@@ -276,7 +276,7 @@ function DocBlockView(
           id={id}
           ref={setRef}
           style={emphasisStyle}
-          className={`${base} border-l-2 border-line pl-3 italic text-ink-2`}
+          className={`break-words ${base} border-l-2 border-line pl-3 italic text-ink-2`}
         >
           {renderInline(block.text, `q-${block.index}`)}
         </blockquote>
@@ -525,7 +525,7 @@ function MatchedPassageCard({ passage, page }: { passage: string; page: number |
     <div className='rp-card p-4'>
       <p className='rp-eyebrow text-ink-3'>Matched passage</p>
       <blockquote
-        className='mt-2 text-sm leading-relaxed text-ink-2'
+        className='break-words mt-2 text-sm leading-relaxed text-ink-2'
         style={{ borderColor: 'var(--rp-accent)' }}
       >
         &ldquo;{passage}&rdquo;
@@ -936,7 +936,7 @@ function ResourceContext({ resource }: { resource: ResourceSummary }) {
               {resource.quotesOfInterest.map((quote, index) => (
                 <blockquote
                   key={index}
-                  className='text-sm leading-relaxed text-ink-2'
+                  className='break-words text-sm leading-relaxed text-ink-2'
                   style={{ borderColor: 'var(--rp-accent)' }}
                 >
                   {quote}

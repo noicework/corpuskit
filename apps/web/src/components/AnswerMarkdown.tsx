@@ -91,7 +91,7 @@ export function AnswerMarkdown({
             return (
               <blockquote
                 key={index}
-                className={`border-l-2 border-line pl-3 italic ${bodyClassName}`}
+                className={`break-words border-l-2 border-line pl-3 italic ${bodyClassName}`}
               >
                 {renderInline(block.text, key)}
               </blockquote>

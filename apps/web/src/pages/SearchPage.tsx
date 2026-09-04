@@ -164,7 +164,7 @@ function ResultCard(
 
           {resource.matchedPassage && passageIsInformative(resource.matchedPassage, query)
             ? (
-              <blockquote className='mt-3 text-sm leading-relaxed text-ink-2'>
+              <blockquote className='break-words mt-3 text-sm leading-relaxed text-ink-2'>
                 &ldquo;{resource.matchedPassage.length > 340
                   ? `${resource.matchedPassage.slice(0, 340).replace(/\s\S*$/, '')}…`
                   : resource.matchedPassage}&rdquo;

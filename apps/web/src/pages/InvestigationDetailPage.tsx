@@ -458,7 +458,7 @@ function EvidenceCard(
       </div>
 
       <blockquote
-        className={`mt-2 border-l-2 border-line pl-3 text-sm leading-relaxed text-ink-2 ${
+        className={`break-words mt-2 border-l-2 border-line pl-3 text-sm leading-relaxed text-ink-2 ${
           expanded ? '' : 'rp-clamp-4'
         }`}
       >

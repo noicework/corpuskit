@@ -746,7 +746,7 @@ export function AnswerJourney({
                     {current.quote
                       ? (
                         <blockquote
-                          className='rp-clamp-4 mt-2 border-l-2 pl-4 text-sm leading-relaxed text-white/80'
+                          className='break-words rp-clamp-4 mt-2 border-l-2 pl-4 text-sm leading-relaxed text-white/80'
                           style={{ borderColor: accent }}
                         >
                           &ldquo;{current.quote}&rdquo;
