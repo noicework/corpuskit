@@ -89,6 +89,19 @@ Every step is idempotent and re-runnable, which also gives the factory its 30-se
 The same machinery backs the ongoing **admin surfaces**: corpus upload, label management, graph
 config, agents, suggested questions - "expose the things people need to manage, in the app".
 
+**Label sets and definitions** (Manage > Taxonomy) are the one admin surface with a coupling rule.
+The knowledge box stores a per-label definition in the label's `text`, but a Data Augmentation
+labeller carries its own copy of labels and descriptions in its task configuration and never reads
+the labelset at run time. So `PUT /api/admin/t/:slug/labelsets/:id` owns both writes, in order:
+it replaces the labelset (`updateLabelset`, preserving the platform's `color` and `kind`), then
+for every configured agent with a `label` operation whose `ident` is that set (`planLabelsetRebuild`
+in `apps/api/src/labelsets.ts`, a pure function) it deletes the agent with `cleanup=false` (generated
+data is kept) and starts a replacement that copies the model, filter, name, trigger and every other
+operation verbatim, changing only that operation's labels, descriptions and `multiple`. The
+replacement always uses `apply: NEW` - existing resources are never reprocessed by a save. If the
+replacement fails to start, the error carries the removed agent's full previous configuration so it
+can be restored by hand.
+
 ## API surface (Deno + Hono + Zod, all typed end-to-end)
 
 ```

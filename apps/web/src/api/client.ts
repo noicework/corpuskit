@@ -535,6 +535,62 @@ export function createAdminLabelset(
   })
 }
 
+export interface LabelsetUpdateInput {
+  title: string
+  multiple: boolean
+  labels: { title: string; text: string }[]
+}
+
+export interface LabelsetUpdateResult {
+  ok: boolean
+  id: string
+  /** The labellers re-instantiated for this set; empty when none carried it. */
+  agents: { previousId: string; newTitle: string }[]
+}
+
+/**
+ * A labelset save that removed a labeller but could not start its
+ * replacement. `previous` is the removed agent's full configuration so it
+ * can be restored by hand.
+ */
+export class LabelsetSaveError extends ApiError {
+  constructor(status: number, message: string, readonly previous?: unknown) {
+    super(status, message)
+    this.name = 'LabelsetSaveError'
+  }
+}
+
+/**
+ * Replace a labelset's title, cardinality, labels and definitions. The server
+ * re-instantiates every labeller carrying the set for new resources only.
+ */
+export async function updateAdminLabelset(
+  slug: string,
+  passcode: string,
+  id: string,
+  input: LabelsetUpdateInput,
+): Promise<LabelsetUpdateResult> {
+  const res = await fetch(
+    `/api/admin/t/${encodeURIComponent(slug)}/labelsets/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
+      body: JSON.stringify(input),
+    },
+  )
+  const body: unknown = await res.json().catch(() => null)
+  if (!res.ok) {
+    const record = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+    const message = typeof record.message === 'string'
+      ? record.message
+      : typeof record.error === 'string'
+      ? record.error
+      : 'The label set could not be saved'
+    throw new LabelsetSaveError(res.status, message, record.previous)
+  }
+  return body as LabelsetUpdateResult
+}
+
 export function addPortal(
   passcode: string,
   input: { name: string; organisation?: string; tagline?: string },

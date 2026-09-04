@@ -624,7 +624,14 @@ export const DOC_PAGES: DocPage[] = [
           'The taxonomy is the set of topics and document kinds the corpus is classified against. ' +
           'It drives the topic rows on Explore, the filters in Search and the Library, and the ' +
           'knowledge graph. Review it, adjust the labels, and have the classification agents ' +
-          'apply them across the corpus so the structure users navigate reflects the real content.',
+          'apply them across the corpus so the structure users navigate reflects the real ' +
+          'content.\n\n' +
+          'Each label can carry a definition - a sentence or two saying what the label means and ' +
+          'when it applies. Definitions show on the Taxonomy page as the vocabulary reference and ' +
+          'are what the labelling agents classify against. Edit a label set under Manage > ' +
+          'Taxonomy: saving it restarts every labeller that carries the set so it picks up the new ' +
+          'labels and definitions, and the restarted labeller applies to new resources only - ' +
+          'nothing already in the corpus is reprocessed or relabelled.',
       },
       {
         heading: 'Enrichments',

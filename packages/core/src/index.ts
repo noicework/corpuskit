@@ -631,6 +631,11 @@ export const LabelsetSchema = z.object({
   title: z.string().min(1),
   multiple: z.boolean(),
   labels: z.string().array(),
+  /**
+   * Per-label definitions keyed by label title - the vocabulary reference the
+   * labeller agents classify against. Present only for labels that carry one.
+   */
+  definitions: z.record(z.string(), z.string()).optional(),
   /** RESOURCES (document-level) or PARAGRAPHS (passage-level). */
   kind: z.enum(['RESOURCES', 'PARAGRAPHS']).optional(),
 })

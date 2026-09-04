@@ -19,6 +19,18 @@ function LabelsetCard({
   organisation: string
 }) {
   const sorted = [...labelset.labels].sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0))
+  const definitions = labelset.definitions ?? {}
+  const hasDefinitions = sorted.some((label) => Boolean(definitions[label]))
+
+  const chip = (label: string) => {
+    const count = counts[label] ?? 0
+    return (
+      <span className={`rp-chip ${count > 0 ? 'text-ink' : 'text-ink-3'}`}>
+        {prettyLabel(label, organisation)}
+        <span className='text-ink-3'>{count}</span>
+      </span>
+    )
+  }
 
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm'>
@@ -36,22 +48,28 @@ function LabelsetCard({
 
       {sorted.length === 0
         ? <p className='mt-4 text-sm text-ink-3'>No values yet.</p>
+        : hasDefinitions
+        ? (
+          // With definitions the card is the vocabulary reference: each value
+          // sits above its own definition rather than in a chip cloud.
+          <ul className='mt-4 space-y-3'>
+            {sorted.map((label) => (
+              <li key={label}>
+                {chip(label)}
+                {definitions[label]
+                  ? (
+                    <p className='mt-1 max-w-prose text-xs leading-relaxed text-ink-3'>
+                      {definitions[label]}
+                    </p>
+                  )
+                  : null}
+              </li>
+            ))}
+          </ul>
+        )
         : (
           <div className='mt-4 flex flex-wrap gap-2'>
-            {sorted.map((label) => {
-              const count = counts[label] ?? 0
-              return (
-                <span
-                  key={label}
-                  className={`rp-chip ${count > 0 ? 'text-ink' : 'text-ink-3'}`}
-                >
-                  {prettyLabel(label, organisation)}
-                  <span className='text-ink-3'>
-                    {count}
-                  </span>
-                </span>
-              )
-            })}
+            {sorted.map((label) => <span key={label}>{chip(label)}</span>)}
           </div>
         )}
     </div>

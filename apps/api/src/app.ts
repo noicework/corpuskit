@@ -87,6 +87,7 @@ import {
 import { generateFollowUpQuestions } from './follow-up-questions.ts'
 import { generateSuggestedQuestions, SUGGESTED_QUESTIONS_SCHEMA_ID } from './suggested-questions.ts'
 import { tenantAliasLocation } from './tenant-aliases.ts'
+import { AgentRestartError, applyLabelsetUpdate } from './labelsets.ts'
 import { registerMcpRoutes, type TrustedPortalUser } from './mcp.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -478,6 +479,14 @@ const labelsetBodySchema = z.object({
   title: z.string().min(1).max(60),
   multiple: z.boolean(),
   labels: z.string().min(1).array().max(40),
+})
+const labelsetUpdateSchema = z.object({
+  title: z.string().trim().min(1).max(60),
+  multiple: z.boolean(),
+  labels: z.object({
+    title: z.string().trim().min(1).max(60),
+    text: z.string().trim().max(600),
+  }).array().min(1).max(60),
 })
 
 /** Strip quotes, whitespace and an accidental "Bearer " prefix from a pasted token. */
@@ -2341,6 +2350,46 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!id) return c.json({ error: 'invalid_request' }, 400)
     await management!.createLabelset(config, { id, ...parsed.data })
     return c.json({ ok: true, id })
+  })
+
+  // Edit a labelset's title, cardinality, labels and per-label definitions.
+  // Saving re-instantiates every labeller agent that carries the set (delete,
+  // then start the replacement for NEW resources only) so the agent picks up
+  // the new labels and definitions; existing resources are never reprocessed.
+  app.put('/api/admin/t/:slug/labelsets/:id', async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const unavailableLu = requireManagement(c)
+    if (unavailableLu) return unavailableLu
+    const parsed = labelsetUpdateSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    const seen = new Set<string>()
+    for (const label of parsed.data.labels) {
+      const key = label.title.toLowerCase()
+      if (seen.has(key)) {
+        return c.json({
+          error: 'invalid_request',
+          message: `Label "${label.title}" appears more than once.`,
+        }, 400)
+      }
+      seen.add(key)
+    }
+    const id = c.req.param('id')
+    const existing = await provider.labelsets(config).catch(() => [])
+    if (!existing.some((ls) => ls.id === id)) return c.json({ error: 'unknown_labelset' }, 404)
+    try {
+      const result = await applyLabelsetUpdate(management!, config, { id, ...parsed.data })
+      return c.json({ ok: true, ...result })
+    } catch (err) {
+      if (err instanceof AgentRestartError) {
+        return c.json({
+          error: 'agent_restart_failed',
+          message: err.message,
+          previous: err.previous,
+        }, 502)
+      }
+      throw err
+    }
   })
 
   // Replace a crawled link resource with clean main-content text. The HTML

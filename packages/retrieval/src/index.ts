@@ -1,5 +1,6 @@
 export type { RetrievalProvider } from './provider.ts'
 export { AragProvider, KnowledgeBoxNotConnectedError } from './providers/arag/index.ts'
+export type { AgentConfig } from './providers/arag/index.ts'
 export {
   ALLOWED_KB_HOSTS,
   AragApiError,

@@ -1054,3 +1054,253 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
     }
   })
 })
+
+describe('PUT /api/admin/t/:slug/labelsets/:id', () => {
+  const FILTER = { field_types: ['FILE', 'LINK'], apply_to_agent_generated_fields: false }
+  const topicLabeller = {
+    id: 'task-topic',
+    task: 'labeler',
+    title: 'topic-labeller',
+    model: 'chatgpt-azure-4o-mini',
+    on: 1,
+    filter: FILTER,
+    operations: [
+      { label: { ident: 'topic', labels: [{ label: 'stock-assessment' }], multiple: false } },
+    ],
+    enabled: true,
+  }
+  const summariser = {
+    id: 'task-ask',
+    task: 'ask',
+    title: 'summariser',
+    model: 'chatgpt-azure-4o-mini',
+    filter: FILTER,
+    operations: [{ ask: { question: 'Summarise', destination: 'summary' } }],
+    enabled: true,
+  }
+  const body = {
+    title: ' Topic ',
+    multiple: true,
+    labels: [
+      { title: 'stock-assessment', text: ' Surveys and models of a fished population. ' },
+      { title: 'marine-sustainability', text: '' },
+    ],
+  }
+
+  function fakeManagement(opts: { agents?: unknown[]; startFails?: boolean } = {}) {
+    const calls: { name: string; args: unknown[] }[] = []
+    const management = {
+      updateLabelset: (_t: unknown, input: unknown) => {
+        calls.push({ name: 'updateLabelset', args: [input] })
+        return Promise.resolve()
+      },
+      agentConfigs: () => {
+        calls.push({ name: 'agentConfigs', args: [] })
+        return Promise.resolve(opts.agents ?? [])
+      },
+      deleteAgent: (_t: unknown, id: string) => {
+        calls.push({ name: 'deleteAgent', args: [id] })
+        return Promise.resolve()
+      },
+      startAgent: (_t: unknown, input: unknown) => {
+        calls.push({ name: 'startAgent', args: [input] })
+        return opts.startFails
+          ? Promise.reject(new Error('422 a labeler task is already running'))
+          : Promise.resolve()
+      },
+    } as unknown as AragProvider
+    return { management, calls }
+  }
+
+  const passcode = 'test-passcode'
+  const put = (
+    app: ReturnType<typeof buildApp>,
+    id: string,
+    payload: unknown,
+    headers: Record<string, string> = { 'x-admin-passcode': passcode },
+  ) =>
+    app.request(`/api/admin/t/marine/labelsets/${id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(payload),
+    })
+
+  it('is gated by the admin passcode like the create route', async () => {
+    const { management, calls } = fakeManagement()
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    const response = await put(app, 'topic', body, {})
+    expect(response.status).toBe(401)
+    expect(calls).toEqual([])
+  })
+
+  it('is unavailable without the management surface', async () => {
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      adminPasscode: passcode,
+    })
+    expect((await put(app, 'topic', body)).status).toBe(503)
+  })
+
+  it('rejects an invalid body and duplicate label titles before touching the box', async () => {
+    const { management, calls } = fakeManagement()
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    expect((await put(app, 'topic', { ...body, labels: [] })).status).toBe(400)
+    expect((await put(app, 'topic', { ...body, title: '' })).status).toBe(400)
+    expect(
+      (await put(app, 'topic', { ...body, labels: [{ title: 'a', text: 'x'.repeat(601) }] }))
+        .status,
+    ).toBe(400)
+    const duplicate = await put(app, 'topic', {
+      ...body,
+      labels: [{ title: 'Region', text: '' }, { title: 'region', text: '' }],
+    })
+    expect(duplicate.status).toBe(400)
+    expect(((await duplicate.json()) as { message: string }).message).toContain('more than once')
+    expect(calls).toEqual([])
+  })
+
+  it('refuses an id that is not an existing labelset', async () => {
+    const { management, calls } = fakeManagement()
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    const response = await put(app, 'region', body)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'unknown_labelset' })
+    expect(calls).toEqual([])
+  })
+
+  it('writes the labelset and reports no agents when none carries it', async () => {
+    const { management, calls } = fakeManagement({ agents: [summariser] })
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    const response = await put(app, 'topic', body)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, id: 'topic', agents: [] })
+    expect(calls.map((c) => c.name)).toEqual(['updateLabelset', 'agentConfigs'])
+    expect(calls[0]?.args[0]).toEqual({
+      id: 'topic',
+      title: 'Topic',
+      multiple: true,
+      labels: [
+        { title: 'stock-assessment', text: 'Surveys and models of a fished population.' },
+        { title: 'marine-sustainability', text: '' },
+      ],
+    })
+  })
+
+  it('writes the labelset first, then deletes and restarts only the carrying labeller', async () => {
+    const { management, calls } = fakeManagement({ agents: [summariser, topicLabeller] })
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    const response = await put(app, 'topic', body)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      ok: true,
+      id: 'topic',
+      agents: [{ previousId: 'task-topic', newTitle: 'topic-labeller' }],
+    })
+    expect(calls.map((c) => c.name)).toEqual([
+      'updateLabelset',
+      'agentConfigs',
+      'deleteAgent',
+      'startAgent',
+    ])
+    expect(calls[2]?.args[0]).toBe('task-topic')
+    expect(calls[3]?.args[0]).toEqual({
+      task: 'labeler',
+      title: 'topic-labeller',
+      model: 'chatgpt-azure-4o-mini',
+      on: 1,
+      filter: FILTER,
+      applyExisting: false,
+      operations: [
+        {
+          label: {
+            ident: 'topic',
+            labels: [
+              {
+                label: 'stock-assessment',
+                description: 'Surveys and models of a fished population.',
+              },
+              { label: 'marine-sustainability', description: '' },
+            ],
+            multiple: true,
+          },
+        },
+      ],
+    })
+  })
+
+  it("returns the removed agent's previous configuration when the replacement fails", async () => {
+    const { management, calls } = fakeManagement({ agents: [topicLabeller], startFails: true })
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    const response = await put(app, 'topic', body)
+    expect(response.status).toBe(502)
+    const payload = await response.json() as {
+      error: string
+      message: string
+      previous: typeof topicLabeller
+    }
+    expect(payload.error).toBe('agent_restart_failed')
+    expect(payload.message).toContain('topic-labeller')
+    expect(payload.message).toContain('already running')
+    expect(payload.previous).toEqual(topicLabeller)
+    expect(calls.map((c) => c.name)).toEqual([
+      'updateLabelset',
+      'agentConfigs',
+      'deleteAgent',
+      'startAgent',
+    ])
+  })
+})
+
+describe('GET /api/t/:slug/labelsets - definitions', () => {
+  it('passes label definitions through to the public taxonomy', async () => {
+    class DefinedProvider extends StubProvider {
+      override labelsets(): Promise<Labelset[]> {
+        return Promise.resolve([{
+          id: 'topic',
+          title: 'Topic',
+          multiple: false,
+          labels: ['stock-assessment'],
+          definitions: { 'stock-assessment': 'Surveys and models of a fished population.' },
+        }])
+      }
+    }
+    const app = buildApp({ provider: new DefinedProvider(), tenants: freshTenants() })
+    const response = await app.request('/api/t/marine/labelsets')
+    expect(response.status).toBe(200)
+    const [topic] = await response.json() as Labelset[]
+    expect(topic?.definitions).toEqual({
+      'stock-assessment': 'Surveys and models of a fished population.',
+    })
+  })
+})
