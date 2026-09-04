@@ -128,12 +128,15 @@ jobs:
             "$BASE_URL/auth/me" | grep '"authenticated":false'
 
       - name: Verify portal custom domains
+        # The hostnames come from wrangler.jsonc, the same list the deploy attaches, so a
+        # domain removed from the config is not still expected here.
         run: |
-          for target in \
-            "https://marine.corpuskit.org/t/marine" \
-            "https://grains.corpuskit.org/t/grains"; do
+          hosts=$(grep -o '"pattern": *"[^"]*"' wrangler.jsonc | sed 's/.*: *"//; s/"$//')
+          test -n "$hosts"
+          for host in $hosts; do
+            echo "checking https://$host/api/health"
             curl --fail --silent --show-error --retry 8 --retry-delay 5 \
-              --output /dev/null "$target"
+              --output /dev/null "https://$host/api/health"
           done
 
       - uses: denoland/setup-deno@v2
