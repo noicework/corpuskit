@@ -41,6 +41,7 @@
     "semiColons": false,
     "exclude": [
       "content/",
+      "design/",
       "docs/",
       "README.md",
       "CLAUDE.md",

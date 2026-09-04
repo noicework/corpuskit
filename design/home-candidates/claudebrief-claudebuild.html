@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en-AU" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CorpusKit – an open source research portal</title>
+<meta name="description" content="CorpusKit is an open source research portal. Search a collection, ask questions that come back with numbered citations and plain-language confidence, browse a library of properly presented resources and explore a knowledge map. Apache 2.0, built to be checked.">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%23F6F2E9"/><text x="16" y="23" font-family="Georgia,serif" font-size="20" font-weight="600" fill="%23211D15" text-anchor="middle">C</text></svg>'>
+<script>document.documentElement.className = 'js';</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..700&family=Source+Sans+3:wght@400..700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* ------------------------------------------------------------------
+   CorpusKit home - "the reading room"
+   Paper ground, warm ink, one working accent: pen-ink blue, used only
+   where a careful reader's pen would go - citations, matched passages,
+   links, the connection being inspected.
+------------------------------------------------------------------- */
+:root{
+  --paper:#F6F2E9;
+  --paper-deep:#EFE9DA;
+  --sheet:#FCFAF4;
+  --ink:#211D15;
+  --ink-2:#5D5647;
+  --ink-3:#77705F;
+  --line:rgba(33,29,21,.16);
+  --line-soft:rgba(33,29,21,.085);
+  --accent:#2C49C7;
+  --accent-deep:#1E338F;
+  --wash:rgba(44,73,199,.13);
+  --serif:'Newsreader', Georgia, 'Times New Roman', serif;
+  --sans:'Source Sans 3', -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono:'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius:6px;
+  --shadow:0 1px 2px rgba(36,28,12,.05), 0 14px 44px -22px rgba(36,28,12,.25);
+  color-scheme: light;
+}
+*,*::before,*::after{ box-sizing:border-box; }
+html{ scroll-behavior:auto; }
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-optical-sizing:auto;
+  font-size:1.0625rem;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+/* paper grain */
+body::after{
+  content:"";
+  position:fixed; inset:0;
+  z-index:300;
+  pointer-events:none;
+  opacity:.05;
+  background-image:url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="180" height="180" filter="url(%23n)"/></svg>');
+}
+::selection{ background:rgba(44,73,199,.18); }
+img,svg{ max-width:100%; }
+
+h1,h2,h3{ font-weight:500; line-height:1.12; letter-spacing:-0.012em; margin:0; text-wrap:balance; }
+p{ margin:0; }
+a{ color:var(--accent); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:3px; }
+a:hover{ color:var(--accent-deep); }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
+
+.container{
+  width:min(1360px, 100% - clamp(2.5rem, 7vw, 8rem));
+  margin-inline:auto;
+}
+/* grid children must be allowed to shrink below their content width */
+.answers-grid > *, .way > *, .run-grid > *, .candour-grid > *,
+.end-grid > *, .lib-grid > *, .spec > div > *{ min-width:0; }
+.skip{
+  position:absolute; left:1rem; top:-3rem; z-index:400;
+  background:var(--ink); color:var(--paper); font-family:var(--sans);
+  padding:.55em 1em; border-radius:var(--radius); text-decoration:none;
+  transition:top .2s ease;
+}
+.skip:focus{ top:1rem; color:var(--paper); }
+
+/* ---------- header ---------- */
+.site-head{
+  position:fixed; top:0; left:0; right:0; z-index:200;
+  border-bottom:1px solid transparent;
+  transition:background-color .3s ease, border-color .3s ease;
+}
+.site-head.scrolled{
+  background:rgba(246,242,233,.94);
+  -webkit-backdrop-filter:blur(12px);
+  backdrop-filter:blur(12px);
+  border-bottom-color:var(--line-soft);
+}
+.head-row{
+  display:flex; align-items:center; gap:2rem;
+  min-height:4.25rem;
+}
+.wordmark{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600;
+  letter-spacing:-0.01em; color:var(--ink); text-decoration:none;
+}
+.wordmark:hover{ color:var(--ink); }
+.head-nav{ display:flex; gap:1.75rem; margin-left:.5rem; }
+.head-nav a{
+  font-family:var(--sans); font-size:.94rem; font-weight:500;
+  color:var(--ink-2); text-decoration:none;
+}
+.head-nav a:hover{ color:var(--ink); text-decoration:underline; text-underline-offset:4px; text-decoration-thickness:1px; }
+.head-side{ margin-left:auto; display:flex; align-items:center; gap:1.4rem; }
+.head-side .gh{
+  font-family:var(--sans); font-size:.94rem; font-weight:500;
+  color:var(--ink-2); text-decoration:none; display:inline-flex; align-items:center; gap:.4em;
+}
+.head-side .gh:hover{ color:var(--ink); }
+.head-side .gh svg{ width:1.05em; height:1.05em; }
+.signin{
+  font-family:var(--sans); font-size:.9rem; font-weight:600;
+  color:var(--ink); text-decoration:none;
+  border:1px solid var(--line); border-radius:999px;
+  padding:.42em 1.1em;
+  transition:border-color .2s ease, background-color .2s ease;
+}
+.signin:hover{ color:var(--ink); border-color:var(--ink); background:var(--sheet); }
+
+/* ---------- hero ---------- */
+.hero{
+  min-height:88vh;
+  display:flex; flex-direction:column; justify-content:center;
+  padding-top:7rem; padding-bottom:2rem;
+}
+.hero h1{
+  font-size:clamp(2.55rem, 5.6vw, 5rem);
+  font-weight:480;
+  max-width:21ch;
+  line-height:1.06;
+}
+.mark{ position:relative; white-space:nowrap; }
+.mark svg{
+  position:absolute; left:-1.5%; bottom:-0.1em;
+  width:103%; height:.3em;
+  overflow:visible;
+}
+.mark svg path{
+  fill:none; stroke:var(--accent); stroke-width:4.6; stroke-linecap:round;
+  opacity:.9;
+}
+.hero-lead{
+  margin-top:2.2rem;
+  max-width:56ch;
+  font-size:clamp(1.12rem, 1.5vw, 1.3rem);
+  line-height:1.6;
+  color:var(--ink-2);
+}
+.hero-actions{
+  margin-top:2.6rem;
+  display:flex; align-items:center; gap:1.8rem; flex-wrap:wrap;
+}
+.btn-ink{
+  font-family:var(--sans); font-size:.98rem; font-weight:600;
+  background:var(--ink); color:var(--paper);
+  text-decoration:none;
+  padding:.78em 1.5em; border-radius:var(--radius);
+  transition:background-color .2s ease;
+}
+.btn-ink:hover{ background:#000; color:var(--paper); }
+.hero-actions .quiet{
+  font-family:var(--sans); font-size:.98rem; font-weight:500;
+}
+.masthead-line{
+  margin-top:auto;
+  border-top:1px solid var(--line-soft);
+  padding-top:1.1rem;
+  display:flex; gap:.7em; flex-wrap:wrap; align-items:baseline;
+  font-family:var(--sans); font-size:.9rem; color:var(--ink-3);
+}
+.masthead-line .dot{ opacity:.6; }
+
+/* ---------- shared section rhythm ---------- */
+section{ scroll-margin-top:6rem; }
+.section{ padding-block:clamp(5rem, 11vh, 8.5rem); }
+.section-head{ max-width:62ch; }
+.section-head h2{
+  font-size:clamp(1.95rem, 3.2vw, 2.85rem);
+  font-weight:500;
+}
+.section-head .lead{
+  margin-top:1.3rem;
+  font-size:clamp(1.06rem, 1.3vw, 1.18rem);
+  color:var(--ink-2);
+}
+.band{ background:var(--paper-deep); }
+
+/* ---------- sheets (the papers on the table) ---------- */
+.sheet{
+  background:var(--sheet);
+  border:1px solid var(--line-soft);
+  border-radius:calc(var(--radius) + 3px);
+  box-shadow:var(--shadow);
+}
+figure.demo{ margin:0; }
+figure.demo figcaption{
+  margin-top:.9rem;
+  font-family:var(--sans); font-size:.88rem; color:var(--ink-3);
+}
+
+/* ---------- the signature: a cited answer ---------- */
+.answers-grid{
+  margin-top:3.2rem;
+  display:grid;
+  grid-template-columns:minmax(0, 1.55fr) minmax(0, .8fr);
+  gap:clamp(2.5rem, 5vw, 5.5rem);
+  align-items:start;
+}
+.ask-sheet{ padding:clamp(1.4rem, 2.6vw, 2.4rem); }
+.ask-q{
+  display:flex; gap:1rem; align-items:baseline;
+  padding-bottom:1.15rem; border-bottom:1px solid var(--line-soft);
+}
+.ui-label{
+  font-family:var(--sans); font-size:.8rem; font-weight:600;
+  color:var(--ink-3); flex:none; letter-spacing:.01em;
+}
+.ask-q .q-text{ font-size:1.22rem; font-weight:500; line-height:1.4; }
+.ask-a{ padding-top:1.3rem; }
+.a-text{ font-size:1.05rem; line-height:1.75; }
+sup.cit-wrap{ line-height:0; font-size:.72em; }
+.cit{
+  font-family:var(--sans); font-weight:600; font-size:1em;
+  color:var(--accent);
+  background:none; border:0; padding:.1em .16em; margin:0;
+  border-radius:4px; cursor:pointer;
+  transition:background-color .18s ease, color .18s ease;
+}
+.cit::before{ content:"["; } .cit::after{ content:"]"; }
+.cit:hover{ background:var(--wash); }
+.cit[aria-expanded="true"]{ background:var(--accent); color:var(--sheet); }
+html.no-js .cit{ cursor:default; }
+.a-quality{
+  margin-top:1.4rem;
+  display:flex; flex-wrap:wrap; gap:.55em 1.2em;
+  font-family:var(--sans); font-size:.85rem; color:var(--ink-2);
+}
+.a-quality b{ font-weight:600; color:var(--ink); }
+.a-advice{
+  margin-top:.55rem;
+  font-style:italic; color:var(--ink-2); font-size:.98rem;
+}
+.src-list{ margin-top:1.6rem; border-top:1px solid var(--line-soft); }
+.src{ border-bottom:1px solid var(--line-soft); }
+.src-head{
+  width:100%; text-align:left; background:none; border:0; cursor:pointer;
+  display:flex; align-items:baseline; gap:.9rem;
+  padding:.95rem .25rem; margin:0;
+  font-family:var(--serif); color:var(--ink);
+}
+html.no-js .src-head{ cursor:default; }
+.src-num{
+  font-family:var(--sans); font-size:.8rem; font-weight:600;
+  color:var(--accent); flex:none; width:1.4em;
+}
+.src-title{ font-size:1rem; font-weight:500; line-height:1.4; }
+.src-meta{
+  font-family:var(--sans); font-size:.82rem; color:var(--ink-3);
+  margin-left:auto; flex:none; padding-left:1rem;
+}
+.src-chev{ flex:none; align-self:center; transition:transform .3s ease; color:var(--ink-3); }
+.src.open .src-chev{ transform:rotate(180deg); }
+.src-body{
+  display:grid; grid-template-rows:0fr;
+  transition:grid-template-rows .5s cubic-bezier(.22,.8,.3,1);
+}
+.src.open .src-body{ grid-template-rows:1fr; }
+html.no-js .src-body{ grid-template-rows:1fr; }
+.src-body > div{ overflow:hidden; min-height:0; }
+.passage{
+  margin:0 .25rem 1.15rem 2.3rem;
+  padding:1rem 1.2rem;
+  border-left:2px solid var(--accent);
+  background:rgba(44,73,199,.035);
+  border-radius:0 var(--radius) var(--radius) 0;
+  font-size:.99rem; line-height:1.7; color:var(--ink-2);
+}
+.passage .pass-meta{
+  display:block; margin-top:.6rem;
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-3); font-style:normal;
+}
+.hl{
+  color:var(--ink);
+  background-image:linear-gradient(var(--wash), var(--wash));
+  background-repeat:no-repeat;
+  background-size:100% 86%;
+  background-position:0 62%;
+  box-decoration-break:clone;
+  -webkit-box-decoration-break:clone;
+}
+html.js .ask-sheet .src .hl{ background-size:0% 86%; transition:background-size .8s ease .25s; }
+html.js .ask-sheet .src.open .hl{ background-size:100% 86%; }
+.followups{
+  margin-top:1.5rem;
+  display:flex; align-items:baseline; gap:.8rem; flex-wrap:wrap;
+}
+.chip{
+  font-family:var(--sans); font-size:.86rem; font-weight:500; color:var(--ink-2);
+  border:1px solid var(--line); border-radius:999px;
+  padding:.35em 1em;
+}
+.ask-aside{ font-size:1rem; color:var(--ink-2); }
+.ask-aside p{
+  padding:1.2rem 0; border-top:1px solid var(--line-soft);
+  line-height:1.65;
+}
+.ask-aside p:last-child{ border-bottom:1px solid var(--line-soft); }
+
+/* ---------- candour band ---------- */
+.candour-grid{
+  margin-top:3.2rem;
+  display:grid; grid-template-columns:repeat(3, minmax(0,1fr));
+  gap:clamp(1.4rem, 2.5vw, 2.4rem);
+  align-items:stretch;
+}
+.candour-grid figure.demo{ display:flex; flex-direction:column; }
+.candour-grid .sheet{ flex:1; }
+.state-sheet{ padding:1.35rem 1.45rem; font-family:var(--sans); }
+.state-sheet .st-title{ font-family:var(--serif); font-size:1.02rem; font-weight:500; line-height:1.4; }
+.state-sheet .st-meta{ margin-top:.4rem; font-size:.82rem; color:var(--ink-3); }
+.tag{
+  display:inline-block; margin-top:.7rem;
+  font-size:.78rem; font-weight:600; color:var(--ink-2);
+  border:1px solid var(--line); border-radius:4px;
+  padding:.18em .6em;
+}
+.state-sheet .st-body{ margin-top:.75rem; font-size:.94rem; line-height:1.6; color:var(--ink-2); }
+.state-sheet .st-strong{ font-weight:600; color:var(--ink); }
+
+/* ---------- ways rows ---------- */
+.way{
+  display:grid;
+  grid-template-columns:minmax(0, .72fr) minmax(0, 1.28fr);
+  gap:clamp(2.2rem, 5vw, 5.5rem);
+  align-items:center;
+  padding-block:clamp(2.8rem, 6vh, 4.5rem);
+}
+.way + .way{ border-top:1px solid var(--line-soft); }
+.way.flip{ grid-template-columns:minmax(0, 1.28fr) minmax(0, .72fr); }
+.way.flip .way-text{ order:2; }
+.way.flip .way-demo{ order:1; }
+.way-text h3{ font-size:clamp(1.45rem, 2.1vw, 1.8rem); }
+.way-text p{ margin-top:1rem; color:var(--ink-2); line-height:1.68; }
+.way-extra{ font-size:.95rem; }
+
+/* search demo */
+.search-sheet{ padding:1.3rem 1.5rem 1.4rem; font-family:var(--sans); }
+.s-bar{
+  display:flex; align-items:center; gap:.7rem;
+  border:1px solid var(--line); border-radius:var(--radius);
+  padding:.6rem .9rem; background:var(--paper);
+}
+.s-bar svg{ width:1rem; height:1rem; color:var(--ink-3); flex:none; }
+.s-query{ font-size:.95rem; color:var(--ink); }
+.s-go{ margin-left:auto; font-size:.85rem; font-weight:600; color:var(--ink-2); }
+.s-modes{
+  margin-top:.9rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap;
+  font-size:.83rem;
+}
+.mode{
+  border:1px solid var(--line); border-radius:999px;
+  padding:.22em .85em; color:var(--ink-2); font-weight:500;
+}
+.mode.on{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.s-modes .hide-ans{ margin-left:auto; font-size:.84rem; color:var(--ink-3); text-decoration:underline; text-underline-offset:3px; }
+.s-answer{
+  margin-top:1rem; padding:.85rem 1rem;
+  border:1px solid var(--line-soft); border-radius:var(--radius);
+  background:rgba(44,73,199,.03);
+  font-family:var(--serif); font-size:.96rem; line-height:1.6;
+}
+.s-answer .ui-label{ display:block; margin-bottom:.3rem; }
+.s-cit{ font-family:var(--sans); font-size:.74em; font-weight:600; color:var(--accent); }
+.s-result{ padding:1.05rem .2rem .95rem; border-bottom:1px solid var(--line-soft); }
+.s-result:last-of-type{ border-bottom:0; padding-bottom:.4rem; }
+.r-title{ font-family:var(--serif); font-size:1.04rem; font-weight:500; line-height:1.4; }
+.r-meta{ margin-top:.3rem; font-size:.8rem; color:var(--ink-3); }
+.r-pass{
+  margin-top:.55rem; font-family:var(--serif); font-size:.93rem; line-height:1.65;
+  color:var(--ink-2);
+}
+.s-foot{
+  margin-top:.6rem; padding-top:.8rem; border-top:1px solid var(--line-soft);
+  display:flex; gap:1.4rem; font-size:.84rem; color:var(--ink-3);
+}
+.s-foot .count{ margin-left:auto; }
+.faux{ color:var(--accent); text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1px; }
+
+/* library demo */
+.lib-grid{
+  display:grid; grid-template-columns:repeat(3, minmax(0,1fr));
+  gap:1rem;
+}
+.lib-card{ padding:1.15rem 1.2rem 1.25rem; display:flex; flex-direction:column; }
+.lib-kind{ font-family:var(--sans); font-size:.78rem; color:var(--ink-3); }
+.lib-title{ margin-top:.55rem; font-size:1.05rem; font-weight:500; line-height:1.35; }
+.lib-sum{ margin-top:.6rem; font-family:var(--sans); font-size:.87rem; line-height:1.55; color:var(--ink-2); }
+.lib-meta{ margin-top:auto; padding-top:.85rem; font-family:var(--sans); font-size:.78rem; color:var(--ink-3); }
+
+/* map demo */
+.map-sheet{ padding:1.2rem 1.3rem 1.3rem; position:relative; font-family:var(--sans); }
+.map-bar{ display:flex; align-items:center; gap:.5rem; font-size:.83rem; }
+.map-bar .m-search{
+  margin-left:auto; display:flex; align-items:center; gap:.5em;
+  border:1px solid var(--line); border-radius:var(--radius);
+  padding:.3em .8em; color:var(--ink-3); background:var(--paper);
+}
+.map-canvas{ margin-top:.9rem; }
+.map-canvas svg{ display:block; width:100%; height:auto; }
+.map-canvas text{ font-family:var(--sans); }
+.inspect{
+  position:absolute; right:3%; bottom:5%;
+  width:min(250px, 58%);
+  background:var(--sheet); border:1px solid var(--line);
+  border-radius:var(--radius); box-shadow:var(--shadow);
+  padding:.8rem .95rem; font-size:.84rem; line-height:1.5;
+}
+.inspect .i-rel{ font-family:var(--serif); font-size:.95rem; font-weight:500; color:var(--ink); }
+.inspect .i-rel em{ font-style:italic; color:var(--accent); }
+.inspect .i-meta{ margin-top:.35rem; color:var(--ink-3); }
+
+/* ---------- run it ---------- */
+.run-grid{
+  margin-top:3rem;
+  display:grid;
+  grid-template-columns:minmax(0, 1.2fr) minmax(0, 1fr);
+  gap:clamp(2.5rem, 5vw, 5.5rem);
+  align-items:start;
+}
+.run-copy p + p{ margin-top:1.2rem; }
+.run-copy p{ color:var(--ink-2); line-height:1.7; }
+.code-sheet{
+  margin-top:1.8rem;
+  background:#26221A;
+  border-radius:calc(var(--radius) + 3px);
+  box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem;
+  overflow-x:auto;
+}
+.code-sheet pre{
+  margin:0; font-family:var(--mono); font-size:.87rem; line-height:1.75;
+  color:#EFEAD9;
+}
+.code-sheet .c-dim{ color:#9A937E; }
+.code-sheet .c-out{ color:#B9B29B; }
+.spec{ margin:0; border-top:1px solid var(--line); }
+.spec > div{
+  display:grid; grid-template-columns:9.5rem minmax(0,1fr);
+  gap:1.2rem; padding:.85rem 0;
+  border-bottom:1px solid var(--line-soft);
+}
+.spec dt{ font-family:var(--sans); font-size:.85rem; font-weight:600; color:var(--ink-3); padding-top:.15rem; }
+.spec dd{ margin:0; font-size:.98rem; line-height:1.55; }
+.steward{
+  margin-top:2.6rem;
+  max-width:66ch;
+  border-left:2px solid var(--ink);
+  padding-left:1.4rem;
+  color:var(--ink-2); line-height:1.7;
+}
+
+/* ---------- contribute ---------- */
+.contrib{ max-width:66ch; }
+.contrib p{ margin-top:1.2rem; color:var(--ink-2); line-height:1.7; }
+.contrib .cta{ margin-top:1.8rem; font-family:var(--sans); font-weight:500; }
+
+/* ---------- ending ---------- */
+.ending h2{
+  font-size:clamp(2.4rem, 4.6vw, 4rem);
+  font-weight:480;
+}
+.end-grid{
+  margin-top:3.5rem;
+  display:grid; grid-template-columns:repeat(3, minmax(0,1fr));
+  gap:clamp(1.8rem, 3.5vw, 3.5rem);
+}
+.end-col{ border-top:1px solid var(--line); padding-top:1.3rem; }
+.end-col h3{ font-size:1.28rem; font-weight:500; }
+.end-col p{ margin-top:.8rem; color:var(--ink-2); font-size:1rem; line-height:1.65; }
+.end-col .go{ display:inline-block; margin-top:1rem; font-family:var(--sans); font-size:.94rem; font-weight:500; }
+
+/* ---------- footer ---------- */
+.site-foot{ border-top:1px solid var(--line-soft); }
+.foot-row{
+  display:flex; align-items:baseline; gap:2rem; flex-wrap:wrap;
+  padding-block:2.2rem;
+  font-family:var(--sans); font-size:.88rem; color:var(--ink-3);
+}
+.foot-row .fm{ font-family:var(--serif); font-weight:600; font-size:1rem; color:var(--ink); }
+.foot-links{ display:flex; gap:1.5rem; }
+.foot-links a{ color:var(--ink-2); text-decoration:none; }
+.foot-links a:hover{ color:var(--ink); text-decoration:underline; }
+.colophon{ margin-left:auto; font-style:italic; font-family:var(--serif); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1080px){
+  .answers-grid{ grid-template-columns:1fr; }
+  .ask-aside{ max-width:60ch; }
+  .way, .way.flip{ grid-template-columns:1fr; gap:1.8rem; align-items:start; }
+  .way.flip .way-text{ order:1; }
+  .way.flip .way-demo{ order:2; }
+  .run-grid{ grid-template-columns:1fr; }
+  .head-nav{ display:none; }
+}
+@media (max-width: 860px){
+  .candour-grid{ grid-template-columns:1fr; max-width:34rem; }
+  .lib-grid{ grid-template-columns:1fr 1fr; }
+  .lib-card:nth-child(3){ display:none; }
+  .end-grid{ grid-template-columns:1fr; }
+}
+@media (max-width: 620px){
+  body{ font-size:1.03rem; }
+  .hero{ min-height:78vh; padding-top:6rem; }
+  .lib-grid{ grid-template-columns:1fr; }
+  .lib-card:nth-child(3){ display:flex; }
+  .src-meta{ display:none; }
+  .passage{ margin-left:.25rem; }
+  .inspect{ position:static; width:auto; margin-top:1rem; }
+  .s-modes .hide-ans{ display:none; }
+  .head-side .gh span{ display:none; }
+  .foot-row{ flex-direction:column; gap:1rem; }
+  .colophon{ margin-left:0; }
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{ transition-duration:.01ms !important; animation-duration:.01ms !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="container head-row">
+    <a class="wordmark" href="#">CorpusKit</a>
+    <nav class="head-nav" aria-label="Page sections">
+      <a href="#answers" data-anchor>What it does</a>
+      <a href="#run" data-anchor>Run it</a>
+      <a href="#contribute" data-anchor>Contribute</a>
+    </nav>
+    <div class="head-side">
+      <!-- Placeholder repository URL - substitute the real one at publish time -->
+      <a class="gh" href="https://github.com/corpuskit/corpuskit">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="signin" href="/auth/login">Sign in</a>
+    </div>
+  </div>
+</header>
+
+<div id="smooth-wrapper">
+<div id="smooth-content">
+
+<main id="main">
+
+  <!-- ================= hero ================= -->
+  <section class="hero">
+    <div class="container" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+      <h1>Put your organisation&rsquo;s research <span class="mark">to work<svg id="hero-underline" viewBox="0 0 220 14" preserveAspectRatio="none" aria-hidden="true"><path d="M4 10.5 C 48 5.5, 102 12.5, 216 6.5"/></svg></span></h1>
+      <p class="hero-lead">CorpusKit is an open source research portal. Connect a research collection and people can search it, question it, browse its library and follow how the work connects – with every answer tied to passages they can open and check.</p>
+      <div class="hero-actions">
+        <!-- Placeholder repository URL - substitute the real one at publish time -->
+        <a class="btn-ink" href="https://github.com/corpuskit/corpuskit">View the repository</a>
+        <a class="quiet" href="#answers" data-anchor>See it answer a question &darr;</a>
+      </div>
+      <div class="masthead-line" style="margin-top:clamp(3rem, 8vh, 6rem);">
+        <span>Apache 2.0 licence</span><span class="dot">·</span>
+        <span>Self-hosted on your infrastructure</span><span class="dot">·</span>
+        <span>Cited answers with plain-language confidence</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= the signature: answers ================= -->
+  <!-- The research content in every demonstration on this page is illustrative
+       placeholder material with plausible figures, written for this page. -->
+  <section id="answers" class="section">
+    <div class="container">
+      <div class="section-head">
+        <h2>Answers that show their working</h2>
+        <p class="lead">Ask a question and the portal answers from the collection – streamed as it is produced, with numbered citations, follow-up questions and a plain statement of how well the sources support it. Each citation opens the passage it rests on, so checking a claim takes one click, and what you get is the exact lines from the research source.</p>
+      </div>
+      <div class="answers-grid">
+        <figure class="demo">
+          <div class="sheet ask-sheet" id="ask-sheet">
+            <div class="ask-q">
+              <span class="ui-label">Question</span>
+              <span class="q-text">How much do cool roofs lower indoor temperatures in summer?</span>
+            </div>
+            <div class="ask-a">
+              <span class="ui-label">Cited answer</span>
+              <p class="a-text" style="margin-top:.6rem;">Across the trials this collection holds, cool roof coatings lowered peak indoor temperatures by 2 to 4&nbsp;°C in uninsulated buildings<sup class="cit-wrap"><button class="cit" data-cit="1" aria-controls="src-1" aria-expanded="false">1</button></sup>, with the benefit narrowing to about 1&nbsp;°C where ceiling insulation was already in place<sup class="cit-wrap"><button class="cit" data-cit="2" aria-controls="src-2" aria-expanded="false">2</button></sup>. The effect was strongest during extended heat, when coated roof surfaces ran up to 20&nbsp;°C cooler than dark ones<sup class="cit-wrap"><button class="cit" data-cit="1" aria-controls="src-1" aria-expanded="false">1</button></sup>. Measured savings on cooling energy varied widely with building type and occupancy<sup class="cit-wrap"><button class="cit" data-cit="3" aria-controls="src-3" aria-expanded="false">3</button></sup>, so figures from any single site are best read as indicative.</p>
+              <div class="a-quality">
+                <span>Confidence <b>moderate</b></span>
+                <span>Relevance <b>high</b></span>
+                <span>Groundedness <b>high</b></span>
+                <span>Context <b>moderate</b></span>
+              </div>
+              <p class="a-advice">The retrieved sources support most of this answer – check the citations before relying on the exact figures.</p>
+              <div class="src-list">
+                <div class="src" data-src="1" id="src-1">
+                  <button class="src-head" data-cit="1" aria-controls="src-1" aria-expanded="false">
+                    <span class="src-num">1</span>
+                    <span class="src-title">Cool roofs in western Sydney schools: a two-summer trial</span>
+                    <span class="src-meta">Technical report · 2021</span>
+                    <svg class="src-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                  <div class="src-body"><div>
+                    <div class="passage">In the six uninsulated demountable classrooms, coated roofs <span class="hl">reduced peak indoor air temperature by 2.1 to 3.8&nbsp;°C across both summers</span>, with roof surface temperatures up to 19.6&nbsp;°C lower than the matched dark-roof controls.
+                      <span class="pass-meta">Matched passage · page 34</span>
+                    </div>
+                  </div></div>
+                </div>
+                <div class="src" data-src="2" id="src-2">
+                  <button class="src-head" data-cit="2" aria-controls="src-2" aria-expanded="false">
+                    <span class="src-num">2</span>
+                    <span class="src-title">Ceiling insulation and roof colour in residential retrofits</span>
+                    <span class="src-meta">Journal article · 2019</span>
+                    <svg class="src-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                  <div class="src-body"><div>
+                    <div class="passage">Where ceiling insulation of R2.5 or better was present, the additional benefit of a coated or light roof <span class="hl">narrowed to between 0.8 and 1.2&nbsp;°C at the afternoon peak</span>.
+                      <span class="pass-meta">Matched passage · page 11</span>
+                    </div>
+                  </div></div>
+                </div>
+                <div class="src" data-src="3" id="src-3">
+                  <button class="src-head" data-cit="3" aria-controls="src-3" aria-expanded="false">
+                    <span class="src-num">3</span>
+                    <span class="src-title">Cooling energy outcomes across mixed building stock</span>
+                    <span class="src-meta">Evaluation · 2022</span>
+                    <svg class="src-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                  <div class="src-body"><div>
+                    <div class="passage">Measured cooling energy savings <span class="hl">ranged from 4 to 27 per cent between sites</span>, and were driven more by occupancy patterns and thermostat settings than by roof treatment alone.
+                      <span class="pass-meta">Matched passage · page 58</span>
+                    </div>
+                  </div></div>
+                </div>
+              </div>
+              <div class="followups">
+                <span class="ui-label">Follow-up questions</span>
+                <span class="chip">Do green roofs cool interiors further?</span>
+                <span class="chip">What do coatings cost per square metre?</span>
+              </div>
+            </div>
+          </div>
+          <figcaption>Select a citation to open the matched passage behind it.</figcaption>
+        </figure>
+        <aside class="ask-aside" aria-label="More about Ask">
+          <p>Deep research breaks a broad question into focused sub-questions before answering it, and shows the reader that structure.</p>
+          <p>Sessions can be saved, renamed and exported, so a line of enquiry can be picked up where it was left.</p>
+          <p>When the whole collection is too wide, ask a cited question of one document from its page in the Library.</p>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= candour ================= -->
+  <section class="band section">
+    <div class="container">
+      <div class="section-head">
+        <h2>When the evidence is thin, it says so</h2>
+        <p class="lead">Research rarely hands over one clean answer, and a portal that pretends otherwise teaches its readers to stop checking. So CorpusKit marks its weak moments in plain sight – that candour is what makes the strong answers worth trusting.</p>
+      </div>
+      <div class="candour-grid">
+        <figure class="demo">
+          <div class="sheet state-sheet">
+            <div class="st-title">Night-time cooling rates in coastal suburbs</div>
+            <div class="st-meta">Report · 2017 · Relevance 0.31</div>
+            <span class="tag">Weak match</span>
+            <p class="st-body">Below the relevance threshold for this search.</p>
+          </div>
+          <figcaption>Weak matches are labelled where they stand, with calibrated scores beside them.</figcaption>
+        </figure>
+        <figure class="demo">
+          <div class="sheet state-sheet">
+            <p class="st-body" style="margin-top:0;"><span class="st-strong">Low confidence</span> – use this answer as a lead. The retrieved passages only partly cover the question, so check the cited sources before relying on it.</p>
+          </div>
+          <figcaption>Confidence is stated in plain language, with what to do about it.</figcaption>
+        </figure>
+        <figure class="demo">
+          <div class="sheet state-sheet">
+            <div class="st-title">No direct evidence found</div>
+            <p class="st-body">The collection does not hold enough to answer this question. Try a narrower question, or browse the topic to see what related work exists.</p>
+          </div>
+          <figcaption>When the collection cannot support an answer, the portal says so instead of producing one anyway.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= the other ways in ================= -->
+  <section class="section">
+    <div class="container">
+      <div class="section-head">
+        <h2>Search, the library and the map</h2>
+        <p class="lead">Ask is one door into a collection. The rest of the portal is built for the days when you would rather look than ask.</p>
+      </div>
+
+      <div class="way" style="margin-top:1.5rem;">
+        <div class="way-text">
+          <h3>Search shows what matched</h3>
+          <p>Results arrive ranked and scored, each carrying the passage that made it relevant, so you can judge a result before you open it. A short cited answer sits above the results by default; hide it and work from the results alone whenever that suits the job better.</p>
+          <p class="way-extra">Hybrid, semantic and keyword modes, filters for topic and document kind, and watched searches that check for changed results daily.</p>
+        </div>
+        <div class="way-demo">
+          <figure class="demo">
+            <div class="sheet search-sheet">
+              <div class="s-bar">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 L14 14" stroke-linecap="round"/></svg>
+                <span class="s-query">street tree canopy and afternoon heat</span>
+                <span class="s-go">Search</span>
+              </div>
+              <div class="s-modes">
+                <span class="mode on">Hybrid</span>
+                <span class="mode">Semantic</span>
+                <span class="mode">Keyword</span>
+                <span class="mode">Topic: Urban greening</span>
+                <span class="hide-ans">Hide cited answer</span>
+              </div>
+              <div class="s-answer">
+                <span class="ui-label">Cited answer</span>
+                Along the monitored streets, each 10 per cent increase in canopy cover was associated with about a 1&nbsp;°C drop in mean afternoon surface temperature <span class="s-cit">[1]</span>.
+              </div>
+              <div class="s-result">
+                <div class="r-title">Street tree canopy and summer surface temperatures in three inland towns</div>
+                <div class="r-meta">Report · 2020 · Relevance 0.91</div>
+                <p class="r-pass">…each 10 per cent increase in canopy cover was associated with <span class="hl">a 1.1&nbsp;°C reduction in mean afternoon surface temperature</span> along the monitored streets…</p>
+              </div>
+              <div class="s-result">
+                <div class="r-title">Species selection for drought-hardy shade trees</div>
+                <div class="r-meta">Guideline · 2018 · Relevance 0.84</div>
+                <p class="r-pass">…broad-crowned species delivered <span class="hl">roughly twice the midday shade area</span> of columnar forms by year ten…</p>
+              </div>
+              <div class="s-foot">
+                <span class="faux">Watch this search</span>
+                <span class="faux">Summarise these results</span>
+                <span class="count">2 of 41 results</span>
+              </div>
+            </div>
+            <figcaption>Search results as the portal presents them, with the passages that matched.</figcaption>
+          </figure>
+        </div>
+      </div>
+
+      <div class="way flip">
+        <div class="way-text">
+          <h3>A library set out for reading</h3>
+          <p>Every resource is presented as a research item with a clear title, a summary, key takeaways and notable quotes, whatever the underlying file was called. Open one and the original document sits beside its extracted text, its related resources, and a cited conversation held against that document alone.</p>
+          <p class="way-extra">Search, sort and filter the whole catalogue, in grid or list view.</p>
+        </div>
+        <div class="way-demo">
+          <figure class="demo">
+            <div class="lib-grid">
+              <div class="sheet lib-card">
+                <span class="lib-kind">Report · 2022</span>
+                <div class="lib-title">Cooling the west: heat and housing on the urban fringe</div>
+                <p class="lib-sum">Pairs street-level heat mapping with household interviews to show where extreme heat lands hardest, and which retrofits residents take up.</p>
+                <span class="lib-meta">4 key takeaways · 2 notable quotes</span>
+              </div>
+              <div class="sheet lib-card">
+                <span class="lib-kind">Evaluation · 2021</span>
+                <div class="lib-title">Green roof maintenance costs over ten years</div>
+                <p class="lib-sum">Tracks establishment and upkeep costs across 14 installations, with a plain comparison against conventional roofing.</p>
+                <span class="lib-meta">3 key takeaways · Key facts</span>
+              </div>
+              <div class="sheet lib-card">
+                <span class="lib-kind">Video · 2023</span>
+                <div class="lib-title">Designing cool schoolyards</div>
+                <p class="lib-sum">A recorded seminar on shade planning for play spaces, with the speaker&rsquo;s worked examples.</p>
+                <span class="lib-meta">Transcript · Related resources</span>
+              </div>
+            </div>
+            <figcaption>Resources carry generated titles and summaries – never a bare filename.</figcaption>
+          </figure>
+        </div>
+      </div>
+
+      <div class="way">
+        <div class="way-text">
+          <h3>The shape of the collection</h3>
+          <p>The knowledge map shows what the research is about: the entities in it, the relationships between them, and a concept view of topics that occur together. Inspect a connection and the portal opens the resources behind it, so even the map answers to its sources.</p>
+          <p class="way-extra">Search the map, filter it, and move between entity and concept views.</p>
+        </div>
+        <div class="way-demo">
+          <figure class="demo">
+            <div class="sheet map-sheet">
+              <div class="map-bar">
+                <span class="mode on">Entities</span>
+                <span class="mode">Concepts</span>
+                <span class="m-search">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 L14 14" stroke-linecap="round"/></svg>
+                  Search the map
+                </span>
+              </div>
+              <div class="map-canvas">
+                <svg viewBox="0 0 640 380" role="img" aria-label="A map of entities in the collection: tree canopy moderates the urban heat island, cool roofs reduce it, and the heat island affects heat health, public housing and energy use">
+                  <g stroke="#B9B29B" stroke-width="1.2">
+                    <line x1="185" y1="92"  x2="298" y2="158"/>
+                    <line x1="190" y1="268" x2="300" y2="182"/>
+                    <line x1="382" y1="150" x2="482" y2="96"/>
+                    <line x1="192" y1="280" x2="470" y2="268"/>
+                    <line x1="345" y1="192" x2="352" y2="300"/>
+                  </g>
+                  <line x1="185" y1="92" x2="298" y2="158" stroke="#2C49C7" stroke-width="1.8"/>
+                  <g font-size="10.5" fill="#77705F">
+                    <text x="252" y="112" fill="#2C49C7">moderates</text>
+                    <text x="222" y="230">reduces</text>
+                    <text x="428" y="112">affects</text>
+                    <text x="316" y="286">lowers</text>
+                    <text x="358" y="252">concentrates in</text>
+                  </g>
+                  <g>
+                    <rect x="252" y="146" width="150" height="42" rx="21" fill="#FCFAF4" stroke="#211D15" stroke-width="1.3"/>
+                    <text x="327" y="172" text-anchor="middle" font-size="13.5" font-weight="600" fill="#211D15">Urban heat island</text>
+                    <rect x="112" y="70" width="118" height="38" rx="19" fill="#FCFAF4" stroke="#2C49C7" stroke-width="1.5"/>
+                    <text x="171" y="94" text-anchor="middle" font-size="13" font-weight="600" fill="#2C49C7">Tree canopy</text>
+                    <rect x="120" y="250" width="108" height="38" rx="19" fill="#FCFAF4" stroke="#5D5647" stroke-width="1.1"/>
+                    <text x="174" y="274" text-anchor="middle" font-size="13" fill="#211D15">Cool roofs</text>
+                    <rect x="452" y="70" width="112" height="38" rx="19" fill="#FCFAF4" stroke="#5D5647" stroke-width="1.1"/>
+                    <text x="508" y="94" text-anchor="middle" font-size="13" fill="#211D15">Heat health</text>
+                    <rect x="298" y="292" width="118" height="38" rx="19" fill="#FCFAF4" stroke="#5D5647" stroke-width="1.1"/>
+                    <text x="357" y="316" text-anchor="middle" font-size="13" fill="#211D15">Public housing</text>
+                    <rect x="452" y="250" width="112" height="38" rx="19" fill="#FCFAF4" stroke="#5D5647" stroke-width="1.1"/>
+                    <text x="508" y="274" text-anchor="middle" font-size="13" fill="#211D15">Energy use</text>
+                  </g>
+                </svg>
+              </div>
+              <div class="inspect">
+                <div class="i-rel">Tree canopy <em>moderates</em> Urban heat island</div>
+                <div class="i-meta">6 resources behind this connection</div>
+              </div>
+            </div>
+            <figcaption>The entity view of a small collection, with one connection inspected.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= run it ================= -->
+  <section id="run" class="band section">
+    <div class="container">
+      <div class="section-head">
+        <h2>Run it yourself</h2>
+        <p class="lead">CorpusKit is published under the Apache 2.0 licence, and the repository holds the whole application: shared types, retrieval integration, tests, build tasks and deployment configuration. Clone it, connect a collection and run the portal on infrastructure you choose.</p>
+      </div>
+      <div class="run-grid">
+        <div class="run-copy">
+          <p>One deployment can serve several organisation-specific portals from configuration alone, each with its own name, identity, topics and collection. Content storage and retrieval run on a connected knowledge service, so a deployment needs an account with one; the application itself is yours to run, change and redistribute.</p>
+          <!-- Placeholder repository URL and commands - substitute the real ones at publish time -->
+          <div class="code-sheet">
+            <pre>git clone https://github.com/corpuskit/corpuskit.git
+cd corpuskit
+cp .env.example .env   <span class="c-dim"># add knowledge service credentials</span>
+deno task dev
+<span class="c-out">Portal running at http://localhost:8790</span></pre>
+          </div>
+          <p style="margin-top:1.4rem; font-family:var(--sans); font-size:.9rem; color:var(--ink-3);">The short version. The repository documents the full setup, containers included.</p>
+        </div>
+        <dl class="spec">
+          <div><dt>Licence</dt><dd>Apache 2.0</dd></div>
+          <div><dt>Runs on</dt><dd>Your own infrastructure, with documented local setup and container configuration</dd></div>
+          <div><dt>Requires</dt><dd>An account with a connected knowledge service, which handles content storage and retrieval</dd></div>
+          <div><dt>State</dt><dd>SQLite-backed durable storage</dd></div>
+          <div><dt>Portals</dt><dd>Several per deployment, defined in configuration</dd></div>
+          <div><dt>External tools</dt><dd>Read-only MCP connector, with portal-scoped access keys an administrator can issue and revoke</dd></div>
+          <div><dt>Administration</dt><dd>Microsoft sign-in with an administrator role</dd></div>
+        </dl>
+      </div>
+      <p class="steward">The project is looked after like infrastructure. Every change runs the same checks before it lands – typecheck, lint, tests and a build – and the repository says what exists now and what remains unfinished, so you can judge the state of things before committing to them.</p>
+    </div>
+  </section>
+
+  <!-- ================= contribute ================= -->
+  <section id="contribute" class="section">
+    <div class="container">
+      <div class="contrib">
+        <h2 style="font-size:clamp(1.95rem, 3.2vw, 2.85rem);">Help look after it</h2>
+        <p>CorpusKit is developed in the open, and the people who run portals are often the people improving them. Code, design, documentation and tests all take contributions, and the standard is the same for everyone: a change says what it does, carries tests where behaviour changes, and passes the checks every other change passes.</p>
+        <p>If you are new to the project, start small and concrete: report a problem with enough detail to reproduce it, improve a page of documentation you found wanting, or pick up an issue marked for first-time contributors. Not sure where something belongs? Open an issue and ask.</p>
+        <!-- Placeholder contributing-guide URL - substitute the real one at publish time -->
+        <p class="cta"><a href="https://github.com/corpuskit/corpuskit/blob/main/CONTRIBUTING.md">Read the contributing guide &rarr;</a></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ending ================= -->
+  <section class="band section ending">
+    <div class="container">
+      <h2>Put it to <span class="mark">work<svg viewBox="0 0 220 14" preserveAspectRatio="none" aria-hidden="true"><path d="M4 10.5 C 48 5.5, 102 12.5, 216 6.5"/></svg></span></h2>
+      <div class="end-grid">
+        <div class="end-col">
+          <h3>Use a portal</h3>
+          <p>If your organisation runs one, start with a question you actually need answered, then open the citations behind whatever comes back. The habit of checking is the whole point.</p>
+        </div>
+        <div class="end-col">
+          <h3>Run your own</h3>
+          <p>Clone the repository, connect a research collection and stand up a portal your organisation controls end to end.</p>
+          <!-- Placeholder repository URL - substitute the real one at publish time -->
+          <a class="go" href="https://github.com/corpuskit/corpuskit">View the repository &rarr;</a>
+        </div>
+        <div class="end-col">
+          <h3>Help look after it</h3>
+          <p>Report what is broken, improve what is unclear, and leave the project better than you found it.</p>
+          <a class="go" href="https://github.com/corpuskit/corpuskit/blob/main/CONTRIBUTING.md">Read the contributing guide &rarr;</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="container foot-row">
+    <span><span class="fm">CorpusKit</span>&ensp;An open source research portal</span>
+    <span class="foot-links">
+      <a href="https://github.com/corpuskit/corpuskit">Repository</a>
+      <a href="https://www.apache.org/licenses/LICENSE-2.0">Licence</a>
+      <a href="https://github.com/corpuskit/corpuskit/blob/main/CONTRIBUTING.md">Contributing</a>
+    </span>
+    <span class="colophon">Set in Newsreader and Source Sans 3</span>
+  </div>
+</footer>
+
+</div><!-- /smooth-content -->
+</div><!-- /smooth-wrapper -->
+
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollSmoother.min.js"></script>
+<script>
+(function(){
+  'use strict';
+  var prm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var hasGsap = typeof window.gsap !== 'undefined' &&
+                typeof window.ScrollTrigger !== 'undefined' &&
+                typeof window.ScrollSmoother !== 'undefined';
+  var smoother = null;
+
+  if (hasGsap) {
+    gsap.registerPlugin(ScrollTrigger, ScrollSmoother);
+    if (!prm) {
+      smoother = ScrollSmoother.create({ smooth: 1.05, effects: false });
+    }
+  }
+
+  /* header hairline on scroll */
+  var head = document.querySelector('.site-head');
+  var onScroll = function(){ head.classList.toggle('scrolled', window.scrollY > 10); };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  /* in-page anchors, offset for the fixed header */
+  document.querySelectorAll('a[data-anchor]').forEach(function(a){
+    a.addEventListener('click', function(e){
+      var target = document.querySelector(a.getAttribute('href'));
+      if (!target) return;
+      e.preventDefault();
+      if (smoother) {
+        smoother.scrollTo(target, true, 'top 96px');
+      } else {
+        target.scrollIntoView({ behavior: prm ? 'auto' : 'smooth' });
+      }
+    });
+  });
+
+  /* citations opening into their matched passages */
+  var srcRows = Array.prototype.slice.call(document.querySelectorAll('.src'));
+  function setOpen(row, open){
+    row.classList.toggle('open', open);
+    var id = row.getAttribute('data-src');
+    document.querySelectorAll('[data-cit="' + id + '"]').forEach(function(btn){
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  function toggleSrc(id){
+    srcRows.forEach(function(row){
+      if (row.getAttribute('data-src') === id) {
+        setOpen(row, !row.classList.contains('open'));
+      } else {
+        setOpen(row, false);
+      }
+    });
+  }
+  document.querySelectorAll('[data-cit]').forEach(function(btn){
+    btn.addEventListener('click', function(){ toggleSrc(btn.getAttribute('data-cit')); });
+  });
+
+  /* the one signature moment: the first citation proves itself on arrival */
+  if (hasGsap && !prm) {
+    ScrollTrigger.create({
+      trigger: '#ask-sheet',
+      start: 'top 70%',
+      once: true,
+      onEnter: function(){ toggleSrc('1'); }
+    });
+  } else {
+    toggleSrc('1');
+  }
+
+  /* hero underline draws once on load */
+  var path = document.querySelector('#hero-underline path');
+  if (path && hasGsap && !prm) {
+    var len = path.getTotalLength();
+    gsap.set(path, { strokeDasharray: len, strokeDashoffset: len });
+    gsap.to(path, { strokeDashoffset: 0, duration: 0.75, delay: 0.2, ease: 'power2.out' });
+  }
+})();
+</script>
+</body>
+</html>
