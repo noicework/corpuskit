@@ -33,13 +33,19 @@ import type {
   RetrievalProvider,
   SearchOptions,
 } from '../../provider.ts'
-import { baselineMerchandising, extractPageSummary } from '../../merchandise.ts'
+import {
+  baselineMerchandising,
+  extractPageSummary,
+  findPageSummaryFieldId,
+} from '../../merchandise.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
 import { spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 
 const CATALOG_TTL_MS = 60_000
+/** Parallel page-summary field reads per list response - one small GET per bare card. */
+const PAGE_SUMMARY_FETCH_CONCURRENCY = 8
 /** Catalogue paging: 200 per call, up to 40 calls - 8,000 resources. */
 const CATALOG_PAGE_SIZE = 200
 const CATALOG_MAX_PAGES = 40
@@ -600,6 +606,12 @@ export interface AragProviderOptions {
 export class AragProvider implements RetrievalProvider {
   private readonly clients = new Map<string, KbClient>()
   private readonly catalogCache = new Map<string, { at: number; resources: ResourceSummary[] }>()
+  /**
+   * Platform page summaries by `<slug>/<resourceId>`, `null` when a resource
+   * has none. Summaries are written once at ingest, so there is no TTL;
+   * bounded by corpus size.
+   */
+  private readonly pageSummaryCache = new Map<string, string | null>()
   private readonly augmentationModelId: string
 
   constructor(private readonly opts: AragProviderOptions) {
@@ -665,6 +677,84 @@ export class AragProvider implements RetrievalProvider {
       // field to that schema in packages/core is all this needs.
       enriched: false,
     })
+  }
+
+  /**
+   * Cards must never be bare (#46). Our own enrichment (title/summary/
+   * takeaways) is overlaid later by the API from its store; until it exists
+   * for a resource, the platform's DA page-summary agent has usually already
+   * written a real summary at ingest. List endpoints return its field id
+   * (`show=values`) but never its text, so for each item whose summary is
+   * still just its title, fetch that one small field - bounded parallelism,
+   * memoised - and use it. Anything that fails leaves the item as it was.
+   */
+  private async fillPlatformSummaries<T extends { id: string; title: string; summary?: string }>(
+    tenant: TenantConfig,
+    items: T[],
+    rawById: Map<string, RawResource>,
+  ): Promise<T[]> {
+    const bare = items.filter((item) => !item.summary || item.summary === item.title)
+    if (bare.length === 0) return items
+    const client = this.client(tenant)
+    const summaries = new Map<string, string>()
+    const queue = [...bare]
+    const worker = async () => {
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        const text = await this.platformPageSummary(
+          client,
+          tenant.slug,
+          item.id,
+          rawById.get(item.id),
+        )
+        if (text) summaries.set(item.id, text)
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(PAGE_SUMMARY_FETCH_CONCURRENCY, bare.length) }, worker),
+    )
+    if (summaries.size === 0) return items
+    return items.map((item) => {
+      const text = summaries.get(item.id)
+      if (!text) return item
+      // Same rule as the baseline: a summary that merely repeats the name
+      // carries nothing, so it does not replace the fallback.
+      const merch = baselineMerchandising(rawById.get(item.id)?.title ?? item.title, text)
+      return merch.summary === merch.title ? item : { ...item, summary: merch.summary }
+    })
+  }
+
+  /** The DA page summary for one resource, via cache, else one small field read. */
+  private async platformPageSummary(
+    client: KbClient,
+    slug: string,
+    id: string,
+    raw: RawResource | undefined,
+  ): Promise<string | null> {
+    const key = `${slug}/${id}`
+    const cached = this.pageSummaryCache.get(key)
+    if (cached !== undefined) return cached
+    let result: string | null = null
+    try {
+      // Every list request asks for `show=values`, so the field pointers are
+      // on the raw resource; a resource without them has no text fields.
+      // Read them structurally so the shared RawResource type need not
+      // carry the per-method `data` shapes used elsewhere.
+      const pointers = (raw as { data?: { texts?: Record<string, unknown> } } | undefined)?.data
+      const fieldId = findPageSummaryFieldId(Object.keys(pointers?.texts ?? {}))
+      if (fieldId) {
+        const field = await client.getJson<{ extracted?: { text?: { text?: string } } }>(
+          `/resource/${id}/text/${fieldId}?show=extracted&extracted=text`,
+        )
+        const text = field.extracted?.text?.text?.trim()
+        result = text && text.length > 0 ? text : null
+      }
+    } catch {
+      // A failed read must never break a list; the card keeps its fallback
+      // and the next request retries (nothing is cached on error).
+      return null
+    }
+    this.pageSummaryCache.set(key, result)
+    return result
   }
 
   async listResources(tenant: TenantConfig): Promise<ResourceSummary[]> {
@@ -890,7 +980,7 @@ export class AragProvider implements RetrievalProvider {
       query: trimmed,
       features,
       page_size: opts.pageSize ?? 20,
-      show: ['basic', 'origin'],
+      show: ['basic', 'origin', 'values'],
       // Cross-encoder reranking pass over the retrieved candidates - verified
       // live (docs/ARAG-DEV.md has no prior record of this; see the reranker
       // note added there). This is in fact the platform's own default when
@@ -928,6 +1018,7 @@ export class AragProvider implements RetrievalProvider {
     const entries = Object.entries(found.resources ?? {})
       .filter(([, raw]) => isDisplayableResource(raw))
       .filter(([, raw]) => isDocumentationResource(raw) === Boolean(opts.docScope))
+    const rawById = new Map(entries)
     // Relevance floor: below this a match is noise, and an off-corpus query
     // should say "no results" honestly rather than surface weak hits.
     const MIN_SCORE = 0.1
@@ -993,7 +1084,11 @@ export class AragProvider implements RetrievalProvider {
       }),
     )
     const relatedQuestions = deriveRelatedQuestions(trimmed, tenant.suggestedQuestions)
-    return { query: trimmed, resources, relatedQuestions }
+    return {
+      query: trimmed,
+      resources: await this.fillPlatformSummaries(tenant, resources, rawById),
+      relatedQuestions,
+    }
   }
 
   /**
@@ -1044,6 +1139,7 @@ export class AragProvider implements RetrievalProvider {
     params.append('show', 'basic')
     params.append('show', 'extra')
     params.append('show', 'origin')
+    params.append('show', 'values')
     params.set('sort_field', opts.sortField ?? 'created')
     params.set('sort_order', opts.sortOrder ?? 'desc')
     params.set('hidden', 'false')
@@ -1066,8 +1162,12 @@ export class AragProvider implements RetrievalProvider {
       .map(([id, raw]) => ({ id, title: raw.title, raw }))
     // Plain browse keeps the canonical report (or Part A/Part 1 when no
     // primary exists). Resource detail routes still resolve every member.
-    const items: CatalogItem[] = dedupeResourceFamilies(entries)
-      .map(({ id, raw }) => catalogItemFromRaw(id, raw))
+    const kept = dedupeResourceFamilies(entries)
+    const items: CatalogItem[] = await this.fillPlatformSummaries(
+      tenant,
+      kept.map(({ id, raw }) => catalogItemFromRaw(id, raw)),
+      new Map(kept.map(({ id, raw }) => [id, raw])),
+    )
     return { items, total: raw.fulltext?.total ?? raw.total ?? items.length }
   }
 
@@ -1101,6 +1201,7 @@ export class AragProvider implements RetrievalProvider {
     params.append('show', 'basic')
     params.append('show', 'extra')
     params.append('show', 'origin')
+    params.append('show', 'values')
     params.set('sort_field', 'created')
     params.set('sort_order', 'desc')
     params.set('hidden', 'false')
@@ -1120,9 +1221,12 @@ export class AragProvider implements RetrievalProvider {
         (r.metadata?.status ?? '').toUpperCase() === 'PROCESSED'
       )
       .map(([id, raw]) => ({ id, title: raw.title, raw }))
-    return dedupeResourceFamilies(entries)
-      .slice(0, limit)
-      .map(({ id, raw }) => this.toSummary(id, raw))
+    const picked = dedupeResourceFamilies(entries).slice(0, limit)
+    return await this.fillPlatformSummaries(
+      tenant,
+      picked.map(({ id, raw }) => this.toSummary(id, raw)),
+      new Map(picked.map(({ id, raw }) => [id, raw])),
+    )
   }
 
   /**
@@ -1141,7 +1245,7 @@ export class AragProvider implements RetrievalProvider {
       query,
       features: ['keyword', 'semantic'],
       page_size: 200,
-      show: ['basic', 'extra', 'origin'],
+      show: ['basic', 'extra', 'origin', 'values'],
       search_configuration: SEARCH_CONFIG_RESEARCH_FIND,
     }
     const filters = [
@@ -1164,12 +1268,17 @@ export class AragProvider implements RetrievalProvider {
       })
       .filter((s) => s.best >= MIN_SCORE)
       .sort((a, b) => b.best - a.best)
-    const items = dedupeResourceFamilies(scored)
-      .map(({ id, raw }) => catalogItemFromRaw(id, raw))
+    const kept = dedupeResourceFamilies(scored)
     const page = opts.page ?? 0
     const pageSize = opts.pageSize ?? 24
     const start = page * pageSize
-    return { items: items.slice(start, start + pageSize), total: items.length }
+    const slice = kept.slice(start, start + pageSize)
+    const items = await this.fillPlatformSummaries(
+      tenant,
+      slice.map(({ id, raw }) => catalogItemFromRaw(id, raw)),
+      new Map(slice.map(({ id, raw }) => [id, raw])),
+    )
+    return { items, total: kept.length }
   }
 
   async facets(
