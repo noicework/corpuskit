@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CorpusKit – an open source research portal</title>
+<meta name="description" content="CorpusKit is an open source research portal. Search a research collection, ask questions that answer with numbered citations, browse the Library and follow the knowledge map. Published under the Apache 2.0 licence.">
+<meta name="theme-color" content="#F5F1E8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='7.5' y='2.5' width='12' height='16' rx='1.5' fill='none' stroke='%23211E19' stroke-width='1.5' opacity='.45'/%3E%3Crect x='3.5' y='5.5' width='12' height='16' rx='1.5' fill='%23FCFAF4' stroke='%23211E19' stroke-width='1.5'/%3E%3Crect x='1.5' y='9' width='5' height='3' rx='1' fill='%23B8402C'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Instrument+Sans:wght@400..700&amp;family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..600&amp;display=swap">
+<style>
+/* ============================================================
+   CorpusKit home – research in working order
+   Warm paper, carbon ink, document blue, annotation red.
+   ============================================================ */
+
+:root{
+  --paper:      #F5F1E8;
+  --paper-deep: #EEE8DA;
+  --card:       #FCFAF4;
+  --ink:        #211E19;
+  --ink-2:      #4A453C;
+  --ink-3:      #6B6457;
+  --line:       #DCD4C3;
+  --line-soft:  #E7E1D2;
+  --line-strong:#C9C0AD;
+  --blue:       #2B50C8;
+  --blue-deep:  #22409F;
+  --red:        #B8402C;
+  --highlight:  #F1E3A0;
+  --tab-ochre:  #D9A441;
+  --tab-blue:   #7D96C9;
+  --tab-sage:   #8CA083;
+  --tab-clay:   #C98B72;
+  --ok:         #47704D;
+  --mid:        #8A6414;
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --sans:  "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono:  "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+
+*, *::before, *::after{ box-sizing:border-box; margin:0; padding:0; }
+
+html{ -webkit-text-size-adjust:100%; }
+
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-optical-sizing:auto;
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+
+/* paper grain */
+body::after{
+  content:"";
+  position:fixed; inset:0;
+  z-index:120;
+  pointer-events:none;
+  opacity:.05;
+  mix-blend-mode:multiply;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='280' height='280' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection{ background:var(--highlight); color:var(--ink); }
+
+a{ color:var(--blue); text-decoration:none; }
+a:hover{ color:var(--blue-deep); }
+:focus-visible{ outline:2px solid var(--blue); outline-offset:3px; border-radius:2px; }
+
+img, svg{ max-width:100%; }
+
+.wrap{ width:min(1340px, 100% - clamp(2.5rem, 6vw, 7rem)); margin-inline:auto; }
+
+/* ---------- typography ---------- */
+
+h1, h2, h3{ font-family:var(--serif); font-weight:430; letter-spacing:-0.012em; text-wrap:balance; }
+h1{ font-size:clamp(2.7rem, 5.3vw, 4.6rem); line-height:1.04; }
+h2{ font-size:clamp(2rem, 3.1vw, 2.9rem); line-height:1.1; }
+h3{ font-size:clamp(1.45rem, 2vw, 1.85rem); line-height:1.2; }
+
+.lede{
+  font-size:clamp(1.1rem, 1.35vw, 1.28rem);
+  line-height:1.62;
+  color:var(--ink-2);
+  max-width:34em;
+}
+.prose p{ color:var(--ink-2); max-width:38em; }
+.prose p + p{ margin-top:1.1em; }
+
+.mono{ font-family:var(--mono); }
+
+/* ---------- buttons ---------- */
+
+.btn{
+  display:inline-flex; align-items:center; gap:.55rem;
+  font-family:var(--sans); font-weight:500; font-size:.95rem;
+  padding:.82rem 1.4rem; border-radius:8px;
+  border:1px solid transparent;
+  cursor:pointer;
+  transition:background-color .18s ease, border-color .18s ease, color .18s ease;
+}
+.btn-primary{ background:var(--ink); color:var(--paper); }
+.btn-primary:hover{ background:#38332B; color:var(--paper); }
+.btn-ghost{ border-color:var(--line-strong); color:var(--ink); background:transparent; }
+.btn-ghost:hover{ border-color:var(--ink); color:var(--ink); }
+
+/* ---------- nav ---------- */
+
+.site-nav{
+  position:fixed; top:0; left:0; right:0; z-index:100;
+  background:rgba(245,241,232,.92);
+  -webkit-backdrop-filter:blur(10px);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid transparent;
+  transition:border-color .25s ease;
+}
+.site-nav.is-scrolled{ border-bottom-color:var(--line); }
+.nav-inner{
+  display:flex; align-items:center; gap:2.2rem;
+  height:64px;
+}
+.brand{
+  display:inline-flex; align-items:center; gap:.6rem;
+  color:var(--ink); font-family:var(--serif); font-weight:500;
+  font-size:1.22rem; letter-spacing:-0.01em;
+}
+.brand:hover{ color:var(--ink); }
+.brand svg{ display:block; }
+.nav-links{
+  display:flex; gap:1.7rem; margin-left:auto;
+  font-family:var(--sans); font-size:.92rem;
+}
+.nav-links a{ color:var(--ink-2); }
+.nav-links a:hover{ color:var(--ink); }
+.nav-cta{ display:flex; align-items:center; gap:1.2rem; margin-left:2rem; }
+.nav-gh{
+  display:inline-flex; align-items:center; gap:.45rem;
+  color:var(--ink-2); font-family:var(--sans); font-size:.92rem;
+}
+.nav-gh:hover{ color:var(--ink); }
+.nav-signin{
+  font-family:var(--sans); font-size:.92rem; font-weight:500;
+  color:var(--ink); border:1px solid var(--line-strong);
+  padding:.42rem 1rem; border-radius:7px;
+  transition:border-color .18s ease;
+}
+.nav-signin:hover{ border-color:var(--ink); color:var(--ink); }
+
+@media (max-width: 900px){
+  .nav-links{ display:none; }
+  .nav-cta{ margin-left:auto; }
+}
+
+/* ---------- fragments (product material) ---------- */
+
+.frag{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:10px;
+  box-shadow:0 1px 0 rgba(33,30,25,.03), 0 24px 48px -36px rgba(33,30,25,.28);
+  font-family:var(--sans);
+}
+.frag-pad{ padding:1.3rem 1.4rem; }
+
+.frag-head{
+  display:flex; align-items:baseline; justify-content:space-between; gap:1rem;
+  padding:.8rem 1.4rem;
+  border-bottom:1px solid var(--line-soft);
+  font-family:var(--mono); font-size:.68rem; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--ink-3);
+}
+
+.cite{
+  display:inline-block;
+  font-family:var(--mono); font-size:.68em; font-weight:500;
+  color:var(--blue);
+  border:1px solid transparent;
+  border-radius:4px;
+  padding:0 .28em;
+  transform:translateY(-.45em);
+  line-height:1.5;
+}
+a.cite:hover{ background:rgba(43,80,200,.1); }
+
+.chip{
+  display:inline-flex; align-items:center; gap:.4rem;
+  font-family:var(--sans); font-size:.78rem; font-weight:500;
+  padding:.28rem .7rem; border-radius:99px;
+  border:1px solid var(--line);
+  color:var(--ink-2); background:var(--card);
+}
+.chip .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+.chip-ok{ color:var(--ok); border-color:#C4D2C2; background:#EFF3EA; }
+.chip-ok .dot{ background:var(--ok); }
+.chip-mid{ color:var(--mid); border-color:#DDCBA0; background:#F6EEDB; }
+.chip-mid .dot{ background:var(--mid); }
+.chip-low{ color:var(--red); border-color:#E0BBB0; background:#F7E9E4; }
+.chip-low .dot{ background:var(--red); }
+
+.hl{
+  background-image:linear-gradient(rgba(241,227,160,.95), rgba(241,227,160,.95));
+  background-repeat:no-repeat;
+  background-size:100% 100%;
+  border-radius:2px;
+  padding:.04em .12em; margin:-.04em -.02em;
+  box-decoration-break:clone;
+  -webkit-box-decoration-break:clone;
+}
+
+/* index tab on fragment cards */
+.frag-wrap{ position:relative; padding-top:15px; }
+.frag-tab{
+  position:absolute; top:0; left:26px;
+  height:34px; padding:.28rem .85rem 1rem;
+  border-radius:7px 7px 0 0;
+  font-family:var(--mono); font-size:.66rem; font-weight:500;
+  letter-spacing:.1em; text-transform:uppercase;
+  color:rgba(33,30,25,.78);
+}
+.frag-wrap > .frag{ position:relative; }
+
+/* ---------- hero ---------- */
+
+.hero{ padding-top:clamp(8rem, 13vh, 10.5rem); padding-bottom:clamp(4.5rem, 7vw, 7rem); }
+.hero-grid{
+  display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr);
+  gap:clamp(3rem, 5vw, 5.5rem);
+  align-items:center;
+}
+.hero h1{ max-width:11em; }
+.hero .lede{ margin-top:1.6rem; }
+.hero-actions{ display:flex; flex-wrap:wrap; gap:.9rem; margin-top:2.3rem; }
+.hero-note{
+  margin-top:1.5rem;
+  font-family:var(--sans); font-size:.88rem; color:var(--ink-3);
+}
+
+.hero-demo{ position:relative; min-height:570px; }
+.demo-q{
+  position:absolute; top:0; left:0; width:min(88%, 560px); z-index:3;
+  display:flex; align-items:center; gap:.8rem;
+  padding:.95rem 1.25rem;
+}
+.demo-q .q-text{ font-family:var(--serif); font-size:1.05rem; color:var(--ink); flex:1; min-width:0; }
+.demo-q .q-go{
+  font-family:var(--sans); font-size:.82rem; font-weight:500;
+  color:var(--paper); background:var(--ink);
+  padding:.34rem .85rem; border-radius:6px; flex:none;
+}
+.demo-answer{
+  position:absolute; top:96px; left:0; width:min(58%, 470px); z-index:2;
+}
+.demo-answer .a-body{
+  font-family:var(--serif); font-size:.98rem; line-height:1.62; color:var(--ink-2);
+}
+.demo-answer .a-quality{
+  display:flex; flex-wrap:wrap; align-items:center; gap:.6rem;
+  margin-top:1.05rem;
+}
+.demo-answer .a-scores{ font-family:var(--mono); font-size:.7rem; color:var(--ink-3); }
+.demo-source{
+  position:absolute; top:252px; right:0; width:min(39.5%, 330px); z-index:1;
+}
+.demo-source .s-title{ font-family:var(--serif); font-size:1.02rem; font-weight:500; line-height:1.35; }
+.demo-source .s-meta{ font-family:var(--mono); font-size:.68rem; color:var(--ink-3); margin-top:.4rem; }
+.demo-source .s-passage{
+  font-family:var(--serif); font-size:.9rem; line-height:1.6; color:var(--ink-2);
+  margin-top:.9rem;
+}
+.demo-caption{
+  position:absolute; left:0; bottom:0;
+  font-family:var(--mono); font-size:.7rem; color:var(--ink-3);
+}
+.demo-sources-list{
+  margin-top:1.1rem; padding-top:.9rem; border-top:1px solid var(--line-soft);
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-2);
+}
+.demo-sources-list li{ list-style:none; display:flex; gap:.55rem; }
+.demo-sources-list li + li{ margin-top:.35rem; }
+.demo-sources-list .n{ font-family:var(--mono); font-size:.7rem; color:var(--blue); flex:none; padding-top:.1em; }
+
+@media (max-width: 1023px){
+  .hero-grid{ grid-template-columns:1fr; }
+  .hero-demo{ min-height:0; display:flex; flex-direction:column; gap:1.1rem; }
+  .demo-q, .demo-answer, .demo-source{ position:static; width:100%; }
+  .demo-caption{ position:static; order:9; }
+}
+
+/* ---------- section shells ---------- */
+
+.section{ padding-block:clamp(5rem, 9vw, 8.5rem); }
+.section-head{ max-width:44em; }
+.section-head .lede{ margin-top:1.3rem; }
+
+/* ---------- signature: an answer you can take apart ---------- */
+
+.sig{ padding-block:0; }
+.sig-stage{
+  min-height:100svh;
+  display:flex; flex-direction:column; justify-content:center;
+  padding-block:clamp(4rem, 7vh, 6rem);
+}
+.sig-grid{
+  position:relative;
+  display:grid; grid-template-columns:minmax(0, 10fr) minmax(0, 9fr);
+  gap:clamp(3rem, 5vw, 6rem);
+  margin-top:clamp(2.5rem, 4vh, 4rem);
+  align-items:start;
+}
+.sig-answer{
+  font-family:var(--serif);
+  font-size:clamp(1.3rem, 1.9vw, 1.72rem);
+  line-height:1.5;
+  color:var(--ink);
+  max-width:21em;
+}
+.sig-answer .cite{ border-color:rgba(43,80,200,.4); }
+.sig-steps{
+  list-style:none; margin-top:2.6rem; max-width:26em;
+}
+.sig-steps li{
+  display:flex; gap:1rem; align-items:baseline;
+  font-family:var(--sans); font-size:.98rem; color:var(--ink-3);
+  padding-block:.55rem;
+  transition:color .25s ease;
+}
+.sig-steps .n{
+  font-family:var(--mono); font-size:.72rem; flex:none; width:1.4em;
+  color:var(--ink-3);
+  transition:color .25s ease;
+}
+.sig-steps li.is-active{ color:var(--ink); }
+.sig-steps li.is-active .n{ color:var(--red); }
+
+.sig-right{ display:flex; flex-direction:column; align-items:stretch; gap:1.4rem; }
+.doc-card .s-title{ font-family:var(--serif); font-size:1.12rem; font-weight:500; line-height:1.35; }
+.doc-card .s-meta{ font-family:var(--mono); font-size:.7rem; color:var(--ink-3); margin-top:.45rem; }
+.doc-card .s-passage{
+  font-family:var(--serif); font-size:.98rem; line-height:1.66; color:var(--ink-2);
+  margin-top:1.05rem;
+}
+.doc-card .s-chip{
+  display:inline-block; margin-top:1rem;
+  font-family:var(--mono); font-size:.68rem; letter-spacing:.06em;
+  color:var(--red);
+}
+
+.conf-panel{ width:min(100%, 420px); align-self:flex-end; }
+.conf-panel .c-head{
+  display:flex; align-items:center; justify-content:space-between; gap:1rem;
+}
+.conf-panel .c-title{ font-family:var(--sans); font-weight:600; font-size:.95rem; }
+.conf-panel .c-line{
+  font-family:var(--sans); font-size:.85rem; color:var(--ink-2); margin-top:.55rem; max-width:30em;
+}
+.qbars{ margin-top:1.1rem; display:flex; flex-direction:column; gap:.65rem; }
+.qbar{ display:grid; grid-template-columns:7.2em 1fr 2.8em; align-items:center; gap:.8rem; }
+.qbar .l{ font-family:var(--sans); font-size:.78rem; color:var(--ink-2); }
+.qbar .v{ font-family:var(--mono); font-size:.7rem; color:var(--ink-3); text-align:right; }
+.qbar-track{ height:4px; background:var(--line-soft); border-radius:2px; overflow:hidden; }
+.qbar-fill{ height:100%; background:var(--ink); border-radius:2px; }
+
+.sig-thread{
+  position:absolute; inset:0; z-index:4;
+  pointer-events:none; overflow:visible;
+  display:none;
+}
+.sig-thread path{ fill:none; stroke:var(--red); stroke-width:1.5; }
+.sig-thread circle{ fill:var(--red); }
+
+@media (min-width:1024px){
+  .sig-thread{ display:block; }
+}
+@media (max-width:1023px){
+  .sig-stage{ min-height:0; }
+  .sig-grid{ grid-template-columns:1fr; gap:0; }
+  .sig-steps{ display:none; }
+  .sig-answer{ padding-bottom:2.2rem; }
+  .sig-right{
+    border-left:1px solid var(--line-strong);
+    padding-left:1.4rem; margin-left:.35rem;
+    position:relative;
+  }
+  .sig-right::before{
+    content:""; position:absolute; left:-4px; top:-6px;
+    width:7px; height:7px; border-radius:50%; background:var(--red);
+  }
+}
+
+/* ---------- candour (dark band) ---------- */
+
+.candour{ background:var(--ink); color:#EDE7DA; }
+.candour .section-head{ max-width:40em; }
+.candour h2{ color:#F3EEE1; }
+.candour .lede{ color:#B9B1A0; }
+.candour-grid{
+  display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr);
+  gap:clamp(3rem, 5vw, 6rem);
+  align-items:center;
+}
+.frag-dark{
+  background:#2A2620; border:1px solid #3D372D; border-radius:10px;
+  box-shadow:0 24px 48px -36px rgba(0,0,0,.6);
+  font-family:var(--sans);
+}
+.frag-dark .fd-q{
+  padding:1rem 1.4rem; border-bottom:1px solid #3D372D;
+  font-family:var(--serif); font-size:1rem; color:#CFC7B6;
+}
+.frag-dark .fd-body{ padding:1.4rem; }
+.frag-dark .fd-state{
+  font-family:var(--serif); font-size:1.35rem; font-weight:450; color:#F3EEE1;
+}
+.frag-dark .fd-text{ margin-top:.7rem; font-size:.9rem; line-height:1.6; color:#B9B1A0; max-width:34em; }
+.frag-dark .fd-text a{ color:#9FB4E8; }
+.frag-dark .fd-text a:hover{ color:#C0CFF2; }
+.candour-chipnote{ margin-top:1.3rem; }
+.candour-chipnote .chip{
+  background:#2A2620; border-color:#5A4038; color:#E2A08F;
+}
+.candour-chipnote .chip .dot{ background:#D9705A; }
+.candour-chipnote .note{
+  display:block; margin-top:.55rem;
+  font-family:var(--mono); font-size:.7rem; color:#8D8574;
+}
+.candour-close{ margin-top:2.2rem; font-family:var(--sans); font-size:.95rem; color:#B9B1A0; max-width:36em; }
+
+@media (max-width:1023px){
+  .candour-grid{ grid-template-columns:1fr; }
+}
+
+/* ---------- ways in ---------- */
+
+.way{
+  display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 7fr);
+  gap:clamp(2.5rem, 5vw, 6rem);
+  align-items:center;
+  margin-top:clamp(4.5rem, 7vw, 7rem);
+}
+.way.alt .way-text{ order:2; }
+.way.alt .way-frag{ order:1; }
+.way-text .prose{ margin-top:1.1rem; }
+.way-text .prose p{ font-family:var(--sans); font-size:.98rem; line-height:1.68; }
+
+@media (max-width:1023px){
+  .way{ grid-template-columns:1fr; gap:1.8rem; }
+  .way.alt .way-text{ order:1; }
+  .way.alt .way-frag{ order:2; }
+}
+
+/* search fragment */
+.sr-bar{
+  display:flex; align-items:center; gap:.75rem;
+  padding:.85rem 1.3rem; border-bottom:1px solid var(--line-soft);
+}
+.sr-bar .sr-q{ font-family:var(--sans); font-size:.95rem; color:var(--ink); flex:1; min-width:0; }
+.sr-modes{ display:flex; gap:.35rem; flex:none; }
+.sr-modes span{
+  font-family:var(--mono); font-size:.66rem; letter-spacing:.04em;
+  padding:.22rem .6rem; border-radius:99px; color:var(--ink-3);
+}
+.sr-modes .on{ background:var(--ink); color:var(--paper); }
+.sr-filters{
+  display:flex; flex-wrap:wrap; gap:.5rem; padding:.8rem 1.3rem 0;
+}
+.sr-result{ padding:1.05rem 1.3rem; }
+.sr-result + .sr-result{ border-top:1px solid var(--line-soft); }
+.sr-result .r-top{ display:flex; align-items:baseline; justify-content:space-between; gap:1rem; }
+.sr-result .r-title{ font-family:var(--sans); font-weight:600; font-size:.95rem; color:var(--blue); }
+.sr-result .r-score{ font-family:var(--mono); font-size:.7rem; color:var(--ink-3); flex:none; }
+.sr-result .r-score .weak{ color:var(--red); }
+.sr-result .r-meta{ font-family:var(--mono); font-size:.68rem; color:var(--ink-3); margin-top:.25rem; }
+.sr-result .r-passage{
+  font-family:var(--serif); font-size:.9rem; line-height:1.6; color:var(--ink-2); margin-top:.55rem;
+}
+.sr-foot{
+  padding:.75rem 1.3rem; border-top:1px solid var(--line-soft);
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-3);
+  display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+}
+
+/* ask / deep research fragment */
+.dr-q{ padding:1.1rem 1.4rem; border-bottom:1px solid var(--line-soft);
+  font-family:var(--serif); font-size:1.02rem; }
+.dr-label{
+  padding:.8rem 1.4rem 0;
+  font-family:var(--mono); font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3);
+}
+.dr-list{ list-style:none; padding:.6rem 1.4rem 1.2rem; }
+.dr-list li{
+  display:flex; gap:.8rem; align-items:baseline; padding-block:.5rem;
+  font-family:var(--sans); font-size:.9rem; color:var(--ink-2);
+}
+.dr-list li + li{ border-top:1px dashed var(--line-soft); }
+.dr-list .n{ font-family:var(--mono); font-size:.7rem; color:var(--blue); flex:none; }
+.dr-list .st{ margin-left:auto; font-family:var(--mono); font-size:.68rem; color:var(--ink-3); flex:none; }
+.dr-list .st.live{ color:var(--mid); }
+.dr-foot{
+  padding:.8rem 1.4rem; border-top:1px solid var(--line-soft);
+  display:flex; gap:1.3rem; flex-wrap:wrap;
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-3);
+}
+
+/* library fragment */
+.lib-filters{
+  display:flex; flex-wrap:wrap; align-items:center; gap:.5rem;
+  padding:.9rem 1.3rem; border-bottom:1px solid var(--line-soft);
+}
+.lib-filters .chip.on{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+.lib-grid{ display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-soft); }
+.lib-card{ background:var(--card); padding:1.2rem 1.3rem; }
+.lib-card .k{ font-family:var(--mono); font-size:.66rem; letter-spacing:.06em; text-transform:uppercase; }
+.lib-card .k.ochre{ color:#9A7215; }
+.lib-card .k.clay{ color:#A05E42; }
+.lib-card .t{ font-family:var(--serif); font-size:1.05rem; font-weight:500; line-height:1.35; margin-top:.5rem; }
+.lib-card .s{ font-family:var(--sans); font-size:.84rem; line-height:1.55; color:var(--ink-2); margin-top:.55rem; }
+.lib-card .tags{ display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.8rem; }
+.lib-card .tags span{
+  font-family:var(--mono); font-size:.66rem; color:var(--ink-3);
+  border:1px solid var(--line); border-radius:99px; padding:.16rem .55rem;
+}
+.lib-foot{
+  padding:.75rem 1.3rem; border-top:1px solid var(--line-soft);
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-3);
+}
+@media (max-width:560px){ .lib-grid{ grid-template-columns:1fr; } }
+
+/* knowledge map fragment */
+.map-frame{ padding:1rem 1.2rem .6rem; }
+.map-frame svg{ display:block; width:100%; height:auto; }
+.map-foot{
+  padding:.75rem 1.3rem .95rem; border-top:1px solid var(--line-soft);
+  display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-3);
+}
+.map-node{ fill:var(--card); stroke:var(--line-strong); }
+.map-node-label{ font-family:var(--sans); font-size:11.5px; fill:var(--ink); }
+.map-edge{ fill:none; stroke:var(--line-strong); stroke-width:1.1; }
+.map-edge-label{ font-family:var(--mono); font-size:9px; fill:var(--ink-3); }
+.map-edge.on{ stroke:var(--blue); stroke-width:1.5; }
+.map-inspect{ font-family:var(--mono); font-size:9.5px; fill:var(--blue); }
+
+/* ---------- stewardship ---------- */
+
+.stew-grid{
+  display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr);
+  gap:clamp(3rem, 5vw, 6rem);
+  align-items:center;
+  margin-top:clamp(2.5rem, 4vw, 4rem);
+}
+.stew-sub{
+  display:grid; grid-template-columns:1fr 1fr;
+  gap:clamp(2.5rem, 4vw, 5rem);
+  margin-top:clamp(4rem, 6vw, 6rem);
+  padding-top:clamp(2.5rem, 4vw, 4rem);
+  border-top:1px solid var(--line);
+}
+.stew-sub .prose{ margin-top:.9rem; }
+.stew-sub .prose p{ font-family:var(--sans); font-size:.95rem; line-height:1.68; }
+
+.ch-head{
+  display:flex; align-items:baseline; justify-content:space-between; gap:1rem;
+  padding:.9rem 1.4rem; border-bottom:1px solid var(--line-soft);
+}
+.ch-head .t{ font-family:var(--sans); font-weight:600; font-size:.95rem; }
+.ch-head .c{ font-family:var(--mono); font-size:.7rem; color:var(--ink-3); }
+.ch-row{
+  display:flex; align-items:baseline; gap:.9rem;
+  padding:.85rem 1.4rem;
+  font-family:var(--sans); font-size:.88rem; color:var(--ink-2);
+}
+.ch-row + .ch-row{ border-top:1px solid var(--line-soft); }
+.ch-row .flag{ font-family:var(--mono); font-size:.68rem; flex:none; color:var(--red); min-width:9.5em; }
+.ch-row .flag.softer{ color:var(--mid); }
+.ch-row .act{ margin-left:auto; flex:none; font-family:var(--sans); font-size:.8rem; }
+.ch-foot{
+  padding:.8rem 1.4rem; border-top:1px solid var(--line-soft);
+  display:flex; gap:1.4rem; flex-wrap:wrap;
+  font-family:var(--sans); font-size:.8rem; color:var(--ink-3);
+}
+
+@media (max-width:1023px){
+  .stew-grid{ grid-template-columns:1fr; }
+  .stew-sub{ grid-template-columns:1fr; gap:2.5rem; }
+}
+
+/* ---------- run ---------- */
+
+.run{ background:var(--paper-deep); }
+.run-grid{
+  display:grid; grid-template-columns:minmax(0, 6fr) minmax(0, 5fr);
+  gap:clamp(3rem, 5vw, 6rem);
+  margin-top:clamp(2.5rem, 4vw, 4rem);
+  align-items:start;
+}
+.run-code{
+  background:var(--ink); color:#D8D1C2; border-radius:10px;
+  padding:1.3rem 1.5rem;
+  font-family:var(--mono); font-size:.82rem; line-height:1.9;
+  overflow-x:auto;
+  box-shadow:0 24px 48px -36px rgba(33,30,25,.4);
+}
+.run-code .cm{ color:#8D8574; }
+.run-code .hi{ color:#F3EEE1; }
+.run-cols{
+  display:grid; grid-template-columns:1fr 1fr;
+  gap:clamp(2.5rem, 4vw, 5rem);
+  margin-top:clamp(3.5rem, 5vw, 5rem);
+  padding-top:clamp(2.5rem, 4vw, 4rem);
+  border-top:1px solid var(--line-strong);
+}
+.run-cols .prose{ margin-top:.9rem; }
+.run-cols .prose p{ font-family:var(--sans); font-size:.95rem; line-height:1.68; }
+.know-list{ list-style:none; margin-top:.9rem; }
+.know-list li{
+  font-family:var(--sans); font-size:.95rem; line-height:1.6; color:var(--ink-2);
+  padding:.75rem 0 .75rem 1.5rem; position:relative;
+}
+.know-list li + li{ border-top:1px solid var(--line); }
+.know-list li::before{
+  content:""; position:absolute; left:0; top:1.42em;
+  width:7px; height:7px; border-radius:50%; background:var(--line-strong);
+}
+.run-note{ margin-top:1.1rem; font-family:var(--mono); font-size:.72rem; color:var(--ink-3); }
+
+@media (max-width:1023px){
+  .run-grid{ grid-template-columns:1fr; }
+  .run-cols{ grid-template-columns:1fr; gap:2.5rem; }
+}
+
+/* ---------- contribute ---------- */
+
+.contrib .section-head{ max-width:40em; }
+.contrib .prose{ margin-top:1.4rem; max-width:40em; }
+.contrib .prose p{ font-size:1.02rem; }
+
+/* ---------- ending ---------- */
+
+.ending{ padding-bottom:clamp(3rem, 5vw, 4.5rem); }
+.routes{ list-style:none; margin-top:clamp(2.5rem, 4vw, 4rem); border-top:1px solid var(--line); }
+.routes li{ border-bottom:1px solid var(--line); }
+.routes a{
+  display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr) auto;
+  gap:2rem; align-items:baseline;
+  padding:1.7rem .2rem;
+  color:var(--ink);
+  transition:color .18s ease;
+}
+.routes .r-title{ font-family:var(--serif); font-size:clamp(1.35rem, 2vw, 1.7rem); font-weight:450; }
+.routes .r-desc{ font-family:var(--sans); font-size:.95rem; color:var(--ink-3); }
+.routes .r-arrow{
+  font-family:var(--sans); font-size:1.1rem; color:var(--ink-3);
+  transition:transform .18s ease, color .18s ease;
+}
+.routes a:hover{ color:var(--blue-deep); }
+.routes a:hover .r-arrow{ transform:translateX(5px); color:var(--blue-deep); }
+
+.colophon{
+  display:flex; align-items:baseline; justify-content:space-between; gap:1.5rem; flex-wrap:wrap;
+  margin-top:clamp(3.5rem, 6vw, 5.5rem);
+  font-family:var(--sans); font-size:.85rem; color:var(--ink-3);
+}
+.colophon .links{ display:flex; gap:1.5rem; }
+.colophon a{ color:var(--ink-2); }
+.colophon a:hover{ color:var(--ink); }
+
+@media (max-width:760px){
+  .routes a{ grid-template-columns:1fr auto; }
+  .routes .r-desc{ grid-column:1 / -1; }
+}
+
+/* large displays breathe a little more */
+@media (min-width:1800px){
+  .wrap{ width:min(1480px, 100% - 10rem); }
+  body{ font-size:17px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="CorpusKit home">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <rect x="7.5" y="2.5" width="12" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".45"/>
+        <rect x="3.5" y="5.5" width="12" height="16" rx="1.5" fill="var(--card)" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="1.5" y="9" width="5" height="3" rx="1" fill="var(--red)"/>
+      </svg>
+      CorpusKit
+    </a>
+    <nav class="nav-links" aria-label="Page sections">
+      <a href="#evidence">Evidence</a>
+      <a href="#ways">Ways in</a>
+      <a href="#run">Run it</a>
+      <a href="#contribute">Contribute</a>
+    </nav>
+    <div class="nav-cta">
+      <!-- placeholder repository URL - confirm before publishing -->
+      <a class="nav-gh" href="https://github.com/corpuskit/corpuskit">
+        <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a class="nav-signin" href="/auth/login">Sign in</a>
+    </div>
+  </div>
+</header>
+
+<div id="smooth-wrapper">
+<div id="smooth-content">
+<main id="top">
+
+  <!-- ================= hero ================= -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <h1>Put your organisation's research to work</h1>
+        <p class="lede">CorpusKit is an open source research portal. Connect a research collection and people can search it, ask questions that come back with numbered citations, browse the Library and follow the relationships between resources. The evidence stays within reach the whole time, so checking a claim is part of finding it.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/corpuskit/corpuskit">View the repository</a>
+          <a class="btn btn-ghost" href="#evidence">See how an answer holds up</a>
+        </div>
+        <p class="hero-note">Published under the Apache 2.0 licence. Runs on your own infrastructure.</p>
+      </div>
+
+      <div class="hero-demo" role="img" aria-label="A portal answering a research question with citations, quality signals and a marked source passage">
+        <div class="frag demo-q">
+          <span class="q-text">How quickly do seagrass meadows recover after major floods?</span>
+          <span class="q-go">Ask</span>
+        </div>
+
+        <article class="frag demo-answer">
+          <div class="frag-head"><span>Cited answer</span><span>Streaming</span></div>
+          <div class="frag-pad">
+            <p class="a-body">Monitoring across five estuaries found that meadows returned to near their pre-flood extent within three growing seasons&nbsp;<span class="cite">1</span>. Recovery was slower where winter turbidity stayed above the long-term median&nbsp;<span class="cite">2</span>.</p>
+            <!-- quality scores are plausible placeholders -->
+            <div class="a-quality">
+              <span class="chip chip-ok"><span class="dot"></span>High confidence</span>
+              <span class="a-scores">relevance 0.86 &#183; groundedness 0.91 &#183; context 0.78</span>
+            </div>
+            <ol class="demo-sources-list">
+              <li><span class="n">1</span>Estuarine seagrass condition assessment 2019 to 2023</li>
+              <li><span class="n">2</span>Turbidity and light limitation in flood-affected estuaries</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="frag demo-source">
+          <div class="frag-pad">
+            <h2 class="s-title" style="font-size:1.02rem">Turbidity and light limitation in flood-affected estuaries</h2>
+            <p class="s-meta">report &#183; 2023 &#183; water quality</p>
+            <p class="s-passage"><span class="hl">Sites where mean winter turbidity remained above the long-term median showed significantly slower recovery of seagrass extent</span> over the two years following the floods.</p>
+          </div>
+        </article>
+
+        <!-- illustrative product material from a coastal catchment collection -->
+        <p class="demo-caption">product material, abridged</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= signature: claim to evidence ================= -->
+  <section class="sig" id="evidence">
+    <div class="sig-stage">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>An answer you can take apart</h2>
+          <p class="lede">A cited answer is a claim with its working attached. Follow one claim from the answer back to the passage that supports it.</p>
+        </div>
+
+        <div class="sig-grid">
+          <div class="sig-left">
+            <p class="sig-answer">Meadows recovered to near their pre-flood extent within three growing seasons, though recovery was slower where winter turbidity stayed above the long-term median&nbsp;<span class="cite" id="sigCite">2</span>.</p>
+            <ol class="sig-steps" id="sigSteps">
+              <li><span class="n">1</span>Each claim in the answer carries a numbered citation</li>
+              <li><span class="n">2</span>The citation opens the research source behind it</li>
+              <li><span class="n">3</span>The matched passage is marked in the source itself</li>
+              <li><span class="n">4</span>Confidence states, in plain language, how well the sources hold the answer up</li>
+            </ol>
+          </div>
+
+          <div class="sig-right">
+            <article class="frag doc-card" id="sigSource">
+              <div class="frag-pad">
+                <h3 class="s-title">Turbidity and light limitation in flood-affected estuaries</h3>
+                <p class="s-meta">report &#183; 2023 &#183; water quality &#183; 148 pages</p><!-- page count is a plausible placeholder -->
+                <p class="s-passage"><span class="hl">Sites where mean winter turbidity remained above the long-term median showed significantly slower recovery of seagrass extent over the two years following the floods.</span> <span class="hl">At these sites, light at the canopy fell below the minimum requirement for Zostera muelleri on 63 per cent of monitored days.</span></p><!-- figure is a plausible placeholder -->
+                <span class="s-chip" id="sigChip">matched passage &#183; page 41</span>
+              </div>
+            </article>
+
+            <aside class="frag conf-panel" id="sigConf">
+              <div class="frag-pad">
+                <div class="c-head">
+                  <span class="c-title">Answer quality</span>
+                  <span class="chip chip-ok"><span class="dot"></span>High confidence</span>
+                </div>
+                <p class="c-line">The cited passages directly support this answer. Every answer reports the same three checks.</p>
+                <div class="qbars">
+                  <div class="qbar"><span class="l">Relevance</span><span class="qbar-track"><span class="qbar-fill" style="display:block;width:86%"></span></span><span class="v">0.86</span></div>
+                  <div class="qbar"><span class="l">Groundedness</span><span class="qbar-track"><span class="qbar-fill" style="display:block;width:91%"></span></span><span class="v">0.91</span></div>
+                  <div class="qbar"><span class="l">Context</span><span class="qbar-track"><span class="qbar-fill" style="display:block;width:78%"></span></span><span class="v">0.78</span></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <svg class="sig-thread" id="sigThread" aria-hidden="true">
+            <path id="sigThreadPath" d=""/>
+            <circle id="sigThreadDot" r="3" cx="-10" cy="-10"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= candour ================= -->
+  <section class="section candour">
+    <div class="wrap">
+      <div class="candour-grid">
+        <div>
+          <div class="section-head">
+            <h2>It can say no</h2>
+            <p class="lede">Not every question has support in a collection, and pretending otherwise is how research tools lose trust. CorpusKit labels weak matches, states low confidence plainly and will answer with nothing rather than a confident guess.</p>
+          </div>
+          <p class="candour-close">Administrators see the same candour. Knowledge-gap reporting shows what people asked that the collection could not answer, so the gaps become work rather than surprises.</p>
+        </div>
+        <div>
+          <article class="frag-dark">
+            <p class="fd-q">Do cormorant numbers affect seagrass recovery?</p>
+            <div class="fd-body">
+              <p class="fd-state">No direct evidence found</p>
+              <p class="fd-text">No passages in this collection directly answer this question. Try a narrower question, or browse the topic <a href="#ways">Estuary condition</a>.</p>
+            </div>
+          </article>
+          <div class="candour-chipnote">
+            <span class="chip"><span class="dot"></span>Low confidence &#8211; treat this answer as a lead and check the cited sources</span>
+            <span class="note">shown on answers the sources only partly support</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ways in ================= -->
+  <section class="section" id="ways">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>More than one way in</h2>
+        <p class="lede">People arrive differently &#8211; with a question, a half-remembered report, a topic to browse or a hunch that two things are connected. A portal keeps all of those routes open.</p>
+      </div>
+
+      <!-- Search -->
+      <div class="way">
+        <div class="way-text">
+          <h3>Search, with the passages that matched</h3>
+          <div class="prose">
+            <p>Results are ranked resources, each showing the passage that made it relevant, with calibrated scores and filters for topic and document kind. Hybrid, semantic and keyword modes are a click apart.</p>
+            <p>A short cited answer sits above the results by default. Hide it and work with the passages alone, summarise a set of results, or watch a search and hear when its results change.</p>
+          </div>
+        </div>
+        <div class="way-frag frag-wrap">
+          <span class="frag-tab" style="background:var(--tab-ochre)">Search</span>
+          <div class="frag">
+            <div class="sr-bar">
+              <span class="sr-q">winter turbidity thresholds</span>
+              <div class="sr-modes"><span class="on">hybrid</span><span>semantic</span><span>keyword</span></div>
+            </div>
+            <div class="sr-filters">
+              <span class="chip">Topic: water quality</span>
+              <span class="chip">Kind: report</span>
+            </div>
+            <div class="sr-result">
+              <div class="r-top"><span class="r-title">Turbidity and light limitation in flood-affected estuaries</span><span class="r-score">0.87</span></div>
+              <p class="r-meta">report &#183; 2023</p>
+              <p class="r-passage">&#8230;sites where <span class="hl">mean winter turbidity remained above the long-term median</span> showed significantly slower recovery&#8230;</p>
+            </div>
+            <div class="sr-result">
+              <div class="r-top"><span class="r-title">Catchment sediment sources after the 2022 floods</span><span class="r-score">0.74</span></div>
+              <p class="r-meta">technical report &#183; 2024</p>
+              <p class="r-passage">&#8230;bank erosion in the upper catchment contributed an estimated <span class="hl">two thirds of the fine sediment load</span> reaching the estuary&#8230;</p><!-- proportion is a plausible placeholder -->
+            </div>
+            <div class="sr-result">
+              <div class="r-top"><span class="r-title">Recreational water quality guidelines review</span><span class="r-score"><span class="weak">weak match</span> &#183; 0.41</span></div>
+              <p class="r-meta">review &#183; 2019</p>
+            </div>
+            <div class="sr-foot"><span>Cited answer shown above results</span><span>Watch this search</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ask -->
+      <div class="way alt">
+        <div class="way-text">
+          <h3>Ask, as a continuing conversation</h3>
+          <div class="prose">
+            <p>Answers stream in with numbered citations, the sources behind them and suggested follow-ups. Answer quality reports relevance, groundedness and context, and confidence is stated in plain language rather than a score alone.</p>
+            <p>Deep research takes a broad question and maps it into focused sub-questions before answering. Sessions can be saved, renamed and exported, so a line of enquiry can be picked up where it stopped.</p>
+          </div>
+        </div>
+        <div class="way-frag frag-wrap">
+          <span class="frag-tab" style="background:var(--tab-blue)">Ask</span>
+          <div class="frag">
+            <p class="dr-q">How has estuary condition changed since 2019, and what drove the change?</p>
+            <p class="dr-label">Deep research &#183; mapping the question</p>
+            <ol class="dr-list">
+              <li><span class="n">1</span>Which condition indicators are tracked across the estuaries?<span class="st">answered &#183; 6 sources</span></li>
+              <li><span class="n">2</span>How did each indicator move between 2019 and 2024?<span class="st">answered &#183; 9 sources</span></li>
+              <li><span class="n">3</span>Which drivers does the research link to those movements?<span class="st live">answering&#8230;</span></li>
+            </ol>
+            <div class="dr-foot"><span>Session saved</span><span>Rename</span><span>Export</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Library -->
+      <div class="way">
+        <div class="way-text">
+          <h3>A Library of research items, not filenames</h3>
+          <div class="prose">
+            <p>Every resource carries a clear title, a summary, key takeaways and notable quotes, whatever the underlying file was called. Search, sort and filter the catalogue, in grid or list view.</p>
+            <p>A resource page shows the original document, the extracted text, related resources and a conversation limited to that one document, so a question can be put to a single report instead of the whole collection.</p>
+          </div>
+        </div>
+        <div class="way-frag frag-wrap">
+          <span class="frag-tab" style="background:var(--tab-sage)">Library</span>
+          <div class="frag">
+            <div class="lib-filters">
+              <span class="chip on">All kinds</span>
+              <span class="chip">Report</span>
+              <span class="chip">Plan</span>
+              <span class="chip">Submission</span>
+            </div>
+            <div class="lib-grid">
+              <div class="lib-card">
+                <span class="k ochre">Report &#183; 2023</span>
+                <p class="t">Estuarine seagrass condition assessment 2019 to 2023</p>
+                <p class="s">Five years of condition monitoring across five estuaries, covering extent, density and light availability.</p>
+                <div class="tags"><span>seagrass</span><span>monitoring</span></div>
+              </div>
+              <div class="lib-card">
+                <span class="k clay">Technical report &#183; 2024</span>
+                <p class="t">Catchment sediment sources after the 2022 floods</p>
+                <p class="s">Traces fine sediment reaching the estuary to its catchment sources and ranks management options.</p>
+                <div class="tags"><span>sediment</span><span>catchment</span></div>
+              </div>
+            </div>
+            <div class="lib-foot">412 resources &#183; sorted by recently added</div><!-- count is a plausible placeholder -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Knowledge map -->
+      <div class="way alt">
+        <div class="way-text">
+          <h3>A map of what the collection knows</h3>
+          <div class="prose">
+            <p>The entity view shows the things the research talks about and the relationships between them. The concept view shows which topics and document kinds occur together.</p>
+            <p>Search the map, filter it, inspect a connection and open the resources behind it. The map is drawn from the collection, not laid over it, and it reflects the entities and relationships configured for each portal.</p>
+          </div>
+        </div>
+        <div class="way-frag frag-wrap">
+          <span class="frag-tab" style="background:var(--tab-clay)">Knowledge map</span>
+          <div class="frag">
+            <div class="map-frame">
+              <svg viewBox="0 0 560 300" role="img" aria-label="A small knowledge map showing entities such as winter turbidity and seagrass extent, joined by labelled relationships">
+                <!-- edges -->
+                <path class="map-edge" d="M118 62 C 170 48, 200 46, 238 52"/>
+                <path class="map-edge on" d="M330 66 C 380 80, 408 96, 428 118"/>
+                <path class="map-edge" d="M452 152 C 440 180, 412 202, 376 214"/>
+                <path class="map-edge" d="M182 232 C 226 232, 256 228, 286 222"/>
+                <path class="map-edge" d="M112 84 C 130 140, 138 186, 122 214"/>
+                <!-- edge labels -->
+                <text class="map-edge-label" x="158" y="40">increased</text>
+                <text class="map-inspect" x="380" y="72">reduces &#183; 4 resources</text>
+                <text class="map-edge-label" x="416" y="196">limits</text>
+                <text class="map-edge-label" x="216" y="252">grows in</text>
+                <!-- nodes -->
+                <g>
+                  <rect class="map-node" x="40" y="44" width="80" height="30" rx="15"/>
+                  <text class="map-node-label" x="80" y="63" text-anchor="middle">2022 floods</text>
+                </g>
+                <g>
+                  <rect class="map-node" x="238" y="40" width="112" height="30" rx="15" stroke="var(--blue)"/>
+                  <text class="map-node-label" x="294" y="59" text-anchor="middle">winter turbidity</text>
+                </g>
+                <g>
+                  <rect class="map-node" x="418" y="112" width="118" height="30" rx="15"/>
+                  <text class="map-node-label" x="477" y="131" text-anchor="middle">light at the canopy</text>
+                </g>
+                <g>
+                  <rect class="map-node" x="258" y="200" width="118" height="30" rx="15"/>
+                  <text class="map-node-label" x="317" y="219" text-anchor="middle">seagrass extent</text>
+                </g>
+                <g>
+                  <rect class="map-node" x="62" y="216" width="120" height="30" rx="15"/>
+                  <text class="map-node-label" x="122" y="235" text-anchor="middle" font-style="italic">Zostera muelleri</text>
+                </g>
+              </svg>
+            </div>
+            <div class="map-foot"><span>Entity view</span><span>Concept view</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= stewardship ================= -->
+  <section class="section" id="stewardship">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Maintained like infrastructure</h2>
+        <p class="lede">A research portal earns trust slowly and loses it quickly. Manage treats the collection as something looked after, not loaded once.</p>
+      </div>
+
+      <div class="stew-grid">
+        <div class="prose">
+          <p>Administrators add files, text and webpages, register website sources and schedule synchronisation. Collection health finds what went wrong &#8211; failed extractions, bot-challenge pages, resources with almost no text &#8211; and drafts stay out of public retrieval until they are ready.</p>
+          <p>Analysing the collection refreshes its topics, document kinds, suggested questions and the structure of the knowledge map as the research grows, so the portal keeps describing the collection it actually holds.</p>
+        </div>
+        <div class="frag-wrap">
+          <span class="frag-tab" style="background:var(--tab-sage)">Manage</span>
+          <div class="frag">
+            <div class="ch-head"><span class="t">Collection health</span><span class="c">418 resources &#183; 3 need attention</span></div><!-- counts are plausible placeholders -->
+            <div class="ch-row"><span class="flag">extraction failed</span>Scanned appendix, floodplain inquiry 1996<span class="act"><a href="#stewardship">Retry</a></span></div>
+            <div class="ch-row"><span class="flag">bot challenge</span>Council planning portal page<span class="act"><a href="#stewardship">Open</a></span></div>
+            <div class="ch-row"><span class="flag softer">very little text</span>Field photo set, March survey<span class="act"><a href="#stewardship">Review</a></span></div>
+            <div class="ch-foot"><span>2 drafts held from public retrieval</span><span>Website sync &#183; nightly</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stew-sub">
+        <div>
+          <h3>Read-only access for approved tools</h3>
+          <div class="prose">
+            <p>The MCP connector lets an approved external research tool search the collection, request a cited answer, retrieve a document and browse the catalogue. Access is read-only and scoped to one portal.</p>
+            <p>Access keys are issued by an administrator, shown once and revocable at any time. The credential for the underlying content service never leaves the server.</p>
+          </div>
+        </div>
+        <div>
+          <h3>One deployment, several portals</h3>
+          <div class="prose">
+            <p>Each portal has its own name, identity, topics, suggested questions and knowledge-map structure, served from configuration rather than separate branches of the application.</p>
+            <p>The portals differ where their collections differ. The system underneath stays the same, which is what makes it maintainable.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= run ================= -->
+  <section class="section run" id="run">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Run it yourself</h2>
+        <p class="lede">The application code is published under the Apache 2.0 licence. Clone it, connect a collection and run the portal on infrastructure you choose and manage.</p>
+      </div>
+
+      <div class="run-grid">
+        <div class="prose">
+          <p>The repository holds the application, shared types, retrieval integration, tests, build tasks and deployment configuration &#8211; the same code that serves the live portals, with documented local setup and container configuration.</p>
+          <p>One boundary matters when you plan a deployment: content storage and retrieval run on a connected knowledge service, and a deployment needs its own account with one. The Apache 2.0 licence covers the CorpusKit application code; connected services and the research material itself have their own terms.</p>
+        </div>
+        <div>
+          <!-- commands are illustrative placeholders - confirm against the repository README -->
+          <pre class="run-code"><code><span class="cm"># clone, configure, run</span>
+git clone https://github.com/corpuskit/corpuskit
+cd corpuskit
+cp .env.example .env   <span class="cm"># knowledge service account</span>
+<span class="hi">deno task dev</span></code></pre>
+          <p class="run-note">local setup and container configuration are documented in the repository</p>
+        </div>
+      </div>
+
+      <div class="run-cols">
+        <div>
+          <h3>How changes are checked</h3>
+          <div class="prose">
+            <p>Every change lands through a pull request. Typechecking, linting, formatting, tests and a full build run on each one, and a red check does not merge. What deploys is what was reviewed.</p>
+            <p>The same gate applies to maintainers and first-time contributors, which keeps the standard visible instead of implied.</p>
+          </div>
+        </div>
+        <div>
+          <h3>Worth knowing before you commit</h3>
+          <ul class="know-list">
+            <li>A deployment needs an account with a connected knowledge service for content storage, retrieval and generation</li>
+            <li>Administrator sign-in supports Microsoft accounts today</li>
+            <li>Application state is kept in SQLite-backed durable storage &#8211; simple to operate, and worth understanding before you scale</li>
+            <li>The issue tracker names current gaps and unfinished areas &#8211; read it as part of an evaluation</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= contribute ================= -->
+  <section class="section contrib" id="contribute">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Contributing</h2>
+      </div>
+      <div class="prose">
+        <p>CorpusKit is built by developers, designers, researchers and documentation writers working from the same repository that runs the portals. Small contributions are genuinely useful: a careful bug report, a fix with a test, a clearer paragraph of documentation.</p>
+        <p>Open issues are labelled so you can tell what is ready to pick up, what is under discussion and what remains unfinished. Every change runs the same checks as a maintainer's, and a maintainer reads everything before it lands.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ending ================= -->
+  <section class="section ending">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Choose your way in</h2>
+      </div>
+      <ul class="routes">
+        <li>
+          <a href="https://github.com/corpuskit/corpuskit">
+            <span class="r-title">Read the code</span>
+            <span class="r-desc">The application, tests and deployment configuration, under Apache 2.0</span>
+            <span class="r-arrow">&#8594;</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/corpuskit/corpuskit#readme">
+            <span class="r-title">Run a portal</span>
+            <span class="r-desc">Local setup and container configuration, documented in the repository</span>
+            <span class="r-arrow">&#8594;</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/corpuskit/corpuskit/issues">
+            <span class="r-title">Improve something</span>
+            <span class="r-desc">Labelled issues, honest gaps and small fixes that are welcome</span>
+            <span class="r-arrow">&#8594;</span>
+          </a>
+        </li>
+      </ul>
+
+      <div class="colophon">
+        <span>CorpusKit &#183; an open source research portal</span>
+        <span class="links">
+          <a href="https://github.com/corpuskit/corpuskit">GitHub</a>
+          <a href="https://github.com/corpuskit/corpuskit/blob/main/LICENSE">Licence</a>
+          <a href="https://github.com/corpuskit/corpuskit/issues">Issues</a>
+        </span>
+      </div>
+    </div>
+  </section>
+
+</main>
+</div><!-- /smooth-content -->
+</div><!-- /smooth-wrapper -->
+
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollSmoother.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  /* nav hairline - plain listener so it works with or without the smoother */
+  var nav = document.querySelector(".site-nav");
+  var navTick = false;
+  function setNav(){
+    nav.classList.toggle("is-scrolled", (window.scrollY || document.documentElement.scrollTop || 0) > 24);
+    navTick = false;
+  }
+  window.addEventListener("scroll", function(){
+    if (!navTick){ navTick = true; window.requestAnimationFrame(setNav); }
+  }, { passive:true });
+  setNav();
+
+  if (!window.gsap || !window.ScrollTrigger || !window.ScrollSmoother) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  gsap.registerPlugin(ScrollTrigger, ScrollSmoother);
+
+  var smoother = ScrollSmoother.create({
+    wrapper:"#smooth-wrapper",
+    content:"#smooth-content",
+    smooth:1.05,
+    effects:false
+  });
+
+  /* anchor navigation through the smoother */
+  document.querySelectorAll('a[href^="#"]').forEach(function(a){
+    a.addEventListener("click", function(e){
+      var sel = a.getAttribute("href");
+      if (sel.length < 2) return;
+      var target = document.querySelector(sel);
+      if (!target) return;
+      e.preventDefault();
+      smoother.scrollTo(target, true, "top 88px");
+    });
+  });
+
+  /* signature sequence - desktop, pinned, scrubbed. The page is complete without it. */
+  var mm = gsap.matchMedia();
+  mm.add("(min-width: 1024px)", function(){
+    var cite   = document.getElementById("sigCite");
+    var source = document.getElementById("sigSource");
+    var conf   = document.getElementById("sigConf");
+    var chip   = document.getElementById("sigChip");
+    var svg    = document.getElementById("sigThread");
+    var path   = document.getElementById("sigThreadPath");
+    var dot    = document.getElementById("sigThreadDot");
+    var marks  = gsap.utils.toArray("#sigSource .hl");
+    var bars   = gsap.utils.toArray("#sigConf .qbar-fill");
+    var steps  = gsap.utils.toArray("#sigSteps li");
+    if (!cite || !source || !conf || !path) return;
+
+    var threadLen = 0;
+    var draw = { p:0 };
+
+    function layoutThread(){
+      var g = svg.getBoundingClientRect();
+      var c = cite.getBoundingClientRect();
+      var s = source.getBoundingClientRect();
+      var x1 = c.right - g.left + 7;
+      var y1 = (c.top + c.bottom) / 2 - g.top;
+      var x2 = s.left - g.left - 10;
+      var y2 = s.top - g.top + 34;
+      var mx = x1 + (x2 - x1) * 0.55;
+      path.setAttribute("d", "M" + x1 + " " + y1 + " C " + mx + " " + y1 + ", " + mx + " " + y2 + ", " + x2 + " " + y2);
+      dot.setAttribute("cx", x2 + 3);
+      dot.setAttribute("cy", y2);
+      threadLen = path.getTotalLength();
+      path.style.strokeDasharray = threadLen;
+      path.style.strokeDashoffset = threadLen * (1 - draw.p);
+    }
+    layoutThread();
+
+    gsap.set(source, { opacity:0.45, y:14 });
+    gsap.set(conf,   { opacity:0, y:18 });
+    gsap.set(bars,   { scaleX:0, transformOrigin:"0 50%" });
+    gsap.set(marks,  { backgroundSize:"0% 100%" });
+    gsap.set(chip,   { opacity:0 });
+    gsap.set(dot,    { opacity:0 });
+
+    var tl = gsap.timeline({
+      scrollTrigger:{
+        trigger:"#evidence",
+        start:"top top",
+        end:"+=2400",
+        scrub:0.4,
+        pin:".sig-stage",
+        anticipatePin:1,
+        onRefresh:layoutThread,
+        onUpdate:function(self){
+          var p = self.progress;
+          var idx = p < 0.18 ? 0 : p < 0.44 ? 1 : p < 0.68 ? 2 : 3;
+          steps.forEach(function(li, i){ li.classList.toggle("is-active", i === idx); });
+        }
+      }
+    });
+
+    tl.to({}, { duration:0.5 })
+      .addLabel("s2")
+      .to(cite, { backgroundColor:"#2B50C8", color:"#F5F1E8", duration:0.18 }, "s2")
+      .to(draw, {
+        p:1, duration:0.8, ease:"none",
+        onUpdate:function(){ path.style.strokeDashoffset = threadLen * (1 - draw.p); }
+      }, "s2")
+      .to(source, { opacity:1, y:0, duration:0.6 }, "s2+=0.15")
+      .to(dot, { opacity:1, duration:0.12 }, "s2+=0.72")
+      .addLabel("s3", "+=0.25")
+      .to(marks, { backgroundSize:"100% 100%", duration:0.85, stagger:0.3, ease:"none" }, "s3")
+      .to(chip, { opacity:1, duration:0.3 }, "s3+=0.7")
+      .addLabel("s4", "+=0.25")
+      .to(conf, { opacity:1, y:0, duration:0.5 }, "s4")
+      .to(bars, { scaleX:1, duration:0.65, stagger:0.12 }, "s4+=0.12")
+      .to({}, { duration:0.45 });
+
+    return function(){
+      steps.forEach(function(li){ li.classList.remove("is-active"); });
+      path.style.strokeDasharray = "";
+      path.style.strokeDashoffset = "";
+    };
+  });
+})();
+</script>
+
+</body>
+</html>

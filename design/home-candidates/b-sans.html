@@ -1,0 +1,1437 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="CorpusKit is an open source research portal for searching a collection, asking cited questions and checking the evidence behind each answer.">
+  <meta name="theme-color" content="#f2efe7">
+  <title>CorpusKit – research with the evidence in reach</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,300..700&amp;family=Source+Sans+3:ital,wght@0,200..900;1,200..900&amp;family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&amp;display=swap" rel="stylesheet">
+  <style>
+
+    :root {
+      --paper: #f2efe7;
+      --paper-soft: #f8f6f0;
+      --paper-deep: #e6e0d4;
+      --ink: #1c1c19;
+      --ink-soft: #5c5a53;
+      --rule: #cec8bb;
+      --blue: #155da6;
+      --blue-dark: #0d467f;
+      --blue-pale: #dce8f4;
+      --white: #fffdf8;
+      --serif: "Newsreader", Georgia, serif;
+      --sans: "Source Sans 3", Arial, sans-serif;
+      --mono: "IBM Plex Mono", monospace;
+      --display: "Archivo", sans-serif;
+      --display-weight-h1: 600;
+      --display-weight-h2: 600;
+      --display-track-h1: -.04em;
+      --display-track-h2: -.04em;
+      --display-lh-h1: .92;
+      --display-lh-h2: .98;
+      --page: min(92vw, 1480px);
+      --radius: 4px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      font-size: 17px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      opacity: .055;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.72'/%3E%3C/svg%3E");
+    }
+
+    a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: .22em; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    ::selection { background: var(--blue-pale); color: var(--ink); }
+
+    .skip-link {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 100;
+      padding: .65rem 1rem;
+      background: var(--ink);
+      color: var(--white);
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus { transform: none; }
+
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 12;
+      height: 76px;
+      border-bottom: 1px solid rgba(28, 28, 25, .15);
+      background: rgba(242, 239, 231, .91);
+      backdrop-filter: blur(16px);
+    }
+
+    .nav-shell {
+      width: var(--page);
+      height: 100%;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: baseline;
+      gap: .1rem;
+      font-family: var(--serif);
+      font-size: 1.55rem;
+      font-weight: 600;
+      line-height: 1;
+      text-decoration: none;
+      letter-spacing: -.035em;
+    }
+
+    .brand-mark { color: var(--blue); }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: clamp(1rem, 2.2vw, 2.4rem);
+      font-size: .91rem;
+    }
+
+    .nav-links a { text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .sign-in { padding-left: clamp(1rem, 2.2vw, 2.4rem); border-left: 1px solid var(--rule); }
+
+    main { overflow: hidden; }
+
+    .hero {
+      width: var(--page);
+      min-height: min(880px, 100svh);
+      margin: 0 auto;
+      padding: clamp(9.5rem, 15vh, 12.5rem) 0 5rem;
+      display: grid;
+      grid-template-columns: minmax(0, 1.72fr) minmax(320px, .48fr);
+      column-gap: clamp(2.5rem, 5vw, 6rem);
+      align-items: end;
+      position: relative;
+    }
+
+    .hero h1 {
+      max-width: 1180px;
+      margin: 0;
+      font-family: var(--display);
+      font-size: var(--display-size-h1, clamp(4.6rem, 8.2vw, 9.6rem));
+      font-weight: var(--display-weight-h1);
+      line-height: var(--display-lh-h1);
+      letter-spacing: var(--display-track-h1);
+      text-wrap: balance;
+    }
+
+    .hero h1 em, .closing h2 em {
+      font-style: normal;
+      font-weight: inherit;
+      color: inherit;
+    }
+
+    .mark { position: relative; display: inline-block; white-space: nowrap; }
+    .mark svg {
+      position: absolute; left: -1.5%; bottom: -.08em;
+      width: 103%; height: .3em;
+      overflow: visible;
+    }
+    .mark svg path {
+      fill: none; stroke: var(--blue); stroke-width: 4.6; stroke-linecap: round;
+      opacity: .9;
+    }
+
+    .hero-copy {
+      max-width: 430px;
+      margin: 0 0 .75rem;
+      align-self: end;
+      font-size: clamp(1.08rem, 1.25vw, 1.28rem);
+      line-height: 1.55;
+    }
+
+    .hero-copy p { margin: 0 0 1.75rem; }
+
+    .text-link {
+      display: inline-flex;
+      align-items: center;
+      gap: .7rem;
+      color: var(--blue-dark);
+      font-weight: 600;
+      text-decoration: none;
+      border-bottom: 1px solid currentColor;
+      padding-bottom: .15rem;
+    }
+
+    .text-link::after { content: "↘"; font-weight: 400; }
+
+    .hero-note {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: flex-end;
+      margin-top: clamp(5rem, 10vh, 9rem);
+      padding-top: 1.2rem;
+      border-top: 1px solid var(--ink);
+      color: var(--ink-soft);
+      font-size: .91rem;
+    }
+
+    .hero-note p { margin: 0; }
+    .hero-note strong { color: var(--ink); font-weight: 600; }
+
+    .workings {
+      background: var(--ink);
+      color: var(--paper-soft);
+      padding: clamp(5.5rem, 10vw, 10rem) 0;
+    }
+
+    .section-shell { width: var(--page); margin: 0 auto; }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, .5fr);
+      gap: 3rem;
+      align-items: end;
+      margin-bottom: clamp(3rem, 6vw, 6rem);
+    }
+
+    .section-head h2,
+    .run-intro h2,
+    .library-copy h2,
+    .closing h2 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(2.8rem, 5.1vw, 5.9rem);
+      font-weight: var(--display-weight-h2);
+      line-height: var(--display-lh-h2);
+      letter-spacing: var(--display-track-h2);
+      text-wrap: balance;
+    }
+
+    .run-intro h2 { font-size: clamp(2.2rem, 3.6vw, 4.2rem); }
+
+    .section-head p {
+      margin: 0 0 .45rem;
+      color: #c6c2b8;
+      font-size: 1.05rem;
+      max-width: 420px;
+    }
+
+    .portal-frame {
+      background: var(--paper-soft);
+      color: var(--ink);
+      border: 1px solid #3a3a36;
+      box-shadow: 0 40px 90px rgba(0, 0, 0, .34);
+    }
+
+    .portal-top {
+      min-height: 76px;
+      padding: 0 clamp(1rem, 2vw, 2rem);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .portal-name {
+      font-family: var(--serif);
+      font-size: 1.23rem;
+      font-weight: 600;
+      letter-spacing: -.02em;
+    }
+
+    .portal-search {
+      width: min(38vw, 500px);
+      padding: .73rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      border: 1px solid var(--rule);
+      background: var(--white);
+      color: var(--ink-soft);
+      font-size: .91rem;
+    }
+
+    .portal-search span:last-child { color: var(--blue); }
+
+    .portal-status {
+      justify-self: end;
+      color: var(--ink-soft);
+      font-size: .83rem;
+    }
+
+    .portal-body {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      min-height: 680px;
+    }
+
+    .portal-nav {
+      padding: 2rem 1.2rem;
+      border-right: 1px solid var(--rule);
+    }
+
+    .view-tab {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: .82rem .75rem;
+      margin: 0 0 .35rem;
+      border: 0;
+      background: transparent;
+      color: var(--ink-soft);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .view-tab::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+    .view-tab:hover { color: var(--ink); }
+    .view-tab.active { color: var(--blue-dark); background: var(--blue-pale); }
+    .view-tab.active::after { background: var(--blue); }
+
+    .portal-main { padding: clamp(1.5rem, 4vw, 4rem); min-width: 0; }
+    .portal-view { display: none; }
+    .portal-view.active { display: block; }
+
+    .portal-view h3 {
+      max-width: 780px;
+      margin: 0 0 2rem;
+      font-family: var(--serif);
+      font-size: clamp(2.2rem, 3.5vw, 4.2rem);
+      font-weight: 400;
+      line-height: 1.05;
+      letter-spacing: -.035em;
+    }
+
+    .question-card {
+      padding: clamp(1.4rem, 3vw, 2.6rem);
+      border: 1px solid var(--rule);
+      background: var(--white);
+    }
+
+    .question {
+      margin: 0 0 1.7rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--rule);
+      color: var(--ink-soft);
+    }
+
+    .answer-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(250px, .65fr);
+      gap: clamp(2rem, 4vw, 5rem);
+    }
+
+    .answer p { margin: 0 0 1rem; font-size: 1.08rem; line-height: 1.68; }
+
+    .citation {
+      display: inline-grid;
+      place-items: center;
+      width: 1.45rem;
+      height: 1.45rem;
+      margin: 0 .08rem;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      font-size: .75rem;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      vertical-align: .1em;
+    }
+
+    .citation[aria-expanded="true"] { outline: 3px solid var(--blue-pale); }
+
+    .confidence {
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      color: var(--ink-soft);
+      font-size: .9rem;
+    }
+
+    .confidence::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 13px 0 0 var(--blue), 26px 0 0 var(--rule);
+      margin-right: 1.6rem;
+    }
+
+    .passage-drawer {
+      min-height: 260px;
+      padding: 1.4rem;
+      background: var(--blue-pale);
+      border-left: 3px solid var(--blue);
+      position: relative;
+    }
+
+    .passage-drawer::before {
+      content: "Matched passage";
+      display: block;
+      margin-bottom: 1.1rem;
+      color: var(--blue-dark);
+      font-size: .81rem;
+      font-weight: 600;
+    }
+
+    .passage-title { margin: 0 0 .7rem; font-weight: 600; }
+    .passage-copy { margin: 0; color: #343d47; font-family: var(--serif); font-size: 1.08rem; line-height: 1.55; }
+    mark { background: rgba(21, 93, 166, .16); color: inherit; padding: .06em .08em; box-decoration-break: clone; }
+
+    .no-evidence {
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+      margin-top: 1rem;
+      padding: 1rem 1.15rem;
+      border: 1px solid var(--rule);
+      color: var(--ink-soft);
+      font-size: .92rem;
+    }
+
+    .no-evidence strong { color: var(--ink); }
+
+    .search-controls {
+      display: flex;
+      gap: .55rem;
+      margin-bottom: 1.6rem;
+      flex-wrap: wrap;
+    }
+
+    .filter-chip {
+      padding: .48rem .82rem;
+      border: 1px solid var(--rule);
+      background: transparent;
+      color: var(--ink-soft);
+      font-size: .85rem;
+    }
+
+    .filter-chip.selected { border-color: var(--blue); color: var(--blue-dark); background: var(--blue-pale); }
+
+    .result {
+      display: grid;
+      grid-template-columns: 62px minmax(0, 1fr) auto;
+      gap: 1.2rem;
+      padding: 1.4rem 0;
+      border-top: 1px solid var(--rule);
+    }
+
+    .score { color: var(--blue); font-family: var(--serif); font-size: 1.3rem; }
+    .result h4 { margin: 0 0 .45rem; font-family: var(--serif); font-size: 1.26rem; }
+    .result p { margin: 0; color: var(--ink-soft); font-size: .91rem; }
+    .kind { color: var(--ink-soft); font-size: .79rem; white-space: nowrap; }
+    .weak { color: #6d5b40; border-bottom: 1px solid #917a55; }
+
+    .library-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .resource-card { min-height: 260px; padding: 1.25rem; border: 1px solid var(--rule); background: var(--white); display: flex; flex-direction: column; }
+    .resource-card::before { content: ""; height: 6px; width: 38%; margin-bottom: 3rem; background: var(--blue); }
+    .resource-card:nth-child(2)::before { width: 67%; opacity: .65; }
+    .resource-card:nth-child(3)::before { width: 24%; opacity: .35; }
+    .resource-card h4 { margin: 0 0 .7rem; font-family: var(--serif); font-size: 1.25rem; line-height: 1.15; }
+    .resource-card p { margin: 0; color: var(--ink-soft); font-size: .87rem; }
+    .resource-card span { margin-top: auto; padding-top: 1.5rem; color: var(--ink-soft); font-size: .78rem; }
+
+    .node-a { left: 12%; top: 23%; }
+    .node-b { right: 11%; top: 25%; }
+    .node-c { right: 13%; bottom: 17%; }
+    .node-d { left: 14%; bottom: 18%; }
+
+    .capability-notes {
+      margin-top: 3rem;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid #4b4a45;
+    }
+
+    .capability-notes article { padding: 1.5rem 1.5rem 0 0; }
+    .capability-notes h3 { margin: 0 0 .55rem; color: var(--paper-soft); font-family: var(--display); font-size: 1.3rem; font-weight: 600; letter-spacing: -.04em; }
+    .capability-notes p { margin: 0; color: #aaa69d; font-size: .91rem; }
+
+
+    @media (min-width: 1024px) {
+      .portal-main { height: var(--portal-main-h, 700px); overflow: hidden; }
+    }
+
+    /* C's view content presented at the Ask page's scale */
+    .chip {
+      display: inline-flex; align-items: center; gap: .4rem;
+      font-family: var(--sans); font-size: .84rem; font-weight: 500;
+      padding: .34rem .85rem; border-radius: 99px;
+      border: 1px solid var(--rule);
+      color: var(--ink-soft); background: var(--white);
+    }
+    .chip.on { background: var(--ink); color: var(--paper-soft); border-color: var(--ink); }
+    .hl {
+      background-image: linear-gradient(rgba(241,227,160,.95), rgba(241,227,160,.95));
+      background-repeat: no-repeat; background-size: 100% 100%;
+      border-radius: 2px; padding: .04em .12em; margin: -.04em -.02em;
+    }
+
+    .pv-controls {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; flex-wrap: wrap; margin-bottom: 1.1rem;
+    }
+    .pv-querybar {
+      flex: 1 1 320px; min-width: 0; display: flex; justify-content: space-between; gap: 1rem;
+      padding: .95rem 1.2rem; border: 1px solid var(--rule); background: var(--white);
+      font-size: 1.02rem; color: var(--ink);
+    }
+    .pv-qicon { color: var(--blue); }
+    .sr-modes { display: flex; gap: .35rem; flex: none; }
+    .sr-modes span {
+      font-family: var(--mono); font-size: .74rem; letter-spacing: .04em;
+      padding: .3rem .78rem; border-radius: 99px; color: var(--ink-soft);
+    }
+    .sr-modes .on { background: var(--ink); color: var(--paper-soft); }
+    .pv-chiprow { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    div.pv-chiprow { margin-bottom: 1.4rem; }
+    .pv-controls .pv-chiprow { margin-bottom: 0; }
+    .pv-meta { margin-left: auto; color: var(--ink-soft); font-size: .87rem; }
+
+    .pv-card { border: 1px solid var(--rule); background: var(--white); }
+    .pv-answerstrip {
+      margin: clamp(1.2rem, 2.5vw, 1.8rem) clamp(1.2rem, 2.5vw, 1.8rem) 0;
+      padding: 1.3rem 1.5rem;
+      background: var(--blue-pale); border-left: 3px solid var(--blue);
+    }
+    .pv-answerstrip .lbl { display: block; margin-bottom: .55rem; color: var(--blue-dark); font-size: .81rem; font-weight: 600; }
+    .pv-answerstrip p { margin: 0; font-size: 1.05rem; line-height: 1.65; max-width: 75ch; }
+    .pv-answerstrip .citation { margin-left: .3rem; }
+    .pv-results { padding: .3rem clamp(1.2rem, 2.5vw, 1.8rem) .6rem; }
+    .pv-result { padding: 1.3rem 0; }
+    .pv-result + .pv-result { border-top: 1px solid var(--rule); }
+    .pv-result .r-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+    .pv-result .r-title { font-family: var(--serif); font-size: 1.32rem; letter-spacing: -.01em; min-width: 0; }
+    .pv-result .r-score { font-family: var(--mono); font-size: .74rem; color: var(--ink-soft); flex: none; }
+    .pv-result .r-score .weak { color: #a05e42; border-bottom: 0; }
+    .pv-result .r-meta { margin: .3rem 0 0; font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); }
+    .pv-result .r-passage { margin: .55rem 0 0; font-family: var(--serif); font-size: 1rem; line-height: 1.6; color: #343d47; max-width: 72ch; }
+    .pv-cardfoot {
+      display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+      padding: 1rem clamp(1.2rem, 2.5vw, 1.8rem); border-top: 1px solid var(--rule);
+      font-size: .87rem; color: var(--ink-soft);
+    }
+    .pv-cardfoot a { color: var(--blue-dark); font-weight: 600; }
+
+    .pv-libgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .pv-libcard {
+      border: 1px solid var(--rule); background: var(--white);
+      padding: 1.5rem 1.6rem; display: flex; flex-direction: column;
+    }
+    .pv-libcard .k { font-family: var(--mono); font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+    .k.ochre { color: #9A7215; }
+    .k.clay { color: #A05E42; }
+    .pv-libcard .t { margin: .6rem 0 0; font-family: var(--serif); font-size: 1.32rem; font-weight: 500; line-height: 1.25; }
+    .pv-libcard .s { margin: .6rem 0 0; font-size: .95rem; line-height: 1.6; color: var(--ink-soft); }
+    .pv-libcard .tags { display: flex; gap: .45rem; flex-wrap: wrap; margin-top: auto; padding-top: 1.15rem; }
+    .pv-libcard .tags span { font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 99px; padding: .2rem .6rem; }
+
+    .pv-mapcard { padding: 1.2rem 1.4rem; }
+    .pv-mapcard svg { display: block; width: 100%; height: auto; max-height: 520px; margin: 0 auto; }
+    .map-node { fill: var(--white); stroke: var(--rule); }
+    .map-node-label { font-family: var(--sans); font-size: 11.5px; fill: var(--ink); }
+    .map-edge { fill: none; stroke: var(--rule); stroke-width: 1.1; }
+    .map-edge-label { font-family: var(--mono); font-size: 9px; fill: #8a8578; }
+    .map-edge.on { stroke: var(--blue); stroke-width: 1.5; }
+    .map-inspect { font-family: var(--mono); font-size: 9.5px; fill: var(--blue); }
+
+    .ch-head {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+      padding: 1.25rem clamp(1.2rem, 2.5vw, 1.8rem); border-bottom: 1px solid var(--rule);
+    }
+    .ch-head .t { font-weight: 600; font-size: 1.05rem; }
+    .ch-head .c { font-family: var(--mono); font-size: .74rem; color: var(--ink-soft); }
+    .ch-row { display: flex; align-items: baseline; gap: 1.1rem; padding: 1.15rem clamp(1.2rem, 2.5vw, 1.8rem); font-size: .98rem; }
+    .ch-row + .ch-row { border-top: 1px solid var(--rule); }
+    .ch-row .flag { font-family: var(--mono); font-size: .72rem; color: #a03d2e; min-width: 10.5em; flex: none; }
+    .ch-row .flag.softer { color: var(--ink-soft); }
+    .ch-row .what { min-width: 0; }
+    .ch-row .act { margin-left: auto; flex: none; font-size: .88rem; }
+    .ch-row .act a { color: var(--blue-dark); font-weight: 600; }
+    .ch-foot {
+      display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+      padding: 1rem clamp(1.2rem, 2.5vw, 1.8rem); border-top: 1px solid var(--rule);
+      font-size: .87rem; color: var(--ink-soft);
+    }
+
+    @media (max-width: 700px) {
+      .pv-libgrid { grid-template-columns: 1fr; }
+      .ch-row { flex-wrap: wrap; gap: .35rem 1.1rem; }
+      .ch-row .flag { min-width: 0; width: 100%; }
+    }
+
+    .ways-caption {
+      display: flex; align-items: baseline; gap: 1rem;
+      margin: -1.2rem 0 2rem; max-width: 62ch;
+    }
+    .ways-caption .wc-n { font-family: var(--mono); font-size: .8rem; color: var(--blue-pale); flex: none; }
+    .ways-caption .wc-t { color: #c6c2b8; font-size: 1.02rem; line-height: 1.6; }
+
+    .library-section {
+      width: var(--page);
+      margin: 0 auto;
+      padding: clamp(7rem, 13vw, 14rem) 0;
+      display: grid;
+      grid-template-columns: minmax(280px, .6fr) minmax(0, 1.2fr);
+      gap: clamp(4rem, 9vw, 11rem);
+      align-items: center;
+    }
+
+    .library-copy h2 { font-size: clamp(3.3rem, 5.7vw, 6.7rem); }
+    .library-copy p { max-width: 510px; margin: 2rem 0 0; font-size: 1.08rem; color: var(--ink-soft); }
+
+    .shelf {
+      position: relative;
+      min-height: 600px;
+      padding: 2.7rem 2.7rem 3rem;
+      background: var(--paper-deep);
+      border: 1px solid var(--rule);
+      box-shadow: 22px 28px 0 rgba(28, 28, 25, .055);
+    }
+
+    .shelf::after {
+      content: "";
+      position: absolute;
+      left: -4%;
+      right: -4%;
+      bottom: -15px;
+      height: 14px;
+      background: #d4ccbd;
+      border: 1px solid #c3b9a8;
+    }
+
+    .paper {
+      position: absolute;
+      background: var(--white);
+      border: 1px solid #d5cfc3;
+      box-shadow: 0 14px 35px rgba(45, 39, 27, .1);
+      padding: 1.6rem;
+    }
+
+    .paper-one { width: 55%; height: 70%; left: 9%; top: 10%; transform: rotate(-3deg); }
+    .paper-two { width: 53%; height: 64%; right: 7%; bottom: 9%; transform: rotate(4deg); }
+    .paper-rule { height: 1px; margin: .75rem 0; background: #ddd7cb; }
+    .paper-rule.short { width: 64%; }
+    .paper-title { margin: 0 0 1.2rem; font-family: var(--serif); font-size: clamp(1.2rem, 2vw, 1.75rem); line-height: 1.08; }
+    .paper-meta { margin: 0 0 3rem; color: var(--ink-soft); font-size: .74rem; }
+    .paper-quote { margin: 1.6rem 0 0; padding-left: 1rem; border-left: 3px solid var(--blue); color: var(--ink-soft); font-family: var(--serif); line-height: 1.45; }
+    .blue-note { position: absolute; right: 4%; top: 5%; width: 105px; padding: .8rem; background: var(--blue); color: white; transform: rotate(3deg); font-size: .75rem; line-height: 1.3; box-shadow: 0 9px 24px rgba(13, 70, 127, .18); }
+
+    .run-section { background: var(--blue); color: white; padding: clamp(6rem, 11vw, 11rem) 0; }
+    .run-cols {
+      width: var(--page); margin: clamp(3.5rem, 6vw, 5.5rem) auto 0;
+      display: grid; grid-template-columns: 1fr 1fr; gap: clamp(2.5rem, 5vw, 6rem);
+      padding-top: clamp(2rem, 3.5vw, 3rem); border-top: 1px solid rgba(255, 255, 255, .25);
+    }
+    .run-cols h3 {
+      margin: 0 0 1rem; font-family: var(--display); font-weight: 600;
+      letter-spacing: -.04em; font-size: 1.55rem; color: #fff;
+    }
+    .run-cols p { margin: 0 0 1rem; color: #dce8f4; font-size: .98rem; line-height: 1.65; }
+    .know-list { margin: 0; padding-left: 1.2rem; color: #dce8f4; font-size: .98rem; line-height: 1.65; }
+    .know-list li { margin-bottom: .55rem; }
+    @media (max-width: 900px) { .run-cols { grid-template-columns: 1fr; } }
+    .run-intro p + p { margin-top: 1.1rem; font-size: .98rem; }
+    .run-grid { width: var(--page); margin: 0 auto; display: grid; grid-template-columns: minmax(280px, .75fr) minmax(0, 1fr); gap: clamp(4rem, 10vw, 12rem); }
+    .run-intro h2 { font-size: clamp(3.7rem, 6.6vw, 7.7rem); }
+    .run-intro p { max-width: 480px; margin: 2rem 0 0; color: #dce8f4; font-size: 1.08rem; }
+
+    .code-card { align-self: start; border: 1px solid rgba(255,255,255,.36); background: #0f4d89; }
+    .code-top { padding: 1rem 1.2rem; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,.25); color: #dce8f4; font-size: .82rem; }
+    pre { margin: 0; padding: clamp(1.6rem, 3vw, 2.8rem); overflow-x: auto; color: white; font-family: var(--mono); font-size: clamp(.78rem, 1.05vw, .95rem); line-height: 1.9; }
+    .code-dim { color: #9fc3e4; }
+
+    .requirements { margin: 2rem 0 0; border-top: 1px solid rgba(255,255,255,.28); }
+    .requirement { display: grid; grid-template-columns: minmax(130px, .36fr) 1fr; gap: 1.2rem; padding: 1rem 0; border-bottom: 1px solid rgba(255,255,255,.28); }
+    .requirement strong { font-weight: 600; }
+    .requirement span { color: #dce8f4; }
+    .run-links { display: flex; gap: 1.4rem; margin-top: 1.8rem; flex-wrap: wrap; }
+    .run-links a { color: white; font-weight: 600; }
+
+    .stewardship {
+      width: var(--page);
+      margin: 0 auto;
+      padding: clamp(7rem, 13vw, 14rem) 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(280px, .62fr);
+      gap: clamp(4rem, 10vw, 12rem);
+      align-items: start;
+    }
+
+    .stewardship blockquote {
+      margin: 0;
+      font-family: var(--display);
+      font-weight: 600;
+      letter-spacing: -.04em;
+      font-size: clamp(2.8rem, 5.2vw, 6.2rem);
+      line-height: .98;
+    }
+
+    @media (max-width: 720px) {
+      .stewardship .mark { white-space: normal; }
+    }
+    .stewardship-copy { padding-top: .65rem; }
+    .stewardship-copy p { margin: 0 0 1.25rem; color: var(--ink-soft); }
+    .stewardship-copy p:first-child { color: var(--ink); font-size: 1.2rem; }
+
+    .closing {
+      min-height: 88vh;
+      padding: clamp(6rem, 11vw, 11rem) 0 3rem;
+      border-top: 1px solid var(--ink);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      width: var(--page);
+      margin: 0 auto;
+    }
+
+    .closing h2 { max-width: 1100px; font-size: clamp(4.1rem, 8vw, 9.4rem); }
+    .next-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 7rem; background: var(--rule); border: 1px solid var(--rule); }
+    .next-step { min-height: 200px; padding: 1.6rem; background: var(--paper); display: flex; flex-direction: column; }
+    .next-step h3 { margin: 0 0 .6rem; font-family: var(--display); font-size: 1.55rem; font-weight: 600; letter-spacing: -.04em; }
+    .next-step p { margin: 0; color: var(--ink-soft); font-size: .94rem; }
+    .next-step a { margin-top: auto; align-self: flex-start; color: var(--blue-dark); font-weight: 600; }
+
+    .site-footer {
+      width: var(--page);
+      margin: 0 auto;
+      padding: 1.8rem 0 2rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 2rem;
+      color: var(--ink-soft);
+      border-top: 1px solid var(--rule);
+      font-size: .84rem;
+    }
+
+    .site-footer p { margin: 0; }
+
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+
+    @media (max-width: 980px) {
+      :root { --page: min(90vw, 820px); }
+      .hero { grid-template-columns: 1fr; align-items: start; }
+      .hero-copy { margin-top: 3rem; }
+      .section-head, .library-section, .run-grid, .stewardship { grid-template-columns: 1fr; }
+      .section-head p { max-width: 620px; }
+      .portal-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .portal-nav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); padding: .75rem; }
+      .view-tab { min-width: 125px; margin: 0 .25rem 0 0; }
+      .answer-layout { grid-template-columns: 1fr; }
+      .portal-top { grid-template-columns: auto 1fr; gap: 1rem; }
+      .portal-search { width: 100%; }
+      .portal-status { display: none; }
+      .capability-notes { grid-template-columns: repeat(2, 1fr); }
+      .library-section { gap: 5rem; }
+      .shelf { min-height: 650px; }
+      .run-grid { gap: 4rem; }
+      .stewardship { gap: 3rem; }
+    }
+
+    @media (max-width: 680px) {
+      :root { --page: calc(100vw - 32px); }
+      body { font-size: 16px; }
+      .site-header { height: 64px; }
+      .nav-links a:not(.sign-in) { display: none; }
+      .sign-in { padding-left: 1rem; }
+      .hero { min-height: 760px; padding-top: 8.2rem; padding-bottom: 2.5rem; }
+      .hero h1 { font-size: clamp(4rem, 20vw, 5.2rem); line-height: .88; }
+      .hero-copy { margin-top: 2.4rem; }
+      .hero-note { margin-top: 4rem; align-items: flex-start; flex-direction: column; }
+      .hero-note p:last-child { display: none; }
+      .workings { padding: 5rem 0; }
+      .section-head { margin-bottom: 2.8rem; gap: 1.5rem; }
+      .section-head h2, .run-intro h2, .library-copy h2, .closing h2 { font-size: clamp(3.2rem, 15vw, 4.4rem); }
+      .portal-frame { margin-inline: -8px; }
+      .portal-top { min-height: 64px; padding: .75rem; grid-template-columns: 1fr; }
+      .portal-name { display: none; }
+      .portal-search { font-size: .79rem; }
+      .portal-nav { padding: .5rem; }
+      .view-tab { min-width: auto; flex: 1; padding: .7rem .55rem; font-size: .8rem; justify-content: center; }
+      .view-tab::after { display: none; }
+      .portal-main { padding: 1.15rem; }
+      .portal-body { min-height: 700px; }
+      .portal-view h3 { font-size: 2.3rem; margin-bottom: 1.3rem; }
+      .question-card { padding: 1rem; }
+      .answer p { font-size: 1rem; }
+      .passage-drawer { min-height: 220px; }
+      .no-evidence { font-size: .84rem; }
+      .result { grid-template-columns: 46px minmax(0, 1fr); gap: .75rem; }
+      .kind { display: none; }
+      .library-grid { grid-template-columns: 1fr; }
+      .resource-card { min-height: 170px; }
+      .resource-card:nth-child(n+3) { display: none; }
+      .map-canvas { min-height: 480px; }
+      .node-a { left: 4%; top: 19%; }
+      .node-b { right: 3%; top: 25%; }
+      .node-c { right: 5%; bottom: 16%; }
+      .node-d { left: 3%; bottom: 20%; }
+      .capability-notes { grid-template-columns: 1fr; }
+      .capability-notes article { padding: 1.2rem 0; border-bottom: 1px solid #4b4a45; }
+      .library-section { padding: 6rem 0 7rem; gap: 3.5rem; }
+      .shelf { min-height: 480px; padding: 1rem; }
+      .paper { padding: 1rem; }
+      .paper-one { width: 67%; height: 67%; left: 2%; }
+      .paper-two { width: 64%; height: 61%; right: 1%; }
+      .paper-meta { margin-bottom: 1.5rem; }
+      .blue-note { width: 80px; right: 0; font-size: .64rem; }
+      .run-section { padding: 5.5rem 0; }
+      .run-grid { gap: 3rem; }
+      .requirement { grid-template-columns: 1fr; gap: .25rem; }
+      .stewardship { padding: 6rem 0; }
+      .stewardship blockquote { font-size: clamp(3rem, 14vw, 4.5rem); }
+      .closing { min-height: auto; padding-top: 5.5rem; }
+      .next-steps { grid-template-columns: 1fr; margin-top: 5rem; }
+      .next-step { min-height: 175px; }
+      .site-footer { flex-direction: column; gap: .4rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+
+    /* ---------- heading font options (prototype switcher) ---------- */
+
+
+    /* ---------- ported from candidate C: an answer you can take apart ---------- */
+    .psig { padding: 0; }
+    .psig-stage {
+      min-height: 100svh;
+      display: flex; flex-direction: column; justify-content: center;
+      padding-block: clamp(4rem, 7vh, 6rem);
+    }
+    .psig-head { max-width: 720px; margin-bottom: clamp(2.5rem, 5vw, 4.5rem); }
+    .psig-head h2 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(2.8rem, 5.1vw, 5.9rem);
+      font-weight: var(--display-weight-h2);
+      line-height: var(--display-lh-h2);
+      letter-spacing: var(--display-track-h2);
+      text-wrap: balance;
+    }
+    .psig-head p { margin: 1.4rem 0 0; color: var(--ink-soft); font-size: 1.05rem; max-width: 480px; }
+    .psig-grid {
+      position: relative;
+      display: grid; grid-template-columns: minmax(0, 10fr) minmax(0, 9fr);
+      gap: clamp(3rem, 5vw, 6rem); align-items: start;
+    }
+    .psig-thread {
+      position: absolute; inset: 0; z-index: 4;
+      pointer-events: none; overflow: visible;
+      display: none;
+    }
+    .psig-thread path { fill: none; stroke: var(--blue); stroke-width: 1.5; }
+    .psig-thread circle { fill: var(--blue); }
+    @media (min-width: 1024px) {
+      .psig-thread { display: block; }
+    }
+    .psig-answer {
+      font-family: var(--serif); font-size: clamp(1.3rem, 1.9vw, 1.72rem);
+      line-height: 1.5; color: var(--ink); max-width: 21em; margin: 0;
+    }
+    .psig-cite {
+      font-family: var(--mono); font-size: .62em; color: var(--blue-dark);
+      border: 1px solid rgba(21,93,166,.4); border-radius: 4px;
+      padding: .1em .4em; vertical-align: super;
+    }
+    .psig-steps { list-style: none; margin: 2.6rem 0 0; padding: 0; max-width: 26em; }
+    .psig-steps li {
+      display: flex; gap: 1rem; align-items: baseline;
+      font-family: var(--sans); font-size: .98rem; color: var(--ink-soft);
+      padding-block: .55rem;
+      transition: color .25s ease;
+    }
+    .psig-steps .n { font-family: var(--mono); font-size: .72rem; flex: none; width: 1.4em; color: var(--ink-soft); transition: color .25s ease; }
+    .psig-steps li.is-active { color: var(--ink); }
+    .psig-steps li.is-active .n { color: var(--blue); }
+    @media (max-width: 1023px) {
+      .psig-stage { min-height: 0; padding-block: clamp(4rem, 9vw, 6rem); }
+      .psig-steps li, .psig-steps .n { color: var(--ink); }
+      .psig-steps .n { color: var(--blue); }
+    }
+    .psig-right { display: flex; flex-direction: column; align-items: stretch; gap: 1.4rem; }
+    .psig-card {
+      background: var(--paper-soft); border: 1px solid var(--paper-deep);
+      border-radius: 8px; padding: 1.5rem 1.6rem;
+      box-shadow: 0 20px 40px -32px rgba(28,28,25,.45);
+    }
+    .psig-card .s-title { margin: 0; font-family: var(--serif); font-size: 1.12rem; font-weight: 500; line-height: 1.35; }
+    .psig-card .s-meta { font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); margin: .45rem 0 0; }
+    .psig-card .s-passage { font-family: var(--serif); font-size: .98rem; line-height: 1.66; color: var(--ink); margin: 1.05rem 0 0; }
+    .psig-hl {
+      background-image: linear-gradient(var(--blue-pale), var(--blue-pale));
+      background-repeat: no-repeat; background-size: 100% 100%;
+      box-decoration-break: clone; -webkit-box-decoration-break: clone;
+    }
+    .psig-card .s-chip { display: inline-block; margin-top: 1rem; font-family: var(--mono); font-size: .68rem; letter-spacing: .06em; color: var(--blue-dark); }
+    .psig-conf { width: min(100%, 420px); align-self: flex-end; }
+    .psig-conf .c-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .psig-conf .c-title { font-family: var(--sans); font-weight: 600; font-size: .95rem; }
+    .psig-conf .c-chip { font-family: var(--mono); font-size: .68rem; color: var(--blue-dark); }
+    .psig-conf .c-line { font-family: var(--sans); font-size: .85rem; color: var(--ink-soft); margin: .55rem 0 0; max-width: 30em; }
+    .psig-qbars { margin-top: 1.1rem; display: flex; flex-direction: column; gap: .65rem; }
+    .psig-qbar { display: grid; grid-template-columns: 7.2em 1fr 2.8em; align-items: center; gap: .8rem; }
+    .psig-qbar .l { font-family: var(--sans); font-size: .78rem; color: var(--ink-soft); }
+    .psig-qbar .v { font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); text-align: right; }
+    .psig-track { height: 4px; background: var(--paper-deep); border-radius: 2px; overflow: hidden; }
+    .psig-fill { height: 100%; display: block; background: var(--blue); border-radius: 2px; }
+    @media (max-width: 1023px) {
+      .psig-grid { grid-template-columns: 1fr; gap: 2.2rem; }
+      .psig-steps { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <nav class="nav-shell" aria-label="Main navigation">
+      <a class="brand" href="#top" aria-label="CorpusKit home">CorpusKit<span class="brand-mark">/</span></a>
+      <div class="nav-links">
+        <a href="#workings">How it works</a>
+        <a href="#run">Run CorpusKit</a>
+        <a href="#contribute">Contribute</a>
+        <a class="sign-in" href="/auth/login">Sign in</a>
+      </div>
+    </nav>
+  </header>
+
+  <div id="smooth-wrapper">
+    <div id="smooth-content">
+      <main id="main">
+        <section class="hero" id="top">
+          <h1>Research with the <em class="mark">evidence<svg id="hero-underline" viewBox="0 0 220 14" preserveAspectRatio="none" aria-hidden="true"><path d="M4 10.5 C 48 5.5, 102 12.5, 216 6.5"/></svg></em> in reach</h1>
+          <div class="hero-copy">
+            <p>CorpusKit is an open source portal for finding, questioning and exploring a research collection. Every answer stays connected to the sources and passages that support it.</p>
+            <a class="text-link" href="#workings">See the portal at work</a>
+          </div>
+          <div class="hero-note" aria-label="Project summary">
+            <p><strong>Open source under Apache 2.0</strong><br>Inspect, run, change and contribute</p>
+            <p>Browse · Search · Ask · Check · Map</p>
+          </div>
+        </section>
+
+        <section class="psig" id="evidence-anatomy">
+          <div class="psig-stage">
+          <div class="section-shell">
+            <div class="psig-head">
+              <h2>An answer you can take apart</h2>
+              <p>A cited answer is a claim with its working attached. Follow one claim from the answer back to the passage that supports it.</p>
+            </div>
+            <div class="psig-grid">
+              <div>
+                <p class="psig-answer">Meadows recovered to near their pre-flood extent within three growing seasons, though recovery was slower where winter turbidity stayed above the long-term median&nbsp;<span class="psig-cite" id="psigCite">2</span>.</p>
+                <ol class="psig-steps" id="psigSteps">
+                  <li><span class="n">1</span>Each claim in the answer carries a numbered citation</li>
+                  <li><span class="n">2</span>The citation opens the research source behind it</li>
+                  <li><span class="n">3</span>The matched passage is marked in the source itself</li>
+                  <li><span class="n">4</span>Confidence states, in plain language, how well the sources hold the answer up</li>
+                </ol>
+              </div>
+              <div class="psig-right">
+                <article class="psig-card" id="psigSource">
+                  <h3 class="s-title">Turbidity and light limitation in flood-affected estuaries</h3>
+                  <p class="s-meta">report &#183; 2023 &#183; water quality &#183; 148 pages</p><!-- page count is a plausible placeholder -->
+                  <p class="s-passage"><span class="psig-hl">Sites where mean winter turbidity remained above the long-term median showed significantly slower recovery of seagrass extent over the two years following the floods.</span> <span class="psig-hl">At these sites, light at the canopy fell below the minimum requirement for Zostera muelleri on 63 per cent of monitored days.</span></p><!-- figure is a plausible placeholder -->
+                  <span class="s-chip" id="psigChip">matched passage &#183; page 41</span>
+                </article>
+                <aside class="psig-card psig-conf" id="psigConf">
+                  <div class="c-head">
+                    <span class="c-title">Answer quality</span>
+                    <span class="c-chip">High confidence</span>
+                  </div>
+                  <p class="c-line">The cited passages directly support this answer. Every answer reports the same three checks.</p>
+                  <div class="psig-qbars">
+                    <div class="psig-qbar"><span class="l">Relevance</span><span class="psig-track"><span class="psig-fill" style="width:86%"></span></span><span class="v">0.86</span></div>
+                    <div class="psig-qbar"><span class="l">Groundedness</span><span class="psig-track"><span class="psig-fill" style="width:91%"></span></span><span class="v">0.91</span></div>
+                    <div class="psig-qbar"><span class="l">Context</span><span class="psig-track"><span class="psig-fill" style="width:78%"></span></span><span class="v">0.78</span></div>
+                  </div>
+                </aside>
+              </div>
+              <svg class="psig-thread" id="psigThread" aria-hidden="true">
+                <path id="psigThreadPath" d=""/>
+                <circle id="psigThreadDot" r="3" cx="-10" cy="-10"/>
+              </svg>
+            </div>
+          </div>
+          </div>
+        </section>
+
+        <section class="workings" id="workings">
+          <div class="section-shell">
+            <div class="section-head">
+              <h2>More than one way in</h2>
+              <p>People arrive differently – with a question, a half-remembered report, a topic to browse or a hunch that two things are connected. A portal keeps all of those routes open.</p>
+            </div>
+
+            <p class="ways-caption"><span class="wc-n" id="waysCaptionNum">01</span><span class="wc-t" id="waysCaptionText">Answers stream in with numbered citations and plain-language confidence. Deep research maps a broad question into focused sub-questions before answering.</span></p>
+
+            <!-- All example research titles, dates, passages and relevance values are illustrative placeholders. -->
+            <div class="portal-frame" aria-label="Interactive CorpusKit portal example">
+              <div class="portal-top">
+                <span class="portal-name">Field notes</span>
+                <div class="portal-search" aria-label="Example search field"><span>Search this research collection</span><span>⌕</span></div>
+                <span class="portal-status">Research portal</span>
+              </div>
+
+              <div class="portal-body">
+                <div class="portal-nav" role="tablist" aria-label="Portal views">
+                  <button class="view-tab active" id="tab-ask" role="tab" aria-selected="true" aria-controls="view-ask" data-view="ask">Ask</button>
+                  <button class="view-tab" id="tab-search" role="tab" aria-selected="false" aria-controls="view-search" data-view="search">Search</button>
+                  <button class="view-tab" id="tab-library" role="tab" aria-selected="false" aria-controls="view-library" data-view="library">Library</button>
+                  <button class="view-tab" id="tab-map" role="tab" aria-selected="false" aria-controls="view-map" data-view="map">Map</button>
+                  <button class="view-tab" id="tab-manage" role="tab" aria-selected="false" aria-controls="view-manage" data-view="manage">Manage</button>
+                </div>
+
+                <div class="portal-main">
+                  <section class="portal-view active" id="view-ask" role="tabpanel" aria-labelledby="tab-ask">
+                    <h3>What helps public buildings stay useful during extreme heat?</h3>
+                    <div class="question-card">
+                      <p class="question">Asked across the whole collection</p>
+                      <div class="answer-layout">
+                        <div class="answer">
+                          <p>Shaded approaches and external blinds can reduce heat before it reaches the building. Plans should also identify a cooler internal room and set clear thresholds for changing how a space is used.<button class="citation" type="button" aria-expanded="true" aria-controls="passage" data-citation="1">1</button></p>
+                          <p>The sources suggest that these changes work best when they are paired with local heat procedures, but they do not compare every building type.<button class="citation" type="button" aria-expanded="false" aria-controls="passage" data-citation="2">2</button></p>
+                          <div class="confidence"><strong>Moderate confidence</strong><span>Check the cited sources before relying on this answer</span></div>
+                        </div>
+                        <aside class="passage-drawer" id="passage" aria-live="polite">
+                          <p class="passage-title">Designing community spaces for hotter days</p>
+                          <p class="passage-copy">“Prioritise <mark>shade at entrances, external window protection and a cooler internal refuge</mark>. Each measure should be linked to an agreed heat response plan.”</p>
+                        </aside>
+                      </div>
+                      <div class="no-evidence"><span aria-hidden="true">○</span><span><strong>No direct evidence found</strong><br>The collection does not compare the running costs of these measures across building types.</span></div>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-search" role="tabpanel" aria-labelledby="tab-search" hidden>
+                    <div class="pv-controls">
+                      <div class="pv-querybar"><span>winter turbidity thresholds</span><span class="pv-qicon">⌕</span></div>
+                      <div class="sr-modes pv-modes"><span class="on">hybrid</span><span>semantic</span><span>keyword</span></div>
+                    </div>
+                    <div class="pv-chiprow">
+                      <span class="chip">Topic: water quality</span>
+                      <span class="chip">Kind: report</span>
+                      <span class="pv-meta">Searching 412 resources</span>
+                    </div>
+                    <div class="pv-card">
+                      <div class="pv-answerstrip">
+                        <span class="lbl">Cited answer</span>
+                        <p>Recovery was slower where mean winter turbidity stayed above the long-term median.<span class="citation" aria-hidden="true">1</span> Reduced light at the canopy is the documented pathway.<span class="citation" aria-hidden="true">2</span></p>
+                      </div>
+                      <div class="pv-results">
+                        <div class="pv-result">
+                          <div class="r-top"><span class="r-title">Turbidity and light limitation in flood-affected estuaries</span><span class="r-score">0.87</span></div>
+                          <p class="r-meta">report · 2023</p>
+                          <p class="r-passage">…sites where <span class="hl">mean winter turbidity remained above the long-term median</span> showed significantly slower recovery…</p>
+                        </div>
+                        <div class="pv-result">
+                          <div class="r-top"><span class="r-title">Catchment sediment sources after the 2022 floods</span><span class="r-score">0.74</span></div>
+                          <p class="r-meta">technical report · 2024</p>
+                          <p class="r-passage">…bank erosion in the upper catchment contributed an estimated <span class="hl">two thirds of the fine sediment load</span> reaching the estuary…</p><!-- proportion is a plausible placeholder -->
+                        </div>
+                        <div class="pv-result">
+                          <div class="r-top"><span class="r-title">Recreational water quality guidelines review</span><span class="r-score"><span class="weak">weak match</span> · 0.41</span></div>
+                          <p class="r-meta">review · 2019</p>
+                        </div>
+                      </div>
+                      <div class="pv-cardfoot"><span>Ranked by hybrid relevance</span><a href="#workings">Watch this search</a></div>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-library" role="tabpanel" aria-labelledby="tab-library" hidden>
+                    <div class="pv-controls">
+                      <div class="pv-chiprow">
+                        <span class="chip on">All kinds</span>
+                        <span class="chip">Report</span>
+                        <span class="chip">Plan</span>
+                        <span class="chip">Submission</span>
+                      </div>
+                      <span class="pv-meta">412 resources · sorted by recently added</span><!-- count is a plausible placeholder -->
+                    </div>
+                    <div class="pv-libgrid">
+                      <div class="pv-libcard">
+                        <span class="k ochre">Report · 2023</span>
+                        <p class="t">Estuarine seagrass condition assessment 2019 to 2023</p>
+                        <p class="s">Five years of condition monitoring across five estuaries, covering extent, density and light availability.</p>
+                        <div class="tags"><span>seagrass</span><span>monitoring</span></div>
+                      </div>
+                      <div class="pv-libcard">
+                        <span class="k clay">Technical report · 2024</span>
+                        <p class="t">Catchment sediment sources after the 2022 floods</p>
+                        <p class="s">Traces fine sediment reaching the estuary to its catchment sources and ranks management options.</p>
+                        <div class="tags"><span>sediment</span><span>catchment</span></div>
+                      </div>
+                      <div class="pv-libcard">
+                        <span class="k ochre">Report · 2023</span>
+                        <p class="t">Turbidity and light limitation in flood-affected estuaries</p>
+                        <p class="s">Links elevated winter turbidity after floods to reduced light at the seagrass canopy and slower recovery.</p>
+                        <div class="tags"><span>turbidity</span><span>light</span></div>
+                      </div>
+                      <div class="pv-libcard">
+                        <span class="k">Review · 2019</span>
+                        <p class="t">Recreational water quality guidelines review</p>
+                        <p class="s">Reviews the thresholds behind recreational water quality guidance and the monitoring evidence supporting them.</p>
+                        <div class="tags"><span>guidelines</span><span>monitoring</span></div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-map" role="tabpanel" aria-labelledby="tab-map" hidden>
+                    <div class="pv-controls">
+                      <div class="sr-modes pv-modes"><span class="on">Entity view</span><span>Concept view</span></div>
+                      <span class="pv-meta">Select a connection to open the resources behind it</span>
+                    </div>
+                    <div class="pv-card pv-mapcard">
+                      <svg viewBox="0 0 560 300" role="img" aria-label="A small knowledge map showing entities such as winter turbidity and seagrass extent, joined by labelled relationships">
+                          <path class="map-edge" d="M118 62 C 170 48, 200 46, 238 52"/>
+                          <path class="map-edge on" d="M330 66 C 380 80, 408 96, 428 118"/>
+                          <path class="map-edge" d="M452 152 C 440 180, 412 202, 376 214"/>
+                          <path class="map-edge" d="M182 232 C 226 232, 256 228, 286 222"/>
+                          <path class="map-edge" d="M112 84 C 130 140, 138 186, 122 214"/>
+                          <text class="map-edge-label" x="158" y="40">increased</text>
+                          <text class="map-inspect" x="380" y="72">reduces · 4 resources</text>
+                          <text class="map-edge-label" x="416" y="196">limits</text>
+                          <text class="map-edge-label" x="216" y="252">grows in</text>
+                          <g>
+                            <rect class="map-node" x="40" y="44" width="80" height="30" rx="15"/>
+                            <text class="map-node-label" x="80" y="63" text-anchor="middle">2022 floods</text>
+                          </g>
+                          <g>
+                            <rect class="map-node" x="238" y="40" width="112" height="30" rx="15" stroke="var(--blue)"/>
+                            <text class="map-node-label" x="294" y="59" text-anchor="middle">winter turbidity</text>
+                          </g>
+                          <g>
+                            <rect class="map-node" x="418" y="112" width="118" height="30" rx="15"/>
+                            <text class="map-node-label" x="477" y="131" text-anchor="middle">light at the canopy</text>
+                          </g>
+                          <g>
+                            <rect class="map-node" x="258" y="200" width="118" height="30" rx="15"/>
+                            <text class="map-node-label" x="317" y="219" text-anchor="middle">seagrass extent</text>
+                          </g>
+                          <g>
+                            <rect class="map-node" x="62" y="216" width="120" height="30" rx="15"/>
+                            <text class="map-node-label" x="122" y="235" text-anchor="middle" font-style="italic">Zostera muelleri</text>
+                          </g>
+                      </svg>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-manage" role="tabpanel" aria-labelledby="tab-manage" hidden>
+                    <div class="pv-card">
+                      <div class="ch-head"><span class="t">Collection health</span><span class="c">418 resources · 3 need attention</span></div><!-- counts are plausible placeholders -->
+                      <div class="ch-row"><span class="flag">extraction failed</span><span class="what">Scanned appendix, floodplain inquiry 1996</span><span class="act"><a href="#workings">Retry</a></span></div>
+                      <div class="ch-row"><span class="flag">bot challenge</span><span class="what">Council planning portal page</span><span class="act"><a href="#workings">Open</a></span></div>
+                      <div class="ch-row"><span class="flag softer">very little text</span><span class="what">Field photo set, March survey</span><span class="act"><a href="#workings">Review</a></span></div>
+                      <div class="ch-foot"><span>2 drafts held from public retrieval</span><span>Website sync · nightly</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+
+
+        <section class="run-section" id="run">
+          <div class="run-grid">
+            <div class="run-intro">
+              <h2>Run it yourself</h2>
+              <p>The application code is published under the Apache 2.0 licence. Clone it, connect a collection and run the portal on infrastructure you choose and manage.</p>
+              <p>The repository holds the application, shared types, retrieval integration, tests, build tasks and deployment configuration – the same code that serves the live portals, with documented local setup and container configuration.</p>
+              <p>One boundary matters when you plan a deployment: content storage and retrieval run on a connected knowledge service, and a deployment needs its own account with one. The Apache 2.0 licence covers the CorpusKit application code; connected services and the research material itself have their own terms.</p>
+            </div>
+            <div>
+              <div class="code-card" aria-label="Example setup command">
+                <div class="code-top"><span>Terminal</span><span>Local setup</span></div>
+                <!-- commands are illustrative placeholders - confirm against the repository README -->
+                <pre><code><span class="code-dim">$</span> git clone https://github.com/corpuskit/corpuskit.git
+<span class="code-dim">$</span> cd corpuskit
+<span class="code-dim">$</span> cp .env.example .env   <span class="code-dim"># knowledge service account</span>
+<span class="code-dim">$</span> deno task dev</code></pre>
+              </div>
+              <div class="run-links">
+                <a href="https://github.com/corpuskit/corpuskit">Open the repository</a>
+                <a href="https://github.com/corpuskit/corpuskit/blob/main/LICENSE">Read the Apache 2.0 licence</a>
+              </div>
+            </div>
+          </div>
+          <div class="run-cols">
+            <div>
+              <h3>How changes are checked</h3>
+              <p>Every change lands through a pull request. Typechecking, linting, formatting, tests and a full build run on each one, and a red check does not merge. What deploys is what was reviewed.</p>
+              <p>The same gate applies to maintainers and first-time contributors, which keeps the standard visible instead of implied.</p>
+            </div>
+            <div>
+              <h3>Worth knowing before you commit</h3>
+              <ul class="know-list">
+                <li>A deployment needs an account with a connected knowledge service for content storage, retrieval and generation</li>
+                <li>Administrator sign-in supports Microsoft accounts today</li>
+                <li>Application state is kept in SQLite-backed durable storage – simple to operate, and worth understanding before you scale</li>
+                <li>The issue tracker names current gaps and unfinished areas – read it as part of an evaluation</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+
+        <section class="closing" id="contribute">
+          <h2>Bring the research closer to the people who <em class="mark">use it<svg viewBox="0 0 220 14" preserveAspectRatio="none" aria-hidden="true"><path d="M4 9.5 C 60 6, 130 12, 216 7"/></svg></em></h2>
+          <div class="next-steps">
+            <article class="next-step"><h3>Use a portal</h3><p>Search, browse and ask questions in a CorpusKit portal run by your organisation.</p><a href="#workings">See how it works</a></article>
+            <article class="next-step"><h3>Run CorpusKit</h3><p>Inspect the code, connect a research collection and maintain the deployment yourself.</p><a href="https://github.com/corpuskit/corpuskit">View the repository</a></article>
+            <article class="next-step"><h3>Contribute</h3><p>Improve the code, design, research practice, tests or documentation.</p><a href="https://github.com/corpuskit/corpuskit/blob/main/CONTRIBUTING.md">Start with the guide</a></article>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <p>CorpusKit is open source under Apache 2.0</p>
+        <p>Built for research that needs to be checked</p>
+      </footer>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollSmoother.min.js"></script>
+  <script>
+    (function () {
+      const tabs = Array.from(document.querySelectorAll('.view-tab'));
+      const views = Array.from(document.querySelectorAll('.portal-view'));
+      const citations = Array.from(document.querySelectorAll('.citation'));
+      const passage = document.getElementById('passage');
+      const passageContent = {
+        1: {
+          title: 'Designing community spaces for hotter days',
+          copy: '“Prioritise <mark>shade at entrances, external window protection and a cooler internal refuge</mark>. Each measure should be linked to an agreed heat response plan.”'
+        },
+        2: {
+          title: 'Local heat response planning guide',
+          copy: '“Set local thresholds for <mark>moving activities, opening the cooler room and checking people at greater risk</mark>. Record who is responsible for each step.”'
+        }
+      };
+
+      function showView(name) {
+        tabs.forEach(function (tab) {
+          const selected = tab.dataset.view === name;
+          tab.classList.toggle('active', selected);
+          tab.setAttribute('aria-selected', String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+        });
+        views.forEach(function (view) {
+          const selected = view.id === 'view-' + name;
+          view.classList.toggle('active', selected);
+          view.hidden = !selected;
+        });
+      }
+
+      window.__showPortalView = showView;
+
+      tabs.forEach(function (tab, index) {
+        tab.addEventListener('click', function () { showView(tab.dataset.view); });
+        tab.addEventListener('keydown', function (event) {
+          if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+          event.preventDefault();
+          const direction = event.key === 'ArrowRight' ? 1 : -1;
+          const next = tabs[(index + direction + tabs.length) % tabs.length];
+          showView(next.dataset.view);
+          next.focus();
+        });
+      });
+
+      citations.forEach(function (citation) {
+        citation.addEventListener('click', function () {
+          const item = passageContent[citation.dataset.citation];
+          citations.forEach(function (button) { button.setAttribute('aria-expanded', String(button === citation)); });
+          passage.querySelector('.passage-title').textContent = item.title;
+          passage.querySelector('.passage-copy').innerHTML = item.copy;
+          if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            gsap.fromTo(passage, { x: 14, opacity: .65 }, { x: 0, opacity: 1, duration: .38, ease: 'power2.out' });
+          }
+        });
+      });
+
+      if (window.gsap && window.ScrollTrigger && window.ScrollSmoother && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        gsap.registerPlugin(ScrollTrigger, ScrollSmoother);
+        ScrollSmoother.create({ wrapper: '#smooth-wrapper', content: '#smooth-content', smooth: 1.05, effects: false, normalizeScroll: true });
+
+        gsap.fromTo('.passage-drawer',
+          { clipPath: 'inset(0 100% 0 0)' },
+          { clipPath: 'inset(0 0% 0 0)', duration: .85, ease: 'power3.inOut', scrollTrigger: { trigger: '.portal-frame', start: 'top 64%', once: true } }
+        );
+      }
+    }());
+  </script>
+  <script>
+    (function () {
+      var path = document.querySelector('#hero-underline path')
+      if (path && window.gsap) {
+        var len = path.getTotalLength()
+        gsap.set(path, { strokeDasharray: len, strokeDashoffset: len })
+        gsap.to(path, { strokeDashoffset: 0, duration: .75, delay: .25, ease: 'power2.out' })
+      }
+    })();
+  </script>
+  <script>
+    /* signature sequence ported from candidate C - desktop, pinned, scrubbed.
+       The page is complete without it. */
+    (function () {
+      if (!window.gsap || !window.ScrollTrigger) return;
+      gsap.registerPlugin(ScrollTrigger);
+      var mm = gsap.matchMedia();
+      mm.add('(min-width: 1024px)', function () {
+        var cite   = document.getElementById('psigCite');
+        var source = document.getElementById('psigSource');
+        var conf   = document.getElementById('psigConf');
+        var chip   = document.getElementById('psigChip');
+        var svg    = document.getElementById('psigThread');
+        var path   = document.getElementById('psigThreadPath');
+        var dot    = document.getElementById('psigThreadDot');
+        var marks  = gsap.utils.toArray('#psigSource .psig-hl');
+        var bars   = gsap.utils.toArray('#psigConf .psig-fill');
+        var steps  = gsap.utils.toArray('#psigSteps li');
+        if (!cite || !source || !conf || !path) return;
+
+        var threadLen = 0;
+        var draw = { p: 0 };
+
+        function layoutThread() {
+          var g = svg.getBoundingClientRect();
+          var c = cite.getBoundingClientRect();
+          var sr = source.getBoundingClientRect();
+          var x1 = c.right - g.left + 7;
+          var y1 = (c.top + c.bottom) / 2 - g.top;
+          var x2 = sr.left - g.left - 10;
+          var y2 = sr.top - g.top + 34;
+          var mx = x1 + (x2 - x1) * 0.55;
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2);
+          dot.setAttribute('cx', x2 + 3);
+          dot.setAttribute('cy', y2);
+          threadLen = path.getTotalLength();
+          path.style.strokeDasharray = threadLen;
+          path.style.strokeDashoffset = threadLen * (1 - draw.p);
+        }
+        layoutThread();
+
+        gsap.set(source, { opacity: 0.45, y: 14 });
+        gsap.set(conf,   { opacity: 0, y: 18 });
+        gsap.set(bars,   { scaleX: 0, transformOrigin: '0 50%' });
+        gsap.set(marks,  { backgroundSize: '0% 100%' });
+        gsap.set(chip,   { opacity: 0 });
+        gsap.set(dot,    { opacity: 0 });
+
+        var tl = gsap.timeline({
+          scrollTrigger: {
+            trigger: '#evidence-anatomy',
+            start: 'top 76',
+            end: '+=2400',
+            scrub: 0.4,
+            pin: '.psig-stage',
+            anticipatePin: 1,
+            onRefresh: layoutThread,
+            onUpdate: function (self) {
+              var pr = self.progress;
+              var idx = pr < 0.18 ? 0 : pr < 0.44 ? 1 : pr < 0.68 ? 2 : 3;
+              steps.forEach(function (li, i) { li.classList.toggle('is-active', i === idx); });
+            }
+          }
+        });
+
+        tl.to({}, { duration: 0.5 })
+          .addLabel('s2')
+          .to(cite, { backgroundColor: '#155da6', color: '#f8f6f0', duration: 0.18 }, 's2')
+          .to(draw, {
+            p: 1, duration: 0.8, ease: 'none',
+            onUpdate: function () { path.style.strokeDashoffset = threadLen * (1 - draw.p); }
+          }, 's2')
+          .to(source, { opacity: 1, y: 0, duration: 0.6 }, 's2+=0.15')
+          .to(dot, { opacity: 1, duration: 0.12 }, 's2+=0.72')
+          .addLabel('s3', '+=0.25')
+          .to(marks, { backgroundSize: '100% 100%', duration: 0.85, stagger: 0.3, ease: 'none' }, 's3')
+          .to(chip, { opacity: 1, duration: 0.3 }, 's3+=0.7')
+          .addLabel('s4', '+=0.25')
+          .to(conf, { opacity: 1, y: 0, duration: 0.5 }, 's4')
+          .to(bars, { scaleX: 1, duration: 0.65, stagger: 0.12 }, 's4+=0.12')
+          .to({}, { duration: 0.45 });
+
+        return function () {
+          steps.forEach(function (li) { li.classList.remove('is-active'); });
+          path.style.strokeDasharray = '';
+          path.style.strokeDashoffset = '';
+        };
+      });
+
+      var steps = [
+        { view: 'ask', text: 'Answers stream in with numbered citations and plain-language confidence. Deep research maps a broad question into focused sub-questions before answering.' },
+        { view: 'search', text: 'Ranked results each show the passage that made them relevant, with a short cited answer above them and hybrid, semantic and keyword modes a click apart.' },
+        { view: 'library', text: 'Every resource carries a clear title, summary and key takeaways, whatever the file was called. A question can be put to a single document instead of the whole collection.' },
+        { view: 'map', text: 'Entities, relationships and overlapping topics, drawn from the collection itself. Inspect a connection and open the resources behind it.' },
+        { view: 'manage', text: 'Administrators add sources and schedule synchronisation, collection health finds what went wrong, and drafts stay out of public retrieval until they are ready.' }
+      ];
+      var current = 0;
+      var numEl = document.getElementById('waysCaptionNum');
+      var textEl = document.getElementById('waysCaptionText');
+      function setStep(i) {
+        if (i === current) return;
+        current = i;
+        if (window.__showPortalView) window.__showPortalView(steps[i].view);
+        numEl.textContent = '0' + (i + 1);
+        textEl.textContent = steps[i].text;
+        gsap.fromTo([numEl, textEl], { opacity: .35 }, { opacity: 1, duration: .35, ease: 'power2.out' });
+      }
+      var mm = gsap.matchMedia();
+      mm.add('(min-width: 1024px)', function () {
+        var st = ScrollTrigger.create({
+          trigger: '.workings',
+          start: 'top 76',
+          end: '+=325%',
+          pin: true,
+          scrub: true,
+          onUpdate: function (self) {
+            setStep(Math.min(4, Math.floor(self.progress * 5)));
+          }
+        });
+        return function () { st.kill(); };
+      });
+    })();
+  </script>
+</body>
+</html>
