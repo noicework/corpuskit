@@ -14,6 +14,8 @@ export {
   baselineMerchandising,
   extractPageSummary,
   fallbackTitle,
+  findPageSummaryFieldId,
+  isPageSummaryFieldId,
   looksLikeFilenameTitle,
   type Merchandised,
   overlayEnrichment,

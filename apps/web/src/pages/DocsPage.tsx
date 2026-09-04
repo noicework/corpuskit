@@ -131,7 +131,7 @@ function Markdown({
             return (
               <blockquote
                 key={index}
-                className='border-l-2 border-line pl-3 text-[0.9375rem] italic leading-relaxed text-ink-2'
+                className='break-words border-l-2 border-line pl-3 text-[0.9375rem] italic leading-relaxed text-ink-2'
               >
                 {renderInline(block.text, `q${index}`, citation)}
               </blockquote>

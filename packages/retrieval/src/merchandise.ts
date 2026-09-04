@@ -155,7 +155,24 @@ export function overlayEnrichment(
 export function extractPageSummary(
   texts: { fieldId: string; text: string }[],
 ): string | undefined {
-  const hit = texts.find((t) => /(^|\/)da-[a-z0-9]*summary[a-z0-9]*-f-/i.test(t.fieldId))
+  const hit = texts.find((t) => isPageSummaryFieldId(t.fieldId))
   const text = hit?.text?.trim()
   return text && text.length > 0 ? text : undefined
+}
+
+/** Whether a text field id is a DA page-summary destination (see `extractPageSummary`). */
+export function isPageSummaryFieldId(fieldId: string): boolean {
+  return /(^|\/)da-[a-z0-9]*summary[a-z0-9]*-f-/i.test(fieldId)
+}
+
+/**
+ * The DA page-summary field id among a resource's text field ids, when the
+ * platform wrote one. List endpoints (`/catalog`, `/find`) return field ids
+ * with `show=values` but never the text itself, so a card that has no summary
+ * of its own uses this id to fetch just that one small field rather than the
+ * whole extracted document.
+ */
+export function findPageSummaryFieldId(fieldIds: Iterable<string>): string | undefined {
+  for (const fieldId of fieldIds) if (isPageSummaryFieldId(fieldId)) return fieldId
+  return undefined
 }
