@@ -87,7 +87,7 @@ import {
 import { generateFollowUpQuestions } from './follow-up-questions.ts'
 import { generateSuggestedQuestions, SUGGESTED_QUESTIONS_SCHEMA_ID } from './suggested-questions.ts'
 import { tenantAliasLocation } from './tenant-aliases.ts'
-import { AgentRestartError, applyLabelsetUpdate } from './labelsets.ts'
+import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
 import { registerMcpRoutes, type TrustedPortalUser } from './mcp.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -475,10 +475,18 @@ const promptsSchema = z.object({
   ask: z.string().max(4000).optional(),
   images: z.boolean().optional(),
 })
+const labelDefinitionSchema = z.object({
+  title: z.string().trim().min(1).max(60),
+  text: z.string().trim().max(600).optional(),
+})
 const labelsetBodySchema = z.object({
   title: z.string().min(1).max(60),
   multiple: z.boolean(),
-  labels: z.string().min(1).array().max(40),
+  // Plain titles (the original shape) or title + definition pairs.
+  labels: z.union([
+    z.string().min(1).array().max(40),
+    labelDefinitionSchema.array().max(60),
+  ]),
 })
 const labelsetUpdateSchema = z.object({
   title: z.string().trim().min(1).max(60),
@@ -2348,7 +2356,23 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const id = parsed.data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!id) return c.json({ error: 'invalid_request' }, 400)
-    await management!.createLabelset(config, { id, ...parsed.data })
+    const labels = parsed.data.labels.map((label) =>
+      typeof label === 'string' ? { title: label } : label
+    )
+    const duplicate = duplicateLabelTitle(labels)
+    if (duplicate) {
+      return c.json({
+        error: 'invalid_request',
+        message: `Label "${duplicate}" appears more than once.`,
+      }, 400)
+    }
+    // Nothing carries a brand-new set, so no agent is created or restarted here.
+    await management!.createLabelset(config, {
+      id,
+      title: parsed.data.title,
+      multiple: parsed.data.multiple,
+      labels,
+    })
     return c.json({ ok: true, id })
   })
 
@@ -2363,16 +2387,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailableLu) return unavailableLu
     const parsed = labelsetUpdateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    const seen = new Set<string>()
-    for (const label of parsed.data.labels) {
-      const key = label.title.toLowerCase()
-      if (seen.has(key)) {
-        return c.json({
-          error: 'invalid_request',
-          message: `Label "${label.title}" appears more than once.`,
-        }, 400)
-      }
-      seen.add(key)
+    const duplicate = duplicateLabelTitle(parsed.data.labels)
+    if (duplicate) {
+      return c.json({
+        error: 'invalid_request',
+        message: `Label "${duplicate}" appears more than once.`,
+      }, 400)
     }
     const id = c.req.param('id')
     const existing = await provider.labelsets(config).catch(() => [])

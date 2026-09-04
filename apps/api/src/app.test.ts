@@ -1304,3 +1304,86 @@ describe('GET /api/t/:slug/labelsets - definitions', () => {
     })
   })
 })
+
+describe('POST /api/admin/t/:slug/labelsets - label shapes', () => {
+  const passcode = 'test-passcode'
+  function fakeCreate() {
+    const calls: unknown[] = []
+    const management = {
+      createLabelset: (_t: unknown, input: unknown) => {
+        calls.push(input)
+        return Promise.resolve()
+      },
+    } as unknown as AragProvider
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      management,
+      adminPasscode: passcode,
+    })
+    const post = (payload: unknown) =>
+      app.request('/api/admin/t/marine/labelsets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
+        body: JSON.stringify(payload),
+      })
+    return { calls, post }
+  }
+
+  it('still accepts plain label titles (the original shape)', async () => {
+    const { calls, post } = fakeCreate()
+    const response = await post({ title: 'Region', multiple: false, labels: ['North', 'South'] })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, id: 'region' })
+    expect(calls).toEqual([{
+      id: 'region',
+      title: 'Region',
+      multiple: false,
+      labels: [{ title: 'North' }, { title: 'South' }],
+    }])
+  })
+
+  it('accepts title + definition pairs and writes the definitions on create', async () => {
+    const { calls, post } = fakeCreate()
+    const response = await post({
+      title: 'Marine Region',
+      multiple: true,
+      labels: [
+        { title: 'North', text: ' Northern waters. ' },
+        { title: 'South' },
+      ],
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, id: 'marine-region' })
+    expect(calls).toEqual([{
+      id: 'marine-region',
+      title: 'Marine Region',
+      multiple: true,
+      labels: [{ title: 'North', text: 'Northern waters.' }, { title: 'South' }],
+    }])
+  })
+
+  it('rejects duplicate titles and over-long definitions before touching the box', async () => {
+    const { calls, post } = fakeCreate()
+    const duplicate = await post({
+      title: 'Region',
+      multiple: false,
+      labels: [{ title: 'North', text: '' }, { title: 'north' }],
+    })
+    expect(duplicate.status).toBe(400)
+    expect(((await duplicate.json()) as { message: string }).message).toContain('more than once')
+    const tooLong = await post({
+      title: 'Region',
+      multiple: false,
+      labels: [{ title: 'North', text: 'x'.repeat(601) }],
+    })
+    expect(tooLong.status).toBe(400)
+    const mixed = await post({
+      title: 'Region',
+      multiple: false,
+      labels: ['North', { title: 'S' }],
+    })
+    expect(mixed.status).toBe(400)
+    expect(calls).toEqual([])
+  })
+})

@@ -1554,13 +1554,17 @@ export class AragProvider implements RetrievalProvider {
     this.invalidateCatalogue(tenant.slug)
   }
 
+  /**
+   * Create a labelset. Labels are plain titles or `{ title, text }` pairs -
+   * `text` is the label's definition, written when given.
+   */
   async createLabelset(
     tenant: TenantConfig,
     input: {
       id: string
       title: string
       multiple: boolean
-      labels: string[]
+      labels: (string | { title: string; text?: string })[]
       kind?: 'RESOURCES' | 'PARAGRAPHS'
     },
   ): Promise<void> {
@@ -1569,7 +1573,13 @@ export class AragProvider implements RetrievalProvider {
       color: '#556b5f',
       multiple: input.multiple,
       kind: [input.kind ?? 'RESOURCES'],
-      labels: input.labels.map((title) => ({ title })),
+      labels: input.labels.map((label) =>
+        typeof label === 'string'
+          ? { title: label }
+          : label.text === undefined
+          ? { title: label.title }
+          : { title: label.title, text: label.text }
+      ),
     })
   }
 

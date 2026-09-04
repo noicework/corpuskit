@@ -48,6 +48,21 @@ export type LabelOperation = {
   label: { ident?: string; labels?: unknown[]; multiple?: boolean; [key: string]: unknown }
 }
 
+/**
+ * The first label title that appears more than once (case-insensitive), or
+ * null. Shared by the create and update routes - a set never holds the same
+ * label twice.
+ */
+export function duplicateLabelTitle(labels: { title: string }[]): string | null {
+  const seen = new Set<string>()
+  for (const label of labels) {
+    const key = label.title.trim().toLowerCase()
+    if (seen.has(key)) return label.title
+    seen.add(key)
+  }
+  return null
+}
+
 /** A `{ label: { ident, ... } }` operation whose `ident` is `labelsetId`. */
 export function isLabelOpFor(op: unknown, labelsetId: string): op is LabelOperation {
   if (!op || typeof op !== 'object' || !('label' in op)) return false
