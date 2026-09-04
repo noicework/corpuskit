@@ -145,5 +145,5 @@ jobs:
         if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
         env:
           BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
-          PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'marine' }}
+          PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'opax' }}
         run: deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick

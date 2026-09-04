@@ -26,7 +26,7 @@ jobs:
     env:
       # A repository variable can move the scheduled check to renamed tenants
       # without changing this workflow. Manual runs can override it per run.
-      ACCEPTANCE_TENANTS: ${{ inputs.tenant_slugs || vars.ACCEPTANCE_TENANTS || 'marine grains' }}
+      ACCEPTANCE_TENANTS: ${{ inputs.tenant_slugs || vars.ACCEPTANCE_TENANTS || 'opax' }}
       ACCEPTANCE_BASE_URL: https://corpuskit.org
     steps:
       - uses: actions/checkout@v4

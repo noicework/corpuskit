@@ -15,10 +15,6 @@
       "custom_domain": true
     },
     {
-      "pattern": "marine.corpuskit.org",
-      "custom_domain": true
-    },
-    {
       "pattern": "grains.corpuskit.org",
       "custom_domain": true
     },
