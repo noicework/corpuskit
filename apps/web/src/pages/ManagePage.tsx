@@ -12,6 +12,7 @@ import { CorpusHealthPanel } from './admin/CorpusHealthPanel.tsx'
 import { EnrichmentsPanel } from './admin/EnrichmentsPanel.tsx'
 import { InsightsPanel } from './admin/InsightsPanel.tsx'
 import { KgPanel } from './admin/KgPanel.tsx'
+import { LabelsetsPanel } from './admin/LabelsetsPanel.tsx'
 import { RecentList } from './admin/RecentList.tsx'
 import { RenamePortal } from './admin/RenamePortal.tsx'
 import { SourcesPanel } from './admin/SourcesPanel.tsx'
@@ -315,7 +316,8 @@ export function ManagePage() {
                 <div className='rp-card p-5'>
                   <div className='flex flex-wrap items-center justify-between gap-3'>
                     <p className='text-sm text-ink-2'>
-                      Run analysis here, or open the full taxonomy view.
+                      Edit label sets and their definitions, run analysis, or open the full taxonomy
+                      view.
                     </p>
                     <Link to={`/t/${slug}/taxonomy`} className='rp-btn rp-btn-outline'>
                       Open taxonomy &rarr;
@@ -324,13 +326,14 @@ export function ManagePage() {
                   {reachable
                     ? (
                       <>
+                        <LabelsetsPanel slug={slug} passcode={adminCredential} />
                         <AnalysePanel slug={slug} passcode={adminCredential} />
                         <InterrogatePanel slug={slug} passcode={adminCredential} />
                       </>
                     )
                     : (
                       <p className='mt-4 text-sm text-ink-3'>
-                        Connect a knowledge box to run analysis.
+                        Connect a knowledge box to edit label sets or run analysis.
                       </p>
                     )}
                 </div>

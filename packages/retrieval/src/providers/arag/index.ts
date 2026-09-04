@@ -587,6 +587,36 @@ export class KnowledgeBoxNotConnectedError extends Error {
   }
 }
 
+/** A labelset as the platform stores it (`GET /labelsets`). */
+interface RawLabelset {
+  title?: string
+  color?: string
+  multiple?: boolean
+  kind?: string[]
+  labels?: { title?: string; text?: string; uri?: string; related?: string }[]
+}
+
+/**
+ * A configured data-augmentation agent with everything needed to reproduce it
+ * on the platform. `operations` and `filter` are the platform's own shapes,
+ * carried verbatim so a rebuild changes only what it means to change.
+ */
+export interface AgentConfig {
+  id: string
+  /** Task type: `labeler`, `ask`, `llm-graph`, ... */
+  task: string
+  /** The agent's display name (`parameters.name`). */
+  title: string
+  /** `parameters.llm.model`; empty when the agent has no pinned model. */
+  model: string
+  /** `parameters.on` - the platform's trigger; undefined when unset. */
+  on?: number
+  /** `parameters.filter` - field types, agent-generated eligibility, ... */
+  filter?: unknown
+  operations: unknown[]
+  enabled: boolean
+}
+
 export interface AragProviderOptions {
   /** Resolve the current binding for a tenant slug - called per request so bindings can change at runtime. */
   resolveBinding: (slug: string) => KbBinding | undefined
@@ -1315,20 +1345,32 @@ export class AragProvider implements RetrievalProvider {
     return out
   }
 
+  private async rawLabelsets(tenant: TenantConfig): Promise<Record<string, RawLabelset>> {
+    const raw = await this.client(tenant).getJson<{ labelsets?: Record<string, RawLabelset> }>(
+      '/labelsets',
+    )
+    return raw.labelsets ?? {}
+  }
+
   async labelsets(tenant: TenantConfig): Promise<Labelset[]> {
-    const raw = await this.client(tenant).getJson<{
-      labelsets?: Record<
-        string,
-        { title?: string; multiple?: boolean; kind?: string[]; labels?: { title?: string }[] }
-      >
-    }>('/labelsets')
-    return Object.entries(raw.labelsets ?? {}).map(([id, ls]) => ({
-      id,
-      title: ls.title ?? id,
-      multiple: ls.multiple ?? true,
-      kind: (ls.kind ?? []).includes('PARAGRAPHS') ? 'PARAGRAPHS' as const : 'RESOURCES' as const,
-      labels: (ls.labels ?? []).map((l) => l.title ?? '').filter(Boolean),
-    }))
+    return Object.entries(await this.rawLabelsets(tenant)).map(([id, ls]) => {
+      const labels = (ls.labels ?? []).filter((l) => Boolean(l.title))
+      // The platform keeps each label's definition in its `text` field; only
+      // labels that actually carry one contribute to the vocabulary reference.
+      const definitions: Record<string, string> = {}
+      for (const l of labels) {
+        const text = l.text?.trim()
+        if (l.title && text) definitions[l.title] = text
+      }
+      return {
+        id,
+        title: ls.title ?? id,
+        multiple: ls.multiple ?? true,
+        kind: (ls.kind ?? []).includes('PARAGRAPHS') ? 'PARAGRAPHS' as const : 'RESOURCES' as const,
+        labels: labels.map((l) => l.title!),
+        ...(Object.keys(definitions).length > 0 ? { definitions } : {}),
+      }
+    })
   }
 
   /**
@@ -1531,6 +1573,31 @@ export class AragProvider implements RetrievalProvider {
     })
   }
 
+  /**
+   * Replace a labelset's title, cardinality, labels and per-label definitions
+   * (the label's `text`). `POST /labelset/{id}` replaces the whole record, so
+   * the existing `color` and `kind` are read first and carried over verbatim.
+   */
+  async updateLabelset(
+    tenant: TenantConfig,
+    input: {
+      id: string
+      title: string
+      multiple: boolean
+      labels: { title: string; text: string }[]
+    },
+  ): Promise<void> {
+    const existing = (await this.rawLabelsets(tenant))[input.id]
+    if (!existing) throw new Error(`Labelset '${input.id}' does not exist on this knowledge box`)
+    await this.client(tenant).postJson(`/labelset/${input.id}`, {
+      title: input.title,
+      color: existing.color ?? '#556b5f',
+      multiple: input.multiple,
+      kind: existing.kind && existing.kind.length > 0 ? existing.kind : ['RESOURCES'],
+      labels: input.labels.map((l) => ({ title: l.title, text: l.text })),
+    })
+  }
+
   // -------------------------------------------------------------------------
   // Data-augmentation agents (DA tasks on the data-plane host).
   // -------------------------------------------------------------------------
@@ -1574,6 +1641,46 @@ export class AragProvider implements RetrievalProvider {
     }
     for (const value of Object.values(raw ?? {})) collect(value)
     return agents
+  }
+
+  /**
+   * The configured agents with the parameters a rebuild needs to reproduce
+   * them: task type, name, model, resource filter and the full operation
+   * list. Read from the `configs` entries of the data-plane task listing.
+   */
+  async agentConfigs(tenant: TenantConfig): Promise<AgentConfig[]> {
+    const raw = await this.client(tenant).dpJson<{
+      configs?: {
+        id?: string
+        task?: string | { name?: string }
+        parameters?: {
+          name?: string
+          on?: number
+          llm?: { model?: string }
+          filter?: unknown
+          operations?: unknown[]
+        }
+        enabled?: boolean
+      }[]
+    }>('GET', '/tasks')
+    const out: AgentConfig[] = []
+    for (const config of raw.configs ?? []) {
+      if (!config.id) continue
+      const task = typeof config.task === 'string' ? config.task : config.task?.name
+      out.push({
+        id: config.id,
+        task: task ?? 'unknown',
+        title: config.parameters?.name ?? task ?? config.id,
+        model: config.parameters?.llm?.model ?? '',
+        on: config.parameters?.on,
+        filter: config.parameters?.filter,
+        operations: Array.isArray(config.parameters?.operations)
+          ? config.parameters.operations
+          : [],
+        enabled: config.enabled ?? true,
+      })
+    }
+    return out
   }
 
   /**
@@ -1652,14 +1759,24 @@ export class AragProvider implements RetrievalProvider {
       operations: unknown[]
       applyExisting: boolean
       model: string
+      /**
+       * The platform's resource filter (field types, whether agent-generated
+       * fields are eligible, ...), passed through verbatim. Omitted for a new
+       * agent; set when re-instantiating one so it keeps running on exactly
+       * what it ran on before.
+       */
+      filter?: unknown
+      /** The platform's `on` trigger; a re-instantiated agent keeps its own. */
+      on?: number
     },
   ): Promise<void> {
     const parameters: Record<string, unknown> = {
       name: input.title,
-      on: 1,
+      on: input.on ?? 1,
       operations: input.operations,
     }
     if (input.model) parameters.llm = { model: input.model }
+    if (input.filter !== undefined) parameters.filter = input.filter
     await this.client(tenant).dpJson('POST', '/task/start', {
       name: input.task,
       parameters,
@@ -2310,8 +2427,13 @@ export class AragProvider implements RetrievalProvider {
     }
   }
 
+  /**
+   * Remove an agent's configuration. The platform's `cleanup` flag would also
+   * delete every field the agent generated; it is pinned off so removing or
+   * re-instantiating an agent never touches data already on resources.
+   */
   async deleteAgent(tenant: TenantConfig, id: string): Promise<void> {
-    await this.client(tenant).dpJson('DELETE', `/task/${id}`)
+    await this.client(tenant).dpJson('DELETE', `/task/${id}?cleanup=false`)
   }
 
   /** Typed full content of a resource for the detail view. */
