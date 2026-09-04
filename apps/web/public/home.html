@@ -1,0 +1,2703 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="CorpusKit is an open source research portal for searching collections, asking cited questions and exploring connections between sources.">
+  <meta name="theme-color" content="#f2efe7">
+  <title>CorpusKit – open source research portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,300..700&amp;family=Source+Sans+3:ital,wght@0,200..900;1,200..900&amp;family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&amp;display=swap" rel="stylesheet">
+  <style>
+
+    :root {
+      --paper: #f2efe7;
+      --paper-soft: #f8f6f0;
+      --paper-deep: #e6e0d4;
+      --ink: #1c1c19;
+      --ink-soft: #5c5a53;
+      --rule: #cec8bb;
+      --blue: #155da6;
+      --blue-dark: #0d467f;
+      --blue-pale: #dce8f4;
+      --white: #fffdf8;
+      --serif: "Newsreader", Georgia, serif;
+      --sans: "Source Sans 3", Arial, sans-serif;
+      --mono: "IBM Plex Mono", monospace;
+      --display: "Archivo", sans-serif;
+      --display-weight-h1: 600;
+      --display-weight-h2: 600;
+      --display-track-h1: -.04em;
+      --display-track-h2: -.04em;
+      --display-lh-h1: .92;
+      --display-lh-h2: .98;
+      --page: min(92vw, 1480px);
+      --radius: 4px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      font-size: 17px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      opacity: .055;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.72'/%3E%3C/svg%3E");
+    }
+
+    a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: .22em; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    ::selection { background: var(--blue-pale); color: var(--ink); }
+
+    .skip-link {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 100;
+      padding: .65rem 1rem;
+      background: var(--ink);
+      color: var(--white);
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus { transform: none; }
+
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 12;
+      height: calc(76px + env(safe-area-inset-top));
+      padding-top: env(safe-area-inset-top);
+      border-bottom: 1px solid rgba(28, 28, 25, .15);
+      background: rgba(242, 239, 231, .91);
+      backdrop-filter: blur(16px);
+      transition: background-color .55s ease, color .55s ease, border-color .55s ease;
+    }
+
+    .site-header.nav-dark {
+      color: var(--paper-soft);
+      background: rgba(28, 28, 25, .94);
+      border-bottom-color: rgba(248, 246, 240, .18);
+    }
+
+    .site-header.nav-blue {
+      color: white;
+      background: rgba(21, 93, 166, .94);
+      border-bottom-color: rgba(255, 255, 255, .24);
+    }
+
+    .nav-shell {
+      width: var(--page);
+      height: 100%;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: baseline;
+      gap: .1rem;
+      font-family: var(--display);
+      font-size: 1.55rem;
+      font-weight: 700;
+      line-height: 1;
+      text-decoration: none;
+      letter-spacing: -.055em;
+    }
+
+    .brand-mark { color: var(--blue); transition: color .55s ease; }
+    .site-header.nav-dark .brand-mark { color: #8fc0ee; }
+    .site-header.nav-blue .brand-mark { color: var(--blue-pale); }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: clamp(1rem, 2.2vw, 2.4rem);
+      font-size: .91rem;
+    }
+
+    .nav-links a { text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+
+    main { overflow: hidden; }
+    #top, #workings, #run, #contribute { scroll-margin-top: calc(76px + env(safe-area-inset-top)); }
+
+    .hero {
+      width: var(--page);
+      min-height: min(880px, 100svh);
+      margin: 0 auto;
+      padding: clamp(9.5rem, 15vh, 12.5rem) 0 5rem;
+      display: grid;
+      grid-template-columns: minmax(0, 1.72fr) minmax(320px, .48fr);
+      column-gap: clamp(2.5rem, 5vw, 6rem);
+      align-items: end;
+      position: relative;
+    }
+
+    .hero h1 {
+      max-width: 1180px;
+      margin: 0;
+      font-family: var(--display);
+      font-size: var(--display-size-h1, clamp(4.35rem, 5.85vw, 7.6rem));
+      font-weight: var(--display-weight-h1);
+      line-height: var(--display-lh-h1);
+      letter-spacing: var(--display-track-h1);
+      text-wrap: balance;
+    }
+
+    .hero-laptop-break { display: none; }
+
+    @media (min-width: 981px) and (max-height: 1200px) {
+      .hero-laptop-break { display: inline; }
+    }
+
+    .hero-claim, .closing-claim { white-space: nowrap; }
+    .hero-highlight, .closing-highlight {
+      margin-inline: -.04em;
+      padding-inline: .08em;
+      background-image: linear-gradient(-.7deg, transparent 6%, var(--blue-pale) 8%, var(--blue-pale) 91%, transparent 93%);
+      background-repeat: no-repeat;
+      background-size: 100% 100%;
+      background-position: left center;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+    .hero-cite, .closing-cite {
+      display: inline-block;
+      margin-left: .32em;
+      padding: .1em .4em;
+      border: 1px solid rgba(21, 93, 166, .4);
+      border-radius: 4px;
+      color: var(--blue-dark);
+      font-family: var(--mono);
+      font-size: .18em;
+      font-weight: 500;
+      letter-spacing: 0;
+      line-height: 1;
+      vertical-align: top;
+      transform: translateY(.22em);
+    }
+
+    .hero-thread {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: none;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    .hero-thread path { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-linecap: round; }
+    .hero-thread circle { fill: var(--blue); }
+    .hero h1, .hero-copy, .hero-note { position: relative; z-index: 3; }
+
+    @media (min-width: 1024px) {
+      .hero-thread { display: block; }
+    }
+
+    .hero-copy {
+      max-width: 430px;
+      margin: 0 0 .75rem;
+      align-self: end;
+      font-size: clamp(.98rem, 1.05vw, 1.08rem);
+      line-height: 1.55;
+    }
+
+    .hero-copy p { margin: 0 0 1.75rem; }
+
+    .text-link {
+      display: inline-flex;
+      align-items: center;
+      gap: .7rem;
+      color: var(--blue-dark);
+      font-weight: 600;
+      text-decoration: none;
+      border-bottom: 1px solid currentColor;
+      padding-bottom: .15rem;
+    }
+
+    .text-link svg {
+      width: 1rem;
+      height: 1rem;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .hero-note {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: flex-end;
+      margin-top: clamp(5rem, 10vh, 9rem);
+      padding-top: 1.2rem;
+      border-top: 1px solid var(--ink);
+      color: var(--ink-soft);
+      font-size: .91rem;
+    }
+
+    .hero-note p { margin: 0; }
+    .hero-note strong { color: var(--ink); font-weight: 600; }
+
+    @media (min-width: 1400px) and (min-height: 900px) {
+      .hero {
+        min-height: 100svh;
+        padding-top: clamp(11rem, 17vh, 14rem);
+        padding-bottom: clamp(6rem, 9vh, 8rem);
+      }
+    }
+
+    .workings {
+      background: var(--ink);
+      color: var(--paper-soft);
+      padding: clamp(5.5rem, 10vw, 10rem) 0;
+      overflow: clip;
+    }
+
+    .section-shell { width: var(--page); margin: 0 auto; }
+
+    .section-head {
+      display: block;
+      margin-bottom: clamp(3rem, 6vw, 6rem);
+    }
+
+    .section-head h2,
+    .run-intro h2,
+    .library-copy h2,
+    .closing h2 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(2.8rem, 5.1vw, 5.9rem);
+      font-weight: var(--display-weight-h2);
+      line-height: var(--display-lh-h2);
+      letter-spacing: var(--display-track-h2);
+      text-wrap: balance;
+    }
+
+    .section-head p {
+      margin: 1.5rem 0 0;
+      color: #c6c2b8;
+      font-size: 1.05rem;
+      max-width: 760px;
+    }
+
+    .portal-stage {
+      position: relative;
+    }
+
+    .portal-frame {
+      background: var(--paper-soft);
+      color: var(--ink);
+      border: 1px solid #3a3a36;
+      box-shadow: 0 40px 90px rgba(0, 0, 0, .34);
+    }
+
+    .portal-top {
+      min-height: 76px;
+      padding: 0 clamp(1rem, 2vw, 2rem);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .portal-name {
+      font-family: var(--serif);
+      font-size: 1.23rem;
+      font-weight: 600;
+      letter-spacing: -.02em;
+    }
+
+    .portal-search {
+      width: min(38vw, 500px);
+      padding: .73rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      border: 1px solid var(--rule);
+      background: var(--white);
+      color: var(--ink-soft);
+      font-size: .91rem;
+    }
+
+    .portal-search span:last-child { color: var(--blue); }
+
+    .portal-status {
+      justify-self: end;
+      color: var(--ink-soft);
+      font-size: .83rem;
+    }
+
+    .portal-body {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      min-height: 680px;
+    }
+
+    .portal-nav {
+      padding: 2rem 1.2rem;
+      border-right: 1px solid var(--rule);
+    }
+
+    .view-tab {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: .82rem .75rem;
+      margin: 0 0 .35rem;
+      border: 0;
+      background: transparent;
+      color: var(--ink-soft);
+      text-align: left;
+      cursor: pointer;
+      transition: color .35s ease, background-color .35s ease;
+    }
+
+    .view-tab::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: transparent; transition: background-color .35s ease, transform .35s ease; }
+    .view-tab:hover { color: var(--ink); }
+    .view-tab.active { color: var(--blue-dark); background: var(--blue-pale); }
+    .view-tab.active::after { background: var(--blue); transform: scale(1.15); }
+
+    .portal-main { display: grid; padding: clamp(1.5rem, 4vw, 4rem); min-width: 0; }
+    .portal-view { display: none; grid-area: 1 / 1; min-width: 0; will-change: opacity, transform; }
+    .portal-view.active, .portal-view.is-transitioning { display: block; }
+    .portal-view.is-transitioning { pointer-events: none; }
+
+    .portal-view h3 {
+      max-width: 780px;
+      margin: 0 0 2rem;
+      font-family: var(--serif);
+      font-size: clamp(2.2rem, 3.5vw, 4.2rem);
+      font-weight: 400;
+      line-height: 1.05;
+      letter-spacing: -.035em;
+    }
+
+    .question-card {
+      padding: clamp(1.4rem, 3vw, 2.6rem);
+      border: 1px solid var(--rule);
+      background: var(--white);
+    }
+
+    .question {
+      margin: 0 0 1.7rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--rule);
+      color: var(--ink-soft);
+    }
+
+    .answer-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(250px, .65fr);
+      gap: clamp(2rem, 4vw, 5rem);
+    }
+
+    .answer p { margin: 0 0 1rem; font-size: 1.08rem; line-height: 1.68; }
+
+    .citation {
+      display: inline-grid;
+      place-items: center;
+      width: 1.45rem;
+      height: 1.45rem;
+      margin: 0 .08rem;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      font-size: .75rem;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      vertical-align: .1em;
+    }
+
+    .citation[aria-expanded="true"] { outline: 3px solid var(--blue-pale); }
+
+    .confidence {
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      color: var(--ink-soft);
+      font-size: .9rem;
+    }
+
+    .confidence::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 13px 0 0 var(--blue), 26px 0 0 var(--rule);
+      margin-right: 1.6rem;
+    }
+
+    .passage-drawer {
+      min-height: 260px;
+      padding: 1.4rem;
+      background: var(--blue-pale);
+      border-left: 3px solid var(--blue);
+      position: relative;
+    }
+
+    .passage-drawer::before {
+      content: "Matched passage";
+      display: block;
+      margin-bottom: 1.1rem;
+      color: var(--blue-dark);
+      font-size: .81rem;
+      font-weight: 600;
+    }
+
+    .passage-title { margin: 0 0 .7rem; font-weight: 600; }
+    .passage-copy { margin: 0; color: #343d47; font-family: var(--serif); font-size: 1.08rem; line-height: 1.55; }
+    mark { background: rgba(21, 93, 166, .16); color: inherit; padding: .06em .08em; box-decoration-break: clone; }
+
+    .no-evidence {
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+      margin-top: 1rem;
+      padding: 1rem 1.15rem;
+      border: 1px solid var(--rule);
+      color: var(--ink-soft);
+      font-size: .92rem;
+    }
+
+    .no-evidence strong { color: var(--ink); }
+
+    .search-controls {
+      display: flex;
+      gap: .55rem;
+      margin-bottom: 1.6rem;
+      flex-wrap: wrap;
+    }
+
+    .filter-chip {
+      padding: .48rem .82rem;
+      border: 1px solid var(--rule);
+      background: transparent;
+      color: var(--ink-soft);
+      font-size: .85rem;
+    }
+
+    .filter-chip.selected { border-color: var(--blue); color: var(--blue-dark); background: var(--blue-pale); }
+
+    .result {
+      display: grid;
+      grid-template-columns: 62px minmax(0, 1fr) auto;
+      gap: 1.2rem;
+      padding: 1.4rem 0;
+      border-top: 1px solid var(--rule);
+    }
+
+    .score { color: var(--blue); font-family: var(--serif); font-size: 1.3rem; }
+    .result h4 { margin: 0 0 .45rem; font-family: var(--serif); font-size: 1.26rem; }
+    .result p { margin: 0; color: var(--ink-soft); font-size: .91rem; }
+    .kind { color: var(--ink-soft); font-size: .79rem; white-space: nowrap; }
+    .weak { color: #6d5b40; border-bottom: 1px solid #917a55; }
+
+    .library-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .resource-card { min-height: 260px; padding: 1.25rem; border: 1px solid var(--rule); background: var(--white); display: flex; flex-direction: column; }
+    .resource-card::before { content: ""; height: 6px; width: 38%; margin-bottom: 3rem; background: var(--blue); }
+    .resource-card:nth-child(2)::before { width: 67%; opacity: .65; }
+    .resource-card:nth-child(3)::before { width: 24%; opacity: .35; }
+    .resource-card h4 { margin: 0 0 .7rem; font-family: var(--serif); font-size: 1.25rem; line-height: 1.15; }
+    .resource-card p { margin: 0; color: var(--ink-soft); font-size: .87rem; }
+    .resource-card span { margin-top: auto; padding-top: 1.5rem; color: var(--ink-soft); font-size: .78rem; }
+
+    .node-a { left: 12%; top: 23%; }
+    .node-b { right: 11%; top: 25%; }
+    .node-c { right: 13%; bottom: 17%; }
+    .node-d { left: 14%; bottom: 18%; }
+
+    .capability-notes {
+      margin-top: 3rem;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid #4b4a45;
+    }
+
+    .capability-notes article { padding: 1.5rem 1.5rem 0 0; }
+    .capability-notes h3 { margin: 0 0 .55rem; color: var(--paper-soft); font-family: var(--display); font-size: 1.3rem; font-weight: 600; letter-spacing: -.04em; }
+    .capability-notes p { margin: 0; color: #aaa69d; font-size: .91rem; }
+
+
+    @media (min-width: 1024px) {
+      .portal-main { height: var(--portal-main-h, 700px); overflow: hidden; }
+    }
+
+    /* C's view content presented at the Ask page's scale */
+    .chip {
+      display: inline-flex; align-items: center; gap: .4rem;
+      font-family: var(--sans); font-size: .84rem; font-weight: 500;
+      padding: .34rem .85rem; border-radius: 99px;
+      border: 1px solid var(--rule);
+      color: var(--ink-soft); background: var(--white);
+    }
+    .chip.on { background: var(--ink); color: var(--paper-soft); border-color: var(--ink); }
+    .hl {
+      background-image: linear-gradient(rgba(241,227,160,.95), rgba(241,227,160,.95));
+      background-repeat: no-repeat; background-size: 100% 100%;
+      border-radius: 2px; padding: .04em .12em; margin: -.04em -.02em;
+    }
+
+    .pv-controls {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; flex-wrap: wrap; margin-bottom: 1.1rem;
+    }
+    .pv-querybar {
+      flex: 1 1 320px; min-width: 0; display: flex; justify-content: space-between; gap: 1rem;
+      padding: .95rem 1.2rem; border: 1px solid var(--rule); background: var(--white);
+      font-size: 1.02rem; color: var(--ink);
+    }
+    .pv-qicon { color: var(--blue); }
+    .sr-modes { display: flex; gap: .35rem; flex: none; }
+    .sr-modes span {
+      font-family: var(--mono); font-size: .74rem; letter-spacing: .04em;
+      padding: .3rem .78rem; border-radius: 99px; color: var(--ink-soft);
+    }
+    .sr-modes .on { background: var(--ink); color: var(--paper-soft); }
+    .pv-chiprow { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    div.pv-chiprow { margin-bottom: 1.4rem; }
+    .pv-controls .pv-chiprow { margin-bottom: 0; }
+    .pv-meta { margin-left: auto; color: var(--ink-soft); font-size: .87rem; }
+
+    .pv-card { border: 1px solid var(--rule); background: var(--white); }
+    .pv-answerstrip {
+      margin: clamp(1.2rem, 2.5vw, 1.8rem) clamp(1.2rem, 2.5vw, 1.8rem) 0;
+      padding: 1.3rem 1.5rem;
+      background: var(--blue-pale); border-left: 3px solid var(--blue);
+    }
+    .pv-answerstrip .lbl { display: block; margin-bottom: .55rem; color: var(--blue-dark); font-size: .81rem; font-weight: 600; }
+    .pv-answerstrip p { margin: 0; font-size: 1.05rem; line-height: 1.65; max-width: 75ch; }
+    .pv-answerstrip .citation { margin-left: .3rem; }
+    .pv-results { padding: .3rem clamp(1.2rem, 2.5vw, 1.8rem) .6rem; }
+    .pv-result { padding: 1.3rem 0; }
+    .pv-result + .pv-result { border-top: 1px solid var(--rule); }
+    .pv-result .r-top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+    .pv-result .r-title { font-family: var(--serif); font-size: 1.32rem; letter-spacing: -.01em; min-width: 0; }
+    .pv-result .r-score { font-family: var(--mono); font-size: .74rem; color: var(--ink-soft); flex: none; }
+    .pv-result .r-score .weak { color: #a05e42; border-bottom: 0; }
+    .pv-result .r-meta { margin: .3rem 0 0; font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); }
+    .pv-result .r-passage { margin: .55rem 0 0; font-family: var(--serif); font-size: 1rem; line-height: 1.6; color: #343d47; max-width: 72ch; }
+    .pv-cardfoot {
+      display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+      padding: 1rem clamp(1.2rem, 2.5vw, 1.8rem); border-top: 1px solid var(--rule);
+      font-size: .87rem; color: var(--ink-soft);
+    }
+    .pv-cardfoot a { color: var(--blue-dark); font-weight: 600; }
+
+    .pv-libgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .pv-libcard {
+      border: 1px solid var(--rule); background: var(--white);
+      padding: 1.5rem 1.6rem; display: flex; flex-direction: column;
+    }
+    .pv-libcard .k { font-family: var(--mono); font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+    .k.ochre { color: #9A7215; }
+    .k.clay { color: #A05E42; }
+    .pv-libcard .t { margin: .6rem 0 0; font-family: var(--serif); font-size: 1.32rem; font-weight: 500; line-height: 1.25; }
+    .pv-libcard .s { margin: .6rem 0 0; font-size: .95rem; line-height: 1.6; color: var(--ink-soft); }
+    .pv-libcard .tags { display: flex; gap: .45rem; flex-wrap: wrap; margin-top: auto; padding-top: 1.15rem; }
+    .pv-libcard .tags span { font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 99px; padding: .2rem .6rem; }
+
+    .pv-mapcard { padding: .8rem; background: #fff; }
+    .pv-mapcard svg { display: block; width: 100%; height: auto; max-height: 520px; margin: 0 auto; }
+    .kg-mobile { display: none; }
+    .kg-legend-panel { fill: #fbfbf8; stroke: #deddd7; }
+    .kg-legend-title, .kg-legend-label, .kg-legend-count, .kg-node-label { font-family: var(--sans); fill: #5e5c56; }
+    .kg-legend-title { font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+    .kg-legend-label { font-size: 9px; }
+    .kg-legend-count { font-family: var(--mono); font-size: 8px; fill: #8b887f; }
+    .kg-legend-rule { stroke: #deddd7; }
+    .kg-cluster { opacity: .62; }
+    .kg-cluster.crop { fill: #e7f0fa; }
+    .kg-cluster.pressure { fill: #faece7; }
+    .kg-cluster.habitat { fill: #e9f5ef; }
+    .kg-cluster-species { fill: #f4edf8; }
+    .kg-cluster-label { font-family: var(--mono); font-size: 8px; font-weight: 600; letter-spacing: .12em; }
+    .kg-cluster-label.crop { fill: #3d6694; }
+    .kg-cluster-label.pressure { fill: #a05e42; }
+    .kg-cluster-label.habitat { fill: #277454; }
+    .kg-cluster-label.species { fill: #765198; }
+    .kg-edge { fill: none; stroke-width: 1; opacity: .3; }
+    .kg-edge.crop { stroke: #4f8fca; }
+    .kg-edge.pressure { stroke: #d77a55; }
+    .kg-edge.habitat { stroke: #3aa87c; }
+    .kg-edge.species { stroke: #9a77bd; }
+    .kg-node { stroke: rgba(255, 255, 255, .95); stroke-width: 1.5; }
+    .kg-node.crop { fill: #2f78bc; }
+    .kg-node.pressure { fill: #d8653a; }
+    .kg-node.habitat { fill: #20a171; }
+    .kg-node.species { fill: #8057a6; }
+    .kg-node.selected { stroke: #1c1c19; stroke-width: 2; }
+    .kg-node-label { font-size: 8.5px; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+    .kg-node-label.key { font-size: 9.5px; fill: #3e3d39; }
+
+    .ch-head {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+      padding: 1.25rem clamp(1.2rem, 2.5vw, 1.8rem); border-bottom: 1px solid var(--rule);
+    }
+    .ch-head .t { font-weight: 600; font-size: 1.05rem; }
+    .ch-head .c { font-family: var(--mono); font-size: .74rem; color: var(--ink-soft); }
+    .ch-row { display: flex; align-items: baseline; gap: 1.1rem; padding: 1.15rem clamp(1.2rem, 2.5vw, 1.8rem); font-size: .98rem; }
+    .ch-row + .ch-row { border-top: 1px solid var(--rule); }
+    .ch-row .flag { font-family: var(--mono); font-size: .72rem; color: #a03d2e; min-width: 10.5em; flex: none; }
+    .ch-row .flag.softer { color: var(--ink-soft); }
+    .ch-row .what { min-width: 0; }
+    .ch-row .act { margin-left: auto; flex: none; font-size: .88rem; }
+    .ch-row .act a { color: var(--blue-dark); font-weight: 600; }
+    .ch-foot {
+      display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+      padding: 1rem clamp(1.2rem, 2.5vw, 1.8rem); border-top: 1px solid var(--rule);
+      font-size: .87rem; color: var(--ink-soft);
+    }
+
+    @media (max-width: 700px) {
+      .pv-libgrid { grid-template-columns: 1fr; }
+      .ch-row { flex-wrap: wrap; gap: .35rem 1.1rem; }
+      .ch-row .flag { min-width: 0; width: 100%; }
+    }
+
+    .ways-caption {
+      margin: 0 0 1.5rem;
+      padding-top: 1rem;
+      max-width: 62ch;
+      border-top: 1px solid #4b4a45;
+    }
+    .ways-caption .wc-n { display: inline; margin-right: .8rem; font-family: var(--display); font-size: .9rem; font-weight: 600; color: var(--blue-pale); }
+    .ways-caption .wc-t { display: inline; color: #c6c2b8; font-size: .9rem; line-height: 1.55; }
+    .ways-caption .wc-n, .ways-caption .wc-t { will-change: opacity, transform; }
+
+    .mobile-view-tabs { display: none; }
+
+    @media (min-width: 1900px) and (min-height: 1201px) {
+      .ways-caption {
+        position: absolute;
+        top: 76px;
+        left: -220px;
+        width: 180px;
+        margin: 0;
+      }
+      .ways-caption .wc-n { display: block; margin: 0 0 .8rem; }
+      .ways-caption .wc-t { display: block; }
+    }
+
+    /* Wide, shorter screens use a compact split walkthrough so the portal stays in view. */
+    @media (min-width: 981px) and (max-height: 1200px) {
+      .workings {
+        min-height: calc(100svh - 76px);
+        padding: 3rem 0 1.5rem;
+      }
+
+      .workings > .section-shell {
+        display: grid;
+        grid-template-columns: minmax(280px, .78fr) minmax(0, 1.22fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        column-gap: clamp(2rem, 4vw, 5rem);
+        row-gap: clamp(2.5rem, 5vh, 4rem);
+        align-items: stretch;
+      }
+
+      .workings .section-head {
+        grid-column: 1;
+        grid-row: 1;
+        align-self: start;
+        margin: 0;
+        padding-top: clamp(2.125rem, calc(3vh + 10px), 2.875rem);
+      }
+
+      .workings .section-head h2 {
+        font-size: clamp(3.2rem, 4.1vw, 5rem);
+        text-wrap: balance;
+      }
+
+      .workings .section-head p {
+        max-width: 46ch;
+        margin-top: 1.25rem;
+        font-size: .98rem;
+      }
+
+      .workings .portal-stage { display: contents; }
+
+      .workings .ways-caption {
+        position: static;
+        grid-column: 1;
+        grid-row: 2;
+        align-self: start;
+        width: auto;
+        max-width: 38ch;
+        min-height: 0;
+        margin: 0;
+      }
+
+      .workings .ways-caption .wc-n {
+        display: block;
+        margin: 0 0 .7rem;
+      }
+
+      .workings .ways-caption .wc-t { display: block; }
+
+      .workings .portal-frame {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        min-width: 0;
+        height: min(720px, calc(100svh - 148px));
+        overflow: hidden;
+      }
+
+      .workings .portal-top {
+        min-height: 56px;
+        padding: 0 1rem;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 1rem;
+      }
+
+      .workings .portal-name { font-size: 1rem; }
+      .workings .portal-search { width: 100%; padding: .6rem .75rem; font-size: .76rem; }
+      .workings .portal-status { display: none; }
+
+      .workings .portal-body {
+        height: calc(100% - 56px);
+        min-height: 0;
+        grid-template-columns: 118px minmax(0, 1fr);
+      }
+
+      .workings .portal-nav { padding: 1rem .65rem; }
+      .workings .view-tab { padding: .62rem .6rem; font-size: .76rem; }
+
+      .workings .portal-main {
+        height: auto;
+        min-height: 0;
+        padding: clamp(1rem, 1.7vw, 1.75rem);
+        overflow: hidden;
+      }
+
+      .workings .portal-view h3 {
+        max-width: 650px;
+        margin-bottom: 1rem;
+        font-size: clamp(1.85rem, 2.4vw, 2.75rem);
+      }
+
+      .workings .question-card { padding: clamp(.9rem, 1.35vw, 1.3rem); }
+      .workings .question { margin-bottom: 1rem; padding-bottom: .8rem; font-size: .8rem; }
+      .workings .answer-layout { gap: clamp(.85rem, 1.5vw, 1.5rem); }
+      .workings .answer p { margin-bottom: .65rem; font-size: .88rem; line-height: 1.5; }
+      .workings .confidence { margin-top: .8rem; padding-top: .8rem; font-size: .72rem; }
+      .workings .passage-drawer { min-height: 0; padding: 1rem; }
+      .workings .passage-title { font-size: .78rem; }
+      .workings .passage-copy { font-size: .84rem; line-height: 1.45; }
+      .workings .no-evidence { margin-top: .8rem; padding-top: .8rem; font-size: .72rem; }
+
+      .workings .pv-controls { margin-bottom: .75rem; }
+      .workings .pv-querybar { padding: .7rem .85rem; font-size: .82rem; }
+      .workings div.pv-chiprow { margin-bottom: .8rem; }
+      .workings .chip { padding: .25rem .55rem; font-size: .68rem; }
+      .workings .pv-meta { font-size: .72rem; }
+      .workings .pv-answerstrip { margin: .85rem .85rem 0; padding: .85rem 1rem; }
+      .workings .pv-answerstrip p { font-size: .83rem; line-height: 1.45; }
+      .workings .pv-results { padding: .2rem .85rem .35rem; }
+      .workings .pv-result { padding: .75rem 0; }
+      .workings .pv-result .r-title { font-size: 1rem; }
+      .workings .pv-result .r-passage { margin-top: .35rem; font-size: .82rem; line-height: 1.4; }
+      .workings .pv-cardfoot { padding: .7rem .85rem; font-size: .72rem; }
+
+      .workings .pv-libgrid { gap: .7rem; }
+      .workings .pv-libcard { padding: 1rem; }
+      .workings .pv-libcard .t { font-size: 1rem; }
+      .workings .pv-libcard .s { margin-top: .4rem; font-size: .78rem; line-height: 1.4; }
+      .workings .pv-libcard .tags { padding-top: .65rem; }
+      .workings .pv-mapcard svg { max-height: calc(100svh - 230px); }
+
+      .workings .ch-head,
+      .workings .ch-row,
+      .workings .ch-foot { padding: .8rem 1rem; }
+      .workings .ch-row { font-size: .8rem; }
+      .workings .ch-row .flag { min-width: 8.5em; font-size: .62rem; }
+    }
+
+    @media (min-width: 981px) and (max-width: 1399px) and (max-height: 1200px) {
+      .workings .answer-layout { grid-template-columns: 1fr; }
+      .workings .no-evidence { display: none; }
+      .workings .pv-libcard:nth-child(n + 3) { display: none; }
+    }
+
+    .library-section {
+      width: var(--page);
+      margin: 0 auto;
+      padding: clamp(7rem, 13vw, 14rem) 0;
+      display: grid;
+      grid-template-columns: minmax(280px, .6fr) minmax(0, 1.2fr);
+      gap: clamp(4rem, 9vw, 11rem);
+      align-items: center;
+    }
+
+    .library-copy h2 { font-size: clamp(3.3rem, 5.7vw, 6.7rem); }
+    .library-copy p { max-width: 510px; margin: 2rem 0 0; font-size: 1.08rem; color: var(--ink-soft); }
+
+    .shelf {
+      position: relative;
+      min-height: 600px;
+      padding: 2.7rem 2.7rem 3rem;
+      background: var(--paper-deep);
+      border: 1px solid var(--rule);
+      box-shadow: 22px 28px 0 rgba(28, 28, 25, .055);
+    }
+
+    .shelf::after {
+      content: "";
+      position: absolute;
+      left: -4%;
+      right: -4%;
+      bottom: -15px;
+      height: 14px;
+      background: #d4ccbd;
+      border: 1px solid #c3b9a8;
+    }
+
+    .paper {
+      position: absolute;
+      background: var(--white);
+      border: 1px solid #d5cfc3;
+      box-shadow: 0 14px 35px rgba(45, 39, 27, .1);
+      padding: 1.6rem;
+    }
+
+    .paper-one { width: 55%; height: 70%; left: 9%; top: 10%; transform: rotate(-3deg); }
+    .paper-two { width: 53%; height: 64%; right: 7%; bottom: 9%; transform: rotate(4deg); }
+    .paper-rule { height: 1px; margin: .75rem 0; background: #ddd7cb; }
+    .paper-rule.short { width: 64%; }
+    .paper-title { margin: 0 0 1.2rem; font-family: var(--serif); font-size: clamp(1.2rem, 2vw, 1.75rem); line-height: 1.08; }
+    .paper-meta { margin: 0 0 3rem; color: var(--ink-soft); font-size: .74rem; }
+    .paper-quote { margin: 1.6rem 0 0; padding-left: 1rem; border-left: 3px solid var(--blue); color: var(--ink-soft); font-family: var(--serif); line-height: 1.45; }
+    .blue-note { position: absolute; right: 4%; top: 5%; width: 105px; padding: .8rem; background: var(--blue); color: white; transform: rotate(3deg); font-size: .75rem; line-height: 1.3; box-shadow: 0 9px 24px rgba(13, 70, 127, .18); }
+
+    .run-section { background: var(--blue); color: white; padding: clamp(6rem, 11vw, 11rem) 0; }
+    .run-cols {
+      width: var(--page); margin: clamp(3.5rem, 6vw, 5.5rem) auto 0;
+      display: grid; grid-template-columns: minmax(360px, .9fr) minmax(0, 1.1fr); gap: clamp(3rem, 7vw, 8rem);
+      padding-top: clamp(2rem, 3.5vw, 3rem); border-top: 1px solid rgba(255, 255, 255, .25);
+    }
+    .run-cols h3 {
+      margin: 0 0 1rem; font-family: var(--display); font-weight: 600;
+      letter-spacing: -.04em; font-size: 1.55rem; color: #fff;
+    }
+    .run-cols p { margin: 0 0 1rem; color: #dce8f4; font-size: .98rem; line-height: 1.65; }
+    .know-list { margin: 0; padding-left: 1.2rem; color: #dce8f4; font-size: .98rem; line-height: 1.65; }
+    .know-list li { margin-bottom: .55rem; }
+    @media (max-width: 900px) { .run-cols { grid-template-columns: 1fr; } }
+    .run-intro p + p { margin-top: 1.1rem; font-size: .98rem; }
+    .run-grid { width: var(--page); margin: 0 auto; display: grid; grid-template-columns: minmax(360px, .9fr) minmax(0, 1.1fr); gap: clamp(3rem, 7vw, 8rem); }
+    .run-grid > * { min-width: 0; }
+    .run-intro h2 { font-size: clamp(2.6rem, 4vw, 4.5rem); }
+    .run-intro p { max-width: 600px; margin: 2rem 0 0; color: #dce8f4; font-size: 1.08rem; }
+
+    .code-card { align-self: start; border: 1px solid rgba(255,255,255,.36); background: #0f4d89; }
+    .code-top { padding: 1rem 1.2rem; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,.25); color: #dce8f4; font-size: .82rem; }
+    pre { margin: 0; padding: clamp(1.6rem, 3vw, 2.8rem); overflow-x: auto; color: white; font-family: var(--mono); font-size: clamp(.78rem, 1.05vw, .95rem); line-height: 1.9; }
+    .code-dim { color: #9fc3e4; }
+    .terminal-line { display: block; min-height: 1.9em; opacity: 0; }
+    .terminal-line.is-active, .terminal-line.is-complete { opacity: 1; }
+    .terminal-cursor {
+      display: inline-block;
+      width: .56em;
+      height: 1.05em;
+      margin-left: .12em;
+      background: #dce8f4;
+      vertical-align: -.14em;
+      opacity: 0;
+    }
+    .terminal-line.is-active .terminal-cursor { opacity: 1; animation: terminal-blink .78s steps(1, end) infinite; }
+    @keyframes terminal-blink { 0%, 48% { opacity: 1; } 49%, 100% { opacity: 0; } }
+
+    .requirements { margin: 2rem 0 0; border-top: 1px solid rgba(255,255,255,.28); }
+    .requirement { display: grid; grid-template-columns: minmax(130px, .36fr) 1fr; gap: 1.2rem; padding: 1rem 0; border-bottom: 1px solid rgba(255,255,255,.28); }
+    .requirement strong { font-weight: 600; }
+    .requirement span { color: #dce8f4; }
+    .run-links { display: flex; gap: 1.4rem; margin-top: 1.8rem; flex-wrap: wrap; }
+    .run-links a { color: white; font-weight: 600; }
+
+    .stewardship {
+      width: var(--page);
+      margin: 0 auto;
+      padding: clamp(7rem, 13vw, 14rem) 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(280px, .62fr);
+      gap: clamp(4rem, 10vw, 12rem);
+      align-items: start;
+    }
+
+    .stewardship blockquote {
+      margin: 0;
+      font-family: var(--display);
+      font-weight: 600;
+      letter-spacing: -.04em;
+      font-size: clamp(2.8rem, 5.2vw, 6.2rem);
+      line-height: .98;
+    }
+
+    .stewardship-copy { padding-top: .65rem; }
+    .stewardship-copy p { margin: 0 0 1.25rem; color: var(--ink-soft); }
+    .stewardship-copy p:first-child { color: var(--ink); font-size: 1.2rem; }
+
+    .closing {
+      padding: clamp(6rem, 11vw, 11rem) 0 3rem;
+      width: var(--page);
+      margin: 0 auto;
+      position: relative;
+    }
+
+    .closing h2 { max-width: 1180px; font-size: var(--display-size-h1, clamp(4.35rem, 5.85vw, 7.6rem)); }
+    .closing h2, .next-steps { position: relative; z-index: 3; }
+    .closing-thread {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: none;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
+    }
+    .closing-thread path { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-linecap: round; }
+    .closing-thread circle { fill: var(--blue); }
+    @media (min-width: 1024px) { .closing-thread { display: block; } }
+    .next-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 7rem; background: var(--rule); border: 1px solid var(--rule); }
+    .next-step { min-height: 200px; padding: 1.6rem; background: var(--paper); display: flex; flex-direction: column; }
+    .next-step h3 { margin: 0 0 .6rem; font-family: var(--display); font-size: 1.55rem; font-weight: 600; letter-spacing: -.04em; }
+    .next-step p { margin: 0; color: var(--ink-soft); font-size: .94rem; }
+    .next-step a { margin-top: auto; align-self: flex-start; color: var(--blue-dark); font-weight: 600; }
+
+    .site-footer {
+      width: var(--page);
+      margin: 0 auto;
+      padding: 1.8rem 0 2rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 2rem;
+      color: var(--ink-soft);
+      border-top: 1px solid var(--rule);
+      font-size: .84rem;
+    }
+
+    .site-footer p { margin: 0; }
+
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+
+    @media (max-width: 980px) {
+      :root { --page: min(90vw, 820px); }
+      .hero { grid-template-columns: minmax(0, 1fr); align-items: start; }
+      .hero-copy { margin-top: 3rem; }
+      .section-head, .library-section, .run-grid, .stewardship { grid-template-columns: 1fr; }
+      .section-head p { max-width: 620px; }
+      .portal-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .portal-nav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); padding: .75rem; }
+      .view-tab { min-width: 125px; margin: 0 .25rem 0 0; }
+      .answer-layout { grid-template-columns: 1fr; }
+      .portal-top { grid-template-columns: auto 1fr; gap: 1rem; }
+      .portal-search { width: 100%; }
+      .portal-status { display: none; }
+      .capability-notes { grid-template-columns: repeat(2, 1fr); }
+      .library-section { gap: 5rem; }
+      .shelf { min-height: 650px; }
+      .run-grid { gap: 4rem; }
+      .stewardship { gap: 3rem; }
+    }
+
+    @media (max-width: 680px) {
+      :root { --page: calc(100vw - 48px); }
+      body { font-size: 16px; }
+      .site-header {
+        position: absolute;
+        height: calc(64px + env(safe-area-inset-top));
+      }
+      .nav-links { display: none; }
+      .hero { min-height: 760px; padding-top: 8.2rem; padding-bottom: 2.5rem; }
+      .hero h1 { min-width: 0; font-size: min(13vw, 4.25rem); line-height: .92; text-wrap: wrap; }
+      .hero-thread { display: block; }
+      .hero-copy { min-width: 0; max-width: 100%; }
+      .hero-copy { margin-top: 2.4rem; }
+      .hero-note { margin-top: 4rem; align-items: flex-start; flex-direction: column; }
+      .hero-note p:last-child { display: none; }
+      .workings { padding: 5rem 0; }
+      .section-head { margin-bottom: 2.8rem; gap: 1.5rem; }
+      .section-head h2, .run-intro h2, .library-copy h2, .closing h2 { font-size: clamp(3.2rem, 15vw, 4.4rem); }
+      .closing h2 { font-size: clamp(3.4rem, 17vw, 5.2rem); line-height: .9; }
+      .run-intro h2 { font-size: clamp(2.4rem, 10.5vw, 3.1rem); }
+      .mobile-view-tabs {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        margin-bottom: 1.35rem;
+        border-bottom: 1px solid #4b4a45;
+      }
+      .mobile-view-tab {
+        min-width: 0;
+        padding: .78rem .1rem .72rem;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: #aaa69d;
+        font-family: var(--display);
+        font-size: .8rem;
+        font-weight: 500;
+        letter-spacing: -.02em;
+        cursor: pointer;
+      }
+      .mobile-view-tab.active {
+        border-bottom-color: rgb(220, 232, 244);
+        color: var(--paper-soft);
+        font-weight: 600;
+      }
+      .ways-caption { padding-top: 0; border-top: 0; }
+      .ways-caption .wc-n { display: none; }
+      .portal-frame {
+        display: flex;
+        flex-direction: column;
+        height: clamp(520px, 78svh, 700px);
+        overflow: hidden;
+      }
+      .portal-top { display: none; }
+      .portal-name { display: none; }
+      .portal-search { font-size: .79rem; }
+      .portal-nav { display: none; }
+      .view-tab { min-width: auto; flex: 1; padding: .7rem .55rem; font-size: .8rem; justify-content: center; }
+      .view-tab::after { display: none; }
+      .portal-main { min-height: 0; padding: 2rem 1.15rem 1.15rem; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+      .portal-body { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+      .portal-view h3 { font-size: 2.3rem; margin-bottom: 1.3rem; }
+      .question-card { padding: 1rem; }
+      .answer p { font-size: 1rem; }
+      .confidence {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        gap: .3rem .75rem;
+        align-items: start;
+      }
+      .confidence::before { grid-column: 1; grid-row: 1; margin: .42rem 0 0; }
+      .confidence strong { grid-column: 2; grid-row: 1; }
+      .confidence span { grid-column: 2; grid-row: 2; }
+      .passage-drawer { min-height: 220px; }
+      .no-evidence { font-size: .84rem; }
+      .result { grid-template-columns: 46px minmax(0, 1fr); gap: .75rem; }
+      .kind { display: none; }
+      .library-grid { grid-template-columns: 1fr; }
+      .resource-card { min-height: 170px; }
+      .resource-card:nth-child(n+3) { display: none; }
+      .map-canvas { min-height: 480px; }
+      .pv-mapcard { padding: 0; }
+      .pv-mapcard .kg-desktop { display: none; }
+      .pv-mapcard .kg-mobile { display: block; max-height: none; }
+      .kg-mobile .kg-node-label { font-size: 11px; stroke-width: 4px; }
+      .kg-mobile .kg-node-label.key { font-size: 12px; }
+      .kg-mobile .kg-cluster-label { font-size: 9px; }
+      .pv-controls {
+        flex-direction: column;
+        align-items: stretch;
+        gap: .75rem;
+        margin-bottom: 1rem;
+      }
+      .pv-querybar { flex-basis: auto; width: 100%; padding: .78rem .85rem; font-size: .86rem; }
+      .sr-modes {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
+        width: 100%;
+        gap: .2rem;
+      }
+      .sr-modes span {
+        min-width: 0;
+        padding: .38rem .2rem;
+        font-size: .64rem;
+        text-align: center;
+        white-space: nowrap;
+      }
+      .pv-chiprow { width: 100%; gap: .35rem; }
+      .chip { padding: .3rem .58rem; font-size: .69rem; }
+      .pv-chiprow .pv-meta,
+      .pv-controls > .pv-meta {
+        flex-basis: 100%;
+        width: 100%;
+        margin: .45rem 0 0;
+        font-size: .78rem;
+        text-align: left;
+      }
+      .node-a { left: 4%; top: 19%; }
+      .node-b { right: 3%; top: 25%; }
+      .node-c { right: 5%; bottom: 16%; }
+      .node-d { left: 3%; bottom: 20%; }
+      .capability-notes { grid-template-columns: 1fr; }
+      .capability-notes article { padding: 1.2rem 0; border-bottom: 1px solid #4b4a45; }
+      .library-section { padding: 6rem 0 7rem; gap: 3.5rem; }
+      .shelf { min-height: 480px; padding: 1rem; }
+      .paper { padding: 1rem; }
+      .paper-one { width: 67%; height: 67%; left: 2%; }
+      .paper-two { width: 64%; height: 61%; right: 1%; }
+      .paper-meta { margin-bottom: 1.5rem; }
+      .blue-note { width: 80px; right: 0; font-size: .64rem; }
+      .run-section { padding: 5.5rem 0; }
+      .run-grid { gap: 3rem; }
+      .code-card { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; }
+      .code-card pre {
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+      .terminal-line { max-width: 100%; }
+      .requirement { grid-template-columns: 1fr; gap: .25rem; }
+      .stewardship { padding: 6rem 0; }
+      .stewardship blockquote { font-size: clamp(3rem, 14vw, 4.5rem); }
+      .closing { min-height: auto; padding-top: 5.5rem; }
+      .closing-thread { display: block; }
+      .next-steps { grid-template-columns: 1fr; margin-top: 5rem; }
+      .next-step { min-height: 175px; }
+      .site-footer { flex-direction: column; gap: .4rem; padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
+    }
+
+    @media (min-width: 681px) and (max-width: 980px) {
+      .hero-thread,
+      .closing-thread { display: block; }
+
+      .mobile-view-tabs {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        margin-bottom: 1.35rem;
+        border-bottom: 1px solid #4b4a45;
+      }
+
+      .mobile-view-tab {
+        min-width: 0;
+        padding: .85rem .25rem .8rem;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: #aaa69d;
+        font-family: var(--display);
+        font-size: .9rem;
+        font-weight: 500;
+        letter-spacing: -.02em;
+        cursor: pointer;
+      }
+
+      .mobile-view-tab.active {
+        border-bottom-color: rgb(220, 232, 244);
+        color: var(--paper-soft);
+        font-weight: 600;
+      }
+
+      .ways-caption { padding-top: 0; border-top: 0; }
+      .ways-caption .wc-n { display: none; }
+      .portal-nav { display: none; }
+      .portal-body { grid-template-rows: minmax(0, 1fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+
+    /* ---------- heading font options (prototype switcher) ---------- */
+
+
+    /* ---------- ported from candidate C: an answer you can take apart ---------- */
+    .psig { padding: 0; }
+    .psig-stage {
+      min-height: 100svh;
+      display: flex; flex-direction: column; justify-content: center;
+      padding-block: clamp(4rem, 7vh, 6rem);
+    }
+    .psig-head {
+      grid-column: 1 / -1;
+      grid-row: 1;
+      max-width: 720px;
+      margin-bottom: clamp(2.5rem, 5vw, 4.5rem);
+    }
+    .psig-head h2 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: clamp(2.8rem, 5.1vw, 5.9rem);
+      font-weight: var(--display-weight-h2);
+      line-height: var(--display-lh-h2);
+      letter-spacing: var(--display-track-h2);
+      text-wrap: balance;
+    }
+    .psig-head p { margin: 1.4rem 0 0; color: var(--ink-soft); font-size: 1.05rem; max-width: 480px; }
+    .psig-grid {
+      position: relative;
+      display: grid; grid-template-columns: minmax(0, 10fr) minmax(0, 9fr);
+      column-gap: clamp(3rem, 5vw, 6rem); align-items: start;
+    }
+    .psig-left, .psig-demo { display: contents; }
+    .psig-thread {
+      position: absolute; inset: 0; z-index: 4;
+      pointer-events: none; overflow: visible;
+      display: none; width: 100%; height: 100%;
+    }
+    .psig-thread path { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-linecap: round; }
+    .psig-thread circle { fill: var(--blue); }
+    @media (min-width: 1024px) {
+      .psig-thread { display: block; }
+    }
+    .psig-answer {
+      grid-column: 1;
+      grid-row: 2;
+      font-family: var(--serif); font-size: clamp(1.3rem, 1.9vw, 1.72rem);
+      line-height: 1.5; color: var(--ink); max-width: 21em; margin: 0;
+    }
+    .psig-cite {
+      font-family: var(--mono); font-size: .62em; color: var(--blue-dark);
+      border: 1px solid rgba(21,93,166,.4); border-radius: 4px;
+      padding: .1em .4em; vertical-align: super;
+    }
+    .psig-steps {
+      grid-column: 1;
+      grid-row: 3;
+      list-style: none; margin: 2.6rem 0 0; padding: 0; max-width: 26em;
+    }
+    .psig-steps li {
+      display: flex; gap: 1rem; align-items: baseline;
+      font-family: var(--sans); font-size: .98rem; color: var(--ink-soft);
+      padding-block: .55rem;
+      transition: color .25s ease;
+    }
+    .psig-steps .n { font-family: var(--mono); font-size: .72rem; flex: none; width: 1.4em; color: var(--ink-soft); transition: color .25s ease; }
+    .psig-steps li.is-active { color: var(--ink); font-weight: 600; }
+    .psig-steps li.is-active .n { color: var(--blue); }
+    @media (max-width: 1023px) {
+      .psig-stage { min-height: 0; padding-block: clamp(4rem, 9vw, 6rem); }
+      .psig-head { margin-bottom: 1.6rem; }
+      .psig-thread { display: block; }
+      .psig-head { grid-column: 1; grid-row: 1; }
+      .psig-steps { grid-column: 1; grid-row: 2; margin: 0 0 2.2rem; }
+      .psig-answer { grid-column: 1; grid-row: 3; }
+      .psig-steps li, .psig-steps .n { color: var(--ink); }
+      .psig-steps .n { color: var(--blue); }
+    }
+    .psig-right {
+      grid-column: 2;
+      grid-row: 2 / span 2;
+      display: flex; flex-direction: column; align-items: stretch; gap: 1.4rem;
+    }
+    .psig-card {
+      background: var(--paper-soft); border: 1px solid var(--paper-deep);
+      border-radius: 8px; padding: 1.5rem 1.6rem;
+      box-shadow: 0 20px 40px -32px rgba(28,28,25,.45);
+    }
+    .psig-card .s-title { margin: 0; font-family: var(--serif); font-size: 1.12rem; font-weight: 500; line-height: 1.35; }
+    .psig-card .s-meta { font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); margin: .45rem 0 0; }
+    .psig-card .s-passage { font-family: var(--serif); font-size: .98rem; line-height: 1.66; color: var(--ink); margin: 1.05rem 0 0; }
+    .psig-hl {
+      background-image: linear-gradient(var(--blue-pale), var(--blue-pale));
+      background-repeat: no-repeat; background-size: 100% 100%;
+      box-decoration-break: clone; -webkit-box-decoration-break: clone;
+    }
+    .psig-card .s-chip { display: inline-block; margin-top: 1rem; font-family: var(--mono); font-size: .68rem; letter-spacing: .06em; color: var(--blue-dark); }
+    .psig-conf { width: min(100%, 420px); align-self: flex-end; }
+    .psig-conf .c-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .psig-conf .c-title { font-family: var(--sans); font-weight: 600; font-size: .95rem; }
+    .psig-conf .c-chip { font-family: var(--mono); font-size: .68rem; color: var(--blue-dark); }
+    .psig-conf .c-line { font-family: var(--sans); font-size: .85rem; color: var(--ink-soft); margin: .55rem 0 0; max-width: 30em; }
+    .psig-qbars { margin-top: 1.1rem; display: flex; flex-direction: column; gap: .65rem; }
+    .psig-qbar { display: grid; grid-template-columns: 7.2em 1fr 2.8em; align-items: center; gap: .8rem; }
+    .psig-qbar .l { font-family: var(--sans); font-size: .78rem; color: var(--ink-soft); }
+    .psig-qbar .v { font-family: var(--mono); font-size: .7rem; color: var(--ink-soft); text-align: right; }
+    .psig-track { height: 4px; background: var(--paper-deep); border-radius: 2px; overflow: hidden; }
+    .psig-fill { height: 100%; display: block; background: var(--blue); border-radius: 2px; }
+    @media (max-width: 1023px) {
+      .psig-grid { grid-template-columns: 1fr; column-gap: 0; row-gap: 0; }
+      .psig-steps { max-width: none; }
+      .psig-right { grid-column: 1; grid-row: 4; margin-top: 2.2rem; }
+    }
+
+    @media (min-width: 1024px) and (min-height: 1201px) {
+      .psig-left,
+      .psig-demo {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+      }
+
+      .psig-left { grid-column: 1; grid-row: 1; }
+      .psig-demo { grid-column: 2; grid-row: 1; }
+
+      .psig-head,
+      .psig-answer,
+      .psig-steps,
+      .psig-right {
+        grid-column: auto;
+        grid-row: auto;
+      }
+
+      .psig-head { margin-bottom: 0; }
+      .psig-steps { margin-top: 2.6rem; }
+      .psig-answer { margin-bottom: clamp(3.5rem, 5vh, 5rem); }
+      .psig-right { margin: 0; }
+    }
+
+    @media (min-width: 1024px) and (max-height: 1200px) {
+      .psig-stage {
+        box-sizing: border-box;
+        min-height: calc(100svh - 76px);
+        height: calc(100svh - 76px);
+        justify-content: flex-start;
+        padding: 3rem 0 1.5rem;
+      }
+
+      .psig-stage > .section-shell { height: 100%; }
+
+      .psig-grid {
+        height: 100%;
+        grid-template-columns: minmax(280px, .78fr) minmax(0, 1.22fr);
+        column-gap: clamp(2rem, 4vw, 5rem);
+      }
+
+      .psig-left,
+      .psig-demo {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+      }
+
+      .psig-left { grid-column: 1; grid-row: 1; }
+      .psig-demo { grid-column: 2; grid-row: 1; padding-top: 1.25rem; }
+
+      .psig-head,
+      .psig-answer,
+      .psig-steps,
+      .psig-right {
+        grid-column: auto;
+        grid-row: auto;
+      }
+
+      .psig-head {
+        max-width: none;
+        margin: 0;
+        padding-top: clamp(2.125rem, calc(3vh + 10px), 2.875rem);
+      }
+
+      .psig-head h2 { font-size: clamp(3.2rem, 4.1vw, 5rem); }
+      .psig-head p { max-width: 50ch; margin-top: 1.25rem; font-size: .98rem; }
+
+      .psig-steps {
+        width: 100%;
+        max-width: 32em;
+        margin: clamp(2rem, 4vh, 3rem) 0 0;
+      }
+
+      .psig-steps li { padding-block: .42rem; font-size: .88rem; }
+
+      .psig-answer {
+        max-width: 28em;
+        margin: 0 0 clamp(1.25rem, 2.5vh, 2rem);
+        font-size: clamp(1.3rem, 1.55vw, 1.65rem);
+        line-height: 1.42;
+      }
+
+      .psig-right {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: clamp(.8rem, 1.3vw, 1.25rem);
+        margin: 0;
+      }
+
+      .psig-card { padding: 1.1rem 1.2rem; }
+      #psigSource { width: min(100%, 900px); align-self: flex-start; }
+      .psig-card .s-title { font-size: 1rem; }
+      .psig-card .s-meta { margin-top: .35rem; font-size: .62rem; }
+      .psig-card .s-passage { margin-top: .75rem; font-size: .84rem; line-height: 1.5; }
+      .psig-card .s-chip { margin-top: .7rem; font-size: .61rem; }
+      .psig-conf { width: min(100%, 420px); align-self: flex-start; }
+      .psig-conf .c-title { font-size: .86rem; }
+      .psig-conf .c-chip { font-size: .6rem; }
+      .psig-conf .c-line { margin-top: .4rem; font-size: .75rem; }
+      .psig-qbars { margin-top: .8rem; gap: .5rem; }
+      .psig-qbar { grid-template-columns: 6.2em 1fr 2.5em; gap: .55rem; }
+      .psig-qbar .l { font-size: .68rem; }
+      .psig-qbar .v { font-size: .62rem; }
+    }
+
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <nav class="nav-shell" aria-label="Main navigation">
+      <a class="brand" href="#top" aria-label="CorpusKit home">CorpusKit<span class="brand-mark">/</span></a>
+      <div class="nav-links">
+        <a href="#workings">How it works</a>
+        <a href="#run">Run CorpusKit</a>
+        <a href="#contribute">Contribute</a>
+      </div>
+    </nav>
+  </header>
+
+  <div id="smooth-wrapper">
+    <div id="smooth-content">
+      <main id="main">
+        <section class="hero" id="top">
+          <h1>Put your<br class="hero-laptop-break"> organisation’s<br>research <span class="hero-claim"><span class="hero-highlight" id="heroHighlight">to work</span><span class="hero-cite" id="heroCite">1</span></span></h1>
+          <div class="hero-copy">
+            <p id="heroDescription">CorpusKit is an open source research portal. Search across reports, papers and other source material, ask questions of the collection and trace connections from one source to another. Answers cite the material they draw on, down to the relevant passage.</p>
+            <a class="text-link" href="#workings">See how it works<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M3.5 9.5 8 14l4.5-4.5"/></svg></a>
+          </div>
+          <div class="hero-note" aria-label="Project summary">
+            <p><strong>Open source under the Apache 2.0 licence</strong></p>
+            <p>Source code, setup guides and issue tracker on GitHub</p>
+          </div>
+          <svg class="hero-thread" id="heroThread" aria-hidden="true">
+            <path id="heroThreadPath" d=""/>
+            <circle id="heroThreadDot" r="3" cx="-10" cy="-10"/>
+          </svg>
+        </section>
+
+        <section class="workings" id="workings">
+          <div class="section-shell">
+            <div class="section-head">
+              <h2>Inside a CorpusKit portal</h2>
+              <p>A portal is built around one organisation’s research collection. People can ask questions across it, search for specific material, browse the Library and inspect relationships in the knowledge map. Manage is where administrators add and maintain the material.</p>
+            </div>
+
+            <div class="portal-stage">
+              <div class="mobile-view-tabs" role="tablist" aria-label="Choose a portal feature">
+                <button class="mobile-view-tab active" id="mobile-tab-ask" role="tab" aria-selected="true" aria-controls="view-ask" data-view="ask">Ask</button>
+                <button class="mobile-view-tab" id="mobile-tab-search" role="tab" aria-selected="false" aria-controls="view-search" data-view="search" tabindex="-1">Search</button>
+                <button class="mobile-view-tab" id="mobile-tab-library" role="tab" aria-selected="false" aria-controls="view-library" data-view="library" tabindex="-1">Library</button>
+                <button class="mobile-view-tab" id="mobile-tab-map" role="tab" aria-selected="false" aria-controls="view-map" data-view="map" tabindex="-1">Map</button>
+                <button class="mobile-view-tab" id="mobile-tab-manage" role="tab" aria-selected="false" aria-controls="view-manage" data-view="manage" tabindex="-1">Manage</button>
+              </div>
+              <p class="ways-caption"><span class="wc-n" id="waysCaptionLabel">Ask</span><span class="wc-t" id="waysCaptionText">Enter a question in Ask. CorpusKit searches the collection and returns an answer with citations, sources and a confidence rating. Deep research is available when a broad question needs to be broken into smaller ones.</span></p>
+
+              <!-- All example research titles, dates, passages and relevance values are illustrative placeholders. -->
+              <div class="portal-frame" aria-label="Interactive CorpusKit portal example">
+              <div class="portal-top">
+                <span class="portal-name">Field notes</span>
+                <div class="portal-search" aria-label="Example search field"><span>Search this research collection</span><span>⌕</span></div>
+                <span class="portal-status">Illustrative portal</span>
+              </div>
+
+              <div class="portal-body">
+                <div class="portal-nav" role="tablist" aria-label="Portal views">
+                  <button class="view-tab active" id="tab-ask" role="tab" aria-selected="true" aria-controls="view-ask" data-view="ask">Ask</button>
+                  <button class="view-tab" id="tab-search" role="tab" aria-selected="false" aria-controls="view-search" data-view="search">Search</button>
+                  <button class="view-tab" id="tab-library" role="tab" aria-selected="false" aria-controls="view-library" data-view="library">Library</button>
+                  <button class="view-tab" id="tab-map" role="tab" aria-selected="false" aria-controls="view-map" data-view="map">Map</button>
+                  <button class="view-tab" id="tab-manage" role="tab" aria-selected="false" aria-controls="view-manage" data-view="manage">Manage</button>
+                </div>
+
+                <div class="portal-main">
+                  <section class="portal-view active" id="view-ask" role="tabpanel" aria-labelledby="tab-ask">
+                    <h3>What affected seagrass recovery after the 2022 floods?</h3>
+                    <div class="question-card">
+                      <p class="question">Question entered in Ask · whole collection</p>
+                      <div class="answer-layout">
+                        <div class="answer">
+                          <p>Seagrass recovered more slowly at sites where winter turbidity remained above the long-term median.<button class="citation" type="button" aria-expanded="true" aria-controls="passage" data-citation="1">1</button></p>
+                          <p>At those sites, light at the canopy fell below the minimum required by <i>Zostera muelleri</i> on 63 per cent of monitored days.<button class="citation" type="button" aria-expanded="false" aria-controls="passage" data-citation="2">2</button></p>
+                          <div class="confidence"><strong>High confidence</strong><span>Both claims are directly supported by the cited reports</span></div>
+                        </div>
+                        <aside class="passage-drawer" id="passage" aria-live="polite">
+                          <p class="passage-title">Estuarine seagrass condition assessment 2019 to 2023</p>
+                          <p class="passage-copy">“Seagrass extent recovered more slowly in estuaries where <mark>winter turbidity remained above the long-term median</mark> during the two years after the floods.”</p>
+                        </aside>
+                      </div>
+                      <div class="no-evidence"><span aria-hidden="true">○</span><span><strong>No direct evidence found</strong><br>The collection does not compare the cost of restoration methods across estuaries.</span></div>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-search" role="tabpanel" aria-labelledby="tab-search" hidden>
+                    <div class="pv-controls">
+                      <div class="pv-querybar"><span>winter turbidity and seagrass recovery</span><span class="pv-qicon">⌕</span></div>
+                      <div class="sr-modes pv-modes"><span class="on">Hybrid</span><span>Semantic</span><span>Keyword</span></div>
+                    </div>
+                    <div class="pv-chiprow">
+                      <span class="chip">Topic: water quality</span>
+                      <span class="chip">Kind: report</span>
+                      <span class="pv-meta">Searching 412 resources</span>
+                    </div>
+                    <div class="pv-card">
+                      <div class="pv-answerstrip">
+                        <span class="lbl">Cited answer</span>
+                        <p>Seagrass recovery was slower where winter turbidity remained above the long-term median.<span class="citation" aria-hidden="true">1</span> A related report attributed an estimated two thirds of the fine sediment reaching the estuary after the floods to bank erosion in the upper catchment.<span class="citation" aria-hidden="true">2</span></p>
+                      </div>
+                      <div class="pv-results">
+                        <div class="pv-result">
+                          <div class="r-top"><span class="r-title">Turbidity and light limitation in flood-affected estuaries</span><span class="r-score">0.87</span></div>
+                          <p class="r-meta">report · 2023</p>
+                          <p class="r-passage">…sites where <span class="hl">mean winter turbidity remained above the long-term median</span> showed significantly slower recovery…</p>
+                        </div>
+                        <div class="pv-result">
+                          <div class="r-top"><span class="r-title">Catchment sediment sources after the 2022 floods</span><span class="r-score">0.74</span></div>
+                          <p class="r-meta">technical report · 2024</p>
+                          <p class="r-passage">…bank erosion in the upper catchment contributed an estimated <span class="hl">two thirds of the fine sediment load</span> reaching the estuary…</p><!-- proportion is a plausible placeholder -->
+                        </div>
+                        <div class="pv-result">
+                          <div class="r-top"><span class="r-title">Recreational water quality guidelines review</span><span class="r-score"><span class="weak">weak match</span> · 0.41</span></div>
+                          <p class="r-meta">review · 2019</p>
+                        </div>
+                      </div>
+                      <div class="pv-cardfoot"><span>Hybrid search</span><a href="#workings">Watch this search</a></div>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-library" role="tabpanel" aria-labelledby="tab-library" hidden>
+                    <div class="pv-controls">
+                      <div class="pv-chiprow">
+                        <span class="chip on">All kinds</span>
+                        <span class="chip">Report</span>
+                        <span class="chip">Plan</span>
+                        <span class="chip">Submission</span>
+                      </div>
+                      <span class="pv-meta">412 resources · recently added first</span><!-- count is a plausible placeholder -->
+                    </div>
+                    <div class="pv-libgrid">
+                      <div class="pv-libcard">
+                        <span class="k ochre">Report · 2023</span>
+                        <p class="t">Estuarine seagrass condition assessment 2019 to 2023</p>
+                        <p class="s">The report covers five years of condition monitoring across five estuaries, including seagrass extent, density and light availability.</p>
+                        <div class="tags"><span>Seagrass</span><span>Monitoring</span></div>
+                      </div>
+                      <div class="pv-libcard">
+                        <span class="k clay">Technical report · 2024</span>
+                        <p class="t">Catchment sediment sources after the 2022 floods</p>
+                        <p class="s">The report traces fine sediment in the estuary to its catchment sources and ranks the available management options.</p>
+                        <div class="tags"><span>Sediment</span><span>Catchment</span></div>
+                      </div>
+                      <div class="pv-libcard">
+                        <span class="k ochre">Report · 2023</span>
+                        <p class="t">Turbidity and light limitation in flood-affected estuaries</p>
+                        <p class="s">The report links high winter turbidity after floods to less light at the seagrass canopy and slower recovery.</p>
+                        <div class="tags"><span>Turbidity</span><span>Light</span></div>
+                      </div>
+                      <div class="pv-libcard">
+                        <span class="k">Review · 2019</span>
+                        <p class="t">Recreational water quality guidelines review</p>
+                        <p class="s">The review examines recreational water quality thresholds and the monitoring evidence behind them.</p>
+                        <div class="tags"><span>Guidelines</span><span>Monitoring</span></div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-map" role="tabpanel" aria-labelledby="tab-map" hidden>
+                    <div class="pv-controls">
+                      <div class="sr-modes pv-modes"><span class="on">Entity view</span><span>Concept view</span></div>
+                      <span class="pv-meta">Select a connection to see the resources behind it</span>
+                    </div>
+                    <div class="pv-card pv-mapcard">
+                      <svg class="kg-desktop" viewBox="0 0 720 330" role="img" aria-label="A two-dimensional knowledge graph of environmental pressures, habitats, species and research topics, with related entities joined by lines">
+                        <rect class="kg-legend-panel" x="4" y="4" width="118" height="322" rx="2"/>
+                        <text class="kg-legend-title" x="16" y="23">Entity types</text>
+                        <circle class="kg-node crop" cx="19" cy="42" r="5"/><text class="kg-legend-label" x="30" y="45">Research topic</text><text class="kg-legend-count" x="108" y="45" text-anchor="end">26</text>
+                        <circle class="kg-node pressure" cx="19" cy="61" r="5"/><text class="kg-legend-label" x="30" y="64">Pressure</text><text class="kg-legend-count" x="108" y="64" text-anchor="end">12</text>
+                        <circle class="kg-node habitat" cx="19" cy="80" r="5"/><text class="kg-legend-label" x="30" y="83">Habitat</text><text class="kg-legend-count" x="108" y="83" text-anchor="end">9</text>
+                        <circle class="kg-node species" cx="19" cy="99" r="5"/><text class="kg-legend-label" x="30" y="102">Species</text><text class="kg-legend-count" x="108" y="102" text-anchor="end">7</text>
+                        <line class="kg-legend-rule" x1="16" y1="119" x2="110" y2="119"/>
+                        <text class="kg-legend-title" x="16" y="139">Most connected</text>
+                        <circle class="kg-node habitat" cx="19" cy="158" r="4"/><text class="kg-legend-label" x="30" y="161">seagrass</text><text class="kg-legend-count" x="108" y="161" text-anchor="end">18</text>
+                        <circle class="kg-node crop" cx="19" cy="180" r="4"/><text class="kg-legend-label" x="30" y="183">turbidity</text><text class="kg-legend-count" x="108" y="183" text-anchor="end">14</text>
+                        <circle class="kg-node pressure" cx="19" cy="202" r="4"/><text class="kg-legend-label" x="30" y="205">2022 floods</text><text class="kg-legend-count" x="108" y="205" text-anchor="end">12</text>
+                        <circle class="kg-node crop" cx="19" cy="224" r="4"/><text class="kg-legend-label" x="30" y="227">water quality</text><text class="kg-legend-count" x="108" y="227" text-anchor="end">11</text>
+                        <circle class="kg-node species" cx="19" cy="246" r="4"/><text class="kg-legend-label" x="30" y="249">Z. muelleri</text><text class="kg-legend-count" x="108" y="249" text-anchor="end">8</text>
+                        <text class="kg-legend-label" x="16" y="302">54 entities</text>
+                        <text class="kg-legend-count" x="108" y="302" text-anchor="end">87 links</text>
+
+                        <ellipse class="kg-cluster crop" cx="358" cy="135" rx="165" ry="112"/>
+                        <ellipse class="kg-cluster habitat" cx="536" cy="116" rx="92" ry="72"/>
+                        <ellipse class="kg-cluster pressure" cx="585" cy="235" rx="116" ry="82"/>
+                        <ellipse class="kg-cluster kg-cluster-species" cx="250" cy="262" rx="87" ry="58"/>
+                        <text class="kg-cluster-label crop" x="326" y="18">Research topics · 26</text>
+                        <text class="kg-cluster-label habitat" x="500" y="42">Habitats · 9</text>
+                        <text class="kg-cluster-label pressure" x="560" y="151">Pressures · 12</text>
+                        <text class="kg-cluster-label species" x="206" y="210">Species · 7</text>
+
+                        <g aria-hidden="true">
+                          <path class="kg-edge crop" d="M312 93L365 129M365 129L419 100M365 129L386 169M312 93L264 132M264 132L309 178M386 169L444 157M419 100L467 128M309 178L348 204M264 132L230 82M312 93L338 57M419 100L397 58"/>
+                          <path class="kg-edge crop" d="M230 82L293 61M293 61L338 57M338 57L397 58M397 58L419 100M230 82L214 146M214 146L264 132M214 146L251 185M251 185L309 178M309 178L386 169M348 204L386 169M444 157L467 128"/>
+                          <path class="kg-edge habitat" d="M467 128L512 93M512 93L554 82M512 93L548 127M548 127L589 103M548 127L578 144M467 128L503 157M503 157L548 127M554 82L605 73"/>
+                          <path class="kg-edge pressure" d="M444 157L522 203M386 169L522 203M467 128L565 195M503 157L565 195M522 203L582 234M565 195L615 207M582 234L635 252M615 207L661 224M582 234L550 271M635 252L614 286M550 271L614 286"/>
+                          <path class="kg-edge species" d="M348 204L301 244M309 178L273 238M251 185L226 244M301 244L273 238M273 238L246 277M226 244L195 273M246 277L291 291M195 273L246 277"/>
+                          <path class="kg-edge habitat" d="M301 244L503 157M273 238L467 128M246 277L548 127M226 244L512 93"/>
+                          <path class="kg-edge pressure" d="M230 82L522 203M293 61L565 195M338 57L615 207M397 58L661 224M214 146L582 234M251 185L635 252"/>
+                        </g>
+
+                        <g aria-hidden="true">
+                          <circle class="kg-node crop" cx="230" cy="82" r="7"/><circle class="kg-node crop" cx="293" cy="61" r="5"/><circle class="kg-node crop" cx="338" cy="57" r="8"/><circle class="kg-node crop" cx="397" cy="58" r="5"/>
+                          <circle class="kg-node crop" cx="312" cy="93" r="9"/><circle class="kg-node crop" cx="365" cy="129" r="14"/><circle class="kg-node crop" cx="419" cy="100" r="8"/><circle class="kg-node crop" cx="264" cy="132" r="6"/>
+                          <circle class="kg-node crop" cx="214" cy="146" r="5"/><circle class="kg-node crop" cx="251" cy="185" r="7"/><circle class="kg-node crop" cx="309" cy="178" r="10"/><circle class="kg-node crop" cx="386" cy="169" r="7"/>
+                          <circle class="kg-node crop" cx="444" cy="157" r="6"/><circle class="kg-node crop" cx="467" cy="128" r="8"/><circle class="kg-node crop" cx="348" cy="204" r="5"/>
+                          <circle class="kg-node habitat" cx="512" cy="93" r="7"/><circle class="kg-node habitat" cx="554" cy="82" r="10"/><circle class="kg-node habitat selected" cx="548" cy="127" r="15"/><circle class="kg-node habitat" cx="589" cy="103" r="8"/><circle class="kg-node habitat" cx="605" cy="73" r="5"/><circle class="kg-node habitat" cx="578" cy="144" r="6"/><circle class="kg-node habitat" cx="503" cy="157" r="8"/>
+                          <circle class="kg-node pressure" cx="522" cy="203" r="8"/><circle class="kg-node pressure" cx="565" cy="195" r="11"/><circle class="kg-node pressure" cx="615" cy="207" r="7"/><circle class="kg-node pressure" cx="582" cy="234" r="13"/><circle class="kg-node pressure" cx="661" cy="224" r="6"/><circle class="kg-node pressure" cx="635" cy="252" r="9"/><circle class="kg-node pressure" cx="550" cy="271" r="6"/><circle class="kg-node pressure" cx="614" cy="286" r="7"/>
+                          <circle class="kg-node species" cx="301" cy="244" r="7"/><circle class="kg-node species" cx="273" cy="238" r="10"/><circle class="kg-node species" cx="226" cy="244" r="6"/><circle class="kg-node species" cx="195" cy="273" r="7"/><circle class="kg-node species" cx="246" cy="277" r="9"/><circle class="kg-node species" cx="291" cy="291" r="5"/>
+                        </g>
+
+                        <text class="kg-node-label key" x="371" y="126">winter turbidity</text>
+                        <text class="kg-node-label" x="316" y="88">water quality</text>
+                        <text class="kg-node-label" x="395" y="165">light availability</text>
+                        <text class="kg-node-label" x="471" y="124">estuary</text>
+                        <text class="kg-node-label key" x="557" y="124">seagrass</text>
+                        <text class="kg-node-label" x="562" y="78">coastal habitat</text>
+                        <text class="kg-node-label key" x="574" y="191">2022 floods</text>
+                        <text class="kg-node-label" x="590" y="231">sediment</text>
+                        <text class="kg-node-label" x="641" y="248">runoff</text>
+                        <text class="kg-node-label key" x="279" y="235" font-style="italic">Zostera muelleri</text>
+                        <text class="kg-node-label" x="183" y="289">Halophila ovalis</text>
+                      </svg>
+                      <svg class="kg-mobile" viewBox="0 0 320 460" role="img" aria-label="A mobile knowledge graph showing how floods, turbidity, seagrass and related research entities connect">
+                        <rect width="320" height="460" fill="#fff"/>
+
+                        <g aria-hidden="true">
+                          <circle class="kg-node crop" cx="18" cy="24" r="5"/><text class="kg-legend-label" x="29" y="28">Topic</text>
+                          <circle class="kg-node habitat" cx="88" cy="24" r="5"/><text class="kg-legend-label" x="99" y="28">Habitat</text>
+                          <circle class="kg-node pressure" cx="180" cy="24" r="5"/><text class="kg-legend-label" x="191" y="28">Pressure</text>
+                          <circle class="kg-node species" cx="263" cy="24" r="5"/><text class="kg-legend-label" x="274" y="28">Species</text>
+                          <line class="kg-legend-rule" x1="12" y1="43" x2="308" y2="43"/>
+
+                          <ellipse class="kg-cluster crop" cx="145" cy="172" rx="125" ry="105"/>
+                          <ellipse class="kg-cluster habitat" cx="230" cy="290" rx="76" ry="103"/>
+                          <ellipse class="kg-cluster pressure" cx="79" cy="306" rx="70" ry="96"/>
+                          <ellipse class="kg-cluster kg-cluster-species" cx="173" cy="411" rx="72" ry="38"/>
+                          <text class="kg-cluster-label crop" x="24" y="66">RESEARCH TOPICS</text>
+                          <text class="kg-cluster-label habitat" x="232" y="211">HABITATS</text>
+                          <text class="kg-cluster-label pressure" x="17" y="227">PRESSURES</text>
+                          <text class="kg-cluster-label species" x="114" y="451">SPECIES</text>
+
+                          <path class="kg-edge crop" d="M72 132L154 178M154 178L236 131M154 178L214 227M154 178L93 205M72 132L111 91M154 178L177 103M236 131L277 167M93 205L48 176"/>
+                          <path class="kg-edge habitat" d="M214 227L252 274M252 274L265 344M214 227L201 310M201 310L265 344M252 274L294 247"/>
+                          <path class="kg-edge pressure" d="M93 205L65 279M65 279L103 342M65 279L31 323M103 342L146 315M48 176L65 279M154 178L103 342"/>
+                          <path class="kg-edge species" d="M201 310L174 405M265 344L174 405M103 342L132 416M174 405L220 422"/>
+                          <path class="kg-edge habitat" d="M72 132L252 274M111 91L214 227M177 103L265 344"/>
+
+                          <circle class="kg-node crop" cx="72" cy="132" r="11"/>
+                          <circle class="kg-node crop" cx="111" cy="91" r="7"/>
+                          <circle class="kg-node crop selected" cx="154" cy="178" r="18"/>
+                          <circle class="kg-node crop" cx="177" cy="103" r="8"/>
+                          <circle class="kg-node crop" cx="236" cy="131" r="12"/>
+                          <circle class="kg-node crop" cx="214" cy="227" r="8"/>
+                          <circle class="kg-node crop" cx="93" cy="205" r="7"/>
+                          <circle class="kg-node crop" cx="48" cy="176" r="6"/>
+                          <circle class="kg-node crop" cx="277" cy="167" r="6"/>
+
+                          <circle class="kg-node habitat" cx="252" cy="274" r="20"/>
+                          <circle class="kg-node habitat" cx="201" cy="310" r="9"/>
+                          <circle class="kg-node habitat" cx="265" cy="344" r="12"/>
+                          <circle class="kg-node habitat" cx="294" cy="247" r="6"/>
+
+                          <circle class="kg-node pressure" cx="65" cy="279" r="17"/>
+                          <circle class="kg-node pressure" cx="103" cy="342" r="11"/>
+                          <circle class="kg-node pressure" cx="31" cy="323" r="7"/>
+                          <circle class="kg-node pressure" cx="146" cy="315" r="6"/>
+
+                          <circle class="kg-node species" cx="174" cy="405" r="14"/>
+                          <circle class="kg-node species" cx="132" cy="416" r="7"/>
+                          <circle class="kg-node species" cx="220" cy="422" r="6"/>
+
+                          <text class="kg-node-label" x="25" y="124">water quality</text>
+                          <text class="kg-node-label" x="76" y="83">monitoring</text>
+                          <text class="kg-node-label key" x="166" y="175">winter turbidity</text>
+                          <text class="kg-node-label" x="187" y="99">light availability</text>
+                          <text class="kg-node-label" x="244" y="128">recovery</text>
+                          <text class="kg-node-label key" x="218" y="270">seagrass</text>
+                          <text class="kg-node-label" x="209" y="306">estuary</text>
+                          <text class="kg-node-label" x="224" y="361">coastal habitat</text>
+                          <text class="kg-node-label key" x="19" y="274">2022 floods</text>
+                          <text class="kg-node-label" x="109" y="339">sediment</text>
+                          <text class="kg-node-label" x="15" y="342">runoff</text>
+                          <text class="kg-node-label key" x="113" y="398" font-style="italic">Zostera muelleri</text>
+                        </g>
+                        <text class="kg-legend-count" x="308" y="449" text-anchor="end">54 entities · 87 links</text>
+                      </svg>
+                    </div>
+                  </section>
+
+                  <section class="portal-view" id="view-manage" role="tabpanel" aria-labelledby="tab-manage" hidden>
+                    <div class="pv-card">
+                      <div class="ch-head"><span class="t">Collection health</span><span class="c">418 resources · 3 need attention</span></div><!-- counts are plausible placeholders -->
+                      <div class="ch-row"><span class="flag">Extraction failed</span><span class="what">Scanned appendix, floodplain inquiry 1996</span><span class="act"><a href="#workings">Retry</a></span></div>
+                      <div class="ch-row"><span class="flag">Bot challenge</span><span class="what">Council planning portal page</span><span class="act"><a href="#workings">Open</a></span></div>
+                      <div class="ch-row"><span class="flag softer">Very little text</span><span class="what">Field photo set, March survey</span><span class="act"><a href="#workings">Review</a></span></div>
+                      <div class="ch-foot"><span>2 drafts excluded from public results</span><span>Website sync · nightly</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <section class="psig" id="evidence-anatomy">
+          <div class="psig-stage">
+          <div class="section-shell">
+            <div class="psig-grid">
+              <div class="psig-left">
+                <div class="psig-head">
+                  <h2>Check the answer against the research</h2>
+                  <p>CorpusKit links claims in an answer to the source passages that support them. Quality scores show how relevant the retrieved material is, how closely the answer follows it and whether enough context was found.</p>
+                </div>
+                <ol class="psig-steps" id="psigSteps">
+                  <li><span class="n">1</span>Choose a claim to check</li>
+                  <li><span class="n">2</span>Open its numbered citation</li>
+                  <li><span class="n">3</span>Read the highlighted passage in the resource</li>
+                  <li><span class="n">4</span>Review the answer quality</li>
+                </ol>
+              </div>
+              <div class="psig-demo">
+                <p class="psig-answer">Seagrass recovered more slowly at sites where winter turbidity remained above the long-term median. At those sites, light at the canopy fell below the minimum required by <i>Zostera muelleri</i> on 63 per cent of monitored days.<span class="psig-cite" id="psigCite">2</span></p>
+                <div class="psig-right">
+                  <article class="psig-card" id="psigSource">
+                    <h3 class="s-title">Turbidity and light limitation in flood-affected estuaries</h3>
+                    <p class="s-meta">Report &#183; 2023 &#183; Water quality &#183; 148 pages</p><!-- page count is a plausible placeholder -->
+                    <p class="s-passage"><span class="psig-hl">Sites where mean winter turbidity remained above the long-term median showed significantly slower recovery of seagrass extent over the two years following the floods.</span> <span class="psig-hl">At these sites, light at the canopy fell below the minimum requirement for Zostera muelleri on 63 per cent of monitored days.</span></p><!-- figure is a plausible placeholder -->
+                    <span class="s-chip" id="psigChip">Matched passage &#183; page 41</span>
+                  </article>
+                  <aside class="psig-card psig-conf" id="psigConf">
+                    <div class="c-head">
+                      <span class="c-title">Answer quality</span>
+                      <span class="c-chip">High confidence</span>
+                    </div>
+                    <p class="c-line">The cited passages directly support the answer.</p>
+                    <div class="psig-qbars">
+                      <div class="psig-qbar"><span class="l">Relevance</span><span class="psig-track"><span class="psig-fill" style="width:86%"></span></span><span class="v">0.86</span></div>
+                      <div class="psig-qbar"><span class="l">Groundedness</span><span class="psig-track"><span class="psig-fill" style="width:91%"></span></span><span class="v">0.91</span></div>
+                      <div class="psig-qbar"><span class="l">Context</span><span class="psig-track"><span class="psig-fill" style="width:78%"></span></span><span class="v">0.78</span></div>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+              <svg class="psig-thread" id="psigThread" aria-hidden="true">
+                <path id="psigThreadPath" d=""/>
+                <circle id="psigThreadDot" r="3" cx="-10" cy="-10"/>
+              </svg>
+            </div>
+          </div>
+          </div>
+        </section>
+
+
+
+        <section class="run-section" id="run">
+          <div class="run-grid">
+            <div class="run-intro">
+              <h2>Run CorpusKit with your collection</h2>
+              <p>CorpusKit’s application code is published under the Apache 2.0 licence. Clone the repository, connect your research collection and run the portal on infrastructure you manage.</p>
+              <p>The repository includes instructions for local and container-based setup, along with the tests, build tasks and deployment configuration used by the project.</p>
+              <p>Content storage, retrieval and generation require an account with a connected knowledge service. The Apache 2.0 licence covers the CorpusKit application. Your infrastructure, connected services and research material have their own terms.</p>
+            </div>
+            <div>
+              <div class="code-card" aria-label="Example setup commands">
+                <div class="code-top"><span>Terminal</span><span>Local setup</span></div>
+                <!-- commands follow the setup instructions in the repository README -->
+                <pre aria-label="git clone https://github.com/noicework/corpuskit.git; cd corpuskit; copy the environment example; provision the application; start the development server"><code aria-hidden="true"><span class="terminal-line"><span class="code-dim">$</span> <span class="typed-command">git clone https://github.com/noicework/corpuskit.git</span><span class="terminal-cursor"></span></span>
+<span class="terminal-line"><span class="code-dim">$</span> <span class="typed-command">cd corpuskit</span><span class="terminal-cursor"></span></span>
+<span class="terminal-line"><span class="code-dim">$</span> <span class="typed-command">cp .env.example .env</span><span class="typed-comment code-dim">   # knowledge service credentials</span><span class="terminal-cursor"></span></span>
+<span class="terminal-line"><span class="code-dim">$</span> <span class="typed-command">deno task provision</span><span class="terminal-cursor"></span></span>
+<span class="terminal-line"><span class="code-dim">$</span> <span class="typed-command">deno task dev</span><span class="terminal-cursor"></span></span></code></pre>
+              </div>
+              <div class="run-links">
+                <a href="https://github.com/noicework/corpuskit">View the repository</a>
+                <a href="https://github.com/noicework/corpuskit/blob/main/LICENSE">Read the Apache 2.0 licence</a>
+              </div>
+            </div>
+          </div>
+          <div class="run-cols">
+            <div>
+              <h3>How changes are checked</h3>
+              <p>Changes are submitted through pull requests. Before a pull request can merge, it must pass typechecking, linting, formatting, tests and a full build. These checks apply to everyone.</p>
+            </div>
+            <div>
+              <h3>Before you deploy</h3>
+              <ul class="know-list">
+                <li>A deployment needs a connected knowledge service for content storage, retrieval and generation</li>
+                <li>Production administration currently supports Microsoft sign-in</li>
+                <li>Application state is stored in SQLite-backed durable storage. Check that this suits the size and needs of your deployment</li>
+                <li>Review the issue tracker for known gaps and unfinished work</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+
+        <section class="closing" id="contribute">
+          <h2>Be a part of <span class="closing-claim"><span class="closing-highlight" id="closingHighlight">CorpusKit</span><span class="closing-cite" id="closingCite">3</span></span></h2>
+          <div class="next-steps">
+            <article class="next-step"><h3>Use a portal</h3><p>Search, browse and ask questions in a CorpusKit portal maintained by your organisation.</p><a href="https://opax.corpuskit.org">See the portal example</a></article>
+            <article class="next-step"><h3>Run CorpusKit</h3><p>Connect your organisation’s research collection and maintain the deployment on infrastructure you manage.</p><a href="https://github.com/noicework/corpuskit">View the repository</a></article>
+            <article class="next-step"><h3>Contribute</h3><p>Contribute to the code, design, documentation, research practice or tests.</p><a href="https://github.com/noicework/corpuskit/blob/main/CONTRIBUTING.md">Read the contribution guide</a></article>
+          </div>
+          <svg class="closing-thread" id="closingThread" aria-hidden="true">
+            <path id="closingThreadPath" d=""/>
+            <circle id="closingThreadDot" r="3" cx="-10" cy="-10"/>
+          </svg>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <p>CorpusKit is open source under the Apache 2.0 licence. Maintained by <a href="https://noice.net.au">Noice</a>. Powered by <a href="https://www.progress.com/agentic-rag">Progress Agentic RAG</a>.</p>
+      </footer>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "gsap": "https://esm.sh/gsap@3.13.0",
+        "gsap/ScrollTrigger": "https://esm.sh/gsap@3.13.0/ScrollTrigger",
+        "gsap/ScrollSmoother": "https://esm.sh/gsap@3.13.0/ScrollSmoother"
+      }
+    }
+  </script>
+  <script type="module">
+    import { gsap } from "gsap";
+    import { ScrollTrigger } from "gsap/ScrollTrigger";
+    import { ScrollSmoother } from "gsap/ScrollSmoother";
+    window.gsap = gsap;
+    window.ScrollTrigger = ScrollTrigger;
+    window.ScrollSmoother = ScrollSmoother;
+  </script>
+  <script type="module">
+    const { gsap, ScrollTrigger, ScrollSmoother } = window;
+    (function () {
+      const tabs = Array.from(document.querySelectorAll('.view-tab, .mobile-view-tab'));
+      const viewNames = ['ask', 'search', 'library', 'map', 'manage'];
+      const views = Array.from(document.querySelectorAll('.portal-view'));
+      const citations = Array.from(document.querySelectorAll('.citation'));
+      const passage = document.getElementById('passage');
+      const passageContent = {
+        1: {
+          title: 'Estuarine seagrass condition assessment 2019 to 2023',
+          copy: '“Seagrass extent recovered more slowly in estuaries where <mark>winter turbidity remained above the long-term median</mark> during the two years after the floods.”'
+        },
+        2: {
+          title: 'Turbidity and light limitation in flood-affected estuaries',
+          copy: '“At these sites, <mark>light at the canopy fell below the minimum requirement for Zostera muelleri</mark> on 63 per cent of monitored days.”'
+        }
+      };
+      let viewTransition = null;
+
+      function showView(name, animate) {
+        if (viewTransition) {
+          const pending = viewTransition;
+          viewTransition = null;
+          pending.progress(1);
+          pending.kill();
+        }
+
+        tabs.forEach(function (tab) {
+          const selected = tab.dataset.view === name;
+          tab.classList.toggle('active', selected);
+          tab.setAttribute('aria-selected', String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+        });
+
+        const portalMain = document.querySelector('.portal-main');
+        if (portalMain) portalMain.scrollTop = 0;
+
+        const nextView = document.getElementById('view-' + name);
+        const activeView = document.querySelector('.portal-view.active');
+        if (!nextView || nextView === activeView) return;
+
+        const shouldAnimate = animate !== false && window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!shouldAnimate) {
+          views.forEach(function (view) {
+            const selected = view === nextView;
+            view.classList.toggle('active', selected);
+            view.classList.remove('is-transitioning');
+            view.hidden = !selected;
+          });
+          return;
+        }
+
+        views.forEach(function (view) {
+          if (view !== activeView && view !== nextView) {
+            view.classList.remove('active', 'is-transitioning');
+            view.hidden = true;
+            gsap.set(view, { clearProps: 'opacity,transform' });
+          }
+        });
+
+        nextView.hidden = false;
+        nextView.classList.add('is-transitioning');
+        gsap.set(nextView, { opacity: 0, y: 18 });
+
+        viewTransition = gsap.timeline({
+          onComplete: function () {
+            views.forEach(function (view) {
+              const selected = view === nextView;
+              view.classList.toggle('active', selected);
+              view.classList.remove('is-transitioning');
+              view.hidden = !selected;
+              gsap.set(view, { clearProps: 'opacity,transform' });
+            });
+            viewTransition = null;
+          }
+        });
+
+        if (activeView) {
+          viewTransition.to(activeView, { opacity: 0, y: -10, duration: .34, ease: 'power2.inOut' }, 0);
+        }
+        viewTransition.to(nextView, { opacity: 1, y: 0, duration: .52, ease: 'power3.out' }, activeView ? .12 : 0);
+      }
+
+      window.__showPortalView = showView;
+
+      tabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          const stepIndex = viewNames.indexOf(tab.dataset.view);
+          if (window.__setPortalStep) window.__setPortalStep(stepIndex);
+          else showView(tab.dataset.view);
+        });
+        tab.addEventListener('keydown', function (event) {
+          if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+          event.preventDefault();
+          const groupTabs = Array.from(tab.closest('[role="tablist"]').querySelectorAll('[data-view]'));
+          const index = groupTabs.indexOf(tab);
+          const direction = event.key === 'ArrowRight' ? 1 : -1;
+          const nextIndex = (index + direction + groupTabs.length) % groupTabs.length;
+          const next = groupTabs[nextIndex];
+          const stepIndex = viewNames.indexOf(next.dataset.view);
+          if (window.__setPortalStep) window.__setPortalStep(stepIndex);
+          else showView(next.dataset.view);
+          next.focus();
+        });
+      });
+
+      citations.forEach(function (citation) {
+        citation.addEventListener('click', function () {
+          const item = passageContent[citation.dataset.citation];
+          citations.forEach(function (button) { button.setAttribute('aria-expanded', String(button === citation)); });
+          passage.querySelector('.passage-title').textContent = item.title;
+          passage.querySelector('.passage-copy').innerHTML = item.copy;
+          if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            gsap.fromTo(passage, { x: 14, opacity: .65 }, { x: 0, opacity: 1, duration: .38, ease: 'power2.out' });
+          }
+        });
+      });
+
+      if (window.gsap && window.ScrollTrigger && window.ScrollSmoother && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        gsap.registerPlugin(ScrollTrigger, ScrollSmoother);
+        var smootherMedia = gsap.matchMedia();
+        smootherMedia.add('(min-width: 1024px)', function () {
+          var smoother = ScrollSmoother.create({ wrapper: '#smooth-wrapper', content: '#smooth-content', smooth: 1.05, effects: false, normalizeScroll: true });
+          return function () { smoother.kill(); };
+        });
+
+        gsap.fromTo('.passage-drawer',
+          { clipPath: 'inset(0 100% 0 0)' },
+          { clipPath: 'inset(0 0% 0 0)', duration: .85, ease: 'power3.inOut', scrollTrigger: { trigger: '.portal-frame', start: 'top 64%', once: true } }
+        );
+      }
+
+      if (window.gsap && window.ScrollTrigger) {
+        gsap.registerPlugin(ScrollTrigger);
+        const header = document.querySelector('.site-header');
+
+        function setHeaderTheme(theme) {
+          header.classList.toggle('nav-dark', theme === 'dark');
+          header.classList.toggle('nav-blue', theme === 'blue');
+        }
+
+        [
+          { trigger: '#workings', theme: 'dark', previous: 'paper' },
+          { trigger: '#evidence-anatomy', theme: 'paper', previous: 'dark' },
+          { trigger: '#run', theme: 'blue', previous: 'paper' },
+          { trigger: '#contribute', theme: 'paper', previous: 'blue' }
+        ].forEach(function (item) {
+          ScrollTrigger.create({
+            trigger: item.trigger,
+            start: 'top 76px',
+            onEnter: function () { setHeaderTheme(item.theme); },
+            onEnterBack: function () { setHeaderTheme(item.theme); },
+            onLeaveBack: function () { setHeaderTheme(item.previous); }
+          });
+        });
+      }
+    }());
+  </script>
+  <script type="module">
+    const { gsap, ScrollTrigger } = window;
+    (function () {
+      var hero = document.querySelector('.hero');
+      var highlight = document.getElementById('heroHighlight');
+      var cite = document.getElementById('heroCite');
+      var description = document.getElementById('heroDescription');
+      var svg = document.getElementById('heroThread');
+      var path = document.getElementById('heroThreadPath');
+      var dot = document.getElementById('heroThreadDot');
+      if (!hero || !highlight || !cite || !description || !svg || !path || !dot) return;
+
+      var lineLength = 0;
+      var hasDrawn = false;
+      var resizeFrame = 0;
+
+      function layoutThread() {
+        if (window.getComputedStyle(svg).display === 'none') return;
+
+        var bounds = svg.getBoundingClientRect();
+        var citationBounds = cite.getBoundingClientRect();
+        var descriptionBounds = description.getBoundingClientRect();
+        var descriptionStyle = window.getComputedStyle(description);
+        var lineHeight = parseFloat(descriptionStyle.lineHeight) || 26;
+        var x1 = citationBounds.right - bounds.left + 8;
+        var y1 = (citationBounds.top + citationBounds.bottom) / 2 - bounds.top;
+        var x2 = descriptionBounds.left - bounds.left - 13;
+        var y2 = descriptionBounds.top - bounds.top + lineHeight * .55;
+        var stacked = descriptionBounds.top > citationBounds.bottom + lineHeight;
+        var isTablet = window.matchMedia('(min-width: 681px) and (max-width: 980px)').matches;
+
+        svg.setAttribute('viewBox', '0 0 ' + bounds.width + ' ' + bounds.height);
+        if (stacked && isTablet) {
+          x2 = descriptionBounds.right - bounds.left - 8;
+          y2 = descriptionBounds.top - bounds.top - 10;
+          var tabletDrop = Math.max(90, y2 - y1);
+          var tabletOuterX = Math.min(bounds.width - 2, x1 + Math.min(48, bounds.width * .05));
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+            ' C ' + tabletOuterX + ' ' + (y1 + tabletDrop * .18) + ', ' +
+            tabletOuterX + ' ' + (y2 - tabletDrop * .18) + ', ' + x2 + ' ' + y2);
+        } else if (stacked) {
+          x2 = descriptionBounds.right - bounds.left - 32;
+          y2 = descriptionBounds.top - bounds.top - 10;
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 + ' Q ' + x2 + ' ' + y1 + ', ' + x2 + ' ' + y2);
+        } else {
+          var distance = Math.max(60, x2 - x1);
+          var bend = Math.min(110, distance * .5);
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C ' + (x1 + bend) + ' ' + y1 + ', ' + (x2 - bend) + ' ' + y2 + ', ' + x2 + ' ' + y2);
+        }
+        dot.setAttribute('cx', x2);
+        dot.setAttribute('cy', y2);
+
+        lineLength = path.getTotalLength();
+        path.style.strokeDasharray = lineLength;
+        path.style.strokeDashoffset = hasDrawn ? 0 : lineLength;
+      }
+
+      function drawThread() {
+        layoutThread();
+        var canDrawThread = lineLength > 0;
+
+        if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          hasDrawn = true;
+          highlight.style.backgroundSize = '100% 100%';
+          cite.style.backgroundColor = '#155da6';
+          cite.style.borderColor = '#155da6';
+          cite.style.color = '#f8f6f0';
+          if (canDrawThread) {
+            path.style.strokeDashoffset = 0;
+            dot.style.opacity = 1;
+          }
+          return;
+        }
+
+        gsap.set(highlight, { backgroundSize: '0% 100%' });
+        gsap.set(dot, { opacity: 0 });
+        var timeline = gsap.timeline({ delay: .3, onComplete: function () { hasDrawn = true; } })
+          .to(highlight, { backgroundSize: '100% 100%', duration: .36, ease: 'none' })
+          .to({}, { duration: .16 })
+          .to(cite, { backgroundColor: '#155da6', borderColor: '#155da6', color: '#f8f6f0', duration: .22, ease: 'power2.out' });
+
+        if (canDrawThread) {
+          timeline
+            .to(path, { strokeDashoffset: 0, duration: .95, ease: 'power2.inOut' })
+            .to(dot, { opacity: 1, duration: .15, ease: 'none' });
+        }
+      }
+
+      function requestLayout() {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = window.requestAnimationFrame(layoutThread);
+      }
+
+      window.addEventListener('resize', requestLayout);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawThread);
+      else window.addEventListener('load', drawThread, { once: true });
+    })();
+  </script>
+  <script type="module">
+    const { gsap, ScrollTrigger } = window;
+    (function () {
+      var closing = document.getElementById('contribute');
+      var highlight = document.getElementById('closingHighlight');
+      var cite = document.getElementById('closingCite');
+      var cards = document.querySelector('.next-steps');
+      var svg = document.getElementById('closingThread');
+      var path = document.getElementById('closingThreadPath');
+      var dot = document.getElementById('closingThreadDot');
+      if (!closing || !highlight || !cite || !cards || !svg || !path || !dot) return;
+
+      var lineLength = 0;
+      var hasDrawn = false;
+      var hasPlayed = false;
+      var resizeFrame = 0;
+
+      function layoutThread() {
+        if (window.getComputedStyle(svg).display === 'none') return;
+
+        var bounds = svg.getBoundingClientRect();
+        var citationBounds = cite.getBoundingClientRect();
+        var cardsBounds = cards.getBoundingClientRect();
+        var isMobile = window.matchMedia('(max-width: 680px)').matches;
+        var isTablet = window.matchMedia('(min-width: 681px) and (max-width: 980px)').matches;
+        var x1 = citationBounds.right - bounds.left + 8;
+        var y1 = (citationBounds.top + citationBounds.bottom) / 2 - bounds.top;
+        var x2 = cardsBounds.left - bounds.left + cardsBounds.width * (5 / 6);
+        var y2 = cardsBounds.top - bounds.top - 10;
+        var rise = Math.max(70, y2 - y1);
+
+        svg.setAttribute('viewBox', '0 0 ' + bounds.width + ' ' + bounds.height);
+        if (isMobile) {
+          x1 = Math.min(bounds.width - 4, x1);
+          x2 = (cardsBounds.left + cardsBounds.right) / 2 - bounds.left;
+          var outerX = Math.min(bounds.width - 2, x1 + 18);
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+            ' C ' + outerX + ' ' + (y1 + rise * .12) + ', ' + outerX + ' ' + (y1 + rise * .42) + ', ' + (x1 - 4) + ' ' + (y1 + rise * .5) +
+            ' S ' + (x2 + 46) + ' ' + (y1 + rise * .6) + ', ' + (x2 + 28) + ' ' + (y1 + rise * .66) +
+            ' S ' + x2 + ' ' + (y2 - rise * .12) + ', ' + x2 + ' ' + y2);
+        } else if (isTablet) {
+          var tabletOuterX = Math.min(bounds.width - 2, Math.max(x1, x2) + Math.min(120, bounds.width * .08));
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+            ' C ' + tabletOuterX + ' ' + (y1 + rise * .18) + ', ' +
+            tabletOuterX + ' ' + (y2 - rise * .18) + ', ' + x2 + ' ' + y2);
+        } else {
+          path.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + (y1 + rise * .4) + ', ' + x2 + ' ' + (y2 - rise * .4) + ', ' + x2 + ' ' + y2);
+        }
+        dot.setAttribute('cx', x2);
+        dot.setAttribute('cy', y2);
+
+        lineLength = path.getTotalLength();
+        path.style.strokeDasharray = lineLength;
+        path.style.strokeDashoffset = hasDrawn ? 0 : lineLength;
+      }
+
+      function showFinalState() {
+        hasDrawn = true;
+        highlight.style.backgroundSize = '100% 100%';
+        cite.style.backgroundColor = '#155da6';
+        cite.style.borderColor = '#155da6';
+        cite.style.color = '#f8f6f0';
+        if (lineLength) {
+          path.style.strokeDashoffset = 0;
+          dot.style.opacity = 1;
+        }
+      }
+
+      function play() {
+        if (hasPlayed) return;
+        hasPlayed = true;
+        layoutThread();
+        var canDrawThread = lineLength > 0;
+
+        if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          showFinalState();
+          return;
+        }
+
+        var timeline = gsap.timeline({ onComplete: function () { hasDrawn = true; } })
+          .to(highlight, { backgroundSize: '100% 100%', duration: .36, ease: 'none' })
+          .to({}, { duration: .16 })
+          .to(cite, { backgroundColor: '#155da6', borderColor: '#155da6', color: '#f8f6f0', duration: .22, ease: 'power2.out' });
+
+        if (canDrawThread) {
+          timeline
+            .to(path, { strokeDashoffset: 0, duration: .95, ease: 'power2.inOut' })
+            .to(dot, { opacity: 1, duration: .15, ease: 'none' });
+        }
+      }
+
+      function prepare() {
+        layoutThread();
+
+        if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          showFinalState();
+          return;
+        }
+
+        gsap.set(highlight, { backgroundSize: '0% 100%' });
+        gsap.set(dot, { opacity: 0 });
+
+        if (window.ScrollTrigger) {
+          gsap.registerPlugin(ScrollTrigger);
+          ScrollTrigger.create({
+            trigger: closing,
+            start: 'top 62%',
+            once: true,
+            onEnter: play,
+            onRefresh: layoutThread
+          });
+        } else if ('IntersectionObserver' in window) {
+          var observer = new IntersectionObserver(function (entries) {
+            if (!entries[0].isIntersecting) return;
+            observer.disconnect();
+            play();
+          }, { threshold: .15 });
+          observer.observe(closing);
+        } else {
+          play();
+        }
+      }
+
+      function requestLayout() {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = window.requestAnimationFrame(layoutThread);
+      }
+
+      window.addEventListener('resize', requestLayout);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(prepare);
+      else window.addEventListener('load', prepare, { once: true });
+    })();
+  </script>
+  <script type="module">
+    const { gsap, ScrollTrigger } = window;
+    /* signature sequence ported from candidate C - desktop, pinned, scrubbed.
+       The page is complete without it. */
+    (function () {
+      if (!window.gsap || !window.ScrollTrigger) return;
+      gsap.registerPlugin(ScrollTrigger);
+      var mm = gsap.matchMedia();
+      mm.add('(min-width: 1024px)', function () {
+        var cite   = document.getElementById('psigCite');
+        var source = document.getElementById('psigSource');
+        var conf   = document.getElementById('psigConf');
+        var chip   = document.getElementById('psigChip');
+        var svg    = document.getElementById('psigThread');
+        var path   = document.getElementById('psigThreadPath');
+        var dot    = document.getElementById('psigThreadDot');
+        var marks  = gsap.utils.toArray('#psigSource .psig-hl');
+        var bars   = gsap.utils.toArray('#psigConf .psig-fill');
+        var steps  = gsap.utils.toArray('#psigSteps li');
+        if (!cite || !source || !conf || !path) return;
+
+        var threadLen = 0;
+        var draw = { p: 0 };
+
+        function layoutThread() {
+          var g = svg.getBoundingClientRect();
+          var c = cite.getBoundingClientRect();
+          var sr = source.getBoundingClientRect();
+          var x1 = c.right - g.left + 7;
+          var y1 = (c.top + c.bottom) / 2 - g.top;
+          var isLaptop = window.matchMedia('(min-width: 1024px) and (max-height: 1200px)').matches;
+          var x2;
+          var y2;
+          if (isLaptop) {
+            x2 = sr.left - g.left + sr.width * .5;
+            y2 = sr.top - g.top - 8;
+            var drop = Math.max(50, y2 - y1);
+            var distance = x2 - x1;
+            path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+              ' C ' + (x1 + distance * .38) + ' ' + y1 + ', ' +
+              (x1 + distance * .78) + ' ' + (y1 + drop * .35) + ', ' + x2 + ' ' + y2);
+          } else {
+            x2 = sr.left - g.left + sr.width * .72;
+            y2 = sr.top - g.top - 8;
+            var desktopDrop = Math.max(60, y2 - y1);
+            var desktopDistance = x2 - x1;
+            path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+              ' C ' + (x1 + desktopDistance * .3) + ' ' + y1 + ', ' +
+              (x1 + desktopDistance * .72) + ' ' + (y1 + desktopDrop * .42) + ', ' + x2 + ' ' + y2);
+          }
+          dot.setAttribute('cx', x2);
+          dot.setAttribute('cy', y2);
+          threadLen = path.getTotalLength();
+          path.style.strokeDasharray = threadLen;
+          path.style.strokeDashoffset = threadLen * (1 - draw.p);
+        }
+        layoutThread();
+
+        gsap.set(source, { opacity: 0.45, y: 14 });
+        gsap.set(conf,   { opacity: 0, y: 18 });
+        gsap.set(bars,   { scaleX: 0, transformOrigin: '0 50%' });
+        gsap.set(marks,  { backgroundSize: '0% 100%' });
+        gsap.set(chip,   { opacity: 0 });
+        gsap.set(dot,    { opacity: 0 });
+
+        var tl = gsap.timeline({
+          scrollTrigger: {
+            trigger: '#evidence-anatomy',
+            start: 'top 76',
+            end: '+=2400',
+            scrub: 0.4,
+            pin: '.psig-stage',
+            anticipatePin: 1,
+            onRefresh: layoutThread,
+            onUpdate: function (self) {
+              var pr = self.progress;
+              var idx = pr < 0.18 ? 0 : pr < 0.44 ? 1 : pr < 0.68 ? 2 : 3;
+              steps.forEach(function (li, i) { li.classList.toggle('is-active', i === idx); });
+            }
+          }
+        });
+
+        tl.to({}, { duration: 0.5 })
+          .addLabel('s2')
+          .to(cite, { backgroundColor: '#155da6', color: '#f8f6f0', duration: 0.18 }, 's2')
+          .to(draw, {
+            p: 1, duration: 0.8, ease: 'none',
+            onUpdate: function () { path.style.strokeDashoffset = threadLen * (1 - draw.p); }
+          }, 's2')
+          .to(source, { opacity: 1, y: 0, duration: 0.6 }, 's2+=0.15')
+          .to(dot, { opacity: 1, duration: 0.12 }, 's2+=0.72')
+          .addLabel('s3', '+=0.25')
+          .to(marks, { backgroundSize: '100% 100%', duration: 0.85, stagger: 0.3, ease: 'none' }, 's3')
+          .to(chip, { opacity: 1, duration: 0.3 }, 's3+=0.7')
+          .addLabel('s4', '+=0.25')
+          .to(conf, { opacity: 1, y: 0, duration: 0.5 }, 's4')
+          .to(bars, { scaleX: 1, duration: 0.65, stagger: 0.12 }, 's4+=0.12')
+          .to({}, { duration: 0.45 });
+
+        return function () {
+          steps.forEach(function (li) { li.classList.remove('is-active'); });
+          path.style.strokeDasharray = '';
+          path.style.strokeDashoffset = '';
+        };
+      });
+
+      mm.add('(max-width: 1023px)', function () {
+        var cite = document.getElementById('psigCite');
+        var source = document.getElementById('psigSource');
+        var svg = document.getElementById('psigThread');
+        var path = document.getElementById('psigThreadPath');
+        var dot = document.getElementById('psigThreadDot');
+        if (!cite || !source || !svg || !path || !dot) return;
+
+        var threadLen = 0;
+        var hasDrawn = false;
+
+        function layoutMobileThread() {
+          var bounds = svg.getBoundingClientRect();
+          var citationBounds = cite.getBoundingClientRect();
+          var sourceBounds = source.getBoundingClientRect();
+          var x1 = Math.min(bounds.width - 4, citationBounds.right - bounds.left + 7);
+          var y1 = (citationBounds.top + citationBounds.bottom) / 2 - bounds.top;
+          var isTablet = window.matchMedia('(min-width: 681px) and (max-width: 980px)').matches;
+          var x2 = sourceBounds.left - bounds.left + sourceBounds.width * (isTablet ? .5 : .72);
+          var y2 = sourceBounds.top - bounds.top - 10;
+          var drop = Math.max(48, y2 - y1);
+          var outerX = Math.min(bounds.width - 2, x1 + 18);
+
+          svg.setAttribute('viewBox', '0 0 ' + bounds.width + ' ' + bounds.height);
+          if (isTablet) {
+            var distance = x2 - x1;
+            path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+              ' C ' + (x1 + distance * .42) + ' ' + y1 + ', ' +
+              (x1 + distance * .86) + ' ' + (y1 + drop * .12) + ', ' + x2 + ' ' + y2);
+          } else {
+            path.setAttribute('d', 'M' + x1 + ' ' + y1 +
+              ' C ' + outerX + ' ' + (y1 + drop * .2) + ', ' + (x2 + 44) + ' ' + (y2 - drop * .24) + ', ' + x2 + ' ' + y2);
+          }
+          dot.setAttribute('cx', x2);
+          dot.setAttribute('cy', y2);
+          threadLen = path.getTotalLength();
+          path.style.strokeDasharray = threadLen;
+          path.style.strokeDashoffset = hasDrawn ? 0 : threadLen;
+        }
+
+        function showMobileThread() {
+          hasDrawn = true;
+          cite.style.backgroundColor = '#155da6';
+          cite.style.borderColor = '#155da6';
+          cite.style.color = '#f8f6f0';
+          path.style.strokeDashoffset = 0;
+          dot.style.opacity = 1;
+        }
+
+        layoutMobileThread();
+        if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutMobileThread);
+
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          showMobileThread();
+          return;
+        }
+
+        gsap.set(dot, { opacity: 0 });
+        var timeline = gsap.timeline({ paused: true, onComplete: function () { hasDrawn = true; } })
+          .to(cite, { backgroundColor: '#155da6', borderColor: '#155da6', color: '#f8f6f0', duration: .2, ease: 'power2.out' })
+          .to(path, { strokeDashoffset: 0, duration: .8, ease: 'power2.inOut' })
+          .to(dot, { opacity: 1, duration: .12, ease: 'none' });
+
+        var trigger = ScrollTrigger.create({
+          trigger: cite,
+          start: 'top 78%',
+          once: true,
+          onEnter: function () { timeline.play(); },
+          onRefresh: layoutMobileThread
+        });
+
+        function requestLayout() { window.requestAnimationFrame(layoutMobileThread); }
+        window.addEventListener('resize', requestLayout);
+
+        return function () {
+          trigger.kill();
+          timeline.kill();
+          window.removeEventListener('resize', requestLayout);
+          path.style.strokeDasharray = '';
+          path.style.strokeDashoffset = '';
+        };
+      });
+
+      var steps = [
+        { view: 'ask', label: 'Ask', text: 'Enter a question in Ask. CorpusKit searches the collection and returns an answer with citations, sources and a confidence rating. Deep research is available when a broad question needs to be broken into smaller ones.' },
+        { view: 'search', label: 'Search', text: 'Search for words, topics or document kinds. Each result includes the passage that matched the search. CorpusKit also provides a short cited answer above the results.' },
+        { view: 'library', label: 'Library', text: 'Browse every resource in the collection. Open one to read it, review its summary or ask a question about that document alone.' },
+        { view: 'map', label: 'Map', text: 'See which entities, relationships and topics appear across the collection. Open a connection to inspect the resources behind it.' },
+        { view: 'manage', label: 'Manage', text: 'Add resources, schedule website updates and check the health of the collection. Drafts stay out of public results until they are published.' }
+      ];
+      var current = 0;
+      var labelEl = document.getElementById('waysCaptionLabel');
+      var textEl = document.getElementById('waysCaptionText');
+      var captionEl = textEl.closest('.ways-caption');
+      var captionTransition = null;
+
+      function reserveCaptionHeight() {
+        if (window.matchMedia('(min-width: 1900px) and (min-height: 1201px)').matches) {
+          captionEl.style.minHeight = '';
+          return;
+        }
+        var originalLabel = labelEl.textContent;
+        var originalText = textEl.textContent;
+        captionEl.style.minHeight = '0';
+        var tallest = 0;
+        steps.forEach(function (step) {
+          labelEl.textContent = step.label;
+          textEl.textContent = step.text;
+          tallest = Math.max(tallest, captionEl.getBoundingClientRect().height);
+        });
+        labelEl.textContent = originalLabel;
+        textEl.textContent = originalText;
+        captionEl.style.minHeight = Math.ceil(tallest) + 'px';
+      }
+
+      reserveCaptionHeight();
+      window.addEventListener('resize', reserveCaptionHeight);
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () {
+          reserveCaptionHeight();
+          if (window.ScrollTrigger) ScrollTrigger.refresh();
+        });
+      }
+
+      function setStep(i) {
+        if (i === current) return;
+        current = i;
+
+        var shouldAnimate = window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (window.__showPortalView) window.__showPortalView(steps[i].view, shouldAnimate);
+
+        if (!shouldAnimate) {
+          labelEl.textContent = steps[i].label;
+          textEl.textContent = steps[i].text;
+          return;
+        }
+
+        if (captionTransition) {
+          var pending = captionTransition;
+          captionTransition = null;
+          pending.progress(1);
+          pending.kill();
+        }
+
+        captionTransition = gsap.timeline({
+          onComplete: function () { captionTransition = null; }
+        });
+        captionTransition
+          .to([labelEl, textEl], { opacity: 0, y: -8, duration: .24, stagger: .025, ease: 'power2.in' })
+          .add(function () {
+            labelEl.textContent = steps[i].label;
+            textEl.textContent = steps[i].text;
+          })
+          .set([labelEl, textEl], { y: 10 })
+          .to([labelEl, textEl], { opacity: 1, y: 0, duration: .5, stagger: .04, ease: 'power3.out' });
+      }
+      window.__setPortalStep = setStep;
+      var mm = gsap.matchMedia();
+      mm.add('(min-width: 1024px)', function () {
+        var st = ScrollTrigger.create({
+          trigger: '.workings',
+          start: 'top 76',
+          end: '+=325%',
+          pin: true,
+          scrub: true,
+          onUpdate: function (self) {
+            setStep(Math.min(4, Math.floor(self.progress * 5)));
+          }
+        });
+        return function () { st.kill(); };
+      });
+    })();
+  </script>
+  <script type="module">
+    const { gsap, ScrollTrigger } = window;
+    (function () {
+      var lines = Array.from(document.querySelectorAll('.terminal-line'));
+      if (!lines.length) return;
+
+      var content = lines.map(function (line) {
+        var command = line.querySelector('.typed-command');
+        var comment = line.querySelector('.typed-comment');
+        return {
+          line: line,
+          command: command,
+          commandText: command.textContent,
+          comment: comment,
+          commentText: comment ? comment.textContent : ''
+        };
+      });
+
+      function showAll() {
+        content.forEach(function (item) {
+          item.command.textContent = item.commandText;
+          if (item.comment) item.comment.textContent = item.commentText;
+          item.line.classList.remove('is-active');
+          item.line.classList.add('is-complete');
+        });
+      }
+
+      if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        showAll();
+        return;
+      }
+
+      content.forEach(function (item) {
+        item.command.textContent = '';
+        if (item.comment) item.comment.textContent = '';
+      });
+
+      var timeline = gsap.timeline({ paused: true });
+
+      function typeInto(element, text, speed) {
+        var state = { characters: 0 };
+        timeline.to(state, {
+          characters: text.length,
+          duration: Math.max(.12, text.length * speed),
+          ease: 'none',
+          onUpdate: function () {
+            element.textContent = text.slice(0, Math.round(state.characters));
+          },
+          onComplete: function () { element.textContent = text; }
+        });
+      }
+
+      content.forEach(function (item, index) {
+        timeline.call(function () { item.line.classList.add('is-active'); });
+        typeInto(item.command, item.commandText, .021);
+        if (item.comment) typeInto(item.comment, item.commentText, .015);
+        timeline.to({}, { duration: index === 0 ? .38 : .24 });
+        timeline.call(function () {
+          item.line.classList.remove('is-active');
+          item.line.classList.add('is-complete');
+        });
+      });
+      timeline.call(function () { content[content.length - 1].line.classList.add('is-active'); });
+
+      function play() {
+        if (!timeline.progress()) timeline.play();
+      }
+
+      if (window.ScrollTrigger) {
+        gsap.registerPlugin(ScrollTrigger);
+        ScrollTrigger.create({ trigger: '.code-card', start: 'top 78%', once: true, onEnter: play });
+      } else if ('IntersectionObserver' in window) {
+        var observer = new IntersectionObserver(function (entries) {
+          if (!entries[0].isIntersecting) return;
+          observer.disconnect();
+          play();
+        }, { threshold: .2 });
+        observer.observe(document.querySelector('.code-card'));
+      } else {
+        play();
+      }
+    })();
+  </script>
+  <script type="module">
+    const { ScrollSmoother, ScrollTrigger } = window;
+    (function () {
+      var links = Array.from(document.querySelectorAll('.site-header a[href^="#"], .hero .text-link[href^="#"]'));
+      if (!links.length) return;
+
+      function scrollToHash(hash, smooth, updateHistory) {
+        var target = document.querySelector(hash);
+        if (!target) return;
+
+        var smoother = window.ScrollSmoother && ScrollSmoother.get();
+        var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        if (smoother && window.ScrollTrigger) {
+          ScrollTrigger.refresh();
+          var destination = 0;
+
+          if (hash !== '#top') {
+            var targetTriggers = ScrollTrigger.getAll().filter(function (trigger) {
+              return trigger.trigger === target;
+            });
+            var pinTrigger = targetTriggers.find(function (trigger) { return Boolean(trigger.pin); });
+            var sectionTrigger = pinTrigger || targetTriggers[0];
+            destination = sectionTrigger ? sectionTrigger.start + 1 : smoother.offset(target, 'top 76px');
+          }
+
+          smoother.scrollTo(destination, smooth && !reduceMotion);
+        } else {
+          var header = document.querySelector('.site-header');
+          var headerIsFixed = header && ['fixed', 'sticky'].includes(window.getComputedStyle(header).position);
+          var headerOffset = hash === '#top' || !headerIsFixed ? 0 : header.getBoundingClientRect().height;
+          var destination = window.scrollY + target.getBoundingClientRect().top - headerOffset;
+          window.scrollTo({ top: destination, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+        }
+
+        if (updateHistory && window.history && history.pushState) {
+          if (window.location.hash === hash) history.replaceState(null, '', hash);
+          else history.pushState(null, '', hash);
+        }
+      }
+
+      links.forEach(function (link) {
+        link.addEventListener('click', function (event) {
+          var hash = link.getAttribute('href');
+          if (!hash || hash === '#') return;
+          event.preventDefault();
+          scrollToHash(hash, true, true);
+        });
+      });
+
+      window.addEventListener('load', function () {
+        var hash = window.location.hash;
+        if (!links.some(function (link) { return link.getAttribute('href') === hash; })) return;
+        requestAnimationFrame(function () { scrollToHash(hash, false, false); });
+      });
+
+      window.addEventListener('popstate', function () {
+        var hash = window.location.hash || '#top';
+        if (!links.some(function (link) { return link.getAttribute('href') === hash; })) return;
+        scrollToHash(hash, false, false);
+      });
+    })();
+  </script>
+</body>
+</html>

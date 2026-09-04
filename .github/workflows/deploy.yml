@@ -1,0 +1,149 @@
+name: Gate and deploy CorpusKit
+
+# Production follows the KSP pattern: repository changes pass the complete gate,
+# then a pinned Wrangler deploy publishes the Worker and static assets. Runtime
+# ARAG and Entra secrets remain attached to the Cloudflare Worker and are never
+# copied through GitHub Actions.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-corpuskit-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Typecheck, lint, format, tests, build
+    runs-on: ubuntu-latest
+    outputs:
+      deployable: ${{ steps.creds.outputs.deployable }}
+    steps:
+      - name: Check Cloudflare deployment credentials
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deployable=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install build tooling
+        env:
+          ESBUILD_VERSION: 0.28.2
+          TAILWINDCSS_VERSION: 4.3.3
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWINDCSS_VERSION}/tailwindcss-linux-x64" \
+            -o /usr/local/bin/tailwindcss
+          chmod +x /usr/local/bin/tailwindcss
+          { curl -fsSL --retry 3 --retry-all-errors \
+              "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+              -o /tmp/esbuild.tgz \
+            && tar -xzf /tmp/esbuild.tgz -C /tmp \
+            && sudo mv /tmp/package/bin/esbuild /usr/local/bin/esbuild ; } \
+          || curl -fsSL --retry 3 --retry-all-errors \
+              "https://unpkg.com/@esbuild/linux-x64@${ESBUILD_VERSION}/bin/esbuild" \
+              -o /usr/local/bin/esbuild
+          sudo chmod +x /usr/local/bin/esbuild
+
+      - name: Build production package
+        run: deno task build:cloudflare
+
+      - name: Gate
+        run: deno task check
+
+      - name: Validate Wrangler package
+        run: npx -y wrangler@4.127.1 deploy --config wrangler.jsonc --dry-run
+
+      - name: Cache Chromium (astral/e2e)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/astral
+          key: astral-chromium-${{ runner.os }}-${{ hashFiles('deno.json') }}
+
+      - name: Browser E2E persona journeys
+        env:
+          # GitHub-hosted runners do not expose Chromium's setuid sandbox.
+          # Astral appends this to the browser process it launches in CI.
+          ASTRAL_BIN_ARGS: --no-sandbox
+        run: deno task test:e2e
+
+      - name: Preserve deployment package
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpuskit-cloudflare-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 2
+          path: |
+            apps/web/dist
+            dist/cloudflare/worker.js
+
+  deploy:
+    name: Deploy to Cloudflare Workers
+    needs: gate
+    if: needs.gate.outputs.deployable == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: corpuskit-cloudflare-${{ github.sha }}
+
+      - name: Deploy the tested package
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 4.127.1
+          command: deploy --config wrangler.jsonc
+
+      - name: Verify the live Worker
+        if: vars.CORPUSKIT_BASE_URL != ''
+        env:
+          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
+        run: |
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 \
+            "$BASE_URL/api/health" | grep '"ok":true'
+
+      - name: Verify Microsoft sign-in is configured
+        if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
+        env:
+          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
+        run: |
+          curl --fail --silent --show-error --retry 3 \
+            "$BASE_URL/auth/me" | grep '"authenticated":false'
+
+      - name: Verify portal custom domains
+        run: |
+          for target in \
+            "https://marine.corpuskit.org/t/marine" \
+            "https://grains.corpuskit.org/t/grains"; do
+            curl --fail --silent --show-error --retry 8 --retry-delay 5 \
+              --output /dev/null "$target"
+          done
+
+      - uses: denoland/setup-deno@v2
+        if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
+        with:
+          deno-version: v2.x
+
+      - name: Post-deploy persona smoke
+        if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
+        env:
+          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
+          PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'marine' }}
+        run: deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick

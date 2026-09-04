@@ -1,0 +1,37 @@
+name: Live acceptance sweep
+
+on:
+  schedule:
+    # Avoid the top of the hour, when scheduled Actions are most likely to queue.
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      tenant_slugs:
+        description: Space- or comma-separated tenant slugs (optional override)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-acceptance-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Check live public endpoints
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # A repository variable can move the scheduled check to renamed tenants
+      # without changing this workflow. Manual runs can override it per run.
+      ACCEPTANCE_TENANTS: ${{ inputs.tenant_slugs || vars.ACCEPTANCE_TENANTS || 'marine grains' }}
+      ACCEPTANCE_BASE_URL: https://corpuskit.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Sweep live tenants
+        run: deno run --allow-net --allow-env=ACCEPTANCE_TENANTS,ACCEPTANCE_BASE_URL apps/api/scripts/live-acceptance.ts

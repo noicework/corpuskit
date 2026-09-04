@@ -1,0 +1,302 @@
+[
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/controlled-traffic-farming-economics.md",
+    "title": "Controlled Traffic Farming - Ten-Year Economic and Soil Structure Outcomes",
+    "topic": "farm-business",
+    "published": "2017-03-22",
+    "type": "report",
+    "summary": "A ten-year comparison on Mallee clay soil tracked compaction, water infiltration and machinery costs under controlled versus conventional traffic cropping. Controlled traffic cut wheel-track area from around 30% to under 15% of the paddock, improved infiltration, and lowered production costs once machinery was matched to permanent tramlines.",
+    "keyFacts": [
+      "Wheel-track area fell from about 30% to under 15% of the paddock under controlled traffic.",
+      "Water infiltration on permanent traffic lanes improved by roughly 40%.",
+      "Machinery-matching costs paid back within six seasons."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/drought-season-decision-tools.md",
+    "title": "Seasonal Decision Tools for Drought-Affected Cropping Programs",
+    "topic": "climate-environment",
+    "published": "2018-08-30",
+    "type": "briefing",
+    "summary": "Drawing on grower case studies from the 2018-19 eastern states drought, this briefing reviews decision points for managing a developing drought - when to cut losses on a failing crop, the opportunity cost of holding versus selling stored grain, and cash flow modelling under three seasonal outlook scenarios.",
+    "keyFacts": [
+      "Early cut-for-hay decisions preserved more equity than holding failing crops to harvest.",
+      "Below-median rainfall cash flow modelling changed input timing for two-thirds of case studies.",
+      "Case studies were drawn from the 2018-19 eastern states drought."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/farm-business-succession-planning.md",
+    "title": "Farm Business Succession Planning for Grain Growers - A Practical Guide",
+    "topic": "farm-business",
+    "published": "2019-06-18",
+    "type": "review",
+    "summary": "Developed with grain-growing families working through ownership and management transition, this guide covers structuring generational conversations, valuing assets and off-farm equity fairly, and staging a transition so incoming operators build capability before taking on full risk. Case studies show staged transitions reduce family conflict compared with a single handover event.",
+    "keyFacts": [
+      "Only around one in three family farm businesses had a documented succession plan.",
+      "Staged transitions over 5-7 years reduced reported family conflict versus a single handover.",
+      "Off-farm equity for non-farming siblings was the most commonly unresolved issue reviewed."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/herbicide-resistance-ryegrass-survey.md",
+    "title": "Herbicide Resistance in Annual Ryegrass - 2023 National Paddock Survey",
+    "topic": "crop-protection",
+    "published": "2023-04-11",
+    "type": "report",
+    "summary": "A national survey testing 412 ryegrass populations against ten herbicide modes of action found widespread Group 1 and Group 2 resistance and, for the first time, emerging Group 15 pre-emergent resistance in Western Australia. The report sets out a mode-of-action rotation framework to slow further resistance development.",
+    "keyFacts": [
+      "72% of surveyed populations were resistant to at least one Group 1 herbicide.",
+      "Group 15 pre-emergent resistance was confirmed for the first time, at 14 of 96 WA sites.",
+      "Diversifying modes of action across a rotation halved resistance build-up over five years."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/integrated-weed-management-case-studies.md",
+    "title": "Integrated Weed Management in Practice - Grower Case Studies",
+    "topic": "crop-protection",
+    "published": "2021-07-08",
+    "type": "review",
+    "summary": "Four grower case studies compare integrated weed management systems - combining harvest weed seed control, crop competition and strategic double-break rotations - against paddocks relying mainly on herbicides. Growers running a full integrated system reported lower herbicide spend per hectare over three seasons.",
+    "keyFacts": [
+      "Harvest weed seed control removed most ryegrass seed set escaping in-crop herbicides.",
+      "Narrower row spacing and higher seeding rates improved early crop competition against weeds.",
+      "Full integrated systems reported lower herbicide spend per hectare over three seasons."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/on-farm-grain-storage-hygiene.md",
+    "title": "On-Farm Grain Storage Hygiene and Insect Detection - Field Guide",
+    "topic": "harvest-storage",
+    "published": "2022-10-14",
+    "type": "briefing",
+    "summary": "A field guide to pre-harvest cleandown of silos and augers, correct aeration set-up, and early detection of insect activity in stored grain, based on demonstration sites in the Wimmera. Fortnightly probe sampling and a thorough cleandown before filling were the most effective low-cost controls observed.",
+    "keyFacts": [
+      "A thorough silo cleandown before filling removes residual grain carrying over insect infestations.",
+      "Fortnightly probe sampling caught insect activity before it was visible in surface grain.",
+      "Correctly set aeration held stored wheat below 15\u00b0C through summer in the demonstration system."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/paddock-scale-frost-risk-mapping.md",
+    "title": "Paddock-Scale Frost Risk Mapping for Grain Cropping Systems",
+    "topic": "climate-environment",
+    "published": "2020-11-05",
+    "type": "report",
+    "summary": "Using cold-air drainage modelling and ten years of on-farm temperature logging across 40 sites, this project produced paddock-scale frost risk maps for South Australian and Victorian cropping regions. The maps identify low-lying frost traps within paddocks previously treated as uniform, supporting zone-matched sowing dates and variety choice.",
+    "keyFacts": [
+      "Frost risk varied by up to 3\u00b0C within a single paddock due to cold-air drainage.",
+      "Zone-matched sowing windows cut frost-affected screenings by an average of 22%.",
+      "Maps were built from a ten-year, 40-site on-farm temperature logging network."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/split-nitrogen-timing-wheat-protein.md",
+    "title": "Split Nitrogen Timing for Improved Wheat Protein and Nitrogen Use Efficiency",
+    "topic": "soils-nutrition",
+    "published": "2024-02-19",
+    "type": "report",
+    "summary": "Trials across seven sites and three soil types found splitting nitrogen between stem elongation and flag leaf lifted grain protein without a yield penalty and improved nitrogen use efficiency, particularly on leaching-prone sandy loams. The protein benefit narrowed in wet grain-fill finishes due to dilution.",
+    "keyFacts": [
+      "Split nitrogen timing lifted average grain protein by 0.6 percentage points with no yield loss.",
+      "Nitrogen use efficiency improved by up to 15% under split timing on sandy loam soils.",
+      "The protein benefit fell to 0.2 percentage points in the one season with a wet finish."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/stripe-rust-pathotype-surveillance.md",
+    "title": "Stripe Rust Pathotype Surveillance Network - Establishment and Season One Findings",
+    "topic": "crop-protection",
+    "published": "1998-05-15",
+    "type": "briefing",
+    "summary": "This briefing documents the first season of a national stripe rust surveillance network set up after a new pathotype was found to overcome resistance genes Yr17 and Yr27. The pathotype spread to 23 of 25 trap nursery sites within four months, with results distributed to growers within a fortnight of confirmation.",
+    "keyFacts": [
+      "The new pathotype reached 23 of 25 trap nursery sites within four months of first detection.",
+      "No commercially available variety tested carried complete resistance to the new pathotype.",
+      "Pathotype confirmation to grower notification averaged a six-day turnaround."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "grains",
+    "file": "content/seed/grains/subsoil-acidity-strategic-liming.md",
+    "title": "Managing Subsoil Acidity with Strategic Lime Applications",
+    "topic": "soils-nutrition",
+    "published": "2021-09-02",
+    "type": "report",
+    "summary": "A nine-site trial found deep-banded lime lifted subsoil pH within three seasons, versus a decade or more for surface application alone, restoring root access to subsoil moisture and a yield advantage in dry finishes. Deep liming returned 2.3:1 over a seven-year sequence.",
+    "keyFacts": [
+      "Subsoil acidity below pH 4.8 cut wheat yield by an average of 18% on affected sites.",
+      "Deep-banded lime lifted subsoil pH from 4.4 to 5.1 at 20-30cm within three seasons.",
+      "Deep liming returned 2.3:1 on investment over a seven-year cropping sequence."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/blacklip-abalone-stock-status-southern-zone.md",
+    "title": "Blacklip Abalone Stock Status Assessment - Southern Zone",
+    "topic": "stock-assessment",
+    "published": "2022-03-14",
+    "type": "report",
+    "summary": "A fishery-independent survey and catch-curve analysis of blacklip abalone across the southern zone updates biomass estimates following localised recruitment failure linked to a marine heatwave. The report recommends a precautionary reduction in total allowable catch for two sub-blocks pending recovery signs in juvenile surveys.",
+    "keyFacts": [
+      "Juvenile recruitment in two sub-blocks fell to under 40% of the long-term average.",
+      "Fishery-independent surveys covered 85 permanent monitoring sites across the southern zone.",
+      "A precautionary TAC reduction was recommended for the affected sub-blocks."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/blockchain-seafood-traceability-pilot.md",
+    "title": "Blockchain-Enabled Seafood Traceability - Pilot Evaluation",
+    "topic": "post-harvest",
+    "published": "2024-01-23",
+    "type": "review",
+    "summary": "An evaluation of a blockchain-based traceability pilot tracking premium seafood from vessel to retail assesses data capture burden on operators and buyer willingness to pay for verified provenance. The pilot found strong retail interest but highlighted the need for simpler at-sea data entry for full supply chain adoption.",
+    "keyFacts": [
+      "Retail buyers indicated willingness to pay a premium of up to 8% for verified provenance.",
+      "At-sea data entry burden was the most cited barrier to full operator adoption.",
+      "The pilot tracked product from vessel through to retail across three supply chains."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/coldchain-innovation-seafood-export.md",
+    "title": "Cold Chain Innovation for Premium Seafood Export - Post-Harvest Quality Trial",
+    "topic": "post-harvest",
+    "published": "2019-11-27",
+    "type": "report",
+    "summary": "A post-harvest trial compares modified atmosphere packaging and rapid super-chilling against conventional ice slurry for premium finfish destined for export. Super-chilled product held sensory quality significantly longer, reducing rejection rates on arrival in key Asian markets.",
+    "keyFacts": [
+      "Super-chilled product retained acceptable sensory quality roughly four days longer than ice slurry.",
+      "Export rejection rates on arrival fell after super-chilling was adopted by trial exporters.",
+      "Modified atmosphere packaging extended shelf life but reduced initial texture scores."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/national-recreational-fishing-survey.md",
+    "title": "National Recreational Fishing Survey - Participation and Catch Estimates",
+    "topic": "fisheries-policy",
+    "published": "2016-09-30",
+    "type": "report",
+    "summary": "A national survey estimates recreational fishing participation, effort and catch by species group, informing allocation decisions between recreational and commercial sectors. The report highlights regional variation in participation and identifies snapper and whiting as the most retained finfish species nationally.",
+    "keyFacts": [
+      "An estimated one in five Australian households included at least one recreational fisher.",
+      "Snapper and whiting were the most retained finfish species by weight nationally.",
+      "Participation rates varied more than twofold between the highest and lowest regions."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/reef-fish-habitat-monitoring-bruv.md",
+    "title": "Reef Fish Habitat Monitoring - Baited Remote Underwater Video Field Methods",
+    "topic": "marine-sustainability",
+    "published": "2017-12-04",
+    "type": "briefing",
+    "summary": "This briefing documents baited remote underwater video station deployment for monitoring reef fish assemblages, covering camera rig set-up, bait standardisation and species identification workflow used to build a long-term habitat monitoring dataset.",
+    "keyFacts": [
+      "Standardised bait quantities allow comparison of relative abundance across sites and years.",
+      "Camera stations were deployed at consistent depth and habitat strata to control for survey bias.",
+      "The dataset forms part of a long-term reef fish habitat monitoring program."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/seacage-finfish-biosecurity-plan.md",
+    "title": "Biosecurity Plan for Sea-Cage Finfish Farming - Risk Framework and Response Protocols",
+    "topic": "aquaculture-biosecurity",
+    "published": "2020-06-09",
+    "type": "report",
+    "summary": "This project developed a tiered biosecurity risk framework for sea-cage finfish operations, covering stock movement, fallowing regimes and early detection of notifiable pathogens, with response protocols aligned to national emergency disease arrangements and a farm-level self-assessment checklist.",
+    "keyFacts": [
+      "The framework defines four biosecurity risk tiers based on stock movement and site proximity.",
+      "Recommended fallowing periods reduced pathogen carryover in trial sites.",
+      "Protocols were aligned with national emergency animal disease response arrangements."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/shark-bycatch-reduction-longline-fisheries.md",
+    "title": "Reducing Shark Bycatch in Longline Fisheries - On-Water Trial Results",
+    "topic": "marine-sustainability",
+    "published": "2021-05-16",
+    "type": "report",
+    "summary": "On-water trials tested circle hooks and shark excluder devices in a commercial longline fishery across 12 vessels over one season. Circle hooks reduced deep-hooking rates in incidentally caught sharks compared with J-hooks, supporting the case for broader circle hook adoption.",
+    "keyFacts": [
+      "Circle hooks reduced deep-hooking rates in incidentally caught sharks compared with J-hooks.",
+      "Shark excluder devices were trialled across 12 commercial longline vessels over one season.",
+      "Crew reported minimal change to target catch handling time after fitting excluder devices."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/southern-rock-lobster-stock-assessment.md",
+    "title": "Southern Rock Lobster Stock Assessment - Legal Size and Effort Modelling Update",
+    "topic": "stock-assessment",
+    "published": "2023-08-21",
+    "type": "report",
+    "summary": "An updated stock assessment for southern rock lobster incorporates revised natural mortality estimates and a decade of tag-recapture data. Effort modelling under three catch scenarios shows the current legal minimum length setting maintains spawning biomass above the limit reference point under moderate fishing pressure.",
+    "keyFacts": [
+      "Ten years of tag-recapture data informed revised natural mortality estimates.",
+      "Spawning biomass remained above the limit reference point under moderate effort scenarios.",
+      "Effort modelling tested three catch scenarios reflecting different market demand outlooks."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/triploid-oyster-growth-trials.md",
+    "title": "Triploid Pacific Oyster Trials - Growth and Market Readiness Outcomes",
+    "topic": "aquaculture-biosecurity",
+    "published": "1999-10-08",
+    "type": "review",
+    "summary": "Early trials compare triploid and diploid Pacific oyster performance across three growing regions, assessing growth rate, condition index through the summer spawning period and market readiness timing. Triploid stock reached market size sooner and avoided the summer condition dip seen in diploid stock.",
+    "keyFacts": [
+      "Triploid oysters reached market size on average one growing season sooner than diploid stock.",
+      "Diploid stock showed a marked condition index dip through the summer spawning period.",
+      "Trials spanned three growing regions with differing water temperature profiles."
+    ],
+    "synthetic": true
+  },
+  {
+    "tenant": "marine",
+    "file": "content/seed/marine/white-spot-disease-prawn-preparedness.md",
+    "title": "White Spot Disease Preparedness for Prawn Aquaculture - Farm-Level Guidelines",
+    "topic": "aquaculture-biosecurity",
+    "published": "2018-02-12",
+    "type": "briefing",
+    "summary": "Guidelines developed following a white spot disease incursion set out farm-level surveillance, pond water exchange controls and staff biosecurity protocols for prawn aquaculture operations, including an early warning checklist and advice on coordinating with neighbouring farms in a shared catchment.",
+    "keyFacts": [
+      "Guidelines followed a confirmed white spot disease incursion in an eastern prawn farming region.",
+      "Restricted pond water exchange during high-risk periods reduced modelled transmission risk.",
+      "An early warning checklist was distributed to all licensed prawn farms in the catchment."
+    ],
+    "synthetic": true
+  }
+]

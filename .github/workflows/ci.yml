@@ -1,0 +1,70 @@
+name: CI
+
+# The quality gate for this repository: typecheck, lint, format, tests and the
+# web build, on every push and pull request. Deployment lives in deploy.yml and
+# is deliberately separate - CI must be able to go green before any deploy
+# credentials exist.
+on:
+  push:
+    branches: [main, scaffold]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Typecheck, lint, format, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install build tooling
+        # Pinned to match the Dockerfile (ESBUILD_VERSION / TAILWINDCSS_VERSION
+        # build args) and local dev tooling - bump all three together.
+        env:
+          ESBUILD_VERSION: 0.28.2
+          TAILWINDCSS_VERSION: 4.3.3
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWINDCSS_VERSION}/tailwindcss-linux-x64" \
+            -o /usr/local/bin/tailwindcss
+          chmod +x /usr/local/bin/tailwindcss
+          # The npm registry tarball is the canonical esbuild source; unpkg
+          # mirrors the same content and stays as a fallback.
+          { curl -fsSL --retry 3 --retry-all-errors \
+              "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+              -o /tmp/esbuild.tgz \
+            && tar -xzf /tmp/esbuild.tgz -C /tmp \
+            && sudo mv /tmp/package/bin/esbuild /usr/local/bin/esbuild ; } \
+          || curl -fsSL --retry 3 --retry-all-errors \
+              "https://unpkg.com/@esbuild/linux-x64@${ESBUILD_VERSION}/bin/esbuild" \
+              -o /usr/local/bin/esbuild
+          sudo chmod +x /usr/local/bin/esbuild
+
+      - name: Build the Cloudflare bundle
+        run: deno task build:cloudflare
+
+      - name: Validate the Worker deployment package
+        run: npx -y wrangler@4.127.1 deploy --config wrangler.jsonc --dry-run
+
+      - name: Gate
+        run: deno task check
+
+      - name: Cache Chromium (astral/e2e)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/astral
+          key: astral-chromium-${{ runner.os }}-${{ hashFiles('deno.json') }}
+
+      - name: Browser E2E persona journeys
+        env:
+          # GitHub-hosted runners do not expose Chromium's setuid sandbox.
+          # Astral appends this to the browser process it launches in CI.
+          ASTRAL_BIN_ARGS: --no-sandbox
+        run: deno task test:e2e

@@ -1,0 +1,74 @@
+{
+  "nodeModulesDir": "none",
+  "imports": {
+    "@research-portal/core": "./packages/core/src/index.ts",
+    "@research-portal/retrieval": "./packages/retrieval/src/index.ts",
+    "@modelcontextprotocol/server": "npm:@modelcontextprotocol/server@2.0.0-alpha.2",
+    "@cfworker/json-schema": "npm:@cfworker/json-schema@4.1.1",
+    "zod": "https://esm.sh/zod@3.25.76",
+    "zod/v4": "npm:zod@4.5.4/v4",
+    "d3-force": "https://esm.sh/d3-force@3.0.0",
+    "three": "https://esm.sh/three@0.170.0",
+    "gsap": "https://esm.sh/gsap@3.13.0",
+    "gsap/ScrollTrigger": "https://esm.sh/gsap@3.13.0/ScrollTrigger",
+    "gsap/ScrollSmoother": "https://esm.sh/gsap@3.13.0/ScrollSmoother",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.9.155",
+    "hono": "jsr:@hono/hono@^4.6.0",
+    "hono/cors": "jsr:@hono/hono@^4.6.0/cors",
+    "hono/streaming": "jsr:@hono/hono@^4.6.0/streaming",
+    "hono/deno": "jsr:@hono/hono@^4.6.0/deno",
+    "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
+    "@std/expect": "jsr:@std/expect@^1",
+    "@astral/astral": "jsr:@astral/astral@^0.5.6",
+    "react": "https://esm.sh/react@18.3.1",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "react-router-dom": "https://esm.sh/react-router-dom@7.1.1?deps=react@18.3.1,react-dom@18.3.1",
+    "@tanstack/react-query": "https://esm.sh/@tanstack/react-query@5.62.11?deps=react@18.3.1"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "lib": ["deno.ns", "dom", "dom.iterable", "dom.asynciterable", "es2022"]
+  },
+  "fmt": {
+    "singleQuote": true,
+    "lineWidth": 100,
+    "semiColons": false,
+    "exclude": [
+      "content/",
+      "docs/",
+      "README.md",
+      "CLAUDE.md",
+      "apps/web/dist/",
+      "apps/web/public/",
+      "worker-configuration.d.ts",
+      ".claude/"
+    ]
+  },
+  "lint": {
+    "exclude": ["apps/web/dist/", "worker-configuration.d.ts", ".claude/"],
+    "rules": {
+      "exclude": ["require-await"]
+    }
+  },
+  "tasks": {
+    "dev": "deno task build:web && deno run --watch --allow-net --allow-env --allow-read --allow-write=data apps/api/src/server.ts",
+    "build:css": "tailwindcss -i apps/web/src/styles.css -o apps/web/dist/styles.css --minify",
+    "build:js": "esbuild apps/web/src/main.tsx --bundle --format=esm --minify --jsx=automatic --outfile=apps/web/dist/app.js --alias:@research-portal/core=./packages/core/src/index.ts --external:react --external:react/jsx-runtime --external:react-dom --external:react-dom/client --external:react-router-dom --external:@tanstack/react-query --external:zod --external:d3-force --external:three --external:pdfjs-dist",
+    "build:web": "mkdir -p apps/web/dist && cp apps/web/index.html apps/web/dist/index.html && cp -R apps/web/public/* apps/web/dist/ && deno task build:css && deno task build:js",
+    "types:cloudflare": "deno run --allow-read=.wrangler --allow-write=.wrangler,worker-configuration.d.ts --allow-run=npx apps/cloudflare/scripts/generate-types.ts",
+    "build:worker": "mkdir -p dist/cloudflare && deno bundle --external cloudflare:workers --output dist/cloudflare/worker.js apps/cloudflare/src/worker.ts",
+    "build:cloudflare": "deno task build:web && deno task build:worker",
+    "secrets:cloudflare": "deno run --allow-read=.env --allow-write=.wrangler --allow-run=npx apps/cloudflare/scripts/upload-secrets.ts",
+    "check": "deno check apps/api/src/server.ts apps/api/scripts/provision.ts apps/api/scripts/persona-smoke.ts apps/api/scripts/accuracy-eval.ts apps/api/scripts/persona-eval.ts apps/web/src/main.tsx apps/cloudflare/src/worker.ts && deno lint && deno fmt --check && deno task test",
+    "test": "deno test --allow-env --allow-read --allow-write packages/ apps/",
+    "test:e2e": "deno task build:web && deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/",
+    "enrich": "deno run --allow-net --allow-env --allow-read apps/api/scripts/enrich-labels.ts",
+    "provision": "deno run --allow-net --allow-env --allow-read --allow-write=.env apps/api/scripts/provision.ts"
+  }
+}

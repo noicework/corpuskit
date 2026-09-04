@@ -1,0 +1,2622 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------------
+ * Token layer.
+ *
+ * The four --rp-primary / --rp-accent / --rp-hero-from / --rp-hero-to vars stay
+ * the tenant hooks: TenantLayout writes them inline from the tenant config and
+ * everything downstream reads them. Everything below is the fixed house style -
+ * a warm neutral ramp on the #f7f7f5 paper base, layered shadows, a focus ring,
+ * and the motion vocabulary.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* Tenant hooks - neutral defaults until a tenant config loads. The theme
+   * layer (lib/theme.ts paletteVars) writes all of these per tenant: either a
+   * stock library palette's twelve roles and grey suite, or values derived
+   * from the portal's seeded four-colour identity. */
+  --rp-primary: #27272a;
+  --rp-accent: #52525b;
+  --rp-hero-from: #3f3f46;
+  --rp-hero-to: #18181b;
+  --rp-on-primary: #ffffff;
+  --rp-brand-fg: #27272a;
+  --rp-on-accent: #ffffff;
+  --rp-accent-fg: #52525b;
+  --rp-focus: #52525b;
+  --rp-on-hero: #ffffff;
+  --rp-wash: color-mix(in srgb, #52525b 12%, #ffffff);
+  --rp-wash-strong: color-mix(in srgb, #52525b 22%, #ffffff);
+
+  /* Typography hooks - TenantLayout overrides these from branding.typography.
+   * The house faces (Manrope body, Inter headings) are the defaults, so
+   * portals without a typography choice look unchanged. */
+  --rp-font-body:
+    'Manrope', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --rp-font-display:
+    'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --rp-font-body-weight: 400;
+  --rp-font-display-weight: 600;
+  --rp-font-display-bold-weight: 700;
+  --rp-font-display-tracking: -0.022em;
+  --rp-font-display-leading: 1.05;
+
+  /* Density hooks - TenantLayout overrides these from branding.density.
+   * The rhythm dial rescales the whole Tailwind spacing scale (see
+   * .rp-tenant); the control dial is deliberately damped so buttons and
+   * inputs move less than the space around them. */
+  --rp-density: 1;
+  --rp-density-ctl: 1;
+
+  /* Warm neutral ramp. Slightly yellow-shifted so it sits on the paper base
+   * without the blue cast of a stock grey scale. */
+  --rp-paper: #ffffff;
+  --rp-n-0: #ffffff;
+  --rp-n-25: #fcfcfa;
+  --rp-n-50: #f7f7f5;
+  --rp-n-100: #f8fafc;
+  --rp-n-200: #e6ebf0;
+  --rp-n-300: #d2d0c9;
+  --rp-n-400: #a8a59d;
+  --rp-n-500: #7d7a72;
+  --rp-n-600: #5b5851;
+  --rp-n-700: #403d37;
+  --rp-n-800: #2a2823;
+  --rp-n-900: #1a1815;
+
+  /* Two-layer shadows: a tight contact shadow plus a soft ambient one. */
+  --rp-shadow-sm: 0 1px 1px rgba(26, 24, 21, 0.04), 0 2px 6px -2px rgba(26, 24, 21, 0.08);
+  --rp-shadow-md: 0 1px 2px rgba(26, 24, 21, 0.05), 0 10px 26px -14px rgba(26, 24, 21, 0.22);
+  --rp-shadow-lg: 0 2px 4px rgba(26, 24, 21, 0.06), 0 22px 48px -20px rgba(26, 24, 21, 0.3);
+  --rp-shadow-xl: 0 4px 10px rgba(26, 24, 21, 0.08), 0 40px 80px -28px rgba(26, 24, 21, 0.4);
+
+  /* Focus ring - a surface-coloured halo then the focus role, legible on any
+   * surface and in either polarity. */
+  --rp-ring: 0 0 0 2px var(--rp-surface), 0 0 0 4px var(--rp-focus);
+  --rp-ring-inverse: 0 0 0 2px rgba(12, 12, 12, 0.9), 0 0 0 4px rgba(255, 255, 255, 0.75);
+
+  --rp-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@theme {
+  /* Resolved per element, so a tenant wrapper overriding the --rp-font-* hooks
+   * re-fonts everything inside it (a tenant's seeded `branding.fonts` and any
+   * Manage typography choice both flow through these hooks - see lib/theme.ts). */
+  --font-sans: var(--rp-font-body);
+  --font-display: var(--rp-font-display);
+}
+
+html {
+  /* Rubber-band overscroll shows the html background - keep it on-theme. */
+  background-color: var(--rp-paper);
+  /* Tenant choices are written as custom properties rather than an inline
+   * font-size so the desktop media query can compose with every choice. */
+  font-size: var(--rp-text-scale, 100%);
+}
+
+@media (min-width: 1024px) {
+  html {
+    /* 106.25% lifts the browser-default 16px root to a comfortable 17px. */
+    font-size: var(--rp-text-scale-desktop, 106.25%);
+  }
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--rp-paper);
+  color: var(--rp-ink);
+  font-feature-settings: 'calt';
+}
+
+/* ---------------------------------------------------------------------------
+ * CorpusKit front door.
+ *
+ * The marketing surface deliberately owns a small visual system instead of
+ * borrowing a tenant palette. It reads like an indexed body of knowledge:
+ * paper, ink, clipped reference cards and one warm annotation colour.
+ * ------------------------------------------------------------------------- */
+
+.mk-site {
+  --mk-ink: #11221b;
+  --mk-green: #0b6d5a;
+  --mk-orange: #f26a3d;
+  --mk-paper: #f4f7f4;
+  --mk-lime: #d6ef86;
+  --rp-surface: var(--mk-paper);
+  --rp-focus: var(--mk-orange);
+  min-height: 100vh;
+  overflow: hidden;
+  color: var(--mk-ink);
+  background:
+    linear-gradient(rgba(17, 34, 27, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 34, 27, 0.045) 1px, transparent 1px),
+    var(--mk-paper);
+  background-size: 4rem 4rem;
+}
+
+.mk-nav,
+.mk-hero,
+.mk-section,
+.mk-footer {
+  width: min(100% - 3rem, 92rem);
+  margin-inline: auto;
+}
+
+.mk-nav {
+  display: flex;
+  min-height: 5.25rem;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(17, 34, 27, 0.2);
+}
+
+.mk-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  border-radius: 0.35rem;
+  font-family: var(--rp-font-display);
+  font-size: 1.1rem;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+}
+
+.mk-mark {
+  position: relative;
+  display: inline-block;
+  width: 1.65rem;
+  height: 1.65rem;
+}
+
+.mk-mark span {
+  position: absolute;
+  left: 0;
+  width: 1.2rem;
+  height: 0.42rem;
+  border-radius: 0.1rem;
+  background: var(--mk-green);
+  transform: skewX(-22deg);
+}
+
+.mk-mark span:nth-child(1) {
+  top: 0.08rem;
+}
+.mk-mark span:nth-child(2) {
+  top: 0.61rem;
+  left: 0.2rem;
+  background: var(--mk-orange);
+}
+.mk-mark span:nth-child(3) {
+  top: 1.14rem;
+  left: 0.4rem;
+}
+
+.mk-nav-link {
+  border-radius: 0.3rem;
+  padding: 0.55rem 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: rgba(17, 34, 27, 0.72);
+}
+
+.mk-nav-link:hover {
+  color: var(--mk-green);
+}
+
+.mk-login,
+.mk-cta-primary,
+.mk-cta-secondary {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  border: 1px solid var(--mk-ink);
+  border-radius: 999px;
+  padding: 0.7rem 1.1rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  transition: transform 180ms var(--rp-ease), background 180ms var(--rp-ease),
+    color 180ms var(--rp-ease);
+}
+
+.mk-login:hover,
+.mk-cta-secondary:hover {
+  transform: translateY(-2px);
+  background: white;
+}
+
+.mk-hero {
+  display: grid;
+  min-height: 43rem;
+  grid-template-columns: minmax(0, 1.04fr) minmax(25rem, 0.96fr);
+  align-items: center;
+  gap: clamp(3rem, 8vw, 9rem);
+  padding-block: 5rem 6.5rem;
+}
+
+.mk-hero-copy {
+  max-width: 48rem;
+}
+
+.mk-kicker {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.115em;
+  text-transform: uppercase;
+  color: var(--mk-green);
+}
+
+.mk-hero h1 {
+  max-width: 13ch;
+  margin-top: 1.35rem;
+  font-family: var(--rp-font-display);
+  font-size: clamp(3.25rem, 6.5vw, 6.8rem);
+  font-weight: 740;
+  letter-spacing: -0.072em;
+  line-height: 0.9;
+  text-wrap: balance;
+}
+
+.mk-intro {
+  max-width: 43rem;
+  margin-top: 2rem;
+  font-size: clamp(1.05rem, 1.5vw, 1.3rem);
+  line-height: 1.65;
+  color: rgba(17, 34, 27, 0.7);
+}
+
+.mk-cta-primary {
+  border-color: var(--mk-green);
+  color: white;
+  background: var(--mk-green);
+  box-shadow: 0 10px 30px -18px rgba(11, 109, 90, 0.9);
+}
+
+.mk-cta-primary:hover {
+  transform: translateY(-2px);
+  background: #07594a;
+}
+
+.mk-cta-secondary {
+  color: var(--mk-ink);
+}
+
+.mk-corpus {
+  position: relative;
+  min-height: 31rem;
+  border: 1px solid rgba(17, 34, 27, 0.28);
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow: 1.35rem 1.35rem 0 var(--mk-lime);
+}
+
+.mk-corpus::before,
+.mk-corpus::after {
+  position: absolute;
+  content: '';
+  pointer-events: none;
+}
+
+.mk-corpus::before {
+  inset: 0;
+  background-image: radial-gradient(rgba(17, 34, 27, 0.2) 1px, transparent 1px);
+  background-size: 1.25rem 1.25rem;
+  mask-image: linear-gradient(to bottom right, black, transparent 70%);
+}
+
+.mk-corpus::after {
+  right: 1.2rem;
+  top: -0.5rem;
+  width: 4.8rem;
+  height: 1.45rem;
+  background: var(--mk-orange);
+  transform: rotate(2deg);
+}
+
+.mk-corpus-label {
+  position: absolute;
+  top: 1.4rem;
+  left: 1.5rem;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mk-document,
+.mk-answer {
+  position: absolute;
+  z-index: 1;
+  border: 1px solid rgba(17, 34, 27, 0.26);
+  background: white;
+  box-shadow: 0 18px 32px -26px rgba(17, 34, 27, 0.7);
+}
+
+.mk-document {
+  width: min(16rem, 54%);
+  padding: 1.2rem;
+}
+
+.mk-document-a {
+  top: 4.8rem;
+  left: 2rem;
+  transform: rotate(-2deg);
+}
+.mk-document-b {
+  top: 10rem;
+  right: 1.5rem;
+  transform: rotate(2.5deg);
+}
+
+.mk-document span,
+.mk-answer-kicker {
+  display: block;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.58rem;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.065em;
+  color: var(--mk-green);
+}
+
+.mk-document strong {
+  display: block;
+  margin-block: 0.65rem 0.9rem;
+  font-family: var(--rp-font-display);
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
+.mk-document i {
+  display: block;
+  width: 100%;
+  height: 0.24rem;
+  margin-top: 0.38rem;
+  background: #dfe7e2;
+}
+
+.mk-document i:last-child {
+  width: 66%;
+}
+
+.mk-thread {
+  position: absolute;
+  z-index: 0;
+  left: 48%;
+  top: 44%;
+  width: 38%;
+  height: 32%;
+  border-left: 1px solid var(--mk-green);
+  border-bottom: 1px solid var(--mk-green);
+  transform: skew(-22deg);
+}
+
+.mk-thread span {
+  position: absolute;
+  width: 0.42rem;
+  height: 0.42rem;
+  border: 1px solid var(--mk-green);
+  border-radius: 50%;
+  background: var(--mk-paper);
+}
+
+.mk-thread span:nth-child(1) {
+  left: -0.24rem;
+  top: -0.2rem;
+}
+.mk-thread span:nth-child(2) {
+  left: -0.24rem;
+  bottom: -0.2rem;
+}
+.mk-thread span:nth-child(3) {
+  right: -0.2rem;
+  bottom: -0.2rem;
+}
+.mk-thread span:nth-child(4) {
+  right: 32%;
+  bottom: -0.2rem;
+  background: var(--mk-orange);
+}
+
+.mk-answer {
+  right: 2.25rem;
+  bottom: 1.8rem;
+  width: min(20rem, 65%);
+  padding: 1.25rem;
+  border-left: 0.25rem solid var(--mk-green);
+}
+
+.mk-answer p {
+  margin-top: 0.55rem;
+  font-size: 0.9rem;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.mk-answer div {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.8rem;
+  font-size: 0.65rem;
+  color: rgba(17, 34, 27, 0.64);
+}
+
+.mk-answer b {
+  display: inline-grid;
+  width: 1.35rem;
+  height: 1.35rem;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  background: var(--mk-green);
+}
+
+.mk-proof {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  color: white;
+  background: var(--mk-ink);
+}
+
+.mk-proof div {
+  display: flex;
+  min-height: 6.25rem;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.5rem clamp(1.5rem, 5vw, 5rem);
+  border-right: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.mk-proof strong {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.65rem;
+  color: var(--mk-lime);
+}
+
+.mk-proof span {
+  font-size: 0.82rem;
+  font-weight: 620;
+}
+
+.mk-section {
+  padding-block: clamp(5rem, 9vw, 9rem);
+}
+
+.mk-section-heading {
+  max-width: 48rem;
+}
+
+.mk-section-heading h2 {
+  margin-top: 1rem;
+  font-family: var(--rp-font-display);
+  font-size: clamp(2.5rem, 5vw, 5rem);
+  font-weight: 720;
+  letter-spacing: -0.06em;
+  line-height: 0.98;
+  text-wrap: balance;
+}
+
+.mk-section-heading > p:last-child {
+  max-width: 38rem;
+  margin-top: 1.35rem;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: rgba(17, 34, 27, 0.66);
+}
+
+.mk-process-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  margin-top: 4.5rem;
+  border: 1px solid rgba(17, 34, 27, 0.2);
+  background: rgba(17, 34, 27, 0.2);
+}
+
+.mk-process-grid article {
+  min-height: 18rem;
+  padding: clamp(1.5rem, 3.5vw, 3.4rem);
+  background: var(--mk-paper);
+}
+
+.mk-process-grid article > span {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--mk-orange);
+}
+
+.mk-process-grid h3 {
+  margin-top: 3.5rem;
+  font-family: var(--rp-font-display);
+  font-size: 1.45rem;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  line-height: 1.12;
+}
+
+.mk-process-grid p {
+  margin-top: 1rem;
+  font-size: 0.86rem;
+  line-height: 1.65;
+  color: rgba(17, 34, 27, 0.64);
+}
+
+.mk-portals {
+  width: 100%;
+  max-width: none;
+  padding-inline: max(1.5rem, calc((100% - 92rem) / 2));
+  color: white;
+  background: var(--mk-green);
+}
+
+.mk-portals .mk-kicker {
+  color: var(--mk-lime);
+}
+.mk-portals .mk-section-heading > p:last-child {
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.mk-portal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 4rem;
+}
+
+.mk-portal-card {
+  position: relative;
+  display: grid;
+  min-height: 17rem;
+  grid-template-columns: auto 1fr;
+  gap: 1.3rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  padding: clamp(1.5rem, 3vw, 2.6rem);
+  color: var(--mk-ink);
+  background: var(--mk-paper);
+  transition: transform 200ms var(--rp-ease), box-shadow 200ms var(--rp-ease);
+}
+
+.mk-portal-card::after {
+  position: absolute;
+  right: -4rem;
+  bottom: -4rem;
+  width: 11rem;
+  height: 11rem;
+  border: 2rem solid var(--mk-lime);
+  border-radius: 50%;
+  content: '';
+  opacity: 0.72;
+}
+
+.mk-portal-card:nth-child(even)::after {
+  border-color: color-mix(in srgb, var(--mk-orange) 70%, white);
+}
+
+.mk-portal-card:hover {
+  z-index: 1;
+  transform: translateY(-0.4rem) rotate(-0.5deg);
+  box-shadow: 0 28px 45px -28px rgba(3, 42, 34, 0.9);
+}
+
+.mk-portal-index {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.7rem;
+  color: var(--mk-orange);
+}
+
+.mk-portal-card p {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mk-green);
+}
+
+.mk-portal-card h3 {
+  max-width: 15ch;
+  margin-top: 0.65rem;
+  font-family: var(--rp-font-display);
+  font-size: clamp(1.5rem, 3vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.mk-portal-card div > span {
+  display: block;
+  max-width: 34rem;
+  margin-top: 1rem;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: rgba(17, 34, 27, 0.62);
+}
+
+.mk-portal-open {
+  position: absolute;
+  z-index: 1;
+  left: clamp(3.9rem, 6vw, 5.6rem);
+  bottom: 1.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  color: var(--mk-green);
+}
+
+.mk-signin-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-top: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  padding: 1.5rem;
+  background: rgba(3, 48, 39, 0.28);
+}
+
+.mk-signin-strip div {
+  display: grid;
+  gap: 0.2rem;
+}
+.mk-signin-strip strong {
+  font-family: var(--rp-font-display);
+  font-size: 1rem;
+}
+.mk-signin-strip span {
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.84);
+}
+.mk-signin-strip .mk-cta-primary {
+  border-color: white;
+  color: var(--mk-ink);
+  background: white;
+}
+
+.mk-footer {
+  display: grid;
+  min-height: 8rem;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+}
+
+.mk-footer p {
+  font-size: 0.72rem;
+  color: rgba(17, 34, 27, 0.56);
+}
+.mk-footer > a:last-child {
+  justify-self: end;
+}
+
+@media (max-width: 920px) {
+  .mk-hero {
+    grid-template-columns: 1fr;
+    gap: 4rem;
+    padding-top: 4rem;
+  }
+  .mk-hero-copy {
+    max-width: 52rem;
+  }
+  .mk-corpus {
+    width: min(100%, 40rem);
+  }
+  .mk-proof {
+    grid-template-columns: 1fr;
+  }
+  .mk-proof div {
+    min-height: 4.5rem;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  .mk-process-grid {
+    grid-template-columns: 1fr;
+  }
+  .mk-process-grid article {
+    min-height: auto;
+  }
+  .mk-process-grid h3 {
+    margin-top: 2.5rem;
+  }
+}
+
+@media (max-width: 680px) {
+  .mk-nav,
+  .mk-hero,
+  .mk-section,
+  .mk-footer {
+    width: min(100% - 2rem, 92rem);
+  }
+  .mk-nav nav .mk-nav-link {
+    display: none;
+  }
+  .mk-hero {
+    min-height: auto;
+    padding-block: 4rem;
+  }
+  .mk-hero h1 {
+    font-size: clamp(3.1rem, 16vw, 5rem);
+  }
+  .mk-corpus {
+    min-height: 29rem;
+    box-shadow: 0.7rem 0.7rem 0 var(--mk-lime);
+  }
+  .mk-document {
+    width: 60%;
+    padding: 1rem;
+  }
+  .mk-document-a {
+    left: 1rem;
+  }
+  .mk-document-b {
+    right: 0.8rem;
+  }
+  .mk-answer {
+    right: 1rem;
+    width: 75%;
+  }
+  .mk-portal-grid {
+    grid-template-columns: 1fr;
+  }
+  .mk-portals {
+    width: 100%;
+    padding-inline: 1rem;
+  }
+  .mk-signin-strip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .mk-footer {
+    grid-template-columns: 1fr auto;
+  }
+  .mk-footer p {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mk-document-a {
+    animation: mk-float-a 7s ease-in-out infinite;
+  }
+  .mk-document-b {
+    animation: mk-float-b 8s ease-in-out infinite;
+  }
+  .mk-answer {
+    animation: mk-float-answer 9s ease-in-out infinite;
+  }
+}
+
+@keyframes mk-float-a {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-0.45rem) rotate(-1deg);
+  }
+}
+
+@keyframes mk-float-b {
+  0%,
+  100% {
+    transform: translateY(0) rotate(2.5deg);
+  }
+  50% {
+    transform: translateY(0.4rem) rotate(1.5deg);
+  }
+}
+
+@keyframes mk-float-answer {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-0.35rem);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Typography
+ * ------------------------------------------------------------------------- */
+
+/* Tenant subtree root. Two inheritance gotchas force the re-declarations:
+ * font-family inherits as a computed value, so the body rule alone cannot
+ * re-font a subtree; and a custom property substitutes nested var()s where it
+ * is DEFINED, so the @theme aliases resolve at :root against the house faces -
+ * they must be re-declared here to recompute against this wrapper's inline
+ * --rp-font-* overrides before the font-sans/font-display utilities read them. */
+.rp-tenant {
+  --font-sans: var(--rp-font-body);
+  --font-display: var(--rp-font-display);
+  font-family: var(--rp-font-body);
+  font-weight: var(--rp-font-body-weight);
+  /* Density: Tailwind emits every spacing utility as calc(var(--spacing) * n)
+   * resolved at use-time, so deriving --spacing from the rhythm dial rescales
+   * paddings, gaps and stacks across the subtree with no call-site changes.
+   * Text sizes never ride this - density is spacing relative to text. */
+  --spacing: calc(0.25rem * var(--rp-density, 1));
+  /* Recomputed here so the halo and ring pick up this wrapper's palette. */
+  --rp-ring: 0 0 0 2px var(--rp-surface), 0 0 0 4px var(--rp-focus);
+}
+
+/* Pin a subtree to canonical spacing - canvas-coordinate UIs and other
+ * pixel-tuned artwork that must not follow the tenant's density. */
+.rp-density-fixed {
+  --spacing: 0.25rem;
+  --rp-density: 1;
+  --rp-density-ctl: 1;
+}
+
+/* Display face, reserved for headlines. Weight, tracking and leading are
+ * per-pairing dials (a condensed caps face and a chunky serif want very
+ * different metrics); balanced wrapping so two-line headlines break evenly. */
+.rp-display {
+  font-family: var(--rp-font-display);
+  font-weight: var(--rp-font-display-weight);
+  letter-spacing: var(--rp-font-display-tracking);
+  line-height: var(--rp-font-display-leading);
+  text-wrap: balance;
+}
+
+.rp-display-bold {
+  font-weight: var(--rp-font-display-bold-weight);
+}
+
+/* Comfortable reading measure/leading for body prose. */
+.rp-prose {
+  line-height: 1.7;
+  letter-spacing: -0.005em;
+}
+
+/* Small all-caps section label used above content blocks. */
+.rp-eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* ---------------------------------------------------------------------------
+ * Layout - the page shell.
+ *
+ * `rp-shell` is the house content container: centred, fluid, with horizontal
+ * padding that grows on larger viewports and a generous max width so a
+ * maximised large display (a 27" screen) is filled rather than stranded in a
+ * narrow centre column. Grids, rails and card rows inside add columns to use
+ * the width; long-form prose keeps a comfortable reading measure via
+ * `rp-measure`, so widening the layout never stretches text to unreadable line
+ * lengths. Pages keep their own vertical padding (`py-*`).
+ * ------------------------------------------------------------------------- */
+.rp-shell {
+  width: 100%;
+  margin-inline: auto;
+  max-width: 104rem; /* 1664px - the standard content width */
+  padding-inline: 1.5rem;
+}
+
+@media (min-width: 1024px) {
+  .rp-shell {
+    padding-inline: 2rem;
+  }
+}
+
+@media (min-width: 1536px) {
+  .rp-shell {
+    padding-inline: 2.5rem;
+  }
+}
+
+/* Readable line-length cap for long-form prose sitting inside a wide layout -
+ * answer text, summaries and extracted document bodies. Keeps the measure at a
+ * comfortable ~72 characters however wide the surrounding column grows. */
+.rp-measure {
+  max-width: 72ch;
+}
+
+/* ---------------------------------------------------------------------------
+ * Surfaces
+ * ------------------------------------------------------------------------- */
+
+/* Glassy surface: translucent paper over a blur. Falls back to a near-opaque
+ * fill where backdrop-filter is unavailable. */
+.rp-glass {
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+
+.rp-shadow-sm {
+  box-shadow: var(--rp-shadow-sm);
+}
+
+.rp-shadow-md {
+  box-shadow: var(--rp-shadow-md);
+}
+
+.rp-shadow-lg {
+  box-shadow: var(--rp-shadow-lg);
+}
+
+.rp-shadow-xl {
+  box-shadow: var(--rp-shadow-xl);
+}
+
+/* Consistent focus treatment on anything interactive that opts in. */
+.rp-focus:focus-visible {
+  outline: none;
+  box-shadow: var(--rp-ring);
+}
+
+.rp-focus-inverse:focus-visible {
+  outline: none;
+  box-shadow: var(--rp-ring-inverse);
+}
+
+/* ---------------------------------------------------------------------------
+ * Hero treatments
+ * ------------------------------------------------------------------------- */
+
+/* Duotone wash over a hero photograph: the tenant's hero-from at 85% falling to
+ * hero-to at 60%, so the image reads through the lighter end. */
+.rp-hero-duotone {
+  background: linear-gradient(135deg, var(--rp-hero-from), var(--rp-hero-to));
+  opacity: 0.78;
+}
+
+@supports (background: color-mix(in srgb, red 50%, transparent)) {
+  .rp-hero-duotone {
+    opacity: 1;
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--rp-hero-from) 85%, transparent),
+      color-mix(in srgb, var(--rp-hero-to) 60%, transparent)
+    );
+  }
+}
+
+/* Soft light bloom from the top of a gradient hero. */
+.rp-hero-glow {
+  background:
+    radial-gradient(58% 62% at 50% 0%, rgba(255, 255, 255, 0.22), transparent 70%),
+    radial-gradient(42% 48% at 88% 96%, rgba(255, 255, 255, 0.12), transparent 72%);
+}
+
+/* Faint dot grid, drawn inline so there is no extra network request. */
+.rp-dotgrid {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'%3E%3Ccircle cx='1.5' cy='1.5' r='1' fill='%23ffffff' fill-opacity='0.16'/%3E%3C/svg%3E");
+  background-size: 22px 22px;
+}
+
+/* Bottom scrim that keeps headline text legible over any photograph. */
+.rp-scrim-bottom {
+  background: linear-gradient(to top, rgba(10, 10, 12, 0.55), rgba(10, 10, 12, 0) 55%);
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion
+ * ------------------------------------------------------------------------- */
+
+@keyframes rp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes rp-kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.06);
+  }
+}
+
+@keyframes rp-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes rp-dwell {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.rp-anim-fade {
+  animation: rp-fade-in 400ms var(--rp-ease) both;
+}
+
+.rp-anim-rise {
+  animation: rp-rise 400ms ease-out both;
+}
+
+.rp-anim-kenburns {
+  animation: rp-kenburns 12s linear both;
+  transform-origin: 50% 45%;
+  will-change: transform;
+}
+
+/* Staggered entrances for a small group of siblings. */
+.rp-delay-1 {
+  animation-delay: 70ms;
+}
+
+.rp-delay-2 {
+  animation-delay: 140ms;
+}
+
+.rp-delay-3 {
+  animation-delay: 210ms;
+}
+
+.rp-delay-4 {
+  animation-delay: 280ms;
+}
+
+/* Route transition on the layout outlet. */
+.rp-page-enter {
+  animation: rp-rise 320ms var(--rp-ease) both;
+}
+
+/* Skeleton shimmer - semantic surfaces keep the travelling highlight equally
+ * deliberate in light and dark tenant palettes. */
+.rp-shimmer {
+  background-color: var(--rp-surface-3);
+  background-image: linear-gradient(
+    90deg,
+    var(--rp-surface-3) 20%,
+    var(--rp-surface-2) 50%,
+    var(--rp-surface-3) 80%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: rp-shimmer 1.6s linear infinite;
+}
+
+/* Resource thumbnails reserve their parent's box while the platform image is
+ * in flight. The compact folio mark is a designed loading state, not a colour
+ * block pretending to be content; every colour and shape follows tenant roles. */
+.rp-resource-thumb {
+  container-type: inline-size;
+  overflow: hidden;
+  background: var(--rp-surface-2);
+}
+
+.rp-thumb-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--rp-surface-2);
+  color: var(--rp-ink-3);
+}
+
+.rp-thumb-placeholder::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    145deg,
+    var(--rp-surface-2) 0 42%,
+    var(--rp-surface-3) 42% 100%
+  );
+  opacity: 0.72;
+}
+
+.rp-thumb-placeholder-loading::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 20%,
+    color-mix(in srgb, var(--rp-surface) 72%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: rp-shimmer 1.6s linear infinite;
+}
+
+.rp-thumb-placeholder-mark {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--rp-ink-3);
+}
+
+.rp-thumb-placeholder-icon {
+  width: clamp(1.5rem, 24cqi, 3rem);
+  height: clamp(1.5rem, 24cqi, 3rem);
+}
+
+.rp-thumb-placeholder-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.25rem;
+  padding-inline: 0.45rem;
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius-chip);
+  background: var(--rp-surface);
+  color: var(--rp-ink-2);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.025em;
+}
+
+.rp-thumb-image {
+  z-index: 2;
+  opacity: 0;
+  background: var(--rp-surface);
+  transition: opacity 180ms var(--rp-ease);
+}
+
+.rp-thumb-image-loaded {
+  opacity: 1;
+}
+
+@container (max-width: 5rem) {
+  .rp-thumb-placeholder-mark {
+    gap: 0;
+  }
+
+  .rp-thumb-placeholder-label {
+    display: none;
+  }
+}
+
+/* Timed dwell bar (the answer journey footer). Paused via inline play-state. */
+.rp-dwell-bar {
+  transform-origin: left center;
+  animation: rp-dwell linear both;
+}
+
+/* Card hover: the whole card lifts, the artwork inside creeps in. */
+.rp-lift {
+  transition:
+    transform 260ms var(--rp-ease),
+    box-shadow 260ms var(--rp-ease);
+}
+
+.rp-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--rp-shadow-md);
+}
+
+.rp-zoom {
+  transition: transform 600ms var(--rp-ease);
+}
+
+.rp-lift:hover .rp-zoom,
+.rp-lift:focus-visible .rp-zoom {
+  transform: scale(1.06);
+}
+
+/* ---------------------------------------------------------------------------
+ * Scrolling rows
+ * ------------------------------------------------------------------------- */
+
+.rp-scroll-row {
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.rp-scroll-row > * {
+  scroll-snap-align: start;
+}
+
+/* Chip rows and card rails where a visible scrollbar would spoil the surface. */
+.rp-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.rp-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Clamps
+ * ------------------------------------------------------------------------- */
+
+.rp-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rp-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rp-clamp-4 {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reduced motion - keep the interface readable, drop the theatre.
+ * ------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-anim-kenburns,
+  .rp-anim-rise,
+  .rp-page-enter {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
+  .rp-anim-fade {
+    animation-duration: 1ms;
+  }
+
+  .rp-shimmer {
+    animation: none;
+    background-image: none;
+  }
+
+  .rp-thumb-placeholder-loading::after {
+    animation: none;
+    background-image: none;
+  }
+
+  .rp-thumb-image {
+    transition: none;
+  }
+
+  .rp-lift,
+  .rp-zoom {
+    transition: none;
+  }
+
+  .rp-lift:hover {
+    transform: none;
+  }
+
+  .rp-lift:hover .rp-zoom {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Semantic theme layer. Components use ONLY these semantic classes (plus the
+ * tenant hooks). The portal is light-only: there is no dark variant to flip.
+ * Shape language: four dials, set by TenantLayout from branding.shape -
+ * --rp-radius for surfaces (cards, panels, tiles), then buttons, chips/tags
+ * and inputs each get their own so 'soft' can pill buttons and tags without
+ * ballooning a textarea. Square (all 0) is the default.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --rp-radius: 0px;
+  --rp-radius-btn: 0px;
+  --rp-radius-chip: 0px;
+  --rp-radius-input: 0px;
+  --rp-app: var(--rp-n-0);
+  --rp-surface: var(--rp-n-0);
+  --rp-surface-2: var(--rp-n-100);
+  --rp-surface-3: var(--rp-n-200);
+  --rp-ink: var(--rp-n-900);
+  --rp-ink-2: var(--rp-n-600);
+  --rp-ink-3: #6f6c64;
+  --rp-line: var(--rp-surface-3);
+  --rp-line-2: var(--rp-surface-2);
+  --rp-glass-bg: rgba(255, 255, 255, 0.94);
+  --rp-ok-bg: #ecfdf5;
+  --rp-ok-ink: #047857;
+  --rp-ok-line: #a7f3d0;
+  --rp-warn-bg: #fffbeb;
+  --rp-warn-ink: #b45309;
+  --rp-warn-line: #fde68a;
+  --rp-bad-bg: #fff1f2;
+  --rp-bad-ink: #be123c;
+  --rp-bad-line: #fecdd3;
+
+  /* Categorical palette for entity/group colouring (e.g. the entity graph) -
+   * six accent-ish hues, picked to skip the ok/bad greens and reds above so a
+   * category swatch never reads as a status. Fixed dual-mode hex, not a
+   * generated hue - a name hashes onto one of these six deterministically. */
+  --rp-cat-1: #2a78d6;
+  --rp-cat-2: #eb6834;
+  --rp-cat-3: #1baf7a;
+  --rp-cat-4: #eda100;
+  --rp-cat-5: #e87ba4;
+  --rp-cat-6: #4a3aa7;
+
+  /* Text tone for each category. The six fills above are tuned for mark-to-mark
+   * separation, which leaves four of them under 4.5:1 as TEXT on the surface.
+   * Carrying 55% of the hue into the ink keeps a caption recognisably "the
+   * green category" while clearing AA for all six (5.3:1 at the worst, amber). */
+  --rp-cat-1-ink: color-mix(in srgb, var(--rp-cat-1) 55%, var(--rp-ink));
+  --rp-cat-2-ink: color-mix(in srgb, var(--rp-cat-2) 55%, var(--rp-ink));
+  --rp-cat-3-ink: color-mix(in srgb, var(--rp-cat-3) 55%, var(--rp-ink));
+  --rp-cat-4-ink: color-mix(in srgb, var(--rp-cat-4) 55%, var(--rp-ink));
+  --rp-cat-5-ink: color-mix(in srgb, var(--rp-cat-5) 55%, var(--rp-ink));
+  --rp-cat-6-ink: color-mix(in srgb, var(--rp-cat-6) 55%, var(--rp-ink));
+  color-scheme: light;
+}
+
+/* `divide-y divide-line` - Tailwind has no divide-line; bind it to the token. */
+.divide-line > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--rp-line);
+}
+
+/* Static chips (labels, list items) must not read as clickable. */
+span.rp-chip,
+li.rp-chip {
+  cursor: default;
+}
+span.rp-chip:hover,
+li.rp-chip:hover {
+  background-color: var(--rp-surface-2);
+}
+
+/* File pickers hide their input inside a label.rp-btn - surface its focus. */
+label.rp-btn:has(input:focus-visible) {
+  outline: 2px solid var(--rp-focus, var(--rp-ink));
+  outline-offset: 2px;
+}
+
+/* Semantic utilities. */
+.bg-app {
+  background-color: var(--rp-app);
+}
+.bg-surface {
+  background-color: var(--rp-surface);
+}
+.bg-surface-2 {
+  background-color: var(--rp-surface-2);
+}
+.bg-surface-3 {
+  background-color: var(--rp-surface-3);
+}
+.text-ink {
+  color: var(--rp-ink);
+}
+.text-ink-2 {
+  color: var(--rp-ink-2);
+}
+.text-ink-3 {
+  color: var(--rp-ink-3);
+}
+.border-line {
+  border-color: var(--rp-line);
+}
+.border-line-2 {
+  border-color: var(--rp-line-2);
+}
+.rp-glass {
+  background: var(--rp-glass-bg);
+}
+
+/* Without backdrop-filter a translucent header lets content ghost through -
+ * go near-opaque instead. Placed after the token rule so it wins. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .rp-glass {
+    background: color-mix(in srgb, var(--rp-surface) 96%, transparent);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Primary navigation band: a white brand strip carrying the logo, above a
+ * solid brand-colour bar carrying the navigation in the light UI face. The bar
+ * paints the tenant's own primary colour rather than one portal's navy, so
+ * every portal keeps its identity. Each seeded primary is a dark shade, so
+ * white link text clears contrast on all of them.
+ * ------------------------------------------------------------------------- */
+.rp-navband {
+  background-color: var(--rp-primary);
+}
+
+/* ---------------------------------------------------------------------------
+ * Quick-entry tiles, the "see all of this" blocks that open a whole section:
+ * a square-cornered wash of the brand accent, a line icon, a brand-navy label
+ * and a trailing arrow. Mixed from the tenant accent rather than hard-coded to
+ * one portal's hue, so the tile follows whichever portal it renders in.
+ * ------------------------------------------------------------------------- */
+.rp-tile {
+  display: flex;
+  align-items: center;
+  gap: calc(1.1rem * var(--rp-density, 1));
+  padding: calc(1.6rem * var(--rp-density, 1)) calc(1.75rem * var(--rp-density, 1));
+  border-radius: var(--rp-radius);
+  background-color: var(--rp-wash);
+  color: var(--rp-brand-fg);
+  transition: background-color 150ms var(--rp-ease);
+}
+
+.rp-tile:hover {
+  background-color: var(--rp-wash-strong);
+}
+
+.rp-tile:focus-visible {
+  outline: 2px solid var(--rp-brand-fg);
+  outline-offset: -3px;
+}
+
+.rp-tile-label {
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+/* Nudges toward the label on hover - the arrow is the affordance. */
+.rp-tile-arrow {
+  margin-inline-start: auto;
+  transition: transform 200ms var(--rp-ease);
+}
+
+.rp-tile:hover .rp-tile-arrow {
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-tile:hover .rp-tile-arrow {
+    transform: none;
+  }
+}
+
+.rp-navlink {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* Rides the rhythm dial so the brand band tightens and breathes with the
+   * rest of the chrome (the label size itself never scales with density). */
+  padding: calc(0.7rem * var(--rp-density, 1)) calc(0.85rem * var(--rp-density, 1));
+  font-size: 1rem;
+  font-weight: 300;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--rp-on-primary) 86%, transparent);
+  white-space: nowrap;
+  transition: color 150ms var(--rp-ease), background-color 150ms var(--rp-ease);
+}
+
+.rp-navlink:hover {
+  color: var(--rp-on-primary);
+  background-color: color-mix(in srgb, var(--rp-on-primary) 10%, transparent);
+}
+
+.rp-navlink:focus-visible {
+  outline: 2px solid var(--rp-on-primary);
+  outline-offset: -3px;
+}
+
+/* Active state has to read against the brand bar, so it is a full-strength
+ * white label over an accent underline rather than the accent wash the old
+ * light header used. */
+.rp-navlink-active {
+  color: var(--rp-on-primary);
+  font-weight: 500;
+}
+
+.rp-navlink-active::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0.55rem;
+  bottom: 0;
+  height: 3px;
+  border-radius: 0;
+  background-color: var(--rp-accent);
+}
+
+/* Component classes - the single source of shape. */
+.rp-card {
+  background: var(--rp-surface);
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius);
+  box-shadow: var(--rp-shadow-sm);
+}
+.rp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: calc(2.25rem * var(--rp-density-ctl, 1));
+  /* Pills need a touch more air at their rounded ends - the shape dial sets
+   * --rp-btn-px (see lib/theme.ts). */
+  padding: 0 var(--rp-btn-px, 0.875rem);
+  border-radius: var(--rp-radius-btn);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background-color 150ms var(--rp-ease), color 150ms var(--rp-ease),
+    border-color 150ms var(--rp-ease), opacity 150ms var(--rp-ease);
+  cursor: pointer;
+}
+.rp-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.rp-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--rp-ring);
+}
+.rp-btn-primary {
+  background: var(--rp-primary);
+  color: var(--rp-on-primary);
+}
+.rp-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+.rp-btn-outline {
+  border: 1px solid var(--rp-line);
+  background: var(--rp-surface);
+  color: var(--rp-ink);
+}
+.rp-btn-outline:hover:not(:disabled) {
+  background: var(--rp-surface-2);
+}
+.rp-btn-ghost {
+  background: transparent;
+  color: var(--rp-ink-2);
+}
+.rp-btn-ghost:hover:not(:disabled) {
+  background: var(--rp-surface-2);
+  color: var(--rp-ink);
+}
+.rp-btn-danger {
+  background: transparent;
+  color: var(--rp-bad-ink);
+}
+.rp-btn-danger:hover:not(:disabled) {
+  background: var(--rp-bad-bg);
+}
+.rp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  /* min-height, not height: a chip whose label wraps (a long source title, or
+   * a phone with the system font scaled up) grew taller than its own border and
+   * the text spilled outside the box. */
+  min-height: calc(1.75rem * var(--rp-density-ctl, 1));
+  max-width: 100%;
+  padding: 0 0.625rem;
+  border-radius: var(--rp-radius-chip);
+  border: 1px solid var(--rp-line);
+  background: var(--rp-surface);
+  color: var(--rp-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  transition: background-color 150ms var(--rp-ease), color 150ms var(--rp-ease),
+    border-color 150ms var(--rp-ease);
+  cursor: pointer;
+}
+.rp-chip:hover {
+  background: var(--rp-surface-2);
+  color: var(--rp-ink);
+}
+.rp-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--rp-ring);
+}
+.rp-chip-active {
+  border-color: var(--rp-accent-fg);
+  color: var(--rp-ink);
+  background: var(--rp-wash);
+}
+.rp-input {
+  width: 100%;
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius-input);
+  background: var(--rp-surface);
+  color: var(--rp-ink);
+  padding-block: calc(0.5625rem * var(--rp-density-ctl, 1));
+  padding-inline: 0.875rem;
+  font-size: 0.875rem;
+}
+/* Leading-icon variant. The shorthand above would beat a `pl-*` utility on the
+ * element (same specificity, later in the cascade), which is what used to sit
+ * the magnifier on top of the placeholder text. */
+/* Native selects: replace the UA arrow (which hugs the edge) with a padded
+ * chevron. Mid-grey reads on both light and dark suites. */
+.rp-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-inline-end: 2.4rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5' fill='none' stroke='%238a8f9c' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.85rem center;
+}
+
+.rp-input-icon {
+  /* 9 spacing units, not a fixed rem, so the text stays clear of a `left-3`
+   * icon at every density. */
+  padding-inline-start: calc(var(--spacing, 0.25rem) * 9);
+}
+/* Input sitting flush against an attached trailing control (header search):
+ * square where the two meet, whatever the shape dial says; the control takes
+ * over the trailing corners. Same specificity story as .rp-input-icon. */
+.rp-input-flush-end {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+.rp-input::placeholder {
+  color: var(--rp-ink-3);
+}
+.rp-input:focus-visible {
+  outline: none;
+  box-shadow: var(--rp-ring);
+}
+
+/* ---------------------------------------------------------------------------
+ * iOS zoom floor.
+ *
+ * Safari and Chrome on iOS zoom the whole viewport in when a form control is
+ * focused whose COMPUTED font-size is under 16px, and leave the page zoomed
+ * afterwards. Nearly every text control in this app was under it - .rp-input is
+ * 0.875rem and the composer, the library search and the document chat all carry
+ * text-sm - so tapping into any of them jumped the layout. The font size is the
+ * fix. `user-scalable=no` or `maximum-scale=1` on the viewport meta would also
+ * stop it and is deliberately not used here: it takes pinch-zoom away from
+ * everyone, which is a WCAG 1.4.4 failure. index.html carries neither.
+ *
+ * Scoped to viewports below `lg` - every phone and tablet, and the only place
+ * the zoom happens - so desktop density is untouched. max() rather than a flat
+ * 16px so a reader who has scaled their system font up keeps the larger size
+ * instead of being pushed back down; no control in the app is sized above
+ * text-base, so this only ever raises a size.
+ *
+ * The :not() is carrying the specificity as well as its own meaning. A bare
+ * `input` selector loses to the text-sm utility sitting on the element, and the
+ * types it excludes are the ones a text size means nothing to.
+ * ------------------------------------------------------------------------- */
+@media (max-width: 1023.98px) {
+  :is(input, textarea, select):not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']) {
+    font-size: max(16px, 1rem);
+  }
+
+  /* Raising the text without raising the box would be a half fix. The compact
+   * .rp-input variants pin an explicit height (h-7, h-8, h-9) cut for 12-14px
+   * text, which leaves a 16px line as little as 8px of room; this floors them
+   * at the 44px touch target, which is also the natural height of an
+   * unconstrained .rp-input, so fields end up a consistent size on a phone.
+   * Anything already taller - a rows=8 textarea, a tall search field - is
+   * untouched, and min-height on a control with no .rp-input is not affected. */
+  .rp-input {
+    min-height: 2.75rem;
+  }
+}
+.rp-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--rp-radius-chip);
+  border: 1px solid;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.rp-badge-ok {
+  background: var(--rp-ok-bg);
+  color: var(--rp-ok-ink);
+  border-color: var(--rp-ok-line);
+}
+.rp-badge-warn {
+  background: var(--rp-warn-bg);
+  color: var(--rp-warn-ink);
+  border-color: var(--rp-warn-line);
+}
+.rp-badge-bad {
+  background: var(--rp-bad-bg);
+  color: var(--rp-bad-ink);
+  border-color: var(--rp-bad-line);
+}
+.rp-badge-quiet {
+  background: var(--rp-surface-2);
+  color: var(--rp-ink-2);
+  border-color: var(--rp-line);
+}
+
+/* ---------------------------------------------------------------------------
+ * Streaming indicator: three dots easing in and out in sequence, shown while an
+ * answer is still arriving. Calmer than a blinking block caret, and it reads as
+ * "working" rather than "cursor".
+ * ------------------------------------------------------------------------- */
+.rp-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  vertical-align: text-bottom;
+}
+
+.rp-dots > span {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background-color: var(--rp-accent);
+  animation: rp-dot 1200ms var(--rp-ease) infinite;
+}
+
+.rp-dots > span:nth-child(2) {
+  animation-delay: 160ms;
+}
+
+.rp-dots > span:nth-child(3) {
+  animation-delay: 320ms;
+}
+
+@keyframes rp-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-dots > span {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Answer stage timeline - the waiting state for an ask. A vertical run of
+ * marks joined by a connector, driven by the pipeline's own stage events.
+ * ------------------------------------------------------------------------- */
+/* Entrance. The rows fade up as the timeline first appears, each a beat after
+ * the one above - the same 4px rise and the same cadence as the handoff that
+ * later lifts them away, run in reverse. It sits on the row rather than on the
+ * pill so a step's mark and connector arrive together with their label instead
+ * of popping in ahead of it, and it is deliberately short: this is in front of
+ * someone waiting for an answer, and the last of the four has settled inside
+ * 0.4s. --rp-stage-i is the row index, set inline, and is the same variable the
+ * exit staggers on. */
+.rp-stage-row {
+  animation: rp-stage-in 260ms var(--rp-ease) both;
+  animation-delay: calc(var(--rp-stage-i, 0) * 40ms);
+}
+
+.rp-stage-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  background-color: var(--rp-surface-2);
+  color: var(--rp-ink-3);
+  transition: background-color 260ms var(--rp-ease), color 260ms var(--rp-ease);
+}
+
+.rp-stage-mark-active {
+  background-color: color-mix(in srgb, var(--rp-accent) 18%, var(--rp-surface));
+  color: var(--rp-accent);
+}
+
+.rp-stage-mark-done {
+  background-color: var(--rp-accent);
+  color: #ffffff;
+}
+
+.rp-stage-line {
+  width: 2px;
+  flex: 1;
+  min-height: 0.85rem;
+  margin-block: 0.15rem;
+  border-radius: 1px;
+  background-color: var(--rp-surface-3);
+  transition: background-color 260ms var(--rp-ease);
+}
+
+.rp-stage-line-done {
+  background-color: color-mix(in srgb, var(--rp-accent) 55%, transparent);
+}
+
+.rp-stage-pill {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  /* Same box height as the mark beside it, and no margin pushing it down, so
+   * the label and its icon share one centre line. The label used to sit 4.1px
+   * low: its own box ran 3.4px taller than the mark's 2rem and a 0.15rem margin
+   * dropped it further. padding-block stays for the case where a label wraps
+   * and min-height is no longer what governs the height. */
+  min-height: 2rem;
+  margin-block: 0;
+  padding: 0.3rem 0.9rem;
+  border-radius: var(--rp-radius-chip);
+  background-color: var(--rp-surface-2);
+  color: var(--rp-ink);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.rp-stage-pill-idle {
+  background-color: transparent;
+  color: var(--rp-ink-3);
+}
+
+.rp-stage-spin {
+  animation: rp-stage-spin 900ms linear infinite;
+  transform-origin: 50% 50%;
+}
+
+/* Handoff: once the answer starts arriving the steps lift away together, each
+ * row a beat after the one above it, and the answer fades up into the space
+ * they leave. --rp-stage-i is the row index, set inline. */
+.rp-stage-row-exit .rp-stage-mark,
+.rp-stage-row-exit .rp-stage-pill,
+.rp-stage-row-exit .rp-stage-line {
+  animation: rp-stage-out 260ms var(--rp-ease) both;
+  animation-delay: calc(var(--rp-stage-i, 0) * 45ms);
+}
+
+@keyframes rp-stage-out {
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+/* The answer body rising into place after the steps clear. */
+.rp-answer-in {
+  animation: rp-answer-in 420ms var(--rp-ease) backwards;
+}
+
+@keyframes rp-answer-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes rp-stage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rp-stage-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-stage-spin,
+  .rp-stage-row,
+  .rp-answer-in,
+  .rp-stage-row-exit .rp-stage-mark,
+  .rp-stage-row-exit .rp-stage-pill,
+  .rp-stage-row-exit .rp-stage-line {
+    animation: none;
+  }
+}
+
+/* Everything that lands after the answer itself - the confidence line, the
+ * quality meters, the answer actions, the retrieved-sources disclosure, and the
+ * follow-up questions that arrive later still. They used to appear the instant
+ * the stream ended, along with a border, a fill and a shadow snapping around
+ * the whole card; now the card's treatment never changes and these simply fade
+ * up under the answer, in the order they read. Same 4px rise, easing and
+ * --rp-stage-i stagger as the timeline they hand over from, held a beat longer
+ * because nobody is waiting on them.
+ *
+ * Fill mode is `backwards`, not `both`, on purpose. The keyframes only declare
+ * `from`, so `both` and `backwards` end on the same pixels - but `both` keeps
+ * the finished animation applied to opacity and transform forever, and Chrome
+ * treats that as a permanent stacking context on every one of these blocks.
+ * The answer-quality dropdown lives inside the actions row and was being
+ * painted under the follow-up cards that arrive after it, whatever z-index it
+ * carried. Releasing the fill once the entrance is over releases the context
+ * too, so a popover in one tail block stacks over the tail blocks below it. */
+.rp-answer-tail {
+  animation: rp-stage-in 320ms var(--rp-ease) backwards;
+  animation-delay: calc(var(--rp-stage-i, 0) * 60ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-answer-tail {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Resizable document rail. The handle is a thin hit area with a visible grip on
+ * hover or focus; the eased class is applied only when NOT dragging, because a
+ * transition during a drag lags the pointer.
+ * ------------------------------------------------------------------------- */
+.rp-rail-eased {
+  transition: grid-template-columns 420ms var(--rp-ease);
+}
+
+.rp-rail-handle {
+  position: relative;
+  width: 0.75rem;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.rp-rail-handle::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background-color: var(--rp-line);
+  transition: background-color 150ms var(--rp-ease);
+}
+
+.rp-rail-handle:hover::before,
+.rp-rail-handle:focus-visible::before {
+  background-color: var(--rp-accent);
+}
+
+.rp-rail-handle:focus-visible {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-rail-eased {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Suggested-question cards on empty Ask. Chips are right on a phone
+ * but read as an afterthought on a wide screen, where there is room to make
+ * them a real choice.
+ * ------------------------------------------------------------------------- */
+.rp-suggest-card {
+  display: flex;
+  /* Centred so a one-line question sits mid-row when its grid neighbour
+   * wraps to two lines. */
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 1rem 1.1rem;
+  text-align: left;
+  border: 1px solid var(--rp-line);
+  /* Surface radius, not button: these are two-line cards, and the button
+   * dial goes full pill at the soft shape. */
+  border-radius: var(--rp-radius);
+  background: var(--rp-surface);
+  color: var(--rp-ink);
+  transition: background-color 150ms var(--rp-ease), border-color 150ms var(--rp-ease),
+    transform 150ms var(--rp-ease);
+}
+
+.rp-suggest-card:hover {
+  background: color-mix(in srgb, var(--rp-accent) 8%, var(--rp-surface));
+  border-color: color-mix(in srgb, var(--rp-accent) 45%, var(--rp-line));
+  transform: translateY(-1px);
+}
+
+.rp-suggest-card:focus-visible {
+  outline: 2px solid var(--rp-accent);
+  outline-offset: 2px;
+}
+
+.rp-suggest-text {
+  flex: 1;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.rp-suggest-arrow {
+  color: var(--rp-ink-3);
+  transition: transform 200ms var(--rp-ease), color 150ms var(--rp-ease);
+}
+
+.rp-suggest-card:hover .rp-suggest-arrow {
+  color: var(--rp-accent);
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-suggest-card,
+  .rp-suggest-card:hover,
+  .rp-suggest-card:hover .rp-suggest-arrow {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Floating map panels align to the same gutter as the header, so the navigator
+ * sits under the logo rather than 16px off it. The rail is the shell's own
+ * geometry (max width plus padding) expressed as an inset, so it keeps matching
+ * when the shell centres on a wide display.
+ * ------------------------------------------------------------------------- */
+@media (min-width: 768px) {
+  .rp-map-gutter-left {
+    left: max(1.5rem, calc((100% - 104rem) / 2 + 1.5rem));
+  }
+
+  .rp-map-gutter-right {
+    right: max(1.5rem, calc((100% - 104rem) / 2 + 1.5rem));
+  }
+}
+
+@media (min-width: 1024px) {
+  .rp-map-gutter-left {
+    left: max(2rem, calc((100% - 104rem) / 2 + 2rem));
+  }
+
+  .rp-map-gutter-right {
+    right: max(2rem, calc((100% - 104rem) / 2 + 2rem));
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Knowledge map.
+ *
+ * The field stays the paper surface: an earlier deep-field treatment looked
+ * handsome but forced the category hues towards each other until Species and
+ * Regions were the same blue. Categorical separation wins over atmosphere, so
+ * depth comes from a very soft vignette and the per-category territory washes
+ * (drawn as SVG gradients in KnowledgeMap.tsx) instead of from a dark ground.
+ * ------------------------------------------------------------------------- */
+.rp-map {
+  background: var(--rp-surface);
+}
+
+/* Marks and links cross-fade between their emphasised and dimmed states, so
+ * hovering a hub reads as the neighbourhood lighting up rather than as a cut. */
+.rp-map-fade {
+  transition: opacity 180ms var(--rp-ease);
+}
+
+/* The map's type. Territory captions are the display face so they read as
+ * cartography rather than as more data labels. */
+.rp-map-label {
+  font-family: var(--rp-font-body);
+  font-size: 12px;
+  letter-spacing: -0.005em;
+}
+
+.rp-map-edge-label {
+  font-family: var(--rp-font-body);
+  font-size: 10.5px;
+  font-style: italic;
+}
+
+.rp-map-territory {
+  font-family: var(--rp-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+/* Keyboard focus. Every node is tabbable, so the ring has to be real - the
+ * canvas previously cleared the outline and drew nothing in its place. */
+.rp-map-node:focus {
+  outline: none;
+}
+
+.rp-map-node .rp-map-ring {
+  opacity: 0;
+}
+
+.rp-map-node:focus-visible .rp-map-ring {
+  opacity: 1;
+}
+
+/* Loading state: a pale constellation that breathes, staggered per mark. */
+@keyframes rp-map-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+.rp-map-seed {
+  animation: rp-map-breathe 2.6s var(--rp-ease) infinite;
+}
+
+@keyframes rp-map-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rp-map-spinner {
+  animation: rp-map-spin 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-map-fade {
+    transition: none;
+  }
+
+  .rp-map-seed {
+    animation: none;
+    opacity: 0.5;
+  }
+
+  .rp-map-spinner {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Knowledge map, third dimension.
+ *
+ * The WebGL canvas owns the marks; the type stays DOM, projected over it, so
+ * labels are set in the tenant's own tokens (face, ink, surface halo) instead
+ * of being rasterised into textures. The layer is inert to the pointer - the
+ * canvas underneath owns every gesture.
+ * ------------------------------------------------------------------------- */
+.rp-map3d {
+  background: var(--rp-surface);
+}
+
+.rp-map3d canvas:active {
+  cursor: grabbing;
+}
+
+/* Keyboard focus on the map itself. The shell's .rp-focus ring is an outward
+ * shadow, and a full-bleed canvas clips it at the viewport edges, so the
+ * map's indicator is drawn inward instead - the same treatment for the 2D
+ * fallback's full-bleed SVG. */
+.rp-map3d canvas:focus-visible,
+svg.rp-map:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--rp-surface), inset 0 0 0 4px var(--rp-focus);
+}
+
+.rp-map3d-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The same soft vignette the 2D map paints, kept in CSS so it follows the
+ * grey suite rather than being baked into the scene. */
+/* The floating map panels sit light over the scene: a translucent surface
+ * with a blurred backdrop so the map glows through them while their type
+ * stays readable, and no shadow - the map is the ground, not a page. */
+.rp-map-panel {
+  background: color-mix(in srgb, var(--rp-surface) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .rp-map-panel {
+    background: color-mix(in srgb, var(--rp-surface) 96%, transparent);
+  }
+}
+
+.rp-map3d-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 90% at 50% 42%,
+    transparent 55%,
+    color-mix(in srgb, var(--rp-n-300) 30%, transparent) 100%
+  );
+}
+
+/* Node labels. The layered text-shadow is the DOM version of the 2D map's
+ * paint-order stroke: a surface-coloured halo that keeps the letterforms
+ * legible over marks and links. */
+.rp-map3d-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--rp-font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  color: var(--rp-ink-2);
+  text-shadow:
+    0 1px 0 var(--rp-surface),
+    0 -1px 0 var(--rp-surface),
+    1px 0 0 var(--rp-surface),
+    -1px 0 0 var(--rp-surface),
+    1px 1px 0 var(--rp-surface),
+    -1px 1px 0 var(--rp-surface),
+    1px -1px 0 var(--rp-surface),
+    -1px -1px 0 var(--rp-surface),
+    0 0 8px var(--rp-surface);
+  will-change: transform, opacity;
+}
+
+.rp-map3d-label[data-emphasised] {
+  font-weight: 650;
+  color: var(--rp-ink);
+}
+
+/* The selected node's label steps up a size so it holds its own against the
+ * ring treatment around the mark beneath it. */
+.rp-map3d-label[data-selected] {
+  font-size: 13px;
+}
+
+.rp-map3d-edge-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--rp-font-body);
+  font-size: 10.5px;
+  font-style: italic;
+  white-space: nowrap;
+  color: var(--rp-ink-2);
+  text-shadow:
+    0 1px 0 var(--rp-surface),
+    0 -1px 0 var(--rp-surface),
+    1px 0 0 var(--rp-surface),
+    -1px 0 0 var(--rp-surface);
+  will-change: transform;
+}
+
+.rp-map3d-territory {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--rp-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  /* A solid halo, not just blur - in perspective the caption regularly sits
+   * over its own category's coloured spheres, where the ink's contrast
+   * contract against the surface does not hold. */
+  text-shadow:
+    0 1px 0 var(--rp-surface),
+    0 -1px 0 var(--rp-surface),
+    1px 0 0 var(--rp-surface),
+    -1px 0 0 var(--rp-surface),
+    1px 1px 0 var(--rp-surface),
+    -1px 1px 0 var(--rp-surface),
+    1px -1px 0 var(--rp-surface),
+    -1px -1px 0 var(--rp-surface),
+    0 0 8px var(--rp-surface);
+  transition: opacity 180ms var(--rp-ease);
+  will-change: transform;
+}
+
+/* A folded category is no longer a whisper over a blob - it IS the mark, so
+ * its caption carries the weight a mark's own name would. One step up in
+ * size only: the widths of both variants are measured, so the collision
+ * placement stays exact either way. */
+.rp-map3d-territory[data-hub] {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+}
+
+/* The hover card - scouting information beside the node under the pointer.
+ * Same translucent idiom as the panels, inert to the pointer, gone cleanly. */
+.rp-map3d-popup {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  max-width: 15rem;
+  padding: 10px 12px;
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius);
+  background: color-mix(in srgb, var(--rp-surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-family: var(--rp-font-body);
+  will-change: transform;
+}
+
+.rp-map3d-popup-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--rp-ink);
+}
+
+.rp-map3d-popup-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rp-map3d-popup-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.rp-map3d-popup-counts {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--rp-ink-2);
+}
+
+.rp-map3d-popup-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--rp-ink-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-map3d-territory {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Pointer affordance. A <button> has `cursor: default` by default, which reads
+ * as inert on icon-only controls with no text to signal they are clickable.
+ * ------------------------------------------------------------------------- */
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+label.rp-btn,
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+[role='button'][aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------------------
+ * Scrollbars on the reading surfaces. The platform default is a heavy grey
+ * slab that competes with the document; these are thin, quiet, and only really
+ * visible on hover.
+ * ------------------------------------------------------------------------- */
+.rp-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rp-surface-3) transparent;
+}
+
+.rp-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.rp-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rp-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+  background-color: var(--rp-surface-3);
+}
+
+.rp-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--rp-ink-3);
+}
+
+.rp-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile navigation - the trigger, its hamburger-to-cross morph, and the sheet.
+ *
+ * The trigger has its own class rather than .rp-btn because .rp-btn fixes a
+ * 2.25rem height that no utility can undo: component classes here are
+ * unlayered and beat Tailwind's utility layer whatever the class list says.
+ * ------------------------------------------------------------------------- */
+
+/* Sized off the same control dial as the help and account buttons beside it so
+ * the three read as one cluster, with a hard 2.75rem floor so the tap target
+ * survives the compact density (which scales controls to 0.93). */
+.rp-navtoggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: max(2.75rem, calc(2.75rem * var(--rp-density-ctl, 1)));
+  height: max(2.75rem, calc(2.75rem * var(--rp-density-ctl, 1)));
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--rp-primary) 25%, transparent);
+  border-radius: 9999px;
+  background-color: color-mix(in srgb, var(--rp-primary) 7%, transparent);
+  color: var(--rp-primary);
+  cursor: pointer;
+  transition: background-color 150ms var(--rp-ease), border-color 150ms var(--rp-ease);
+}
+
+.rp-navtoggle[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--rp-primary) 45%, transparent);
+  background-color: color-mix(in srgb, var(--rp-primary) 14%, transparent);
+}
+
+/* The morph. The three bars are the same three bars throughout - the outer two
+ * travel to the centre line and rotate into the cross, the middle one clears
+ * out of their way - so nothing cross-fades and nothing is swapped. The
+ * geometry is expressed about the icon's own centre, and the closing direction
+ * is simply the transition running back the other way. */
+.rp-navtoggle-bar {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+
+.rp-navtoggle-bar-top,
+.rp-navtoggle-bar-bot {
+  transition: transform 220ms cubic-bezier(0.2, 0.9, 0.25, 1.12);
+}
+
+/* Opening: the middle bar goes first and the arms follow it in. Closing: the
+ * arms unfold first and the middle bar drops back once they are clear. */
+.rp-navtoggle[aria-expanded='true'] .rp-navtoggle-bar-top,
+.rp-navtoggle[aria-expanded='true'] .rp-navtoggle-bar-bot {
+  transition-delay: 45ms;
+}
+
+.rp-navtoggle-bar-mid {
+  transition: opacity 130ms var(--rp-ease) 120ms, transform 180ms var(--rp-ease) 90ms;
+}
+
+.rp-navtoggle[aria-expanded='true'] .rp-navtoggle-bar-mid {
+  opacity: 0;
+  transform: scaleX(0.15);
+  transition: opacity 110ms var(--rp-ease), transform 200ms var(--rp-ease);
+}
+
+.rp-navtoggle[aria-expanded='true'] .rp-navtoggle-bar-top {
+  transform: rotate(45deg) translateY(5px) scaleX(0.82);
+}
+
+.rp-navtoggle[aria-expanded='true'] .rp-navtoggle-bar-bot {
+  transform: rotate(-45deg) translateY(-5px) scaleX(0.82);
+}
+
+/* The sheet. It hangs from under the header, so the scrim is a real layer over
+ * the page rather than a full-bleed fill, and the trigger stays on screen to
+ * morph. Panel and scrim animate opacity and transform only. */
+.rp-navsheet-scrim {
+  background-color: rgba(10, 10, 12, 0.45);
+  animation: rp-fade-in 200ms var(--rp-ease) both;
+}
+
+.rp-navsheet-panel {
+  animation: rp-navsheet-in 240ms var(--rp-ease) both;
+}
+
+/* The rows arrive on the same cadence as the stage timeline, off the same
+ * --rp-stage-i index and the same rp-stage-in / rp-stage-out keyframes, so the
+ * portal has one entrance vocabulary rather than two. Faster here: this is a
+ * menu someone opened to get somewhere, and the last row has settled inside
+ * 0.29s. */
+.rp-navsheet-item {
+  animation: rp-stage-in 180ms var(--rp-ease) both;
+  animation-delay: calc(var(--rp-stage-i, 0) * 26ms);
+}
+
+/* Exit, mirroring the entrance: the rows lift back towards the header, the
+ * panel follows them up and the scrim fades out from under it. Ordered after
+ * the entrance rules so the exit class wins on the element carrying both. */
+.rp-navsheet-item-exit {
+  animation: rp-stage-out 140ms var(--rp-ease) both;
+  animation-delay: calc(var(--rp-stage-i, 0) * 18ms);
+}
+
+.rp-navsheet-panel-exit {
+  animation: rp-navsheet-out 190ms var(--rp-ease) both;
+}
+
+.rp-navsheet-scrim-exit {
+  animation: rp-navsheet-fade-out 180ms var(--rp-ease) both;
+}
+
+@keyframes rp-navsheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes rp-navsheet-out {
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes rp-navsheet-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Support and account inside the sheet: the header's two icon buttons given
+ * their names and a full-width row, on the brand panel rather than the paper. */
+.rp-navsheet-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border: 1px solid color-mix(in srgb, var(--rp-on-primary) 30%, transparent);
+  border-radius: var(--rp-radius-btn);
+  background-color: transparent;
+  color: var(--rp-on-primary);
+  font-size: 0.9375rem;
+  /* Pinned, so the two rows keep an identical box whatever their labels are
+   * and at whatever root font size the reader has chosen. */
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms var(--rp-ease), border-color 150ms var(--rp-ease);
+}
+
+.rp-navsheet-action:hover {
+  border-color: color-mix(in srgb, var(--rp-on-primary) 55%, transparent);
+  background-color: color-mix(in srgb, var(--rp-on-primary) 12%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-navsheet-scrim,
+  .rp-navsheet-scrim-exit,
+  .rp-navsheet-panel,
+  .rp-navsheet-panel-exit,
+  .rp-navsheet-item,
+  .rp-navsheet-item-exit {
+    animation: none !important;
+  }
+
+  .rp-navtoggle-bar,
+  .rp-navsheet-action {
+    transition: none;
+  }
+}

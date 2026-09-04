@@ -1,0 +1,11 @@
+[
+  {
+    "allowedMemberTypes": ["User"],
+    "description": "Manage CorpusKit portals, bindings, content and appearance.",
+    "displayName": "CorpusKit administrator",
+    "id": "6e50cf77-3aff-4137-8e61-91bac509953e",
+    "isEnabled": true,
+    "origin": "Application",
+    "value": "CorpusKit.Admin"
+  }
+]

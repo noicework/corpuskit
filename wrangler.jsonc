@@ -1,0 +1,73 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "corpuskit",
+  "main": "dist/cloudflare/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "corpuskit.org",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.corpuskit.org",
+      "custom_domain": true
+    },
+    {
+      "pattern": "marine.corpuskit.org",
+      "custom_domain": true
+    },
+    {
+      "pattern": "grains.corpuskit.org",
+      "custom_domain": true
+    },
+    {
+      "pattern": "opax.corpuskit.org",
+      "custom_domain": true
+    },
+    {
+      "pattern": "corpuskit.noice.net.au",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PORTAL",
+        "class_name": "PortalDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["PortalDurableObject"]
+    }
+  ],
+  "triggers": {
+    "crons": ["17 15 * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "ENTRA_CLIENT_ID": "147a13c9-2a9e-4e32-aa01-3f020d2a18cd",
+    "ENTRA_TENANT_ID": "15c1eb19-1f38-4a09-bb25-7ff9892387b8",
+    "ENTRA_REDIRECT_URI": "https://corpuskit.org/auth/callback"
+  }
+}

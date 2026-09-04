@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+.next/
+.output/
+.wrangler/
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+*.auth.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*
+data/
+.claude/worktrees/
+
+# Persona evaluation transcripts - regenerate with --out, never committed
+persona-eval-*.json
