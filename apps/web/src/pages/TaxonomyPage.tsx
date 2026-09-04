@@ -8,6 +8,7 @@ import { ErrorCard, Skeleton } from '../components/ui.tsx'
 import { MessagePanel } from './admin/MessagePanel.tsx'
 import { errorMessage, inputClass, type Message } from './admin/shared.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
+import { getAuthSession } from '../api/auth.ts'
 
 function LabelsetCard({
   labelset,
@@ -78,17 +79,21 @@ function LabelsetCard({
 
 function AddLabelsetCard({
   slug,
+  credential,
+  ssoAdmin,
   onAdded,
 }: {
   slug: string
+  /** The admin credential ManagePage would send: `microsoft-sso` or the passcode. */
+  credential: string
+  /** A signed-in administrator needs no passcode field. */
+  ssoAdmin: boolean
   onAdded: () => Promise<unknown>
 }) {
   const [title, setTitle] = useState('')
   const [multiple, setMultiple] = useState(false)
   const [seed, setSeed] = useState('')
-  const [passcode, setPasscode] = useState(
-    () => sessionStorage.getItem('rp-admin-passcode') ?? '',
-  )
+  const [passcode, setPasscode] = useState(credential)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -102,7 +107,11 @@ function AddLabelsetCard({
     setBusy(true)
     setMessage(null)
     try {
-      await createAdminLabelset(slug, passcode, { title: title.trim(), multiple, labels })
+      await createAdminLabelset(slug, ssoAdmin ? 'microsoft-sso' : passcode, {
+        title: title.trim(),
+        multiple,
+        labels,
+      })
       setMessage({ tone: 'ok', text: `Added "${title.trim()}" - it will appear once indexed.` })
       setTitle('')
       setSeed('')
@@ -186,23 +195,25 @@ function AddLabelsetCard({
           />
         </div>
 
-        <div>
-          <label
-            htmlFor='taxonomy-passcode'
-            className='mb-1.5 block text-sm font-medium text-ink'
-          >
-            Admin passcode
-          </label>
-          <input
-            id='taxonomy-passcode'
-            type='password'
-            className={inputClass}
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            autoComplete='off'
-            required
-          />
-        </div>
+        {!ssoAdmin && (
+          <div>
+            <label
+              htmlFor='taxonomy-passcode'
+              className='mb-1.5 block text-sm font-medium text-ink'
+            >
+              Admin passcode
+            </label>
+            <input
+              id='taxonomy-passcode'
+              type='password'
+              className={inputClass}
+              value={passcode}
+              onChange={(e) => setPasscode(e.target.value)}
+              autoComplete='off'
+              required
+            />
+          </div>
+        )}
 
         <button
           type='submit'
@@ -240,7 +251,18 @@ export function TaxonomyPage() {
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const queryClient = useQueryClient()
-  const isAdmin = Boolean(sessionStorage.getItem('rp-admin-passcode'))
+  // Same administrator rule as ManagePage: a signed-in administrator
+  // (Microsoft SSO) or the session passcode; SSO sends `microsoft-sso`.
+  const { data: auth } = useQuery({
+    queryKey: ['auth-session'],
+    queryFn: getAuthSession,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const ssoAdmin = auth?.user?.isAdmin === true
+  const passcode = sessionStorage.getItem('rp-admin-passcode') ?? ''
+  const isAdmin = ssoAdmin || passcode.length > 0
+  const adminCredential = ssoAdmin ? 'microsoft-sso' : passcode
 
   const {
     data: labelsets,
@@ -300,7 +322,16 @@ export function TaxonomyPage() {
               organisation={config.branding.organisation}
             />
           ))}
-          {isAdmin ? <AddLabelsetCard slug={slug} onAdded={refreshAll} /> : null}
+          {isAdmin
+            ? (
+              <AddLabelsetCard
+                slug={slug}
+                credential={adminCredential}
+                ssoAdmin={ssoAdmin}
+                onAdded={refreshAll}
+              />
+            )
+            : null}
         </div>
       )}
     </main>

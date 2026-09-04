@@ -326,7 +326,11 @@ export function ManagePage() {
                   {reachable
                     ? (
                       <>
-                        <LabelsetsPanel slug={slug} passcode={adminCredential} />
+                        <LabelsetsPanel
+                          slug={slug}
+                          passcode={adminCredential}
+                          organisation={config.branding.organisation}
+                        />
                         <AnalysePanel slug={slug} passcode={adminCredential} />
                         <InterrogatePanel slug={slug} passcode={adminCredential} />
                       </>

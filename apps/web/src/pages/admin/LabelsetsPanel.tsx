@@ -2,25 +2,26 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Labelset } from '@research-portal/core'
 import {
+  createAdminLabelset,
   getLabelsets,
   LabelsetSaveError,
   type LabelsetUpdateResult,
   updateAdminLabelset,
 } from '../../api/client.ts'
-import { EmptyState, ErrorCard, prettyLabel, Skeleton } from '../../components/ui.tsx'
+import { ErrorCard, prettyLabel, Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
 // Mirrors the server's schema so problems surface before a save attempt.
-const TITLE_MAX = 60
-const LABEL_MAX = 60
-const TEXT_MAX = 600
-const LABELS_MAX = 60
+export const TITLE_MAX = 60
+export const LABEL_MAX = 60
+export const TEXT_MAX = 600
+export const LABELS_MAX = 60
 
-type DraftLabel = { title: string; text: string }
-type Draft = { title: string; multiple: boolean; labels: DraftLabel[] }
+export type DraftLabel = { title: string; text: string }
+export type Draft = { title: string; multiple: boolean; labels: DraftLabel[] }
 
-function draftFrom(labelset: Labelset): Draft {
+export function draftFrom(labelset: Labelset): Draft {
   return {
     title: labelset.title,
     multiple: labelset.multiple,
@@ -31,8 +32,12 @@ function draftFrom(labelset: Labelset): Draft {
   }
 }
 
+export function blankDraft(): Draft {
+  return { title: '', multiple: false, labels: [{ title: '', text: '' }] }
+}
+
 /** Trimmed, as the server will see it. */
-function normalise(draft: Draft): Draft {
+export function normalise(draft: Draft): Draft {
   return {
     title: draft.title.trim(),
     multiple: draft.multiple,
@@ -40,11 +45,16 @@ function normalise(draft: Draft): Draft {
   }
 }
 
-function sameDraft(a: Draft, b: Draft): boolean {
+export function sameDraft(a: Draft, b: Draft): boolean {
   return JSON.stringify(normalise(a)) === JSON.stringify(normalise(b))
 }
 
-function validate(draft: Draft): string[] {
+/** The id the create route derives from a set's name. */
+export function labelsetIdFrom(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+export function validate(draft: Draft): string[] {
   const problems: string[] = []
   const title = draft.title.trim()
   if (!title) problems.push('The set needs a name.')
@@ -74,7 +84,21 @@ function validate(draft: Draft): string[] {
   return problems
 }
 
-function resultMessage(title: string, result: LabelsetUpdateResult): string {
+/** Validation for a set that does not exist yet: the derived id must be usable and free. */
+export function validateNew(draft: Draft, existingIds: string[]): string[] {
+  const problems = validate(draft)
+  const title = draft.title.trim()
+  if (title) {
+    const id = labelsetIdFrom(title)
+    if (!id) problems.push('The name needs at least one letter or digit.')
+    else if (existingIds.includes(id)) {
+      problems.push(`A set with the id "${id}" already exists - choose another name.`)
+    }
+  }
+  return problems
+}
+
+export function resultMessage(title: string, result: LabelsetUpdateResult): string {
   if (result.agents.length === 0) {
     return `Saved "${title}". No labeller carries this set, so no agent was restarted.`
   }
@@ -84,6 +108,11 @@ function resultMessage(title: string, result: LabelsetUpdateResult): string {
   const noun = result.agents.length === 1 ? 'labeller' : 'labellers'
   return `Saved "${title}". Re-instantiated ${result.agents.length} ${noun} for new resources ` +
     `only: ${names}.`
+}
+
+export function createdMessage(title: string, id: string): string {
+  return `Created "${title}" (${id}). Nothing carries a new set yet, so no agent was created ` +
+    'or restarted - run analysis or the knowledge graph tools when you want a labeller for it.'
 }
 
 function CardinalitySwitch({
@@ -174,91 +203,56 @@ function LabelRow({
   )
 }
 
-function LabelsetEditor({
-  slug,
-  passcode,
-  labelset,
+/** The shared body of both forms: name, cardinality and the label rows. */
+function DraftFields({
+  setId,
   draft,
-  onDraft,
-  onSaved,
-  organisation,
+  busy,
+  onChange,
+  idPreview,
 }: {
-  slug: string
-  passcode: string
-  labelset: Labelset
+  setId: string
   draft: Draft
-  onDraft: (next: Draft | null) => void
-  onSaved: () => Promise<unknown>
-  organisation: string
+  busy: boolean
+  onChange: (next: Draft) => void
+  /** Shown under the name for a set that does not exist yet. */
+  idPreview?: string
 }) {
-  const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<Message | null>(null)
-  const [previous, setPrevious] = useState<unknown>(null)
-
-  const baseline = draftFrom(labelset)
-  const dirty = !sameDraft(draft, baseline)
-  const problems = validate(draft)
-  const canSave = dirty && problems.length === 0 && !saving
-
-  const update = (patch: Partial<Draft>) => onDraft({ ...draft, ...patch })
+  const update = (patch: Partial<Draft>) => onChange({ ...draft, ...patch })
   const updateLabel = (index: number, patch: Partial<DraftLabel>) =>
     update({ labels: draft.labels.map((l, i) => i === index ? { ...l, ...patch } : l) })
 
-  const onSave = async () => {
-    setSaving(true)
-    setMessage(null)
-    setPrevious(null)
-    const body = normalise(draft)
-    try {
-      const result = await updateAdminLabelset(slug, passcode, labelset.id, body)
-      setMessage({ tone: 'ok', text: resultMessage(body.title, result) })
-      onDraft(null)
-      await onSaved()
-    } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save this label set.') })
-      if (err instanceof LabelsetSaveError && err.previous) setPrevious(err.previous)
-    } finally {
-      setSaving(false)
-    }
-  }
-
   return (
-    <div className='relative rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div className='min-w-0'>
-          <p className='text-sm font-semibold text-ink'>
-            {prettyLabel(labelset.title, organisation)}
-          </p>
-          <p className='mt-0.5 font-mono text-xs text-ink-3'>{labelset.id}</p>
-        </div>
-        <span className='rp-badge'>
-          {labelset.kind === 'PARAGRAPHS' ? 'Passage level' : 'Document level'}
-        </span>
-      </div>
-
-      <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto]'>
+    <>
+      <div className='grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto]'>
         <div className='min-w-0'>
           <label
-            htmlFor={`ls-${labelset.id}-title`}
+            htmlFor={`ls-${setId}-title`}
             className='mb-1.5 block text-sm font-medium text-ink'
           >
             Name
           </label>
           <input
-            id={`ls-${labelset.id}-title`}
+            id={`ls-${setId}-title`}
             className='rp-input'
             value={draft.title}
             maxLength={TITLE_MAX}
-            disabled={saving}
+            disabled={busy}
             autoComplete='off'
+            placeholder={idPreview !== undefined ? 'e.g. Region' : undefined}
             onChange={(e) => update({ title: e.target.value })}
           />
+          {idPreview !== undefined && (
+            <p className='mt-1 text-xs text-ink-3'>
+              Id: <span className='font-mono'>{idPreview || 'derived from the name'}</span>
+            </p>
+          )}
         </div>
         <div>
           <p className='mb-1.5 block text-sm font-medium text-ink'>Values per resource</p>
           <CardinalitySwitch
             multiple={draft.multiple}
-            disabled={saving}
+            disabled={busy}
             onChange={(multiple) => update({ multiple })}
           />
         </div>
@@ -290,8 +284,8 @@ function LabelsetEditor({
               key={index}
               label={label}
               index={index}
-              setId={labelset.id}
-              disabled={saving}
+              setId={setId}
+              disabled={busy}
               onChange={(patch) => updateLabel(index, patch)}
               onRemove={() => update({ labels: draft.labels.filter((_, i) => i !== index) })}
             />
@@ -303,29 +297,104 @@ function LabelsetEditor({
 
         <button
           type='button'
-          disabled={saving || draft.labels.length >= LABELS_MAX}
+          disabled={busy || draft.labels.length >= LABELS_MAX}
           onClick={() => update({ labels: [...draft.labels, { title: '', text: '' }] })}
           className='rp-btn rp-btn-outline mt-3'
         >
           Add label
         </button>
       </div>
+    </>
+  )
+}
 
-      {problems.length > 0 && dirty && (
-        <div
-          className='mt-4 rounded-[var(--rp-radius)] border px-4 py-3 text-sm'
-          style={{
-            background: 'var(--rp-warn-bg)',
-            borderColor: 'var(--rp-warn-line)',
-            color: 'var(--rp-warn-ink)',
-          }}
-        >
-          <p className='font-medium'>Before this can be saved:</p>
-          <ul className='mt-1 list-disc space-y-0.5 pl-5'>
-            {problems.map((p, i) => <li key={i}>{p}</li>)}
-          </ul>
+function ProblemList({ problems }: { problems: string[] }) {
+  if (problems.length === 0) return null
+  return (
+    <div
+      className='mt-4 rounded-[var(--rp-radius)] border px-4 py-3 text-sm'
+      style={{
+        background: 'var(--rp-warn-bg)',
+        borderColor: 'var(--rp-warn-line)',
+        color: 'var(--rp-warn-ink)',
+      }}
+    >
+      <p className='font-medium'>Before this can be saved:</p>
+      <ul className='mt-1 list-disc space-y-0.5 pl-5'>
+        {problems.map((p, i) => <li key={i}>{p}</li>)}
+      </ul>
+    </div>
+  )
+}
+
+function LabelsetEditor({
+  slug,
+  passcode,
+  labelset,
+  draft,
+  notice,
+  onDraft,
+  onSaved,
+  organisation,
+}: {
+  slug: string
+  passcode: string
+  labelset: Labelset
+  draft: Draft
+  /** A message from the panel (e.g. the set was just created). */
+  notice: Message | null
+  onDraft: (next: Draft | null) => void
+  onSaved: () => Promise<unknown>
+  organisation: string
+}) {
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<Message | null>(null)
+  const [previous, setPrevious] = useState<unknown>(null)
+
+  const baseline = draftFrom(labelset)
+  const dirty = !sameDraft(draft, baseline)
+  const problems = validate(draft)
+  const canSave = dirty && problems.length === 0 && !saving
+
+  const onSave = async () => {
+    setSaving(true)
+    setMessage(null)
+    setPrevious(null)
+    const body = normalise(draft)
+    try {
+      const result = await updateAdminLabelset(slug, passcode, labelset.id, body)
+      setMessage({ tone: 'ok', text: resultMessage(body.title, result) })
+      onDraft(null)
+      await onSaved()
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save this label set.') })
+      if (err instanceof LabelsetSaveError && err.previous) setPrevious(err.previous)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className='relative rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
+      {notice && !dirty && !message && <MessagePanel message={notice} className='mb-4' />}
+
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='text-sm font-semibold text-ink'>
+            {prettyLabel(labelset.title, organisation)}
+          </p>
+          <p className='mt-0.5 font-mono text-xs text-ink-3'>{labelset.id}</p>
         </div>
-      )}
+        <span className='rp-badge'>
+          {labelset.kind === 'PARAGRAPHS' ? 'Passage level' : 'Document level'}
+        </span>
+      </div>
+
+      <div className='mt-4'>
+        <DraftFields setId={labelset.id} draft={draft} busy={saving} onChange={onDraft} />
+      </div>
+
+      {dirty && <ProblemList problems={problems} />}
 
       {message && <MessagePanel message={message} className='mt-4' />}
 
@@ -384,11 +453,110 @@ function LabelsetEditor({
 }
 
 /**
- * Label sets and their per-label definitions, editable in place. The list on
- * the left picks a set; the editor on the right owns its name, cardinality
- * and one row per label. Saving writes the set to the knowledge box and
- * re-instantiates every labeller that carries it, for new resources only.
- * Unsaved edits are kept per set, so switching sets loses nothing.
+ * Create a set in place: name (the id is derived from it the way the create
+ * route does), cardinality and one or more label rows with definitions.
+ * Nothing carries a brand-new set, so no agent is created or restarted.
+ */
+function NewLabelsetForm({
+  slug,
+  passcode,
+  existingIds,
+  onCreated,
+  onCancel,
+}: {
+  slug: string
+  passcode: string
+  existingIds: string[]
+  onCreated: (id: string, title: string) => Promise<unknown>
+  /** Absent for the first set, where there is nothing to go back to. */
+  onCancel?: () => void
+}) {
+  const [draft, setDraft] = useState<Draft>(blankDraft)
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<Message | null>(null)
+
+  const problems = validateNew(draft, existingIds)
+  const id = labelsetIdFrom(draft.title)
+  const canCreate = problems.length === 0 && !busy
+
+  const onSubmit = async () => {
+    setBusy(true)
+    setMessage(null)
+    const body = normalise(draft)
+    try {
+      const created = await createAdminLabelset(slug, passcode, body)
+      await onCreated(created.id, body.title)
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not create this label set.') })
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className='rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div>
+          <p className='text-sm font-semibold text-ink'>New label set</p>
+          <p className='mt-0.5 text-xs text-ink-3'>
+            Name it, choose how many values a resource may carry, and define its labels.
+          </p>
+        </div>
+        {onCancel && (
+          <button
+            type='button'
+            disabled={busy}
+            onClick={onCancel}
+            className='rp-btn rp-btn-ghost h-8 px-2.5 text-xs'
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+
+      <div className='mt-4'>
+        <DraftFields
+          setId='new'
+          draft={draft}
+          busy={busy}
+          idPreview={id}
+          onChange={(next) => {
+            setTouched(true)
+            setDraft(next)
+          }}
+        />
+      </div>
+
+      {touched && <ProblemList problems={problems} />}
+
+      {message && <MessagePanel message={message} className='mt-4' />}
+
+      <p className='mt-4 text-xs text-ink-3'>
+        Creating a set writes it to the knowledge box. Nothing carries a new set yet, so no agent is
+        created or restarted.
+      </p>
+
+      <div className='mt-4 flex flex-col gap-2 sm:flex-row sm:items-center'>
+        <button
+          type='button'
+          disabled={!canCreate}
+          onClick={() => void onSubmit()}
+          className='rp-btn rp-btn-primary w-full sm:w-auto'
+        >
+          {busy ? 'Creating…' : 'Create label set'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Label sets and their per-label definitions, created and edited in place.
+ * The list on the left picks a set (or starts a new one); the editor on the
+ * right owns its name, cardinality and one row per label. Saving writes the
+ * set to the knowledge box and re-instantiates every labeller that carries
+ * it, for new resources only. Unsaved edits are kept per set, so switching
+ * sets loses nothing.
  */
 export function LabelsetsPanel({
   slug,
@@ -405,6 +573,8 @@ export function LabelsetsPanel({
     queryFn: () => getLabelsets(slug),
   })
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [notice, setNotice] = useState<Message | null>(null)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
 
   const selected = labelsets?.find((ls) => ls.id === selectedId) ?? labelsets?.[0] ?? null
@@ -422,12 +592,25 @@ export function LabelsetsPanel({
       return copy
     })
 
-  const onSaved = () =>
+  const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ['labelsets', slug] }),
       queryClient.invalidateQueries({ queryKey: ['facets', slug] }),
       queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] }),
     ])
+
+  const onCreated = async (id: string, title: string) => {
+    await refresh()
+    setNotice({ tone: 'ok', text: createdMessage(title, id) })
+    setSelectedId(id)
+    setCreating(false)
+  }
+
+  const select = (id: string) => {
+    setNotice(null)
+    setCreating(false)
+    setSelectedId(id)
+  }
 
   return (
     <section
@@ -460,68 +643,103 @@ export function LabelsetsPanel({
 
       {labelsets && labelsets.length === 0 && (
         <div className='mt-4'>
-          <EmptyState
-            title='No label sets yet'
-            description='Add a category on the Taxonomy page, then define its labels here.'
-          />
+          <p className='text-sm text-ink-2'>
+            No label sets yet. Create the first one here - its labels and definitions become the
+            vocabulary a labeller classifies against.
+          </p>
+          <div className='mt-3'>
+            <NewLabelsetForm
+              slug={slug}
+              passcode={passcode}
+              existingIds={[]}
+              onCreated={onCreated}
+            />
+          </div>
         </div>
       )}
 
       {labelsets && labelsets.length > 0 && selected && (
         <div className='mt-4 grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
-          <ul
-            aria-label='Label sets'
-            className='rp-no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 md:mx-0 md:flex-col md:overflow-visible md:px-0'
-          >
-            {labelsets.map((ls) => {
-              const active = ls.id === selected.id
-              return (
-                <li key={ls.id} className='shrink-0 md:shrink'>
-                  <button
-                    type='button'
-                    onClick={() => setSelectedId(ls.id)}
-                    aria-current={active ? 'true' : undefined}
-                    className={`w-full rounded-[var(--rp-radius)] border px-3 py-2 text-left transition-colors duration-150 ${
-                      active
-                        ? 'border-[var(--rp-line-2)] bg-[var(--rp-wash)] text-ink'
-                        : 'border-transparent text-ink-2 hover:bg-[var(--rp-surface-3)] hover:text-[var(--rp-ink)]'
-                    }`}
-                  >
-                    <span className='flex items-center gap-2'>
-                      <span className='truncate text-sm font-medium'>
-                        {prettyLabel(ls.title, organisation)}
+          <div className='flex flex-col gap-2'>
+            <button
+              type='button'
+              onClick={() => {
+                setNotice(null)
+                setCreating(true)
+              }}
+              aria-pressed={creating}
+              className={`rp-btn w-full ${creating ? 'rp-btn-primary' : 'rp-btn-outline'}`}
+            >
+              New label set
+            </button>
+            <ul
+              aria-label='Label sets'
+              className='rp-no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 md:mx-0 md:flex-col md:overflow-visible md:px-0'
+            >
+              {labelsets.map((ls) => {
+                const active = !creating && ls.id === selected.id
+                return (
+                  <li key={ls.id} className='shrink-0 md:shrink'>
+                    <button
+                      type='button'
+                      onClick={() => select(ls.id)}
+                      aria-current={active ? 'true' : undefined}
+                      className={`w-full rounded-[var(--rp-radius)] border px-3 py-2 text-left transition-colors duration-150 ${
+                        active
+                          ? 'border-[var(--rp-line-2)] bg-[var(--rp-wash)] text-ink'
+                          : 'border-transparent text-ink-2 hover:bg-[var(--rp-surface-3)] hover:text-[var(--rp-ink)]'
+                      }`}
+                    >
+                      <span className='flex items-center gap-2'>
+                        <span className='truncate text-sm font-medium'>
+                          {prettyLabel(ls.title, organisation)}
+                        </span>
+                        {dirtyIds.has(ls.id) && (
+                          <span
+                            className='h-1.5 w-1.5 shrink-0 rounded-full'
+                            style={{ background: 'var(--rp-warn-ink)' }}
+                            aria-label='Unsaved changes'
+                          />
+                        )}
                       </span>
-                      {dirtyIds.has(ls.id) && (
-                        <span
-                          className='h-1.5 w-1.5 shrink-0 rounded-full'
-                          style={{ background: 'var(--rp-warn-ink)' }}
-                          aria-label='Unsaved changes'
-                        />
-                      )}
-                    </span>
-                    <span className='mt-0.5 block whitespace-nowrap text-xs text-ink-3 md:whitespace-normal'>
-                      <span className='font-mono'>{ls.id}</span>
-                      {' · '}
-                      {ls.multiple ? 'Multiple' : 'Single'}
-                      {' · '}
-                      {ls.labels.length} {ls.labels.length === 1 ? 'label' : 'labels'}
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+                      <span className='mt-0.5 block whitespace-nowrap text-xs text-ink-3 md:whitespace-normal'>
+                        <span className='font-mono'>{ls.id}</span>
+                        {' · '}
+                        {ls.multiple ? 'Multiple' : 'Single'}
+                        {' · '}
+                        {ls.labels.length} {ls.labels.length === 1 ? 'label' : 'labels'}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
 
-          <LabelsetEditor
-            key={selected.id}
-            slug={slug}
-            passcode={passcode}
-            labelset={selected}
-            draft={drafts[selected.id] ?? draftFrom(selected)}
-            onDraft={(next) => setDraft(selected.id, next)}
-            onSaved={onSaved}
-            organisation={organisation}
-          />
+          {creating
+            ? (
+              <NewLabelsetForm
+                slug={slug}
+                passcode={passcode}
+                existingIds={labelsets.map((ls) => ls.id)}
+                onCreated={onCreated}
+                onCancel={() =>
+                  setCreating(false)}
+              />
+            )
+            : (
+              <LabelsetEditor
+                key={selected.id}
+                slug={slug}
+                passcode={passcode}
+                labelset={selected}
+                draft={drafts[selected.id] ?? draftFrom(selected)}
+                notice={notice}
+                onDraft={(next) => setDraft(selected.id, next)}
+                onSaved={refresh}
+                organisation={organisation}
+              />
+            )}
         </div>
       )}
     </section>

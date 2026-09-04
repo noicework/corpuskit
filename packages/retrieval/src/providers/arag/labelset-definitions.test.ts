@@ -123,6 +123,27 @@ describe('AragProvider.labelsets - definitions', () => {
   })
 })
 
+describe('AragProvider.createLabelset', () => {
+  it('writes plain titles as before and text for title + definition pairs', async () => {
+    const { provider, calls } = harness((call) =>
+      call.method === 'POST' && call.url.endsWith('/labelset/region') ? jsonResponse({}) : undefined
+    )
+    await provider.createLabelset(TENANT, {
+      id: 'region',
+      title: 'Region',
+      multiple: false,
+      labels: ['North', { title: 'South', text: 'Southern waters.' }, { title: 'East' }],
+    })
+    expect(calls[0]?.body).toEqual({
+      title: 'Region',
+      color: '#556b5f',
+      multiple: false,
+      kind: ['RESOURCES'],
+      labels: [{ title: 'North' }, { title: 'South', text: 'Southern waters.' }, { title: 'East' }],
+    })
+  })
+})
+
 describe('AragProvider.updateLabelset', () => {
   it('reads the existing set, then posts the full replacement keeping colour and kind', async () => {
     const { provider, calls } = harness((call) => {

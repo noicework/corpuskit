@@ -523,11 +523,14 @@ export function discoverCrawl(
   )
 }
 
+/** Labels for a new set: plain titles, or title + definition pairs. */
+export type NewLabelsetLabel = string | { title: string; text?: string }
+
 export function createAdminLabelset(
   slug: string,
   passcode: string,
-  input: { title: string; multiple: boolean; labels: string[] },
-): Promise<{ ok: boolean }> {
+  input: { title: string; multiple: boolean; labels: NewLabelsetLabel[] },
+): Promise<{ ok: boolean; id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/labelsets`, passcode, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
