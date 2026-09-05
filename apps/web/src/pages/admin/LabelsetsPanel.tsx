@@ -635,12 +635,12 @@ export function LabelsetsPanel({
             </button>
             <ul
               aria-label='Label sets'
-              className='rp-no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 md:mx-0 md:flex-col md:overflow-visible md:px-0'
+              className='flex flex-col gap-2'
             >
               {labelsets.map((ls) => {
                 const active = !creating && ls.id === selected.id
                 return (
-                  <li key={ls.id} className='shrink-0 md:shrink'>
+                  <li key={ls.id}>
                     <button
                       type='button'
                       onClick={() => select(ls.id)}
