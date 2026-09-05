@@ -631,7 +631,13 @@ export const DOC_PAGES: DocPage[] = [
           'are what the labelling agents classify against. Edit a label set under Manage > ' +
           'Taxonomy: saving it restarts every labeller that carries the set so it picks up the new ' +
           'labels and definitions, and the restarted labeller applies to new resources only - ' +
-          'nothing already in the corpus is reprocessed or relabelled.',
+          'nothing already in the corpus is reprocessed or relabelled.\n\n' +
+          'Create a set under Manage > Taxonomy (or from the Taxonomy page): give it a name - ' +
+          'its id is derived from the name, so "Marine Region" becomes marine-region - choose ' +
+          'whether a resource may carry one value or several, and add its labels with their ' +
+          'definitions. Nothing carries a brand-new set, so creating one neither creates nor ' +
+          'restarts any agent; a labeller for it comes from running analysis or the knowledge ' +
+          'graph tools. Editing a set later restarts only the labellers that carry it.',
       },
       {
         heading: 'Enrichments',

@@ -42,13 +42,12 @@ export function AnalysePanel({ slug, passcode }: { slug: string; passcode: strin
   }
 
   return (
-    <div className='mt-5 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
+    <div className='mt-6 border-t border-line pt-5'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <p className='text-sm font-semibold text-ink'>Analyse and configure</p>
-          <p className='mt-0.5 text-xs text-ink-3'>
-            Interrogates the box and derives the taxonomy, graph dimensions and suggested questions
-            from what is actually in it.
+          <h3 className='text-sm font-semibold text-ink'>Analyse and configure</h3>
+          <p className='mt-0.5 text-xs text-ink-2'>
+            Derives the taxonomy, graph dimensions and suggested questions from the corpus.
           </p>
         </div>
         <button

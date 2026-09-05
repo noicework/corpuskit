@@ -313,13 +313,15 @@ export function ManagePage() {
               )}
 
               {tab === 'taxonomy' && (
+                // One container: the tab card. Everything inside is a flat
+                // section (heading, then controls), separated by hairlines.
                 <div className='rp-card p-5'>
-                  <div className='flex flex-wrap items-center justify-between gap-3'>
-                    <p className='text-sm text-ink-2'>
-                      Edit label sets and their definitions, run analysis, or open the full taxonomy
-                      view.
-                    </p>
-                    <Link to={`/t/${slug}/taxonomy`} className='rp-btn rp-btn-outline'>
+                  <div className='flex flex-wrap items-baseline justify-between gap-3'>
+                    <h3 className='text-sm font-semibold text-ink'>Label sets</h3>
+                    <Link
+                      to={`/t/${slug}/taxonomy`}
+                      className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
+                    >
                       Open taxonomy &rarr;
                     </Link>
                   </div>
