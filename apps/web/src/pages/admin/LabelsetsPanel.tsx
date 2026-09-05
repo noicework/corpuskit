@@ -110,9 +110,8 @@ export function resultMessage(title: string, result: LabelsetUpdateResult): stri
     `only: ${names}.`
 }
 
-export function createdMessage(title: string, id: string): string {
-  return `Created "${title}" (${id}). Nothing carries a new set yet, so no agent was created ` +
-    'or restarted - run analysis or the knowledge graph tools when you want a labeller for it.'
+export function createdMessage(title: string): string {
+  return `Created "${title}". No labeller was created or restarted.`
 }
 
 function CardinalitySwitch({
@@ -166,7 +165,7 @@ function LabelRow({
   const textId = `ls-${setId}-text-${index}`
   return (
     // One grid row on md+ (name | definition | remove); stacked on a phone,
-    // where a divider keeps each label's trio reading as one row.
+    // where a hairline keeps each label's trio reading as one row.
     <div className='grid grid-cols-1 items-start gap-2 border-b border-line pb-3 last:border-b-0 last:pb-0 md:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] md:border-b-0 md:pb-0'>
       <input
         id={nameId}
@@ -183,7 +182,7 @@ function LabelRow({
         id={textId}
         className='rp-input'
         rows={2}
-        placeholder='Definition - what this label means and when it applies'
+        placeholder='Definition'
         aria-label={`Definition of label ${label.title.trim() || index + 1}`}
         value={label.text}
         maxLength={TEXT_MAX}
@@ -215,7 +214,7 @@ function DraftFields({
   draft: Draft
   busy: boolean
   onChange: (next: Draft) => void
-  /** Shown under the name for a set that does not exist yet. */
+  /** For a set that does not exist yet: the derived id, shown once a name is typed. */
   idPreview?: string
 }) {
   const update = (patch: Partial<Draft>) => onChange({ ...draft, ...patch })
@@ -242,11 +241,13 @@ function DraftFields({
             placeholder={idPreview !== undefined ? 'e.g. Region' : undefined}
             onChange={(e) => update({ title: e.target.value })}
           />
-          {idPreview !== undefined && (
-            <p className='mt-1 text-xs text-ink-3'>
-              Id: <span className='font-mono'>{idPreview || 'derived from the name'}</span>
-            </p>
-          )}
+          {idPreview
+            ? (
+              <p className='mt-1 text-xs text-ink-3'>
+                Id: <span className='font-mono'>{idPreview}</span>
+              </p>
+            )
+            : null}
         </div>
         <div>
           <p className='mb-1.5 block text-sm font-medium text-ink'>Values per resource</p>
@@ -260,13 +261,7 @@ function DraftFields({
 
       <div className='mt-5'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
-          <div>
-            <p className='text-sm font-semibold text-ink'>Labels and definitions</p>
-            <p className='mt-0.5 text-xs text-ink-3'>
-              A definition says what the label means and when it applies - it is what the labeller
-              classifies against.
-            </p>
-          </div>
+          <p className='text-sm font-medium text-ink'>Labels and definitions</p>
           <span className='rp-badge'>
             {draft.labels.length} of {LABELS_MAX}
           </span>
@@ -290,9 +285,7 @@ function DraftFields({
               onRemove={() => update({ labels: draft.labels.filter((_, i) => i !== index) })}
             />
           ))}
-          {draft.labels.length === 0 && (
-            <p className='text-sm text-ink-3'>No labels - add at least one to save.</p>
-          )}
+          {draft.labels.length === 0 && <p className='text-sm text-ink-3'>No labels.</p>}
         </div>
 
         <button
@@ -375,7 +368,7 @@ function LabelsetEditor({
   }
 
   return (
-    <div className='relative rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
+    <div className='relative min-w-0'>
       {notice && !dirty && !message && <MessagePanel message={notice} className='mb-4' />}
 
       <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -399,25 +392,22 @@ function LabelsetEditor({
       {message && <MessagePanel message={message} className='mt-4' />}
 
       {previous !== null && (
-        <details className='mt-3 rounded-[var(--rp-radius)] border border-line bg-surface-2 px-4 py-3 text-sm text-ink-2'>
+        <details className='mt-3 text-sm text-ink-2'>
           <summary className='cursor-pointer font-medium text-ink'>
             Previous agent configuration - keep this to restore the labeller by hand
           </summary>
-          <pre className='mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-ink-2'>
+          <pre className='mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[var(--rp-radius)] bg-surface-2 p-3 font-mono text-xs text-ink-2'>
             {JSON.stringify(previous, null, 2)}
           </pre>
         </details>
       )}
 
-      <p className='mt-4 text-xs text-ink-3'>
-        Saving replaces this set on the knowledge box and restarts every labeller that carries it,
-        for new resources only. Resources already in the corpus keep their current labels.
-      </p>
-
       {dirty && (
-        <div className='sticky bottom-0 z-10 -mx-4 -mb-4 mt-4 border-t border-line bg-surface-2 px-4 py-3 shadow-[var(--rp-shadow-md)]'>
+        <div className='sticky bottom-0 z-10 mt-4 border-t border-line bg-surface py-3'>
           <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3'>
-            <p className='text-xs text-ink-3'>Unsaved changes</p>
+            <p className='text-xs text-ink-3'>
+              Saving restarts this set's labellers for new resources.
+            </p>
             <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
               <button
                 type='button'
@@ -437,12 +427,7 @@ function LabelsetEditor({
                 onClick={() => void onSave()}
                 className='rp-btn rp-btn-primary w-full sm:w-auto'
               >
-                {saving ? 'Saving…' : (
-                  <>
-                    <span className='sm:hidden'>Save</span>
-                    <span className='hidden sm:inline'>Save and restart labellers</span>
-                  </>
-                )}
+                {saving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>
@@ -494,15 +479,10 @@ function NewLabelsetForm({
   }
 
   return (
-    <div className='rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div>
+    <div className='min-w-0'>
+      {onCancel && (
+        <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
           <p className='text-sm font-semibold text-ink'>New label set</p>
-          <p className='mt-0.5 text-xs text-ink-3'>
-            Name it, choose how many values a resource may carry, and define its labels.
-          </p>
-        </div>
-        {onCancel && (
           <button
             type='button'
             disabled={busy}
@@ -511,30 +491,23 @@ function NewLabelsetForm({
           >
             Cancel
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div className='mt-4'>
-        <DraftFields
-          setId='new'
-          draft={draft}
-          busy={busy}
-          idPreview={id}
-          onChange={(next) => {
-            setTouched(true)
-            setDraft(next)
-          }}
-        />
-      </div>
+      <DraftFields
+        setId='new'
+        draft={draft}
+        busy={busy}
+        idPreview={id}
+        onChange={(next) => {
+          setTouched(true)
+          setDraft(next)
+        }}
+      />
 
       {touched && <ProblemList problems={problems} />}
 
       {message && <MessagePanel message={message} className='mt-4' />}
-
-      <p className='mt-4 text-xs text-ink-3'>
-        Creating a set writes it to the knowledge box. Nothing carries a new set yet, so no agent is
-        created or restarted.
-      </p>
 
       <div className='mt-4 flex flex-col gap-2 sm:flex-row sm:items-center'>
         <button
@@ -551,12 +524,13 @@ function NewLabelsetForm({
 }
 
 /**
- * Label sets and their per-label definitions, created and edited in place.
- * The list on the left picks a set (or starts a new one); the editor on the
- * right owns its name, cardinality and one row per label. Saving writes the
- * set to the knowledge box and re-instantiates every labeller that carries
- * it, for new resources only. Unsaved edits are kept per set, so switching
- * sets loses nothing.
+ * Label sets and their per-label definitions, created and edited in place as
+ * one flat section: the list picks a set (or starts a new one) and the form
+ * beside it owns its name, cardinality and one row per label. Saving writes
+ * the set to the knowledge box and re-instantiates every labeller that
+ * carries it, for new resources only. Unsaved edits are kept per set, so
+ * switching sets loses nothing. The section heading is rendered by the
+ * caller, so this component is the body only.
  */
 export function LabelsetsPanel({
   slug,
@@ -601,7 +575,7 @@ export function LabelsetsPanel({
 
   const onCreated = async (id: string, title: string) => {
     await refresh()
-    setNotice({ tone: 'ok', text: createdMessage(title, id) })
+    setNotice({ tone: 'ok', text: createdMessage(title) })
     setSelectedId(id)
     setCreating(false)
   }
@@ -613,20 +587,9 @@ export function LabelsetsPanel({
   }
 
   return (
-    <section
-      aria-labelledby='labelsets-heading'
-      className='mt-5 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'
-    >
-      <div>
-        <p id='labelsets-heading' className='text-sm font-semibold text-ink'>Label sets</p>
-        <p className='mt-0.5 text-xs text-ink-3'>
-          Each set's labels and definitions are the vocabulary its labeller classifies against.
-          Saving a set restarts its labellers for new resources only.
-        </p>
-      </div>
-
+    <section aria-label='Label sets' className='mt-4'>
       {isLoading && (
-        <div className='mt-4 grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
+        <div className='grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
           <div className='space-y-2'>
             <Skeleton className='h-12 w-full' />
             <Skeleton className='h-12 w-full' />
@@ -636,17 +599,15 @@ export function LabelsetsPanel({
       )}
 
       {isError && (
-        <div className='mt-4'>
-          <ErrorCard message='Could not load the label sets.' onRetry={() => void refetch()} />
-        </div>
+        <ErrorCard
+          message='Could not load the label sets.'
+          onRetry={() => void refetch()}
+        />
       )}
 
       {labelsets && labelsets.length === 0 && (
-        <div className='mt-4'>
-          <p className='text-sm text-ink-2'>
-            No label sets yet. Create the first one here - its labels and definitions become the
-            vocabulary a labeller classifies against.
-          </p>
+        <>
+          <p className='text-sm text-ink-2'>No label sets yet.</p>
           <div className='mt-3'>
             <NewLabelsetForm
               slug={slug}
@@ -655,11 +616,11 @@ export function LabelsetsPanel({
               onCreated={onCreated}
             />
           </div>
-        </div>
+        </>
       )}
 
       {labelsets && labelsets.length > 0 && selected && (
-        <div className='mt-4 grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
+        <div className='grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
           <div className='flex flex-col gap-2'>
             <button
               type='button'
@@ -684,10 +645,10 @@ export function LabelsetsPanel({
                       type='button'
                       onClick={() => select(ls.id)}
                       aria-current={active ? 'true' : undefined}
-                      className={`w-full rounded-[var(--rp-radius)] border px-3 py-2 text-left transition-colors duration-150 ${
+                      className={`w-full rounded-[var(--rp-radius)] px-3 py-2 text-left transition-colors duration-150 ${
                         active
-                          ? 'border-[var(--rp-line-2)] bg-[var(--rp-wash)] text-ink'
-                          : 'border-transparent text-ink-2 hover:bg-[var(--rp-surface-3)] hover:text-[var(--rp-ink)]'
+                          ? 'bg-[var(--rp-wash)] text-ink'
+                          : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
                       }`}
                     >
                       <span className='flex items-center gap-2'>

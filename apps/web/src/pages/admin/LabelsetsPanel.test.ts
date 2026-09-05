@@ -52,10 +52,10 @@ describe('LabelsetsPanel - creating a set in place', () => {
     expect(validate({ ...ok, labels: [] })).toEqual(['Add at least one label.'])
   })
 
-  it('tells the administrator that creating restarts nothing', () => {
-    const text = createdMessage('Region', 'region')
-    expect(text).toContain('Created "Region" (region)')
-    expect(text).toContain('no agent was created or restarted')
+  it('tells the administrator that creating restarts nothing, in one line', () => {
+    expect(createdMessage('Region')).toBe(
+      'Created "Region". No labeller was created or restarted.',
+    )
   })
 
   it('reports a save with no carrying labeller plainly', () => {
