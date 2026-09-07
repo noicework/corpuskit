@@ -627,17 +627,9 @@ export const DOC_PAGES: DocPage[] = [
           'apply them across the corpus so the structure users navigate reflects the real ' +
           'content.\n\n' +
           'Each label can carry a definition - a sentence or two saying what the label means and ' +
-          'when it applies. Definitions show on the Taxonomy page as the vocabulary reference and ' +
-          'are what the labelling agents classify against. Edit a label set under Manage > ' +
-          'Taxonomy: saving it restarts every labeller that carries the set so it picks up the new ' +
-          'labels and definitions, and the restarted labeller applies to new resources only - ' +
-          'nothing already in the corpus is reprocessed or relabelled.\n\n' +
-          'Create a set under Manage > Taxonomy (or from the Taxonomy page): give it a name - ' +
-          'its id is derived from the name, so "Marine Region" becomes marine-region - choose ' +
-          'whether a resource may carry one value or several, and add its labels with their ' +
-          'definitions. Nothing carries a brand-new set, so creating one neither creates nor ' +
-          'restarts any agent; a labeller for it comes from running analysis or the knowledge ' +
-          'graph tools. Editing a set later restarts only the labellers that carry it.',
+          'when it applies. Definitions show on the Taxonomy page and are what the labelling ' +
+          'agents classify against. Editing and creating label sets is covered on the ' +
+          'Managing label sets page.',
       },
       {
         heading: 'Enrichments',
@@ -657,6 +649,64 @@ export const DOC_PAGES: DocPage[] = [
           'The knowledge graph is built by an extraction agent configured with the entity types ' +
           'and relation examples that matter for the domain. Review and refine that strategy in ' +
           'management, and the graph the portal draws follows from it.',
+      },
+    ],
+  },
+  {
+    id: 'admin-label-sets',
+    category: 'Administration',
+    title: 'Managing label sets and definitions',
+    summary:
+      'Edit or create the label sets the corpus is classified against, and what saving does to the labellers.',
+    sections: [
+      {
+        heading: 'Where label sets live',
+        body:
+          'Open Manage > Taxonomy. The Label sets section lists every set on the knowledge box ' +
+          'except the ones the portal keeps for its own bookkeeping. Choose a set to edit it, or ' +
+          'choose New label set. The public Taxonomy page shows the same sets read-only, with ' +
+          'each definition beneath its label, as the vocabulary reference for everyone.',
+      },
+      {
+        heading: 'Labels and definitions',
+        body: 'A set has a name, a rule for how many of its labels a resource may carry (one or ' +
+          'several), and its labels. Each label can carry a definition - a sentence or two saying ' +
+          'what it means and when it applies. Definitions are what the labelling agents classify ' +
+          'against, so they are the biggest single lever on tagging quality: write them the way ' +
+          'you would explain the category to a new colleague, with the borderline cases spelt out.',
+      },
+      {
+        heading: 'What saving does',
+        body: 'Saving writes the set to the knowledge box and then restarts every labeller that ' +
+          'carries the set, so the labeller works from the new labels and definitions from then ' +
+          'on. The result names the labellers restarted, or says that no labeller carries the set.\n\n' +
+          'The restart applies to new resources only. Nothing already in the corpus is ' +
+          'reprocessed or relabelled, and every existing resource keeps the labels it has. To ' +
+          'apply a changed definition to existing resources, run the labeller over them ' +
+          'deliberately from the agents tools, or edit their labels by hand.',
+      },
+      {
+        heading: 'Creating a set',
+        body:
+          'Give the set a name - its id is derived from the name as you type, so Marine Region ' +
+          'becomes marine-region - choose one or several labels per resource, and add the labels ' +
+          'with their definitions. Nothing carries a brand-new set, so creating one neither ' +
+          'creates nor restarts any agent. A labeller for it comes from running analysis or the ' +
+          'knowledge graph tools; editing the set later restarts only the labellers that carry it.',
+      },
+      {
+        heading: 'Removing a label',
+        body:
+          'Removing a label from a set stops the labellers applying it to new resources. Resources ' +
+          'that already carry it keep it until they are relabelled.',
+      },
+      {
+        heading: 'If a restart fails',
+        body:
+          'Saving happens in two steps: the set first, then each labeller is removed and started ' +
+          'again with the new vocabulary. If a labeller cannot be started after it was removed, ' +
+          "the page reports it and shows the labeller's previous configuration in full so it can " +
+          'be put back by hand. The set itself is saved either way.',
       },
     ],
   },
