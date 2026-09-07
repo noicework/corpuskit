@@ -84,12 +84,6 @@ const SHELL_CSS = `
     letter-spacing: -.055em;
   }
   .brand-mark { color: var(--blue); }
-  .top-label {
-    color: var(--ink-soft);
-    font-family: var(--mono);
-    font-size: 17px;
-    letter-spacing: .01em;
-  }
   .body {
     display: flex;
     flex: 1;
@@ -141,10 +135,7 @@ const SHELL_CSS = `
   }
   .lede strong { color: var(--ink); font-weight: 600; }
   .strip {
-    display: flex;
-    justify-content: space-between;
-    gap: 2rem;
-    margin-top: 44px;
+    margin-top: 48px;
     padding-top: 18px;
     border-top: 1px solid var(--ink);
     color: var(--ink-soft);
@@ -152,7 +143,6 @@ const SHELL_CSS = `
     font-size: 17px;
     line-height: 1.3;
   }
-  .strip strong { color: var(--ink); font-weight: 500; }
 
   /* Answer card (the .question-card / .citation / .confidence motifs). */
   .two-col {
@@ -294,30 +284,17 @@ html, body { width: ${width}px; height: ${height}px; }
 
 const BRAND = '<div class="brand">CorpusKit<span class="brand-mark">/</span></div>'
 
-function strip(left: string, right = 'corpuskit.org'): string {
-  return `<div class="strip"><span>${left}</span><span>${right}</span></div>`
-}
-
-const LICENCE_STRIP = strip(
-  '<strong>Open source</strong> · Apache 2.0 · corpuskit.org',
-  'Maintained by Noice',
-)
+/** The only chrome besides the wordmark: the domain, bottom-left. */
+const FOOTER = '<div class="strip">corpuskit.org</div>'
 
 /**
  * The launch card: the hero headline with its highlight and citation, the
- * descriptor and the licence strip. The OG images carry no top-right label
- * (the wordmark stands alone); the post variant keeps one.
+ * descriptor and the domain footer.
  */
-function launch(
-  width: number,
-  height: number,
-  file: string,
-  options: { square?: boolean; label?: string } = {},
-): Card {
-  const vars: Record<string, string> = options.square
+function launch(width: number, height: number, file: string, square = false): Card {
+  const vars: Record<string, string> = square
     ? { '--h1': '136px', '--lede': '34px', '--pad': '80px' }
     : {}
-  const label = options.label ? `<span class="top-label">${options.label}</span>` : ''
   return {
     file,
     width,
@@ -327,11 +304,11 @@ function launch(
       width,
       height,
       `<div class="card">
-        <div class="top">${BRAND}${label}</div>
+        <div class="top">${BRAND}</div>
         <div class="body">
           <h1>Put your<br>organisation’s<br>research <span class="hl">to work</span><span class="cite">1</span></h1>
           <p class="lede">Search collections, ask cited questions and explore connections between sources.</p>
-          ${LICENCE_STRIP}
+          ${FOOTER}
         </div>
       </div>`,
       vars,
@@ -358,7 +335,7 @@ function icon(size: number, file: string): Card {
 
 export const OG_CARDS: Card[] = [
   launch(1200, 630, 'og/corpuskit.png'),
-  launch(1200, 1200, 'og/corpuskit-square.png', { square: true }),
+  launch(1200, 1200, 'og/corpuskit-square.png', true),
   icon(180, 'apple-touch-icon.png'),
   icon(96, 'favicon.png'),
 ]
@@ -377,18 +354,18 @@ function post(file: string, body: string, vars: Record<string, string> = {}): Ca
 }
 
 export const POST_CARDS: Card[] = [
-  launch(POST_W, POST_H, 'posts/01-launch.png', { label: 'Open source research portal' }),
+  launch(POST_W, POST_H, 'posts/01-launch.png'),
 
   post(
     'posts/02-cited-passages.png',
     `<div class="card">
-      <div class="top">${BRAND}<span class="top-label">Every answer cited</span></div>
+      <div class="top">${BRAND}</div>
       <div class="body">
         <h1>Answers cite the<br>material they draw on,<br>down to the <span class="hl">passage</span><span class="cite">1</span></h1>
         <div class="passage">Seagrass recovery was slower where winter turbidity remained above the long-term median.
           <cite>1 &nbsp;Estuary condition report · 2023 · page 14</cite>
         </div>
-        ${LICENCE_STRIP}
+        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '80px' },
@@ -397,7 +374,7 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/03-check-the-answer.png',
     `<div class="card">
-      <div class="top">${BRAND}<span class="top-label">Read the source</span></div>
+      <div class="top">${BRAND}</div>
       <div class="body">
         <div class="two-col">
           <h1>Check the<br>answer<br>against the<br><span class="hl">research</span><span class="cite">1</span></h1>
@@ -408,7 +385,7 @@ export const POST_CARDS: Card[] = [
             <div class="confidence"><strong>High confidence</strong><span>Both claims are directly supported by the cited reports</span></div>
           </div>
         </div>
-        ${LICENCE_STRIP}
+        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '82px' },
@@ -417,7 +394,7 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/04-five-views.png',
     `<div class="card">
-      <div class="top">${BRAND}<span class="top-label">One collection, five ways in</span></div>
+      <div class="top">${BRAND}</div>
       <div class="body">
         <h1>Ask. Search. Library.<br>Map. <span class="hl">Manage.</span><span class="cite">1</span></h1>
         <div class="views">
@@ -427,7 +404,7 @@ export const POST_CARDS: Card[] = [
           <div class="view"><div class="t">Map</div><p class="d">Explore connections between sources</p></div>
           <div class="view"><div class="t">Manage</div><p class="d">Configure the portal and its corpus</p></div>
         </div>
-        ${LICENCE_STRIP}
+        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '92px' },
@@ -436,7 +413,7 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/05-open-source.png',
     `<div class="card">
-      <div class="top">${BRAND}<span class="top-label">corpuskit.org</span></div>
+      <div class="top">${BRAND}</div>
       <div class="body">
         <h1>Open source under<br>the <span class="hl">Apache 2.0 licence</span><span class="cite">1</span></h1>
         <div class="views views-3">
@@ -444,12 +421,7 @@ export const POST_CARDS: Card[] = [
           <div class="view"><div class="t">Run CorpusKit</div><p class="d">Connect your research collection and run it on infrastructure you manage</p></div>
           <div class="view"><div class="t">Contribute</div><p class="d">Code, design, documentation, research practice or tests</p></div>
         </div>
-        ${
-      strip(
-        '<strong>Open source</strong> · Apache 2.0 · corpuskit.org',
-        'Powered by Progress Agentic RAG',
-      )
-    }
+        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '86px' },
