@@ -237,21 +237,10 @@ const SHELL_CSS = `
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 18px;
-    margin-top: 40px;
+    margin-top: 54px;
   }
   .views-3 { grid-template-columns: repeat(3, 1fr); gap: 40px; }
   .views-3 .d { max-width: 22em; }
-  .view {
-    padding-top: 14px;
-    border-top: 1px solid var(--ink);
-  }
-  .view .n {
-    display: block;
-    color: var(--blue-dark);
-    font-family: var(--mono);
-    font-size: 15px;
-    margin-bottom: 6px;
-  }
   .view .t {
     font-family: var(--display);
     font-size: 30px;
@@ -432,11 +421,11 @@ export const POST_CARDS: Card[] = [
       <div class="body">
         <h1>Ask. Search. Library.<br>Map. <span class="hl">Manage.</span><span class="cite">1</span></h1>
         <div class="views">
-          <div class="view"><span class="n">01</span><div class="t">Ask</div><p class="d">Cited answers from the collection</p></div>
-          <div class="view"><span class="n">02</span><div class="t">Search</div><p class="d">Find the passage, not just the file</p></div>
-          <div class="view"><span class="n">03</span><div class="t">Library</div><p class="d">Browse and filter every source</p></div>
-          <div class="view"><span class="n">04</span><div class="t">Map</div><p class="d">Explore connections between sources</p></div>
-          <div class="view"><span class="n">05</span><div class="t">Manage</div><p class="d">Configure the portal and its corpus</p></div>
+          <div class="view"><div class="t">Ask</div><p class="d">Cited answers from the collection</p></div>
+          <div class="view"><div class="t">Search</div><p class="d">Find the passage, not just the file</p></div>
+          <div class="view"><div class="t">Library</div><p class="d">Browse and filter every source</p></div>
+          <div class="view"><div class="t">Map</div><p class="d">Explore connections between sources</p></div>
+          <div class="view"><div class="t">Manage</div><p class="d">Configure the portal and its corpus</p></div>
         </div>
         ${LICENCE_STRIP}
       </div>
@@ -451,9 +440,9 @@ export const POST_CARDS: Card[] = [
       <div class="body">
         <h1>Open source under<br>the <span class="hl">Apache 2.0 licence</span><span class="cite">1</span></h1>
         <div class="views views-3">
-          <div class="view"><span class="n">01</span><div class="t">Use a portal</div><p class="d">Search, browse and ask questions in a portal maintained by your organisation</p></div>
-          <div class="view"><span class="n">02</span><div class="t">Run CorpusKit</div><p class="d">Connect your research collection and run it on infrastructure you manage</p></div>
-          <div class="view"><span class="n">03</span><div class="t">Contribute</div><p class="d">Code, design, documentation, research practice or tests</p></div>
+          <div class="view"><div class="t">Use a portal</div><p class="d">Search, browse and ask questions in a portal maintained by your organisation</p></div>
+          <div class="view"><div class="t">Run CorpusKit</div><p class="d">Connect your research collection and run it on infrastructure you manage</p></div>
+          <div class="view"><div class="t">Contribute</div><p class="d">Code, design, documentation, research practice or tests</p></div>
         </div>
         ${
       strip(
