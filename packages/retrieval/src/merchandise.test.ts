@@ -146,3 +146,11 @@ describe('extractPageSummary on a text ingest', () => {
     expect(extractPageSummary([{ fieldId: 'texts/body', text: 'Body.' }])).toBeUndefined()
   })
 })
+
+Deno.test('baselineMerchandising treats a non-string title or summary as absent', () => {
+  const structured = baselineMerchandising('1981-071-DLD.pdf', { text: 'not a string' })
+  expect(structured.summary).not.toContain('object')
+  expect(structured).toEqual(baselineMerchandising('1981-071-DLD.pdf', undefined))
+  const numeric = baselineMerchandising(42, 7)
+  expect(numeric.title).toBe('Untitled resource')
+})

@@ -95,13 +95,18 @@ export interface Merchandised {
  * is demoted to `sourceName`; a summary that is merely the filename is dropped.
  */
 export function baselineMerchandising(
-  rawTitle: string | undefined,
-  rawSummary: string | undefined,
+  rawTitle: unknown,
+  rawSummary: unknown,
 ): Merchandised {
-  const raw = (rawTitle ?? '').trim()
+  // The platform's `basic` and `extra` shows are not typed at the boundary:
+  // a summary can arrive as a structured value on a box whose agents wrote
+  // one (verified in production: a non-string summary threw on every
+  // catalogue load, taking search down). Anything that is not text is no
+  // summary at all.
+  const raw = asText(rawTitle)
   const src = sourceNameFor(raw)
   const title = src ? fallbackTitle(raw) : (raw || 'Untitled resource')
-  const rawSum = (rawSummary ?? '').trim()
+  const rawSum = asText(rawSummary)
   // A raw summary equal to the filename (or to the raw title) carries nothing.
   const usableRawSum = rawSum && rawSum !== raw && rawSum !== (src ?? '') ? rawSum : ''
   // Nor does a source name that is just the title with a file extension on it
@@ -164,6 +169,11 @@ export function extractPageSummary(
   const hit = texts.find((t) => isPageSummaryFieldId(t.fieldId))
   const text = hit?.text?.trim()
   return text && text.length > 0 ? text : undefined
+}
+
+/** A trimmed string, or the empty string for anything that is not text. */
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 /** Whether a text field id is a DA page-summary destination (see `extractPageSummary`). */

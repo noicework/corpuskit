@@ -1240,7 +1240,12 @@ export class AragProvider implements RetrievalProvider {
     // enrichment (real title/summary/takeaways/quotes) from its own store.
     const safe = displayTitle(raw.title, id)
     const rawTitle = safe === 'Untitled resource' ? '' : (raw.title ?? '')
-    const merch = baselineMerchandising(rawTitle, meta.summary || raw.summary)
+    // Either summary may be a structured value on a box whose agents wrote
+    // one; only text is a summary (baselineMerchandising drops the rest).
+    const merch = baselineMerchandising(
+      rawTitle,
+      typeof meta.summary === 'string' && meta.summary.trim() ? meta.summary : raw.summary,
+    )
     const bib = bibliographic(meta)
     const kindLabel = studyDesignOf(raw, {
       title: rawTitle,
