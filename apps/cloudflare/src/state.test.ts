@@ -3,11 +3,12 @@ import { expect } from '@std/expect'
 import { DEFAULT_RESEARCH_ENRICHMENT, type Enrichment } from '@research-portal/core'
 import {
   DurableEnrichmentStore,
+  DurableRoutingLog,
   DurableState,
   DurableTenantStore,
   type SqlStorageLike,
 } from './state.ts'
-import type { McpKeyRecord } from '../../api/src/stores.ts'
+import type { McpKeyRecord, RoutingRecord } from '../../api/src/stores.ts'
 import { DurableMcpKeyStore } from './state.ts'
 
 class TestSqlStorage implements SqlStorageLike {
@@ -186,4 +187,34 @@ Deno.test('DurableTenantStore exposes hostnames for OPAX and successfully provis
   expect(store.list().find((tenant) => tenant.slug === 'new-portal')?.hostname).toBe(
     'new-portal.corpuskit.org',
   )
+})
+
+Deno.test('DurableRoutingLog appends per decision, trims to its cap and keeps tenants apart', () => {
+  const state = new DurableState(new TestSqlStorage())
+  state.migrate()
+  const log = new DurableRoutingLog(state, 3)
+  const decision = (n: number, intent: string): RoutingRecord => ({
+    ts: `2026-09-07T00:00:0${n}.000Z`,
+    questionHash: `h${n}`,
+    questionLength: 20 + n,
+    intent,
+    stage: n % 2 === 0 ? 'rule' : 'classifier',
+    confidence: 0.9,
+    rationale: 'test',
+    configuration: `portal-intent-${intent}`,
+    latencyMs: n,
+  })
+  for (let n = 1; n <= 5; n++) log.record('marine', decision(n, n < 4 ? 'general' : 'review'))
+  log.record('grains', decision(9, 'lookup'))
+
+  const recent = log.recent('marine', 10)
+  expect(recent.map((r) => r.questionHash)).toEqual(['h5', 'h4', 'h3'])
+  expect(log.recent('marine', 2).map((r) => r.questionHash)).toEqual(['h5', 'h4'])
+  expect(log.summary('marine')).toEqual({
+    total: 3,
+    byIntent: { general: 1, review: 2 },
+    byStage: { classifier: 2, rule: 1 },
+  })
+  expect(log.summary('grains').total).toBe(1)
+  expect(log.recent('opax')).toEqual([])
 })

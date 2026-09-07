@@ -1220,6 +1220,14 @@ export class AragProvider implements RetrievalProvider {
         if (key.startsWith(`${slug}|`)) cache.delete(key)
       }
     }
+    this.forgetPageSummaries(slug)
+  }
+
+  /** Drop the memoised platform page summaries for a tenant (keys are `<slug>/<id>`). */
+  private forgetPageSummaries(slug: string): void {
+    for (const key of this.pageSummaryCache.keys()) {
+      if (key.startsWith(`${slug}/`)) this.pageSummaryCache.delete(key)
+    }
   }
 
   private toSummary(id: string, raw: RawResource): ResourceSummary {
@@ -1570,6 +1578,9 @@ export class AragProvider implements RetrievalProvider {
     for (const key of this.searchCache.keys()) {
       if (key.startsWith(`${slug}|`)) this.searchCache.delete(key)
     }
+    // A write to the box can change what the platform summarised: the next
+    // listing re-reads the summaries of the cards it shows.
+    this.forgetPageSummaries(slug)
   }
 
   async suggest(tenant: TenantConfig, query?: string): Promise<Question[]> {
@@ -2000,7 +2011,10 @@ export class AragProvider implements RetrievalProvider {
       .sort((a, b) => b.best - a.best)
     const kept = dedupeResourceFamilies(scored)
       .filter(({ id, raw }) =>
-        matchesCatalogFilters(catalogItemFromRaw(id, raw), { kindIds: opts.kindIds })
+        matchesCatalogFilters(catalogItemFromRaw(id, raw), {
+          kindIds: opts.kindIds,
+          formatIds: opts.formatIds,
+        })
       )
     const page = opts.page ?? 0
     const pageSize = opts.pageSize ?? 24
