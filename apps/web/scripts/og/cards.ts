@@ -88,9 +88,9 @@ const SHELL_CSS = `
     display: flex;
     flex: 1;
     flex-direction: column;
-    justify-content: flex-end;
+    justify-content: center;
     min-height: 0;
-    margin-top: 36px;
+    margin-top: 24px;
   }
   h1 {
     margin: 0;
@@ -134,8 +134,7 @@ const SHELL_CSS = `
     line-height: 1.4;
   }
   .lede strong { color: var(--ink); font-weight: 600; }
-  .strip {
-    margin-top: 52px;
+  .domain {
     color: var(--ink);
     font-family: var(--mono);
     font-size: 18px;
@@ -281,10 +280,9 @@ html, body { width: ${width}px; height: ${height}px; }
 </html>`
 }
 
-const BRAND = '<div class="brand">CorpusKit<span class="brand-mark">/</span></div>'
-
-/** The only chrome besides the wordmark: the domain, bottom-left. */
-const FOOTER = '<div class="strip">corpuskit.org</div>'
+/** The whole chrome: wordmark top-left, domain top-right, baseline-aligned. */
+const TOP =
+  '<div class="top"><div class="brand">CorpusKit<span class="brand-mark">/</span></div><span class="domain">corpuskit.org</span></div>'
 
 /**
  * The launch card: the hero headline with its highlight and citation, the
@@ -303,11 +301,10 @@ function launch(width: number, height: number, file: string, square = false): Ca
       width,
       height,
       `<div class="card">
-        <div class="top">${BRAND}</div>
+        ${TOP}
         <div class="body">
           <h1>Put your<br>organisation’s<br>research <span class="hl">to work</span><span class="cite">1</span></h1>
           <p class="lede">Search collections, ask cited questions and explore connections between sources.</p>
-          ${FOOTER}
         </div>
       </div>`,
       vars,
@@ -358,13 +355,12 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/02-cited-passages.png',
     `<div class="card">
-      <div class="top">${BRAND}</div>
+      ${TOP}
       <div class="body">
         <h1>Answers cite the<br>material they draw on,<br>down to the <span class="hl">passage</span><span class="cite">1</span></h1>
         <div class="passage">Seagrass recovery was slower where winter turbidity remained above the long-term median.
           <cite>1 &nbsp;Estuary condition report · 2023 · page 14</cite>
         </div>
-        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '80px' },
@@ -373,7 +369,7 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/03-check-the-answer.png',
     `<div class="card">
-      <div class="top">${BRAND}</div>
+      ${TOP}
       <div class="body">
         <div class="two-col">
           <h1>Check the<br>answer<br>against the<br><span class="hl">research</span><span class="cite">1</span></h1>
@@ -384,7 +380,6 @@ export const POST_CARDS: Card[] = [
             <div class="confidence"><strong>High confidence</strong><span>Both claims are directly supported by the cited reports</span></div>
           </div>
         </div>
-        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '82px' },
@@ -393,7 +388,7 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/04-five-views.png',
     `<div class="card">
-      <div class="top">${BRAND}</div>
+      ${TOP}
       <div class="body">
         <h1>Ask. Search. Library.<br>Map. <span class="hl">Manage.</span><span class="cite">1</span></h1>
         <div class="views">
@@ -403,7 +398,6 @@ export const POST_CARDS: Card[] = [
           <div class="view"><div class="t">Map</div><p class="d">Explore connections between sources</p></div>
           <div class="view"><div class="t">Manage</div><p class="d">Configure the portal and its corpus</p></div>
         </div>
-        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '92px' },
@@ -412,7 +406,7 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/05-open-source.png',
     `<div class="card">
-      <div class="top">${BRAND}</div>
+      ${TOP}
       <div class="body">
         <h1>Open source under<br>the <span class="hl">Apache 2.0 licence</span><span class="cite">1</span></h1>
         <div class="views views-3">
@@ -420,7 +414,6 @@ export const POST_CARDS: Card[] = [
           <div class="view"><div class="t">Run CorpusKit</div><p class="d">Connect your research collection and run it on infrastructure you manage</p></div>
           <div class="view"><div class="t">Contribute</div><p class="d">Code, design, documentation, research practice or tests</p></div>
         </div>
-        ${FOOTER}
       </div>
     </div>`,
     { '--h1': '86px' },
