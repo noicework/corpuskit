@@ -135,13 +135,12 @@ const SHELL_CSS = `
   }
   .lede strong { color: var(--ink); font-weight: 600; }
   .strip {
-    margin-top: 48px;
-    padding-top: 18px;
-    border-top: 1px solid var(--ink);
-    color: var(--ink-soft);
+    margin-top: 52px;
+    color: var(--ink);
     font-family: var(--mono);
-    font-size: 17px;
-    line-height: 1.3;
+    font-size: 18px;
+    font-weight: 500;
+    line-height: 1;
   }
 
   /* Answer card (the .question-card / .citation / .confidence motifs). */
