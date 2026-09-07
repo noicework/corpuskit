@@ -341,13 +341,20 @@ const LICENCE_STRIP = strip(
 )
 
 /**
- * The launch card. The hero headline, its highlight and citation, a thread
- * from the citation down to the strip, and the licence line.
+ * The launch card: the hero headline with its highlight and citation, the
+ * descriptor and the licence strip. The OG images carry no top-right label
+ * (the wordmark stands alone); the post variant keeps one.
  */
-function launch(width: number, height: number, file: string, square: boolean): Card {
-  const vars: Record<string, string> = square
+function launch(
+  width: number,
+  height: number,
+  file: string,
+  options: { square?: boolean; label?: string } = {},
+): Card {
+  const vars: Record<string, string> = options.square
     ? { '--h1': '136px', '--lede': '34px', '--pad': '80px' }
     : {}
+  const label = options.label ? `<span class="top-label">${options.label}</span>` : ''
   return {
     file,
     width,
@@ -357,7 +364,7 @@ function launch(width: number, height: number, file: string, square: boolean): C
       width,
       height,
       `<div class="card">
-        <div class="top">${BRAND}<span class="top-label">Open source research portal</span></div>
+        <div class="top">${BRAND}${label}</div>
         <div class="body">
           <h1>Put your<br>organisation’s<br>research <span class="hl">to work</span><span class="cite">1</span></h1>
           <p class="lede">Search collections, ask cited questions and explore connections between sources.</p>
@@ -387,8 +394,8 @@ function icon(size: number, file: string): Card {
 }
 
 export const OG_CARDS: Card[] = [
-  launch(1200, 630, 'og/corpuskit.png', false),
-  launch(1200, 1200, 'og/corpuskit-square.png', true),
+  launch(1200, 630, 'og/corpuskit.png'),
+  launch(1200, 1200, 'og/corpuskit-square.png', { square: true }),
   icon(180, 'apple-touch-icon.png'),
   icon(96, 'favicon.png'),
 ]
@@ -407,7 +414,7 @@ function post(file: string, body: string, vars: Record<string, string> = {}): Ca
 }
 
 export const POST_CARDS: Card[] = [
-  launch(POST_W, POST_H, 'posts/01-launch.png', false),
+  launch(POST_W, POST_H, 'posts/01-launch.png', { label: 'Open source research portal' }),
 
   post(
     'posts/02-cited-passages.png',
