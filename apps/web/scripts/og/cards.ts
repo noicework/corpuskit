@@ -232,34 +232,6 @@ const SHELL_CSS = `
     font-style: normal;
   }
 
-  /* Terminal (the .code-card motif from the run section). */
-  .code-card {
-    margin-top: 36px;
-    border: 1px solid rgba(255, 255, 255, .36);
-    background: #0f4d89;
-    color: white;
-    font-family: var(--mono);
-    font-size: 21px;
-  }
-  .code-top {
-    display: flex;
-    justify-content: space-between;
-    padding: 12px 22px;
-    border-bottom: 1px solid rgba(255, 255, 255, .25);
-    color: var(--blue-pale);
-    font-size: 15px;
-  }
-  .code-card pre { margin: 0; padding: 24px 26px; line-height: 1.9; }
-  .code-dim { color: #9fc3e4; }
-  .cursor {
-    display: inline-block;
-    width: .56em;
-    height: 1.05em;
-    margin-left: .12em;
-    background: var(--blue-pale);
-    vertical-align: -.14em;
-  }
-
   /* Five views. */
   .views {
     display: grid;
@@ -267,6 +239,8 @@ const SHELL_CSS = `
     gap: 18px;
     margin-top: 40px;
   }
+  .views-3 { grid-template-columns: repeat(3, 1fr); gap: 40px; }
+  .views-3 .d { max-width: 22em; }
   .view {
     padding-top: 14px;
     border-top: 1px solid var(--ink);
@@ -473,12 +447,13 @@ export const POST_CARDS: Card[] = [
   post(
     'posts/05-open-source.png',
     `<div class="card">
-      <div class="top">${BRAND}<span class="top-label">github.com/noicework/corpuskit</span></div>
+      <div class="top">${BRAND}<span class="top-label">corpuskit.org</span></div>
       <div class="body">
         <h1>Open source under<br>the <span class="hl">Apache 2.0 licence</span><span class="cite">1</span></h1>
-        <div class="code-card">
-          <div class="code-top"><span>Terminal</span><span>Deno · Cloudflare Workers</span></div>
-          <pre><span class="code-dim">$</span> git clone https://github.com/noicework/corpuskit.git<span class="cursor"></span></pre>
+        <div class="views views-3">
+          <div class="view"><span class="n">01</span><div class="t">Use a portal</div><p class="d">Search, browse and ask questions in a portal maintained by your organisation</p></div>
+          <div class="view"><span class="n">02</span><div class="t">Run CorpusKit</div><p class="d">Connect your research collection and run it on infrastructure you manage</p></div>
+          <div class="view"><span class="n">03</span><div class="t">Contribute</div><p class="d">Code, design, documentation, research practice or tests</p></div>
         </div>
         ${
       strip(
