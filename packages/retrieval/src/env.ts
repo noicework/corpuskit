@@ -9,6 +9,33 @@ import type { KbBinding } from './providers/arag/client.ts'
  *   ARAG_KB_<SLUG>_TOKEN      service-account token for that knowledge box
  * These are the seeded demo boxes; user-connected bindings override them.
  */
+/**
+ * Sandbox ("lab") boxes: ARAG_KB_<SLUG>_LAB / ARAG_KB_<SLUG>_LAB_TOKEN bind a
+ * scratch knowledge box for the Extraction Lab under the slug `<slug>-lab`.
+ * Kept separate from the demo bindings so a lab is never mistaken for a
+ * portal's own box.
+ */
+export function labBindings(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, KbBinding> {
+  const zone = env.ARAG_ZONE
+  const out: Record<string, KbBinding> = {}
+  if (!zone) return out
+  for (const [key, value] of Object.entries(env)) {
+    const match = key.match(/^ARAG_KB_([A-Z0-9]+)_LAB$/)
+    const name = match?.[1]
+    if (!name || !value) continue
+    const token = env[`ARAG_KB_${name}_LAB_TOKEN`]
+    if (!token) continue
+    out[`${name.toLowerCase()}-lab`] = {
+      baseUrl: `${regionalBase(zone)}/kb/${value}`,
+      token,
+      kbId: value,
+    }
+  }
+  return out
+}
+
 export function envBindings(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, KbBinding> {

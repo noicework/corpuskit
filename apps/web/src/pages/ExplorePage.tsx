@@ -513,7 +513,7 @@ export function ExplorePage() {
 
       <QuickEntry slug={config.slug} />
 
-      <RegionBand slug={config.slug} />
+      {config.regionalDiscovery !== false && <RegionBand slug={config.slug} />}
 
       <section className='rp-shell space-y-10 pb-16 pt-12'>
         {isError

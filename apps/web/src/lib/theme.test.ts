@@ -253,3 +253,47 @@ describe('fontStack', () => {
     )
   })
 })
+
+describe('viewer dark scheme', () => {
+  it('follows the system until a choice is stored', async () => {
+    const { resolveScheme } = await import('./theme.ts')
+    expect(resolveScheme('system', true)).toBe('dark')
+    expect(resolveScheme('system', false)).toBe('light')
+    expect(resolveScheme('light', true)).toBe('light')
+    expect(resolveScheme('dark', false)).toBe('dark')
+  })
+
+  it('maps a light portal onto the dark grey suite with AA brand inks', async () => {
+    const { DARK_GREY_SUITE } = await import('./theme.ts')
+    const { contrastRatio } = await import('@research-portal/core')
+    const vars = paletteVars(
+      branding({
+        colours: {
+          primary: '#2e2359',
+          accent: '#8b6fd8',
+          heroFrom: '#1f1740',
+          heroTo: '#4a3a8f',
+        },
+      }),
+      'dark',
+    )
+    expect(vars['--rp-surface']).toBe(DARK_GREY_SUITE['--rp-surface'])
+    expect(vars['--rp-ink']).toBe(DARK_GREY_SUITE['--rp-ink'])
+    // The deep violet brand ink is unreadable on a dark surface as-is; it is
+    // lightened until it clears AA, while the brand surface itself is kept.
+    expect(contrastRatio(vars['--rp-brand-fg']!, vars['--rp-surface']!)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(vars['--rp-accent-fg']!, vars['--rp-surface']!)).toBeGreaterThanOrEqual(
+      4.5,
+    )
+    expect(vars['--rp-primary']).toBe('#2e2359')
+    expect(vars['--rp-ok-bg']).toBe('#0e2f24')
+    expect(tenantThemeVars(branding(), 'dark').colorScheme).toBe('dark')
+  })
+
+  it('leaves a light scheme, and a dark library palette, exactly as before', async () => {
+    expect(paletteVars(branding(), 'light')).toEqual(paletteVars(branding()))
+    const observatory = branding({ paletteId: 'observatory' })
+    expect(paletteVars(observatory, 'dark')).toEqual(paletteVars(observatory))
+    expect(paletteMode(observatory, 'light')).toBe('dark')
+  })
+})

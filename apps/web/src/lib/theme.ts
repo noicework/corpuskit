@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
+  contrastRatio,
   DEFAULT_PALETTES,
   type DensityId,
   FONT_PAIRINGS,
@@ -185,9 +186,83 @@ export function resolvePalette(branding: Branding): Palette | null {
   return DEFAULT_PALETTES[choice].palette
 }
 
-/** 'dark' only when a dark-suite library palette is active. */
-export function paletteMode(branding: Branding): 'light' | 'dark' {
+/** The viewer's colour scheme: their own choice, or what the system asked for. */
+export type ViewerScheme = 'light' | 'dark'
+
+/** 'dark' when a dark-suite library palette is active, or the viewer chose dark. */
+export function paletteMode(branding: Branding, scheme: ViewerScheme = 'light'): 'light' | 'dark' {
+  if (scheme === 'dark') return 'dark'
   return resolvePalette(branding)?.mode ?? 'light'
+}
+
+/**
+ * The house dark grey suite - what the viewer's dark toggle maps every
+ * light-suite portal onto. Neutral rather than temperature-tinted so it sits
+ * under any brand colour; the same polarity Observatory (the library's dark
+ * palette) uses, with status colours from DARK_STATUS_VARS.
+ */
+export const DARK_GREY_SUITE: Record<string, string> = {
+  '--rp-paper': '#121316',
+  '--rp-app': '#121316',
+  '--rp-surface': '#1a1c20',
+  '--rp-surface-2': '#23262b',
+  '--rp-surface-3': '#33373e',
+  '--rp-line': '#33373e',
+  '--rp-line-2': '#23262b',
+  '--rp-ink': '#f2f3f5',
+  '--rp-ink-2': '#cfd2d8',
+  '--rp-ink-3': '#a3a8b1',
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  const v = parseInt(m[1]!, 16)
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
+}
+
+function mixWithWhite(hex: string, amount: number): string {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return hex
+  const channel = (c: number) => Math.round(c + (255 - c) * amount).toString(16).padStart(2, '0')
+  return `#${channel(rgb[0])}${channel(rgb[1])}${channel(rgb[2])}`
+}
+
+/**
+ * A brand colour that reads on a light surface (a deep violet, a fir green)
+ * can fall under 3:1 on a dark one. Lighten it in small steps until it
+ * clears the ratio asked for, so brand ink and links stay legible in the
+ * viewer's dark scheme without a hand-authored dark palette.
+ */
+export function ensureContrast(hex: string, surface: string, minimum: number): string {
+  if (!hexToRgb(hex)) return hex
+  let candidate = hex
+  for (let step = 0; step <= 10; step++) {
+    candidate = mixWithWhite(hex, step / 10)
+    if (contrastRatio(candidate, surface) >= minimum) return candidate
+  }
+  return candidate
+}
+
+/**
+ * Token overrides for the viewer's dark scheme on a portal whose own
+ * palette is light: the dark grey suite, dark-polarity status colours, an
+ * opaque-enough glass, washes mixed from the accent over the dark surface,
+ * and brand/accent inks lightened to AA on the dark surface.
+ */
+function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
+  const surface = DARK_GREY_SUITE['--rp-surface']!
+  const accent = roles['--rp-accent'] ?? '#888888'
+  return {
+    ...DARK_GREY_SUITE,
+    ...DARK_STATUS_VARS,
+    '--rp-glass-bg': `color-mix(in srgb, ${surface} 92%, transparent)`,
+    '--rp-brand-fg': ensureContrast(roles['--rp-brand-fg'] ?? accent, surface, 4.5),
+    '--rp-accent-fg': ensureContrast(roles['--rp-accent-fg'] ?? accent, surface, 4.5),
+    '--rp-focus': ensureContrast(roles['--rp-focus'] ?? accent, surface, 3),
+    '--rp-wash': `color-mix(in srgb, ${accent} 18%, ${surface})`,
+    '--rp-wash-strong': `color-mix(in srgb, ${accent} 30%, ${surface})`,
+  }
 }
 
 /**
@@ -198,7 +273,20 @@ export function paletteMode(branding: Branding): 'light' | 'dark' {
  * so existing portals render unchanged; the grey suite then stays on the
  * house defaults from the stylesheet.
  */
-export function paletteVars(branding: Branding): Record<string, string> {
+export function paletteVars(
+  branding: Branding,
+  scheme: ViewerScheme = 'light',
+): Record<string, string> {
+  const roles = paletteRoleVars(branding)
+  // A dark library palette is already dark; the viewer's toggle only has
+  // work to do on a light suite.
+  if (scheme === 'dark' && paletteMode(branding) === 'light') {
+    return { ...roles, ...viewerDarkVars(roles) }
+  }
+  return roles
+}
+
+function paletteRoleVars(branding: Branding): Record<string, string> {
   const palette = resolvePalette(branding)
   if (!palette) {
     const { primary, accent, heroFrom, heroTo } = branding.colours
@@ -250,14 +338,72 @@ export function paletteVars(branding: Branding): Record<string, string> {
 }
 
 /** Every theme var the tenant wrapper sets inline - palette, faces, radii, density. */
-export function tenantThemeVars(branding: Branding): CSSProperties {
+export function tenantThemeVars(
+  branding: Branding,
+  scheme: ViewerScheme = 'light',
+): CSSProperties {
   return {
-    ...paletteVars(branding),
+    ...paletteVars(branding, scheme),
     ...typographyVars(branding),
     ...shapeVars(branding.shape),
     ...densityVars(branding.density),
-    colorScheme: paletteMode(branding),
+    colorScheme: paletteMode(branding, scheme),
   } as CSSProperties
+}
+
+const SCHEME_KEY = 'rp-scheme'
+const DARK_QUERY = '(prefers-color-scheme: dark)'
+
+/** What the viewer stored: an explicit choice, or nothing (follow the system). */
+export type SchemeChoice = ViewerScheme | 'system'
+
+/** The scheme to render: an explicit choice wins; otherwise the system preference. */
+export function resolveScheme(choice: SchemeChoice, prefersDark: boolean): ViewerScheme {
+  if (choice === 'dark' || choice === 'light') return choice
+  return prefersDark ? 'dark' : 'light'
+}
+
+function readSchemeChoice(): SchemeChoice {
+  try {
+    const raw = globalThis.localStorage?.getItem(SCHEME_KEY)
+    return raw === 'dark' || raw === 'light' ? raw : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+function systemPrefersDark(): boolean {
+  return typeof globalThis.matchMedia === 'function' && globalThis.matchMedia(DARK_QUERY).matches
+}
+
+/**
+ * The viewer's colour scheme: defaults to the system preference (and follows
+ * it while no choice is stored), persisted in localStorage once they toggle.
+ */
+export function useViewerScheme(): {
+  scheme: ViewerScheme
+  choice: SchemeChoice
+  setChoice: (choice: SchemeChoice) => void
+} {
+  const [choice, setChoiceState] = useState<SchemeChoice>(readSchemeChoice)
+  const [prefersDark, setPrefersDark] = useState<boolean>(systemPrefersDark)
+  useEffect(() => {
+    if (typeof globalThis.matchMedia !== 'function') return
+    const media = globalThis.matchMedia(DARK_QUERY)
+    const onChange = () => setPrefersDark(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  const setChoice = (next: SchemeChoice) => {
+    setChoiceState(next)
+    try {
+      if (next === 'system') globalThis.localStorage?.removeItem(SCHEME_KEY)
+      else globalThis.localStorage?.setItem(SCHEME_KEY, next)
+    } catch {
+      // Storage can be unavailable (private mode); the choice still applies for this visit.
+    }
+  }
+  return { scheme: resolveScheme(choice, prefersDark), choice, setChoice }
 }
 
 /**
@@ -269,18 +415,18 @@ export function tenantThemeVars(branding: Branding): CSSProperties {
  * mounted, removed when it unmounts, so non-tenant routes keep the neutral
  * defaults.
  */
-export function useBodyTheme(branding: Branding | undefined): void {
+export function useBodyTheme(branding: Branding | undefined, scheme: ViewerScheme = 'light'): void {
   useEffect(() => {
     if (!branding) return
-    const { colorScheme, ...rest } = tenantThemeVars(branding) as Record<string, string>
+    const { colorScheme, ...rest } = tenantThemeVars(branding, scheme) as Record<string, string>
     const root = document.documentElement
-    const scheme = colorScheme ?? 'light'
+    const resolved = colorScheme ?? 'light'
     document.body.classList.add('rp-tenant')
     for (const [name, value] of Object.entries(rest)) {
       document.body.style.setProperty(name, value)
     }
-    document.body.style.colorScheme = scheme
-    root.style.colorScheme = scheme
+    document.body.style.colorScheme = resolved
+    root.style.colorScheme = resolved
     const paper = rest['--rp-paper']
     if (paper) root.style.setProperty('--rp-paper', paper)
     return () => {
@@ -290,7 +436,7 @@ export function useBodyTheme(branding: Branding | undefined): void {
       root.style.removeProperty('color-scheme')
       root.style.removeProperty('--rp-paper')
     }
-  }, [branding])
+  }, [branding, scheme])
 }
 
 export function googleFontsUrl(id: FontPairingId): string {

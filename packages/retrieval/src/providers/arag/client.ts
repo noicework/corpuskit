@@ -153,6 +153,7 @@ export class KbClient {
     bytes: Uint8Array,
     contentType: string,
     filename: string,
+    extraHeaders: Record<string, string> = {},
   ): Promise<unknown> {
     const url = this.url(path)
     const res = await this.fetchImpl(url, {
@@ -161,6 +162,7 @@ export class KbClient {
         'content-type': contentType,
         'x-filename': btoa(unescape(encodeURIComponent(filename))),
         'x-nuclia-serviceaccount': `Bearer ${this.binding.token}`,
+        ...extraHeaders,
       },
       body: bytes as BodyInit,
     })

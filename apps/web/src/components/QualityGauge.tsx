@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { assessConfidence, type ConfidenceState } from '../lib/confidence.ts'
+import { type AnswerAudit, figureLabel } from '../lib/answer-marks.ts'
 import { useCompactViewport } from './useViewMode.ts'
 
 const SEGMENTS = 5
@@ -21,20 +22,21 @@ const METRICS: { key: keyof QualityScores; label: string; description: string }[
   {
     key: 'answerRelevance',
     label: 'Relevance',
-    description: 'Answer relevance: how directly the answer addresses the question asked - ' +
-      'scored automatically against the retrieved sources.',
+    description: "Answer relevance: the platform's own self-assessment of how directly the " +
+      "answer addresses the question asked. Not the portal's check of the figures.",
   },
   {
     key: 'groundedness',
     label: 'Groundedness',
-    description: 'Groundedness: how firmly the answer is supported by the retrieved material - ' +
-      'scored automatically against the retrieved sources.',
+    description: "Groundedness: the platform's own self-assessment of how firmly the answer " +
+      "is supported by the retrieved material. It is not the portal's check of the figures " +
+      'against the cited texts, and the two can disagree.',
   },
   {
     key: 'contextRelevance',
     label: 'Context',
-    description: 'Context relevance: how well the retrieved passages match the question asked - ' +
-      'scored automatically against the retrieved sources.',
+    description: "Context relevance: the platform's own self-assessment of how well the " +
+      'retrieved passages match the question asked.',
   },
 ]
 
@@ -170,7 +172,7 @@ export function TrustSignals({ quality, showLabel = true }: TrustSignalsProps) {
               'tracking-wide text-ink-3'}
           >
             <ShieldCheckIcon />
-            Answer quality
+            Platform self-assessment
           </span>
         )
         : null}
@@ -203,7 +205,7 @@ const CONFIDENCE_DETAIL: Record<ConfidenceState, string> = {
     'The automatic quality checks did not run for this answer, so there is no score to report. Judge it on its citations.',
   high: 'The retrieved sources support this answer well.',
   moderate:
-    'The retrieved sources only partly support this answer - check the citations before relying on it.',
+    'The platform scores this answer as well grounded, but the portal could not check its figures against the cited texts - read the citations before relying on it.',
   low:
     'The retrieved sources only weakly support this answer. Treat it as a lead and verify against the cited sources below.',
 }
@@ -400,6 +402,12 @@ const TRIGGER_TONE: Record<
 export interface AnswerQualityDisclosureProps {
   quality: QualityScores | null | undefined
   /**
+   * The portal's own audit of the answer against the cited texts. When it
+   * checked anything it decides the headline; the platform score then reads
+   * as the secondary signal it is, so the two never contradict each other.
+   */
+  audit?: AnswerAudit
+  /**
    * Present only when a deep re-answer is genuinely on offer for this answer -
    * the caller owns that decision, because it turns on message state (already
    * deep, already dismissed) this component cannot see.
@@ -427,8 +435,64 @@ export interface AnswerQualityDisclosureProps {
  * site header. The breakpoint comes from the shared `useCompactViewport`, which
  * matches Tailwind's own `sm` rather than guessing at a `max-width` epsilon.
  */
+/** What the audit found, in one sentence, for the disclosure panel. */
+export function auditSummary(audit: AnswerAudit | undefined): string | null {
+  if (!audit) return null
+  const parts: string[] = []
+  const unsupported = audit.figuresUnsupported.length + audit.yearsUnsupported.length
+  if (audit.figuresChecked > 0) {
+    parts.push(
+      unsupported === 0
+        ? `${
+          audit.figuresChecked === 1 ? '1 figure' : `${audit.figuresChecked} figures`
+        } found beside ${
+          audit.figuresChecked === 1 ? 'its claim' : 'their claims'
+        } in the cited passages`
+        : `${unsupported} of ${
+          audit.figuresChecked + audit.yearsUnsupported.length
+        } figures not found beside their claim: ${
+          [...audit.figuresUnsupported, ...audit.yearsUnsupported].map(figureLabel).join(', ')
+        }`,
+    )
+  }
+  if ((audit.sentencesRemoved ?? 0) > 0) {
+    const removed = audit.sentencesRemoved!
+    const figures = (audit.figuresRemoved ?? []).map(figureLabel).join(', ')
+    parts.push(
+      `${
+        removed === 1 ? '1 sentence' : `${removed} sentences`
+      } removed because no cited passage carries ${
+        removed === 1 ? 'its' : 'their'
+      } figures beside the claim${figures ? ` (${figures})` : ''}`,
+    )
+  }
+  if (typeof audit.sentencesChecked === 'number' && audit.sentencesChecked > 0) {
+    parts.push(
+      `${audit.sentencesCited ?? 0} of ${audit.sentencesChecked} sentences carry a citation`,
+    )
+  }
+  if (audit.contraindicationsUnsupported.length > 0) {
+    parts.push(
+      `${audit.contraindicationsUnsupported.length} unsupported contraindication${
+        audit.contraindicationsUnsupported.length === 1 ? '' : 's'
+      } removed`,
+    )
+  }
+  if ((audit.denominatorsMissing ?? []).length > 0) {
+    parts.push(
+      `stated without a denominator: ${audit.denominatorsMissing!.map(figureLabel).join(', ')}`,
+    )
+  }
+  if ((audit.attributionsCorrected ?? []).length > 0) {
+    parts.push(`attribution corrected for ${audit.attributionsCorrected!.join(', ')}`)
+  }
+  if (parts.length === 0) return null
+  const sentence = parts.join('; ')
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1) + '.'
+}
+
 export function AnswerQualityDisclosure(
-  { quality, onReanswerDeeply, sparselyGrounded = false }: AnswerQualityDisclosureProps,
+  { quality, audit, onReanswerDeeply, sparselyGrounded = false }: AnswerQualityDisclosureProps,
 ) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -488,8 +552,11 @@ export function AnswerQualityDisclosure(
     }
   }
 
-  const confidence = assessConfidence(quality)
-  const detail = CONFIDENCE_DETAIL[confidence.state]
+  const confidence = assessConfidence(quality, audit)
+  const audited = auditSummary(audit)
+  const detail = confidence.basis === 'audit' && audited
+    ? `Checked against the cited texts: ${audited.charAt(0).toLowerCase()}${audited.slice(1)}`
+    : CONFIDENCE_DETAIL[confidence.state]
   const { tone, labelled } = TRIGGER_TONE[confidence.state]
   const loud = tone !== 'quiet'
 
@@ -518,6 +585,15 @@ export function AnswerQualityDisclosure(
       {quality
         ? (
           <div className='mt-3 rounded-[var(--rp-radius)] border border-line bg-surface-2 px-3 py-2.5'>
+            {confidence.basis === 'audit'
+              ? (
+                <p className='mb-2 text-xs leading-relaxed text-ink-3'>
+                  The platform's self-assessment, shown for reference - it scores its own answer and
+                  can disagree with the check above, which is the portal's own audit of the figures
+                  against the cited texts.
+                </p>
+              )
+              : null}
             <TrustSignals quality={quality} showLabel={false} />
           </div>
         )

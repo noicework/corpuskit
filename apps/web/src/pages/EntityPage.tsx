@@ -2,9 +2,10 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext, useParams } from 'react-router-dom'
 import type { ScoredResource } from '@research-portal/core'
-import { type EntityDossier, getEntityDossier } from '../api/client.ts'
+import { ApiError, type EntityDossier, getEntityDossier } from '../api/client.ts'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
+import { passageIsQuotable } from '../lib/passage.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 type RelationEdge = EntityDossier['relations']['edges'][number]
@@ -27,7 +28,7 @@ function RelationChip({ edge, slug, name }: { edge: RelationEdge; slug: string; 
     return (
       <Link
         to={`/t/${slug}/entity/${encodeURIComponent(value)}`}
-        className='rp-focus rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
         style={{ color: 'var(--rp-accent-fg)' }}
       >
         {value}
@@ -67,7 +68,12 @@ function MentionCard({ resource, slug }: { resource: ScoredResource; slug: strin
         <h3 className='rp-clamp-2 mt-2 text-sm font-semibold leading-snug text-ink'>
           {resource.title}
         </h3>
-        {resource.matchedPassage
+        {
+          /* A name is matched by its byline, a contribution statement or a
+           * declarations block as often as by a sentence about the person:
+           * those are flagged by the search and never quoted (D3-04). */
+        }
+        {resource.matchedPassage && passageIsQuotable(resource)
           ? (
             <p className='rp-clamp-2 mt-1.5 text-sm italic leading-relaxed text-ink-2'>
               &ldquo;{resource.matchedPassage}&rdquo;
@@ -85,18 +91,13 @@ function MentionCard({ resource, slug }: { resource: ScoredResource; slug: strin
   )
 }
 
-function EntitySkeleton() {
+/** The relations list while the dossier loads: the name itself never waits (D3-17). */
+function RelationsSkeleton() {
   return (
-    <div className='space-y-8'>
-      <div>
-        <Skeleton className='h-4 w-24' />
-        <Skeleton className='mt-3 h-9 w-72' />
-      </div>
-      <div className='space-y-2.5'>
-        <Skeleton className='h-11 w-full' />
-        <Skeleton className='h-11 w-full' />
-        <Skeleton className='h-11 w-3/4' />
-      </div>
+    <div className='space-y-2.5' aria-busy='true' aria-label='Loading connections'>
+      <Skeleton className='h-11 w-full' />
+      <Skeleton className='h-11 w-full' />
+      <Skeleton className='h-11 w-3/4' />
     </div>
   )
 }
@@ -112,7 +113,10 @@ export function EntityPage() {
     queryKey: ['entity', config.slug, name],
     queryFn: () => getEntityDossier(config.slug, name),
     enabled: name.length > 0,
+    // An unknown entity is an answer, not a failure worth retrying.
+    retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 2,
   })
+  const unknown = isError && error instanceof ApiError && error.status === 404
 
   const groups = useMemo(() => {
     if (!data) return []
@@ -135,20 +139,54 @@ export function EntityPage() {
     <main className='mx-auto max-w-4xl px-6 py-8'>
       <Link
         to={`/t/${config.slug}/graph`}
-        className='text-sm font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-sm font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
       >
         &larr; Back to graph
       </Link>
 
       {isLoading
         ? (
-          <div className='mt-4'>
-            <EntitySkeleton />
-          </div>
+          <>
+            <div className='mt-4 flex flex-wrap items-start justify-between gap-4'>
+              <div className='min-w-0'>
+                <p className='rp-eyebrow text-ink-3'>Entity</p>
+                <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{name}</h1>
+              </div>
+              <Link to={askHref} className='rp-btn rp-btn-primary shrink-0'>
+                Ask about this
+              </Link>
+            </div>
+            <section className='mt-8'>
+              <h2 className='rp-eyebrow text-ink-3'>Connections</h2>
+              <div className='mt-3'>
+                <RelationsSkeleton />
+              </div>
+            </section>
+          </>
         )
         : null}
 
-      {isError
+      {unknown
+        ? (
+          <div className='mt-4'>
+            <p className='rp-eyebrow text-ink-3'>Entity</p>
+            <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{name}</h1>
+            <div className='mt-6'>
+              <EmptyState
+                title='Nothing on this yet'
+                description='No paper in the corpus mentions this name and the knowledge graph has no relations for it. Check the spelling, or search the library for a broader term.'
+              >
+                <Link
+                  to={`/t/${config.slug}/search?q=${encodeURIComponent(name)}`}
+                  className='rp-btn rp-btn-outline'
+                >
+                  Search the library
+                </Link>
+              </EmptyState>
+            </div>
+          </div>
+        )
+        : isError
         ? (
           <div className='mt-4'>
             <ErrorCard
@@ -192,8 +230,8 @@ export function EntityPage() {
                 ? (
                   <div className='mt-3'>
                     <EmptyState
-                      title='No knowledge-graph connections yet'
-                      description='Run the knowledge graph agent in Manage to extract relations for this corpus.'
+                      title='No connections recorded yet'
+                      description='The knowledge graph has no relations for this entity so far. The papers below still mention it.'
                     />
                   </div>
                 )

@@ -122,6 +122,14 @@ CRUD /api/admin/t/:slug/*              corpus, labels, graph, agents, questions
 Zod schemas shared between server validation and the client. Sessions/assessments live in the
 JSON stores under `apps/api/src/stores.ts` so the portal, not the browser, owns them.
 
+**The Ask route is more than a proxy.** `POST /api/t/:slug/ask` routes the question, probes
+retrieval before generation, pins the papers the question names, asks the platform once (plus
+at most one retry), then re-binds the citations sentence by sentence, audits every figure,
+cohort, year and contraindication against the cited texts, removes what it cannot verify and
+says so, and leads the confidence label with that check. The whole sequence, the rules each
+stage applies and the findings that motivated them are in `docs/TRUST-LAYER.md`; the router and
+the stored search configurations behind it are in `docs/INTENT-ROUTING.md`.
+
 ## Front end
 
 - **React 18 + TypeScript**, loaded via an `esm.sh` import map (`apps/web/index.html`), bundled
@@ -147,6 +155,9 @@ JSON stores under `apps/api/src/stores.ts` so the portal, not the browser, owns 
   unit/integration tests, `deno check` for typechecking, `deno lint` and `deno fmt --check` for
   lint/format - one `deno task check` gate before anything is called done (see `deno.json`'s
   `tasks` key and `CONTRIBUTING.md`).
+- The answer trust layer (routing, grounding gate, binding, audit, gate, confidence) is
+  deterministic and unit-tested module by module; `docs/TRUST-LAYER.md` section 6 lists the
+  test files and what each covers.
 - Tests use in-file stub doubles only; no stub ships in product code. CI needs no ARAG
   credentials for the current test suite, which runs entirely against the JSON-file stores and
   in-file doubles.

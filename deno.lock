@@ -182,6 +182,7 @@
     "https://esm.sh/gsap@3.13.0/denonext/ScrollTrigger.mjs": "16fa9c4dc14192f2dc6636720d3ee040d357319fecfd810c24b7c40bba2f2af3",
     "https://esm.sh/gsap@3.13.0/denonext/gsap.mjs": "4aeeaee150215e23efcfd01a85cea42bfa78d1f97c6e93de3bc8cd9b81a4de42",
     "https://esm.sh/pdfjs-dist@4.9.155": "23ada0915aa7113c963cfc6175cfac060147cdd996abf9accb37e280f9805952",
+    "https://esm.sh/pdfjs-dist@4.9.155/denonext/pdfjs-dist.mjs": "c50055363cf8dfaab4bde3a1412306306af7a6de43e581bac20f32985b81c78c",
     "https://esm.sh/react-dom@18.3.1": "3352732344c5b11264f40d467ac8be1124cf462b05bf691864663b7887c20003",
     "https://esm.sh/react-dom@18.3.1/X-ZHJlYWN0QDE4LjMuMQ/denonext/react-dom.mjs": "26138c169a69a085aad47d9ad7b9c76354e41d6a84b3694bce126f3f1101c34c",
     "https://esm.sh/react-dom@18.3.1/client": "21721a0da8572c9017131699230e73bd29b31cae9763948f5a7e3966315d07a2",

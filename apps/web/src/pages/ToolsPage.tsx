@@ -218,6 +218,30 @@ export function ToolsPage() {
         </p>
       </header>
 
+      <section className='mt-8 max-w-3xl' aria-labelledby='extraction-lab-heading'>
+        <div className='rp-card p-6 sm:p-8'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <h2 id='extraction-lab-heading' className='rp-display text-2xl text-ink'>
+              Extraction Lab
+            </h2>
+            <span className='rp-chip cursor-default bg-[var(--rp-wash)] text-[var(--rp-ink)]'>
+              Administrators
+            </span>
+          </div>
+          <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
+            The extraction layer decides what this portal can ever know. Profile a document, run it
+            through the default, table-aware and visual extraction methods in a sandbox, compare the
+            text, tables and a judge's score side by side, and set the routing rule for each class
+            of document.
+          </p>
+          <Link
+            to={`/t/${slug}/manage?tab=extraction`}
+            className='rp-btn rp-btn-outline mt-4 inline-block'
+          >
+            Open the Extraction Lab
+          </Link>
+        </div>
+      </section>
       <section className='mt-8 max-w-3xl' aria-labelledby='connector-heading'>
         <div className='rp-card p-6 sm:p-8'>
           <div className='flex flex-col gap-5 sm:flex-row'>

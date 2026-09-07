@@ -118,6 +118,27 @@ describe('merchandising overlays', () => {
     expect(out.resourceId).toBe('r1')
   })
 
+  it('merchandiseCitation keeps a curated title and carries the generated headline as a subtitle', () => {
+    const store = new EnrichmentStore(tmp())
+    store.put('marine-2', 'r1', enrichment())
+    const citation: Citation = { index: 1, resourceId: 'r1', title: 'Project 1981-071' }
+    const out = merchandiseCitation(store, 'marine-2', citation, {
+      title: 'Echo-sounder and radar: a training manual for the professional fishing fleet',
+      titleCurated: true,
+    })
+    expect(out.title).toBe(
+      'Echo-sounder and radar: a training manual for the professional fishing fleet',
+    )
+    // Near-duplicate of the title: no subtitle.
+    expect(out.headline).toBeUndefined()
+    const other = merchandiseCitation(store, 'marine-2', citation, {
+      title: 'Project 1981-071 final report',
+      titleCurated: true,
+    })
+    expect(other.title).toBe('Project 1981-071 final report')
+    expect(other.headline).toBe('Echo-sounder and radar training for professional fishers')
+  })
+
   it('merchandiseCitation falls back to the baseline title when no enrichment is stored', () => {
     const store = new EnrichmentStore(tmp())
     const citation: Citation = { index: 1, resourceId: 'unknown-resource', title: 'A Real Title' }

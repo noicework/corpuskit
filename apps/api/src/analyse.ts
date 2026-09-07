@@ -1,6 +1,7 @@
 import type { AnalyseEvent, TenantConfig } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
 import type { TenantStoreApi } from './tenants.ts'
+import { sampleInventory } from './inventory-sample.ts'
 
 /**
  * Corpus analysis: interrogate a knowledge box and derive its portal
@@ -23,8 +24,12 @@ const ANALYSE_SCHEMA = {
         items: {
           type: 'object',
           additionalProperties: false,
-          properties: { id: { type: 'string' }, label: { type: 'string' } },
-          required: ['id', 'label'],
+          properties: {
+            id: { type: 'string' },
+            label: { type: 'string' },
+            description: { type: 'string' },
+          },
+          required: ['id', 'label', 'description'],
         },
       },
       kinds: {
@@ -32,8 +37,12 @@ const ANALYSE_SCHEMA = {
         items: {
           type: 'object',
           additionalProperties: false,
-          properties: { id: { type: 'string' }, label: { type: 'string' } },
-          required: ['id', 'label'],
+          properties: {
+            id: { type: 'string' },
+            label: { type: 'string' },
+            description: { type: 'string' },
+          },
+          required: ['id', 'label', 'description'],
         },
       },
       assignments: {
@@ -57,8 +66,8 @@ const ANALYSE_SCHEMA = {
 }
 
 interface AnalysisDesign {
-  topics: { id: string; label: string }[]
-  kinds: { id: string; label: string }[]
+  topics: { id: string; label: string; description?: string }[]
+  kinds: { id: string; label: string; description?: string }[]
   assignments: { number: number; topicId: string; kindId: string }[]
   suggestedQuestions: string[]
   searchPlaceholder: string
@@ -95,22 +104,15 @@ export async function* analyseTenant(
   const INVENTORY_BUDGET = 14_000
   const line = (r: { title: string; summary: string }, i: number) =>
     `${i + 1}. ${r.title} - ${r.summary.slice(0, 180)}`
-  let sample = resources
-  if (resources.reduce((n, r, i) => n + line(r, i).length + 1, 0) > INVENTORY_BUDGET) {
-    // even stride across the whole corpus keeps the sample representative
-    const stride = Math.ceil(resources.length * 90 / INVENTORY_BUDGET)
-    sample = resources.filter((_, i) => i % stride === 0)
-    while (sample.reduce((n, r, i) => n + line(r, i).length + 1, 0) > INVENTORY_BUDGET) sample.pop()
-  }
-  const sampled = sample.length < resources.length
-  const inventory = sample.map(line).join('\n')
+  const { sample, sampled, inventory } = sampleInventory(resources, line, INVENTORY_BUDGET)
   const prompt = `You are configuring a research portal for this knowledge box. Here is ` +
     (sampled
       ? `a representative sample of ${sample.length} of its ${resources.length} resources:`
       : `the complete inventory of its ${resources.length} resources:`) +
     `\n\n${inventory}\n\n` +
     `Design the portal configuration: (1) 4 to 8 topics that partition this corpus well, each ` +
-    `with a kebab-case id and a short label in Australian English; (2) 3 to 5 "kinds" - a ` +
+    `with a kebab-case id, a short label in Australian English and a one-sentence description ` +
+    `of what qualifies (the classifier's prompt); (2) 3 to 5 "kinds", each with a description - a ` +
     `second, orthogonal way of classifying the same resources (for example document genre or ` +
     `research approach), also with kebab-case ids; (3) for EVERY numbered resource above, an ` +
     `assignment of exactly one topicId and one kindId; (4) 6 suggested questions a researcher ` +
@@ -125,9 +127,17 @@ export async function* analyseTenant(
     yield { type: 'error', message: 'The model returned no usable taxonomy - try again.' }
     return
   }
-  const topics = design.topics.map((t) => ({ id: slugify(t.id || t.label), label: t.label }))
+  const topics = design.topics.map((t) => ({
+    id: slugify(t.id || t.label),
+    label: t.label,
+    ...(t.description?.trim() ? { description: t.description.trim() } : {}),
+  }))
     .filter((t) => t.id)
-  const kinds = (design.kinds ?? []).map((k) => ({ id: slugify(k.id || k.label), label: k.label }))
+  const kinds = (design.kinds ?? []).map((k) => ({
+    id: slugify(k.id || k.label),
+    label: k.label,
+    ...(k.description?.trim() ? { description: k.description.trim() } : {}),
+  }))
     .filter((k) => k.id)
   yield {
     type: 'item',
@@ -147,7 +157,12 @@ export async function* analyseTenant(
         id,
         title,
         multiple: false,
-        labels: labels.map((l) => l.id),
+        // The description rides on the label so the classifier agent has a
+        // prompt per label, not just an id.
+        labels: labels.map((l) => ({
+          title: l.id,
+          ...(l.description ? { text: l.description } : {}),
+        })),
       })
       yield { type: 'item', label: `Labelset '${id}' configured (${labels.length} labels)` }
     } catch {

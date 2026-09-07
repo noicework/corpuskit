@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useOutletContext } from 'react-router-dom'
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import { ApiError, getAdminOverview } from '../api/client.ts'
 import { ErrorCard, Skeleton } from '../components/ui.tsx'
 import { AddContent } from './admin/AddContent.tsx'
@@ -8,6 +8,7 @@ import { AnalysePanel } from './admin/AnalysePanel.tsx'
 import { InterrogatePanel } from './admin/InterrogatePanel.tsx'
 import { AppearancePanel } from './admin/AppearancePanel.tsx'
 import { BehaviourPanel } from './admin/BehaviourPanel.tsx'
+import { ExtractionPanel } from './admin/ExtractionPanel.tsx'
 import { CorpusHealthPanel } from './admin/CorpusHealthPanel.tsx'
 import { EnrichmentsPanel } from './admin/EnrichmentsPanel.tsx'
 import { InsightsPanel } from './admin/InsightsPanel.tsx'
@@ -29,6 +30,7 @@ type TabId =
   | 'graph'
   | 'appearance'
   | 'behaviour'
+  | 'extraction'
   | 'details'
 
 const TABS: { id: TabId; label: string }[] = [
@@ -40,6 +42,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'graph', label: 'Knowledge graph' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'behaviour', label: 'Behaviour' },
+  { id: 'extraction', label: 'Extraction' },
   { id: 'details', label: 'Details' },
 ]
 
@@ -56,7 +59,12 @@ export function ManagePage() {
 
   const [passcode, setPasscode] = useState(() => sessionStorage.getItem('rp-admin-passcode') ?? '')
   const [draft, setDraft] = useState('')
-  const [tab, setTab] = useState<TabId>('overview')
+  const [searchParams] = useSearchParams()
+  // A deep link (Tools > Extraction Lab) can open a tab directly.
+  const [tab, setTab] = useState<TabId>(() => {
+    const wanted = searchParams.get('tab')
+    return TABS.some((t) => t.id === wanted) ? wanted as TabId : 'overview'
+  })
   const [renaming, setRenaming] = useState(false)
   const { data: auth, isLoading: authLoading } = useQuery({
     queryKey: ['auth-session'],
@@ -366,6 +374,7 @@ export function ManagePage() {
               )}
 
               {tab === 'behaviour' && <BehaviourPanel slug={slug} passcode={adminCredential} />}
+              {tab === 'extraction' && <ExtractionPanel slug={slug} passcode={adminCredential} />}
 
               {tab === 'details' && (
                 <div className='rp-card p-5'>

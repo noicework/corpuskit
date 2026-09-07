@@ -10,8 +10,10 @@ WORKDIR /app
 ARG ESBUILD_VERSION=0.28.2
 ARG TAILWINDCSS_VERSION=4.3.3
 
+# poppler-utils gives the Extraction Lab its profiler (pdfinfo, pdftotext,
+# pdffonts); without it profiles fall back to the platform's extracted text.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates \
+  && apt-get install -y --no-install-recommends curl ca-certificates poppler-utils \
   && rm -rf /var/lib/apt/lists/*
 
 # esbuild: the npm registry tarball is the canonical source; unpkg mirrors the
@@ -41,4 +43,4 @@ RUN deno task build:web
 
 EXPOSE 8787
 
-CMD ["run", "--allow-net", "--allow-env", "--allow-read", "--allow-write=/app/data", "apps/api/src/server.ts"]
+CMD ["run", "--allow-net", "--allow-env", "--allow-read", "--allow-write=/app/data", "--allow-run=pdfinfo,pdftotext,pdffonts", "apps/api/src/server.ts"]

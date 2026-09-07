@@ -289,6 +289,7 @@ export async function* implementKgStrategy(
     task: string,
     title: string,
     operations: unknown[],
+    scope: 'field' | 'text_block' = 'field',
   ): AsyncGenerator<KgImplementEvent> {
     try {
       await management.startAgent(config, {
@@ -297,6 +298,7 @@ export async function* implementKgStrategy(
         operations,
         applyExisting: opts.applyExisting,
         model,
+        scope,
       })
       agents += 1
       yield { type: 'item', label: `${label} agent registered` }
@@ -373,7 +375,10 @@ export async function* implementKgStrategy(
   if (existingByTitle.has(chunksTitle)) {
     agents += 1
     yield { type: 'item', label: 'Passage labeller already registered - keeping it' }
-  } else {yield* tryStart('Passage labeller', 'labeler', chunksTitle, [{
+  } else {
+    // Chunk-level labels classify individual passages, so this agent runs
+    // over text blocks, not whole fields.
+    yield* tryStart('Passage labeller', 'labeler', chunksTitle, [{
       label: {
         ident: 'kgl2',
         labels: proposal.chunkLabels.map((l) => ({
@@ -381,7 +386,8 @@ export async function* implementKgStrategy(
           description: l.description,
         })),
       },
-    }])}
+    }], 'text_block')
+  }
   // Topic/kind classification keeps every future ingest visible to facets,
   // Explore and the coverage line - without it, bulk loads land unorganised.
   const classifyTitle = `classify-${slugify(config.slug)}`
@@ -390,13 +396,21 @@ export async function* implementKgStrategy(
     yield { type: 'item', label: 'Topic and kind classifier already registered - keeping it' }
   } else {
     const boxLabelsets = await management.labelsets(config).catch(() => [])
+    // Each label carries its prompt: the description stored on the labelset
+    // (written by corpus analysis), else the portal's topic description, else
+    // the label itself spelt out - never an empty string.
+    const topicDescriptions = new Map(config.topics.map((t) => [t.id, t.description ?? '']))
+    const describe = (ls: { id: string; definitions?: Record<string, string> }, label: string) =>
+      ls.definitions?.[label] ||
+      (ls.id === 'topic' ? topicDescriptions.get(label) : '') ||
+      `Documents whose main subject is ${label.replace(/[-_]+/g, ' ')}`
     const classifyOps = ['topic', 'kind']
       .map((ident) => boxLabelsets.find((ls) => ls.id === ident))
       .filter((ls): ls is NonNullable<typeof ls> => ls !== undefined)
       .map((ls) => ({
         label: {
           ident: ls.id,
-          labels: ls.labels.map((label) => ({ label, description: '' })),
+          labels: ls.labels.map((label) => ({ label, description: describe(ls, label) })),
           multiple: false,
         },
       }))

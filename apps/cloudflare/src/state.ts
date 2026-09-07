@@ -27,6 +27,8 @@ import type {
   InvestigationStoreApi,
   McpKeyRecord,
   McpKeyStoreApi,
+  RoutingLogApi,
+  RoutingRecord,
   SessionsStoreApi,
   Source,
   SourceStoreApi,
@@ -1026,6 +1028,41 @@ export class DurableMcpKeyStore implements McpKeyStoreApi {
   }
 }
 
+/**
+ * Intent-routing decisions per tenant, newest last, capped so the record
+ * stays a bounded evaluation set rather than an unbounded log.
+ */
+export class DurableRoutingLog implements RoutingLogApi {
+  constructor(private readonly state: DurableState) {}
+
+  private all(slug: string): RoutingRecord[] {
+    return this.state.get(key('routing', slug), [])
+  }
+
+  record(slug: string, entry: RoutingRecord): void {
+    const all = this.all(slug)
+    all.push(entry)
+    this.state.put(key('routing', slug), all.slice(-10_000))
+  }
+
+  recent(slug: string, limit = 50): RoutingRecord[] {
+    return [...this.all(slug)].reverse().slice(0, limit)
+  }
+
+  summary(
+    slug: string,
+  ): { total: number; byIntent: Record<string, number>; byStage: Record<string, number> } {
+    const byIntent: Record<string, number> = {}
+    const byStage: Record<string, number> = {}
+    const rows = this.all(slug)
+    for (const r of rows) {
+      byIntent[r.intent] = (byIntent[r.intent] ?? 0) + 1
+      byStage[r.stage] = (byStage[r.stage] ?? 0) + 1
+    }
+    return { total: rows.length, byIntent, byStage }
+  }
+}
+
 export interface DurableStores {
   bindings: DurableBindingStore
   tenants: DurableTenantStore
@@ -1039,6 +1076,7 @@ export interface DurableStores {
   kgProposals: DurableKgProposalStore
   branding: DurableBrandingStore
   mcpKeys: DurableMcpKeyStore
+  routing: DurableRoutingLog
 }
 
 export function durableStores(
@@ -1058,5 +1096,6 @@ export function durableStores(
     kgProposals: new DurableKgProposalStore(state),
     branding: new DurableBrandingStore(state),
     mcpKeys: new DurableMcpKeyStore(state),
+    routing: new DurableRoutingLog(state),
   }
 }

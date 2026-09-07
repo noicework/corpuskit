@@ -133,3 +133,16 @@ describe('extractPageSummary (reuse the platform DA page-summary field)', () => 
       .toBeUndefined()
   })
 })
+
+describe('extractPageSummary on a text ingest', () => {
+  it('finds the agent field beside a text field, not only beside a file field', async () => {
+    const { extractPageSummary } = await import('./merchandise.ts')
+    expect(
+      extractPageSummary([
+        { fieldId: 'texts/body', text: 'Body.' },
+        { fieldId: 'texts/da-pagesummary-t-body', text: 'A summary.' },
+      ]),
+    ).toBe('A summary.')
+    expect(extractPageSummary([{ fieldId: 'texts/body', text: 'Body.' }])).toBeUndefined()
+  })
+})

@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ensureSearchConfigs, getPrompts, getSearchConfigs, savePrompts } from '../../api/client.ts'
+import {
+  ensureSearchConfigs,
+  getPrompts,
+  getRouting,
+  getSearchConfigs,
+  getTenantConfig,
+  savePrompts,
+} from '../../api/client.ts'
+import { intentSummary } from '../../components/RouteChip.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
@@ -143,6 +151,13 @@ function SearchConfigsBlock({ slug, passcode }: { slug: string; passcode: string
       )}
 
       {message && <MessagePanel message={message} className='mt-3' />}
+      <IntentsTable
+        slug={slug}
+        passcode={passcode}
+        live={data ?? null}
+        loading={isLoading}
+        error={isError}
+      />
 
       <details className='mt-4'>
         <summary className='cursor-pointer text-xs font-medium text-ink-2'>
@@ -171,6 +186,116 @@ export function BehaviourPanel({ slug, passcode }: { slug: string; passcode: str
     <div className='space-y-4'>
       <AskPromptEditor slug={slug} passcode={passcode} />
       <SearchConfigsBlock slug={slug} passcode={passcode} />
+    </div>
+  )
+}
+
+/**
+ * Intent-routed configurations: each intent, the stored configuration it
+ * selects, the policy in one line, and whether the box currently holds it.
+ * Converge is the "create default configurations" action above - it writes
+ * every intent configuration too.
+ */
+function IntentsTable(
+  { slug, passcode, live, loading, error }: {
+    slug: string
+    passcode: string
+    live: Record<string, unknown> | null
+    loading: boolean
+    error: boolean
+  },
+) {
+  const { data: config } = useQuery({
+    queryKey: ['tenant-config', slug],
+    queryFn: () => getTenantConfig(slug),
+  })
+  const { data: routing } = useQuery({
+    queryKey: ['admin-routing', slug],
+    queryFn: () => getRouting(slug, passcode),
+    refetchInterval: 30_000,
+  })
+  const intents = config?.intents ?? []
+  if (intents.length === 0) return null
+  const defaultIntent = config?.defaultIntent
+  const names = (id: string, surfaces: string[]) => {
+    if (id === defaultIntent) return ['portal-ask', 'portal-search']
+    const out: string[] = []
+    if (surfaces.includes('ask')) out.push(`portal-intent-${id}`)
+    if (surfaces.includes('search')) {
+      out.push(surfaces.includes('ask') ? `portal-intent-${id}-find` : `portal-intent-${id}`)
+    }
+    return out
+  }
+  const status = (name: string) => {
+    if (loading) return 'checking'
+    if (error || !live) return 'unknown'
+    return name in live ? 'present' : 'missing'
+  }
+  const summary = routing?.summary
+  return (
+    <div className='mt-5 border-t border-line pt-4'>
+      <div className='flex flex-wrap items-baseline justify-between gap-2'>
+        <h4 className='text-sm font-semibold text-ink'>Intent routing</h4>
+        {summary && summary.total > 0
+          ? (
+            <p className='text-xs text-ink-3'>
+              {summary.total} decisions ·{' '}
+              {Object.entries(summary.byStage).map(([k, v]) => `${v} ${k}`).join(', ')}
+            </p>
+          )
+          : <p className='text-xs text-ink-3'>No routing decisions logged yet.</p>}
+      </div>
+      <div className='mt-2 overflow-x-auto'>
+        <table className='w-full text-left text-xs'>
+          <thead className='text-ink-3'>
+            <tr>
+              <th className='py-1.5 pr-3 font-medium'>Intent</th>
+              <th className='py-1.5 pr-3 font-medium'>Configuration</th>
+              <th className='py-1.5 pr-3 font-medium'>Policy</th>
+              <th className='py-1.5 font-medium'>On the box</th>
+              <th className='py-1.5 pl-3 text-right font-medium'>Routed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {intents.map((intent) => (
+              <tr key={intent.id} className='border-t border-line align-top'>
+                <td className='py-2 pr-3'>
+                  <span className='font-medium text-ink'>{intent.label}</span>
+                  <span className='block text-ink-3'>{intent.description}</span>
+                </td>
+                <td className='py-2 pr-3 font-mono text-[11px] text-ink-2'>
+                  {names(intent.id, intent.answer.surfaces).map((n) => (
+                    <span key={n} className='block'>{n}</span>
+                  ))}
+                </td>
+                <td className='py-2 pr-3 text-ink-2'>{intentSummary(intent)}</td>
+                <td className='py-2'>
+                  {names(intent.id, intent.answer.surfaces).map((n) => {
+                    const st = status(n)
+                    return (
+                      <span
+                        key={n}
+                        className={`block ${
+                          st === 'present'
+                            ? 'rp-badge rp-badge-ok'
+                            : st === 'missing'
+                            ? 'rp-badge rp-badge-warn'
+                            : 'text-ink-3'
+                        }`}
+                      >
+                        {st}
+                      </span>
+                    )
+                  })}
+                </td>
+                <td className='py-2 pl-3 text-right tabular-nums text-ink-2'>
+                  {summary?.byIntent[intent.id] ?? 0}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

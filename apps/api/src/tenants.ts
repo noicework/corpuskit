@@ -59,6 +59,11 @@ const grains: TenantConfig = TenantConfigSchema.parse({
     paletteId: 'kiln',
   },
   searchPlaceholder: 'Search agronomy, crop protection, soils, farm business…',
+  assessmentHeading: 'Industry Knowledge Areas',
+  // These ids must match the `topic` labelset on the bound knowledge box -
+  // Explore intersects them with the box's facet counts, so an id that is not a
+  // real label silently yields an empty portal. Read from the box on
+  // 2026-08-31; the comments are its resource counts.
   topics: [
     { id: 'crop-protection', label: 'Crop protection' },
     { id: 'soils-nutrition', label: 'Soils and nutrition' },
@@ -103,6 +108,10 @@ const marine: TenantConfig = TenantConfigSchema.parse({
     paletteId: 'fathom',
   },
   searchPlaceholder: 'Search fisheries, aquaculture, stock assessment, marine ecology…',
+  assessmentHeading: 'Industry Knowledge Areas',
+  // These ids must match the `topic` labelset actually on the bound knowledge
+  // box - Explore intersects them with the box's classification facet counts,
+  // so an id that is not a real label silently yields an empty portal.
   topics: [
     { id: 'stock-assessment', label: 'Stock assessment' },
     { id: 'aquaculture-biosecurity', label: 'Aquaculture biosecurity' },
@@ -182,9 +191,14 @@ export interface TenantPatch {
   topics?: TenantConfig['topics']
   suggestedQuestions?: TenantConfig['suggestedQuestions']
   searchPlaceholder?: string
+  assessmentHeading?: string
   branding?: TenantConfig['branding']
   /** Portal-managed behaviour settings (system prompt, image grounding). */
   prompts?: { ask?: string; images?: boolean }
+  /** Extraction routing rules (docs/EXTRACTION-LAB.md). */
+  extraction?: TenantConfig['extraction']
+  /** Intent-routed configurations (docs/INTENT-ROUTING.md), when a portal tunes its own. */
+  intents?: TenantConfig['intents']
 }
 
 export class TenantStore {

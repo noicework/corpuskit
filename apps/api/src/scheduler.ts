@@ -9,6 +9,7 @@ import {
 } from './crawl.ts'
 import { type Source, type SourceStoreApi, type WatchStoreApi } from './stores.ts'
 import { type EnrichmentStoreApi, runEnrichmentOverCorpus } from './enrichments.ts'
+import { runSuggestedQuestionsOverCorpus } from './suggested-questions.ts'
 import type { TenantStoreApi } from './tenants.ts'
 
 // ---------------------------------------------------------------------------
@@ -238,6 +239,8 @@ export async function runWatches(
 
 /** Merchandise up to this many still-unenriched resources per portal, per run. */
 const AUTO_ENRICH_CAP = 400
+/** Per-document openers written per cadence, after the merchandising pass. */
+const AUTO_QUESTIONS_CAP = 150
 
 /** Daily by default; operators may safely choose an hourly-to-monthly cadence. */
 export const DEFAULT_AUTO_ENRICH_CADENCE_MS = 24 * 3600 * 1000
@@ -286,6 +289,19 @@ export async function runAutoEnrichments(
         // strained, moving straight to the next box would only transfer the
         // pressure; leave every remaining portal for the next cadence.
         return
+      }
+      // Openers for the resource pages ride the same cadence, so a page never
+      // generates them on demand once the pass has caught up.
+      for await (
+        const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
+          limit: AUTO_QUESTIONS_CAP,
+        })
+      ) {
+        if (event.type === 'error') {
+          console.warn(
+            `[scheduler] suggested questions paused for ${config.slug}: ${event.message}`,
+          )
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error'

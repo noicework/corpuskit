@@ -1,12 +1,13 @@
 import { type CSSProperties, type FormEvent, useMemo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { useOutletContext, useSearchParams } from 'react-router-dom'
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import type { GenerateKind, ResourceSummary } from '@research-portal/core'
 import { generateArtifact } from '../api/client.ts'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
-import { EmptyState } from '../components/ui.tsx'
+import { EmptyState, ExportNotice, savedFileNotice, useExportNotice } from '../components/ui.tsx'
 import { SaveArtefactButton } from '../components/SaveEvidence.tsx'
 import { suggestedTopicChips } from '../lib/generate-suggestions.ts'
+import { tenantCopy } from '../lib/tenant-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 // ---------------------------------------------------------------------------
@@ -17,7 +18,6 @@ import type { TenantOutletContext } from './TenantLayout.tsx'
 type KindMeta = {
   id: GenerateKind
   label: string
-  placeholder: string
   description: string
 }
 
@@ -25,40 +25,34 @@ const KINDS: KindMeta[] = [
   {
     id: 'comparison',
     label: 'Comparison',
-    placeholder: 'e.g. Compare controlled traffic farming with conventional tillage',
     description:
       "A side-by-side matrix that scores a handful of options against the dimensions that matter, grounded in the portal's content.",
   },
   {
     id: 'briefing',
     label: 'Briefing',
-    placeholder: 'e.g. Brief me on the current state of soil carbon measurement',
     description:
       'An executive briefing document - an overview, structured sections, and the key takeaways worth remembering.',
   },
   {
     id: 'timeline',
     label: 'Timeline',
-    placeholder: 'e.g. Timeline of drought policy changes since 2015',
     description:
       'A chronological timeline of events drawn from the sources, oldest to most recent.',
   },
   {
     id: 'proscons',
     label: 'Pros and cons',
-    placeholder: 'e.g. Pros and cons of adopting variable rate technology',
     description: 'A balanced pros and cons breakdown, with the rationale behind each point.',
   },
   {
     id: 'faq',
     label: 'FAQ',
-    placeholder: 'e.g. Common questions about grain storage regulations',
     description: 'A set of frequently asked questions with grounded, source-backed answers.',
   },
   {
     id: 'assessment',
     label: 'Assessment',
-    placeholder: 'e.g. Quiz me on the basics of integrated pest management',
     description: 'A short interactive quiz to test understanding of a topic, with explanations.',
   },
 ]
@@ -75,12 +69,113 @@ type Rating = { dimension: string; assessment: string; source?: string }
 type ComparisonItem = { name: string; ratings: Rating[] }
 type ComparisonObject = { dimensions: string[]; items: ComparisonItem[] }
 
-type BriefingSection = { heading: string; content: string }
+type BriefingSource = { resourceId: string; title: string }
+type BriefingSection = {
+  heading: string
+  content: string
+  sources?: BriefingSource[]
+  /** Reference numbers into `references`, in citation order. */
+  refs?: number[]
+}
+/** A numbered reference, built by the server from the resource record. */
+type BriefingReference = {
+  index: number
+  resourceId: string
+  title: string
+  journal?: string
+  year?: string
+  authors?: string[]
+}
 type BriefingObject = {
   title: string
   executive_summary: string
   sections: BriefingSection[]
   key_takeaways: string[]
+  /** Reference numbers per takeaway, parallel to `key_takeaways`. */
+  takeaway_refs?: number[][]
+  references?: BriefingReference[]
+  /** Headings the server withheld because no retrieved source supported them. */
+  omitted_sections?: string[]
+  /** The figure audit the server ran over the sections and takeaways (D3-03). */
+  audit?: {
+    figuresChecked: number
+    figuresRemoved: string[]
+    sentencesRemoved: number
+    takeawaysRemoved: number
+  }
+}
+
+/** "12months" reads as "12 months" in the badge. */
+function figureLabel(token: string): string {
+  return token.replace(/(\d)((?:month|week|year|day|hour)s)$/, '$1 $2')
+}
+
+/** The badge that says what the briefing's figure audit checked and removed. */
+function BriefingAuditBadge({ audit }: { audit: NonNullable<BriefingObject['audit']> }) {
+  const removed = audit.sentencesRemoved + audit.takeawaysRemoved
+  if (audit.figuresChecked === 0 && removed === 0) return null
+  const checked = audit.figuresChecked === 1
+    ? '1 figure checked'
+    : `${audit.figuresChecked} figures checked`
+  const label = removed > 0
+    ? `${checked} · ${removed === 1 ? '1 sentence' : `${removed} sentences`} removed`
+    : checked
+  const figures = audit.figuresRemoved.map(figureLabel).join(', ')
+  const title = removed > 0
+    ? `${
+      removed === 1 ? 'One sentence was' : `${removed} sentences were`
+    } removed because no source of ${
+      removed === 1 ? 'its' : 'their'
+    } section carries the figures beside the claim, at its outcome and for its population${
+      figures ? ` (${figures})` : ''
+    }. Every figure still in the briefing was found beside its claim.`
+    : 'Every figure in this briefing was found beside its claim, at its outcome and for its population, in a source of its section.'
+  return (
+    <span
+      className={`rp-badge ${removed > 0 ? 'rp-badge-warn' : 'rp-badge-ok'}`}
+      title={title}
+      data-testid='briefing-audit-badge'
+    >
+      {label}
+    </span>
+  )
+}
+
+/** "Broadley et al., Neurol Neuroimmunol Neuroinflamm, 2025" - the record's own citation line. */
+function referenceLine(reference: BriefingReference): string {
+  const first = reference.authors?.[0]
+  const surname = first ? first.replace(/[,\s]+[A-Z.\s-]*$/, '').trim() || first : ''
+  const author = surname ? (reference.authors?.length ?? 0) > 1 ? `${surname} et al.` : surname : ''
+  return [author, reference.journal, reference.year].filter(Boolean).join(', ')
+}
+
+/** Numbered citation markers, each linking to the reference it names. */
+function RefMarkers({ refs, references, slug }: {
+  refs: number[]
+  references: BriefingReference[]
+  slug: string
+}) {
+  if (refs.length === 0) return null
+  return (
+    <sup className='ml-0.5 whitespace-nowrap'>
+      {refs.map((n) => {
+        const reference = references.find((r) => r.index === n)
+        return (
+          <Link
+            key={n}
+            to={reference
+              ? `/t/${slug}/library/${encodeURIComponent(reference.resourceId)}`
+              : `/t/${slug}/generate`}
+            className='rp-focus inline-block min-h-6 min-w-6 px-0.5 text-center font-semibold no-underline'
+            style={{ color: 'var(--rp-accent-fg)' }}
+            title={reference ? `Reference ${n} - ${reference.title}` : `Reference ${n}`}
+          >
+            [{n}]
+          </Link>
+        )
+      })}
+    </sup>
+  )
 }
 
 type TimelineEvent = { date: string; title: string; description: string }
@@ -98,8 +193,11 @@ type AssessmentQuestion = {
   correct_index: number
   explanation: string
   topic: string
+  /** The retrieved resource the question was written from, when the server could resolve it. */
+  source_resource_id?: string | null
+  source_title?: string | null
 }
-type AssessmentObject = { questions: AssessmentQuestion[] }
+type AssessmentObject = { questions: AssessmentQuestion[]; requested?: number }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -138,8 +236,14 @@ function isBriefing(value: unknown): value is BriefingObject {
   ) {
     return false
   }
+  if (value.omitted_sections !== undefined && !isStringArray(value.omitted_sections)) return false
   return value.sections.every(
-    (s) => isRecord(s) && typeof s.heading === 'string' && typeof s.content === 'string',
+    (s) =>
+      isRecord(s) && typeof s.heading === 'string' && typeof s.content === 'string' &&
+      (s.sources === undefined ||
+        (Array.isArray(s.sources) && s.sources.every((src) =>
+          isRecord(src) && typeof src.resourceId === 'string' && typeof src.title === 'string'
+        ))),
   )
 }
 
@@ -192,7 +296,11 @@ function isAssessment(value: unknown): value is AssessmentObject {
       isStringArray(q.options) &&
       typeof q.correct_index === 'number' &&
       typeof q.explanation === 'string' &&
-      typeof q.topic === 'string',
+      typeof q.topic === 'string' &&
+      (q.source_resource_id === undefined || q.source_resource_id === null ||
+        typeof q.source_resource_id === 'string') &&
+      (q.source_title === undefined || q.source_title === null ||
+        typeof q.source_title === 'string'),
   )
 }
 
@@ -259,10 +367,18 @@ function ComparisonTable({ data }: { data: ComparisonObject }) {
   )
 }
 
-function BriefingDoc({ data }: { data: BriefingObject }) {
+function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
+  const omitted = data.omitted_sections ?? []
+  const references = data.references ?? []
+  const takeawayRefs = data.takeaway_refs ?? []
+  const untraced = data.key_takeaways.filter((_, i) => (takeawayRefs[i] ?? []).length === 0)
+    .length
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm sm:p-8'>
-      <h2 className='text-xl font-semibold tracking-tight text-ink'>{data.title}</h2>
+      <div className='flex flex-wrap items-start justify-between gap-x-4 gap-y-2'>
+        <h2 className='min-w-0 text-xl font-semibold tracking-tight text-ink'>{data.title}</h2>
+        {data.audit ? <BriefingAuditBadge audit={data.audit} /> : null}
+      </div>
       <p className='mt-3 text-sm leading-relaxed text-ink-2'>{data.executive_summary}</p>
 
       {data.key_takeaways.length > 0 && (
@@ -274,10 +390,22 @@ function BriefingDoc({ data }: { data: BriefingObject }) {
             {data.key_takeaways.map((t, i) => (
               <li key={i} className='flex gap-2 text-sm text-ink'>
                 <span aria-hidden='true' className='text-ink-3'>&bull;</span>
-                <span>{t}</span>
+                <span>
+                  {t}
+                  <RefMarkers refs={takeawayRefs[i] ?? []} references={references} slug={slug} />
+                </span>
               </li>
             ))}
           </ul>
+          {references.length > 0 && untraced > 0
+            ? (
+              <p className='mt-2 text-xs leading-relaxed text-ink-3'>
+                {untraced === 1 ? 'One takeaway carries' : `${untraced} takeaways carry`}{' '}
+                no marker because no section of this briefing states it - treat{' '}
+                {untraced === 1 ? 'it' : 'them'} as unverified.
+              </p>
+            )
+            : null}
         </div>
       )}
 
@@ -285,10 +413,63 @@ function BriefingDoc({ data }: { data: BriefingObject }) {
         {data.sections.map((s, i) => (
           <div key={i}>
             <h3 className='text-sm font-semibold text-ink'>{s.heading}</h3>
-            <p className='mt-1.5 text-sm leading-relaxed text-ink-2'>{s.content}</p>
+            <p className='mt-1.5 text-sm leading-relaxed text-ink-2'>
+              {s.content}
+              <RefMarkers refs={s.refs ?? []} references={references} slug={slug} />
+            </p>
+            {(s.refs ?? []).length === 0 && s.sources && s.sources.length > 0 && (
+              <p className='mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3'>
+                <span>Sources:</span>
+                {s.sources.map((src) => (
+                  <Link
+                    key={src.resourceId}
+                    to={`/t/${slug}/library/${encodeURIComponent(src.resourceId)}`}
+                    className='rp-focus max-w-[24rem] truncate font-medium underline-offset-2 hover:underline'
+                    style={{ color: 'var(--rp-accent-fg)' }}
+                    title={src.title}
+                  >
+                    {src.title}
+                  </Link>
+                ))}
+              </p>
+            )}
           </div>
         ))}
       </div>
+
+      {references.length > 0 && (
+        <div className='mt-6 border-t border-line pt-4'>
+          <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>References</p>
+          <ol className='mt-2 space-y-1.5 text-sm'>
+            {references.map((reference) => {
+              const line = referenceLine(reference)
+              return (
+                <li key={reference.index} className='flex gap-2 leading-relaxed text-ink-2'>
+                  <span className='shrink-0 tabular-nums text-ink-3'>[{reference.index}]</span>
+                  <span className='min-w-0'>
+                    <Link
+                      to={`/t/${slug}/library/${encodeURIComponent(reference.resourceId)}`}
+                      className='rp-focus font-medium text-ink underline-offset-2 hover:underline'
+                    >
+                      {reference.title}
+                    </Link>
+                    {line ? <span className='text-ink-3'>{` - ${line}`}</span> : null}
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+        </div>
+      )}
+
+      {omitted.length > 0 && (
+        <p className='mt-5 border-t border-line pt-4 text-xs leading-relaxed text-ink-3'>
+          {omitted.length === 1 ? 'One section was' : `${omitted.length} sections were`}{' '}
+          left out because no retrieved source supported {omitted.length === 1 ? 'it' : 'them'}:
+          {' '}
+          {omitted.join('; ')}.
+        </p>
+      )}
     </div>
   )
 }
@@ -389,7 +570,7 @@ function FaqView({ data }: { data: FaqObject }) {
 }
 
 /** Interactive quiz - pick an answer per question, submit reveals correct/incorrect + a score. */
-function AssessmentQuiz({ data }: { data: AssessmentObject }) {
+function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }) {
   const [selected, setSelected] = useState<Record<number, number>>({})
   const [submitted, setSubmitted] = useState(false)
 
@@ -408,6 +589,16 @@ function AssessmentQuiz({ data }: { data: AssessmentObject }) {
           </p>
         )}
       </div>
+
+      {(data.requested ?? 0) > data.questions.length
+        ? (
+          <p className='mt-2 text-xs leading-relaxed text-ink-3' role='note'>
+            {data.questions.length === 1 ? 'One' : data.questions.length} of the {data.requested}
+            {' '}
+            questions asked for survived the source check.
+          </p>
+        )
+        : null}
 
       <div className='mt-4 space-y-6'>
         {data.questions.map((q, qi) => (
@@ -467,6 +658,24 @@ function AssessmentQuiz({ data }: { data: AssessmentObject }) {
             {submitted && q.explanation && (
               <p className='mt-3 text-sm leading-relaxed text-ink-2'>{q.explanation}</p>
             )}
+            {submitted && (
+              <p className='mt-2 text-xs text-ink-3'>
+                {q.source_resource_id && q.source_title
+                  ? (
+                    <>
+                      Source:{' '}
+                      <Link
+                        to={`/t/${slug}/library/${encodeURIComponent(q.source_resource_id)}`}
+                        className='rp-focus font-medium underline-offset-2 hover:underline'
+                        style={{ color: 'var(--rp-accent-fg)' }}
+                      >
+                        {q.source_title}
+                      </Link>
+                    </>
+                  )
+                  : 'Source: not attributed - the question could not be tied to one retrieved document.'}
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -524,14 +733,18 @@ function SourcesRow({ sources }: { sources: ResourceSummary[] }) {
   )
 }
 
-function ArtifactBody({ kind, object }: { kind: GenerateKind; object: unknown }) {
+function ArtifactBody(
+  { kind, object, slug }: { kind: GenerateKind; object: unknown; slug: string },
+) {
   switch (kind) {
     case 'comparison':
       return isComparison(object)
         ? <ComparisonTable data={object} />
         : <RawFallback value={object} />
     case 'briefing':
-      return isBriefing(object) ? <BriefingDoc data={object} /> : <RawFallback value={object} />
+      return isBriefing(object)
+        ? <BriefingDoc data={object} slug={slug} />
+        : <RawFallback value={object} />
     case 'timeline':
       return isTimeline(object) ? <TimelineView data={object} /> : <RawFallback value={object} />
     case 'proscons':
@@ -540,7 +753,7 @@ function ArtifactBody({ kind, object }: { kind: GenerateKind; object: unknown })
       return isFaq(object) ? <FaqView data={object} /> : <RawFallback value={object} />
     case 'assessment':
       return isAssessment(object)
-        ? <AssessmentQuiz data={object} />
+        ? <AssessmentQuiz data={object} slug={slug} />
         : <RawFallback value={object} />
     default:
       return <RawFallback value={object} />
@@ -599,15 +812,44 @@ function artifactToHtml(
       `<table><thead><tr><th>Dimension</th>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`
   } else if (kind === 'briefing' && isBriefing(object)) {
     title = object.title
+    const references = object.references ?? []
+    const markers = (refs: number[] | undefined) =>
+      refs && refs.length > 0 ? ` <sup>${refs.map((n) => `[${n}]`).join('')}</sup>` : ''
+    const takeawayRefs = object.takeaway_refs ?? []
     const takeaways = object.key_takeaways.length > 0
       ? `<h2>Key takeaways</h2><ul>${
-        object.key_takeaways.map((t) => `<li>${escapeHtml(t)}</li>`).join('')
+        object.key_takeaways.map((t, i) => `<li>${escapeHtml(t)}${markers(takeawayRefs[i])}</li>`)
+          .join('')
       }</ul>`
       : ''
     const sections = object.sections
-      .map((s) => `<h2>${escapeHtml(s.heading)}</h2><p>${escapeHtml(s.content)}</p>`)
+      .map((s) => {
+        const sourceLine = (s.refs ?? []).length === 0 && s.sources && s.sources.length > 0
+          ? `<p><small>Sources: ${
+            s.sources.map((src) => escapeHtml(src.title)).join('; ')
+          }</small></p>`
+          : ''
+        return `<h2>${escapeHtml(s.heading)}</h2><p>${escapeHtml(s.content)}${
+          markers(s.refs)
+        }</p>${sourceLine}`
+      })
       .join('')
-    contentHtml = `<p>${escapeHtml(object.executive_summary)}</p>${takeaways}${sections}`
+    const omitted = object.omitted_sections && object.omitted_sections.length > 0
+      ? `<p><small>Left out for want of a supporting source: ${
+        object.omitted_sections.map(escapeHtml).join('; ')
+      }</small></p>`
+      : ''
+    const referenceList = references.length > 0
+      ? `<h2>References</h2><ol>${
+        references.map((r) => {
+          const line = referenceLine(r)
+          return `<li>${escapeHtml(r.title)}${line ? ` - ${escapeHtml(line)}` : ''}</li>`
+        }).join('')
+      }</ol>`
+      : ''
+    contentHtml = `<p>${
+      escapeHtml(object.executive_summary)
+    }</p>${takeaways}${sections}${omitted}${referenceList}`
   } else if (kind === 'timeline' && isTimeline(object)) {
     title = object.title
     contentHtml = `<ol>${
@@ -648,9 +890,12 @@ function artifactToHtml(
           )
           .join('')
         const topic = q.topic ? `<p><em>${escapeHtml(q.topic)}</em></p>` : ''
+        const source = q.source_title
+          ? `<p><small>Source: ${escapeHtml(q.source_title)}</small></p>`
+          : ''
         return `<h2>${i + 1}. ${
           escapeHtml(q.question)
-        }</h2>${topic}<ol type="a">${options}</ol><p>${escapeHtml(q.explanation)}</p>`
+        }</h2>${topic}<ol type="a">${options}</ol><p>${escapeHtml(q.explanation)}</p>${source}`
       })
       .join('')
   } else {
@@ -744,7 +989,8 @@ function slugOrDate(title: string): string {
   return slug.length > 0 ? slug.slice(0, 60) : new Date().toISOString().slice(0, 10)
 }
 
-function exportToWord(kind: GenerateKind, object: unknown, sourceTitles: string[]) {
+/** Downloads the artefact as a Word-compatible .doc and returns the file name. */
+function exportToWord(kind: GenerateKind, object: unknown, sourceTitles: string[]): string {
   const { title, bodyHtml } = artifactToHtml(kind, object, sourceTitles)
   const html = wordDocumentHtml(title, bodyHtml)
   const blob = new Blob(['﻿', html], { type: 'application/msword' })
@@ -756,6 +1002,7 @@ function exportToWord(kind: GenerateKind, object: unknown, sourceTitles: string[
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+  return link.download
 }
 
 /** Opens a print-ready view in a new window and triggers the browser's print dialog.
@@ -781,6 +1028,7 @@ function ExportRow(
   },
 ) {
   const [popupBlocked, setPopupBlocked] = useState(false)
+  const { notice, announce } = useExportNotice()
   const disabled = object === undefined || object === null
 
   return (
@@ -800,7 +1048,8 @@ function ExportRow(
       <button
         type='button'
         disabled={disabled}
-        onClick={() => exportToWord(kind, object, sourceTitles)}
+        onClick={() =>
+          announce(savedFileNotice(exportToWord(kind, object, sourceTitles), 'Word document'))}
         className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
       >
         Export to Word
@@ -808,11 +1057,20 @@ function ExportRow(
       <button
         type='button'
         disabled={disabled}
-        onClick={() => setPopupBlocked(!exportToPdf(kind, object, sourceTitles))}
+        onClick={() => {
+          const opened = exportToPdf(kind, object, sourceTitles)
+          setPopupBlocked(!opened)
+          if (opened) {
+            announce(
+              'Opened a print-ready copy in a new tab - save it as PDF from the print dialog',
+            )
+          }
+        }}
         className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
       >
         Export to PDF
       </button>
+      <ExportNotice notice={notice} />
       {popupBlocked
         ? (
           <p className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
@@ -879,6 +1137,7 @@ function SuggestedTopicChips({
  */
 export function GeneratePage() {
   const { config } = useOutletContext<TenantOutletContext>()
+  const copy = tenantCopy(config)
   // Direct links can select a kind (?kind=briefing).
   const [searchParams] = useSearchParams()
   const requestedKind = searchParams.get('kind')
@@ -921,7 +1180,11 @@ export function GeneratePage() {
         Schema-enforced research artifacts, grounded in the portal's content.
       </p>
 
-      <div className='rp-no-scrollbar mt-6 flex items-center gap-1 overflow-x-auto whitespace-nowrap rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
+      {
+        /* The tabs wrap onto a second row on a phone rather than clipping at
+        * "Pros a" with no scroll affordance. */
+      }
+      <div className='mt-6 flex flex-wrap items-center gap-1 rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
         {KINDS.map((k) => (
           <button
             key={k.id}
@@ -952,7 +1215,7 @@ export function GeneratePage() {
           rows={3}
           value={drafts[kind]}
           onChange={(e) => setDrafts((prev) => ({ ...prev, [kind]: e.target.value }))}
-          placeholder={activeMeta?.placeholder}
+          placeholder={copy.generateExample(kind)}
           className='rp-input'
         />
         <SuggestedTopicChips kind={kind} topics={config.topics} onPick={pickSuggestion} />
@@ -1013,6 +1276,7 @@ export function GeneratePage() {
             key={resultVersion}
             kind={mutation.data.kind}
             object={mutation.data.object}
+            slug={config.slug}
           />
           <ExportRow
             key={`export-${resultVersion}`}

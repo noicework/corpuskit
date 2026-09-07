@@ -3,9 +3,18 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { TenantConfig } from '@research-portal/core'
 import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
-import { tenantThemeVars, useBodyTheme, useTenantFonts, useTextScale } from '../lib/theme.ts'
+import {
+  tenantThemeVars,
+  useBodyTheme,
+  useTenantFonts,
+  useTextScale,
+  useViewerScheme,
+} from '../lib/theme.ts'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
+import { HelpItemIcon, HelpMenu } from '../components/HelpMenu.tsx'
+import { helpMenuItems } from '../components/help-menu-items.ts'
+import { pageTitle } from '../lib/page-title.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
@@ -13,6 +22,8 @@ import { getAuthSession } from '../api/auth.ts'
 
 export type TenantOutletContext = {
   config: TenantConfig
+  /** True for a signed-in administrator; developer-facing widgets show only then. */
+  isAdmin?: boolean
 }
 
 function FullPageSpinner() {
@@ -41,12 +52,13 @@ const MOBILE_NAV_ITEMS: { path: string; label: string; end: boolean }[] = [
   ...NAV_ITEMS,
 ]
 
-// One name each for the help and account controls, read by both the header
-// icons and the phone sheet's rows so the two surfaces cannot drift apart. The
-const HELP_LABEL = 'Help'
+// One name for the account control, read by both the header icon and the phone
+// sheet's row so the two surfaces cannot drift apart. The help destinations come
+// from `helpMenuItems` for the same reason.
 const ACCOUNT_LABEL = 'My account'
 
-function HelpIcon({ className }: { className: string }) {
+/** Sun and moon, for the viewer's scheme toggle. */
+function SchemeIcon({ scheme, className }: { scheme: 'light' | 'dark'; className: string }) {
   return (
     <svg
       viewBox='0 0 24 24'
@@ -58,9 +70,12 @@ function HelpIcon({ className }: { className: string }) {
       className={className}
       aria-hidden='true'
     >
-      <circle cx='12' cy='12' r='9' />
-      <path d='M9.4 9.2a2.7 2.7 0 015.2.9c0 1.8-2.6 2.4-2.6 4' />
-      <path d='M12 17.4h.01' />
+      {scheme === 'dark' ? <path d='M20 14.5A8.5 8.5 0 019.5 4a7 7 0 1010.5 10.5z' /> : (
+        <>
+          <circle cx='12' cy='12' r='4' />
+          <path d='M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8' />
+        </>
+      )}
     </svg>
   )
 }
@@ -272,16 +287,11 @@ export function TenantLayout() {
     // would attach to nothing and never set the property.
   }, [config])
 
+  // Every surface names itself in the tab, so two open portal tabs are told
+  // apart by what they hold rather than by the product name alone (D6-14).
   useEffect(() => {
     if (config) {
-      const surface = /\/ask(?:\/|$)/.test(location.pathname)
-        ? 'Ask'
-        : /\/tools(?:\/|$)/.test(location.pathname)
-        ? 'Tools'
-        : null
-      document.title = surface
-        ? `${surface} | ${config.branding.productName}`
-        : config.branding.productName
+      document.title = pageTitle(location.pathname, config.branding.productName)
     }
     return () => {
       document.title = 'Research Portal'
@@ -293,7 +303,12 @@ export function TenantLayout() {
   // no-ops until the config loads).
   useTenantFonts(config?.branding)
   useTextScale(config?.branding)
-  useBodyTheme(config?.branding)
+  // The viewer's light/dark scheme: system preference by default, their own
+  // choice once they toggle it, persisted per browser.
+  const { scheme, setChoice } = useViewerScheme()
+  const schemeLabel = scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+  const toggleScheme = () => setChoice(scheme === 'dark' ? 'light' : 'dark')
+  useBodyTheme(config?.branding, scheme)
 
   if (isLoading) {
     return <FullPageSpinner />
@@ -330,7 +345,7 @@ export function TenantLayout() {
   return (
     <div
       className='rp-tenant min-h-screen bg-app'
-      style={tenantThemeVars(config.branding)}
+      style={tenantThemeVars(config.branding, scheme)}
     >
       {
         /* Two-tier header: a white strip carrying the logo, over a solid
@@ -419,7 +434,7 @@ export function TenantLayout() {
                   className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
                   style={{
                     borderColor: 'var(--rp-line)',
-                    color: 'var(--rp-primary)',
+                    color: 'var(--rp-brand-fg)',
                   }}
                 >
                   <svg
@@ -452,24 +467,41 @@ export function TenantLayout() {
                   </Link>
                 </span>
               )}
-              <Link
-                to={`/t/${config.slug}/help`}
-                aria-label={HELP_LABEL}
-                title={HELP_LABEL}
-                className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
-                style={{
-                  borderColor: 'color-mix(in srgb, var(--rp-primary) 25%, transparent)',
-                  color: 'var(--rp-primary)',
-                }}
-              >
-                <HelpIcon className='h-6 w-6' />
-              </Link>
-              <AccountMenu
-                isAdmin={accountIsAdmin}
-                label={accountLabel}
-                manageHref='/admin'
-                onProfile={() => setSignInOpen(true)}
-              />
+              {
+                /* Below `sm` the help and account controls live in the phone
+                * menu only (the sheet carries both): three 44px circles plus
+                * the logo no longer fit a 390px header once the root font is
+                * scaled up for accessibility. Wrapped, for the same reason as
+                * the menu toggle below - component classes set their own
+                * display and would beat a utility on the element itself. */
+              }
+              <span className='hidden sm:inline-flex'>
+                <button
+                  type='button'
+                  onClick={toggleScheme}
+                  aria-label={schemeLabel}
+                  title={schemeLabel}
+                  aria-pressed={scheme === 'dark'}
+                  className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
+                    color: 'var(--rp-brand-fg)',
+                  }}
+                >
+                  <SchemeIcon scheme={scheme} className='h-6 w-6' />
+                </button>
+              </span>
+              <span className='hidden sm:inline-flex'>
+                <HelpMenu slug={config.slug} />
+              </span>
+              <span className='hidden sm:inline-flex'>
+                <AccountMenu
+                  isAdmin={accountIsAdmin}
+                  label={accountLabel}
+                  manageHref='/admin'
+                  onProfile={() => setSignInOpen(true)}
+                />
+              </span>
               {
                 /* Wrapped, because .rp-navtoggle sets its own display and would
                 * beat a `md:hidden` utility on the button itself - component
@@ -596,13 +628,25 @@ export function TenantLayout() {
               }`}
               style={{ '--rp-stage-i': MOBILE_NAV_ITEMS.length } as CSSProperties}
             >
-              <NavLink
-                to={`/t/${config.slug}/help`}
+              <button
+                type='button'
+                onClick={toggleScheme}
+                aria-pressed={scheme === 'dark'}
                 className='rp-navsheet-action rp-focus-inverse'
               >
-                <HelpIcon className='h-5 w-5 shrink-0' />
-                {HELP_LABEL}
-              </NavLink>
+                <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
+                {scheme === 'dark' ? 'Light mode' : 'Dark mode'}
+              </button>
+              {helpMenuItems(config.slug).map((item) => (
+                <NavLink
+                  key={item.key}
+                  to={item.href}
+                  className='rp-navsheet-action rp-focus-inverse'
+                >
+                  <HelpItemIcon item={item} className='h-5 w-5 shrink-0' />
+                  {item.label}
+                </NavLink>
+              ))}
               <AccountMenu
                 isAdmin={accountIsAdmin}
                 label={accountLabel}
@@ -631,7 +675,7 @@ export function TenantLayout() {
 
       {/* Keyed on the path so each route change replays the entrance. */}
       <div key={location.pathname} className='rp-page-enter'>
-        <Outlet context={{ config } satisfies TenantOutletContext} />
+        <Outlet context={{ config, isAdmin: accountIsAdmin } satisfies TenantOutletContext} />
       </div>
 
       {

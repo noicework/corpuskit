@@ -65,7 +65,11 @@ export function SearchField(
         value={value}
         onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
         placeholder={placeholder}
-        className='min-w-0 flex-1 border-0 bg-transparent text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none'
+        // `self-stretch`: the control itself, not only the box drawn around
+        // it, is the height of the row. Measured on a phone the bare input
+        // was 23px tall, under the 24px minimum for a target
+        // (review loop 6 D6-15).
+        className='min-w-0 flex-1 self-stretch border-0 bg-transparent text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none'
       />
     </>
   )

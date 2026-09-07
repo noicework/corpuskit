@@ -263,3 +263,13 @@ describe('blockPlainText', () => {
     expect(blockPlainText({ kind: 'paragraph', text: 'hello', index: 0 })).toBe('hello')
   })
 })
+
+describe('isGeneratedTextField', () => {
+  it('recognises the DA page-summary field and leaves the body alone', async () => {
+    const { isGeneratedTextField } = await import('./resource-view.ts')
+    expect(isGeneratedTextField('texts/da-pagesummary-t-body')).toBe(true)
+    expect(isGeneratedTextField('da-summary-f-file')).toBe(true)
+    expect(isGeneratedTextField('texts/body')).toBe(false)
+    expect(isGeneratedTextField('files/file')).toBe(false)
+  })
+})

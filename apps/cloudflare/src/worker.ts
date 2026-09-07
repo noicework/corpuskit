@@ -65,6 +65,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       kgProposals: this.stores.kgProposals,
       branding: this.stores.branding,
       mcpKeys: this.stores.mcpKeys,
+      routing: this.stores.routing,
       zone: bindings.ARAG_ZONE,
       adminPasscode: bindings.ADMIN_PASSCODE,
       trustedAdmin: (request) => request.headers.get(SSO_ADMIN_HEADER) === '1',

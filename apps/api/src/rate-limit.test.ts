@@ -1,7 +1,13 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import { clientIp, RATE_LIMIT_MESSAGE, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
-import { Hono } from 'hono'
+import {
+  clientIp,
+  clientKey,
+  RATE_LIMIT_MESSAGE,
+  rateLimit,
+  SlidingWindowLimiter,
+} from './rate-limit.ts'
+import { type Context, Hono } from 'hono'
 
 /** A controllable clock so tests never depend on real elapsed time. */
 function fakeClock(start = 0) {
@@ -141,5 +147,46 @@ describe('rateLimit middleware', () => {
   it('has a defined Australian-English, em-dash-free user-facing message available', () => {
     expect(RATE_LIMIT_MESSAGE).toContain('You are asking faster')
     expect(RATE_LIMIT_MESSAGE).not.toContain('—')
+  })
+})
+
+describe('X-RateLimit-Remaining', () => {
+  it('reports how much of the window is left on an allowed request', async () => {
+    const limiter = new SlidingWindowLimiter({ limit: 3, windowMs: 60_000 })
+    const app = new Hono()
+    app.use('*', rateLimit(limiter, () => 'k'))
+    app.get('/', (c) => c.text('ok'))
+    expect((await app.request('/')).headers.get('x-ratelimit-remaining')).toBe('2')
+    expect((await app.request('/')).headers.get('x-ratelimit-remaining')).toBe('1')
+    expect((await app.request('/')).headers.get('x-ratelimit-remaining')).toBe('0')
+    const over = await app.request('/')
+    expect(over.status).toBe(429)
+    expect(over.headers.get('x-ratelimit-remaining')).toBeNull()
+  })
+  it('is absent when the limiter is disabled', async () => {
+    const app = new Hono()
+    app.use('*', rateLimit(new SlidingWindowLimiter({ limit: 0, windowMs: 60_000 }), () => 'k'))
+    app.get('/', (c) => c.text('ok'))
+    expect((await app.request('/')).headers.get('x-ratelimit-remaining')).toBeNull()
+  })
+})
+
+describe('clientKey', () => {
+  const ctx = (headers: Record<string, string>) =>
+    ({ req: { header: (name: string) => headers[name.toLowerCase()] } }) as unknown as Context
+
+  it('keys on a well-formed x-rp-client id ahead of the address', () => {
+    expect(clientKey(ctx({ 'x-rp-client': 'abcdef0123456789', 'fly-client-ip': '10.0.0.1' })))
+      .toBe('client:abcdef0123456789')
+  })
+
+  it('falls back to the address when the id is missing or malformed', () => {
+    expect(clientKey(ctx({ 'fly-client-ip': '10.0.0.1' }))).toBe('ip:10.0.0.1')
+    expect(clientKey(ctx({ 'x-rp-client': 'x y', 'fly-client-ip': '10.0.0.1' }))).toBe(
+      'ip:10.0.0.1',
+    )
+    expect(clientKey(ctx({ 'x-rp-client': 'short', 'fly-client-ip': '10.0.0.1' }))).toBe(
+      'ip:10.0.0.1',
+    )
   })
 })

@@ -3,26 +3,75 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import type { CatalogItem } from '@research-portal/core'
 import { getCatalog, getFacets } from '../api/client.ts'
+import { Byline, bylineFor } from '../components/Byline.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { SearchField } from '../components/SearchField.tsx'
 import { GridDensity, ViewToggle } from '../components/ViewControls.tsx'
 import { useViewMode, type ViewMode } from '../components/useViewMode.ts'
-import { EmptyState, ErrorCard, prettyLabel, Skeleton } from '../components/ui.tsx'
+import { EmptyState, ErrorCard, prettyLabel, sameLabel, Skeleton } from '../components/ui.tsx'
+import { plainDashes, presentTitle } from '../lib/display-title.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 const PAGE_SIZE = 24
 
-export type SortValue = 'newest' | 'oldest' | 'title'
+export type SortValue = 'published' | 'oldestPublished' | 'newest' | 'oldest' | 'title'
 
-export const SORT_VALUES: SortValue[] = ['newest', 'oldest', 'title']
+export const SORT_VALUES: SortValue[] = [
+  'published',
+  'oldestPublished',
+  'newest',
+  'oldest',
+  'title',
+]
+
+/** The default sort: what was published most recently, not what was uploaded last. */
+export const DEFAULT_SORT: SortValue = 'published'
 
 export const SORT_OPTIONS: Record<
   SortValue,
-  { label: string; sort: 'created' | 'title'; order: 'asc' | 'desc' }
+  { label: string; sort: 'created' | 'title' | 'published'; order: 'asc' | 'desc' }
 > = {
+  published: { label: 'Newest published', sort: 'published', order: 'desc' },
+  oldestPublished: { label: 'Oldest published', sort: 'published', order: 'asc' },
   newest: { label: 'Newest added', sort: 'created', order: 'desc' },
   oldest: { label: 'Oldest added', sort: 'created', order: 'asc' },
   title: { label: 'Title A-Z', sort: 'title', order: 'asc' },
+}
+
+/**
+ * A facet selection from the URL. Each facet answers to its singular name and
+ * its plural (`?topic=` and `?topics=`, the form the resource page's topic
+ * badges and the Search rail link with), comma-separated for several.
+ */
+export function facetsFromUrl(
+  params: { get: (name: string) => string | null },
+  ...names: string[]
+): string[] {
+  const raw = names.map((name) => params.get(name)).find((value) => value !== null) ?? ''
+  return [...new Set(raw.split(',').map((id) => id.trim()).filter(Boolean))]
+}
+
+/** How a `format` label reads on a card and on the artwork placeholder. */
+export function formatLabel(format: string | undefined, type: string | undefined): string | null {
+  if (format === 'article') return 'Article'
+  if (format === 'supplement') return 'Supplement'
+  if (format === 'media') return type === 'video' ? 'Video' : 'Media'
+  return null
+}
+
+/**
+ * The day a corpus was bulk-imported, when there is one: the created date
+ * shared by at least four in five of the items on the page. "Added 3 Sept
+ * 2026" on every card carries no information, so cards on that day drop
+ * the line; anything added since still shows it.
+ */
+export function bulkImportDay(items: { created?: string }[]): string | null {
+  const days = items.map((i) => i.created?.slice(0, 10)).filter((d): d is string => Boolean(d))
+  if (days.length < 5) return null
+  const counts = new Map<string, number>()
+  for (const day of days) counts.set(day, (counts.get(day) ?? 0) + 1)
+  const [day, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]!
+  return count / days.length >= 0.8 ? day : null
 }
 
 const STATUS_BADGES: Record<'pending' | 'error', { label: string; className: string }> = {
@@ -42,13 +91,6 @@ function formatYear(iso: string): string | null {
   return match ? match[1] ?? null : null
 }
 
-/**
- * Catalogue items may carry the platform's `kind` label and the source's
- * original publish date - fields not yet in the shared CatalogItem type, so
- * they're read defensively here and simply omitted when absent.
- */
-type CatalogItemMeta = CatalogItem & { kind?: string; published?: string }
-
 function LibraryCard(
   {
     item,
@@ -57,6 +99,7 @@ function LibraryCard(
     organisation,
     view = 'grid',
     compact = false,
+    hideAdded = false,
   }: {
     item: CatalogItem
     slug: string
@@ -66,14 +109,24 @@ function LibraryCard(
     view?: ViewMode
     /** Narrow viewport - a list row's short lines earn a longer summary. */
     compact?: boolean
+    /** This item's created date is the corpus's bulk-import day - say nothing about it. */
+    hideAdded?: boolean
   },
 ) {
-  const meta = item as CatalogItemMeta
   const topicLabels = item.topicIds
     .map((id) => topicLabel(id))
     .filter((label): label is string => Boolean(label))
   const statusInfo = item.status === 'processed' ? null : STATUS_BADGES[item.status]
-  const publishedYear = meta.published ? formatYear(meta.published) : null
+  const publishedYear = item.published ? formatYear(item.published) : null
+  const byline = bylineFor(item)
+  const format = formatLabel(item.format, item.type)
+  // The kind chip is dropped when it only restates the format badge
+  // ("Supplementary Material" under "Supplement").
+  const kind = item.kind && !(format && sameLabel(prettyLabel(item.kind, organisation), format))
+    ? prettyLabel(item.kind, organisation)
+    : null
+  const title = presentTitle(item.title)
+  const summary = item.summary ? plainDashes(item.summary) : ''
 
   const list = view === 'list'
   const body = (
@@ -93,7 +146,18 @@ function LibraryCard(
             ? 'absolute inset-0 overflow-hidden bg-surface'
             : 'rp-shadow-sm absolute inset-x-6 bottom-0 top-6 overflow-hidden bg-surface'}
         >
-          <ResourceThumb slug={slug} id={item.id} type='document' imgClassName='object-top' />
+          {
+            /* Same artwork pipeline as Search: the platform thumbnail when one
+            * exists. A text-only article has no page to render, so its
+            * placeholder says what it is ("Article"), never "Report". */
+          }
+          <ResourceThumb
+            slug={slug}
+            id={item.id}
+            type={item.type ?? 'document'}
+            label={format ?? undefined}
+            imgClassName='object-top'
+          />
         </div>
         {
           /* A list row's thumbnail is only 4.5rem wide, too narrow to carry the
@@ -114,8 +178,9 @@ function LibraryCard(
           : 'flex flex-1 flex-col gap-2 border-t border-line p-3.5'}
       >
         <h3 className='rp-clamp-2 text-sm font-semibold leading-snug text-ink'>
-          {item.title}
+          {title}
         </h3>
+        {byline ? <Byline parts={byline} className='!mt-0' /> : null}
         {
           /* Three lines is the budget almost everywhere: two clipped most grid
           * summaries mid-sentence, and the third line is what lets a card read
@@ -127,30 +192,25 @@ function LibraryCard(
           * thousand pixels, so three lines already carry a few hundred
           * characters and a four-line clamp would mostly buy whitespace. */
         }
-        {item.summary && item.summary !== item.title
+        {summary && summary !== item.title
           ? (
             <p
               className={`text-xs leading-relaxed text-ink-3 ${
                 list && compact ? 'rp-clamp-4' : 'rp-clamp-3'
               }`}
             >
-              {item.summary}
+              {summary}
             </p>
           )
           : null}
-        {topicLabels.length > 0 || meta.kind || (statusInfo && list)
+        {topicLabels.length > 0 || format || kind || (statusInfo && list)
           ? (
             <div className='flex flex-wrap gap-1'>
               {statusInfo && list
                 ? <span className={statusInfo.className}>{statusInfo.label}</span>
                 : null}
-              {meta.kind
-                ? (
-                  <span className='rp-badge rp-badge-quiet'>
-                    {prettyLabel(meta.kind, organisation)}
-                  </span>
-                )
-                : null}
+              {format ? <span className='rp-badge rp-badge-quiet'>{format}</span> : null}
+              {kind ? <span className='rp-badge rp-badge-quiet'>{kind}</span> : null}
               {topicLabels.slice(0, 3).map((label) => (
                 <span
                   key={label}
@@ -162,14 +222,16 @@ function LibraryCard(
             </div>
           )
           : null}
-        {item.created || publishedYear || item.sourceName
+        {(item.created && !hideAdded) || (publishedYear && !byline) || item.sourceName
           ? (
             <div className='mt-auto pt-1'>
-              {item.created || publishedYear
+              {(item.created && !hideAdded) || (publishedYear && !byline)
                 ? (
                   <p className='flex flex-wrap items-baseline gap-x-1.5 text-xs tabular-nums text-ink-3'>
-                    {item.created ? <span>{formatDate(item.created)}</span> : null}
-                    {publishedYear ? <span>Published {publishedYear}</span> : null}
+                    {publishedYear && !byline ? <span>Published {publishedYear}</span> : null}
+                    {item.created && !hideAdded
+                      ? <span>Added {formatDate(item.created)}</span>
+                      : null}
                   </p>
                 )
                 : null}
@@ -252,7 +314,7 @@ export function LibraryBrowser(
 
   const [queryDraft, setQueryDraft] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
-  const [sortState, setSortState] = useState<SortValue>('newest')
+  const [sortState, setSortState] = useState<SortValue>(DEFAULT_SORT)
   const sort = sortProp ?? sortState
   const setSort = onSortChange ?? setSortState
   // Grid density: how many cards sit across the widest breakpoint.
@@ -260,15 +322,27 @@ export function LibraryBrowser(
   const density = densityProp ?? densityState
   const setDensity = onDensityChange ?? setDensityState
   const [searchParams] = useSearchParams()
-  const [selectedTopics, setSelectedTopics] = useState<string[]>(() => {
-    const fromUrl = searchParams.get('topic')
-    return fromUrl ? [fromUrl] : []
-  })
+  const [selectedTopics, setSelectedTopics] = useState<string[]>(() =>
+    facetsFromUrl(searchParams, 'topic', 'topics')
+  )
   // Kind deep links arrive from the knowledge map's concept lens.
-  const [selectedKinds, setSelectedKinds] = useState<string[]>(() => {
-    const fromUrl = searchParams.get('kind')
-    return fromUrl ? [fromUrl] : []
-  })
+  const [selectedKinds, setSelectedKinds] = useState<string[]>(() =>
+    facetsFromUrl(searchParams, 'kind', 'kinds')
+  )
+  // Format (article / supplement / media) - present only on a corpus whose
+  // ingest filed its resources that way; the facet hides itself otherwise.
+  const [selectedFormats, setSelectedFormats] = useState<string[]>(() =>
+    facetsFromUrl(searchParams, 'format', 'formats')
+  )
+  // Until the reader touches the facet, a corpus filed by format opens on its
+  // articles: the last-uploaded videos and supplements make a poor first screen.
+  const [formatTouched, setFormatTouched] = useState(() =>
+    facetsFromUrl(searchParams, 'format', 'formats').length > 0
+  )
+  const toggleFormat = (id: string) => {
+    setFormatTouched(true)
+    setSelectedFormats((prev) => prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id])
+  }
   const [filtersOpen, setFiltersOpen] = useState(false)
   /** The filter rail, and therefore the sidebar grid track, need topics to filter by. */
   const showFilterRail = !bare && config.topics.length > 0
@@ -283,20 +357,45 @@ export function LibraryBrowser(
 
   const topicsKey = selectedTopics.join(',')
   const kindsKey = selectedKinds.join(',')
+  const formatsKey = selectedFormats.join(',')
 
   useEffect(() => {
     setPage(0)
     setAccumulated([])
     setTotal(0)
-  }, [debouncedQuery, sort, topicsKey, kindsKey])
+  }, [debouncedQuery, sort, topicsKey, kindsKey, formatsKey])
 
   const sortOption = SORT_OPTIONS[sort]
 
+  // The same aggregation, under the same query key, as the Search rail - so
+  // the two never show different numbers for one topic.
   const { data: facets } = useQuery({
     queryKey: ['facets', config.slug],
-    queryFn: () => getFacets(config.slug, ['topic']),
+    queryFn: () => getFacets(config.slug),
   })
   const topicCounts = facets?.topic ?? {}
+  // Resources carrying none of the portal's topics - the gap the classifier
+  // has yet to close, made visible rather than silently filtered away. A
+  // real count from the index: topics are multi-valued, so "resources minus
+  // the sum of topic counts" could never surface it.
+  const untagged = facets?.untagged?.topic ?? null
+  const kindCounts = facets?.kind ?? {}
+  const kindIds = useMemo(() => Object.keys(kindCounts).sort(), [kindCounts])
+  const kindLabel = (id: string) => prettyLabel(id, config.branding.organisation)
+  const toggleKind = (id: string) =>
+    setSelectedKinds((prev) => prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id])
+  const formatCounts = facets?.format ?? {}
+  const FORMATS = [
+    { id: 'article', label: 'Articles' },
+    { id: 'supplement', label: 'Supplementary material' },
+    { id: 'media', label: 'Video and audio' },
+  ]
+  const formatFacets = FORMATS.filter((f) => (formatCounts[f.id] ?? 0) > 0)
+  useEffect(() => {
+    if (!formatTouched && selectedFormats.length === 0 && (formatCounts.article ?? 0) > 0) {
+      setSelectedFormats(['article'])
+    }
+  }, [formatTouched, selectedFormats.length, formatCounts.article])
 
   const {
     data,
@@ -306,7 +405,7 @@ export function LibraryBrowser(
     error,
     refetch,
   } = useQuery({
-    queryKey: ['catalog', config.slug, debouncedQuery, sort, topicsKey, kindsKey, page],
+    queryKey: ['catalog', config.slug, debouncedQuery, sort, topicsKey, kindsKey, formatsKey, page],
     queryFn: () =>
       getCatalog(config.slug, {
         page,
@@ -314,6 +413,7 @@ export function LibraryBrowser(
         query: debouncedQuery || undefined,
         topicIds: selectedTopics,
         kindIds: selectedKinds,
+        formatIds: selectedFormats,
         sort: sortOption.sort,
         order: sortOption.order,
       }),
@@ -346,6 +446,7 @@ export function LibraryBrowser(
 
   const hasMore = accumulated.length < total
   const isInitialLoading = isLoading && page === 0
+  const importDay = useMemo(() => bulkImportDay(accumulated), [accumulated])
 
   return (
     <main className={bare ? '' : 'rp-shell py-8'}>
@@ -450,8 +551,9 @@ export function LibraryBrowser(
                   className='rp-btn rp-btn-outline'
                   aria-expanded={filtersOpen}
                 >
-                  Filters{(selectedTopics.length + selectedKinds.length) > 0
-                    ? ` (${selectedTopics.length + selectedKinds.length})`
+                  Filters{(selectedTopics.length + selectedKinds.length + selectedFormats.length) >
+                      0
+                    ? ` (${selectedTopics.length + selectedKinds.length + selectedFormats.length})`
                     : ''}
                 </button>
               </span>
@@ -472,7 +574,7 @@ export function LibraryBrowser(
                 className='rp-chip text-xs'
                 title='Remove this filter'
               >
-                {kind.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                {kindLabel(kind)}
                 <span aria-hidden='true'>×</span>
               </button>
             ))}
@@ -489,7 +591,7 @@ export function LibraryBrowser(
       <div
         className={bare
           ? ''
-          : `mt-6 grid grid-cols-1 gap-6 ${showFilterRail ? 'lg:grid-cols-[230px_1fr]' : ''}`}
+          : `mt-6 grid grid-cols-1 gap-6 ${showFilterRail ? 'lg:grid-cols-[14.5rem_1fr]' : ''}`}
       >
         {showFilterRail
           ? (
@@ -502,7 +604,7 @@ export function LibraryBrowser(
                       <button
                         type='button'
                         onClick={() => setSelectedTopics([])}
-                        className='text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                        className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                       >
                         Clear
                       </button>
@@ -528,12 +630,129 @@ export function LibraryBrowser(
                           className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
                           style={{ accentColor: 'var(--rp-accent)' }}
                         />
-                        <span className='min-w-0 flex-1'>{topic.label}</span>
-                        <span className='self-center text-xs tabular-nums text-ink-3'>{count}</span>
+                        <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
+                          {topic.label}
+                        </span>
+                        <span className='shrink-0 self-center text-xs tabular-nums text-ink-3'>
+                          {count}
+                        </span>
                       </label>
                     )
                   })}
+                  {untagged
+                    ? (
+                      <p
+                        className='flex items-start gap-2.5 px-1 py-1 text-sm text-ink-3'
+                        title='Resources not yet filed under a topic'
+                      >
+                        <span
+                          className='mt-[2px] inline-block h-4 w-4 shrink-0'
+                          aria-hidden='true'
+                        />
+                        <span className='min-w-0 flex-1 italic'>Untagged</span>
+                        <span className='shrink-0 self-center text-xs tabular-nums'>
+                          {untagged}
+                        </span>
+                      </p>
+                    )
+                    : null}
                 </div>
+                {kindIds.length > 0
+                  ? (
+                    <div className='mt-4 border-t border-line pt-3'>
+                      <div className='flex items-center justify-between gap-2'>
+                        <p className='rp-eyebrow text-ink-3'>Kind</p>
+                        {selectedKinds.length > 0
+                          ? (
+                            <button
+                              type='button'
+                              onClick={() => setSelectedKinds([])}
+                              className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                            >
+                              Clear
+                            </button>
+                          )
+                          : null}
+                      </div>
+                      <div className='mt-2.5 space-y-0.5'>
+                        {kindIds.map((id) => {
+                          const count = kindCounts[id] ?? 0
+                          const checked = selectedKinds.includes(id)
+                          return (
+                            <label
+                              key={id}
+                              className={`flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm ${
+                                count === 0 && !checked ? 'text-ink-3' : 'text-ink-2'
+                              }`}
+                            >
+                              <input
+                                type='checkbox'
+                                checked={checked}
+                                onChange={() => toggleKind(id)}
+                                className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
+                                style={{ accentColor: 'var(--rp-accent)' }}
+                              />
+                              <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
+                                {kindLabel(id)}
+                              </span>
+                              <span className='shrink-0 self-center text-xs tabular-nums text-ink-3'>
+                                {count}
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                  : null}
+                {formatFacets.length > 0
+                  ? (
+                    <div className='mt-4 border-t border-line pt-3'>
+                      <div className='flex items-center justify-between gap-2'>
+                        <p className='rp-eyebrow text-ink-3'>Format</p>
+                        {selectedFormats.length > 0
+                          ? (
+                            <button
+                              type='button'
+                              onClick={() => {
+                                setFormatTouched(true)
+                                setSelectedFormats([])
+                              }}
+                              className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                            >
+                              Clear
+                            </button>
+                          )
+                          : null}
+                      </div>
+                      <div className='mt-2.5 space-y-0.5'>
+                        {formatFacets.map((format) => {
+                          const checked = selectedFormats.includes(format.id)
+                          return (
+                            <label
+                              key={format.id}
+                              className='flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm text-ink-2'
+                            >
+                              <input
+                                type='checkbox'
+                                checked={checked}
+                                onChange={() => toggleFormat(format.id)}
+                                className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
+                                style={{ accentColor: 'var(--rp-accent)' }}
+                              />
+                              <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
+                                {format.label}
+                              </span>
+                              <span className='shrink-0 self-center text-xs tabular-nums text-ink-3'>
+                                {formatCounts[format.id] ?? 0}
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                  : null}
               </div>
             </aside>
           )
@@ -561,7 +780,7 @@ export function LibraryBrowser(
             ? (
               <EmptyState
                 title='No resources match these filters'
-                description='Try a different search term, or clear the topic filters.'
+                description='Try a different search term, or clear a filter.'
               />
             )
             : null}
@@ -579,6 +798,7 @@ export function LibraryBrowser(
                       slug={config.slug}
                       topicLabel={topicLabel}
                       organisation={config.branding.organisation}
+                      hideAdded={importDay !== null && item.created?.slice(0, 10) === importDay}
                     />
                   ))}
                 </div>

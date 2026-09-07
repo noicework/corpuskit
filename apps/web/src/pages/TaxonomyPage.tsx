@@ -2,7 +2,7 @@ import { type FormEvent, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useOutletContext } from 'react-router-dom'
 import type { Labelset } from '@research-portal/core'
-import { createAdminLabelset, getFacets, getLabelsets } from '../api/client.ts'
+import { createAdminLabelset, getCounters, getFacets, getLabelsets } from '../api/client.ts'
 import { prettyLabel } from '../components/ui.tsx'
 import { ErrorCard, Skeleton } from '../components/ui.tsx'
 import { MessagePanel } from './admin/MessagePanel.tsx'
@@ -10,25 +10,55 @@ import { errorMessage, inputClass, type Message } from './admin/shared.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { getAuthSession } from '../api/auth.ts'
 
+/** Whether a labelset has any indexed value at all - one with none is hidden. */
+export function labelsetHasCounts(counts: Record<string, number> | undefined): boolean {
+  return Object.values(counts ?? {}).some((n) => n > 0)
+}
+
+/**
+ * The cardinality line. A labelset declared single-valued whose counts add up
+ * to more than the corpus has resources is, in practice, multi-valued - say
+ * what the index shows rather than what the declaration claims.
+ */
+export function cardinalityLabel(
+  labelset: Pick<Labelset, 'multiple' | 'kind'>,
+  counts: Record<string, number>,
+  resources: number | undefined,
+): string {
+  if (labelset.kind === 'PARAGRAPHS') return 'Applied to passages, not whole resources'
+  const total = Object.values(counts).reduce((n, c) => n + c, 0)
+  if (!labelset.multiple && resources !== undefined && resources > 0 && total > resources) {
+    return 'Multiple values per resource (observed in the index)'
+  }
+  return labelset.multiple ? 'Multiple values per resource' : 'Single value per resource'
+}
+
 function LabelsetCard({
   labelset,
   counts,
   organisation,
+  resources,
 }: {
   labelset: Labelset
   counts: Record<string, number>
   organisation: string
+  /** Resources in the box, for the observed-cardinality check. */
+  resources: number | undefined
 }) {
   const sorted = [...labelset.labels].sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0))
   const definitions = labelset.definitions ?? {}
   const hasDefinitions = sorted.some((label) => Boolean(definitions[label]))
+  const passages = labelset.kind === 'PARAGRAPHS'
 
   const chip = (label: string) => {
     const count = counts[label] ?? 0
     return (
       <span className={`rp-chip ${count > 0 ? 'text-ink' : 'text-ink-3'}`}>
         {prettyLabel(label, organisation)}
-        <span className='text-ink-3'>{count}</span>
+        <span className='text-ink-3'>
+          {count.toLocaleString()}
+          {passages ? ' passages' : ''}
+        </span>
       </span>
     )
   }
@@ -44,7 +74,8 @@ function LabelsetCard({
         </span>
       </div>
       <p className='mt-1 text-xs text-ink-3'>
-        {labelset.multiple ? 'Multiple values per resource' : 'Single value per resource'}
+        {cardinalityLabel(labelset, counts, resources)}
+        {passages ? ' - counts are passages' : ''}
       </p>
 
       {sorted.length === 0
@@ -282,6 +313,18 @@ export function TaxonomyPage() {
     queryFn: () => getFacets(slug, labelsetIds),
     enabled: labelsetIds.length > 0,
   })
+  const { data: counters } = useQuery({
+    queryKey: ['counters', slug],
+    queryFn: () => getCounters(slug),
+    staleTime: 60_000,
+  })
+  // A labelset with no indexed value at all is noise on this page (a stale
+  // classifier's empty categories); it is hidden and counted in one line.
+  const visible = useMemo(
+    () => labelsets?.filter((ls) => !facets || labelsetHasCounts(facets[ls.id])) ?? [],
+    [labelsets, facets],
+  )
+  const hiddenCount = (labelsets?.length ?? 0) - visible.length
 
   const refreshAll = () =>
     Promise.all([
@@ -313,26 +356,38 @@ export function TaxonomyPage() {
       )}
 
       {labelsets && (
-        <div className='mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2'>
-          {labelsets.map((ls) => (
-            <LabelsetCard
-              key={ls.id}
-              labelset={ls}
-              counts={facets?.[ls.id] ?? {}}
-              organisation={config.branding.organisation}
-            />
-          ))}
-          {isAdmin
-            ? (
-              <AddLabelsetCard
-                slug={slug}
-                credential={adminCredential}
-                ssoAdmin={ssoAdmin}
-                onAdded={refreshAll}
+        <>
+          <div className='mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2'>
+            {visible.map((ls) => (
+              <LabelsetCard
+                key={ls.id}
+                labelset={ls}
+                counts={facets?.[ls.id] ?? {}}
+                organisation={config.branding.organisation}
+                resources={counters?.resources}
               />
+            ))}
+            {isAdmin
+              ? (
+                <AddLabelsetCard
+                  slug={slug}
+                  credential={adminCredential}
+                  ssoAdmin={ssoAdmin}
+                  onAdded={refreshAll}
+                />
+              )
+              : null}
+          </div>
+          {hiddenCount > 0
+            ? (
+              <p className='mt-4 text-xs text-ink-3'>
+                {hiddenCount} {hiddenCount === 1 ? 'category' : 'categories'} with no indexed values
+                {' '}
+                {hiddenCount === 1 ? 'is' : 'are'} not shown.
+              </p>
             )
             : null}
-        </div>
+        </>
       )}
     </main>
   )

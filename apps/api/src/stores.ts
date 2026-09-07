@@ -594,6 +594,7 @@ export type WatchStoreApi = Pick<WatchStore, keyof WatchStore>
 export type SourceStoreApi = Pick<SourceStore, keyof SourceStore>
 export type InvestigationStoreApi = Pick<InvestigationStore, keyof InvestigationStore>
 export type McpKeyStoreApi = Pick<McpKeyStore, keyof McpKeyStore>
+export type RoutingLogApi = Pick<RoutingLog, keyof RoutingLog>
 
 // --- Enrichment import/export ----------------------------------------------
 
@@ -674,4 +675,80 @@ EnrichmentStore.prototype.importRecords = function (
   }
 
   return { imported, skipped, overwritten, reasons: { existing: skipped } }
+}
+
+// ---------------------------------------------------------------------------
+// Routing log: one line per intent-routing decision, per tenant. The
+// evaluation set for tuning the rules and an audit trail of which stored
+// configuration answered which question (docs/INTENT-ROUTING.md).
+// ---------------------------------------------------------------------------
+
+export interface RoutingRecord {
+  ts: string
+  /** SHA-free short hash of the normalised question; the question itself is not stored. */
+  questionHash: string
+  questionLength: number
+  intent: string
+  stage: 'rule' | 'classifier' | 'default' | 'override'
+  confidence: number
+  rationale: string
+  configuration: string
+  latencyMs: number
+}
+
+export class RoutingLog {
+  private pathFor(slug: string): string {
+    return join(DATA_DIR, 'routing', `${safeSegment(slug)}.jsonl`)
+  }
+
+  record(slug: string, entry: RoutingRecord): void {
+    const path = this.pathFor(slug)
+    mkdirSync(dirname(path), { recursive: true })
+    appendFileSync(path, JSON.stringify(entry) + '\n')
+  }
+
+  /** Newest first, capped. */
+  recent(slug: string, limit = 50): RoutingRecord[] {
+    let raw: string
+    try {
+      raw = readFileSync(this.pathFor(slug), 'utf8')
+    } catch {
+      return []
+    }
+    const rows: RoutingRecord[] = []
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        rows.push(JSON.parse(line) as RoutingRecord)
+      } catch {
+        // a torn line from a crash mid-write is skipped
+      }
+    }
+    return rows.reverse().slice(0, limit)
+  }
+
+  /** Counts by intent and stage over the whole log - the panel's summary line. */
+  summary(
+    slug: string,
+  ): { total: number; byIntent: Record<string, number>; byStage: Record<string, number> } {
+    const rows = this.recent(slug, Number.MAX_SAFE_INTEGER)
+    const byIntent: Record<string, number> = {}
+    const byStage: Record<string, number> = {}
+    for (const r of rows) {
+      byIntent[r.intent] = (byIntent[r.intent] ?? 0) + 1
+      byStage[r.stage] = (byStage[r.stage] ?? 0) + 1
+    }
+    return { total: rows.length, byIntent, byStage }
+  }
+}
+
+/** A short, stable hash for grouping identical questions without storing them. */
+export function questionHash(question: string): string {
+  const normalised = question.toLowerCase().replace(/\s+/g, ' ').trim()
+  let h = 2166136261
+  for (let i = 0; i < normalised.length; i++) {
+    h ^= normalised.charCodeAt(i)
+    h = Math.imul(h, 16777619) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
 }

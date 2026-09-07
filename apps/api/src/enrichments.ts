@@ -95,13 +95,20 @@ export type EnrichmentStoreApi = Pick<EnrichmentStore, keyof EnrichmentStore>
 // ---------------------------------------------------------------------------
 
 function overlay(
-  base: { title: string; summary?: string; sourceName?: string; enriched?: boolean },
+  base: {
+    title: string
+    summary?: string
+    sourceName?: string
+    enriched?: boolean
+    titleCurated?: boolean
+  },
   enrichment: Enrichment | undefined,
 ) {
   return overlayEnrichment({
     title: base.title,
     summary: base.summary ?? base.title,
     ...(base.sourceName ? { sourceName: base.sourceName } : {}),
+    ...(base.titleCurated ? { titleCurated: true } : {}),
     enriched: base.enriched ?? false,
   }, enrichment)
 }
@@ -157,6 +164,7 @@ export function merchandiseCatalogItem(
     summary: item.summary,
     sourceName: item.sourceName,
     enriched: item.enriched,
+    titleCurated: item.titleCurated,
   }, store.get(slug, item.id))
   return {
     ...item,
@@ -196,13 +204,43 @@ export function merchandiseSources(
  * Only the title changes; the citation's passage/index/resourceId are the
  * platform's own evidence and are left untouched.
  */
+/**
+ * A citation carries the bibliographic title when the resource has one (a
+ * curated journal-article title is never replaced by a generated headline),
+ * with the generated headline as a separate subtitle when it differs. The
+ * cited resource's record, when the caller has it, says which is which;
+ * without it the overlay behaves as for any other surface.
+ */
 export function merchandiseCitation(
   store: EnrichmentStoreApi,
   slug: string,
   citation: Citation,
+  resource?: { title: string; titleCurated?: boolean; sourceName?: string; enriched?: boolean },
 ): Citation {
-  const m = overlay({ title: citation.title }, store.get(slug, citation.resourceId))
-  return { ...citation, title: m.title }
+  const enrichment = store.get(slug, citation.resourceId)
+  const base = resource
+    ? {
+      title: resource.title,
+      titleCurated: resource.titleCurated,
+      sourceName: resource.sourceName,
+      enriched: resource.enriched,
+    }
+    : { title: citation.title }
+  const m = overlay(base, enrichment)
+  const generated = overlay({ title: base.title }, enrichment).title
+  const headline = generated && !sameHeadline(generated, m.title) ? generated : undefined
+  return { ...citation, title: m.title, ...(headline ? { headline } : {}) }
+}
+
+/** A generated headline that only re-cases or lightly rewords the title adds nothing as a subtitle. */
+function sameHeadline(a: string, b: string): boolean {
+  const words = (t: string) =>
+    new Set(t.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 3))
+  const wa = words(a)
+  const wb = words(b)
+  if (wa.size === 0 || wb.size === 0) return a.trim().toLowerCase() === b.trim().toLowerCase()
+  const shared = [...wa].filter((w) => wb.has(w)).length
+  return shared / Math.min(wa.size, wb.size) >= 0.7
 }
 
 export function merchandiseContent(

@@ -47,6 +47,49 @@ describe('documentation content integrity', () => {
     }
   })
 
+  it('explains how the portal works, second after getting started, in plain language', () => {
+    const page = docPageById('how-this-works')
+    expect(page).toBeDefined()
+    expect(DOC_PAGES[1]?.id).toBe('how-this-works')
+    expect(page?.category).toBe('Getting started')
+    expect(page?.sections.map((section) => section.heading)).toEqual([
+      'Where the content comes from',
+      'What happens when a document is added',
+      'How a question is answered',
+      'How the answer is checked before you see it',
+      'What you can do with it',
+      'What it deliberately does not do',
+      'Under the hood',
+    ])
+    const text = docPageToPlainText(page!)
+    // The answer pipeline, in the words a clinician-researcher would use.
+    for (
+      const phrase of [
+        'Text and tables are extracted',
+        'Enrichment agents',
+        'study-design labels',
+        'The question is routed',
+        'The index returns the passages',
+        'written only from those passages',
+        'Every sentence that states a finding carries a citation',
+        'no language model in the loop',
+        'The check decides',
+        'can lower the label but never raise it',
+        'never answers without a source',
+        'does not browse the internet',
+        'does not change the papers',
+      ]
+    ) {
+      expect(text).toContain(phrase)
+    }
+    // The platform is named exactly once, in the technical note, with its acronym expanded.
+    expect(text.match(/Progress Agentic RAG/g)?.length).toBe(1)
+    expect(text).toContain('retrieval-augmented generation')
+    expect(text).toContain('(portable document format)')
+    // Live figures belong to the illustrated page, never hardcoded into the prose.
+    expect(text).not.toMatch(/\b\d{3,} (?:resources|papers|paragraphs|sentences)\b/)
+  })
+
   it('uses Australian English and no em dashes in user-facing copy', () => {
     // US spellings chosen so they are not substrings of their Australian forms
     // (e.g. "colour" does not contain "color", "artefact" does not contain "artifact").
@@ -59,6 +102,58 @@ describe('documentation content integrity', () => {
         expect(lower).not.toContain(us)
       }
     }
+  })
+
+  it('documents watches: the daily re-check, the dot, where the list lives, per browser (P8-12)', () => {
+    const page = docPageById('watches')
+    expect(page?.category).toBe('Finding answers')
+    const text = docPageToPlainText(page!)
+    for (const phrase of ['Once a day', 'dot', 'Saved', 'browser', 'Watch this search']) {
+      expect(text).toContain(phrase)
+    }
+    expect(docPageToPlainText(docPageById('assistant')!)).toContain('Watch a search')
+  })
+
+  it('describes the confidence signal Ask actually shows, not a banner it does not (P7-31)', () => {
+    const text = docPageToPlainText(docPageById('trust-and-citations')!)
+    for (
+      const label of [
+        'High confidence',
+        'Moderate confidence',
+        'Low confidence',
+        'Confidence not scored',
+      ]
+    ) {
+      expect(text).toContain(label)
+    }
+    expect(text).toContain('actions row')
+    expect(text).toContain('answer relevance')
+    expect(text).toContain('groundedness')
+    expect(text).toContain('context relevance')
+    // The figures check is described generically - no vendor or feature name.
+    expect(text).toContain('checks them against the cited passages')
+    // The gate as it is now: removal with a note, substitution only for the same figure,
+    // confidence led by the check, the first sentence verified while streaming.
+    for (
+      const phrase of [
+        'removed, and the answer says',
+        'same figure at the same time point',
+        'a decline is never replaced',
+        'led by the portal',
+        'never raise it',
+        'First sentence verified against',
+      ]
+    ) {
+      expect(text).toContain(phrase)
+    }
+    expect(text).not.toContain('a banner says so')
+  })
+
+  it('names the Deep research sub-question list as the public multi-step view (P9-19)', () => {
+    const text = docPageToPlainText(docPageById('assistant')!)
+    expect(text).toContain('sub-questions shown above a deep answer')
+    expect(text).toContain('/agentic')
+    expect(text).toContain('Administrators additionally see')
   })
 
   it('uses the current Ask and Tools surface names', () => {

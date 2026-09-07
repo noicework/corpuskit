@@ -15,7 +15,7 @@ const TYPE_GLYPHS: Record<string, string> = {
 }
 
 const THUMB_LABELS: Record<string, string> = {
-  document: 'Report',
+  document: 'Document',
   pdf: 'PDF',
   web: 'Web',
   video: 'Video',
@@ -39,12 +39,19 @@ export function ResourceThumb({
   slug,
   id,
   type,
+  label: labelOverride,
   className = '',
   imgClassName = '',
 }: {
   slug: string
   id: string
   type: ResourceType | string
+  /**
+   * What the placeholder calls the resource when no artwork exists - the
+   * format ("Article") where the corpus files resources that way, rather
+   * than the content type's generic word.
+   */
+  label?: string
   className?: string
   /** Extra classes for the image itself, e.g. `object-top` to anchor the crop. */
   imgClassName?: string
@@ -58,7 +65,7 @@ export function ResourceThumb({
   const loaded = loadedSrc === src
   const failed = failedSrc === src
   const glyph = TYPE_GLYPHS[type] ?? TYPE_GLYPHS.document
-  const label = resourceThumbLabel(type)
+  const label = labelOverride ?? resourceThumbLabel(type)
 
   // Native lazy loading looks several viewports ahead. In a long card list that
   // made every large thumbnail compete at once, so the visible row was last to

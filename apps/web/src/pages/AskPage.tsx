@@ -12,6 +12,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { AskEvent, AskStage, Citation, ScoredResource } from '@research-portal/core'
 import {
   addWatch,
+  ApiError,
   deleteServerSession,
   getFollowUpQuestions,
   getServerSession,
@@ -20,12 +21,22 @@ import {
   getSuggestedQuestions,
   listServerSessions,
   putServerSession,
+  type RouteDecision,
   sendAnswerFeedback,
   streamAsk,
 } from '../api/client.ts'
+import { secondsUntilRetry } from '../lib/ask-budget.ts'
 import { AnswerMarkdown } from '../components/AnswerMarkdown.tsx'
-import { citationHref, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
+import { answerHtml, escapeHtml, referenceListHtml } from '../lib/answer-export.ts'
+import {
+  citationHref,
+  ContextJourney,
+  EvidenceDisclosure,
+  InferenceMark,
+} from '../components/AnswerStream.tsx'
+import { CompareConfigurations } from '../components/CompareConfigurations.tsx'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
+import { RouteChip } from '../components/RouteChip.tsx'
 import {
   type EvidenceSource,
   evidenceSummary,
@@ -34,10 +45,17 @@ import {
 } from '../components/EvidenceTable.tsx'
 import { PipelinePanel } from '../components/PipelinePanel.tsx'
 import { AnswerQualityDisclosure, type QualityScores } from '../components/QualityGauge.tsx'
-import { LiveStatus } from '../components/ui.tsx'
+import { ExportNotice, LiveStatus, savedFileNotice, useExportNotice } from '../components/ui.tsx'
 import { useCompactViewport } from '../components/useViewMode.ts'
 import { isThinlyGrounded } from '../lib/confidence.ts'
+import {
+  type AnswerAudit,
+  auditBadge,
+  isUnsupportedFigure,
+  unsupportedFigurePattern,
+} from '../lib/answer-marks.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
+import type { Intent } from '@research-portal/core'
 import {
   type StageStatuses,
   StageTimeline,
@@ -63,9 +81,14 @@ type ChatMessage = {
   }
   quality?: QualityScores
   error?: string
+  /** The error was the server asking us to wait (HTTP 429): retry after this many seconds. */
+  rateLimited?: boolean
+  retryAfterSec?: number
   pending?: boolean
   /** How the platform interpreted/rephrased the question (first turn only). */
   interpretedQuery?: string
+  /** The routed intent found nothing usable and the general configuration answered instead. */
+  fallback?: { from: string; to: string | null; reason: string }
   /** Platform learning id for this answer - target for feedback. */
   learningId?: string
   feedbackGood?: boolean
@@ -80,6 +103,23 @@ type ChatMessage = {
   wasDeep?: boolean
   /** True when the corpus could not answer and guidance was shown instead of a real answer. */
   refused?: boolean
+  /** The generation stopped mid-sentence; the incomplete tail was cut back to the last complete sentence. */
+  truncated?: boolean
+  /** What the post-answer audit checked against the cited texts, once it has run. */
+  audit?: AnswerAudit
+  /**
+   * The text is complete but the figure gate has not passed it yet: how
+   * many figures are being checked. Cleared by `done`; never persisted.
+   */
+  checking?: number
+  /**
+   * The first sentence, checked against a retrieved paper's text while
+   * the rest still streams: every figure it states was found beside its
+   * claim in that paper. Cleared by `done`; never persisted.
+   */
+  verified?: { sentence: string; title: string }
+  /** The intent-routing decision this answer ran under (docs/INTENT-ROUTING.md). */
+  route?: RouteDecision
   /** Per-source AI relevance verdicts, once judged - persisted so the Evidence table doesn't re-judge on reload. */
   verdicts?: Record<string, EvidenceVerdictInfo>
 }
@@ -156,9 +196,32 @@ function migrateMessage(raw: unknown): ChatMessage {
     deepBadge: typeof message?.deepBadge === 'boolean' ? message.deepBadge : undefined,
     wasDeep: typeof message?.wasDeep === 'boolean' ? message.wasDeep : undefined,
     refused: typeof message?.refused === 'boolean' ? message.refused : undefined,
+    truncated: typeof message?.truncated === 'boolean' ? message.truncated : undefined,
+    audit: migrateAudit(message?.audit),
     verdicts: message?.verdicts && typeof message.verdicts === 'object'
       ? message.verdicts as Record<string, EvidenceVerdictInfo>
       : undefined,
+  }
+}
+
+function migrateAudit(raw: unknown): AnswerAudit | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const value = raw as Partial<AnswerAudit>
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string') : []
+  if (typeof value.figuresChecked !== 'number') return undefined
+  const count = (v: unknown): number | undefined => typeof v === 'number' ? v : undefined
+  return {
+    figuresChecked: value.figuresChecked,
+    figuresUnsupported: strings(value.figuresUnsupported),
+    yearsUnsupported: strings(value.yearsUnsupported),
+    contraindicationsUnsupported: strings(value.contraindicationsUnsupported),
+    sentencesChecked: count(value.sentencesChecked),
+    sentencesCited: count(value.sentencesCited),
+    denominatorsMissing: strings(value.denominatorsMissing),
+    attributionsCorrected: strings(value.attributionsCorrected),
+    sentencesRemoved: count(value.sentencesRemoved),
+    figuresRemoved: strings(value.figuresRemoved),
   }
 }
 
@@ -188,6 +251,14 @@ function loadSessions(slug: string): ChatSession[] {
   } catch {
     return []
   }
+}
+
+/** True when at least one assistant turn carries an answer rather than a transport error. */
+export function hasAnsweredTurn(messages: readonly ChatMessage[]): boolean {
+  return messages.some((message) =>
+    message.author === 'AGENT' && !message.pending && !message.error &&
+    message.text.trim().length > 0
+  )
 }
 
 function saveSessions(slug: string, sessions: ChatSession[], deletedIds?: Set<string>) {
@@ -238,9 +309,11 @@ function sessionTitle(session: ChatSession): string {
 
 /**
  * Replaces `[n]` markers in a plain-text run with superscript, accent-
- * coloured links to the matching citation's deep link. Run AFTER other
- * inline parsing (bold) has already split the text into nodes, so this only
- * ever sees plain text segments - never markup.
+ * coloured links to the matching citation's deep link, marks the figures
+ * the audit could not find beside their claim, and renders the model's
+ * "(inference)" hedge quietly. Run AFTER other inline parsing (bold,
+ * italic) has already split the text into nodes, so this only ever sees
+ * plain text segments - never markup.
  */
 function renderCitationMarkers(
   text: string,
@@ -248,24 +321,53 @@ function renderCitationMarkers(
   sources: ScoredResource[],
   slug: string,
   keyPrefix: string,
+  unsupported: RegExp | null,
 ): ReactNode[] {
-  const segments = text.split(/(\[\d+\])/g)
+  // Bracketed runs are either the answer's own citation markers (bound to a
+  // source below) or a paper's citation numbers copied verbatim ("[16,17]"),
+  // which mean nothing here and are dropped; "(inference)" is the model's
+  // own hedge and renders as one.
+  const splitter = new RegExp(
+    `(\\[\\d+(?:\\s*,\\s*\\d+)*\\]|\\[inference\\]|\\(inference\\)${
+      unsupported ? `|${unsupported.source}` : ''
+    })`,
+    'gi',
+  )
+  const segments = text.split(splitter).filter((segment) => segment !== undefined)
   return segments.map((segment, index) => {
+    if (/^[[(]inference[\])]$/i.test(segment)) {
+      return <InferenceMark key={`${keyPrefix}-${index}`} />
+    }
+    if (isUnsupportedFigure(segment, unsupported)) {
+      return (
+        <mark
+          key={`${keyPrefix}-${index}`}
+          className='rounded-[var(--rp-radius-chip)] px-0.5 underline decoration-dotted decoration-[var(--rp-warn-ink)] underline-offset-2'
+          style={{ backgroundColor: 'var(--rp-warn-bg)', color: 'var(--rp-warn-ink)' }}
+          title='Not found beside this claim in the cited passages - verify against the source'
+        >
+          {segment}
+        </mark>
+      )
+    }
     const match = /^\[(\d+)\]$/.exec(segment)
     const citationIndex = match?.[1] ? Number(match[1]) : null
     const citation = citationIndex === null
       ? undefined
       : citations.find((item) => item.index === citationIndex)
 
+    if (!citation && /^\[[\d,\s]+\]$/.test(segment) && citations.length > 0) {
+      return <span key={`${keyPrefix}-${index}`} />
+    }
     if (citation) {
-      const matchedPassage = sources.find((source) => source.id === citation.resourceId)
-        ?.matchedPassage
+      const source = sources.find((s) => s.id === citation.resourceId)
+      const matchedPassage = source?.matchedField === 'summary' ? undefined : source?.matchedPassage
       return (
         <sup key={`${keyPrefix}-${index}`}>
           <Link
-            to={citationHref(slug, citation.resourceId, matchedPassage)}
-            className='font-semibold no-underline'
-            style={{ color: 'var(--rp-accent)' }}
+            to={citationHref(slug, citation.resourceId, matchedPassage, source?.matchedPage)}
+            className='rp-focus inline-flex min-h-6 min-w-6 items-center justify-center px-0.5 font-semibold no-underline'
+            style={{ color: 'var(--rp-accent-fg)' }}
             title={`Source ${citationIndex} - ${citation.title}; click to open, or find it in the Evidence table below`}
           >
             [{citationIndex}]
@@ -283,12 +385,37 @@ function renderInline(
   sources: ScoredResource[],
   slug: string,
   keyPrefix: string,
+  unsupported: RegExp | null,
 ): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  const parts = text.split(/(\*\*[^*]+\*\*|(?<![\w*])\*[^*\n]+\*(?![\w*]))/g)
   return parts.flatMap((part, index): ReactNode[] =>
-    part.startsWith('**') && part.endsWith('**')
-      ? [<strong key={`${keyPrefix}-${index}`}>{part.slice(2, -2)}</strong>]
-      : renderCitationMarkers(part, citations, sources, slug, `${keyPrefix}-${index}`)
+    part.startsWith('**') && part.endsWith('**') && part.length > 4
+      ? [
+        <strong key={`${keyPrefix}-${index}`}>
+          {renderCitationMarkers(
+            part.slice(2, -2),
+            citations,
+            sources,
+            slug,
+            `${keyPrefix}-${index}`,
+            unsupported,
+          )}
+        </strong>,
+      ]
+      : part.startsWith('*') && part.endsWith('*') && part.length > 2
+      ? [
+        <em key={`${keyPrefix}-${index}`} className='text-ink-2'>
+          {renderCitationMarkers(
+            part.slice(1, -1),
+            citations,
+            sources,
+            slug,
+            `${keyPrefix}-${index}`,
+            unsupported,
+          )}
+        </em>,
+      ]
+      : renderCitationMarkers(part, citations, sources, slug, `${keyPrefix}-${index}`, unsupported)
   )
 }
 
@@ -297,11 +424,14 @@ function renderMarkdown(
   citations: Citation[],
   sources: ScoredResource[],
   slug: string,
+  audit?: AnswerAudit,
 ): ReactNode {
+  const unsupported = unsupportedFigurePattern(audit)
   return (
     <AnswerMarkdown
       text={text}
-      renderInline={(run, keyPrefix) => renderInline(run, citations, sources, slug, keyPrefix)}
+      renderInline={(run, keyPrefix) =>
+        renderInline(run, citations, sources, slug, keyPrefix, unsupported)}
     />
   )
 }
@@ -463,31 +593,50 @@ function UserBubble({
   message: ChatMessage
   onAskSubquery: (subquery: string) => void
 }) {
+  const subqueries = message.subqueries ?? []
+  const chips = (
+    <div className='flex flex-wrap justify-end gap-1.5'>
+      {subqueries.map((subquery, index) => (
+        <button
+          key={index}
+          type='button'
+          onClick={() => onAskSubquery(subquery)}
+          className='rp-chip text-[11px]'
+        >
+          {subquery}
+        </button>
+      ))}
+    </div>
+  )
   return (
-    <div className='flex flex-col items-end gap-1.5'>
+    /* scroll-mt: below `lg` the title bar is sticky over the thread, so a
+     * bubble scrolled to the top would otherwise slide under it. */
+    <div className='flex scroll-mt-16 flex-col items-end gap-1.5 lg:scroll-mt-0'>
       <div
         className='max-w-[85%] rounded-[calc(var(--rp-radius)+4px)] rounded-tr-sm px-4 py-3 text-sm leading-relaxed text-ink sm:max-w-[70%]'
         style={{ backgroundColor: 'var(--rp-wash)' }}
       >
         {message.text}
       </div>
-      {message.subqueries && message.subqueries.length > 0
+      {subqueries.length > 0
         ? (
           <div className='flex max-w-[85%] flex-col items-end gap-1 sm:max-w-[70%]'>
-            <p className='text-[11px] font-medium uppercase tracking-wide text-ink-3'>
-              Searched for
-            </p>
-            <div className='flex flex-wrap justify-end gap-1.5'>
-              {message.subqueries.map((subquery, index) => (
-                <button
-                  key={index}
-                  type='button'
-                  onClick={() => onAskSubquery(subquery)}
-                  className='rp-chip text-[11px]'
-                >
-                  {subquery}
-                </button>
-              ))}
+            {
+              /* On a phone the prequery stack filled the whole first screen
+              * and pushed the answer below the fold - so there it sits
+              * behind a one-line disclosure; from `sm` up the chips show. */
+            }
+            <details className='w-full sm:hidden'>
+              <summary className='cursor-pointer text-right text-[11px] font-medium uppercase tracking-wide text-ink-3'>
+                Searched for {subqueries.length} sub-questions
+              </summary>
+              <div className='mt-1.5'>{chips}</div>
+            </details>
+            <div className='hidden flex-col items-end gap-1 sm:flex'>
+              <p className='text-[11px] font-medium uppercase tracking-wide text-ink-3'>
+                Searched for
+              </p>
+              {chips}
             </div>
           </div>
         )
@@ -640,6 +789,52 @@ const ICON_WATCH =
   'M12 5c-5 0-8 4.6-8.6 6.4a1.8 1.8 0 000 1.2C4 14.4 7 19 12 19s8-4.6 8.6-6.4a1.8 1.8 0 000-1.2C20 9.6 17 5 12 5z M12 14.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z'
 
 /** Copies the answer text, confirming in place rather than with a toast. */
+/**
+ * What the post-answer audit checked: every figure found beside its claim
+ * in a cited passage (quiet, green), or how many were not (amber, with the
+ * figures named in the tooltip and marked inline in the prose).
+ */
+/**
+ * The state between the last streamed word and the gated text: the answer
+ * reads complete but has not been checked, and this says so in the badge's
+ * own place, with the number of figures under check. Replaced by the audit
+ * badge on `done`.
+ */
+function CheckingBadge({ figures }: { figures?: number }) {
+  // Text on screen before the check has run is unchecked text, and the
+  // reader is told so from the first token, not only once the audit
+  // starts: streamed prose used to appear as the answer and then be
+  // withdrawn (D5-08).
+  const label = figures === undefined
+    ? 'Unchecked - still streaming, the check follows'
+    : figures === 0
+    ? 'Checking the answer against the cited papers'
+    : figures === 1
+    ? 'Checking 1 figure against the cited papers'
+    : `Checking ${figures} figures against the cited papers`
+  return (
+    <div className='mt-3 flex items-center gap-2' role='status' aria-live='polite'>
+      <span className='rp-badge rp-badge-quiet inline-flex items-center gap-1.5'>
+        <span className='rp-stage-spin inline-block h-3 w-3 rounded-full border-[1.5px] border-current border-t-transparent opacity-70' />
+        {label}
+      </span>
+    </div>
+  )
+}
+
+function AuditBadge({ audit }: { audit?: AnswerAudit }) {
+  const badge = auditBadge(audit)
+  if (!badge) return null
+  return (
+    <span
+      className={`rp-badge ${badge.tone === 'ok' ? 'rp-badge-ok' : 'rp-badge-warn'} mr-1`}
+      title={badge.title}
+    >
+      {badge.label}
+    </span>
+  )
+}
+
 function CopyAnswer({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
 
@@ -687,7 +882,7 @@ function WatchControl({ question, slug }: { question: string; slug: string }) {
   if (status === 'done') {
     return (
       <p className='text-xs text-ink-3'>
-        Watching - you will see a change badge in Search when results change.
+        In your Watches - a change badge appears in Search when results change.
       </p>
     )
   }
@@ -695,13 +890,17 @@ function WatchControl({ question, slug }: { question: string; slug: string }) {
   return (
     <div className='flex items-center gap-1.5'>
       <ActionIcon
-        label={status === 'busy' ? 'Saving the watch' : 'Watch this question'}
+        label={status === 'busy' ? 'Adding to Watches' : 'Add to Watches'}
         onClick={handleWatch}
         disabled={status === 'busy'}
         path={ICON_WATCH}
       />
       {status === 'error'
-        ? <p className='text-xs text-[var(--rp-bad-ink)]'>Could not save the watch - try again.</p>
+        ? (
+          <p className='text-xs text-[var(--rp-bad-ink)]'>
+            Could not add it to Watches - try again.
+          </p>
+        )
         : null}
     </div>
   )
@@ -744,6 +943,85 @@ function tailStyle(index: number): CSSProperties {
   return { '--rp-stage-i': index } as CSSProperties
 }
 
+/**
+ * The failed-answer state. A rate limit is not "something went wrong": the
+ * portal is busy, the server said how long to wait, and the card counts that
+ * down and retries by itself - the reader can also retry at once. The copy
+ * is the same sentence the Search page uses (`RATE_LIMIT_MESSAGE`).
+ */
+function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
+  message: string
+  rateLimited: boolean
+  retryAfterSec?: number
+  onRetry: () => void
+}) {
+  const wait = Math.max(1, retryAfterSec ?? (secondsUntilRetry() || RETRY_FALLBACK_SEC))
+  const [left, setLeft] = useState(rateLimited ? wait : 0)
+  const onRetryRef = useRef(onRetry)
+  onRetryRef.current = onRetry
+  useEffect(() => {
+    if (!rateLimited) return
+    setLeft(wait)
+    const started = Date.now()
+    const timer = setInterval(() => {
+      const remaining = wait - Math.floor((Date.now() - started) / 1000)
+      if (remaining <= 0) {
+        clearInterval(timer)
+        setLeft(0)
+        onRetryRef.current()
+      } else {
+        setLeft(remaining)
+      }
+    }, 250)
+    return () => clearInterval(timer)
+  }, [rateLimited, wait])
+  return (
+    <div
+      role='status'
+      className='rounded-[calc(var(--rp-radius)+4px)] border p-3 sm:p-5'
+      style={rateLimited
+        ? { borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }
+        : { borderColor: 'var(--rp-bad-line)', background: 'var(--rp-bad-bg)' }}
+    >
+      <p
+        className='text-sm font-medium'
+        style={{ color: rateLimited ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
+      >
+        {rateLimited ? 'The portal is busy' : 'Something went wrong'}
+      </p>
+      <p
+        className='mt-1 text-sm'
+        style={{ color: rateLimited ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
+      >
+        {message}
+      </p>
+      <div className='mt-3 flex flex-wrap items-center gap-3'>
+        <button
+          type='button'
+          onClick={onRetry}
+          className={rateLimited ? 'rp-btn rp-btn-outline' : 'rp-btn rp-btn-danger'}
+        >
+          {rateLimited ? 'Retry now' : 'Retry'}
+        </button>
+        {rateLimited && left > 0
+          ? (
+            <span
+              className='text-sm tabular-nums'
+              style={{ color: 'var(--rp-warn-ink)' }}
+              aria-live='polite'
+            >
+              Retrying in {left} s
+            </span>
+          )
+          : null}
+      </div>
+    </div>
+  )
+}
+
+/** When a 429 carries no Retry-After, wait this long before the automatic retry. */
+const RETRY_FALLBACK_SEC = 15
+
 function AnswerCard({
   message,
   slug,
@@ -755,6 +1033,9 @@ function AnswerCard({
   onReanswerDeeply,
   onAskSubquery,
   onVerdicts,
+  intents,
+  onReroute,
+  isAdmin = false,
 }: {
   message: ChatMessage
   slug: string
@@ -766,8 +1047,15 @@ function AnswerCard({
   onReanswerDeeply: () => void
   onAskSubquery: (subquery: string) => void
   onVerdicts: (verdicts: Record<string, EvidenceVerdictInfo>) => void
+  /** The portal's intents, for the route chip and compare mode. */
+  intents: Intent[]
+  /** Re-ask this answer's question under another intent. */
+  onReroute: (intentId: string) => void
+  /** Developer-facing widgets (pipeline, tokens) show only to administrators. */
+  isAdmin?: boolean
 }) {
   const [showPipeline, setShowPipeline] = useState(false)
+  const [compare, setCompare] = useState<[string, string] | null>(null)
   // The sources/evidence block is collapsed by default and this state is
   // per-message (it lives in the card, not the page), so opening one answer's
   // evidence never opens another's. The reader chooses to open it, rather than
@@ -815,16 +1103,12 @@ function AnswerCard({
 
   if (message.error && !message.text.trim()) {
     return (
-      <div
-        className='rounded-[calc(var(--rp-radius)+4px)] border p-3 sm:p-5'
-        style={{ borderColor: 'var(--rp-bad-line)', background: 'var(--rp-bad-bg)' }}
-      >
-        <p className='text-sm font-medium text-[var(--rp-bad-ink)]'>Something went wrong</p>
-        <p className='mt-1 text-sm text-[var(--rp-bad-ink)]'>{message.error}</p>
-        <button type='button' onClick={onRetry} className='rp-btn rp-btn-danger mt-3'>
-          Retry
-        </button>
-      </div>
+      <AnswerErrorCard
+        message={message.error}
+        rateLimited={message.rateLimited === true}
+        retryAfterSec={message.retryAfterSec}
+        onRetry={onRetry}
+      />
     )
   }
 
@@ -836,7 +1120,7 @@ function AnswerCard({
   // deep (nothing deeper to escalate to).
   const groundedness = message.quality?.groundedness
   const offerDeepReanswer = !message.pending && !message.healDismissed && !message.wasDeep &&
-    !message.deepBadge && isThinlyGrounded(message.quality)
+    !message.deepBadge && isThinlyGrounded(message.quality, message.audit)
   const isSparselyGrounded = !message.pending && groundedness !== null &&
     groundedness !== undefined &&
     groundedness <= 2
@@ -850,16 +1134,16 @@ function AnswerCard({
     referenceChunk: source.referenceChunk,
     published: source.published,
     sourceName: source.sourceName,
+    type: source.type,
+    matchedField: source.matchedField,
   }))
 
   // What the collapsed evidence panel says about itself: enough to decide
   // whether to open it ("7 sources · 3 cited · 1980-2010") without unfurling a
   // wall of raw passages under every answer.
-  const citedSourceCount = message.sources.length > 0
-    ? message.sources.filter((source) =>
-      message.citations.some((citation) => citation.resourceId === source.id)
-    ).length
-    : message.citations.length
+  // "n cited" is the bound set: the resources a marker in the final text
+  // actually points at, whether or not retrieval listed them.
+  const citedSourceCount = new Set(message.citations.map((citation) => citation.resourceId)).size
 
   // A refusal gets its own structured "no evidence" state instead of the
   // normal answer body - the guidance sentence the platform generated, what
@@ -873,7 +1157,7 @@ function AnswerCard({
         </div>
 
         {message.text.length > 0
-          ? renderMarkdown(message.text, message.citations, message.sources, slug)
+          ? renderMarkdown(message.text, message.citations, message.sources, slug, message.audit)
           : null}
 
         {evidenceSources.length > 0
@@ -886,7 +1170,7 @@ function AnswerCard({
                 slug={slug}
                 question={question}
                 sources={evidenceSources}
-                title='the closest passages retrieved'
+                title='closest matches, not used'
                 anchorPrefix={message.id}
               />
             </div>
@@ -936,15 +1220,68 @@ function AnswerCard({
           </div>
         )
         : null}
-
-      {phase !== 'answer' && message.pending
-        ? <StageTimeline statuses={stageStatuses ?? {}} exiting={phase === 'handoff'} />
-        : message.text.length > 0
+      {intents.length > 0 && (message.route || message.pending)
         ? (
-          <div className='rp-answer-in'>
-            {renderMarkdown(message.text, message.citations, message.sources, slug)}
+          <div className='mb-2 flex flex-wrap items-center gap-2'>
+            <RouteChip
+              decision={message.route}
+              intents={intents}
+              pending={message.pending}
+              onOverride={onReroute}
+            />
+            {message.fallback
+              ? (
+                <span
+                  className='rp-badge rp-badge-warn'
+                  title={message.fallback.reason}
+                >
+                  Answered from {message.fallback.to
+                    ? intents.find((i) => i.id === message.fallback?.to)?.label ??
+                      message.fallback.to
+                    : 'the general configuration'} -{' '}
+                  {intents.find((i) => i.id === message.fallback?.from)?.label ??
+                    message.fallback.from} found nothing usable
+                </span>
+              )
+              : null}
           </div>
         )
+        : null}
+
+      {phase !== 'answer' && message.pending
+        ? (
+          <StageTimeline
+            statuses={stageStatuses ?? {}}
+            exiting={phase === 'handoff'}
+            reading={message.sources.map((source) => source.title)}
+          />
+        )
+        : message.text.length > 0
+        ? (
+          <div
+            className={message.pending ? 'rp-answer-in rp-answer-checking' : 'rp-answer-in'}
+            aria-busy={message.pending ? true : undefined}
+          >
+            {renderMarkdown(message.text, message.citations, message.sources, slug, message.audit)}
+          </div>
+        )
+        : null}
+
+      {message.pending && message.verified && phase === 'answer' && message.text.length > 0
+        ? (
+          <p
+            className='rp-answer-verified mt-2 text-xs leading-relaxed text-ink-3'
+            role='status'
+            data-testid='first-sentence-verified'
+          >
+            <span className='font-medium text-[var(--rp-ok-ink)]'>First sentence verified</span>
+            {' '}
+            against <span className='italic'>{message.verified.title}</span>
+          </p>
+        )
+        : null}
+      {message.pending && phase === 'answer' && message.text.length > 0
+        ? <CheckingBadge figures={message.checking} />
         : null}
 
       {
@@ -955,6 +1292,32 @@ function AnswerCard({
           stays loud and labelled while the news is bad, so folding them away
           never softens a poorly grounded answer. See AnswerQualityDisclosure. */
       }
+
+      {message.truncated && !message.pending
+        ? (
+          <div
+            className='rp-answer-tail mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--rp-radius)] border p-3'
+            role='status'
+            style={{
+              ...tailStyle(TAIL_NOTICE),
+              borderColor: 'var(--rp-warn-line)',
+              background: 'var(--rp-warn-bg)',
+            }}
+          >
+            <p className='text-xs leading-relaxed text-[var(--rp-warn-ink)]'>
+              The answer stopped mid-sentence. The incomplete sentence was removed; what remains is
+              complete and cited. Ask again for the rest.
+            </p>
+            <button
+              type='button'
+              onClick={() => onAskSubquery?.(question)}
+              className='rp-btn rp-btn-outline h-8 shrink-0 px-2 text-xs'
+            >
+              Ask again
+            </button>
+          </div>
+        )
+        : null}
 
       {message.error && message.text.trim()
         ? (
@@ -1000,9 +1363,30 @@ function AnswerCard({
             style={tailStyle(TAIL_ACTIONS)}
           >
             <FeedbackControl message={message} onFeedback={onFeedback} />
-            <div className='ml-auto flex items-center gap-0.5'>
+            <div className='ml-auto flex flex-wrap items-center justify-end gap-0.5'>
+              {intents.filter((i) => i.answer.surfaces.includes('ask')).length > 1 &&
+                  question.trim().length > 0
+                ? (
+                  <button
+                    type='button'
+                    onClick={() => {
+                      const askable = intents.filter((i) => i.answer.surfaces.includes('ask'))
+                      const current = message.route?.intent ?? askable[0]!.id
+                      const other = askable.find((i) => i.id !== current)?.id ?? current
+                      setCompare((prev) => prev ? null : [current, other])
+                    }}
+                    aria-pressed={compare !== null}
+                    title='Run this question through two retrieval configurations side by side'
+                    className='rp-btn rp-btn-ghost h-8 px-2 text-xs'
+                  >
+                    Compare configurations
+                  </button>
+                )
+                : null}
+              <AuditBadge audit={message.audit} />
               <AnswerQualityDisclosure
                 quality={message.quality}
+                audit={message.audit}
                 {...(offerDeepReanswer ? { onReanswerDeeply } : {})}
                 sparselyGrounded={isSparselyGrounded && evidenceSources.length > 0}
               />
@@ -1032,7 +1416,45 @@ function AnswerCard({
           panel stays navigable - and the evidence table opens with it rather
           than asking for a second click on the same evidence. */
       }
-      {!message.pending && (message.sources.length > 0 || message.citations.length > 0)
+      {compare
+        ? (
+          <CompareConfigurations
+            slug={slug}
+            question={question}
+            intents={intents}
+            initial={compare}
+            onClose={() => setCompare(null)}
+          />
+        )
+        : null}
+      {
+        /* The answer streams before its sources and citations have settled, so
+          the reader would otherwise stare at a finished answer with nothing
+          beneath it for a few seconds. Say what is happening instead - and
+          show the sources as soon as they exist rather than holding them until
+          every post-answer step has completed. */
+      }
+      {message.pending && message.text.length > 0 && message.sources.length === 0 &&
+          message.citations.length === 0
+        ? (
+          <div
+            className='rp-answer-tail mt-4 flex items-center gap-2.5 border-t border-line pt-3 text-xs text-ink-3'
+            role='status'
+            aria-live='polite'
+          >
+            <span
+              className='inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-line border-t-[var(--rp-accent)]'
+              aria-hidden='true'
+            />
+            <span>Retrieving evidence…</span>
+            <span
+              className='rp-shimmer h-3 w-28 rounded-[var(--rp-radius)] bg-surface-3'
+              aria-hidden='true'
+            />
+          </div>
+        )
+        : null}
+      {message.sources.length > 0 || message.citations.length > 0
         ? (
           <div
             className='rp-answer-tail mt-4 border-t border-line pt-3'
@@ -1056,24 +1478,44 @@ function AnswerCard({
                       }
                       <div className='flex flex-wrap gap-1.5'>
                         {message.citations.map((citation) => {
-                          const matchedPassage = message.sources.find((source) =>
+                          const source = message.sources.find((source) =>
                             source.id === citation.resourceId
-                          )?.matchedPassage
+                          )
+                          const matchedPassage = source?.matchedField === 'summary'
+                            ? undefined
+                            : source?.matchedPassage
                           return (
                             <Link
                               key={citation.index}
-                              to={citationHref(slug, citation.resourceId, matchedPassage)}
-                              title={citation.title}
-                              className='rp-chip'
+                              to={citationHref(
+                                slug,
+                                citation.resourceId,
+                                matchedPassage,
+                                source?.matchedPage,
+                              )}
+                              title={citation.headline
+                                ? `${citation.title} - ${citation.headline}`
+                                : citation.title}
+                              className='rp-chip h-auto py-1'
                             >
                               <span
-                                className='inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold text-white'
-                                style={{ backgroundColor: 'var(--rp-accent)' }}
+                                className='inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold'
+                                style={{
+                                  backgroundColor: 'var(--rp-accent)',
+                                  color: 'var(--rp-on-accent)',
+                                }}
                               >
                                 {citation.index}
                               </span>
-                              <span className='min-w-0 truncate sm:max-w-[14rem]'>
-                                {citation.title}
+                              <span className='flex min-w-0 flex-col leading-tight sm:max-w-[16rem]'>
+                                <span className='truncate'>{citation.title}</span>
+                                {citation.headline
+                                  ? (
+                                    <span className='truncate text-[11px] font-normal text-ink-3'>
+                                      {citation.headline}
+                                    </span>
+                                  )
+                                  : null}
                               </span>
                             </Link>
                           )
@@ -1104,7 +1546,7 @@ function AnswerCard({
                   )
                   : null}
 
-                {message.sources.length > 0 || message.usage
+                {isAdmin && (message.sources.length > 0 || message.usage)
                   ? (
                     <div className='flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-3'>
                       {message.sources.length > 0
@@ -1178,18 +1620,9 @@ function AnswerCard({
 // ---------------------------------------------------------------------------
 // Export - a standalone Word-compatible .doc of the current research trail.
 // Mirrors the export idiom in GeneratePage.tsx (a self-contained HTML shell
-// with the Word-namespaced <head>), rebuilt locally here since GeneratePage
-// doesn't export its helpers.
+// with the Word-namespaced <head>). The answer body and the reference list
+// come from lib/answer-export.ts, which runs the page's own block parser.
 // ---------------------------------------------------------------------------
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 function slugOrDate(title: string): string {
   const slug = title
@@ -1206,10 +1639,19 @@ function formatScore(score: number | null | undefined): string {
 
 /**
  * Renders the research trail as clean semantic HTML: one heading per
- * question, the answer text below it, a bracketed citation list of source
- * titles, and the REMi quality line when the platform scored the answer.
+ * question, the answer rendered through the page's own Markdown block parser
+ * (headings, lists, tables; `[n]` markers as superscripts), a numbered
+ * reference list in marker order built from the citation metadata (authors,
+ * journal, year, DOI, portal link), and the REMi quality line when the
+ * platform scored the answer. `resourceUrl` makes the portal links absolute
+ * so they resolve from the saved document.
  */
-function sessionToWordHtml(portalName: string, title: string, messages: ChatMessage[]): string {
+function sessionToWordHtml(
+  portalName: string,
+  title: string,
+  messages: ChatMessage[],
+  resourceUrl: (resourceId: string) => string,
+): string {
   const dateLine = new Date().toLocaleDateString('en-AU', {
     day: 'numeric',
     month: 'long',
@@ -1224,14 +1666,8 @@ function sessionToWordHtml(portalName: string, title: string, messages: ChatMess
       if (message.error) {
         return `<p><em>Answer unavailable - ${escapeHtml(message.error)}</em></p>`
       }
-      const answerHtml = message.text
-        .split(/\n{2,}/)
-        .filter((block) => block.trim().length > 0)
-        .map((block) => `<p>${escapeHtml(block.trim())}</p>`)
-        .join('')
-      const citationsHtml = message.citations.length > 0
-        ? `<p>[${message.citations.map((citation) => escapeHtml(citation.title)).join('; ')}]</p>`
-        : ''
+      const bodyHtml = answerHtml(message.text, message.citations)
+      const citationsHtml = referenceListHtml(message.citations, message.sources, resourceUrl)
       const qualityHtml = message.quality
         ? `<p><em>Answer relevance ${
           formatScore(message.quality.answerRelevance)
@@ -1239,7 +1675,7 @@ function sessionToWordHtml(portalName: string, title: string, messages: ChatMess
           formatScore(message.quality.groundedness)
         } &middot; Context relevance ${formatScore(message.quality.contextRelevance)}</em></p>`
         : ''
-      return `${answerHtml}${citationsHtml}${qualityHtml}`
+      return `${bodyHtml}${citationsHtml}${qualityHtml}`
     })
     .join('')
 
@@ -1261,7 +1697,14 @@ body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; line-heig
 h1, h2 { font-family: Arial, Helvetica, sans-serif; color: #111111; }
 h1 { font-size: 20pt; margin-bottom: 4pt; }
 h2 { font-size: 13pt; margin-top: 18pt; margin-bottom: 6pt; }
-p { margin: 6pt 0; font-size: 11pt; }
+h3 { font-size: 11.5pt; margin-top: 12pt; margin-bottom: 4pt; }
+h4 { font-size: 11pt; margin-top: 10pt; margin-bottom: 4pt; }
+p, li { margin: 6pt 0; font-size: 11pt; }
+ol, ul { margin: 6pt 0 6pt 18pt; }
+table { border-collapse: collapse; margin: 8pt 0; }
+th, td { border: 1px solid #999999; padding: 3pt 6pt; font-size: 10.5pt; vertical-align: top; }
+blockquote { margin: 6pt 0 6pt 12pt; color: #444444; }
+sup { font-size: 8pt; }
 </style>
 </head>
 <body>
@@ -1277,7 +1720,7 @@ ${turnsHtml}
 // ---------------------------------------------------------------------------
 
 export function AskPage() {
-  const { config } = useOutletContext<TenantOutletContext>()
+  const { config, isAdmin = false } = useOutletContext<TenantOutletContext>()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions(config.slug))
@@ -1600,6 +2043,31 @@ export function AskPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, isStreaming])
 
+  /**
+   * Drop a session that never received an answer - the pending turn may have
+   * been saved when the question was sent, and an error card is not a
+   * research-trail entry.
+   */
+  function forgetSession(sessionId: string) {
+    setSessions((prev) => {
+      const existing = prev.find((session) => session.id === sessionId)
+      if (!existing || hasAnsweredTurn(existing.messages)) return prev
+      const next = prev.filter((session) => session.id !== sessionId)
+      deletedIdsRef.current.add(sessionId)
+      saveSessions(config.slug, next, deletedIdsRef.current)
+      const timer = syncTimersRef.current.get(sessionId)
+      if (timer) {
+        clearTimeout(timer)
+        syncTimersRef.current.delete(sessionId)
+      }
+      return next
+    })
+    if (activeSessionId === sessionId) {
+      // Keep the thread on screen; a retry starts a fresh trail entry.
+      setActiveSessionId(null)
+    }
+  }
+
   function persist(nextMessages: ChatMessage[], sessionId: string) {
     setSessions((prev) => {
       const existing = prev.find((session) => session.id === sessionId)
@@ -1709,19 +2177,45 @@ export function AskPage() {
     query: string,
     baseMessages: ChatMessage[],
     sessionId: string,
-    options?: { depth?: 'default' | 'deep'; prequeries?: string[]; deepBadge?: boolean },
+    options?: {
+      depth?: 'default' | 'deep'
+      prequeries?: string[]
+      deepBadge?: boolean
+      /** A decision already made (an override from the route chip). */
+      route?: RouteDecision
+    },
   ) {
-    // A new answer retires the last answer's follow-ups the moment it starts.
+    // A new answer retires the last answer's follow-ups the moment it starts,
+    // and closes the previous stream if its trailing quality scores are
+    // still arriving (the composer is released on `done`, not at close).
     followUpAbortRef.current?.abort()
     followUpAbortRef.current = null
+    abortRef.current?.abort()
     setFollowUps(null)
     const answerId = makeId()
     // baseMessages ends with the question being asked (as a USER message) - the
     // request sends that as `query`, so prior turns exclude it here.
+    // Each earlier answer carries the resources it cited, so a figure the
+    // follow-up repeats is checked against those papers and they are
+    // retrieved again (D3-06).
     const contextTurns = baseMessages
       .slice(0, -1)
       .filter((message) => !message.error)
-      .map((message) => ({ author: message.author, text: message.text }))
+      .map((message) => {
+        const resourceIds = [...new Set(message.citations.map((c) => c.resourceId))].slice(0, 12)
+        // The passages the cited papers were quoted for: a follow-up that
+        // reshapes or leans on this answer reads them again (D4-06, D4-07).
+        const passages = message.sources
+          .filter((s) => resourceIds.includes(s.id) && (s.matchedPassage ?? '').trim().length > 0)
+          .map((s) => (s.matchedPassage ?? '').slice(0, 2000))
+          .slice(0, 12)
+        return {
+          author: message.author,
+          text: message.text,
+          ...(resourceIds.length > 0 ? { resourceIds } : {}),
+          ...(passages.length > 0 ? { passages } : {}),
+        }
+      })
 
     let working: ChatMessage[] = [
       ...baseMessages,
@@ -1749,17 +2243,49 @@ export function AskPage() {
       setMessages(working)
     }
 
+    // Routing: which stored configuration answers this question. A choice
+    // already made (the route chip's override) is passed as the intent;
+    // otherwise the server routes inside the ask itself - rules at once,
+    // the classifier beside retrieval rather than ahead of it - and reports
+    // the decision as a `route` event, so no round trip precedes the answer.
+    const route = options?.route
+    const autoRoute = !route && (config.intents?.length ?? 0) > 0 && contextTurns.length === 0
+    if (route) update((message) => ({ ...message, route }))
+
     try {
       await streamAsk(
         config.slug,
-        { query, context: contextTurns, depth: options?.depth, prequeries: options?.prequeries },
+        {
+          query,
+          context: contextTurns,
+          depth: options?.depth,
+          prequeries: options?.prequeries,
+          ...(route ? { intent: route.intent } : {}),
+          ...(autoRoute ? { route: 'auto' as const } : {}),
+        },
         (event: AskEvent) => {
           switch (event.type) {
+            case 'route':
+              update((message) => ({ ...message, route: event.decision }))
+              break
+            case 'verified':
+              update((message) => ({
+                ...message,
+                verified: { sentence: event.sentence, title: event.title },
+              }))
+              break
             case 'stage':
               if (event.status === 'started') {
                 setActiveStage(event.stage)
               } else {
                 setSeenStages((prev) => new Set(prev).add(event.stage))
+              }
+              // The streamed text is on screen but not yet checked: say so
+              // where the audit badge will land, with the count of figures
+              // under check, until `done` carries the gated text (D2-17).
+              if (event.stage === 'auditing') {
+                const figures = event.status === 'started' ? (event.figures ?? 0) : undefined
+                update((message) => ({ ...message, checking: figures }))
               }
               break
             case 'sources':
@@ -1780,6 +2306,18 @@ export function AskPage() {
               break
             case 'interpreted':
               update((message) => ({ ...message, interpretedQuery: event.query }))
+              break
+            case 'fallback':
+              // A fresh answer follows on another configuration: whatever
+              // the first attempt streamed (its decline copy, its sources)
+              // is discarded so the two never read as one answer.
+              update((message) => ({
+                ...message,
+                text: '',
+                sources: [],
+                citations: [],
+                fallback: { from: event.from, to: event.to, reason: event.reason },
+              }))
               break
             case 'searched':
               // The platform auto-decomposed the question into sub-queries it
@@ -1816,6 +2354,25 @@ export function AskPage() {
                 },
               }))
               break
+            case 'audit':
+              update((message) => ({
+                ...message,
+                audit: {
+                  figuresChecked: event.figuresChecked,
+                  figuresUnsupported: event.figuresUnsupported,
+                  yearsUnsupported: event.yearsUnsupported,
+                  contraindicationsUnsupported: event.contraindicationsUnsupported,
+                  sentencesChecked: event.sentencesChecked,
+                  sentencesCited: event.sentencesCited,
+                  denominatorsMissing: event.denominatorsMissing ?? [],
+                  attributionsCorrected: event.attributionsCorrected ?? [],
+                  sentencesRemoved: event.sentencesRemoved ?? 0,
+                  figuresRemoved: event.figuresRemoved ?? [],
+                  figuresRescued: event.figuresRescued ?? [],
+                  sentencesReplaced: event.sentencesReplaced ?? 0,
+                },
+              }))
+              break
             case 'done':
               update((message) => ({
                 ...message,
@@ -1828,8 +2385,21 @@ export function AskPage() {
                 // text when absent (e.g. a refusal, which carries no citations).
                 text: event.text ?? message.text,
                 pending: false,
+                checking: undefined,
+                verified: undefined,
                 refused: event.refused,
+                truncated: event.truncated === true,
               }))
+              // The answer is complete here; the quality scores follow on
+              // the same stream a few seconds later. The composer is
+              // released now rather than at stream close so the reader is
+              // never made to wait on the judge - and the trail entry is
+              // saved now too, so the sessions rail lists it with the answer
+              // rather than when the tail closes the stream (D2-19). The
+              // close-time save below carries the scores in.
+              setIsStreaming(false)
+              setActiveStage(null)
+              if (hasAnsweredTurn(working)) persist(working, sessionId)
               break
             case 'error':
               update((message) => ({
@@ -1849,6 +2419,15 @@ export function AskPage() {
             ? { ...existing, pending: false }
             : { ...existing, pending: false, error: 'Stopped before an answer arrived.' }
         )
+      } else if (thrown instanceof ApiError && thrown.status === 429) {
+        // The server asked us to wait: the card counts down and retries.
+        update((existing) => ({
+          ...existing,
+          pending: false,
+          error: thrown.message,
+          rateLimited: true,
+          retryAfterSec: thrown.retryAfterSec,
+        }))
       } else {
         const message = thrown instanceof Error
           ? thrown.message
@@ -1860,7 +2439,11 @@ export function AskPage() {
       setActiveStage(null)
       setSeenStages(new Set())
       abortRef.current = null
-      persist(working, sessionId)
+      // A trail entry is an answer, not a failed transport: a session whose
+      // only assistant turns are errors is not saved (and is dropped again
+      // if an earlier save of the pending turn already wrote it).
+      if (hasAnsweredTurn(working)) persist(working, sessionId)
+      else forgetSession(sessionId)
       // After the answer, never during it - and never after a Stop, which is
       // the reader saying they have finished with this question.
       if (!controller.signal.aborted) {
@@ -1960,6 +2543,34 @@ export function AskPage() {
     void runAsk(question, baseMessages, sessionId, { depth: 'deep', deepBadge: true })
   }
 
+  /** Re-ask the same question under another intent, chosen from the route chip. */
+  function reroute(question: string, forMessageId: string, intentId: string) {
+    if (isStreaming || !question.trim()) return
+    const intent = (config.intents ?? []).find((i) => i.id === intentId)
+    if (!intent) return
+    const isDefault = intentId === config.defaultIntent
+    const route: RouteDecision = {
+      intent: intentId,
+      confidence: 1,
+      stage: 'override',
+      rationale: `${intent.label}: chosen by you`,
+      configuration: isDefault ? 'portal-ask' : `portal-intent-${intentId}`,
+      entities: messages.find((m) => m.id === forMessageId)?.route?.entities ?? [],
+    }
+    const userMessage: ChatMessage = {
+      id: makeId(),
+      author: 'USER',
+      text: question,
+      citations: [],
+      sources: [],
+    }
+    const baseMessages = [...messages, userMessage]
+    const sessionId = activeSessionId ?? makeId()
+    if (!activeSessionId) setActiveSessionId(sessionId)
+    setMessages(baseMessages)
+    void runAsk(question, baseMessages, sessionId, { route })
+  }
+
   /**
    * Posts feedback for the platform's learning loop and, on success, marks
    * the message so the UI collapses to a quiet "thanks" state. Returns
@@ -2016,9 +2627,19 @@ export function AskPage() {
   }
 
   /** Downloads the current research trail as a Word-compatible .doc. */
+  const { notice: exportNotice, announce: announceExport } = useExportNotice()
   function exportSession() {
+    // Mid-stream the trail holds only the question: the button is disabled
+    // while streaming, and this guard keeps a keyboard-triggered export honest.
+    if (isStreaming) return
     const title = currentSessionTitle()
-    const html = sessionToWordHtml(config.branding.productName, title, messages)
+    const html = sessionToWordHtml(
+      config.branding.productName,
+      title,
+      messages,
+      (resourceId) =>
+        `${globalThis.location.origin}/t/${config.slug}/library/${encodeURIComponent(resourceId)}`,
+    )
     const blob = new Blob(['﻿', html], { type: 'application/msword' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -2028,6 +2649,7 @@ export function AskPage() {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
+    announceExport(savedFileNotice(link.download, 'Word document'))
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2044,10 +2666,36 @@ export function AskPage() {
 
   const isEmpty = messages.length === 0
   const lastMessage = messages[messages.length - 1]
+  // The latest settled answer and the question it answered, for the wide
+  // display's sources rail. The rail is a layout affordance: the same
+  // sources still sit in the answer's own evidence disclosure.
+  const railAnswerIndex = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m && m.author === 'AGENT' && !m.pending && m.sources.length > 0) return i
+    }
+    return -1
+  })()
+  const railAnswer = railAnswerIndex >= 0 ? messages[railAnswerIndex] : undefined
+  const railQuestion = railAnswerIndex > 0 ? messages[railAnswerIndex - 1]?.text ?? '' : ''
+  const railSources: EvidenceSource[] = (railAnswer?.sources ?? []).map((source) => ({
+    id: source.id,
+    title: source.title,
+    passage: source.matchedPassage,
+    score: source.relevance,
+    matchedPage: source.matchedPage,
+    referenceChunk: source.referenceChunk,
+    published: source.published,
+    sourceName: source.sourceName,
+    type: source.type,
+    matchedField: source.matchedField,
+  }))
   const liveMessage = isStreaming
     ? 'Answer in progress'
     : lastMessage?.author === 'AGENT' && !lastMessage.pending
-    ? 'Answer complete'
+    ? lastMessage.error && !lastMessage.text.trim()
+      ? (lastMessage.rateLimited ? 'The portal is busy - retrying shortly' : 'Answer unavailable')
+      : 'Answer complete'
     : ''
 
   return (
@@ -2154,7 +2802,11 @@ export function AskPage() {
                 <button
                   type='button'
                   onClick={exportSession}
-                  className='rp-btn rp-btn-outline shrink-0 gap-2'
+                  disabled={isStreaming}
+                  title={isStreaming
+                    ? 'Export is available once the answer has finished'
+                    : 'Save this research trail as a Word document with a numbered reference list'}
+                  className='rp-btn rp-btn-outline shrink-0 gap-2 disabled:cursor-not-allowed'
                 >
                   <svg
                     viewBox='0 0 24 24'
@@ -2170,6 +2822,7 @@ export function AskPage() {
                   </svg>
                   Export
                 </button>
+                <ExportNotice notice={exportNotice} />
               </div>
             )
             : null}
@@ -2262,6 +2915,16 @@ export function AskPage() {
                               message.id,
                             )}
                           onAskSubquery={(subquery) => void send(subquery)}
+                          intents={config.intents ?? []}
+                          isAdmin={isAdmin}
+                          onReroute={(intentId) =>
+                            reroute(
+                              messages[index - 1]?.author === 'USER'
+                                ? messages[index - 1]?.text ?? ''
+                                : '',
+                              message.id,
+                              intentId,
+                            )}
                           onVerdicts={(verdicts) => saveVerdicts(message.id, verdicts)}
                         />
                       )
@@ -2482,6 +3145,35 @@ export function AskPage() {
           </form>
         </div>
       </div>
+
+      {
+        /* From `xl` up the right third of a wide display, which used to sit
+        * empty beside a 75ch answer column, carries the latest answer's
+        * sources. It scrolls on its own; the thread keeps its scrollbar. */
+      }
+      {railAnswer && railSources.length > 0
+        ? (
+          <aside
+            aria-label='Sources for the latest answer'
+            className='hidden min-h-0 w-80 shrink-0 flex-col xl:flex 2xl:w-96'
+          >
+            <div className='rp-scroll min-h-0 flex-1 overflow-y-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
+              <p className='rp-eyebrow text-ink-3'>Sources for the latest answer</p>
+              <div className='mt-3'>
+                <EvidenceTable
+                  slug={config.slug}
+                  question={railQuestion}
+                  sources={railSources}
+                  citations={railAnswer.citations}
+                  verdicts={railAnswer.verdicts}
+                  anchorPrefix={`rail-${railAnswer.id}`}
+                  collapsible={false}
+                />
+              </div>
+            </div>
+          </aside>
+        )
+        : null}
     </main>
   )
 }

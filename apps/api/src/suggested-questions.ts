@@ -1,5 +1,6 @@
-import type { ResourceContent, TenantConfig } from '@research-portal/core'
+import type { EnrichmentRunEvent, ResourceContent, TenantConfig } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
+import type { EnrichmentStoreApi } from './enrichments.ts'
 
 /**
  * Openers worth asking about ONE particular document, written from the
@@ -236,4 +237,104 @@ export async function generateSuggestedQuestions(
   } catch {
     return []
   }
+}
+
+/** Openers written in parallel per pass - each is one fast-tier generation. */
+const QUESTIONS_CONCURRENCY = 3
+
+/**
+ * Write openers for every resource that has none yet, a bounded slice at a
+ * time. This is the enrichment-time pass: the resource page reads from the
+ * store and never waits on generation. Reuses the enrichment run's event
+ * shape so Manage can stream it the same way.
+ */
+export async function* runSuggestedQuestionsOverCorpus(
+  management: AragProvider,
+  store: EnrichmentStoreApi,
+  config: TenantConfig,
+  opts: { limit?: number } = {},
+): AsyncGenerator<EnrichmentRunEvent> {
+  let catalogue
+  try {
+    catalogue = await management.listResources(config)
+  } catch (err) {
+    yield {
+      type: 'error',
+      message: err instanceof Error ? err.message : 'Could not list resources',
+    }
+    return
+  }
+  const missing = catalogue.filter((r) =>
+    !store.get(config.slug, r.id, SUGGESTED_QUESTIONS_SCHEMA_ID)
+  )
+  const targets = typeof opts.limit === 'number' ? missing.slice(0, opts.limit) : missing
+  yield { type: 'start', total: targets.length }
+  if (targets.length === 0) {
+    yield { type: 'done', enriched: 0, errors: 0 }
+    return
+  }
+  const events: EnrichmentRunEvent[] = []
+  let notify: (() => void) | null = null
+  const push = (event: EnrichmentRunEvent) => {
+    events.push(event)
+    notify?.()
+    notify = null
+  }
+  let index = 0
+  let written = 0
+  let errors = 0
+  const worker = async () => {
+    for (;;) {
+      const i = index++
+      if (i >= targets.length) return
+      const resource = targets[i]!
+      try {
+        const questions = await generateSuggestedQuestions(
+          management,
+          config,
+          resource.id,
+          resource.title,
+          resource.summary,
+        )
+        store.put(config.slug, resource.id, {
+          schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
+          generatedAt: new Date().toISOString(),
+          data: { questions },
+        })
+        written++
+        push({ type: 'item', id: resource.id, title: resource.title, outcome: 'enriched' })
+      } catch (err) {
+        errors++
+        push({
+          type: 'item',
+          id: resource.id,
+          title: resource.title,
+          outcome: 'error',
+          detail: err instanceof Error ? err.message.slice(0, 140) : 'generation failed',
+        })
+      }
+    }
+  }
+  let finished = false
+  const pool = Promise.all(
+    Array.from({ length: Math.min(QUESTIONS_CONCURRENCY, targets.length) }, worker),
+  ).then(() => {
+    finished = true
+    notify?.()
+    notify = null
+  })
+  let emitted = 0
+  while (emitted < targets.length) {
+    if (events.length > emitted) {
+      yield events[emitted]!
+      emitted++
+      continue
+    }
+    if (finished) break
+    await new Promise<void>((resolve) => {
+      notify = resolve
+    })
+  }
+  await pool
+  yield { type: 'done', enriched: written, errors }
 }

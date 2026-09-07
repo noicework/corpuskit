@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { normaliseAnswerBullets } from '../lib/answer-text.ts'
+import { normaliseAnswerBullets, stripRefusalTemplate } from '../lib/answer-text.ts'
 import { type DocBlock, parseDocBlocks } from '../lib/resource-view.ts'
 
 /**
@@ -60,7 +60,7 @@ export function AnswerMarkdown({
   renderInline,
   bodyClassName = 'text-sm leading-relaxed text-ink-2',
 }: AnswerMarkdownProps): ReactNode {
-  const blocks = parseDocBlocks(normaliseAnswerBullets(text))
+  const blocks = parseDocBlocks(normaliseAnswerBullets(stripRefusalTemplate(text)))
   return (
     <div className='space-y-3'>
       {blocks.map((block, index) => {

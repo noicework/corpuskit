@@ -1111,6 +1111,27 @@ function HeroGround({ bannerImageUrl }: { bannerImageUrl?: string }) {
 }
 
 /** Empty, error and everything-filtered-out share one frame on the map's own ground. */
+/**
+ * What the stage shows before the map's first paint: a soft constellation and
+ * a shimmer, so a phone that needs several seconds to lay the graph out is
+ * visibly working rather than blank. Sits under the map, which fades over it.
+ */
+function CanvasSkeleton() {
+  return (
+    <div
+      className='absolute inset-0 flex items-center justify-center bg-surface'
+      aria-hidden='true'
+    >
+      <MapConstellation still />
+      <div className='relative flex w-full max-w-md flex-col items-center gap-3 px-6'>
+        <div className='rp-shimmer h-3 w-40 rounded-[var(--rp-radius-chip)] bg-surface-3' />
+        <div className='rp-shimmer h-3 w-56 rounded-[var(--rp-radius-chip)] bg-surface-3' />
+        <div className='rp-shimmer h-3 w-32 rounded-[var(--rp-radius-chip)] bg-surface-3' />
+      </div>
+    </div>
+  )
+}
+
 function CanvasNotice({ children }: { children: React.ReactNode }) {
   return (
     <div className='absolute inset-0 flex items-center justify-center bg-surface p-6'>
@@ -1121,7 +1142,7 @@ function CanvasNotice({ children }: { children: React.ReactNode }) {
 }
 
 export function GraphPage() {
-  const { config } = useOutletContext<TenantOutletContext>()
+  const { config, isAdmin = false } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const [mode, setMode] = useState<Mode>('entity')
   const [layout, setLayout] = useState<MapLayout>('grouped')
@@ -1514,6 +1535,7 @@ export function GraphPage() {
         <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
           {mapBusy ? 'Loading knowledge map.' : hasGraph ? 'Knowledge map ready.' : ''}
         </p>
+        {loading || (hasGraph && !mapReady) ? <CanvasSkeleton /> : null}
         {loading ? null : error
           ? (
             <CanvasNotice>
@@ -1536,7 +1558,9 @@ export function GraphPage() {
                   ? 'Once resources carry topics and kinds, their overlaps appear here.'
                   : extracting
                   ? 'The knowledge-graph agent is working through the corpus now. Relations appear here as it extracts them - check back shortly.'
-                  : 'No knowledge-graph agent has run over this corpus yet - configure one from Manage and the entities and relations will appear here.'}
+                  : isAdmin
+                  ? 'No knowledge-graph agent has run over this corpus yet - configure one from Manage and the entities and relations will appear here.'
+                  : 'The map is built from relations extracted across the corpus, and none are available yet. Search and the library work as usual in the meantime.'}
               />
             </CanvasNotice>
           )

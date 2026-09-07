@@ -6,6 +6,9 @@ import type {
   DensityId,
   EnrichmentAgentStatus,
   EnrichmentRunEvent,
+  ExtractionMethod,
+  ExtractionProfile,
+  ExtractionRules,
   FacetCounts,
   GenerateKind,
   GenerateResult,
@@ -30,6 +33,7 @@ import type {
   TextScaleId,
   TypographyChoice,
 } from '@research-portal/core'
+import { noteAskBudget } from '../lib/ask-budget.ts'
 
 /**
  * Typed error thrown by every helper below. Carries the HTTP status so callers
@@ -37,12 +41,38 @@ import type {
  */
 export class ApiError extends Error {
   status: number
+  /** Seconds the server asked us to wait (a 429's Retry-After), when it said. */
+  retryAfterSec?: number
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, retryAfterSec?: number) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    if (retryAfterSec !== undefined) this.retryAfterSec = retryAfterSec
   }
+}
+
+/**
+ * Copy for an HTTP 429 from the ask and route endpoints. Matches
+ * `RATE_LIMIT_MESSAGE` in apps/api/src/rate-limit.ts word for word.
+ */
+export const RATE_LIMIT_MESSAGE =
+  'You are asking faster than the portal can answer - please wait a moment and try again.'
+
+/** The 429's Retry-After in whole seconds, or undefined when the header is absent or unreadable. */
+export function retryAfterOf(res: Response): number | undefined {
+  const raw = res.headers.get('retry-after')
+  if (!raw) return undefined
+  const seconds = Number(raw)
+  if (Number.isFinite(seconds)) return Math.max(1, Math.ceil(seconds))
+  const at = Date.parse(raw)
+  return Number.isFinite(at) ? Math.max(1, Math.ceil((at - Date.now()) / 1000)) : undefined
+}
+
+/** An ApiError for a failed ask-class response: a 429 carries the shared copy and its Retry-After. */
+export function askError(res: Response, fallback: string): ApiError {
+  if (res.status === 429) return new ApiError(429, RATE_LIMIT_MESSAGE, retryAfterOf(res))
+  return new ApiError(res.status, res.statusText || fallback)
 }
 
 /** Human-readable fallbacks for the API's machine error codes. */
@@ -115,12 +145,13 @@ export function getKnowledgeBoxStatus(slug: string): Promise<KnowledgeBoxStatus>
 export function searchTenantFull(
   slug: string,
   query: string,
-  opts: { mode?: RetrievalMode; topicIds?: string[]; kindIds?: string[] } = {},
+  opts: { mode?: RetrievalMode; topicIds?: string[]; kindIds?: string[]; intent?: string } = {},
 ): Promise<SearchResults> {
   const params = new URLSearchParams({ q: query })
   if (opts.mode) params.set('mode', opts.mode)
   if (opts.topicIds && opts.topicIds.length > 0) params.set('topics', opts.topicIds.join(','))
   if (opts.kindIds && opts.kindIds.length > 0) params.set('kinds', opts.kindIds.join(','))
+  if (opts.intent) params.set('intent', opts.intent)
   return request<SearchResults>(`/api/t/${encodeURIComponent(slug)}/search?${params.toString()}`)
 }
 
@@ -186,7 +217,8 @@ export function getCatalog(
     query?: string
     topicIds?: string[]
     kindIds?: string[]
-    sort?: 'created' | 'modified' | 'title'
+    formatIds?: string[]
+    sort?: 'created' | 'modified' | 'title' | 'published'
     order?: 'asc' | 'desc'
   } = {},
 ): Promise<CatalogPage> {
@@ -196,6 +228,7 @@ export function getCatalog(
   if (opts.query) params.set('q', opts.query)
   if (opts.topicIds && opts.topicIds.length > 0) params.set('topics', opts.topicIds.join(','))
   if (opts.kindIds && opts.kindIds.length > 0) params.set('kind', opts.kindIds.join(','))
+  if (opts.formatIds && opts.formatIds.length > 0) params.set('format', opts.formatIds.join(','))
   if (opts.sort) params.set('sort', opts.sort)
   if (opts.order) params.set('order', opts.order)
   return request<CatalogPage>(`/api/t/${encodeURIComponent(slug)}/catalog?${params.toString()}`)
@@ -214,9 +247,17 @@ export function getTopicResources(
   )
 }
 
-export function getFacets(slug: string, labelsets: string[] = ['topic']): Promise<FacetCounts> {
+/**
+ * Facet counts for the rails. Every rail (Search, Library) calls this with
+ * the same default set and shares one query key, so they cannot disagree;
+ * the response also carries `untagged.topic`, the real no-topic count.
+ */
+export function getFacets(
+  slug: string,
+  labelsets: string[] = ['topic', 'kind', 'format'],
+): Promise<FacetCounts> {
   return request<FacetCounts>(
-    `/api/t/${encodeURIComponent(slug)}/facets?ls=${labelsets.join(',')}`,
+    `/api/t/${encodeURIComponent(slug)}/facets?labelsets=${labelsets.join(',')}`,
   )
 }
 
@@ -242,11 +283,25 @@ export function generateArtifact(
   slug: string,
   kind: GenerateKind,
   query: string,
+  opts: {
+    /** Keep retrieval to resources filed under these topics (an assessment on one area). */
+    topicIds?: string[]
+    /** Writing guidance (count, depth) kept out of the retrieval text. */
+    guidance?: string
+    /** How many questions the reader asked for (an assessment): the server trims to it. */
+    count?: number
+  } = {},
 ): Promise<GenerateResult> {
   return fetch(`/api/t/${encodeURIComponent(slug)}/generate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ kind, query }),
+    body: JSON.stringify({
+      kind,
+      query,
+      ...(opts.topicIds?.length ? { topics: opts.topicIds } : {}),
+      ...(opts.guidance?.trim() ? { guidance: opts.guidance.trim() } : {}),
+      ...(opts.count ? { count: opts.count } : {}),
+    }),
   }).then(async (res) => {
     if (!res.ok) {
       const body: unknown = await res.json().catch(() => null)
@@ -262,13 +317,25 @@ export function generateArtifact(
 
 export interface AskRequest {
   query: string
-  context?: { author: 'USER' | 'AGENT'; text: string }[]
+  /** Intent id chosen by the router (docs/INTENT-ROUTING.md). */
+  intent?: string
+  context?: {
+    author: 'USER' | 'AGENT'
+    text: string
+    resourceIds?: string[]
+    passages?: string[]
+  }[]
   resourceId?: string
   topicIds?: string[]
   /** 'deep' grounds on the full text of matching resources (self-heal / deep research). */
   depth?: 'default' | 'deep'
   /** Sub-questions researched alongside the main query (deep-research mode). */
   prequeries?: string[]
+  /**
+   * 'auto': the server routes the question (rules at once, the classifier
+   * beside retrieval) and reports its decision as a `route` event.
+   */
+  route?: 'auto'
 }
 
 /**
@@ -276,6 +343,7 @@ export interface AskRequest {
  * event, delta text chunks, citation events, optionally usage, then done (or
  * error). Returns when the stream closes; abort via the signal.
  */
+
 export async function streamAsk(
   slug: string,
   body: AskRequest,
@@ -284,13 +352,12 @@ export async function streamAsk(
 ): Promise<void> {
   const res = await fetch(`/api/t/${encodeURIComponent(slug)}/ask`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
     body: JSON.stringify(body),
     signal,
   })
-  if (!res.ok || !res.body) {
-    throw new ApiError(res.status, res.statusText || 'The answer service is unavailable')
-  }
+  noteAskBudget(res)
+  if (!res.ok || !res.body) throw askError(res, 'The answer service is unavailable')
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -667,10 +734,18 @@ export function getResourceContent(slug: string, id: string): Promise<ResourceCo
 }
 
 /** Openers written from this one document; [] when none could be grounded. */
-export function getResourceQuestions(slug: string, id: string): Promise<string[]> {
-  return request<{ questions: string[] }>(
+/**
+ * Openers for one document. `pending` means the server is writing them in the
+ * background right now (a document the enrichment pass has not reached), so
+ * the page can ask again shortly rather than settle for the generic three.
+ */
+export function getResourceQuestions(
+  slug: string,
+  id: string,
+): Promise<{ questions: string[]; pending: boolean }> {
+  return request<{ questions: string[]; pending?: boolean }>(
     `/api/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}/questions`,
-  ).then((r) => r.questions ?? [])
+  ).then((r) => ({ questions: r.questions ?? [], pending: r.pending === true }))
 }
 
 /** URL for streaming a stored file field (PDF/video/audio) inline. */
@@ -1457,6 +1532,20 @@ export function getFollowUpQuestions(
   })
 }
 
+// --- Service health (public) --------------------------------------------------
+
+export interface ServiceHealth {
+  ok: boolean
+  web: boolean
+  version: string
+  /** The web bundle's stamp, when the build was stamped. */
+  build?: { sha: string; builtAt: string }
+}
+
+export function getHealth(): Promise<ServiceHealth> {
+  return clientRequest('/api/health')
+}
+
 // --- Admin: corpus health -----------------------------------------------------
 
 export interface CorpusHealthRow {
@@ -1673,6 +1762,171 @@ export async function runEnrichment(
       onEvent(JSON.parse(data) as EnrichmentRunEvent)
     } catch {
       // A truncated trailing frame is not an event.
+    }
+  }
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() ?? ''
+    for (const frame of frames) emit(frame)
+  }
+  emit(buffer)
+}
+
+// ---------------------------------------------------------------------------
+// Intent routing (docs/INTENT-ROUTING.md)
+// ---------------------------------------------------------------------------
+
+export interface RouteDecision {
+  intent: string
+  confidence: number
+  stage: 'rule' | 'classifier' | 'default' | 'override'
+  rationale: string
+  configuration: string
+  entities: string[]
+  rule?: string
+  latencyMs?: number
+}
+
+/** Which stored search configuration should answer this question. */
+export async function routeIntent(
+  slug: string,
+  query: string,
+  surface: 'ask' | 'search' = 'ask',
+  signal?: AbortSignal,
+): Promise<RouteDecision> {
+  const res = await fetch(`/api/t/${encodeURIComponent(slug)}/route`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
+    body: JSON.stringify({ query, surface }),
+    signal,
+  })
+  noteAskBudget(res)
+  if (!res.ok) throw askError(res, 'Routing is unavailable')
+  return (await res.json()) as RouteDecision
+}
+
+export interface RoutingRecord {
+  ts: string
+  questionHash: string
+  questionLength: number
+  intent: string
+  stage: RouteDecision['stage']
+  confidence: number
+  rationale: string
+  configuration: string
+  latencyMs: number
+}
+
+export function getRouting(
+  slug: string,
+  passcode: string,
+): Promise<{
+  recent: RoutingRecord[]
+  summary: { total: number; byIntent: Record<string, number>; byStage: Record<string, number> }
+}> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/routing`, passcode)
+}
+
+// ---------------------------------------------------------------------------
+// Extraction Lab (docs/EXTRACTION-LAB.md)
+// ---------------------------------------------------------------------------
+
+export interface ExtractionMethodsResponse {
+  lab: string
+  available: boolean
+  methods: ExtractionMethod[]
+  rules: ExtractionRules | null
+  poppler: boolean
+  message?: string
+}
+
+export function getExtractionMethods(
+  slug: string,
+  passcode: string,
+): Promise<ExtractionMethodsResponse> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/methods`, passcode)
+}
+
+export function profileExtraction(
+  slug: string,
+  passcode: string,
+  resourceId: string,
+): Promise<{ profile: ExtractionProfile; filename: string }> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/profile`, passcode, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ resourceId }),
+  })
+}
+
+export function saveExtractionRules(
+  slug: string,
+  passcode: string,
+  rules: ExtractionRules,
+): Promise<{ ok: boolean; rules: ExtractionRules }> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/rules`, passcode, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(rules),
+  })
+}
+
+export interface ExtractionMetrics {
+  chars: number
+  charsPerPage: number
+  yieldVsDefault: number | null
+  paragraphs: number
+  tableRows: number
+  dictionaryHitRate: number
+  latencySec: number
+  visionPages: number
+  judgeScore: number | null
+  judgeReason: string
+}
+
+export type ExtractionCompareEvent =
+  | { type: 'stage'; label: string }
+  | { type: 'profile'; profile: ExtractionProfile; filename: string }
+  | { type: 'method'; method: ExtractionMethod; metrics: ExtractionMetrics; textPreview: string }
+  | { type: 'ask'; method: ExtractionMethod; question: string; answer: string; citations: number }
+  | { type: 'error'; message: string; method?: string }
+  | {
+    type: 'done'
+    purged: number
+    recommended: string | null
+    /** Why that method: the profile class and the evidence that decided it. */
+    reason: string
+    yields: Record<string, number>
+  }
+
+export async function compareExtraction(
+  slug: string,
+  passcode: string,
+  body: { resourceId: string; methods: string[]; question?: string; keep?: boolean },
+  onEvent: (event: ExtractionCompareEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/admin/t/${encodeURIComponent(slug)}/extraction/compare`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new ApiError(res.status, 'The comparison could not start')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const emit = (frame: string) => {
+    const line = frame.trim()
+    if (!line) return
+    const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
+    try {
+      onEvent(JSON.parse(data) as ExtractionCompareEvent)
+    } catch {
+      // truncated trailing frame
     }
   }
   for (;;) {

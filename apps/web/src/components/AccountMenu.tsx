@@ -198,8 +198,8 @@ export function AccountMenu({
       className={buttonClass}
       style={variant === 'header'
         ? {
-          borderColor: 'color-mix(in srgb, var(--rp-primary) 25%, transparent)',
-          color: 'var(--rp-primary)',
+          borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
+          color: 'var(--rp-brand-fg)',
         }
         : undefined}
     >

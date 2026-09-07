@@ -6,12 +6,12 @@ const source = await Deno.readTextFile(new URL('LibraryPage.tsx', import.meta.ur
 describe('library grid tracks', () => {
   it('only declares the sidebar column when the filter rail renders', () => {
     // A portal whose corpus has no topics renders no aside. An unconditional
-    // `230px 1fr` put the single child in the 230px track, squeezing a
+    // `230px 1fr` (now a rem track, so it grows with the root font) put the single child in the 230px track, squeezing a
     // full-width page of cards into a narrow strip (seen live on OPAX).
     expect(source).toContain(
-      "`mt-6 grid grid-cols-1 gap-6 ${showFilterRail ? 'lg:grid-cols-[230px_1fr]' : ''}`",
+      "`mt-6 grid grid-cols-1 gap-6 ${showFilterRail ? 'lg:grid-cols-[14.5rem_1fr]' : ''}`",
     )
-    expect(source).not.toContain("'mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[230px_1fr]'")
+    expect(source).not.toContain("'mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[14.5rem_1fr]'")
   })
 
   it('gates the rail, its toggle and the grid track on one shared flag', () => {

@@ -8,6 +8,8 @@ describe('ResourceThumb', () => {
     expect(resourceThumbLabel('video')).toBe('Video')
     expect(resourceThumbLabel('audio')).toBe('Audio')
     expect(resourceThumbLabel('office')).toBe('Document')
+    // A text-only journal article is not a "Report".
+    expect(resourceThumbLabel('document')).toBe('Document')
     expect(resourceThumbLabel('something-new')).toBe('Resource')
   })
 

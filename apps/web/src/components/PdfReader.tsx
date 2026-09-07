@@ -1,6 +1,7 @@
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import { ErrorCard, LiveStatus, Skeleton } from './ui.tsx'
+import { findPassageRange, passageNeedles } from '../lib/pdf-highlight.ts'
 
 /**
  * Wiring note (see CLAUDE.md's "keep the
@@ -133,11 +134,42 @@ const ICON_PROPS = {
 /** Inline PDF viewer built on pdfjs-dist, canvas-rendering one page at a
  * time. Falls back to the plain iframe embed (`fallback`) whenever pdfjs
  * cannot be loaded or fails to open the document. */
+/** A highlight box over the rendered page, in CSS pixels of the canvas. */
+interface HighlightRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** The shape of a pdfjs text-content item that carries text and a position. */
+interface PositionedRun {
+  str?: string
+  transform?: number[]
+  width?: number
+  height?: number
+}
+
+/** How many pages to search for a passage when the citation carries no page number. */
+const PASSAGE_SCAN_LIMIT = 80
+
 export function PdfReader(
-  { fileUrl, title, initialPage }: {
+  { fileUrl, title, initialPage, highlight = null, onLoadError }: {
     fileUrl: string
     title: string
     initialPage: number | null
+    /**
+     * The cited passage. When set, the viewer locates it in the page's text
+     * layer and paints a highlight over it - and, if no page was given, scans
+     * the document for the page that carries it.
+     */
+    highlight?: string | null
+    /**
+     * The document could not be opened or rendered, so this viewer is showing
+     * an error rather than the file. The page above uses it to fall back to
+     * the extracted text, which is then the only reading available.
+     */
+    onLoadError?: () => void
   },
 ) {
   const [libFailed, setLibFailed] = useState(false)
@@ -155,11 +187,40 @@ export function PdfReader(
   const renderTaskRef = useRef<RenderTask | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   /** The scale the current page was last rendered at - the source of truth
    * for "current zoom" when the user zooms in/out from fit-width, since
    * fit-width itself has no single fixed scale. */
   const effectiveScaleRef = useRef(1)
+  const [highlightRects, setHighlightRects] = useState<HighlightRect[]>([])
+  const [highlightPage, setHighlightPage] = useState<number | null>(null)
+  /**
+   * A deep link named a page but the passage is not on it (the citation's
+   * page index was off, or the text layer differs). Said out loud, with a
+   * way to search the document, rather than landing there in silence.
+   */
+  const [highlightMissing, setHighlightMissing] = useState(false)
+  const [scanRequested, setScanRequested] = useState(false)
+  const [scanOutcome, setScanOutcome] = useState<'idle' | 'searching' | 'not-found'>('idle')
+  /** Guards the one-off passage scan so paging never re-triggers it. */
+  const scannedForRef = useRef<string | null>(null)
+  /**
+   * The page+passage the viewer has already scrolled to. A cited passage
+   * halfway down an A4 page sits below the fold of this pane, so landing on
+   * the right page is not enough - the highlight itself has to be brought
+   * into view, once, without fighting the reader's own scrolling afterwards
+   * (a zoom or a resize re-renders the same page and must not yank it back).
+   */
+  const scrolledToHighlightRef = useRef<string | null>(null)
+  /**
+   * The file+passage the page itself has already been scrolled to. The viewer
+   * pane sits below the title and the quoted passage, so a cited passage can
+   * be perfectly placed inside the pane and still be off the bottom of the
+   * window - the page has to come to the reader once, on arrival. Paging back
+   * to the cited page later must not yank the window again.
+   */
+  const scrolledPageToReaderRef = useRef<string | null>(null)
 
   // Load the document whenever the file or retry token changes.
   useEffect(() => {
@@ -194,6 +255,7 @@ export function PdfReader(
         }
         setErrorMessage(err instanceof Error ? err.message : 'This PDF could not be opened.')
         setStatus('error')
+        onLoadError?.()
       })
 
     return () => {
@@ -281,6 +343,49 @@ export function PdfReader(
       renderTaskRef.current = task
       try {
         await task.promise
+        if (cancelled) return
+        if (highlight && passageNeedles(highlight).length > 0) {
+          const content = await page.getTextContent()
+          if (cancelled) return
+          const runs = content.items as PositionedRun[]
+          const range = findPassageRange(runs.map((r) => ({ str: r.str ?? '' })), highlight)
+          if (range) {
+            const rects: HighlightRect[] = []
+            for (let i = range.start; i <= range.end; i++) {
+              const run = runs[i]
+              const t = run?.transform
+              if (!run || !t || !run.str?.trim()) continue
+              const x = t[4] ?? 0
+              const y = t[5] ?? 0
+              const h = run.height || Math.hypot(t[1] ?? 0, t[3] ?? 0) || 10
+              const w = run.width || 0
+              const [x1, y1, x2, y2] = viewport.convertToViewportRectangle([x, y, x + w, y + h])
+              rects.push({
+                left: Math.min(x1, x2),
+                top: Math.min(y1, y2),
+                width: Math.abs(x2 - x1),
+                height: Math.abs(y2 - y1),
+              })
+            }
+            setHighlightRects(rects)
+            setHighlightPage(pageNumber)
+            setHighlightMissing(false)
+            const firstRect = rects[0]
+            if (firstRect) {
+              setAnnouncement(`Cited passage highlighted on page ${pageNumber}`)
+              scrollHighlightIntoView(canvas, firstRect, `${fileUrl}::${pageNumber}::${highlight}`)
+            }
+          } else {
+            setHighlightRects([])
+            setHighlightPage(null)
+            // The deep-linked page (clamped: a citation can name a page the
+            // file does not have) is on screen and the passage is not on it.
+            if (initialPage && pageNumber === Math.min(initialPage, numPages || initialPage)) {
+              setHighlightMissing(true)
+              setAnnouncement(`Highlight not found on page ${pageNumber}`)
+            }
+          }
+        }
       } catch (err) {
         // A cancelled render (superseded by a newer page/zoom) is expected
         // and not an error.
@@ -288,6 +393,7 @@ export function PdfReader(
         if (!cancelled && !isCancellation) {
           setErrorMessage(err instanceof Error ? err.message : 'This page could not be rendered.')
           setStatus('error')
+          onLoadError?.()
         }
       }
     })
@@ -299,7 +405,92 @@ export function PdfReader(
     return () => {
       cancelled = true
     }
-  }, [status, pageNumber, zoomMode, containerWidth, getPage])
+  }, [status, pageNumber, zoomMode, containerWidth, getPage, highlight, initialPage, numPages])
+
+  // A citation with a passage but no page - or one whose page did not carry
+  // the passage and the reader asked for a search: find the page that
+  // carries it, once per document, scanning from the front within a sane
+  // limit.
+  useEffect(() => {
+    if (status !== 'ready' || (initialPage && !scanRequested) || !highlight) return
+    const key = `${fileUrl}::${highlight}::${scanRequested}`
+    if (scannedForRef.current === key) return
+    scannedForRef.current = key
+    if (passageNeedles(highlight).length === 0) return
+    let cancelled = false
+    if (scanRequested) setScanOutcome('searching')
+    ;(async () => {
+      const limit = Math.min(numPages, PASSAGE_SCAN_LIMIT)
+      for (let n = 1; n <= limit && !cancelled; n++) {
+        const pagePromise = getPage(n)
+        if (!pagePromise) return
+        const content = await (await pagePromise).getTextContent()
+        const runs = content.items as PositionedRun[]
+        if (findPassageRange(runs.map((r) => ({ str: r.str ?? '' })), highlight)) {
+          if (!cancelled) {
+            setPageNumber(n)
+            setHighlightMissing(false)
+            setScanOutcome('idle')
+          }
+          return
+        }
+      }
+      if (!cancelled && scanRequested) {
+        setScanOutcome('not-found')
+        setAnnouncement(`The passage was not found in the first ${limit} pages`)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [status, initialPage, scanRequested, highlight, numPages, getPage, fileUrl])
+
+  /**
+   * Brings the first highlighted run into view inside the viewer's own scroll
+   * pane. Scrolls the pane, never the page: the reader arrived here to see the
+   * document, so the document is what moves. Runs once per page+passage.
+   */
+  function scrollHighlightIntoView(canvas: HTMLCanvasElement, rect: HighlightRect, key: string) {
+    const scroller = containerRef.current
+    if (!scroller || scrolledToHighlightRef.current === key) return
+    scrolledToHighlightRef.current = key
+    const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ===
+      true
+
+    const canvasBox = canvas.getBoundingClientRect()
+    const scrollBox = scroller.getBoundingClientRect()
+    const top = scroller.scrollTop + (canvasBox.top - scrollBox.top) + rect.top
+    const left = scroller.scrollLeft + (canvasBox.left - scrollBox.left) + rect.left
+    const overflowsHorizontally = scroller.scrollWidth - scroller.clientWidth > 1
+    scroller.scrollTo({
+      // A quarter of the pane above the passage, so it reads in context rather
+      // than pinned to the very top edge.
+      top: Math.max(0, top - scroller.clientHeight * 0.25),
+      left: overflowsHorizontally ? Math.max(0, left - scroller.clientWidth * 0.25) : 0,
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    })
+
+    // Then bring the viewer itself under the sticky header, once per arrival:
+    // the pane can be scrolled perfectly and still sit below the fold, since
+    // it opens under the title and the quoted passage. A frame later, and via
+    // scrollTo rather than scrollIntoView, because Chrome cancels a smooth
+    // scrollIntoView on the document when a nested box starts its own smooth
+    // scroll in the same task (measured, not assumed). The offset is the
+    // root's own scroll-margin, so the header height stays a token.
+    const arrivalKey = `${fileUrl}::${highlight}`
+    if (scrolledPageToReaderRef.current !== arrivalKey) {
+      scrolledPageToReaderRef.current = arrivalKey
+      requestAnimationFrame(() => {
+        const root = rootRef.current
+        if (!root) return
+        const margin = Number.parseFloat(getComputedStyle(root).scrollMarginTop) || 0
+        globalThis.scrollTo({
+          top: Math.max(0, globalThis.scrollY + root.getBoundingClientRect().top - margin),
+          behavior: reducedMotion ? 'auto' : 'smooth',
+        })
+      })
+    }
+  }
 
   function goToPage(n: number) {
     setPageNumber(Math.min(Math.max(1, n), Math.max(1, numPages)))
@@ -348,7 +539,10 @@ export function PdfReader(
   const zoomPercent = zoomMode === 'fit-width' ? null : Math.round(zoomMode.scale * 100)
 
   return (
-    <div className='overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'>
+    <div
+      ref={rootRef}
+      className='scroll-mt-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_2)] overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
+    >
       <div className='flex flex-wrap items-center gap-1 border-b border-line bg-surface-2 px-2 py-1.5'>
         <ToolbarButton
           label='Previous page'
@@ -451,6 +645,40 @@ export function PdfReader(
 
       <LiveStatus message={announcement} />
 
+      {highlightMissing && highlight
+        ? (
+          <div
+            role='status'
+            className='flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs'
+            style={{
+              borderColor: 'var(--rp-warn-line)',
+              background: 'var(--rp-warn-bg)',
+              color: 'var(--rp-warn-ink)',
+            }}
+          >
+            <span className='font-medium'>Highlight not found on this page.</span>
+            {scanOutcome === 'searching'
+              ? <span>Searching the document for the passage…</span>
+              : scanOutcome === 'not-found'
+              ? (
+                <span>
+                  It was not found in the first {Math.min(numPages, PASSAGE_SCAN_LIMIT)}{' '}
+                  pages either - the cited text may differ from this file's text layer.
+                </span>
+              )
+              : (
+                <button
+                  type='button'
+                  onClick={() => setScanRequested(true)}
+                  className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2'
+                >
+                  Find it in the document
+                </button>
+              )}
+          </div>
+        )
+        : null}
+
       <div
         ref={containerRef}
         className='rp-scroll max-h-[75vh] overflow-auto bg-surface-2 sm:max-h-[80vh]'
@@ -489,7 +717,28 @@ export function PdfReader(
           onKeyDown={handleKeyDown}
           className={`rp-focus flex justify-center p-4 ${status === 'ready' ? '' : 'hidden'}`}
         >
-          <canvas ref={canvasRef} className='rp-shadow-sm bg-white' />
+          <div className='relative'>
+            <canvas ref={canvasRef} className='rp-shadow-sm bg-white' />
+            {highlightPage === pageNumber
+              ? highlightRects.map((rect, i) => (
+                <div
+                  key={i}
+                  aria-hidden='true'
+                  data-pdf-highlight=''
+                  className='pointer-events-none absolute rounded-[2px]'
+                  style={{
+                    left: rect.left - 1,
+                    top: rect.top - 1,
+                    width: rect.width + 2,
+                    height: rect.height + 2,
+                    backgroundColor: 'var(--rp-accent)',
+                    opacity: 0.3,
+                    mixBlendMode: 'multiply',
+                  }}
+                />
+              ))
+              : null}
+          </div>
         </div>
       </div>
     </div>

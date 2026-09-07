@@ -89,7 +89,7 @@ describe('relationsGraph - includeBuiltin toggle', () => {
 
     expect(bodies[0]).toEqual({
       query: { prop: 'generated', by: 'data-augmentation' },
-      top_k: 400,
+      top_k: 500,
     })
     const ids = result.nodes.map((n) => n.id)
     expect(ids).toContain('Abalone')
@@ -110,7 +110,7 @@ describe('relationsGraph - includeBuiltin toggle', () => {
           { prop: 'generated', by: 'data-augmentation' },
         ],
       },
-      top_k: 400,
+      top_k: 500,
     })
   })
 
@@ -121,7 +121,7 @@ describe('relationsGraph - includeBuiltin toggle', () => {
 
     // The /graph endpoint 422s on a missing/empty query, so "everything" is an
     // explicit all-paths query (verified live).
-    expect(bodies[0]).toEqual({ query: { prop: 'path' }, top_k: 400 })
+    expect(bodies[0]).toEqual({ query: { prop: 'path' }, top_k: 500 })
 
     const ids = result.nodes.map((n) => n.id)
     // Built-in NER relation now included.
@@ -139,7 +139,7 @@ describe('relationsGraph - includeBuiltin toggle', () => {
 
     expect(bodies[0]).toEqual({
       query: { prop: 'path', source: { value: 'Abalone', match: 'exact' }, undirected: true },
-      top_k: 400,
+      top_k: 500,
     })
   })
 })

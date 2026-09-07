@@ -4,12 +4,13 @@ import type { AskStage } from '@research-portal/core'
 export type StageStatus = 'pending' | 'active' | 'complete'
 export type StageStatuses = Partial<Record<AskStage, StageStatus>>
 
-/** The four stages an ask moves through, in order, with reader-facing labels. */
+/** The five stages an ask moves through, in order, with reader-facing labels. */
 export const STAGE_STEPS: { key: AskStage; label: string }[] = [
   { key: 'preprocessing', label: 'Reading your question' },
   { key: 'retrieval', label: 'Searching the corpus' },
   { key: 'generating', label: 'Writing the answer' },
-  { key: 'validating', label: 'Checking the answer' },
+  { key: 'auditing', label: 'Checking the figures' },
+  { key: 'validating', label: 'Scoring the answer' },
 ]
 
 /** Everything before the active stage is finished, whether or not we saw its event. */
@@ -94,13 +95,41 @@ export function useAnswerPhase(hasText: boolean, active: boolean): Phase {
 }
 
 export function StageTimeline(
-  { statuses, exiting = false }: { statuses: StageStatuses; exiting?: boolean },
+  { statuses, exiting = false, reading = [] }: {
+    statuses: StageStatuses
+    exiting?: boolean
+    /**
+     * The papers retrieval has already found, named while the platform
+     * reads them: the shortlist arrives a second or two into a question
+     * that takes ten to answer, and a reader who can see what is being
+     * read is not staring at a spinner (D3-05).
+     */
+    reading?: string[]
+  },
 ) {
   const activeLabel = STAGE_STEPS.find((s) => statuses[s.key] === 'active')?.label
+  const shortlist = reading.filter((t) => t.trim().length > 0).slice(0, 3)
 
   return (
     <div className='py-1'>
       <p className='sr-only' role='status'>{activeLabel ?? 'Working'}</p>
+      {shortlist.length > 0
+        ? (
+          <p
+            className={`rp-stage-reading mb-2 text-xs leading-relaxed text-ink-3 ${
+              exiting ? 'rp-stage-row-exit' : ''
+            }`}
+          >
+            <span className='font-medium text-ink-2'>Reading</span>{' '}
+            {shortlist.map((title, index) => (
+              <span key={title}>
+                {index > 0 ? <span aria-hidden='true' className='mx-1'>&middot;</span> : null}
+                <span className='italic'>{title}</span>
+              </span>
+            ))}
+          </p>
+        )
+        : null}
       <ol className='space-y-0'>
         {STAGE_STEPS.map((step, index) => {
           const state = statuses[step.key] ?? 'pending'

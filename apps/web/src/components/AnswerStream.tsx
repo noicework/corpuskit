@@ -6,6 +6,7 @@ import { AnswerJourney } from './AnswerJourney.tsx'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { CurrencyNote } from './CurrencyNote.tsx'
 import { type QualityScores, TrustSignals } from './QualityGauge.tsx'
+import { type AnswerAudit, auditBadge } from '../lib/answer-marks.ts'
 import { StageTimeline, statusesFor, useAnswerPhase } from './StageTimeline.tsx'
 
 type Status = 'idle' | 'streaming' | 'done' | 'error'
@@ -53,9 +54,30 @@ export function citationHref(
   slug: string,
   resourceId: string,
   matchedPassage: string | undefined,
+  /** The page the passage sits on, so the reader's PDF pane opens there too. */
+  page?: number,
 ): string {
-  const query = matchedPassage ? `?passage=${encodeURIComponent(matchedPassage.slice(0, 300))}` : ''
-  return `/t/${slug}/library/${resourceId}${query}`
+  const params: string[] = []
+  if (matchedPassage) params.push(`passage=${encodeURIComponent(matchedPassage.slice(0, 300))}`)
+  if (page && matchedPassage) params.push(`page=${page}`)
+  return `/t/${slug}/library/${resourceId}${params.length > 0 ? `?${params.join('&')}` : ''}`
+}
+
+/**
+ * The model's own hedge, shown as a mark rather than as prose: a reader sees
+ * a small "inference" flag with its meaning on hover and for screen readers,
+ * never the literal "(inference)" the prompt asked the model to write.
+ */
+export function InferenceMark() {
+  return (
+    <sup
+      className='ml-0.5 select-none rounded-[var(--rp-radius-chip)] px-1 text-[0.6em] font-semibold uppercase tracking-wide text-ink-3'
+      style={{ backgroundColor: 'var(--rp-surface-3)' }}
+      title="The model's own inference, not a statement in the cited sources"
+    >
+      inference
+    </sup>
+  )
 }
 
 /**
@@ -158,6 +180,27 @@ export function EvidenceDisclosure({
 }
 
 /**
+ * The figure-check badge under a document-scoped answer: the same check
+ * the Ask page badges, run against the open document (D4-21). Nothing is
+ * shown when the answer stated no figure.
+ */
+function ScopedAuditBadge({ audit }: { audit: AnswerAudit | null }) {
+  const badge = auditBadge(audit ?? undefined)
+  if (!badge) return null
+  return (
+    <div className='mt-3 flex flex-wrap items-center gap-2'>
+      <span
+        className={`rp-badge ${badge.tone === 'ok' ? 'rp-badge-ok' : 'rp-badge-warn'}`}
+        title={badge.title}
+      >
+        {badge.label}
+      </span>
+      <span className='text-xs text-ink-3'>Checked against this document's text</span>
+    </div>
+  )
+}
+
+/**
  * Renders one bound `[n]` marker found in the prose, or null when `n` has no
  * matching citation - an unbound number is left as the literal text it was.
  */
@@ -173,24 +216,36 @@ function renderCitationMarkers(
   renderMarker: MarkerRenderer,
   keyPrefix: string,
 ): ReactNode[] {
-  return text.split(/(\[\d+\])/g).map((segment, index) => {
+  return text.split(/(\[\d+\]|\[inference\]|\(inference\))/gi).map((segment, index) => {
     const key = `${keyPrefix}-${index}`
+    // The model's own hedge, rendered as a mark rather than as prose.
+    if (/^[[(]inference[\])]$/i.test(segment)) return <InferenceMark key={key} />
     const match = /^\[(\d+)\]$/.exec(segment)
     const marker = match?.[1] ? renderMarker(segment, Number(match[1]), key) : null
     return marker ?? <span key={key}>{segment}</span>
   })
 }
 
-/** Renders `**bold**` spans, and `[n]` markers, within one line/paragraph. */
+/** Renders `**bold**` and `*italic*` spans, and `[n]` markers, within one line/paragraph. */
 function renderInline(
   text: string,
   renderMarker: MarkerRenderer,
   keyPrefix: string,
 ): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  const parts = text.split(/(\*\*[^*]+\*\*|(?<![\w*])\*[^*\n]+\*(?![\w*]))/g)
   return parts.flatMap((part, index): ReactNode[] =>
     part.startsWith('**') && part.endsWith('**') && part.length > 4
-      ? [<strong key={`${keyPrefix}-${index}`}>{part.slice(2, -2)}</strong>]
+      ? [
+        <strong key={`${keyPrefix}-${index}`}>
+          {renderCitationMarkers(part.slice(2, -2), renderMarker, `${keyPrefix}-${index}`)}
+        </strong>,
+      ]
+      : part.startsWith('*') && part.endsWith('*') && part.length > 2
+      ? [
+        <em key={`${keyPrefix}-${index}`}>
+          {renderCitationMarkers(part.slice(1, -1), renderMarker, `${keyPrefix}-${index}`)}
+        </em>,
+      ]
       : renderCitationMarkers(part, renderMarker, `${keyPrefix}-${index}`)
   )
 }
@@ -341,7 +396,11 @@ export function AnswerStream(
   const [citations, setCitations] = useState<Citation[]>([])
   const [usage, setUsage] = useState<UsageEvent | null>(null)
   const [quality, setQuality] = useState<QualityScores | null>(null)
+  /** What the figure check found, for the badge under a document-scoped answer (D4-21). */
+  const [audit, setAudit] = useState<AnswerAudit | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  /** The corpus (or, scoped, this document) could not answer; guidance was shown instead. */
+  const [refused, setRefused] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
   const [activeStage, setActiveStage] = useState<AskStage | null>(null)
   const [seenStages, setSeenStages] = useState<Set<AskStage>>(() => new Set())
@@ -377,7 +436,9 @@ export function AnswerStream(
       setCitations([])
       setUsage(null)
       setQuality(null)
+      setAudit(null)
       setErrorMessage(null)
+      setRefused(false)
       return
     }
 
@@ -389,7 +450,9 @@ export function AnswerStream(
     setCitations([])
     setUsage(null)
     setQuality(null)
+    setAudit(null)
     setErrorMessage(null)
+    setRefused(false)
 
     streamAsk(slug, request, (event: AskEvent) => {
       switch (event.type) {
@@ -412,6 +475,9 @@ export function AnswerStream(
             contextRelevance: event.contextRelevance,
           })
           break
+        case 'audit':
+          setAudit(event)
+          break
         case 'done':
           // The deterministically citation-bound text replaces the streamed
           // accumulation: the platform strips the model's own inline markers
@@ -420,6 +486,7 @@ export function AnswerStream(
           // the model's unbound numbering, which is what a marker click would
           // have to trust. SearchAnswer and AskPage already do this.
           if (event.text !== undefined) setText(event.text)
+          setRefused(Boolean(event.refused))
           setStatus('done')
           break
         case 'error':
@@ -436,7 +503,11 @@ export function AnswerStream(
       }
     }, controller.signal).catch((err: unknown) => {
       if (controller.signal.aborted) return
-      setErrorMessage(err instanceof Error ? err.message : 'The answer service is unavailable')
+      // The portal's own words, never the browser's or an upstream one
+      // (review loop 8 D8-07). The detail stays in
+      // the console, where a developer can read it.
+      console.error('ask stream failed', err)
+      setErrorMessage('The answer service is unavailable - please try again.')
       setStatus('error')
     })
 
@@ -530,6 +601,26 @@ export function AnswerStream(
               exiting={phase === 'handoff'}
             />
           )
+          : scopedToResource && refused && status === 'done'
+          ? (
+            /* Document scope: the whole-corpus decline ("browse the Library")
+             * makes no sense when the question was checked against one
+             * document. Say that plainly and offer the corpus. */
+            <div className='rp-answer-in rounded-[var(--rp-radius)] border border-dashed border-line bg-surface-2 p-4'>
+              <p className='text-sm font-semibold text-ink'>This document does not answer that</p>
+              <p className='mt-1 text-sm leading-relaxed text-ink-2'>
+                The question was checked against this document only, and nothing in it addresses it.
+                Try asking about something the document covers, or put the question to the whole
+                corpus.
+              </p>
+              <Link
+                to={`/t/${slug}/ask?ask=${encodeURIComponent(request.query)}`}
+                className='rp-btn rp-btn-outline mt-3'
+              >
+                Ask the whole corpus
+              </Link>
+            </div>
+          )
           : text.length > 0
           ? <div className='rp-answer-in'>{renderAnswerText(text, renderMarker)}</div>
           : null}
@@ -543,6 +634,9 @@ export function AnswerStream(
           )
           : null}
       </div>
+      {scopedToResource && status === 'done' && !refused
+        ? <ScopedAuditBadge audit={audit} />
+        : null}
 
       {citations.length > 0 && !scopedToResource
         ? (

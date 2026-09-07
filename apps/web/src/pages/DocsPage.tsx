@@ -8,7 +8,8 @@ import {
   docPageById,
   docPagesByCategory,
 } from '@research-portal/core'
-import { streamDocsAsk } from '../api/client.ts'
+import { getHealth, streamDocsAsk } from '../api/client.ts'
+import { useQuery } from '@tanstack/react-query'
 import { ConfidenceIndicator, type QualityScores } from '../components/QualityGauge.tsx'
 import { LiveStatus } from '../components/ui.tsx'
 import { normaliseAnswerBullets } from '../lib/answer-text.ts'
@@ -510,7 +511,11 @@ function sectionAnchor(heading: string): string {
   return heading.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
-function Article({ page }: { page: DocPage }) {
+/** Pages that also exist as a designed surface outside Help: page id to route. */
+const ILLUSTRATED_PAGES: Record<string, string> = { 'how-this-works': 'how-it-works' }
+
+function Article({ page, slug }: { page: DocPage; slug: string }) {
+  const illustrated = ILLUSTRATED_PAGES[page.id]
   return (
     <article className='rp-measure'>
       <header>
@@ -518,6 +523,13 @@ function Article({ page }: { page: DocPage }) {
           {page.title}
         </h1>
         <p className='mt-2 text-base leading-relaxed text-ink-2'>{page.summary}</p>
+        {illustrated
+          ? (
+            <Link to={`/t/${slug}/${illustrated}`} className='rp-btn rp-btn-outline mt-4'>
+              See the illustrated page, with the flow diagram and live figures
+            </Link>
+          )
+          : null}
       </header>
       <div className='mt-8 space-y-8'>
         {page.sections.map((section) => (
@@ -534,6 +546,39 @@ function Article({ page }: { page: DocPage }) {
         ))}
       </div>
     </article>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Build stamp - which bundle the browser is running, so a stale build is
+// obvious to anyone reading Help (D1-21).
+// ---------------------------------------------------------------------------
+
+function buildLine(build: { sha: string; builtAt: string }): string {
+  const when = new Date(build.builtAt)
+  const stamp = Number.isNaN(when.getTime()) ? build.builtAt : when.toLocaleString('en-AU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return `Portal build ${build.sha} - built ${stamp}`
+}
+
+function BuildStamp() {
+  const { data } = useQuery({
+    queryKey: ['health'],
+    queryFn: getHealth,
+    staleTime: 60_000,
+    retry: false,
+  })
+  if (!data) return null
+  const text = data.build ? buildLine(data.build) : `Portal build ${data.version}`
+  return (
+    <p className='mt-10 border-t border-line pt-4 text-xs text-ink-3' data-testid='build-stamp'>
+      {text}
+    </p>
   )
 }
 
@@ -567,6 +612,18 @@ export function DocsPage() {
         <p className='mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-2'>
           Everything you need to use the portal - and a help assistant that answers your questions
           from these pages only.
+        </p>
+        <p className='mt-2 max-w-2xl text-sm leading-relaxed text-ink-2'>
+          New here?{' '}
+          <Link
+            to={`/t/${slug}/how-it-works`}
+            className='rp-focus rounded-[var(--rp-radius-btn)] font-medium underline underline-offset-2'
+            style={{ color: 'var(--rp-accent-fg)' }}
+          >
+            Read how this works
+          </Link>{' '}
+          - where the content comes from, how a question is answered and what is checked before you
+          see it.
         </p>
       </div>
 
@@ -612,7 +669,8 @@ export function DocsPage() {
           </div>
         </aside>
         <div className='min-w-0'>
-          <Article page={activePage} />
+          <Article page={activePage} slug={slug} />
+          <BuildStamp />
         </div>
       </div>
     </main>

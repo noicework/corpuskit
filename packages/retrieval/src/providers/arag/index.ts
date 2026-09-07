@@ -17,13 +17,17 @@ import type {
   TenantConfig,
 } from '@research-portal/core'
 import {
+  classifyStudyDesign,
   DOC_PAGES,
   docPageToMarkdown,
   docResourceOrigin,
   docResourceSlug,
   DOCUMENTATION_LABEL,
   DOCUMENTATION_LABELSET,
+  type ExtractionMethod,
+  type Intent,
   isDocOrigin,
+  type LabelRef,
   ResourceSummarySchema,
 } from '@research-portal/core'
 import type { DocPage } from '@research-portal/core'
@@ -38,14 +42,88 @@ import {
   extractPageSummary,
   findPageSummaryFieldId,
 } from '../../merchandise.ts'
+import { variantPreamble } from '../../prompts.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
 import { spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
+import { dedupeNames, isNoiseEntity, keepEntity, preferredSpelling } from './entity-filter.ts'
+import { rankSuggestedQuestions } from './suggest-ranking.ts'
+import {
+  catalogFilterExpression,
+  matchesCatalogFilters,
+  paginateCatalogItems,
+  sortCatalogItems,
+  untaggedFilterExpression,
+} from './catalog-browse.ts'
+import {
+  chooseSnippet,
+  extractDoi,
+  isCitationNoise,
+  isExactTermMatch,
+  matchesDoi,
+  type ScoredParagraph,
+} from './snippet.ts'
 
 const CATALOG_TTL_MS = 60_000
 /** Parallel page-summary field reads per list response - one small GET per bare card. */
 const PAGE_SUMMARY_FETCH_CONCURRENCY = 8
+/** Identical search queries return the identical list for this long. */
+const SEARCH_CACHE_TTL_MS = 3 * 60_000
+/** Paragraphs a search listing retrieves before resources are ranked (see searchUncached). */
+const SEARCH_PARAGRAPH_BUDGET = 60
+const SEARCH_CACHE_MAX = 200
+/** The relations slice and the entity groups are re-read from the box this often. */
+const GRAPH_CACHE_TTL_MS = 5 * 60_000
+/** The platform caps /graph at 500 paths per call (422 above it, verified live). */
+const GRAPH_PAGE = 500
+/** Nodes on the whole-corpus map; the entity view is not capped this way. */
+const GRAPH_SLICE = 120
+/**
+ * Every group keeps at least this many of its strongest nodes in the slice,
+ * so a genetics corpus whose conditions outweigh its genes still shows the
+ * genes rather than six of them.
+ */
+const GRAPH_GROUP_FLOOR = 12
+
+/**
+ * The top `size` nodes by the caller's order, except that each group is
+ * guaranteed its first `floor` nodes when it has them. Deterministic for a
+ * deterministic input order.
+ */
+export function sliceWithGroupFloor<T extends { id: string; group: string }>(
+  ranked: readonly T[],
+  size: number,
+  floor: number,
+): T[] {
+  const perGroup = new Map<string, number>()
+  const reserved = new Set<string>()
+  for (const node of ranked) {
+    const n = perGroup.get(node.group) ?? 0
+    if (n < floor) {
+      perGroup.set(node.group, n + 1)
+      reserved.add(node.id)
+    }
+    if (reserved.size >= size) break
+  }
+  const out: T[] = []
+  for (const node of ranked) {
+    if (out.length >= size) break
+    if (reserved.has(node.id)) out.push(node)
+  }
+  for (const node of ranked) {
+    if (out.length >= size) break
+    if (!reserved.has(node.id)) out.push(node)
+  }
+  // Back to rank order - the reservation only decides membership.
+  const rank = new Map(ranked.map((n, i) => [n.id, i]))
+  return out.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
+}
+
+type RelationsGraphResult = {
+  nodes: { id: string; group: string; weight: number }[]
+  edges: { source: string; target: string; label: string }[]
+}
 /** Catalogue paging: 200 per call, up to 40 calls - 8,000 resources. */
 const CATALOG_PAGE_SIZE = 200
 const CATALOG_MAX_PAGES = 40
@@ -119,6 +197,46 @@ export function looksLikeReferenceChunk(text: string): boolean {
   const words = sample.split(/\s+/).length || 1
   const density = (authorYear + dois + etAl) / (words / 100)
   return headerHit || frontMatter || density > 2.5 || (authorYear >= 4 && etAl >= 2)
+}
+
+/**
+ * A declarations block - conflicts of interest, funding, ethics approval,
+ * author contributions, data availability - is not evidence: it is never
+ * the passage quoted under a result nor the paragraph an evidence card
+ * offers, and a hit made of nothing else is treated like a reference-list
+ * hit (D3-04). Heading words are counted with the disclosure phrases that
+ * follow them, so a Methods paragraph that mentions its funding once is
+ * still a Methods paragraph.
+ */
+export function looksLikeDeclarationsChunk(text: string): boolean {
+  const sample = text.slice(0, 800)
+  const headings = (sample.match(
+    /\b(?:declarations?|conflicts? of interest|competing interests?|disclosures?|funding|acknowledge?ments?|author(?:s'|s’)? contributions?|ethics approval|ethical approval|data availability|code availability|consent (?:to|for) (?:publication|participate)|informed consent|supplementary information)\b/gi,
+  ) ?? []).length
+  const disclosures = (sample.match(
+    /\b(?:honoraria|honorarium|speaker(?:'s|’s)? fees?|consultancy|consulting fees?|advisory boards?|research (?:grants?|funds?|funding|support) from|(?:has|have) received|equity interest|no (?:competing|conflicts?)|nothing to disclose|declares? no|declared no|not applicable|study concept or design|analysis or interpretation of data|acquisition of data|drafting(?:\/revision)? of the manuscript|critical revision|medical writing for content|major role in|we (?:acknowledge|thank)|the authors (?:acknowledge|thank))\b/gi,
+  ) ?? []).length
+  // "We thank" and "we acknowledge" open an acknowledgements block on their own.
+  const acknowledgement = /\b(?:we|the authors) (?:acknowledge|thank|are grateful to)\b/i.test(
+    sample,
+  )
+  // A CRediT author-contribution block is a list of roles; a conflicts
+  // statement is a list of companies.
+  const credit = (sample.match(
+    /\b(?:conceptuali[sz]ation|methodology|formal analysis|funding acquisition|writing (?:-|–|—) (?:review|original)|supervision|data curation|project administration|visuali[sz]ation|resources|validation)\b/gi,
+  ) ?? []).length
+  const companies = new Set(
+    (sample.match(
+      /\b(?:UCB|Eisai|Novartis|Roche|Janssen|Genzyme|Pfizer|GSK|GlaxoSmithKline|Sanofi|Biogen|Bial|Angelini|Arvelle|Esteve|GW Pharma|LivaNova|Medtronic|Zogenix|Jazz|SK Life|Lundbeck|Merck|Takeda|AbbVie|Sunovion|Xenon|Marinus|Neurelis|Ovid|Stoke|Praxis|Epiminder|Seer Medical|Supernus|Cerebral Therapeutics|Longboard|Bayer|Boehringer)\b/g,
+    ) ?? []).map((c) => c.toLowerCase()),
+  ).size
+  return acknowledgement || credit >= 3 || companies >= 3 || headings >= 2 ||
+    (headings >= 1 && disclosures >= 1) || disclosures >= 3
+}
+
+/** A paragraph that is not evidence: a bibliography or a declarations block. */
+function isNonEvidenceChunk(text: string): boolean {
+  return looksLikeReferenceChunk(text) || looksLikeDeclarationsChunk(text)
 }
 
 /**
@@ -330,6 +448,17 @@ export function calibrateRelevance(score: number): number {
  * so structured generation's grounding gate judges a source's relevance the
  * same way `ask` scores its grounding sources.
  */
+/**
+ * The platform reports a paragraph's page as a zero-based index
+ * (`position.page_number`); readers, "Open PDF at page N" and the PDF
+ * viewer count from one. Converting here, at the one boundary the index
+ * crosses, keeps every consumer one-based. A first-page match (index 0)
+ * used to be dropped as falsy and now surfaces as page 1.
+ */
+export function displayPage(page: number | undefined): number | undefined {
+  return typeof page === 'number' && Number.isInteger(page) && page >= 0 ? page + 1 : undefined
+}
+
 function bestParagraphMatch(raw: {
   fields?: Record<
     string,
@@ -344,6 +473,12 @@ function bestParagraphMatch(raw: {
   let best = 0
   let passage: string | undefined
   let page: number | undefined
+  // The best paragraph that is evidence: a bibliography or a declarations
+  // block never becomes the quote under a result while a body paragraph
+  // matched too (D3-04).
+  let bodyBest = -1
+  let bodyPassage: string | undefined
+  let bodyPage: number | undefined
   for (const field of Object.values(raw.fields ?? {})) {
     for (const paragraph of Object.values(field.paragraphs ?? {})) {
       const score = paragraph.score ?? 0
@@ -352,9 +487,17 @@ function bestParagraphMatch(raw: {
         passage = paragraph.text ?? passage
         page = paragraph.position?.page_number
       }
+      if (paragraph.text && score >= bodyBest && !isNonEvidenceChunk(paragraph.text)) {
+        bodyBest = score
+        bodyPassage = paragraph.text
+        bodyPage = paragraph.position?.page_number
+      }
     }
   }
-  const reference = passage ? looksLikeReferenceChunk(passage) : false
+  if (passage !== undefined && bodyPassage !== undefined && isNonEvidenceChunk(passage)) {
+    return { best: bodyBest, passage: bodyPassage, page: bodyPage, reference: false }
+  }
+  const reference = passage ? isNonEvidenceChunk(passage) : false
   return { best: reference ? best * 0.4 : best, passage, page, reference }
 }
 
@@ -365,6 +508,14 @@ interface PortalMetadata {
   topic?: string
   type?: string
   published?: string
+  authors?: unknown
+  journal?: unknown
+  year?: unknown
+  doi?: unknown
+  pmid?: unknown
+  pmcid?: unknown
+  keywords?: unknown
+  titleCurated?: unknown
 }
 
 interface RawResource {
@@ -453,14 +604,281 @@ export function labelFieldExpression(): {
   return { prop: 'label', labelset: DOCUMENTATION_LABELSET, label: DOCUMENTATION_LABEL }
 }
 
-/** filter_expression EXCLUDING documentation - for portal-search / portal-ask. */
-export function researchExcludeFilterExpression(): Record<string, unknown> {
-  return { field: { not: labelFieldExpression() } }
+/**
+ * filter_expression EXCLUDING documentation - for portal-search / portal-ask -
+ * plus any labels the tenant keeps out of research retrieval (supplements,
+ * media). With no extra exclusions the shape is unchanged.
+ */
+export function researchExcludeFilterExpression(
+  exclude: { labelset: string; label: string }[] = [],
+): Record<string, unknown> {
+  if (exclude.length === 0) return { field: { not: labelFieldExpression() } }
+  return {
+    field: {
+      and: [
+        { not: labelFieldExpression() },
+        ...exclude.map((e) => ({ not: { prop: 'label', labelset: e.labelset, label: e.label } })),
+      ],
+    },
+  }
 }
 
 /** filter_expression including ONLY documentation - for portal-doc-search / portal-doc-ask. */
 export function docOnlyFilterExpression(): Record<string, unknown> {
   return { field: labelFieldExpression() }
+}
+
+/**
+ * The stored filter for one intent: documentation is always excluded; then
+ * either the intent's own exclusions, or, when `only` is set, grounding is
+ * restricted to those labels instead.
+ */
+export function intentFilterExpression(
+  retrieval: { exclude?: LabelRef[]; only?: LabelRef[] },
+): Record<string, unknown> {
+  const only = retrieval.only ?? []
+  if (only.length > 0) {
+    const include = only.length === 1
+      ? { prop: 'label', labelset: only[0]!.labelset, label: only[0]!.label }
+      : { or: only.map((e) => ({ prop: 'label', labelset: e.labelset, label: e.label })) }
+    return { field: { and: [{ not: labelFieldExpression() }, include] } }
+  }
+  return researchExcludeFilterExpression(retrieval.exclude ?? [])
+}
+
+/** The platform caps a prequeries strategy at ten queries. */
+export const MAX_PREQUERIES = 10
+
+/** Paragraph budget of a pinned resource's own retrieval pass. */
+export const PINNED_TOP_K = 20
+/** Paragraph budget of a clause pass against a pinned resource. */
+export const PINNED_CLAUSE_TOP_K = 10
+/** Paragraph budget of a scoped topic pass (an author's articles). */
+export const SCOPED_TOP_K = 30
+/** Paragraph budget of an earlier turn's cited paper on a follow-up. */
+export const PRIOR_TOP_K = 10
+
+/**
+ * The extra retrieval passes that join an ask's grounding set, in priority
+ * order: a pass per pinned resource (a paper the question names, or the
+ * top paper per named entity) with a wider paragraph budget and a heavier
+ * weight than the main query, a pass per question clause against the
+ * first pinned resources (so a two-part question reads the paragraphs that
+ * answer each part), one pass restricted to the labels the intent prefers
+ * (a data question's supplements beside its papers), then the caller's
+ * sub-questions. Verified live: a prequery request is a full find request,
+ * so `resource_filters`, `top_k` and label `filters` scope it.
+ */
+export function groundingPrequeries(
+  query: string,
+  opts: {
+    pinnedResourceIds?: readonly string[]
+    pinnedQueries?: readonly string[]
+    scopedQueries?: readonly { query: string; resourceIds: readonly string[] }[]
+    prefer?: readonly LabelRef[]
+    prequeries?: readonly string[]
+    /** Earlier turns' cited papers: a lighter pass each, after the pinned papers. */
+    priorResourceIds?: readonly string[]
+    /** A filter every caller prequery carries (the documentation-only filter under docScope). */
+    filterExpression?: Record<string, unknown>
+  },
+): Record<string, unknown>[] {
+  const features = ['keyword', 'semantic']
+  const out: Record<string, unknown>[] = []
+  for (const scoped of (opts.scopedQueries ?? []).slice(0, 2)) {
+    if (!scoped.query.trim() || scoped.resourceIds.length === 0) continue
+    out.push({
+      request: {
+        query: scoped.query,
+        features,
+        resource_filters: scoped.resourceIds.slice(0, 80),
+        top_k: SCOPED_TOP_K,
+      },
+      weight: 2,
+    })
+  }
+  const pinned = (opts.pinnedResourceIds ?? []).slice(0, 4)
+  for (const id of pinned) {
+    out.push({
+      request: { query, features, resource_filters: [id], top_k: PINNED_TOP_K },
+      weight: 2,
+    })
+  }
+  for (const id of pinned.slice(0, 2)) {
+    for (const clause of (opts.pinnedQueries ?? []).slice(0, 2)) {
+      if (out.length >= MAX_PREQUERIES - 1) break
+      out.push({
+        request: { query: clause, features, resource_filters: [id], top_k: PINNED_CLAUSE_TOP_K },
+        weight: 1,
+      })
+    }
+  }
+  for (const id of (opts.priorResourceIds ?? []).filter((id) => !pinned.includes(id)).slice(0, 4)) {
+    if (out.length >= MAX_PREQUERIES - 1) break
+    out.push({
+      request: { query, features, resource_filters: [id], top_k: PRIOR_TOP_K },
+      weight: 1,
+    })
+  }
+  const prefer = opts.prefer ?? []
+  if (prefer.length > 0) {
+    out.push({
+      request: {
+        query,
+        features,
+        filters: prefer.map((l) => `/classification.labels/${l.labelset}/${l.label}`),
+      },
+      weight: 1,
+    })
+  }
+  for (const q of opts.prequeries ?? []) {
+    if (out.length >= MAX_PREQUERIES) break
+    out.push({
+      request: {
+        query: q,
+        features,
+        ...(opts.filterExpression ? { filter_expression: opts.filterExpression } : {}),
+      },
+      weight: 1,
+    })
+  }
+  return out.slice(0, MAX_PREQUERIES)
+}
+
+/**
+ * The tail of a streamed chunk that may be the start of a `[n]` marker the
+ * next chunk completes ("[", "[1", "[1, 2"). Held back so a marker split
+ * across chunks is never shown half-stripped; the held text is prepended
+ * to the next chunk.
+ */
+export function splitPartialMarker(text: string): { emit: string; hold: string } {
+  const m = /\s*\[\d{0,3}(?:\s*,\s*\d{0,3})*$/.exec(text)
+  if (!m) return { emit: text, hold: '' }
+  return { emit: text.slice(0, m.index), hold: text.slice(m.index) }
+}
+
+/** The portal half of an intent's retrieval: grounding strategies. */
+export function intentStrategies(intent: Intent): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = []
+  if (intent.answer.strategy === 'full') out.push({ name: 'full_resource' })
+  else if (intent.answer.strategy === 'neighbours') {
+    const n = intent.answer.neighbours ?? 2
+    out.push({ name: 'neighbouring_paragraphs', before: n, after: n })
+  }
+  if (intent.answer.graph) out.push({ name: 'graph_beta', hops: 2, agentic_graph_only: true })
+  return out
+}
+
+/** Apply an intent's citation floor and recency ordering to retrieved sources. */
+export function shapeSourcesForIntent(
+  sources: ScoredResource[],
+  intent: Intent | undefined,
+): ScoredResource[] {
+  if (!intent) return sources
+  // Every source the platform grounded on stays visible: a citation the
+  // reader cannot open is worse than a weak source they can judge. The
+  // intent's minScore is a display hint (the evidence card marks weak
+  // matches), never a filter after grounding.
+  if (intent.answer.sortByPublished) {
+    return [...sources].sort((a, b) => (b.published ?? '').localeCompare(a.published ?? ''))
+  }
+  return sources
+}
+
+/** A field written by a data-augmentation agent (a generated summary), not the document itself. */
+export function isGeneratedField(fieldKey: string): boolean {
+  return /da-|summary|\/a\/|^a\//i.test(fieldKey)
+}
+
+/** The platform's stored extraction strategy shape (as read back from /extract_strategies). */
+interface RawStrategy {
+  name?: string
+  vllm_config?: { rules?: string[]; llm?: { generative_model?: string } } | null
+  ai_tables?: { llm?: { generative_model?: string } } | null
+}
+
+/** Platform body for an extraction method; the vendor shape stays here. */
+export function strategyBody(spec: Omit<ExtractionMethod, 'id'>): Record<string, unknown> {
+  const llm = spec.model ? { generative_model: spec.model } : {}
+  if (spec.kind === 'tables') return { name: spec.name, ai_tables: { llm } }
+  if (spec.kind === 'visual') {
+    return {
+      name: spec.name,
+      vllm_config: {
+        rules: spec.rules && spec.rules.length > 0 ? spec.rules : [DEFAULT_VISUAL_RULE],
+        llm,
+      },
+    }
+  }
+  return { name: spec.name }
+}
+
+export const DEFAULT_VISUAL_RULE =
+  'Transcribe every element on the page faithfully: headings, paragraphs, tables as markdown ' +
+  'tables, figure captions, axis labels and footnotes. Keep reading order. Do not summarise or omit.'
+
+export function methodFromStrategy(id: string, s: RawStrategy): ExtractionMethod {
+  if (s.ai_tables) {
+    return {
+      id,
+      name: s.name ?? id,
+      kind: 'tables',
+      ...(s.ai_tables.llm?.generative_model ? { model: s.ai_tables.llm.generative_model } : {}),
+    }
+  }
+  if (s.vllm_config) {
+    return {
+      id,
+      name: s.name ?? id,
+      kind: 'visual',
+      ...(s.vllm_config.llm?.generative_model ? { model: s.vllm_config.llm.generative_model } : {}),
+      ...(s.vllm_config.rules?.length ? { rules: s.vllm_config.rules } : {}),
+    }
+  }
+  return { id, name: s.name ?? id, kind: 'default' }
+}
+
+/** Stored configuration name for an intent; the default intent keeps the default pair. */
+export function intentConfigurationName(
+  tenant: TenantConfig,
+  intentId: string,
+  kind: 'find' | 'ask',
+): string {
+  const isDefault = intentId === (tenant.defaultIntent ?? '')
+  if (isDefault) return kind === 'ask' ? SEARCH_CONFIG_RESEARCH_ASK : SEARCH_CONFIG_RESEARCH_FIND
+  const intent = tenant.intents?.find((i) => i.id === intentId)
+  const askCapable = intent?.answer.surfaces.includes('ask') ?? true
+  // An intent that answers gets the plain name for its ask config and a
+  // `-find` twin for search; a search-only intent's plain name IS a find config.
+  if (kind === 'ask' || !askCapable) return `portal-intent-${intentId}`
+  return `portal-intent-${intentId}-find`
+}
+
+/** The stored configuration objects an intent needs on the box. */
+export function intentSearchConfigs(tenant: TenantConfig): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const intent of tenant.intents ?? []) {
+    if (intent.id === tenant.defaultIntent) continue
+    const filter = intentFilterExpression(intent.retrieval)
+    const base = {
+      features: intent.retrieval.features,
+      reranker: intent.retrieval.reranker,
+      filter_expression: filter,
+    }
+    if (intent.answer.surfaces.includes('ask')) {
+      out[intentConfigurationName(tenant, intent.id, 'ask')] = {
+        kind: 'ask',
+        config: { ...base, top_k: intent.retrieval.topK, citations: true },
+      }
+    }
+    if (intent.answer.surfaces.includes('search')) {
+      out[intentConfigurationName(tenant, intent.id, 'find')] = {
+        kind: 'find',
+        config: { ...base, top_k: intent.retrieval.topK },
+      }
+    }
+  }
+  return out
 }
 
 /**
@@ -490,21 +908,123 @@ type FindResponse = {
   >
 }
 
+/**
+ * The study design a research article shows as its `kind`: the rule-first
+ * classifier over the stored record (title, abstract, keywords and MeSH
+ * headings), with the box's own `kind` label admitted only where the text
+ * corroborates it. Every surface - cards, the resource header, the facet and
+ * its filter - derives the kind here, so they cannot disagree.
+ */
+function studyDesignOf(
+  raw: RawResource,
+  record: { title: string; keywords?: string[]; format?: string; type?: string },
+): string | undefined {
+  const meta = raw.extra?.metadata ?? {}
+  // Only a bibliographic record (a journal article filed by format, or one
+  // carrying a DOI, PubMed id or journal) states a study design. A corpus of
+  // reports and submissions keeps the kind its labelset gives it.
+  const bibliographic = Boolean(record.format) ||
+    Boolean(meta.doi || meta.pmcid || meta.pmid || meta.journal)
+  if (!bibliographic) return classificationLabels(raw, 'kind')[0]
+  return classifyStudyDesign({
+    title: record.title,
+    abstract: meta.summary || raw.summary,
+    keywords: record.keywords,
+    format: record.format,
+    type: record.type,
+    label: classificationLabels(raw, 'kind')[0],
+  })?.id
+}
+
 /** Builds a CatalogItem from a raw platform resource - shared by catalogue's paged browse and its filtered-query path, so both render the same shape. */
+/**
+ * The bibliographic record an ingest may store on `extra.metadata` (journal
+ * articles carry authors, journal, year, DOI, keywords and a curated title).
+ * Absent fields are simply omitted so older resources are unchanged.
+ */
+function bibliographic(meta: PortalMetadata): {
+  authors?: string[]
+  journal?: string
+  year?: string
+  doi?: string
+  pmid?: string
+  pmcid?: string
+  keywords?: string[]
+  titleCurated?: boolean
+} {
+  const strings = (v: unknown): string[] | undefined =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === 'string' && x.length > 0)
+      : undefined
+  const str = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v.trim() : undefined
+  const authors = strings(meta.authors)
+  const keywords = strings(meta.keywords)
+  const journal = str(meta.journal)
+  const year = str(meta.year)
+  const doi = str(meta.doi)
+  const pmid = str(meta.pmid)
+  const pmcid = str(meta.pmcid)?.toUpperCase()
+  return {
+    ...(authors?.length ? { authors } : {}),
+    ...(journal ? { journal } : {}),
+    ...(year ? { year } : {}),
+    ...(doi ? { doi } : {}),
+    ...(pmid ? { pmid } : {}),
+    ...(pmcid ? { pmcid } : {}),
+    ...(keywords?.length ? { keywords } : {}),
+    ...(meta.titleCurated === true ? { titleCurated: true } : {}),
+  }
+}
+
+/**
+ * The names worth showing from one entity group: noise dropped (numbers,
+ * people, journals, vignettes; non-genes in the Gene group), case variants
+ * merged onto the spelling that reads best, and the result sorted so the
+ * list is the same on every read.
+ */
+function cleanEntityNames(names: readonly string[], group: string): string[] {
+  const variants = new Map<string, string[]>()
+  for (const raw of names) {
+    const name = raw.replace(/\s+/g, ' ').trim()
+    if (!keepEntity(name, group)) continue
+    const key = name.toLowerCase()
+    const list = variants.get(key)
+    if (list) list.push(name)
+    else variants.set(key, [name])
+  }
+  return [...variants.values()]
+    .map((list) => preferredSpelling(list))
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+}
+
+/** The portal's content type for a resource, from the metadata the ingest stored. */
+function resourceTypeFromMeta(meta: PortalMetadata): ResourceType {
+  const t = meta.type
+  return t === 'video' || t === 'web' || t === 'pdf' ? t : 'document'
+}
+
 function catalogItemFromRaw(id: string, r: RawResource): CatalogItem {
   const status = r.metadata?.status
   const safe = displayTitle(r.title, id)
   const rawTitle = safe === 'Untitled resource' ? '' : (r.title ?? '')
   const merch = baselineMerchandising(rawTitle, r.summary ?? r.extra?.metadata?.summary)
+  const { keywords, ...bib } = bibliographic(r.extra?.metadata ?? {})
+  const format = classificationLabels(r, 'format')[0]
+  const type = resourceTypeFromMeta(r.extra?.metadata ?? {})
+  const kind = studyDesignOf(r, { title: rawTitle, keywords, format, type })
   return {
     id,
     title: merch.title,
     status: status === 'PROCESSED' ? 'processed' : status === 'ERROR' ? 'error' : 'pending',
     created: r.created,
     topicIds: classificationLabels(r, 'topic'),
-    kind: classificationLabels(r, 'kind')[0],
+    ...(kind ? { kind } : {}),
+    ...(format ? { format } : {}),
+    type,
     published: r.extra?.metadata?.published,
     ...(merch.sourceName ? { sourceName: merch.sourceName } : {}),
+    ...bib,
     enriched: false,
   }
 }
@@ -633,9 +1153,30 @@ export interface AragProviderOptions {
  * per tenant, bound by slug. Every answer, search result and resource comes
  * from the live regional API; nothing is fabricated here.
  */
+/** How long the REMi answer-quality request may run before the answer's stream closes without it. */
+const REMI_CAP_MS = 8000
+
 export class AragProvider implements RetrievalProvider {
   private readonly clients = new Map<string, KbClient>()
-  private readonly catalogCache = new Map<string, { at: number; resources: ResourceSummary[] }>()
+  /**
+   * Search listings before their platform page summaries are filled: the
+   * fill runs on every read (cheap: summaries are memoised per resource), so
+   * a card whose summary read failed is retried on the next identical query.
+   */
+  private readonly searchCache = new Map<
+    string,
+    { at: number; results: SearchResults; rawById: Map<string, RawResource> }
+  >()
+  private readonly graphCache = new Map<string, { at: number; graph: RelationsGraphResult }>()
+  /** Cleaned entity names per group, uncapped - the display list is a slice of it. */
+  private readonly entityGroupsCache = new Map<
+    string,
+    { at: number; groups: { group: string; entities: string[] }[] }
+  >()
+  private readonly catalogCache = new Map<
+    string,
+    { at: number; resources: ResourceSummary[]; items: CatalogItem[] }
+  >()
   /**
    * Platform page summaries by `<slug>/<resourceId>`, `null` when a resource
    * has none. Summaries are written once at ingest, so there is no TTL;
@@ -673,16 +1214,18 @@ export class AragProvider implements RetrievalProvider {
       if (key.startsWith(`${slug}:`)) this.clients.delete(key)
     }
     this.catalogCache.delete(slug)
+    this.entityGroupsCache.delete(slug)
+    for (const cache of [this.searchCache, this.graphCache]) {
+      for (const key of cache.keys()) {
+        if (key.startsWith(`${slug}|`)) cache.delete(key)
+      }
+    }
   }
 
   private toSummary(id: string, raw: RawResource): ResourceSummary {
     const meta = raw.extra?.metadata ?? {}
     const topicFromLabels = classificationLabels(raw, 'topic')
-    const kindLabel = classificationLabels(raw, 'kind')[0]
-    const type: ResourceType = ((): ResourceType => {
-      const t = meta.type
-      return t === 'video' || t === 'web' || t === 'pdf' ? t : 'document'
-    })()
+    const type = resourceTypeFromMeta(meta)
     // Merchandise the raw title/summary so a filename ("1981-071-DLD.pdf") is
     // never the headline. Junk titles (hash/bot/system) collapse to "Untitled
     // resource" with no source name shown. The API overlays a generated
@@ -690,6 +1233,13 @@ export class AragProvider implements RetrievalProvider {
     const safe = displayTitle(raw.title, id)
     const rawTitle = safe === 'Untitled resource' ? '' : (raw.title ?? '')
     const merch = baselineMerchandising(rawTitle, meta.summary || raw.summary)
+    const bib = bibliographic(meta)
+    const kindLabel = studyDesignOf(raw, {
+      title: rawTitle,
+      keywords: bib.keywords,
+      format: classificationLabels(raw, 'format')[0],
+      type,
+    })
     return ResourceSummarySchema.parse({
       id,
       title: merch.title,
@@ -700,11 +1250,11 @@ export class AragProvider implements RetrievalProvider {
       published: meta.published,
       ...(kindLabel ? { kind: kindLabel } : {}),
       ...(merch.sourceName ? { sourceName: merch.sourceName } : {}),
-      // NOTE: a resource ingested from a website source carries `origin.url`
-      // on the platform, and resourceContent() surfaces it - but
-      // ResourceSummarySchema has no `originUrl` field, so a summary cannot
-      // carry the page it came from (zod strips it). Adding the optional
-      // field to that schema in packages/core is all this needs.
+      ...bib,
+      // Where it came from (a PMC article URL, a crawled page): the search
+      // route resolves PMC identifiers against it when the ingest stored no
+      // pmcid field of its own.
+      ...(raw.origin?.url ? { originUrl: raw.origin.url } : {}),
       enriched: false,
     })
   }
@@ -788,13 +1338,29 @@ export class AragProvider implements RetrievalProvider {
   }
 
   async listResources(tenant: TenantConfig): Promise<ResourceSummary[]> {
+    return (await this.loadCatalogue(tenant)).resources
+  }
+
+  /**
+   * Every displayable resource as a library item, from the same paged read
+   * `listResources` makes and under the same TTL - the publication-date sort
+   * the platform cannot do runs over this.
+   */
+  private async catalogItems(tenant: TenantConfig): Promise<CatalogItem[]> {
+    return (await this.loadCatalogue(tenant)).items
+  }
+
+  private async loadCatalogue(
+    tenant: TenantConfig,
+  ): Promise<{ resources: ResourceSummary[]; items: CatalogItem[] }> {
     const cached = this.catalogCache.get(tenant.slug)
-    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.resources
+    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached
     const client = this.client(tenant)
     // Read the catalogue in pages and build summaries from the page payload
     // itself. A per-resource fetch here would mean one request per document -
     // thousands of parallel calls on a real corpus, on the hot search path.
     const resources: ResourceSummary[] = []
+    const items: CatalogItem[] = []
     for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
       const catalog = await client.getJson<{ resources?: Record<string, RawResource> }>(
         `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin`,
@@ -806,18 +1372,20 @@ export class AragProvider implements RetrievalProvider {
         // is research-invisible: it never appears in the research catalogue.
         if (!isDisplayableResource(raw) || isDocumentationResource(raw)) continue
         resources.push(this.toSummary(id, raw))
+        items.push(catalogItemFromRaw(id, raw))
       }
       if (batch.length < CATALOG_PAGE_SIZE) break
     }
     resources.sort((a, b) => (b.published ?? '').localeCompare(a.published ?? ''))
-    this.catalogCache.set(tenant.slug, { at: Date.now(), resources })
-    return resources
+    const entry = { at: Date.now(), resources, items }
+    this.catalogCache.set(tenant.slug, entry)
+    return entry
   }
 
   async resource(tenant: TenantConfig, id: string): Promise<ResourceSummary | null> {
     try {
       const raw = await this.client(tenant).getJson<RawResource>(
-        `/resource/${id}?show=basic&show=extra`,
+        `/resource/${id}?show=basic&show=extra&show=origin`,
       )
       return this.toSummary(id, raw)
     } catch (err) {
@@ -865,12 +1433,21 @@ export class AragProvider implements RetrievalProvider {
 
   async uploadFile(
     tenant: TenantConfig,
-    input: { filename: string; contentType: string; bytes: Uint8Array },
+    input: {
+      filename: string
+      contentType: string
+      bytes: Uint8Array
+      /** Extraction method (strategy id) to apply; omitted or 'default' = the platform default. */
+      method?: string
+    },
   ): Promise<{ id: string }> {
     const client = this.client(tenant)
+    const headers: Record<string, string> = input.method && input.method !== 'default'
+      ? { 'x-extract-strategy': input.method }
+      : {}
     const res =
       (await withBackpressureRetry(() =>
-        client.postRaw('/upload', input.bytes, input.contentType, input.filename)
+        client.postRaw('/upload', input.bytes, input.contentType, input.filename, headers)
       )) as { uuid?: string; resource?: string }
     this.invalidateCatalogue(tenant.slug)
     return { id: res.uuid ?? res.resource ?? '' }
@@ -990,10 +1567,13 @@ export class AragProvider implements RetrievalProvider {
 
   private invalidateCatalogue(slug: string): void {
     this.catalogCache.delete(slug)
+    for (const key of this.searchCache.keys()) {
+      if (key.startsWith(`${slug}|`)) this.searchCache.delete(key)
+    }
   }
 
-  async suggest(tenant: TenantConfig): Promise<Question[]> {
-    return tenant.suggestedQuestions
+  async suggest(tenant: TenantConfig, query?: string): Promise<Question[]> {
+    return rankSuggestedQuestions(tenant.suggestedQuestions, query)
   }
 
   async search(
@@ -1003,6 +1583,39 @@ export class AragProvider implements RetrievalProvider {
   ): Promise<SearchResults> {
     const trimmed = query.trim()
     if (!trimmed) return { query, resources: [], relatedQuestions: [] }
+    // The platform's hybrid merge is not stable call to call: the same query
+    // returned 14, 18, 18 and 17 results with a different top hit across four
+    // loads in three minutes. A short per-query cache makes an identical
+    // query return the identical list for a few minutes, which is what a
+    // reader comparing two tabs expects.
+    const cacheKey = `${tenant.slug}|${trimmed.toLowerCase()}|${JSON.stringify(opts)}`
+    const cached = this.searchCache.get(cacheKey)
+    let listing: { results: SearchResults; rawById: Map<string, RawResource> }
+    if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
+      listing = cached
+    } else {
+      listing = await this.searchUncached(tenant, trimmed, opts)
+      if (this.searchCache.size >= SEARCH_CACHE_MAX) {
+        const oldest = this.searchCache.keys().next().value
+        if (oldest !== undefined) this.searchCache.delete(oldest)
+      }
+      this.searchCache.set(cacheKey, { at: Date.now(), ...listing })
+    }
+    return {
+      ...listing.results,
+      resources: await this.fillPlatformSummaries(
+        tenant,
+        listing.results.resources,
+        listing.rawById,
+      ),
+    }
+  }
+
+  private async searchUncached(
+    tenant: TenantConfig,
+    trimmed: string,
+    opts: SearchOptions,
+  ): Promise<{ results: SearchResults; rawById: Map<string, RawResource> }> {
     const client = this.client(tenant)
     const mode = opts.mode ?? 'hybrid'
     const features = mode === 'hybrid' ? ['keyword', 'semantic'] : [mode]
@@ -1010,6 +1623,13 @@ export class AragProvider implements RetrievalProvider {
       query: trimmed,
       features,
       page_size: opts.pageSize ?? 20,
+      // The paragraph budget, and what actually bounds the resource list:
+      // a sentence that one paper answers in twenty paragraphs otherwise
+      // fills the whole page with that paper and returns it alone
+      // (verified live: "risk of SUDEP with lamotrigine" gave one resource
+      // at the default and eighteen at sixty). A request-level top_k wins
+      // over the stored configuration's.
+      top_k: SEARCH_PARAGRAPH_BUDGET,
       show: ['basic', 'origin', 'values'],
       // Cross-encoder reranking pass over the retrieved candidates - verified
       // live (docs/ARAG-DEV.md has no prior record of this; see the reranker
@@ -1029,10 +1649,29 @@ export class AragProvider implements RetrievalProvider {
     // isolation lives in that stored config, not a per-request filter.
     if (opts.docScope) body.search_configuration = SEARCH_CONFIG_DOC_FIND
     else if (mode === 'hybrid') body.search_configuration = SEARCH_CONFIG_RESEARCH_FIND
-    const filters = [
-      ...(opts.topicIds ?? []).map((t) => `/classification.labels/topic/${t}`),
-      ...(opts.kindIds ?? []).map((k) => `/classification.labels/kind/${k}`),
-    ]
+    const searchIntent = opts.intent ? tenant.intents?.find((i) => i.id === opts.intent) : undefined
+    if (searchIntent && !opts.docScope && searchIntent.answer.surfaces.includes('search')) {
+      // The stored configuration carries the intent's features and filter and
+      // overrides request features - but `findWithFallback` sheds the
+      // configuration on a zero result, and a retry with no features at all
+      // is the platform's fuzzy default. Sending the intent's own features
+      // keeps a keyword-only lookup keyword-only on that retry.
+      body.search_configuration = intentConfigurationName(tenant, searchIntent.id, 'find')
+      body.features = searchIntent.retrieval.features
+      body.reranker = searchIntent.retrieval.reranker
+      body.page_size = opts.pageSize ?? searchIntent.retrieval.topK
+      body.top_k = Math.max(searchIntent.retrieval.topK, SEARCH_PARAGRAPH_BUDGET)
+    }
+    if (opts.resourceIds && opts.resourceIds.length > 0) body.resource_filters = opts.resourceIds
+    // An exact lookup (a bare identifier or term on the keyword
+    // configuration) promises the documents that contain it, never near
+    // misses; a DOI names one document. Both are enforced below.
+    const exactLookup = searchIntent !== undefined && !opts.docScope &&
+      !searchIntent.answer.surfaces.includes('ask')
+    const wantedDoi = opts.docScope ? undefined : extractDoi(trimmed)
+    // Topics live in the index; the kind is derived from the record (see
+    // studyDesignOf), so it is applied to the results below, not sent.
+    const filters = (opts.topicIds ?? []).map((t) => `/classification.labels/topic/${t}`)
     if (filters.length > 0) body.filters = filters
     const [found, all] = await Promise.all([
       this.findWithFallback(client, body),
@@ -1054,33 +1693,59 @@ export class AragProvider implements RetrievalProvider {
     const MIN_SCORE = 0.1
     const scored = entries
       .map(([id, raw]) => {
-        let best = 0
-        let passage: string | undefined
-        let page: number | undefined
-        for (const field of Object.values(raw.fields ?? {})) {
+        const paragraphs: ScoredParagraph[] = []
+        for (const [fieldKey, field] of Object.entries(raw.fields ?? {})) {
           for (const paragraph of Object.values(field.paragraphs ?? {})) {
-            const score = paragraph.score ?? 0
-            if (score >= best) {
-              best = score
-              passage = paragraph.text ?? passage
-              page = (paragraph as { position?: { page_number?: number } }).position?.page_number
-            }
+            paragraphs.push({
+              score: paragraph.score ?? 0,
+              text: paragraph.text ?? '',
+              page: (paragraph as { position?: { page_number?: number } }).position?.page_number,
+              fieldKey,
+            })
           }
         }
-        const reference = passage ? looksLikeReferenceChunk(passage) : false
-        // A reference-list match is citation-title noise - keep it findable
-        // but never let it outrank body text.
+        // The snippet is the best BODY paragraph whenever one matched: a
+        // reference-list line, a first-page title/author block or a DOI
+        // fragment never outranks or stands in for body text. A resource
+        // whose only matches are such noise stays findable, flagged, at a
+        // fraction of its score.
+        const choice = chooseSnippet(
+          paragraphs,
+          MIN_SCORE,
+          (text) =>
+            looksLikeReferenceChunk(text) || isCitationNoise(text) ||
+            looksLikeDeclarationsChunk(text),
+        )
+        const passage = choice.passage?.text || undefined
+        const summaryDoi = byId.get(id)?.doi
+        const texts = paragraphs.map((p) => p.text)
+        // A DOI query matches one document; the resource that records it is
+        // a certain match whatever its paragraph scores say.
+        const doiHit = wantedDoi !== undefined && matchesDoi(wantedDoi, { doi: summaryDoi, texts })
         return {
           id,
           title: raw.title,
           raw,
-          best: reference ? best * 0.4 : best,
+          best: doiHit && summaryDoi ? Math.max(choice.score, 1) : choice.score,
           passage,
-          page,
-          reference,
+          page: choice.passage?.page,
+          reference: choice.reference,
+          matchedField: choice.passage?.fieldKey && isGeneratedField(choice.passage.fieldKey)
+            ? 'summary' as const
+            : 'body' as const,
+          texts,
+          doiHit,
         }
       })
       .filter((s) => s.best >= MIN_SCORE)
+      // A DOI names one document: nothing else - least of all a reference
+      // list citing a neighbouring DOI - is a result for it.
+      .filter((s) => wantedDoi === undefined || s.doiHit)
+      // An exact lookup returns only documents that contain every term.
+      .filter((s) =>
+        !exactLookup || wantedDoi !== undefined ||
+        isExactTermMatch(trimmed, { title: s.title, texts: s.texts })
+      )
     // Near-duplicate suppression: crawled pages repeat nav/footer chrome, so
     // two results opening with the same 120 characters are the same content.
     const seenSignatures = new Set<string>()
@@ -1103,22 +1768,20 @@ export class AragProvider implements RetrievalProvider {
     // already 0-1; BM25 scores (>1) are squashed logistically. Never
     // normalised to the top hit - a weak best match must LOOK weak.
     const calibrate = (s: number): number => s <= 1 ? Math.max(0, Math.min(1, s)) : s / (s + 2)
+    const kinds = opts.kindIds ?? []
     const resources: ScoredResource[] = deduped.map(
-      ({ id, raw, best, passage, page, reference }) => ({
+      ({ id, raw, best, passage, page, reference, matchedField }) => ({
         ...(byId.get(id) ?? this.toSummary(id, raw)),
         relevance: Math.round(calibrate(best) * 100) / 100,
         citedCount: 0,
         matchedPassage: passage,
-        ...(page ? { matchedPage: page } : {}),
+        ...(displayPage(page) ? { matchedPage: displayPage(page) } : {}),
         ...(reference ? { referenceChunk: true } : {}),
+        ...(passage ? { matchedField } : {}),
       }),
-    )
+    ).filter((r) => kinds.length === 0 || (r.kind !== undefined && kinds.includes(r.kind)))
     const relatedQuestions = deriveRelatedQuestions(trimmed, tenant.suggestedQuestions)
-    return {
-      query: trimmed,
-      resources: await this.fillPlatformSummaries(tenant, resources, rawById),
-      relatedQuestions,
-    }
+    return { results: { query: trimmed, resources, relatedQuestions }, rawById }
   }
 
   /**
@@ -1163,6 +1826,14 @@ export class AragProvider implements RetrievalProvider {
     // retrieval path `search` uses; unfiltered browse/paging below is
     // untouched.
     if (query) return await this.catalogByQuery(tenant, query, opts)
+    // The platform's `sort_field` is created/modified/title only, so a
+    // publication-date sort runs over the cached listing (same paged read,
+    // same TTL) with the same OR-within / AND-across facet semantics. A kind
+    // filter takes the same path: the kind is derived from the record (see
+    // studyDesignOf), not read from the index.
+    if (opts.sortField === 'published' || (opts.kindIds?.length ?? 0) > 0) {
+      return await this.catalogFromListing(tenant, opts)
+    }
     const params = new URLSearchParams()
     params.set('page_number', String(opts.page ?? 0))
     params.set('page_size', String(opts.pageSize ?? 24))
@@ -1173,12 +1844,11 @@ export class AragProvider implements RetrievalProvider {
     params.set('sort_field', opts.sortField ?? 'created')
     params.set('sort_order', opts.sortOrder ?? 'desc')
     params.set('hidden', 'false')
-    for (const topic of opts.topicIds ?? []) {
-      params.append('filters', `/classification.labels/topic/${topic}`)
-    }
-    for (const kind of opts.kindIds ?? []) {
-      params.append('filters', `/classification.labels/kind/${kind}`)
-    }
+    // One expression, not the legacy `filters` params: those AND every label,
+    // so Articles + Video returned nothing. Labels within a facet OR, facets
+    // AND (docs/ARAG-DEV.md: `/catalog` keys the expression under `resource`).
+    const expression = catalogFilterExpression(opts)
+    if (expression) params.set('filter_expression', JSON.stringify(expression))
     const raw = await this.client(tenant).getJson<{
       resources?: Record<string, RawResource & { created?: string }>
       fulltext?: { total?: number }
@@ -1199,6 +1869,37 @@ export class AragProvider implements RetrievalProvider {
       new Map(kept.map(({ id, raw }) => [id, raw])),
     )
     return { items, total: raw.fulltext?.total ?? raw.total ?? items.length }
+  }
+
+  /** Browse over the cached listing: the publication-date sort and any kind filter. */
+  private async catalogFromListing(
+    tenant: TenantConfig,
+    opts: CatalogOptions,
+  ): Promise<CatalogPage> {
+    const all = await this.catalogItems(tenant)
+    const matching = dedupeResourceFamilies(
+      all.filter((item) => matchesCatalogFilters(item, opts)),
+    )
+    const sorted = sortCatalogItems(matching, opts.sortField ?? 'created', opts.sortOrder ?? 'desc')
+    return {
+      items: paginateCatalogItems(sorted, opts.page ?? 0, opts.pageSize ?? 24),
+      total: sorted.length,
+    }
+  }
+
+  /**
+   * How many resources carry no label at all from a labelset - a real count
+   * from the index, because topics are multi-valued and "resources minus the
+   * sum of topic counts" goes negative.
+   */
+  async untaggedCount(tenant: TenantConfig, labelset: string): Promise<number> {
+    const params = new URLSearchParams({ page_size: '0', hidden: 'false' })
+    params.set('filter_expression', JSON.stringify(untaggedFilterExpression(labelset)))
+    const raw = await this.client(tenant).getJson<{
+      fulltext?: { total?: number }
+      total?: number
+    }>(`/catalog?${params.toString()}`)
+    return raw.fulltext?.total ?? raw.total ?? 0
   }
 
   /**
@@ -1278,10 +1979,9 @@ export class AragProvider implements RetrievalProvider {
       show: ['basic', 'extra', 'origin', 'values'],
       search_configuration: SEARCH_CONFIG_RESEARCH_FIND,
     }
-    const filters = [
-      ...(opts.topicIds ?? []).map((t) => `/classification.labels/topic/${t}`),
-      ...(opts.kindIds ?? []).map((k) => `/classification.labels/kind/${k}`),
-    ]
+    // Topics live in the index; the kind is derived from the record, so it
+    // is applied to the results below rather than sent as a filter.
+    const filters = (opts.topicIds ?? []).map((t) => `/classification.labels/topic/${t}`)
     if (filters.length > 0) body.filters = filters
     const found = await this.findWithFallback(client, body)
     const MIN_SCORE = 0.1
@@ -1299,6 +1999,9 @@ export class AragProvider implements RetrievalProvider {
       .filter((s) => s.best >= MIN_SCORE)
       .sort((a, b) => b.best - a.best)
     const kept = dedupeResourceFamilies(scored)
+      .filter(({ id, raw }) =>
+        matchesCatalogFilters(catalogItemFromRaw(id, raw), { kindIds: opts.kindIds })
+      )
     const page = opts.page ?? 0
     const pageSize = opts.pageSize ?? 24
     const start = page * pageSize
@@ -1317,8 +2020,21 @@ export class AragProvider implements RetrievalProvider {
     filters?: string[],
   ): Promise<FacetCounts> {
     if (labelsets.length === 0) return {}
+    // The kind is derived here from the stored record (see studyDesignOf),
+    // not read from the index, so its counts come from the cached listing.
+    // A filter ON a kind is one the platform cannot apply, so every labelset
+    // requested under it is counted from the listing as well.
+    const kindFilter = (filters ?? []).some((f) => f.startsWith('/classification.labels/kind/'))
+    if (kindFilter) return this.facetsFromListing(tenant, labelsets, filters ?? [])
+    const out: FacetCounts = {}
+    let remaining = labelsets
+    if (labelsets.includes('kind')) {
+      out.kind = (await this.facetsFromListing(tenant, ['kind'], filters ?? [])).kind ?? {}
+      remaining = labelsets.filter((id) => id !== 'kind')
+      if (remaining.length === 0) return out
+    }
     const params = new URLSearchParams({ page_size: '0' })
-    for (const id of labelsets) params.append('faceted', `/classification.labels/${id}`)
+    for (const id of remaining) params.append('faceted', `/classification.labels/${id}`)
     for (const f of filters ?? []) params.append('filters', f)
     const raw = await this.client(tenant).getJson<{
       fulltext?: { facets?: Record<string, Record<string, number>> }
@@ -1330,7 +2046,6 @@ export class AragProvider implements RetrievalProvider {
     const defined = new Map(
       (await this.labelsets(tenant)).map((ls) => [ls.id, new Set(ls.labels)]),
     )
-    const out: FacetCounts = {}
     for (const [facetKey, counts] of Object.entries(source)) {
       const labelsetId = facetKey.split('/').pop() ?? facetKey
       const allowed = defined.get(labelsetId)
@@ -1350,6 +2065,116 @@ export class AragProvider implements RetrievalProvider {
       '/labelsets',
     )
     return raw.labelsets ?? {}
+  }
+
+  /**
+   * Facet counts over the cached listing (the same paged read `listResources`
+   * makes), with the same AND-across-facets filter semantics as the index:
+   * the only way to count a labelset the portal derives itself.
+   */
+  private async facetsFromListing(
+    tenant: TenantConfig,
+    labelsets: string[],
+    filters: string[],
+  ): Promise<FacetCounts> {
+    const wanted = filters
+      .map((f) => /^\/classification\.labels\/([^/]+)\/(.+)$/.exec(f))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map((m) => ({ labelset: m[1]!, label: m[2]! }))
+    const labelsOf = (item: CatalogItem, labelset: string): string[] =>
+      labelset === 'kind'
+        ? item.kind ? [item.kind] : []
+        : labelset === 'format'
+        ? item.format ? [item.format] : []
+        : labelset === 'topic'
+        ? item.topicIds
+        : []
+    const items = (await this.catalogItems(tenant)).filter((item) =>
+      wanted.every((w) => labelsOf(item, w.labelset).includes(w.label))
+    )
+    const out: FacetCounts = {}
+    for (const labelset of labelsets) {
+      const counts: Record<string, number> = {}
+      for (const item of items) {
+        for (const label of labelsOf(item, labelset)) counts[label] = (counts[label] ?? 0) + 1
+      }
+      out[labelset] = counts
+    }
+    return out
+  }
+
+  /** The extraction methods registered on the box, plus the platform default. */
+  async listExtractionMethods(tenant: TenantConfig): Promise<ExtractionMethod[]> {
+    const raw = await this.client(tenant).getJson<Record<string, RawStrategy>>(
+      '/extract_strategies',
+    )
+    const methods: ExtractionMethod[] = [
+      { id: 'default', name: 'Default', kind: 'default' },
+    ]
+    for (const [id, s] of Object.entries(raw ?? {})) methods.push(methodFromStrategy(id, s))
+    return methods
+  }
+
+  /** Register an extraction method; returns it with the platform's id. */
+  async registerExtractionMethod(
+    tenant: TenantConfig,
+    spec: Omit<ExtractionMethod, 'id'>,
+  ): Promise<ExtractionMethod> {
+    const id = await this.client(tenant).postJson<string>('/extract_strategies', strategyBody(spec))
+    return { ...spec, id: typeof id === 'string' ? id : String(id) }
+  }
+
+  /**
+   * What the platform extracted from a resource: text, paragraph count and
+   * the number of markdown-table rows in it (the table-aware method writes
+   * tables into the text as rows of `|` cells).
+   */
+  async resourceExtraction(
+    tenant: TenantConfig,
+    id: string,
+  ): Promise<
+    { status: string; text: string; chars: number; paragraphs: number; tableRows: number }
+  > {
+    const full = await this.client(tenant).getJson<{
+      metadata?: { status?: string }
+      data?: Record<
+        string,
+        Record<
+          string,
+          {
+            extracted?: {
+              text?: { text?: string }
+              metadata?: { metadata?: { paragraphs?: unknown[] } }
+            }
+          }
+        >
+      >
+    }>(`/resource/${id}?show=basic&show=extracted&extracted=text&extracted=metadata`)
+    const texts: string[] = []
+    let paragraphs = 0
+    for (const [group, fields] of Object.entries(full.data ?? {})) {
+      if (group === 'generics') continue
+      for (const [fieldKey, field] of Object.entries(fields ?? {})) {
+        // A generated summary field is not the document: the audit and the
+        // evidence cards read the extraction to check claims against what
+        // the paper says, and a DA summary would vouch for itself.
+        if (isGeneratedField(fieldKey)) continue
+        const t = field.extracted?.text?.text
+        if (t) texts.push(t)
+        paragraphs += field.extracted?.metadata?.metadata?.paragraphs?.length ?? 0
+      }
+    }
+    const text = texts.join('\n\n')
+    const tableRows =
+      text.split('\n').filter((l) => /^\s*\|.*\|\s*$/.test(l) && !/^\s*\|[\s|:-]+\|\s*$/.test(l))
+        .length
+    return {
+      status: full.metadata?.status ?? 'PENDING',
+      text,
+      chars: text.length,
+      paragraphs,
+      tableRows,
+    }
   }
 
   async labelsets(tenant: TenantConfig): Promise<Labelset[]> {
@@ -1464,12 +2289,93 @@ export class AragProvider implements RetrievalProvider {
    * synthesis - which already grounds strictly on the researcher's own kept
    * evidence, corpus analysis) keep their existing behaviour unchanged.
    */
+  /**
+   * Stage 2 of intent routing: one short structured generation that names the
+   * intent, a confidence and a rationale. One keyword hit is retrieved (the
+   * platform will not generate on an empty context) so it costs one short
+   * generation.
+   * `citations` is never sent with `answer_json_schema` (docs/ARAG-DEV.md).
+   */
+  async classifyIntent(
+    tenant: TenantConfig,
+    query: string,
+    opts: { model?: string; allowed?: string[] } = {},
+  ): Promise<{ intent?: unknown; confidence?: unknown; rationale?: unknown }> {
+    const intents = (tenant.intents ?? []).filter((i) =>
+      !opts.allowed || opts.allowed.includes(i.id)
+    )
+    if (intents.length === 0) return {}
+    const schema = {
+      name: 'route_intent',
+      description: 'Choose which retrieval intent a research question belongs to',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          intent: { type: 'string', enum: intents.map((i) => i.id) },
+          confidence: { type: 'number' },
+          rationale: { type: 'string' },
+        },
+        required: ['intent', 'confidence', 'rationale'],
+      },
+    }
+    const menu = intents
+      .map((i) => `- ${i.id}: ${i.description} Examples: ${i.examples.join('; ')}`)
+      .join('\n')
+    const prompt = `Classify this question into exactly one intent. Intents:\n${menu}\n\n` +
+      `Question: ${query}\n\nReturn the intent id, a confidence between 0 and 1, and a one-sentence rationale.`
+    const client = this.client(tenant)
+    const res = await client.postStream('/ask', {
+      query: prompt,
+      features: ['keyword'],
+      answer_json_schema: schema,
+      show: ['basic'],
+      // The platform refuses to generate with no retrieved context, so the
+      // classifier keeps one cheap keyword hit rather than grounding on
+      // nothing; the schema answer ignores it.
+      top_k: 1,
+      reranker: 'noop',
+      ...(opts.model ? { generative_model: opts.model } : {}),
+      max_tokens: 400,
+    })
+    let object: unknown = null
+    for await (const line of ndjson(res)) {
+      const item = (line as { item?: { type?: string } & Record<string, unknown> }).item
+      if (item?.type === 'answer_json') object = item.object ?? null
+    }
+    return (object && typeof object === 'object') ? object as Record<string, unknown> : {}
+  }
+
   async askStructured(
     tenant: TenantConfig,
     schema: { name: string; description: string; parameters: unknown },
     query: string,
-    opts: { requireGrounding?: boolean; resourceId?: string; model?: string } = {},
-  ): Promise<{ object: unknown; sources: ScoredResource[]; insufficientGrounding: boolean }> {
+    opts: {
+      requireGrounding?: boolean
+      resourceId?: string
+      model?: string
+      /** System-prompt instructions for the generation (how to write, what to include). */
+      instructions?: string
+      /** Restrict retrieval to resources filed under any of these topics. */
+      topicIds?: string[]
+      /** Restrict retrieval to these resources (a briefing's chosen papers). */
+      resourceIds?: string[]
+      /**
+       * Passages the application adds to the grounding context (a briefing's
+       * section-filtered paragraphs and data-augmentation fields), beside
+       * what retrieval finds. Plain text, trimmed to size by the caller.
+       */
+      extraContext?: string[]
+      /** Paragraph budget for the platform's own retrieval, when the caller supplies the context. */
+      topK?: number
+    } = {},
+  ): Promise<{
+    object: unknown
+    sources: ScoredResource[]
+    insufficientGrounding: boolean
+    /** Every retrieved passage per resource id - the grounding context the model wrote from. */
+    passagesByResource: Record<string, string[]>
+  }> {
     const client = this.client(tenant)
     const catalogue = await this.listResources(tenant).catch(() => [] as ResourceSummary[])
     const byId = new Map(catalogue.map((r) => [r.id, r]))
@@ -1478,10 +2384,28 @@ export class AragProvider implements RetrievalProvider {
       features: ['keyword', 'semantic'],
       answer_json_schema: schema,
       show: ['basic', 'origin'],
+      // Writing instructions ride the system prompt, never the query: the
+      // query is also the retrieval text, and instructions in it drag
+      // retrieval towards the instructions rather than the topic.
+      ...(opts.instructions?.trim() ? { prompt: { system: opts.instructions.trim() } } : {}),
       // Scope generation to one resource (per-resource enrichment) - the same
       // resource_filters the per-document chat uses. Verified live: it grounds
       // the answer on exactly that resource.
-      ...(opts.resourceId ? { resource_filters: [opts.resourceId] } : {}),
+      ...(opts.resourceId
+        ? { resource_filters: [opts.resourceId] }
+        : opts.resourceIds?.length
+        ? { resource_filters: opts.resourceIds.slice(0, 40) }
+        : {}),
+      ...(opts.extraContext?.length
+        ? { extra_context: opts.extraContext.filter((t) => t.trim().length > 0).slice(0, 12) }
+        : {}),
+      ...(opts.topK && opts.topK > 0 ? { top_k: Math.min(Math.floor(opts.topK), 100) } : {}),
+      // A topic scope (an assessment on one knowledge area) keeps retrieval
+      // to the resources filed under it, so an off-topic passage cannot seed
+      // a question.
+      ...(opts.topicIds?.length
+        ? { filters: opts.topicIds.map((t) => `/classification.labels/topic/${t}`) }
+        : {}),
       // Run a cheap, high-volume job (per-document openers) on the fast tier
       // instead of the box's default model. Omitted -> the box default.
       ...(opts.model ? { generative_model: opts.model } : {}),
@@ -1491,6 +2415,7 @@ export class AragProvider implements RetrievalProvider {
     })
     let object: unknown = null
     let sources: ScoredResource[] = []
+    const passagesByResource: Record<string, string[]> = {}
     for await (const line of ndjson(res)) {
       const item = (line as { item?: { type?: string } & Record<string, unknown> }).item
       if (!item?.type) continue
@@ -1511,6 +2436,11 @@ export class AragProvider implements RetrievalProvider {
             }
           >
         } | undefined
+        for (const [id, raw] of Object.entries(results?.resources ?? {})) {
+          passagesByResource[id] = Object.values(raw.fields ?? {}).flatMap((field) =>
+            Object.values(field.paragraphs ?? {}).flatMap((p) => p.text ? [p.text] : [])
+          )
+        }
         sources = Object.entries(results?.resources ?? {})
           .map(([id, raw]) => {
             const match = bestParagraphMatch(raw)
@@ -1519,7 +2449,7 @@ export class AragProvider implements RetrievalProvider {
               relevance: Math.round(calibrateRelevance(match.best) * 100) / 100,
               citedCount: 0,
               matchedPassage: match.passage,
-              ...(match.page ? { matchedPage: match.page } : {}),
+              ...(displayPage(match.page) ? { matchedPage: displayPage(match.page) } : {}),
               ...(match.reference ? { referenceChunk: true } : {}),
             }
           })
@@ -1530,7 +2460,7 @@ export class AragProvider implements RetrievalProvider {
     }
     const grounded = sources.filter((s) => s.relevance >= MIN_GENERATE_GROUNDING)
     if (opts.requireGrounding && grounded.length === 0) {
-      return { object: null, sources: grounded, insufficientGrounding: true }
+      return { object: null, sources: grounded, insufficientGrounding: true, passagesByResource }
     }
     if (object === null) {
       throw new Error('The platform returned no structured answer - try a narrower request')
@@ -1539,6 +2469,7 @@ export class AragProvider implements RetrievalProvider {
       object,
       sources: opts.requireGrounding ? grounded : sources,
       insufficientGrounding: false,
+      passagesByResource,
     }
   }
 
@@ -1778,11 +2709,17 @@ export class AragProvider implements RetrievalProvider {
       filter?: unknown
       /** The platform's `on` trigger; a re-instantiated agent keeps its own. */
       on?: number
+      /**
+       * What the agent is applied to: whole fields (resources), the default,
+       * or individual text blocks (passages). The platform enum is
+       * TEXT_BLOCK = 0, FIELD = 1.
+       */
+      scope?: 'field' | 'text_block'
     },
   ): Promise<void> {
     const parameters: Record<string, unknown> = {
       name: input.title,
-      on: input.on ?? 1,
+      on: input.on ?? (input.scope === 'text_block' ? 0 : 1),
       operations: input.operations,
     }
     if (input.model) parameters.llm = { model: input.model }
@@ -1833,10 +2770,13 @@ export class AragProvider implements RetrievalProvider {
   async relationsGraph(
     tenant: TenantConfig,
     opts: { entity?: string; topK?: number; includeBuiltin?: boolean } = {},
-  ): Promise<{
-    nodes: { id: string; group: string; weight: number }[]
-    edges: { source: string; target: string; label: string }[]
-  }> {
+  ): Promise<RelationsGraphResult> {
+    const entity = opts.entity?.trim()
+    const cacheKey = `${tenant.slug}|${entity?.toLowerCase() ?? ''}|${
+      opts.includeBuiltin ? 'builtin' : 'agent'
+    }|${opts.topK ?? ''}`
+    const cached = this.graphCache.get(cacheKey)
+    if (cached && Date.now() - cached.at < GRAPH_CACHE_TTL_MS) return cached.graph
     try {
       // By default, only agent-extracted relations - the built-in NER pipeline
       // floods the path index (PERSON/DATE/LOC) and would drown the curated
@@ -1846,31 +2786,44 @@ export class AragProvider implements RetrievalProvider {
       // raw NER output comes through too - the label-assignment and
       // resource-id exclusions below still apply either way.
       const generated = { prop: 'generated', by: 'data-augmentation' }
-      const pathFilter = opts.entity
+      const pathFilter = entity
         ? {
           prop: 'path',
-          source: { value: opts.entity, match: 'exact' },
+          source: { value: entity, match: 'exact' },
           undirected: true,
         }
         : null
-      // For "include built-in", scope to the entity's paths when given, else ask
-      // for ALL relation paths. NOTE: the /graph endpoint 422s on a missing or
-      // empty ({}) query, so "everything" must be an explicit { prop: 'path' }
-      // (verified live) - this is the shape that returns built-in NER paths too.
-      const query = opts.includeBuiltin
-        ? pathFilter ?? { prop: 'path' }
-        : pathFilter
-        ? { and: [pathFilter, generated] }
-        : generated
-      const body: Record<string, unknown> = { top_k: opts.topK ?? 400 }
-      if (query !== undefined) body.query = query
-      const raw = await this.client(tenant).postJson<{
-        paths?: {
-          source?: { value?: string; group?: string }
-          relation?: { label?: string }
-          destination?: { value?: string; group?: string }
-        }[]
-      }>('/graph', body)
+      // NOTE: the /graph endpoint 422s on a missing or empty ({}) query, so
+      // "everything" must be an explicit { prop: 'path' } (verified live).
+      const queries: unknown[] = []
+      if (pathFilter) {
+        queries.push(opts.includeBuiltin ? pathFilter : { and: [pathFilter, generated] })
+      } else if (opts.includeBuiltin) queries.push({ prop: 'path' })
+      else {
+        // The generated index is larger than one page and the platform pages
+        // it in no stable order, so a single page gave a different map on
+        // every load (SCN1A and Dravet, then JME, then a drug-allergy paper).
+        // Read one page per entity group plus the ungrouped page, and rank the
+        // union by weight: the slice is then the same on every call until the
+        // index itself changes.
+        queries.push(generated)
+        for (const group of await this.entityGroupNames(tenant)) {
+          queries.push({ and: [{ prop: 'path', source: { group }, undirected: true }, generated] })
+        }
+      }
+      const topK = Math.min(GRAPH_PAGE, opts.topK ?? GRAPH_PAGE)
+      const client = this.client(tenant)
+      const pages = await Promise.all(
+        queries.map((query) =>
+          client.postJson<{
+            paths?: {
+              source?: { value?: string; group?: string }
+              relation?: { label?: string }
+              destination?: { value?: string; group?: string }
+            }[]
+          }>('/graph', { top_k: topK, query })
+        ),
+      )
       const weight = new Map<string, { group: string; weight: number }>()
       const edges: { source: string; target: string; label: string }[] = []
       const seenEdge = new Set<string>()
@@ -1885,7 +2838,7 @@ export class AragProvider implements RetrievalProvider {
         groupSpellings.set(key, raw)
         return raw
       }
-      for (const path of raw.paths ?? []) {
+      for (const path of pages.flatMap((page) => page.paths ?? [])) {
         const s = path.source?.value
         const d = path.destination?.value
         if (!s || !d || s === d) continue
@@ -1911,23 +2864,65 @@ export class AragProvider implements RetrievalProvider {
         }
       }
       // The agent extracts the same entity under several case spellings, each
-      // with its own relations - merge them before the top-120 cut so the
-      // merged weight is what earns a place.
+      // with its own relations - merge them before the cut so the merged
+      // weight is what earns a place.
       const deduped = dedupeEntityCase(
         [...weight.entries()].map(([id, v]) => ({ id, group: v.group, weight: v.weight })),
         edges,
       )
-      const nodes = deduped.nodes
-        .sort((a, b) => b.weight - a.weight)
-        .slice(0, 120)
-      const keep = new Set(nodes.map((n) => n.id))
-      return {
-        nodes,
-        edges: deduped.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+      // Table numbers, author strings, journals and case vignettes are not
+      // entities; the Gene group must hold gene symbols. The entity a reader
+      // asked for is always kept, whatever it looks like.
+      // The raw NER opt-in is the reader asking for everything, so only the
+      // agent-extracted graph is cleaned.
+      const asked = entity?.toLowerCase()
+      const clean = deduped.nodes.filter((n) =>
+        opts.includeBuiltin || n.id.toLowerCase() === asked || keepEntity(n.id, n.group)
+      )
+      const cleanIds = new Set(clean.map((n) => n.id))
+      const cleanEdges = deduped.edges.filter((e) =>
+        cleanIds.has(e.source) && cleanIds.has(e.target)
+      )
+      const degree = new Map<string, number>()
+      for (const e of cleanEdges) {
+        degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+        degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
       }
+      // Weight, then degree, then name: a total order, so the slice is stable.
+      const ranked = clean
+        .filter((n) => (degree.get(n.id) ?? 0) > 0)
+        .sort((a, b) =>
+          b.weight - a.weight || (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) ||
+          a.id.localeCompare(b.id)
+        )
+      const nodes = entity ? ranked : sliceWithGroupFloor(ranked, GRAPH_SLICE, GRAPH_GROUP_FLOOR)
+      const keep = new Set(nodes.map((n) => n.id))
+      const graph = {
+        nodes,
+        edges: cleanEdges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+      }
+      this.graphCache.set(cacheKey, { at: Date.now(), graph })
+      return graph
     } catch {
       return { nodes: [], edges: [] }
     }
+  }
+
+  /** The custom entity groups on the box, by name - the graph reads one page per group. */
+  private async entityGroupNames(tenant: TenantConfig): Promise<string[]> {
+    return (await this.allEntityGroups(tenant)).map((g) => g.group)
+  }
+
+  /**
+   * Every entity name the portal knows for prefix matching: the tenant's
+   * configured lexicon plus the cleaned entity groups. Cached with the groups.
+   */
+  private async entityLexicon(tenant: TenantConfig): Promise<string[]> {
+    const groups = await this.allEntityGroups(tenant)
+    return dedupeNames([
+      ...(tenant.entityTerms ?? []),
+      ...groups.flatMap((g) => g.entities),
+    ])
   }
 
   /** Grounded multi-resource summary via the box's summarize endpoint. */
@@ -1981,6 +2976,18 @@ export class AragProvider implements RetrievalProvider {
   }
 
   /** Remove a resource permanently (curation - e.g. replacing a corrupt ingest). */
+  /** Retitle and tag a resource (used by the Extraction Lab to mark sandbox uploads). */
+  async patchResourceMeta(
+    tenant: TenantConfig,
+    id: string,
+    meta: { title?: string; tags?: string[] },
+  ): Promise<void> {
+    await this.client(tenant).patchJson(`/resource/${id}`, {
+      ...(meta.title ? { title: meta.title } : {}),
+      ...(meta.tags ? { origin: { tags: meta.tags } } : {}),
+    })
+  }
+
   async deleteResource(tenant: TenantConfig, id: string): Promise<void> {
     await this.client(tenant).deleteJson(`/resource/${id}`)
     this.invalidateCatalogue(tenant.slug)
@@ -2185,9 +3192,27 @@ export class AragProvider implements RetrievalProvider {
     // the query, dropping single-fragment noise unrelated to it.
     const NOISE =
       /^(recent|early|late|last|next|this|coming|current|previous)\b|^(north|south|east|west)$|^(january|february|march|april|may|june|july|august|september|october|november|december)\b|^\d{1,4}$/i
-    const entities = (platform.entities?.entities ?? [])
-      .map((e) => (e.value ?? '').trim())
-      .filter((v) => v.length > 2 && !NOISE.test(v) && !v.includes('\n') && matchesQuery(v))
+    // Platform suggestions plus a prefix match over the portal's own lexicon
+    // (the configured terms and the cleaned entity groups): "kaina" reaches
+    // "kainate" and "kainic acid" even when the platform offers only a rat.
+    // Case variants ("Dravet", "dravet", "DRAVET") collapse onto one entry.
+    const lexicon = await this.entityLexicon(tenant).catch(() => [] as string[])
+    const candidates = [
+      ...(platform.entities?.entities ?? []).map((e) => (e.value ?? '').trim()),
+      ...lexicon,
+    ].filter((v) =>
+      v.length > 2 && !NOISE.test(v) && !v.includes('\n') && !isNoiseEntity(v) && matchesQuery(v)
+    )
+    const variants = new Map<string, string[]>()
+    for (const v of candidates) {
+      const key = v.replace(/\s+/g, ' ').toLowerCase()
+      const list = variants.get(key)
+      if (list) list.push(v)
+      else variants.set(key, [v])
+    }
+    const startsWith = (v: string) => v.toLowerCase().startsWith(q) ? 0 : 1
+    const entities = dedupeNames([...variants.values()].map((list) => preferredSpelling(list)))
+      .sort((a, b) => startsWith(a) - startsWith(b) || a.length - b.length || a.localeCompare(b))
       .slice(0, 6)
 
     const seen = new Set<string>()
@@ -2266,7 +3291,7 @@ export class AragProvider implements RetrievalProvider {
    */
   async ensureSearchConfigs(tenant: TenantConfig): Promise<string[]> {
     const client = this.client(tenant)
-    const researchExclude = researchExcludeFilterExpression()
+    const researchExclude = researchExcludeFilterExpression(tenant.searchExclude ?? [])
     const docOnly = docOnlyFilterExpression()
     const desired: Record<string, unknown> = {
       [SEARCH_CONFIG_RESEARCH_FIND]: {
@@ -2309,6 +3334,7 @@ export class AragProvider implements RetrievalProvider {
         kind: 'find',
         config: { features: ['keyword'], top_k: 8 },
       },
+      ...intentSearchConfigs(tenant),
     }
     const created: string[] = []
     for (const [name, body] of Object.entries(desired)) {
@@ -2408,6 +3434,15 @@ export class AragProvider implements RetrievalProvider {
   async entityGroups(
     tenant: TenantConfig,
   ): Promise<{ group: string; entities: string[] }[]> {
+    const groups = await this.allEntityGroups(tenant)
+    return groups.map((g) => ({ group: g.group, entities: g.entities.slice(0, 100) }))
+  }
+
+  private async allEntityGroups(
+    tenant: TenantConfig,
+  ): Promise<{ group: string; entities: string[] }[]> {
+    const cached = this.entityGroupsCache.get(tenant.slug)
+    if (cached && Date.now() - cached.at < GRAPH_CACHE_TTL_MS) return cached.groups
     try {
       const client = this.client(tenant)
       const raw = await client.getJson<{
@@ -2418,20 +3453,25 @@ export class AragProvider implements RetrievalProvider {
       // and are excluded from the portal's graph views.
       const names = Object.keys(raw.groups ?? {})
         .filter((name) => !/^[A-Z0-9_]+$/.test(name))
+        .sort((a, b) => a.localeCompare(b))
         .slice(0, 16)
       const out = await Promise.all(names.map(async (group) => {
-        const inline = Object.keys(raw.groups?.[group]?.entities ?? {})
-        if (inline.length > 0) return { group, entities: inline.slice(0, 100) }
-        try {
-          const detail = await client.getJson<{ entities?: Record<string, unknown> }>(
-            `/entitiesgroup/${encodeURIComponent(group)}`,
-          )
-          return { group, entities: Object.keys(detail.entities ?? {}).slice(0, 100) }
-        } catch {
-          return { group, entities: [] }
+        let inline = Object.keys(raw.groups?.[group]?.entities ?? {})
+        if (inline.length === 0) {
+          try {
+            const detail = await client.getJson<{ entities?: Record<string, unknown> }>(
+              `/entitiesgroup/${encodeURIComponent(group)}`,
+            )
+            inline = Object.keys(detail.entities ?? {})
+          } catch {
+            inline = []
+          }
         }
+        return { group, entities: cleanEntityNames(inline, group) }
       }))
-      return out.filter((g) => g.entities.length > 0)
+      const groups = out.filter((g) => g.entities.length > 0)
+      this.entityGroupsCache.set(tenant.slug, { at: Date.now(), groups })
+      return groups
     } catch {
       return []
     }
@@ -2598,12 +3638,25 @@ export class AragProvider implements RetrievalProvider {
     const excludedSourceIds = new Set<string>()
     let excludedGroundingSeen = false
 
+    const intent = opts.intent && !opts.docScope
+      ? tenant.intents?.find((i) => i.id === opts.intent && i.answer.surfaces.includes('ask'))
+      : undefined
     const body: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
       citations: true,
       show: ['basic', 'origin'],
-      search_configuration: opts.docScope ? SEARCH_CONFIG_DOC_ASK : SEARCH_CONFIG_RESEARCH_ASK,
+      // A sandbox box (the Extraction Lab) has none of the portal's stored
+      // configurations - naming one 400s "Search configuration not found" -
+      // and its single scoped document must ground the answer whatever its
+      // retrieval score, so no configuration and no score floor are sent.
+      ...(opts.sandbox ? { min_score: { semantic: 0, bm25: 0 } } : {
+        search_configuration: opts.docScope
+          ? SEARCH_CONFIG_DOC_ASK
+          : intent
+          ? intentConfigurationName(tenant, intent.id, 'ask')
+          : SEARCH_CONFIG_RESEARCH_ASK,
+      }),
       // Cross-encoder reranking of the grounding candidates - verified live
       // (see the reranker note in docs/ARAG-DEV.md and search()'s comment
       // above). Pinned defensively: it is already the platform's default
@@ -2614,7 +3667,7 @@ export class AragProvider implements RetrievalProvider {
       // Nuclia's default RAG prompt answers "Not enough data to answer this."
       // as a guardrail even when relevant sources were retrieved - override it.
       prompt: {
-        system: opts.systemPrompt?.trim() ||
+        system: variantPreamble(intent?.answer.promptVariant) + (opts.systemPrompt?.trim() ||
           (opts.docScope
             ? `You are the help assistant for the ${tenant.branding.productName} research ` +
               'portal. Answer the user\'s "how do I..." question about using the portal, using ' +
@@ -2623,11 +3676,17 @@ export class AragProvider implements RetrievalProvider {
               'documentation at claim level with a bracketed marker like [1] after each step or ' +
               'fact - the application assigns the real citation numbers itself. If the ' +
               'documentation does not cover the question, say so plainly and suggest where in the ' +
-              'portal to look; never invent a feature that is not described in the documentation.'
+              'portal to look; never invent a feature that is not described in the documentation. ' +
+              'Call the material "the documentation" or "the Help pages", never "the context" ' +
+              'or "the provided context" - a reader never sees a context. Never write "Not ' +
+              'enough data to answer this": when the documentation does not describe something, ' +
+              'say that in plain words and name the nearest feature it does describe.'
             : `You are a research analyst for ${tenant.branding.organisation}. Always answer the ` +
               'question using the provided context. Synthesise across sources even when the ' +
               'context is partial - surface what IS known and be specific. Never reply that there ' +
-              'is not enough data, and never refuse, when any relevant context is present. Write ' +
+              'is not enough data, and never refuse, when any relevant context is present. For any ' +
+              "part of the question the context does not address, say plainly that the portal's " +
+              'sources do not cover it rather than answering that part from general knowledge. Write ' +
               'clear, well-structured prose with Markdown, in Australian English. Cite evidence ' +
               'at claim level: after each factual claim, add a bracketed marker like [1] to show ' +
               'a citation belongs there. The number itself does not matter and does not need to ' +
@@ -2637,8 +3696,20 @@ export class AragProvider implements RetrievalProvider {
               'the context states, mark it (inference). When the context ' +
               'contains conflicting, negative or nuanced findings (adverse observations, ' +
               'non-detections, disagreements between studies), state them explicitly with their ' +
-              'specifics - a researcher needs the tension, never a smoothed summary.'),
+              'specifics - a researcher needs the tension, never a smoothed summary. Refer to the ' +
+              'material as "the cited sources", never as "the context"; a reader never sees the ' +
+              'context, only the sources. Never write "Not enough data to answer this".')) +
+          (opts.promptAddendum?.trim() ? `\n\n${opts.promptAddendum.trim()}` : ''),
       },
+    }
+    if (opts.extraContext && opts.extraContext.length > 0) {
+      body.extra_context = opts.extraContext.filter((t) => t.trim().length > 0).slice(0, 12)
+    }
+    if (intent) {
+      // The stored configuration's features win over the request's; never
+      // send both (docs/ARAG-DEV.md).
+      delete body.features
+      body.reranker = intent.retrieval.reranker
     }
     if (opts.context && opts.context.length > 0) {
       // The app models turns as USER/AGENT; this deployment's /ask context
@@ -2649,31 +3720,66 @@ export class AragProvider implements RetrievalProvider {
       }))
     }
     if (opts.resourceId) body.resource_filters = [opts.resourceId]
+    else if (opts.resourceIds && opts.resourceIds.length > 0) {
+      // An author's papers: the platform's resource filter takes a list.
+      body.resource_filters = opts.resourceIds.slice(0, 80)
+    }
     if (opts.topicIds && opts.topicIds.length > 0) {
       body.filters = opts.topicIds.map((t) => `/classification.labels/topic/${t}`)
     }
     // Agentic retrieval upgrades: widen grounding windows around each hit and
     // walk the knowledge graph from entities detected in the query (uses the
     // box's graph extraction agent). Degrades gracefully if unsupported.
-    const strategies: Record<string, unknown>[] = opts.depth === 'deep'
+    const depth = intent?.answer.depth === 'deep' ? 'deep' : opts.depth
+    let strategies: Record<string, unknown>[] = opts.lean
+      // A reformatting turn's material is in extra_context; retrieval
+      // only has to bind citations, so no expansion and no walk (D5-05).
+      ? []
+      : opts.light
+      // A terse question: one neighbour each side, no graph walk.
+      ? [{ name: 'neighbouring_paragraphs', before: 1, after: 1 }]
+      : intent
+      ? intentStrategies(intent)
+      : depth === 'deep'
       ? [{ name: 'full_resource' }]
       : [
         { name: 'neighbouring_paragraphs', before: 2, after: 2 },
         { name: 'graph_beta', hops: 2, agentic_graph_only: true },
       ]
-    if (opts.prequeries && opts.prequeries.length > 0) {
-      strategies.push({
-        name: 'prequeries',
-        queries: opts.prequeries.slice(0, 8).map((q) => ({
-          request: { query: q, features: ['keyword', 'semantic'] },
-          weight: 1,
-        })),
-      })
+    if (opts.lean) body.reranker = 'noop'
+    if (opts.topK && opts.topK > 0) {
+      // A request-level paragraph budget wins over the stored
+      // configuration's (verified for /find; the author-scoped review
+      // needs more than twenty paragraphs across forty papers). Whole
+      // resources and a wide budget do not fit one context, so the full
+      // text strategy gives way to neighbouring paragraphs.
+      body.top_k = Math.min(Math.floor(opts.topK), 100)
+      if (strategies.some((st) => st.name === 'full_resource')) {
+        strategies = [
+          { name: 'neighbouring_paragraphs', before: 1, after: 1 },
+          ...strategies.filter((st) => st.name !== 'full_resource'),
+        ]
+      }
     }
+    const prequeries = groundingPrequeries(query, {
+      pinnedResourceIds: opts.pinnedResourceIds,
+      pinnedQueries: opts.pinnedQueries,
+      scopedQueries: opts.scopedQueries,
+      prefer: intent?.retrieval.prefer,
+      prequeries: opts.prequeries,
+      priorResourceIds: opts.priorResourceIds,
+      // A Help prequery is a full find request of its own: it carries the
+      // documentation-only filter, or it would read the research corpus.
+      ...(opts.docScope ? { filterExpression: docOnlyFilterExpression() } : {}),
+    })
+    if (prequeries.length > 0) strategies.push({ name: 'prequeries', queries: prequeries })
     body.rag_strategies = strategies
     if (opts.images) {
       body.rag_images_strategies = [{ name: 'page_image' }, { name: 'tables' }]
     }
+    // A table over three studies needs more than the default generation
+    // budget, or its last row is cut (D4-06).
+    if (opts.maxTokens && opts.maxTokens > 0) body.max_tokens = Math.min(opts.maxTokens, 4096)
 
     let sources: ScoredResource[] = []
     const contextTexts: string[] = []
@@ -2681,6 +3787,9 @@ export class AragProvider implements RetrievalProvider {
     let refusalPossible = true
     let generating = false
     let emitted = false
+    // The start of a marker the next chunk completes, held back from the
+    // provisional text (see splitPartialMarker).
+    let heldTail = ''
     // See MIN_REFUSAL_OVERRIDE_RELEVANCE: at most one retry when the model
     // refuses despite a genuinely relevant retrieved source - never more,
     // so a true out-of-corpus question (no strong source to trigger it)
@@ -2708,18 +3817,63 @@ export class AragProvider implements RetrievalProvider {
         let best = 0
         let passage: string | undefined
         let page: number | undefined
-        for (const field of Object.values(raw.fields ?? {})) {
+        let matchedField: 'body' | 'summary' = 'body'
+        // The best paragraph that is not a reference-list chunk: papers in
+        // one group cite each other, so an author-scoped question's top hit
+        // in a paper is often its bibliography. A paper with any body hit
+        // shows that hit and is never a reference hit (D1-05).
+        let bodyBest = -1
+        let bodyPassage: string | undefined
+        let bodyPage: number | undefined
+        let bodyField: 'body' | 'summary' = 'body'
+        // Every body paragraph retrieval returned, best first: the evidence
+        // card chooses among them for the paragraph that carries the claim.
+        const paged: { score: number; text: string; page?: number }[] = []
+        for (const [fieldKey, field] of Object.entries(raw.fields ?? {})) {
           for (const paragraph of Object.values(field.paragraphs ?? {})) {
             if (paragraph.text) contextTexts.push(paragraph.text)
-            if ((paragraph.score ?? 0) >= best) {
-              best = paragraph.score ?? 0
+            const paragraphPage = displayPage(
+              (paragraph as { position?: { page_number?: number } }).position?.page_number,
+            )
+            if (
+              paragraph.text && !isGeneratedField(fieldKey) &&
+              !looksLikeDeclarationsChunk(paragraph.text)
+            ) {
+              paged.push({
+                score: paragraph.score ?? 0,
+                text: paragraph.text.slice(0, 2000),
+                ...(paragraphPage ? { page: paragraphPage } : {}),
+              })
+            }
+            const score = paragraph.score ?? 0
+            if (score >= best) {
+              best = score
               passage = paragraph.text ?? passage
               page = (paragraph as { position?: { page_number?: number } }).position?.page_number
+              matchedField = isGeneratedField(fieldKey) ? 'summary' : 'body'
+            }
+            if (paragraph.text && score >= bodyBest && !isNonEvidenceChunk(paragraph.text)) {
+              bodyBest = score
+              bodyPassage = paragraph.text
+              bodyPage = (paragraph as { position?: { page_number?: number } }).position
+                ?.page_number
+              bodyField = isGeneratedField(fieldKey) ? 'summary' : 'body'
             }
           }
         }
-        const reference = passage ? looksLikeReferenceChunk(passage) : false
-        const shown = reference ? best * 0.4 : best
+        let swapped = false
+        if (passage !== undefined && bodyPassage !== undefined && isNonEvidenceChunk(passage)) {
+          passage = bodyPassage
+          page = bodyPage
+          matchedField = bodyField
+          swapped = true
+        }
+        const reference = passage ? isNonEvidenceChunk(passage) : false
+        const shown = reference ? best * 0.4 : swapped ? bodyBest : best
+        const passages = paged
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 12)
+          .map(({ text, page }) => ({ text, ...(page ? { page } : {}) }))
         return {
           ...(byId.get(id) ?? this.toSummary(id, raw)),
           // Same calibration as search: semantic scores pass through, BM25
@@ -2728,8 +3882,10 @@ export class AragProvider implements RetrievalProvider {
             100,
           citedCount: 0,
           matchedPassage: passage,
-          ...(page ? { matchedPage: page } : {}),
+          ...(displayPage(page) ? { matchedPage: displayPage(page) } : {}),
+          ...(passages.length > 0 ? { passages } : {}),
           ...(reference ? { referenceChunk: true } : {}),
+          ...(passage ? { matchedField } : {}),
         }
       })
 
@@ -2745,6 +3901,7 @@ export class AragProvider implements RetrievalProvider {
         fullAnswer = ''
         refusalPossible = true
         generating = false
+        heldTail = ''
         citationsMapAccum = {}
         validSourceIds.clear()
         excludedSourceIds.clear()
@@ -2776,7 +3933,7 @@ export class AragProvider implements RetrievalProvider {
                 excludedSourceIds.add(id)
               }
             }
-            sources = toSources(kept)
+            sources = shapeSourcesForIntent(toSources(kept), intent)
             yield { type: 'sources', resources: sources }
             if (!generating) {
               generating = true
@@ -2818,12 +3975,18 @@ export class AragProvider implements RetrievalProvider {
               // shown mid-stream. The authoritative, correctly-bound text
               // (spliced from the platform's own char-offsets) replaces this
               // once generation and citation binding both finish - see the
-              // `done` event below.
-              yield { type: 'delta', text: stripInlineMarkers(fullAnswer) }
+              // `done` event below. A marker split across chunks is held
+              // back until the chunk that completes it (D2-14).
+              const first = splitPartialMarker(fullAnswer)
+              heldTail = first.hold
+              yield { type: 'delta', text: stripInlineMarkers(first.emit) }
               continue
             }
             emitted = true
-            yield { type: 'delta', text: stripInlineMarkers(item.text) }
+            const chunk = splitPartialMarker(heldTail + item.text)
+            heldTail = chunk.hold
+            const visible = stripInlineMarkers(chunk.emit)
+            if (visible) yield { type: 'delta', text: visible }
           } else if (item.type === 'citations' && item.citations) {
             // Accumulate only - numbering and marker placement need the
             // complete map plus the complete answer text, computed once the
@@ -2874,7 +4037,8 @@ export class AragProvider implements RetrievalProvider {
         // true out-of-corpus question (nothing this relevant retrieved)
         // refuses exactly as before.
         if (
-          isGuardrailRefusal(fullAnswer) && !refusalRetried && attempt < MAX_ATTEMPTS &&
+          isGuardrailRefusal(fullAnswer) && !refusalRetried && !opts.noRefusalRetry &&
+          attempt < MAX_ATTEMPTS &&
           sources.some((s) => s.relevance >= MIN_REFUSAL_OVERRIDE_RELEVANCE)
         ) {
           refusalRetried = true
@@ -2893,6 +4057,11 @@ export class AragProvider implements RetrievalProvider {
         // text on an unlucky chunk boundary. This is the one place `refused`
         // and the reader-facing refusal message are decided, so `done.text`
         // (BUG 3) and the retry gates above always agree with it.
+        if (heldTail && !isGuardrailRefusal(fullAnswer)) {
+          const tail = stripInlineMarkers(heldTail)
+          heldTail = ''
+          if (tail) yield { type: 'delta', text: tail }
+        }
         let refused = false
         let refusalMessage: string | undefined
         // Withhold an answer grounded ONLY in excluded content (docs/ARAG-DEV.md:
@@ -2977,36 +4146,46 @@ export class AragProvider implements RetrievalProvider {
           boundText = bound.text
         }
         yield { type: 'stage', stage: 'generating', status: 'completed' }
-        yield { type: 'stage', stage: 'validating', status: 'started' }
-        // REMi trust signal: score the finished answer against the full
-        // retrieved context. Best effort with a hard time cap - the answer is
-        // never held hostage by the scorer.
-        if (fullAnswer.trim() && contextTexts.length > 0) {
-          try {
-            let capTimer: ReturnType<typeof setTimeout> | undefined
-            const quality = await Promise.race([
-              this.remi(tenant, {
-                question: query,
-                answer: fullAnswer,
-                contexts: contextTexts,
-              }),
-              new Promise<null>((resolve) => {
-                capTimer = setTimeout(() => resolve(null), 12000)
-              }),
-            ])
-            clearTimeout(capTimer)
-            if (quality) yield { type: 'quality', ...quality }
-          } catch {
-            // scoring unavailable - skip silently
-          }
-        }
-        yield { type: 'stage', stage: 'validating', status: 'completed' }
         // BUG 3: done.text always carries the final answer text, refusal
         // included - a client that reads done.text as canonical (replacing
         // its accumulated streamed text, as the delta contract intends)
         // must get the honest refusal message here too, not nothing.
+        //
+        // `done` goes out BEFORE the quality judge runs: the answer is
+        // complete the moment the text and its citations are, and the REMi
+        // scores follow as their own event. Holding `done` for the judge
+        // was a flat 10 to 12 second "validating" tail on every answer
+        // with the composer still locked. Consumers keep reading after
+        // `done` for the trailing `quality` event.
         const doneText = refused ? refusalMessage : boundText
+        // REMi trust signal: score the finished answer against the full
+        // retrieved context. Best effort with a hard time cap - the answer is
+        // never held hostage by the scorer. The request starts BEFORE `done`
+        // goes out, so it runs alongside the consumer's own audit of the
+        // answer rather than after it: awaited only once `done` has been
+        // consumed, it adds the cap minus the audit's own time at most, not
+        // a fixed tail on every answer (D2-17).
+        let capTimer: ReturnType<typeof setTimeout> | undefined
+        const qualityPending = fullAnswer.trim() && contextTexts.length > 0
+          ? Promise.race([
+            this.remi(tenant, {
+              question: query,
+              answer: fullAnswer,
+              contexts: contextTexts,
+            }),
+            new Promise<null>((resolve) => {
+              capTimer = setTimeout(() => resolve(null), REMI_CAP_MS)
+            }),
+          ]).catch(() => null)
+          : null
         yield { type: 'done', refused, ...(doneText !== undefined ? { text: doneText } : {}) }
+        yield { type: 'stage', stage: 'validating', status: 'started' }
+        if (qualityPending) {
+          const quality = await qualityPending
+          clearTimeout(capTimer)
+          if (quality) yield { type: 'quality', ...quality }
+        }
+        yield { type: 'stage', stage: 'validating', status: 'completed' }
         return
       } catch (err) {
         const status = err instanceof AragApiError ? err.status : 0

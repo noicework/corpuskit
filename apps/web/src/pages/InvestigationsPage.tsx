@@ -4,6 +4,7 @@ import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { createInvestigation, type InvestigationMeta, listInvestigations } from '../api/client.ts'
 import { MakeCurrentToggle, useCurrentInvestigation } from '../components/SaveEvidence.tsx'
 import { EmptyState, ErrorCard, Skeleton } from '../components/ui.tsx'
+import { tenantCopy } from '../lib/tenant-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,8 @@ function InvestigationCard(
 }
 
 function CreateInvestigationForm({ slug }: { slug: string }) {
+  const { config } = useOutletContext<TenantOutletContext>()
+  const copy = tenantCopy(config)
   const [name, setName] = useState('')
   const [question, setQuestion] = useState('')
   const navigate = useNavigate()
@@ -104,7 +107,7 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
           type='text'
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder='e.g. Does controlled traffic farming pay off on heavy clay?'
+          placeholder={copy.investigationExample}
           className='rp-input'
           required
         />

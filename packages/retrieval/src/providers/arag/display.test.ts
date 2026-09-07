@@ -3,6 +3,7 @@ import { expect } from '@std/expect'
 import type { Question } from '@research-portal/core'
 import {
   deriveRelatedQuestions,
+  displayPage,
   displayTitle,
   isDisplayableResource,
   looksLikeBotChallengeTitle,
@@ -150,5 +151,18 @@ describe('deriveRelatedQuestions (query-aware "people also ask")', () => {
   it('returns an empty list (widget hides) when nothing genuinely overlaps', () => {
     const result = deriveRelatedQuestions('kelp forest restoration in Victoria', suggested)
     expect(result).toEqual([])
+  })
+})
+
+describe('displayPage', () => {
+  it('converts the platform zero-based page index to the one-based page a reader shows', () => {
+    expect(displayPage(0)).toBe(1)
+    expect(displayPage(11)).toBe(12)
+  })
+
+  it('has no page for a missing or malformed index', () => {
+    expect(displayPage(undefined)).toBeUndefined()
+    expect(displayPage(-1)).toBeUndefined()
+    expect(displayPage(1.5)).toBeUndefined()
   })
 })

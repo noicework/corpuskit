@@ -192,6 +192,8 @@ export const FONT_PAIRINGS: Record<FontPairingId, FontPairing> = {
 export const TopicSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
+  /** One line on what qualifies - the prompt the topic classifier agent is given. */
+  description: z.string().optional(),
 })
 
 export const QuestionSchema = z.object({
@@ -206,6 +208,143 @@ export const EntityTypeSchema = z.object({
 })
 
 /** A lower-case public DNS hostname, without a scheme, path or port. */
+// ---------------------------------------------------------------------------
+// Intent-routed search configurations. One ask box, many jobs-to-be-done, each
+// served by its own stored search configuration on the same knowledge box and
+// the portal-side settings that go with it. See docs/INTENT-ROUTING.md.
+// ---------------------------------------------------------------------------
+
+export const LabelRefSchema = z.object({ labelset: z.string().min(1), label: z.string().min(1) })
+export type LabelRef = z.infer<typeof LabelRefSchema>
+
+export const IntentSchema = z.object({
+  id: z.string().min(1).regex(/^[a-z][a-z0-9-]*$/),
+  label: z.string().min(1),
+  description: z.string(),
+  examples: z.string().array().default([]),
+  /** Stored half - what ensureSearchConfigs writes to the box as portal-intent-<id>. */
+  retrieval: z.object({
+    features: z.enum(['keyword', 'semantic']).array().min(1),
+    topK: z.number().int().positive(),
+    reranker: z.enum(['predict', 'noop']),
+    /** Labels excluded beyond documentation. */
+    exclude: LabelRefSchema.array().default([]),
+    /** When set, grounding is restricted to these labels (replaces exclusion). */
+    only: LabelRefSchema.array().default([]),
+    /**
+     * Labels the intent favours without excluding the rest: retrieval runs
+     * over everything the filter allows, and a second pass restricted to
+     * these labels joins the grounding set, so a data question reads the
+     * paper and its tables together rather than the tables alone.
+     */
+    prefer: LabelRefSchema.array().default([]),
+  }),
+  /** Portal half - applied at request time by the provider. */
+  answer: z.object({
+    surfaces: z.enum(['search', 'ask']).array().min(1),
+    strategy: z.enum(['neighbours', 'full', 'none']),
+    neighbours: z.number().int().nonnegative().optional(),
+    graph: z.boolean().default(false),
+    promptVariant: z.enum(['default', 'safety', 'synthesis', 'recency', 'data']),
+    /** `{entities}` is replaced with the drug/gene mentions found in the question; `{query}` with the question. */
+    prequeries: z.string().array().default([]),
+    depth: z.enum(['default', 'deep']).default('default'),
+    minScore: z.number().min(0).max(1).default(0.35),
+    sortByPublished: z.boolean().default(false),
+  }),
+  /** Stage-1 rules: regexes (case-insensitive) tested against the question; first intent with a match wins. */
+  rules: z.string().array().default([]),
+  /** Shown as the reason when one of the rules fires, in place of the generic wording. */
+  ruleRationale: z.string().optional(),
+  /**
+   * The classifier may choose this intent only when the question matches one
+   * of these expressions (case-insensitive). A supplements intent is gated on
+   * the words that name a table, a data sheet or a peer-review file, so a
+   * question that merely asks for a figure keeps reading the papers.
+   */
+  classifierGate: z.string().array().default([]),
+  /** The rule only fires when the question also names a known entity (drug, gene). */
+  requireEntity: z.boolean().default(false),
+  /**
+   * The rule only fires when the question names a term from the tenant's entity lexicon
+   * (a medication or syndrome), not merely a gene-symbol shape - so "dose" in a rodent
+   * protocol never reaches the clinical safety prompt.
+   */
+  requireLexiconEntity: z.boolean().default(false),
+  /**
+   * Stage 1 only: the classifier may never choose this intent. Listing intents (exact
+   * lookup) fire on identifier shapes and lexicon hits alone, never on a guess.
+   */
+  rulesOnly: z.boolean().default(false),
+})
+export type Intent = z.infer<typeof IntentSchema>
+
+export const RouteDecisionSchema = z.object({
+  intent: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+  stage: z.enum(['rule', 'classifier', 'default', 'override']),
+  rationale: z.string(),
+  /** The stored search configuration the intent selects. */
+  configuration: z.string(),
+  /** Entities the router found in the question, when any. */
+  entities: z.string().array().default([]),
+  /** The stage-1 rule that fired, for the audit trail and the chip's tooltip. */
+  rule: z.string().optional(),
+})
+export type RouteDecision = z.infer<typeof RouteDecisionSchema>
+
+// ---------------------------------------------------------------------------
+// Custom extraction methods (docs/EXTRACTION-LAB.md). A method is a named
+// extraction strategy on the box, applied per upload; rules route documents
+// to a method by their profile class.
+// ---------------------------------------------------------------------------
+
+export const ExtractionMethodSchema = z.object({
+  /** The platform's strategy id; 'default' for the built-in extraction. */
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.enum(['default', 'tables', 'visual']),
+  model: z.string().optional(),
+  /** Transcription rules for a visual method. */
+  rules: z.string().array().optional(),
+})
+export type ExtractionMethod = z.infer<typeof ExtractionMethodSchema>
+
+export const ExtractionClassSchema = z.enum([
+  'prose',
+  'tables',
+  'garbled-text',
+  'image-only',
+  'long-scan',
+])
+export type ExtractionClass = z.infer<typeof ExtractionClassSchema>
+
+export const ExtractionProfileSchema = z.object({
+  pages: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  chars: z.number().int().nonnegative(),
+  charsPerPage: z.number().nonnegative(),
+  fonts: z.number().int().nonnegative(),
+  imageOnlyPages: z.number().int().nonnegative(),
+  /** Rows that look tabular (several aligned numeric cells) per page. */
+  tableRowsPerPage: z.number().nonnegative(),
+  /** Share of words of four or more letters that look like real words. */
+  dictionaryHitRate: z.number().min(0).max(1),
+  class: ExtractionClassSchema,
+  /** Where the profile came from: poppler on the host, or the platform's extracted text. */
+  source: z.enum(['poppler', 'platform']),
+})
+export type ExtractionProfile = z.infer<typeof ExtractionProfileSchema>
+
+export const ExtractionRulesSchema = z.object({
+  /** Method id for anything no rule claims. */
+  default: z.string().min(1),
+  rules: z.object({ when: ExtractionClassSchema, method: z.string().min(1) }).array(),
+  /** Documents longer than this go to the default method even when a rule says visual. */
+  visualPageCap: z.number().int().positive().optional(),
+})
+export type ExtractionRules = z.infer<typeof ExtractionRulesSchema>
+
 export const TenantHostnameSchema = z.string().max(253).regex(
   /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
 )
@@ -225,10 +364,56 @@ export const TenantConfigSchema = z.object({
   hostname: TenantHostnameSchema.optional(),
   branding: BrandingSchema,
   searchPlaceholder: z.string(),
+  /**
+   * Heading over the Assessment page's topic tiles ("Industry Knowledge
+   * Areas" on a sector portal, "Research knowledge areas" on a journal
+   * corpus). Absent means the generic "Knowledge areas".
+   */
+  assessmentHeading: z.string().optional(),
   topics: TopicSchema.array(),
   suggestedQuestions: QuestionSchema.array(),
   entityTypes: EntityTypeSchema.array(),
   relationTypes: z.string().array(),
+  /**
+   * Whether Explore shows the regional discovery band (the map of Australia
+   * and its state questions). Absent means shown; a portal whose corpus is
+   * not organised by Australian state sets it to false.
+   */
+  regionalDiscovery: z.boolean().optional(),
+  /**
+   * Labels excluded from the research search and ask configurations (on top
+   * of the always-excluded in-app documentation). A journal corpus keeps its
+   * supplements and videos browsable in the library but grounds answers in
+   * the articles: [{ labelset: 'format', label: 'supplement' }, ...].
+   */
+  searchExclude: z.object({ labelset: z.string().min(1), label: z.string().min(1) }).array()
+    .optional(),
+  /** Intent-routed search configurations (docs/INTENT-ROUTING.md). Absent = one default pair. */
+  intents: IntentSchema.array().optional(),
+  defaultIntent: z.string().optional(),
+  /** Domain lexicon (drug and gene names) the router recognises as entities. */
+  entityTerms: z.string().array().optional(),
+  /**
+   * The portal's own timezone, as an IANA name ("Australia/Melbourne"). Every
+   * user-facing date the API writes is formatted in it, so an artefact made in
+   * the morning is not dated yesterday (review loop 6
+   * D6-13). Absent means UTC.
+   */
+  timezone: z.string().optional(),
+  /**
+   * Portal-facing example copy. Every field has a default derived from
+   * `suggestedQuestions` and `topics` (see apps/web/src/lib/tenant-copy.ts),
+   * so a tenant sets only what it wants to say - and no other tenant's
+   * examples can leak into its pages.
+   */
+  copy: z.object({
+    /** Placeholder for a new investigation's name, e.g. "Does X pay off in Y?". */
+    investigationExample: z.string().optional(),
+    /** Placeholder per Generate kind (comparison, briefing, timeline, proscons, faq, assessment). */
+    generateExamples: z.record(z.string(), z.string()).optional(),
+  }).optional(),
+  /** Extraction routing rules (docs/EXTRACTION-LAB.md). Absent = platform default for everything. */
+  extraction: ExtractionRulesSchema.optional(),
 })
 
 // ---------------------------------------------------------------------------
@@ -339,6 +524,23 @@ export const ResourceSummarySchema = z.object({
   quotesOfInterest: z.string().array().optional(),
   /** True when a generated enrichment (not just a filename fallback) drives title/summary. */
   enriched: z.boolean().optional(),
+  /** Bibliographic record, when the ingest supplied one (journal articles). */
+  authors: z.string().array().optional(),
+  journal: z.string().optional(),
+  year: z.string().optional(),
+  doi: z.string().optional(),
+  /** PubMed Central id (PMC1234567) and PubMed id, when the ingest supplied them. */
+  pmcid: z.string().optional(),
+  pmid: z.string().optional(),
+  /** Where the source came from (a PMC article URL, a crawled page), when known. */
+  originUrl: z.string().optional(),
+  /** Author keywords / subject headings - shown as keywords, never as facts. */
+  keywords: z.string().array().optional(),
+  /**
+   * True when the stored title is authoritative (a journal article's real
+   * title). Merchandising never replaces a curated title with a generated one.
+   */
+  titleCurated: z.boolean().optional(),
 })
 
 // ---------------------------------------------------------------------------
@@ -588,14 +790,40 @@ export const ScoredResourceSchema = ResourceSummarySchema.extend({
   matchedPassage: z.string().optional(),
   /** Page the matched passage sits on (PDFs), for open-at-page links. */
   matchedPage: z.number().int().positive().optional(),
+  /**
+   * Every paragraph retrieval returned for this resource, best first, each
+   * with its page when known - so the evidence card can quote the paragraph
+   * that carries the answer's figure rather than the top-scoring one.
+   */
+  passages: z.object({
+    text: z.string(),
+    page: z.number().int().positive().optional(),
+  }).array().optional(),
   /** True when the matched passage looks like a reference list or front matter. */
   referenceChunk: z.boolean().optional(),
+  /** Where the matched passage came from: the document body, a generated summary field, or the bibliographic record (an identifier or author lookup). */
+  matchedField: z.enum(['body', 'summary', 'metadata']).optional(),
 })
+
+/**
+ * An exact lookup the search resolved against catalogue metadata (a DOI, PMCID,
+ * PMID or an author surname) before any retrieval - so the page can say "no
+ * resource carries this identifier" instead of listing look-alikes.
+ */
+export const SearchLookupSchema = z.object({
+  kind: z.enum(['doi', 'pmcid', 'pmid', 'author']),
+  value: z.string(),
+  matched: z.boolean(),
+})
+export type SearchLookup = z.infer<typeof SearchLookupSchema>
 
 export const SearchResultsSchema = z.object({
   query: z.string(),
   resources: ScoredResourceSchema.array(),
   relatedQuestions: QuestionSchema.array(),
+  lookup: SearchLookupSchema.optional(),
+  /** The rule-stage routing decision the search applied, when one fired. */
+  route: RouteDecisionSchema.optional(),
 })
 
 export const RetrievalModeSchema = z.enum(['hybrid', 'semantic', 'keyword'])
@@ -610,6 +838,10 @@ export const CatalogItemSchema = z.object({
   topicIds: z.string().array(),
   /** Label in the 'kind' labelset, when classified. */
   kind: z.string().optional(),
+  /** Label in the 'format' labelset (article / supplement / media), when filed that way. */
+  format: z.string().optional(),
+  /** Content type, so a card can badge a text-only article honestly. */
+  type: ResourceTypeSchema.optional(),
   /** ISO date the source was published, when known. */
   published: z.string().optional(),
   /** Merchandised blurb from the default enrichment, when generated. */
@@ -618,6 +850,11 @@ export const CatalogItemSchema = z.object({
   sourceName: z.string().optional(),
   /** True when a generated enrichment drives the title/summary. */
   enriched: z.boolean().optional(),
+  authors: z.string().array().optional(),
+  journal: z.string().optional(),
+  year: z.string().optional(),
+  doi: z.string().optional(),
+  titleCurated: z.boolean().optional(),
 })
 
 export const CatalogPageSchema = z.object({
@@ -640,7 +877,12 @@ export const LabelsetSchema = z.object({
   kind: z.enum(['RESOURCES', 'PARAGRAPHS']).optional(),
 })
 
-/** Facet counts: labelset id -> label -> count of resources carrying it. */
+/**
+ * Facet counts: labelset id -> label -> count of resources carrying it. The
+ * reserved key `untagged` maps a labelset id to the number of resources
+ * carrying NO label from it (the honest "Untagged" row - topics are
+ * multi-valued, so resources minus the sum of counts is wrong).
+ */
 export const FacetCountsSchema = z.record(z.string(), z.record(z.string(), z.number()))
 
 /** Label co-occurrence graph (the reference portal's knowledge-graph model). */
@@ -771,20 +1013,43 @@ export const CitationSchema = z.object({
   /** 1-based citation number as it appears in the answer text, e.g. [1]. */
   index: z.number().int().positive(),
   resourceId: z.string().min(1),
+  /** The bibliographic title (a journal article's real title) when the record has one. */
   title: z.string().min(1),
+  /** The generated headline, when it differs from the title - shown as a subtitle. */
+  headline: z.string().optional(),
   passage: z.string().optional(),
 })
 
-export const AskStageSchema = z.enum(['preprocessing', 'retrieval', 'generating', 'validating'])
+export const AskStageSchema = z.enum([
+  'preprocessing',
+  'retrieval',
+  'generating',
+  'auditing',
+  'validating',
+])
 
 export const AskEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('stage'),
     stage: AskStageSchema,
     status: z.enum(['started', 'completed']),
+    /** For `auditing`: how many figures the answer states, so the surface can say "Checking 6 figures". */
+    figures: z.number().int().nonnegative().optional(),
   }),
   z.object({ type: z.literal('sources'), resources: ScoredResourceSchema.array() }),
   z.object({ type: z.literal('delta'), text: z.string() }),
+  /**
+   * The answer's first sentence, checked while the rest still streams:
+   * every figure it states was found beside its claim in the named paper's
+   * text, one of the papers retrieval found before generation began. Sent
+   * before the audit; the gated `done` text still replaces the stream.
+   */
+  z.object({
+    type: z.literal('verified'),
+    sentence: z.string(),
+    resourceId: z.string(),
+    title: z.string(),
+  }),
   z.object({ type: z.literal('citation'), citation: CitationSchema }),
   z.object({
     /** Platform learning id for this answer - target for feedback. */
@@ -830,8 +1095,72 @@ export const AskEventSchema = z.discriminatedUnion('type', [
      * targets agree by construction.
      */
     text: z.string().optional(),
+    /**
+     * The generation stopped mid-sentence and the incomplete tail was cut
+     * back to the last complete sentence (or the text left standing when
+     * nothing complete preceded it). The surface says so and offers a retry.
+     */
+    truncated: z.boolean().optional(),
   }),
   z.object({ type: z.literal('error'), message: z.string() }),
+  /**
+   * What the post-answer audit checked against the cited texts. Figures are
+   * every number the answer states (with its unit), years every four-digit
+   * year; an unsupported figure is one no cited passage contains beside the
+   * claim's own terms. Contraindications are drugs the answer called
+   * contraindicated or to be avoided without a cited passage saying so.
+   * Sent before `done` so the surface can badge and mark the final text.
+   */
+  z.object({
+    type: z.literal('audit'),
+    figuresChecked: z.number().int().nonnegative(),
+    figuresUnsupported: z.string().array(),
+    yearsUnsupported: z.string().array(),
+    contraindicationsUnsupported: z.string().array(),
+    /** Sentences the binding pass judged, and how many kept at least one citation. */
+    sentencesChecked: z.number().int().nonnegative().optional(),
+    sentencesCited: z.number().int().nonnegative().optional(),
+    /** Proportions stated in a sentence that gives no denominator. */
+    denominatorsMissing: z.string().array().optional(),
+    /** Attributions ("X and colleagues") rewritten because the cited paper lacks that author. */
+    attributionsCorrected: z.string().array().optional(),
+    /**
+     * Sentences the figure gate removed from the answer because no cited
+     * passage carries their figures beside the claim, and those figures.
+     * What remains in the text has passed; `figuresUnsupported` is then
+     * empty.
+     */
+    sentencesRemoved: z.number().int().nonnegative().optional(),
+    figuresRemoved: z.string().array().optional(),
+    /** Figures found in a retrieved, prior-turn or generated text after the cited passages failed them. */
+    figuresRescued: z.string().array().optional(),
+    /** Sentences replaced by the named paper's own figure sentence, quoted and cited. */
+    sentencesReplaced: z.number().int().nonnegative().optional(),
+    /** Titles of resources that carry a removed figure somewhere, though not beside its claim. */
+    foundIn: z.string().array().optional(),
+    /** Figures removed because the cited paper carries them only where it cites other studies. */
+    figuresSecondhandRemoved: z.string().array().optional(),
+    /** Denominators rewritten to the pairing the cited passage gives in the figure's own bracket. */
+    denominatorsCorrected: z.string().array().optional(),
+  }),
+  /**
+   * The routed intent's retrieval found nothing usable (a supplements-only
+   * configuration with no strong match), so the answer was generated from
+   * the general configuration instead. Sent before any delta so the surface
+   * can relabel the route chip.
+   */
+  z.object({
+    type: z.literal('fallback'),
+    from: z.string(),
+    to: z.string().nullable(),
+    reason: z.string(),
+  }),
+  /**
+   * The routing decision the server made for this question when the caller
+   * asked for automatic routing: immediately for a rule, and once the
+   * classifier answers otherwise. Sent before any delta.
+   */
+  z.object({ type: z.literal('route'), decision: RouteDecisionSchema }),
 ])
 
 // ---------------------------------------------------------------------------
@@ -882,3 +1211,4 @@ export type AskEvent = z.infer<typeof AskEventSchema>
 // ---------------------------------------------------------------------------
 export * from './docs.ts'
 export * from './palettes.ts'
+export * from './study-design.ts'

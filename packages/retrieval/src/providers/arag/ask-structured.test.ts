@@ -85,6 +85,41 @@ function hit(id: string, title: string, score: number, text = 'Some retrieved pa
   }
 }
 
+describe('askStructured instructions', () => {
+  it('sends writing instructions as the system prompt and leaves the query as the retrieval text', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const provider = new AragProvider({
+      resolveBinding: () => ({
+        baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test-kb',
+        token: 'test-token',
+      }),
+      fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url.includes('/catalog')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ resources: {} }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          )
+        }
+        bodies.push(JSON.parse(String(init?.body ?? '{}')))
+        return Promise.resolve(ndjsonResponse([
+          { item: { type: 'retrieval', results: { resources: hit('res-1', 'A source', 0.8) } } },
+          { item: { type: 'answer_json', object: { title: 'x' } } },
+        ]))
+      },
+    })
+    await provider.askStructured(TENANT, SCHEMA, 'seizure forecasting', {
+      instructions: 'Include concrete figures.',
+    })
+    expect(bodies[0]?.query).toBe('seizure forecasting')
+    expect(bodies[0]?.prompt).toEqual({ system: 'Include concrete figures.' })
+    await provider.askStructured(TENANT, SCHEMA, 'seizure forecasting')
+    expect(bodies[1]?.prompt).toBeUndefined()
+  })
+})
+
 describe('askStructured grounding gate (requireGrounding)', () => {
   it('sufficient grounding: returns the generated artefact, sources above the floor', async () => {
     const provider = providerWith([

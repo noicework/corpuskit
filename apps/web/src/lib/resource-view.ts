@@ -322,3 +322,13 @@ export function blockPlainText(block: DocBlock): string {
       return block.text
   }
 }
+
+/**
+ * A text field the platform generated rather than extracted - the DA
+ * page-summary agent's `da-pagesummary-*` field and any other `da-` field.
+ * Such text is shown under its own "Generated summary" heading, never as
+ * the opening block of the document's extracted text.
+ */
+export function isGeneratedTextField(fieldId: string): boolean {
+  return /(^|\/)da-/i.test(fieldId)
+}

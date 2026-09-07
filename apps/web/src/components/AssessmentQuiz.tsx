@@ -1,4 +1,5 @@
 import { type CSSProperties, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 // ---------------------------------------------------------------------------
 // Shared interactive quiz renderer for the "assessment" generated-artefact
@@ -14,9 +15,20 @@ export type AssessmentQuestion = {
   correct_index: number
   explanation: string
   topic: string
+  /** The retrieved resource the question was written from, when the server could resolve it. */
+  source_resource_id?: string | null
+  source_title?: string | null
 }
 
-export type AssessmentObject = { questions: AssessmentQuestion[] }
+export type AssessmentObject = {
+  questions: AssessmentQuestion[]
+  /** Questions the server withheld because they were written from a reference list. */
+  omitted_questions?: number
+  omitted_secondhand?: number
+  omitted_unsourced?: number
+  /** How many questions were asked for, when fewer survived the source checks. */
+  requested?: number
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -35,7 +47,11 @@ export function isAssessment(value: unknown): value is AssessmentObject {
       isStringArray(q.options) &&
       typeof q.correct_index === 'number' &&
       typeof q.explanation === 'string' &&
-      typeof q.topic === 'string',
+      typeof q.topic === 'string' &&
+      (q.source_resource_id === undefined || q.source_resource_id === null ||
+        typeof q.source_resource_id === 'string') &&
+      (q.source_title === undefined || q.source_title === null ||
+        typeof q.source_title === 'string'),
   )
 }
 
@@ -58,9 +74,12 @@ function scoreVerdict(score: number, total: number): string {
 export function AssessmentQuiz({
   data,
   onRetake,
+  slug,
 }: {
   data: AssessmentObject
   onRetake?: () => void
+  /** Portal slug for the per-question source links; without it the source shows as text. */
+  slug?: string
 }) {
   const [selected, setSelected] = useState<Record<number, number>>({})
   const [submitted, setSubmitted] = useState(false)
@@ -94,6 +113,51 @@ export function AssessmentQuiz({
           </div>
         </div>
       )}
+
+      {(data.requested ?? 0) > data.questions.length
+        ? (
+          <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
+            {data.questions.length === 1 ? 'One' : data.questions.length} of the {data.requested}
+            {' '}
+            questions asked for survived the source check.
+          </p>
+        )
+        : null}
+      {(data.omitted_questions ?? 0) > 0
+        ? (
+          <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
+            {data.omitted_questions === 1
+              ? 'One question was left out'
+              : `${data.omitted_questions} questions were left out`} because{' '}
+            {data.omitted_questions === 1 ? 'it was' : 'they were'}{' '}
+            written from a reference list rather than from what a source reports.
+          </p>
+        )
+        : null}
+      {(data.omitted_secondhand ?? 0) > 0
+        ? (
+          <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
+            {data.omitted_secondhand === 1
+              ? 'One question was left out'
+              : `${data.omitted_secondhand} questions were left out`} because{' '}
+            {data.omitted_secondhand === 1 ? 'its' : 'their'}{' '}
+            answer key was a figure the source paper only quotes from earlier studies, not its own
+            result.
+          </p>
+        )
+        : null}
+      {(data.omitted_unsourced ?? 0) > 0
+        ? (
+          <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
+            {data.omitted_unsourced === 1
+              ? 'One question was left out'
+              : `${data.omitted_unsourced} questions were left out`} because{' '}
+            {data.omitted_unsourced === 1 ? 'the sentence it quoted' : 'the sentences they quoted'}
+            {' '}
+            could not be found in any of the papers retrieved for this topic.
+          </p>
+        )
+        : null}
 
       <div className='space-y-6'>
         {data.questions.map((q, qi) => (
@@ -154,6 +218,27 @@ export function AssessmentQuiz({
             </div>
             {submitted && q.explanation && (
               <p className='mt-3 text-sm leading-relaxed text-ink-2'>{q.explanation}</p>
+            )}
+            {submitted && (
+              <p className='mt-2 text-xs text-ink-3'>
+                {q.source_resource_id && q.source_title
+                  ? (
+                    <>
+                      Source: {slug
+                        ? (
+                          <Link
+                            to={`/t/${slug}/library/${encodeURIComponent(q.source_resource_id)}`}
+                            className='rp-focus font-medium underline-offset-2 hover:underline'
+                            style={{ color: 'var(--rp-accent-fg)' }}
+                          >
+                            {q.source_title}
+                          </Link>
+                        )
+                        : <span className='font-medium text-ink-2'>{q.source_title}</span>}
+                    </>
+                  )
+                  : 'Source: not attributed - the question could not be tied to one retrieved document.'}
+              </p>
             )}
           </div>
         ))}

@@ -924,6 +924,12 @@ body {
   max-width: 72ch;
 }
 
+/* The How-this-works flow diagram: SVG node corners that follow the shape dial. */
+.rp-flow-node {
+  rx: var(--rp-radius);
+  ry: var(--rp-radius);
+}
+
 /* ---------------------------------------------------------------------------
  * Surfaces
  * ------------------------------------------------------------------------- */
@@ -1324,7 +1330,9 @@ body {
 
 /* ---------------------------------------------------------------------------
  * Semantic theme layer. Components use ONLY these semantic classes (plus the
- * tenant hooks). The portal is light-only: there is no dark variant to flip.
+ * tenant hooks). Dark is a token swap, not a second stylesheet: a dark library
+ * palette, or the viewer's own dark toggle (lib/theme.ts maps a light suite
+ * onto the house dark grey suite), rewrites the greys and status colours.
  * Shape language: four dials, set by TenantLayout from branding.shape -
  * --rp-radius for surfaces (cards, panels, tiles), then buttons, chips/tags
  * and inputs each get their own so 'soft' can pill buttons and tags without
@@ -1604,6 +1612,47 @@ label.rp-btn:has(input:focus-visible) {
 .rp-btn-danger:hover:not(:disabled) {
   background: var(--rp-bad-bg);
 }
+
+/* The house switch: the visual half of a toggle whose semantics live on the
+ * <button> that wraps it (aria-expanded + aria-controls for a disclosure).
+ * The track rides the shape and density dials; the knob is a circle, which is
+ * shape-independent by design. On is a solid accent fill, which is what the
+ * accent role is for. */
+.rp-switch {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  width: calc(2rem * var(--rp-density-ctl, 1));
+  height: calc(1.125rem * var(--rp-density-ctl, 1));
+  padding: 2px;
+  border: 1px solid var(--rp-line-2);
+  border-radius: var(--rp-radius-chip);
+  background: var(--rp-surface-3);
+  transition: background-color 150ms var(--rp-ease), border-color 150ms var(--rp-ease);
+}
+.rp-switch-knob {
+  display: block;
+  width: calc(0.75rem * var(--rp-density-ctl, 1));
+  height: calc(0.75rem * var(--rp-density-ctl, 1));
+  border-radius: 9999px;
+  background: var(--rp-ink-3);
+  transition: transform 150ms var(--rp-ease), background-color 150ms var(--rp-ease);
+}
+.rp-switch[data-on='true'] {
+  border-color: var(--rp-accent);
+  background: var(--rp-accent);
+}
+.rp-switch[data-on='true'] .rp-switch-knob {
+  background: var(--rp-on-accent);
+  transform: translateX(calc(1.25rem * var(--rp-density-ctl, 1) - 6px));
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-switch,
+  .rp-switch-knob {
+    transition: none;
+  }
+}
+
 .rp-chip {
   display: inline-flex;
   align-items: center;
@@ -1904,6 +1953,19 @@ label.rp-btn:has(input:focus-visible) {
 /* The answer body rising into place after the steps clear. */
 .rp-answer-in {
   animation: rp-answer-in 420ms var(--rp-ease) backwards;
+}
+
+/* Streamed text the check has not passed yet: shown as unchecked, not as
+ * the answer, so a sentence the gate withdraws was never presented as fact
+ * (D5-08). Muted ink and a dashed rule; the gated text lands in full ink. */
+.rp-answer-checking {
+  color: var(--rp-ink-2);
+  border-left: 2px dashed var(--rp-line);
+  padding-left: 0.875rem;
+  transition: color 200ms var(--rp-ease);
+}
+.rp-answer-checking a {
+  opacity: 0.85;
 }
 
 @keyframes rp-answer-in {
@@ -2468,10 +2530,10 @@ button:disabled,
   width: max(2.75rem, calc(2.75rem * var(--rp-density-ctl, 1)));
   height: max(2.75rem, calc(2.75rem * var(--rp-density-ctl, 1)));
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--rp-primary) 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rp-brand-fg) 25%, transparent);
   border-radius: 9999px;
-  background-color: color-mix(in srgb, var(--rp-primary) 7%, transparent);
-  color: var(--rp-primary);
+  background-color: color-mix(in srgb, var(--rp-brand-fg) 7%, transparent);
+  color: var(--rp-brand-fg);
   cursor: pointer;
   transition: background-color 150ms var(--rp-ease), border-color 150ms var(--rp-ease);
 }

@@ -1,6 +1,6 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import { normaliseAnswerBullets } from './answer-text.ts'
+import { normaliseAnswerBullets, stripRefusalTemplate } from './answer-text.ts'
 
 describe('normaliseAnswerBullets', () => {
   it('moves an inline bullet after a bold heading onto its own line', () => {
@@ -34,5 +34,20 @@ describe('normaliseAnswerBullets', () => {
     expect(normaliseAnswerBullets('this is *important* to note')).toBe(
       'this is *important* to note',
     )
+  })
+})
+
+describe('stripRefusalTemplate', () => {
+  it('removes the sentence carrying the leaked guardrail template', () => {
+    const text =
+      'The corpus has no trials of cenobamate in Dravet syndrome. Therefore, "Not enough data to answer this." Existing evidence covers fenfluramine.'
+    expect(stripRefusalTemplate(text)).toBe(
+      'The corpus has no trials of cenobamate in Dravet syndrome. Existing evidence covers fenfluramine.',
+    )
+  })
+
+  it('leaves an answer without the template untouched', () => {
+    const text = 'Lacosamide reduced the risk of a second seizure.\n\n- HR 0.54'
+    expect(stripRefusalTemplate(text)).toBe(text)
   })
 })

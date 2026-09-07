@@ -57,10 +57,11 @@
     }
   },
   "tasks": {
-    "dev": "deno task build:web && deno run --watch --allow-net --allow-env --allow-read --allow-write=data apps/api/src/server.ts",
+    "dev": "deno task build:web && deno run --watch --allow-net --allow-env --allow-read --allow-write=data --allow-run=pdfinfo,pdftotext,pdffonts apps/api/src/server.ts",
     "build:css": "tailwindcss -i apps/web/src/styles.css -o apps/web/dist/styles.css --minify",
     "build:js": "esbuild apps/web/src/main.tsx --bundle --format=esm --minify --jsx=automatic --outfile=apps/web/dist/app.js --alias:@research-portal/core=./packages/core/src/index.ts --external:react --external:react/jsx-runtime --external:react-dom --external:react-dom/client --external:react-router-dom --external:@tanstack/react-query --external:zod --external:d3-force --external:three --external:pdfjs-dist",
-    "build:web": "mkdir -p apps/web/dist && cp apps/web/index.html apps/web/dist/index.html && cp -R apps/web/public/* apps/web/dist/ && deno task build:css && deno task build:js",
+    "build:web": "mkdir -p apps/web/dist && cp apps/web/index.html apps/web/dist/index.html && cp -R apps/web/public/* apps/web/dist/ && deno task build:css && deno task build:js && deno task build:stamp",
+    "build:stamp": "deno run --allow-env --allow-read --allow-write=apps/web/dist --allow-run=git apps/web/scripts/stamp-build.ts",
     "types:cloudflare": "deno run --allow-read=.wrangler --allow-write=.wrangler,worker-configuration.d.ts --allow-run=npx apps/cloudflare/scripts/generate-types.ts",
     "build:worker": "mkdir -p dist/cloudflare && deno bundle --external cloudflare:workers --output dist/cloudflare/worker.js apps/cloudflare/src/worker.ts",
     "build:cloudflare": "deno task build:web && deno task build:worker",

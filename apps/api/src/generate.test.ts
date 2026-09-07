@@ -125,7 +125,11 @@ describe('POST /api/t/:slug/generate', () => {
           object: {
             title: 'Soil carbon measurement',
             executive_summary: 'A grounded overview.',
-            sections: [{ heading: 'Methods', content: 'Direct and indirect measurement.' }],
+            sections: [{
+              heading: 'Methods',
+              content: 'Direct and indirect measurement.',
+              sources: ['Soil Carbon Measurement Handbook'],
+            }],
             key_takeaways: ['Direct methods are more accurate but costlier.'],
           },
         },
@@ -148,6 +152,132 @@ describe('POST /api/t/:slug/generate', () => {
     expect(body.object?.title).toBe('Soil carbon measurement')
     expect(body.sources).toHaveLength(1)
     expect(body.sources[0]?.id).toBe('res-1')
+  })
+
+  it('briefing (P6-07): per-section sources resolve to retrieved resources and an unsourced section is withheld', async () => {
+    const app = makeApp([
+      {
+        item: {
+          type: 'retrieval',
+          results: { resources: hit('res-1', 'Seizure forecasting with wearables', 0.75) },
+        },
+      },
+      {
+        item: {
+          type: 'answer_json',
+          object: {
+            title: 'Seizure forecasting',
+            executive_summary: 'Grounded.',
+            sections: [
+              {
+                heading: 'Performance',
+                content: 'AUC 0.72 to 0.92 in six participants.',
+                sources: ['Seizure forecasting with wearables'],
+              },
+              { heading: 'Background', content: 'A generality.', sources: ['An invented paper'] },
+            ],
+            key_takeaways: [],
+          },
+        },
+      },
+    ])
+    const response = await app.request('/api/t/marine/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'briefing', query: 'seizure forecasting' }),
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      insufficientGrounding?: boolean
+      object?: {
+        sections: { heading: string; sources: { resourceId: string; title: string }[] }[]
+        omitted_sections: string[]
+      }
+    }
+    expect(body.insufficientGrounding).toBe(false)
+    expect(body.object?.sections).toHaveLength(1)
+    expect(body.object?.sections[0]?.sources).toEqual([
+      { resourceId: 'res-1', title: 'Seizure forecasting with wearables' },
+    ])
+    expect(body.object?.omitted_sections).toEqual(['Background'])
+  })
+
+  it('briefing: withholds the whole artefact when no section can be attributed', async () => {
+    const app = makeApp([
+      {
+        item: {
+          type: 'retrieval',
+          results: { resources: hit('res-1', 'Seizure forecasting with wearables', 0.75) },
+        },
+      },
+      {
+        item: {
+          type: 'answer_json',
+          object: {
+            title: 'Seizure forecasting',
+            executive_summary: 'Fluent but unattributed.',
+            sections: [{ heading: 'Background', content: 'A generality.', sources: [] }],
+            key_takeaways: [],
+          },
+        },
+      },
+    ])
+    const response = await app.request('/api/t/marine/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'briefing', query: 'seizure forecasting' }),
+    })
+    const body = await response.json() as { insufficientGrounding?: boolean; message?: string }
+    expect(body.insufficientGrounding).toBe(true)
+    expect(body.message).toContain('withheld')
+  })
+
+  it('assessment (P8-11): a question carries the resolved source resource id, or null when unmatched', async () => {
+    const app = makeApp([
+      {
+        item: {
+          type: 'retrieval',
+          results: { resources: hit('res-9', 'Autoimmune encephalitis outcomes', 0.8) },
+        },
+      },
+      {
+        item: {
+          type: 'answer_json',
+          object: {
+            questions: [
+              {
+                question: 'Which subtype had better recovery?',
+                options: ['a', 'b', 'c', 'd'],
+                correct_index: 0,
+                explanation: 'e',
+                topic: 't',
+                source: 'Autoimmune encephalitis outcomes',
+              },
+              {
+                question: 'Q2',
+                options: ['a', 'b', 'c', 'd'],
+                correct_index: 1,
+                explanation: 'e',
+                topic: 't',
+                source: 'Nowhere',
+              },
+            ],
+          },
+        },
+      },
+    ])
+    const response = await app.request('/api/t/marine/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'assessment', query: 'quiz me on autoimmune encephalitis' }),
+    })
+    const body = await response.json() as {
+      object?: { questions: Record<string, unknown>[] }
+    }
+    expect(body.object?.questions[0]?.source_resource_id).toBe('res-9')
+    expect(body.object?.questions[0]?.source_title).toBe('Autoimmune encephalitis outcomes')
+    expect(body.object?.questions[0]?.source).toBeUndefined()
+    expect(body.object?.questions[1]?.source_resource_id).toBeNull()
   })
 
   it('BUG 1: merchandises /generate sources with the real generated title, never the raw filename/project-code title', async () => {
@@ -174,7 +304,11 @@ describe('POST /api/t/:slug/generate', () => {
           object: {
             title: 'Soil carbon measurement',
             executive_summary: 'A grounded overview.',
-            sections: [{ heading: 'Methods', content: 'Direct and indirect measurement.' }],
+            sections: [{
+              heading: 'Methods',
+              content: 'Direct and indirect measurement.',
+              sources: ['Soil Carbon Measurement Handbook'],
+            }],
             key_takeaways: ['Direct methods are more accurate but costlier.'],
           },
         },

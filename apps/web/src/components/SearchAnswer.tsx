@@ -1,22 +1,14 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AskEvent, AskStage, Citation, ScoredResource } from '@research-portal/core'
-import { ApiError, streamAsk } from '../api/client.ts'
+import { ApiError, RATE_LIMIT_MESSAGE, streamAsk } from '../api/client.ts'
+import { secondsUntilRetry, shouldDeferAutomaticAsk } from '../lib/ask-budget.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { citationHref } from './AnswerStream.tsx'
 import { CurrencyNote } from './CurrencyNote.tsx'
 import { ConfidenceIndicator, type QualityScores } from './QualityGauge.tsx'
 import { ErrorCard, LiveStatus } from './ui.tsx'
 import { StageTimeline, statusesFor, useAnswerPhase } from './StageTimeline.tsx'
-
-/**
- * Matches `RATE_LIMIT_MESSAGE` in apps/api/src/rate-limit.ts word for word.
- * That module is server-only and never bundled into the web client, so the
- * copy is duplicated here rather than imported - keep the two in sync by eye
- * if the server copy changes.
- */
-const RATE_LIMIT_MESSAGE =
-  'You are asking faster than the portal can answer - please wait a moment and try again.'
 
 /** Matches AskPage's own stage copy, duplicated here (not exported there). */
 const STAGE_LABELS: Record<string, string> = {
@@ -26,7 +18,7 @@ const STAGE_LABELS: Record<string, string> = {
   validating: 'Checking the answer…',
 }
 
-type Status = 'idle' | 'streaming' | 'done' | 'error'
+type Status = 'idle' | 'streaming' | 'done' | 'error' | 'deferred'
 
 export interface SearchAnswerResult {
   citations: Citation[]
@@ -62,6 +54,7 @@ function renderCitationMarkers(
   sources: ScoredResource[],
   slug: string,
   keyPrefix: string,
+  streaming: boolean,
 ): ReactNode[] {
   const segments = text.split(/(\[\d+\])/g)
   return segments.map((segment, index) => {
@@ -78,7 +71,7 @@ function renderCitationMarkers(
         <sup key={`${keyPrefix}-${index}`}>
           <Link
             to={citationHref(slug, citation.resourceId, matchedPassage)}
-            className='font-semibold no-underline'
+            className='rp-focus inline-flex min-h-6 min-w-6 items-center justify-center px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
             title={`Source ${citationIndex} - ${citation.title}`}
           >
@@ -87,6 +80,10 @@ function renderCitationMarkers(
         </sup>
       )
     }
+    // While the answer streams, a marker with no citation to bind to is the
+    // model's own provisional numbering: never shown as if it were a
+    // source (D2-14). The server's bound text replaces it on `done`.
+    if (citationIndex !== null && streaming) return null
     return <span key={`${keyPrefix}-${index}`}>{segment}</span>
   })
 }
@@ -97,12 +94,13 @@ function renderInline(
   sources: ScoredResource[],
   slug: string,
   keyPrefix: string,
+  streaming: boolean,
 ): ReactNode[] {
   const parts = text.split(/(\*\*[^*]+\*\*)/g)
   return parts.flatMap((part, index): ReactNode[] =>
     part.startsWith('**') && part.endsWith('**') && part.length > 4
       ? [<strong key={`${keyPrefix}-${index}`}>{part.slice(2, -2)}</strong>]
-      : renderCitationMarkers(part, citations, sources, slug, `${keyPrefix}-${index}`)
+      : renderCitationMarkers(part, citations, sources, slug, `${keyPrefix}-${index}`, streaming)
   )
 }
 
@@ -112,11 +110,13 @@ function renderAnswer(
   citations: Citation[],
   sources: ScoredResource[],
   slug: string,
+  streaming: boolean,
 ): ReactNode {
   return (
     <AnswerMarkdown
       text={text}
-      renderInline={(run, keyPrefix) => renderInline(run, citations, sources, slug, keyPrefix)}
+      renderInline={(run, keyPrefix) =>
+        renderInline(run, citations, sources, slug, keyPrefix, streaming)}
       bodyClassName='text-sm leading-relaxed text-ink'
     />
   )
@@ -139,6 +139,43 @@ function renderAnswer(
  * via `onResult` so SearchPage can badge result cards and power the
  * Resources/Citations toggle without duplicating the stream itself.
  */
+/**
+ * The results-only fallback: the automatic answer stood down because the ask
+ * budget is nearly spent or the server asked us to wait. Says so plainly, with
+ * the wait when there is one, and lets the reader run it anyway.
+ */
+function DeferredNotice({ onRun }: { onRun: () => void }) {
+  const [wait, setWait] = useState(secondsUntilRetry())
+  useEffect(() => {
+    if (wait <= 0) return
+    const timer = setInterval(() => setWait(secondsUntilRetry()), 500)
+    return () => clearInterval(timer)
+  }, [wait])
+  return (
+    <div
+      role='status'
+      className='rounded-[var(--rp-radius)] border p-4'
+      style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
+    >
+      <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
+        Answer paused - showing results only
+      </p>
+      <p className='mt-1 text-sm leading-relaxed' style={{ color: 'var(--rp-warn-ink)' }}>
+        {RATE_LIMIT_MESSAGE}
+        {wait > 0 ? ` The portal will take another question in ${wait} s.` : ''}
+      </p>
+      <button
+        type='button'
+        onClick={onRun}
+        disabled={wait > 0}
+        className='rp-btn rp-btn-outline mt-3'
+      >
+        {wait > 0 ? `Answer in ${wait} s` : 'Answer this search'}
+      </button>
+    </div>
+  )
+}
+
 export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   const [status, setStatus] = useState<Status>('idle')
   const [text, setText] = useState('')
@@ -174,9 +211,6 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
       return
     }
 
-    const controller = new AbortController()
-    abortRef.current = controller
-    setStatus('streaming')
     setText('')
     setSources([])
     setCitations([])
@@ -186,6 +220,19 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     setStageLabel(null)
     setActiveStage(null)
     setSeenStages(new Set())
+
+    // This summary runs by itself on every search and shares the reader's
+    // ask budget. Near the limit, or while the server has asked us to wait,
+    // it stands down so the results still load and the reader's own next
+    // ask is not the one refused. A retry click (retryToken) always runs.
+    if (retryToken === 0 && shouldDeferAutomaticAsk()) {
+      setStatus('deferred')
+      return
+    }
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    setStatus('streaming')
 
     streamAsk(slug, { query: trimmed }, (event: AskEvent) => {
       switch (event.type) {
@@ -271,12 +318,16 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     ? (refused ? 'No direct evidence found' : 'Answer complete')
     : status === 'error'
     ? 'Answer unavailable'
+    : status === 'deferred'
+    ? 'Answer paused - results only'
     : ''
 
   const headerSummary = status === 'streaming'
     ? (stageLabel ?? '')
     : status === 'error'
     ? 'Unavailable'
+    : status === 'deferred'
+    ? 'Paused'
     : refused
     ? 'No direct evidence found'
     : `${citations.length} ${citations.length === 1 ? 'citation' : 'citations'}`
@@ -316,7 +367,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
           onClick={() => setCollapsed((prev) => !prev)}
           aria-expanded={!collapsed}
           aria-controls='search-answer-body'
-          className='rp-focus shrink-0 rounded-[var(--rp-radius)] px-1 text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+          className='rp-focus inline-flex min-h-6 shrink-0 items-center rounded-[var(--rp-radius)] px-1.5 text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
         >
           {collapsed ? 'Show' : 'Hide'}
         </button>
@@ -325,7 +376,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
       {!collapsed
         ? (
           <div id='search-answer-body' className='mt-3'>
-            {status === 'error'
+            {status === 'deferred' ? <DeferredNotice onRun={retry} /> : status === 'error'
               ? (
                 <ErrorCard
                   message={errorMessage ?? 'The answer service is unavailable.'}
@@ -352,7 +403,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                   {text.length > 0
                     ? (
                       <div className='rp-answer-in rp-prose text-sm text-ink'>
-                        {renderAnswer(text, citations, sources, slug)}
+                        {renderAnswer(text, citations, sources, slug, status === 'streaming')}
                       </div>
                     )
                     : null}

@@ -10,7 +10,7 @@ export {
   regionalBase,
 } from './providers/arag/client.ts'
 export type { KbBinding } from './providers/arag/client.ts'
-export { createProviderFromEnv, envBindings } from './env.ts'
+export { createProviderFromEnv, envBindings, labBindings } from './env.ts'
 export {
   baselineMerchandising,
   extractPageSummary,
@@ -22,3 +22,18 @@ export {
   overlayEnrichment,
   sourceNameFor,
 } from './merchandise.ts'
+export { PROMPT_VARIANTS, type PromptVariant, variantPreamble } from './prompts.ts'
+export {
+  intentConfigurationName,
+  intentFilterExpression,
+  intentSearchConfigs,
+  intentStrategies,
+  isGeneratedField,
+  shapeSourcesForIntent,
+} from './providers/arag/index.ts'
+export {
+  DEFAULT_VISUAL_RULE,
+  looksLikeReferenceChunk,
+  methodFromStrategy,
+  strategyBody,
+} from './providers/arag/index.ts'
