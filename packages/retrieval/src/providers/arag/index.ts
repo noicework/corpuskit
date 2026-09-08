@@ -2068,6 +2068,8 @@ export class AragProvider implements RetrievalProvider {
     for (const [facetKey, counts] of Object.entries(source)) {
       const labelsetId = facetKey.split('/').pop() ?? facetKey
       const allowed = defined.get(labelsetId)
+      // Ignore stale index facets for labelsets absent from this knowledge box.
+      if (!allowed || !remaining.includes(labelsetId)) continue
       const byLabel: Record<string, number> = {}
       for (const [labelPath, count] of Object.entries(counts)) {
         const label = labelPath.split('/').pop() ?? labelPath

@@ -163,3 +163,37 @@ describe('study-design kind (D1-06)', () => {
     expect(facets.format).toEqual({ article: 1 })
   })
 })
+
+describe('facet labelset isolation', () => {
+  it('discards phantom format counts when the KB defines only topics', async () => {
+    const provider = new AragProvider({
+      resolveBinding: () => ({ baseUrl: 'https://kb.example/kb/demo', token: 't' }),
+      fetchImpl: (input) => {
+        const url = String(input)
+        if (url.includes('/labelsets')) {
+          return Promise.resolve(jsonResponse({
+            labelsets: {
+              topic: { title: 'Topic', labels: [{ title: 'getting-started' }] },
+            },
+          }))
+        }
+        if (url.includes('/catalog')) {
+          return Promise.resolve(jsonResponse({
+            fulltext: {
+              facets: {
+                '/classification.labels/topic': {
+                  '/classification.labels/topic/getting-started': 4,
+                },
+                '/classification.labels/format': { '/classification.labels/format/article': 655 },
+              },
+            },
+          }))
+        }
+        throw new Error(`Unexpected URL ${url}`)
+      },
+    })
+    const facets = await provider.facets(TENANT, ['topic', 'format'])
+    expect(facets.topic).toEqual({ 'getting-started': 4 })
+    expect(facets.format ?? {}).toEqual({})
+  })
+})
