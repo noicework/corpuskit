@@ -2,6 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 
 import { DurableObject } from 'cloudflare:workers'
+import { initialiseDemo } from './demo.ts'
 import { buildApp } from '../../api/src/app.ts'
 import { runAutoEnrichments, runAutoSyncs, runWatches } from '../../api/src/scheduler.ts'
 import { AragProvider } from '@research-portal/retrieval'
@@ -46,6 +47,7 @@ export class PortalDurableObject extends DurableObject<Env> {
     state.migrate()
     const bindings = stringEnv(env)
     this.stores = durableStores(state, bindings)
+    initialiseDemo(this.stores.tenants, bindings.ENVIRONMENT)
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
