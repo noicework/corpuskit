@@ -84,7 +84,7 @@ export function GridDensity(
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
         aria-label='Cards across the grid'
-        className={`rp-focus w-24 accent-[var(--rp-primary)] ${className} ${hidden}`}
+        className={`rp-focus w-24 accent-[var(--rp-accent-fg)] ${className} ${hidden}`}
       />
     </>
   )
