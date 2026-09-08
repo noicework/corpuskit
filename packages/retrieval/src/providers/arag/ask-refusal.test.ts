@@ -50,6 +50,19 @@ function askStream(
   return [
     { item: { type: 'retrieval', results: { resources } } },
     { item: { type: 'answer', text: answerText } },
+    ...(answerText.includes('[1]')
+      ? [
+        { item: { type: 'answer', text: '\n\n[1]: block-AA\n' } },
+        {
+          item: {
+            type: 'footnote_citations',
+            footnote_to_context: {
+              'block-AA': `${Object.keys(resources)[0]}/t/text/0-20`,
+            },
+          },
+        },
+      ]
+      : []),
   ]
 }
 
