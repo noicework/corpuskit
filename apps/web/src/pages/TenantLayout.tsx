@@ -376,7 +376,15 @@ export function TenantLayout() {
                 to={`/t/${config.slug}`}
                 className='rp-focus flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]'
               >
-                {config.branding.logoUrl && !logoFailed
+                {isCorpusKit
+                  ? (
+                    <span className='rp-corpuskit-wordmark'>
+                      CorpusKit<span style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}>
+                        /
+                      </span>
+                    </span>
+                  )
+                  : config.branding.logoUrl && !logoFailed
                   ? (
                     <img
                       src={config.branding.logoUrl}
