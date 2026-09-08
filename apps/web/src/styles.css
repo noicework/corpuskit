@@ -2682,3 +2682,24 @@ button:disabled,
     transition: none;
   }
 }
+
+/* CorpusKit's public homepage identity, shared by the documentation demo. */
+.rp-corpuskit-hero {
+  --rp-primary: #155da6;
+  --rp-on-hero: #ffffff;
+  --rp-on-primary: #ffffff;
+  background: #155da6;
+  color: #ffffff;
+}
+
+.rp-corpuskit-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .1rem;
+  font-family: "Archivo", sans-serif;
+  font-size: 1.55rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -.055em;
+  white-space: nowrap;
+}
