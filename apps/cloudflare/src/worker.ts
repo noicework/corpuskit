@@ -48,6 +48,7 @@ export class PortalDurableObject extends DurableObject<Env> {
     this.stores = durableStores(state, bindings)
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
+      augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
     })
     this.app = buildApp({
       provider: this.provider,

@@ -61,7 +61,14 @@ export const PaletteSchema = z.object({
 })
 export type Palette = z.infer<typeof PaletteSchema>
 
-export const PaletteIdSchema = z.enum(['fathom', 'canopy', 'damson', 'kiln', 'observatory'])
+export const PaletteIdSchema = z.enum([
+  'fathom',
+  'canopy',
+  'damson',
+  'kiln',
+  'observatory',
+  'corpuskit',
+])
 export type PaletteId = z.infer<typeof PaletteIdSchema>
 
 /**
@@ -81,6 +88,33 @@ export interface PaletteEntry {
 }
 
 export const DEFAULT_PALETTES: Record<PaletteId, PaletteEntry> = {
+  corpuskit: {
+    'id': 'corpuskit',
+    'label': 'CorpusKit',
+    'description': 'Warm paper, blue ink and the CorpusKit editorial identity.',
+    'palette': {
+      'mode': 'light',
+      'brandSurface': '#f2efe7',
+      'onBrandSurface': '#1c1c19',
+      'brandForeground': '#1c1c19',
+      'accent': '#155da6',
+      'onAccent': '#fffdf8',
+      'accentForeground': '#155da6',
+      'focusRing': '#155da6',
+      'accentWash': '#dce8f4',
+      'accentWashStrong': '#c6d9eb',
+      'heroFrom': '#f2efe7',
+      'heroTo': '#f2efe7',
+      'onHero': '#1c1c19',
+      'paper': '#f2efe7',
+      'surface': '#fffdf8',
+      'surface2': '#f8f6f0',
+      'line': '#cec8bb',
+      'ink': '#1c1c19',
+      'ink2': '#5c5a53',
+      'ink3': '#656158',
+    },
+  },
   fathom: {
     id: 'fathom',
     label: 'Fathom',

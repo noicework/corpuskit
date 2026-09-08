@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "corpuskit-demo",
+  "main": "dist/cloudflare/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "demo.corpuskit.org",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PORTAL",
+        "class_name": "PortalDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "PortalDurableObject"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "17 15 * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+  "vars": {
+    "ENVIRONMENT": "demo",
+    "ARAG_DA_AGENT_MODEL": "openai-compatible"
+  }
+}
