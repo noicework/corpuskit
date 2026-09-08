@@ -305,7 +305,10 @@ export function TenantLayout() {
   useTextScale(config?.branding)
   // The viewer's light/dark scheme: system preference by default, their own
   // choice once they toggle it, persisted per browser.
-  const { scheme, setChoice } = useViewerScheme()
+  const { scheme: viewerScheme, setChoice } = useViewerScheme()
+  // The CorpusKit homepage identity is intentionally light-only.
+  const lightOnly = config?.branding.paletteId === 'corpuskit'
+  const scheme = lightOnly ? 'light' : viewerScheme
   const schemeLabel = scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
   const toggleScheme = () => setChoice(scheme === 'dark' ? 'light' : 'dark')
   useBodyTheme(config?.branding, scheme)
@@ -475,22 +478,24 @@ export function TenantLayout() {
                 * the menu toggle below - component classes set their own
                 * display and would beat a utility on the element itself. */
               }
-              <span className='hidden sm:inline-flex'>
-                <button
-                  type='button'
-                  onClick={toggleScheme}
-                  aria-label={schemeLabel}
-                  title={schemeLabel}
-                  aria-pressed={scheme === 'dark'}
-                  className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-                    color: 'var(--rp-brand-fg)',
-                  }}
-                >
-                  <SchemeIcon scheme={scheme} className='h-6 w-6' />
-                </button>
-              </span>
+              {!lightOnly && (
+                <span className='hidden sm:inline-flex'>
+                  <button
+                    type='button'
+                    onClick={toggleScheme}
+                    aria-label={schemeLabel}
+                    title={schemeLabel}
+                    aria-pressed={scheme === 'dark'}
+                    className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
+                    style={{
+                      borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
+                      color: 'var(--rp-brand-fg)',
+                    }}
+                  >
+                    <SchemeIcon scheme={scheme} className='h-6 w-6' />
+                  </button>
+                </span>
+              )}
               <span className='hidden sm:inline-flex'>
                 <HelpMenu slug={config.slug} />
               </span>
@@ -628,15 +633,17 @@ export function TenantLayout() {
               }`}
               style={{ '--rp-stage-i': MOBILE_NAV_ITEMS.length } as CSSProperties}
             >
-              <button
-                type='button'
-                onClick={toggleScheme}
-                aria-pressed={scheme === 'dark'}
-                className='rp-navsheet-action rp-focus-inverse'
-              >
-                <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
-                {scheme === 'dark' ? 'Light mode' : 'Dark mode'}
-              </button>
+              {!lightOnly && (
+                <button
+                  type='button'
+                  onClick={toggleScheme}
+                  aria-pressed={scheme === 'dark'}
+                  className='rp-navsheet-action rp-focus-inverse'
+                >
+                  <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
+                  {scheme === 'dark' ? 'Light mode' : 'Dark mode'}
+                </button>
+              )}
               {helpMenuItems(config.slug).map((item) => (
                 <NavLink
                   key={item.key}
