@@ -156,12 +156,12 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 }
 
 const HEADING_CLASSES: Record<number, string> = {
-  1: 'rp-display text-xl text-ink mt-6 first:mt-0',
-  2: 'rp-display text-lg text-ink mt-6 first:mt-0',
-  3: 'font-semibold text-base text-ink mt-5',
-  4: 'font-semibold text-sm text-ink mt-4',
-  5: 'font-semibold text-sm text-ink mt-4',
-  6: 'font-semibold text-sm text-ink-2 mt-4',
+  1: 'rp-display text-xl text-ink mt-6 mb-3 first:mt-0',
+  2: 'rp-display text-lg text-ink mt-6 mb-3 first:mt-0',
+  3: 'font-semibold text-base text-ink mt-5 mb-3',
+  4: 'font-semibold text-sm text-ink mt-4 mb-2',
+  5: 'font-semibold text-sm text-ink mt-4 mb-2',
+  6: 'font-semibold text-sm text-ink-2 mt-4 mb-2',
 }
 
 /**
@@ -187,8 +187,9 @@ function DocBlockView(
     : undefined
   // A bare URL or DOI in the extracted text has no break opportunity and
   // used to push the page 100 px wider than a phone (D3-14).
+  const spacing = block.kind === 'heading' ? '' : 'mb-4 last:mb-0'
   const base =
-    `doc-block scroll-mt-24 [overflow-wrap:anywhere] transition-colors duration-700 ${emphasisClass}`
+    `${spacing} doc-block scroll-mt-24 [overflow-wrap:anywhere] transition-colors duration-700 ${emphasisClass}`
   const id = `doc-block-${block.index}`
 
   switch (block.kind) {
