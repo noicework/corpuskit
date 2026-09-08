@@ -2972,6 +2972,11 @@ export class AragProvider implements RetrievalProvider {
         ? raw
         : (raw as { rephrased_query?: string; text?: string }).rephrased_query ??
           (raw as { text?: string }).text ?? ''
+      // Custom models can return an insufficient-context sentinel with a status
+      // suffix instead of a rewritten query. Never present that as an interpretation.
+      if (/^not enough (?:data|context) to answer this[.!]?(?:-?\d+)?$/i.test(text.trim())) {
+        return null
+      }
       // The predict endpoint appends a single status digit to the rephrased text.
       const cleaned = text.trim().replace(/[01]$/, '').trim().replace(/\?+$/, (m) => m.slice(0, 1))
       if (!cleaned || cleaned.toLowerCase() === question.trim().toLowerCase()) return null
