@@ -281,7 +281,16 @@ export function paletteVars(
   // A dark library palette is already dark; the viewer's toggle only has
   // work to do on a light suite.
   if (scheme === 'dark' && paletteMode(branding) === 'light') {
-    return { ...roles, ...viewerDarkVars(roles) }
+    return {
+      ...roles,
+      ...viewerDarkVars(roles),
+      ...(branding.paletteId === 'corpuskit'
+        ? {
+          '--rp-primary': DARK_GREY_SUITE['--rp-surface']!,
+          '--rp-on-primary': DARK_GREY_SUITE['--rp-ink']!,
+        }
+        : {}),
+    }
   }
   return roles
 }

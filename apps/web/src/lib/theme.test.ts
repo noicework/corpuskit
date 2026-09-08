@@ -290,6 +290,16 @@ describe('viewer dark scheme', () => {
     expect(tenantThemeVars(branding(), 'dark').colorScheme).toBe('dark')
   })
 
+  it('gives the CorpusKit navigation a dark surface and readable links', async () => {
+    const { DARK_GREY_SUITE } = await import('./theme.ts')
+    const { contrastRatio } = await import('@research-portal/core')
+    const vars = paletteVars(branding({ paletteId: 'corpuskit' }), 'dark')
+    expect(vars['--rp-primary']).toBe(DARK_GREY_SUITE['--rp-surface'])
+    expect(contrastRatio(vars['--rp-on-primary']!, vars['--rp-primary']!)).toBeGreaterThanOrEqual(
+      4.5,
+    )
+  })
+
   it('leaves a light scheme, and a dark library palette, exactly as before', async () => {
     expect(paletteVars(branding(), 'light')).toEqual(paletteVars(branding()))
     const observatory = branding({ paletteId: 'observatory' })
