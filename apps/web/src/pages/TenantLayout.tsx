@@ -305,9 +305,17 @@ export function TenantLayout() {
   useTextScale(config?.branding)
   // The viewer's light/dark scheme: system preference by default, their own
   // choice once they toggle it, persisted per browser.
-  const { scheme, setChoice } = useViewerScheme()
+  const { scheme: viewerScheme, setChoice } = useViewerScheme()
+  // Start the CorpusKit identity in light mode, independent of browser preferences.
+  const [demoScheme, setDemoScheme] = useState<'light' | 'dark'>('light')
+  const isCorpusKit = config?.branding.paletteId === 'corpuskit'
+  const scheme = isCorpusKit ? demoScheme : viewerScheme
   const schemeLabel = scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
-  const toggleScheme = () => setChoice(scheme === 'dark' ? 'light' : 'dark')
+  const toggleScheme = () => {
+    const next = scheme === 'dark' ? 'light' : 'dark'
+    if (isCorpusKit) setDemoScheme(next)
+    else setChoice(next)
+  }
   useBodyTheme(config?.branding, scheme)
 
   if (isLoading) {

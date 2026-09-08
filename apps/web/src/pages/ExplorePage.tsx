@@ -77,7 +77,17 @@ function Hero({
   // there is width to spend on it.
   return (
     <section className='relative isolate pb-24 pt-14 sm:px-6 sm:pb-28 sm:pt-20'>
-      <HeroBackdrop imageUrl={config.branding.heroImageUrl} />
+      {config.branding.paletteId === 'corpuskit' && !config.branding.heroImageUrl
+        ? (
+          <div className='absolute inset-0 -z-10 overflow-hidden bg-[#f2efe7]' aria-hidden='true'>
+            <img
+              src='/images/corpuskit-knowledge-paper.webp'
+              alt=''
+              className='h-full w-full object-cover object-right mix-blend-multiply'
+            />
+          </div>
+        )
+        : <HeroBackdrop imageUrl={config.branding.heroImageUrl} />}
 
       <div className='rp-shell grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-14'>
         <div className='min-w-0'>

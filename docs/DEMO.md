@@ -28,3 +28,14 @@ and provider routing with fallbacks disabled. The Worker explicitly passes
 `ARAG_DA_AGENT_MODEL` into its retrieval provider so demo augmentation uses the
 same configured OpenAI-compatible model instead of the application's default
 augmentation tier. Embeddings, reranking and extraction remain ARAG services.
+
+The CorpusKit palette starts in light mode independently of saved or system
+preferences, while retaining the viewer toggle for the current visit. The
+homepage navigation links to the demo on desktop and mobile.
+
+The decorative hero asset is `apps/web/public/images/corpuskit-knowledge-paper.webp`,
+generated with the built-in image generator and encoded as WebP. Prompt: an
+extremely light abstract editorial composition of text blobs, floating clusters
+of tiny typographic lines and ghosted document paragraphs on warm paper #f2efe7;
+pale warm grey marks, a whisper of blue-grey, most detail around the right and
+bottom edges, clear space for heading and search, no readable titles or UI.
