@@ -2799,14 +2799,19 @@ export class AragProvider implements RetrievalProvider {
     const cached = this.graphCache.get(cacheKey)
     if (cached && Date.now() - cached.at < GRAPH_CACHE_TTL_MS) return cached.graph
     try {
-      // By default, only agent-extracted relations - the built-in NER pipeline
+      // By default, agent-extracted and imported relations - the built-in NER pipeline
       // floods the path index (PERSON/DATE/LOC) and would drown the curated
       // graph. With an entity, scope to that node's neighbourhood in either
       // direction. `includeBuiltin` is an explicit opt-in (surfaced as a
       // toggle in the Graph page) that drops the `generated` filter so the
       // raw NER output comes through too - the label-assignment and
       // resource-id exclusions below still apply either way.
-      const generated = { prop: 'generated', by: 'data-augmentation' }
+      const generated = {
+        or: [
+          { prop: 'generated', by: 'data-augmentation' },
+          { prop: 'generated', by: 'user' },
+        ],
+      }
       const pathFilter = entity
         ? {
           prop: 'path',

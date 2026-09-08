@@ -5,7 +5,7 @@ import { AragProvider } from './index.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 
 /**
- * `relationsGraph()` defaults to agent-extracted relations only - the
+ * `relationsGraph()` defaults to agent-extracted and imported relations - the
  * built-in NER pipeline (PERSON/DATE/LOC groups) floods the path index and
  * would drown the curated graph. The Graph page now offers an opt-in
  * "include built-in entities" toggle (`includeBuiltin: true`) that drops the
@@ -88,7 +88,9 @@ describe('relationsGraph - includeBuiltin toggle', () => {
     const result = await provider.relationsGraph(TENANT)
 
     expect(bodies[0]).toEqual({
-      query: { prop: 'generated', by: 'data-augmentation' },
+      query: {
+        or: [{ prop: 'generated', by: 'data-augmentation' }, { prop: 'generated', by: 'user' }],
+      },
       top_k: 500,
     })
     const ids = result.nodes.map((n) => n.id)
@@ -107,7 +109,9 @@ describe('relationsGraph - includeBuiltin toggle', () => {
       query: {
         and: [
           { prop: 'path', source: { value: 'Abalone', match: 'exact' }, undirected: true },
-          { prop: 'generated', by: 'data-augmentation' },
+          {
+            or: [{ prop: 'generated', by: 'data-augmentation' }, { prop: 'generated', by: 'user' }],
+          },
         ],
       },
       top_k: 500,
