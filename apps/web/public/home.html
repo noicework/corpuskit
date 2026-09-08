@@ -156,6 +156,13 @@
 
     .nav-links a { text-decoration: none; }
     .nav-links a:hover { text-decoration: underline; }
+    .nav-links .nav-demo {
+      padding: .55rem 1rem;
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .nav-links .nav-demo:hover { background: rgba(128, 128, 128, .1); text-decoration: none; }
 
     main { overflow: hidden; }
     #top, #workings, #run, #contribute { scroll-margin-top: calc(76px + env(safe-area-inset-top)); }
@@ -1058,7 +1065,8 @@
         position: absolute;
         height: calc(64px + env(safe-area-inset-top));
       }
-      .nav-links { display: none; }
+      .nav-links { display: flex; }
+      .nav-links a:not(.nav-demo) { display: none; }
       .hero { min-height: 760px; padding-top: 8.2rem; padding-bottom: 2.5rem; }
       .hero h1 { min-width: 0; font-size: min(13vw, 4.25rem); line-height: .92; text-wrap: wrap; }
       .hero-thread { display: block; }
@@ -1476,6 +1484,7 @@
         <a href="#workings">How it works</a>
         <a href="#run">Run CorpusKit</a>
         <a href="#contribute">Contribute</a>
+        <a class="nav-demo" href="https://demo.corpuskit.org">Demo</a>
       </div>
     </nav>
   </header>
