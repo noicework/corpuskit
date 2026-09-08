@@ -7,6 +7,7 @@ import { PaletteChoiceSchema } from './palettes.ts'
 
 /** The named Google Fonts heading/body pairings a portal can choose from. */
 export const FontPairingIdSchema = z.enum([
+  'archivo-source',
   'albert-barlow',
   'fraunces-poppins',
   'corben-montserrat',
@@ -128,6 +129,23 @@ export interface FontPairing {
  * otherwise) - Corben ships only 400/700 and Bebas Neue only 400.
  */
 export const FONT_PAIRINGS: Record<FontPairingId, FontPairing> = {
+  'archivo-source': {
+    'id': 'archivo-source',
+    'label': 'Archivo & Source Sans 3',
+    'heading': {
+      'family': 'Archivo',
+      'weight': 600,
+      'boldWeight': 700,
+      'tracking': '-0.04em',
+      'leading': '0.98',
+    },
+    'body': {
+      'family': 'Source Sans 3',
+      'weight': 400,
+    },
+    'googleQuery':
+      'family=Archivo:wdth,wght@100,400;100,600;100,700&family=Source+Sans+3:wght@400;500;600;700',
+  },
   'albert-barlow': {
     id: 'albert-barlow',
     label: 'Albert Sans & Barlow',

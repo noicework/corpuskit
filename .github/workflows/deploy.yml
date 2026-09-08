@@ -150,3 +150,24 @@ jobs:
           BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
           PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'opax' }}
         run: deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick
+
+  deploy-demo:
+    name: Deploy documentation demo
+    needs: gate
+    if: needs.gate.outputs.deployable == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: corpuskit-cloudflare-${{ github.sha }}
+      - name: Deploy the tested demo package
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 4.127.1
+          command: deploy --config wrangler.demo.jsonc
+      - name: Verify demo health
+        run: curl --fail --silent --show-error --retry 8 --retry-delay 5 https://demo.corpuskit.org/api/health
