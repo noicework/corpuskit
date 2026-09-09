@@ -1,5 +1,5 @@
 /**
- * Post-deploy live persona smoke test.
+ * Live demo persona smoke test.
  *
  * Runs the researcher persona's core journey against a LIVE, deployed
  * portal over plain HTTP - no mocking, no test doubles, real ARAG-backed
@@ -16,7 +16,7 @@
  * summary and a non-zero exit code, so it can gate the deploy workflow.
  *
  * Usage:
- *   BASE_URL=https://your-portal.example.com \
+ *   BASE_URL=https://demo.corpuskit.org PERSONA_SMOKE_TENANTS=demo \
  *     deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts [--quick]
  *
  * --quick checks a single tenant (2 LLM asks total: one in-corpus, one
@@ -66,11 +66,8 @@ const ALL_TENANTS: TenantJourney[] = [
   },
 ]
 
-// Which tenant slugs to actually exercise, in order. Overridable via
-// PERSONA_SMOKE_TENANTS (comma-separated) so a deployment can point the smoke
-// at the tenants that hold real content. A tenant still being loaded with real
-// content should not gate deploys until it is ready. Defaults to the
-// code-seeded showcase tenants for local/CI-double runs.
+// Keep the local fixture journeys available, but remote functional tests are
+// restricted by smokeTarget to the dedicated demo corpus, never customer data.
 export function selectedJourneys(selection: string): TenantJourney[] {
   const slugs = selection.split(',').map((s) => s.trim()).filter(Boolean)
   if (slugs.length === 0) throw new Error('At least one persona smoke tenant is required')
@@ -79,6 +76,28 @@ export function selectedJourneys(selection: string): TenantJourney[] {
     if (!journey) throw new Error(`Unknown persona smoke tenant: ${slug}`)
     return journey
   })
+}
+
+export function smokeTarget(
+  baseValue = 'https://demo.corpuskit.org',
+  selection = 'demo',
+): { base: string; tenants: TenantJourney[] } {
+  const url = new URL(baseValue)
+  const tenants = selectedJourneys(selection)
+  if (
+    !['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
+    url.search || url.hash || !/^\/*$/.test(url.pathname)
+  ) throw new Error('Smoke target must be an HTTP(S) origin without credentials, path or query')
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  if (
+    !local && (url.origin !== 'https://demo.corpuskit.org' ||
+      tenants.length !== 1 || tenants[0]?.slug !== 'demo')
+  ) {
+    throw new Error(
+      'Remote functional smoke tests must target https://demo.corpuskit.org tenant demo',
+    )
+  }
+  return { base: url.origin, tenants }
 }
 
 const FIRST_TOKEN_BUDGET_MS = 15_000
@@ -312,13 +331,13 @@ async function checkRefusalAsk(base: string, tenant: TenantJourney): Promise<voi
 }
 
 async function main() {
-  const base = (process.env.BASE_URL ?? '').replace(/\/+$/, '')
-  if (!base) {
-    console.error('Missing BASE_URL - e.g. BASE_URL=https://your-portal.example.com')
-    process.exit(1)
-  }
+  // Validate before any HTTP request so stale repository/local overrides cannot
+  // send an automated functional query to a customer corpus.
+  const { base, tenants: selected } = smokeTarget(
+    process.env.BASE_URL,
+    Deno.env.get('PERSONA_SMOKE_TENANTS'),
+  )
   const quick = Deno.args.includes('--quick')
-  const selected = selectedJourneys(Deno.env.get('PERSONA_SMOKE_TENANTS') ?? 'marine,grains')
   const tenants = quick ? selected.slice(0, 1) : selected
 
   console.log(`Persona smoke test against ${base}${quick ? ' (quick mode)' : ''}`)

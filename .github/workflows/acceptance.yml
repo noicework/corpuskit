@@ -5,11 +5,6 @@ on:
     # Avoid the top of the hour, when scheduled Actions are most likely to queue.
     - cron: '17 */3 * * *'
   workflow_dispatch:
-    inputs:
-      tenant_slugs:
-        description: Space- or comma-separated tenant slugs (optional override)
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -20,18 +15,18 @@ concurrency:
 
 jobs:
   sweep:
-    name: Check live public endpoints
+    name: Check live demo public endpoints
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # A repository variable can move the scheduled check to renamed tenants
-      # without changing this workflow. Manual runs can override it per run.
-      ACCEPTANCE_TENANTS: ${{ inputs.tenant_slugs || vars.ACCEPTANCE_TENANTS || 'opax' }}
-      ACCEPTANCE_BASE_URL: https://corpuskit.org
+      # Functional testing belongs to the demo corpus, never a customer portal.
+      # Scheduled and manual dispatches deliberately share the same fixed target.
+      ACCEPTANCE_TENANTS: demo
+      ACCEPTANCE_BASE_URL: https://demo.corpuskit.org
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Sweep live tenants
+      - name: Sweep live demo tenant
         run: deno run --allow-net --allow-env=ACCEPTANCE_TENANTS,ACCEPTANCE_BASE_URL apps/api/scripts/live-acceptance.ts
