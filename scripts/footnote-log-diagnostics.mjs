@@ -17,7 +17,12 @@ const response = await fetch(
       view: 'events',
       limit: 100,
       parameters: {
-        filters: [{ key: '$metadata.service', type: 'string', operation: 'eq', value: 'corpuskit' }],
+        filters: [{
+          key: '$metadata.service',
+          type: 'string',
+          operation: 'eq',
+          value: 'corpuskit',
+        }],
         needle: { value: 'error' },
       },
     }),
@@ -32,6 +37,7 @@ if (!response.ok || payload.success === false) {
   const raw = JSON.stringify(payload.result)
   const classifications = [
     'FootnoteError',
+    'The response citation links could not be verified',
     'The answer service had a problem',
     'citation',
     'footnote',
