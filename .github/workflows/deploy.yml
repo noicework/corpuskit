@@ -133,9 +133,9 @@ jobs:
         run: deno run --allow-env --allow-read --allow-net apps/cloudflare/scripts/release-safety.ts verify corpuskit "$RUNNER_TEMP/production-candidate.json"
 
       - name: Verify Microsoft sign-in is configured
-        if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
+        if: vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
         env:
-          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
+          BASE_URL: https://corpuskit.org
         run: |
           curl --fail --silent --show-error --retry 3 \
             "$BASE_URL/auth/me" | grep '"authenticated":false'
@@ -152,29 +152,29 @@ jobs:
               --output /dev/null "https://$host/api/health"
           done
 
-      - name: Post-deploy persona smoke
-        if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
-        env:
-          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
-          PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'opax' }}
-        run: deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick
-
       - name: Restore exact previous production version after verification failure
         id: rollback
         if: failure() && steps.publish.outcome == 'success' && steps.candidate.outcome == 'success'
         run: deno run --allow-env --allow-read --allow-run=npx apps/cloudflare/scripts/release-safety.ts rollback corpuskit "$RUNNER_TEMP/production-before.json" "$RUNNER_TEMP/production-candidate.json"
 
-      - name: Verify restored production version and live journey
+      - name: Verify restored production version, sign-in and domains
         if: failure() && steps.rollback.outcome == 'success'
         env:
-          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL || 'https://corpuskit.org' }}
-          PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'opax' }}
+          BASE_URL: https://corpuskit.org
           RUNTIME_CONFIGURED: ${{ vars.CORPUSKIT_RUNTIME_CONFIGURED }}
         run: |
           deno run --allow-env --allow-read --allow-net apps/cloudflare/scripts/release-safety.ts verify corpuskit "$RUNNER_TEMP/production-before.json"
           if [ "$RUNTIME_CONFIGURED" = true ]; then
-            deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick
+            curl --fail --silent --show-error --retry 3 \
+              "$BASE_URL/auth/me" | grep '"authenticated":false'
           fi
+          hosts=$(grep -o '"pattern": *"[^"]*"' wrangler.jsonc | sed 's/.*: *"//; s/"$//')
+          test -n "$hosts"
+          for host in $hosts; do
+            echo "checking restored https://$host/api/health"
+            curl --fail --silent --show-error --retry 8 --retry-delay 5 \
+              --output /dev/null "https://$host/api/health"
+          done
 
   deploy-demo:
     name: Deploy documentation demo

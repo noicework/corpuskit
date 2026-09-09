@@ -22,18 +22,31 @@ Production is published at `https://corpuskit.org`. The Worker also keeps its ge
    waits for this job to pass. The demo has its own existing tenant, binding and Durable Object
    state; no production tenants or credentials are copied into it.
 6. Record production's exact active deployment and version, deploy the same preserved package,
-   then verify health, custom domains, anonymous auth state and the live production persona journey
-   once runtime secrets have been attached.
+   then verify actual production health/version, custom domains and anonymous auth state once runtime
+   secrets have been attached. These are production deployment checks, not corpus queries.
 7. If post-deploy verification fails, restore that Worker's recorded previous version and verify
-   both the active version and the restored live journey. The failed release stays red even when
-   recovery succeeds.
+   its active version. Demo recovery also reruns its real functional journey; production recovery
+   rechecks production sign-in and domain health, without querying a customer corpus. The failed
+   release stays red even when recovery succeeds.
+
+All automated functional testing targets **`https://demo.corpuskit.org`, tenant `demo`**. This
+includes the release's search/cited-answer/refusal gate, demo rollback verification, and the
+three-hourly or manually dispatched `acceptance.yml` sweep. There is no production/OPAX persona
+smoke and no arbitrary tenant override in these workflows. The old `PERSONA_SMOKE_TENANTS` and
+`ACCEPTANCE_TENANTS` repository variables are ignored; they do not redirect either workflow.
+The persona runner also rejects non-demo remote targets before making a request. Localhost
+test-double journeys remain available for development.
+
+The demo gate proves the preserved package works with the demo's real ARAG corpus. It does **not**
+prove any production customer's corpus or ARAG configuration works. Production health, version,
+authentication and configured-domain checks remain separate and run against production itself.
 
 GitHub needs `CLOUDFLARE_ACCOUNT_ID` and a narrowly scoped `CLOUDFLARE_API_TOKEN` with Workers
-Scripts edit permission for the target account. Set `CORPUSKIT_BASE_URL` to
-`https://corpuskit.org` as a repository Actions variable. Leave the
+Scripts edit permission for the target account. Deployment checks use the explicit production
+and demo hostnames; `CORPUSKIT_BASE_URL` does not redirect the deployment workflow. Leave the
 `CORPUSKIT_RUNTIME_CONFIGURED` repository variable unset for the first deployment. After uploading
-runtime secrets, set it to `true` and rerun the deployment workflow to enable the identity and ARAG
-production checks.
+runtime secrets, set it to `true` and rerun the deployment workflow to enable the production identity
+check. The real ARAG functional gate always runs against the existing demo corpus.
 
 ## Runtime secrets
 
@@ -145,7 +158,7 @@ releases, but operators should not make dashboard releases during a pipeline dep
 does not offer an atomic compare-and-swap between checking and rolling back).
 
 Recovery remains a visible failure if Cloudflare rejects rollback, the previous version does not
-become active, or the restored smoke check fails. A publish that errors partway through, or a failed
+become active, or the restored Worker's applicable verification checks fail. A publish that errors partway through, or a failed
 candidate snapshot, requires manual inspection: the workflow cannot safely identify its candidate
 and will not guess. Cancelling a runner can also prevent recovery steps from running. Do not cancel
 a published release that is running verification; let it verify or recover.
