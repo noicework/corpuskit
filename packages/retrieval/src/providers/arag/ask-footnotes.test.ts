@@ -67,7 +67,7 @@ function fixture(opts: {
         { type: 'retrieval', results: { resources: { report: resource } } },
         ...Array.from(raw).map((text) => ({ type: 'answer', text })),
         opts.mode === 'standard'
-          ? { type: 'citations', citations: { 'report/f/pdf/0-16': [[0, 17]] } }
+          ? { type: 'citations', citations: { [opts.id ?? 'report/f/pdf/0-16']: [[0, 17]] } }
           : {
             type: 'footnote_citations',
             footnote_to_context: opts.broken ? {} : { 'block-AA': opts.id ?? 'report/f/pdf/0-16' },
@@ -236,4 +236,78 @@ Deno.test('footnote validation logs fixed reason codes without leaking source ID
   } finally {
     console.error = originalError
   }
+})
+
+Deno.test('verified extra context binds at resource level in both citation modes', async () => {
+  for (const mode of ['llm_footnotes', 'standard'] as const) {
+    const f = fixture({ id: 'USER_CONTEXT_0', mode })
+    const events = await collect(f.provider, {
+      sourceContext: [{ resourceId: 'report', text: 'Stocks recovered.' }],
+    })
+    expect(f.bodies[0]?.extra_context).toEqual(['Stocks recovered.'])
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(events.filter((e) => e.type === 'citation')).toEqual([{
+      type: 'citation',
+      citation: { index: 1, resourceId: 'report', title: 'Original report' },
+    }])
+    expect(events.some((e) => e.type === 'done' && e.text?.includes('Stocks recovered.[1]')))
+      .toBe(true)
+  }
+})
+
+Deno.test('extra context alias order survives filtering, retry and anonymous entries', async () => {
+  const f = fixture({ id: 'USER_CONTEXT_1', retry: true })
+  const events = await collect(f.provider, {
+    extraContext: ['', 'Anonymous context', '   '],
+    sourceContext: [
+      { resourceId: 'ignored', text: '' },
+      { resourceId: 'report', text: 'Stocks recovered.' },
+    ],
+  })
+  expect(f.bodies.every((b) =>
+    JSON.stringify(b.extra_context) ===
+      JSON.stringify(['Anonymous context', 'Stocks recovered.'])
+  )).toBe(true)
+  expect(events.some((e) => e.type === 'error')).toBe(false)
+  expect(events.some((e) => e.type === 'citation' && e.citation.resourceId === 'report')).toBe(true)
+})
+
+Deno.test('supplied context cannot evade resource pins or bind an unsent alias', async () => {
+  for (const id of ['USER_CONTEXT_0', 'USER_CONTEXT_12', 'USER_CONTEXT_01']) {
+    const f = fixture({ id })
+    const events = await collect(f.provider, {
+      resourceId: 'different',
+      sourceContext: Array.from({ length: 13 }, () => ({
+        resourceId: 'report',
+        text: 'Stocks recovered.',
+      })),
+    })
+    expect((f.bodies[0]?.extra_context as string[]).length).toBe(12)
+    expect(events.some((e) => e.type === 'done' || e.type === 'citation')).toBe(false)
+    expect(events.some((e) => e.type === 'error')).toBe(true)
+  }
+})
+
+Deno.test('footnotes reserve a full default generation budget but respect explicit caps', async () => {
+  const implicit = fixture()
+  await collect(implicit.provider)
+  expect(implicit.bodies[0]?.max_tokens).toBe(4096)
+
+  for (const maxTokens of [1200, 4096, 6000]) {
+    const explicit = fixture()
+    await collect(explicit.provider, { maxTokens })
+    expect(explicit.bodies[0]?.max_tokens).toBe(Math.min(maxTokens, 4096))
+  }
+
+  const standard = fixture({ mode: 'standard' })
+  await collect(standard.provider)
+  expect(standard.bodies[0]?.max_tokens).toBeUndefined()
+  const structured = fixture()
+  await structured.provider.askStructured(
+    tenant,
+    { name: 'test', description: 'Test', parameters: {} },
+    'Test',
+  )
+  // Structured generation already requests 4096, independently of citations.
+  expect(structured.bodies[0]?.max_tokens).toBe(4096)
 })

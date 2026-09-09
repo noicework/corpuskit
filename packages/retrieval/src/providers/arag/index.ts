@@ -52,6 +52,7 @@ import {
   FOOTNOTE_PROMPT,
 } from './citation-mode.ts'
 import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
+import { prepareExtraContext } from './extra-context.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 import { dedupeNames, isNoiseEntity, keepEntity, preferredSpelling } from './entity-filter.ts'
@@ -3740,9 +3741,8 @@ export class AragProvider implements RetrievalProvider {
           (footnotes ? `\n\n${FOOTNOTE_PROMPT}` : ''),
       },
     }
-    if (opts.extraContext && opts.extraContext.length > 0) {
-      body.extra_context = opts.extraContext.filter((t) => t.trim().length > 0).slice(0, 12)
-    }
+    const extraContext = prepareExtraContext(opts)
+    if (extraContext.texts.length > 0) body.extra_context = extraContext.texts
     if (intent) {
       // The stored configuration's features win over the request's; never
       // send both (docs/ARAG-DEV.md).
@@ -3818,6 +3818,12 @@ export class AragProvider implements RetrievalProvider {
     // A table over three studies needs more than the default generation
     // budget, or its last row is cut (D4-06).
     if (opts.maxTokens && opts.maxTokens > 0) body.max_tokens = Math.min(opts.maxTokens, 4096)
+    else if (footnotes) {
+      // Footnote definitions arrive after the prose. A small knowledge-box
+      // default can finish the claims but truncate their required definitions.
+      // Leave explicit caller limits intact and keep malformed output closed.
+      body.max_tokens = 4096
+    }
 
     let sources: ScoredResource[] = []
     const contextTexts: string[] = []
@@ -3947,6 +3953,9 @@ export class AragProvider implements RetrievalProvider {
         excludedGroundingSeen = false
       }
       try {
+        // REMi sees the same original context the generator received, including
+        // supplied passages that may never appear in the scored retrieval item.
+        contextTexts.push(...extraContext.texts)
         const res = await client.postStream('/ask', body, { 'x-show-consumption': 'true' })
         const learningId = res.headers.get('nuclia-learning-id')
         if (learningId) yield { type: 'learning', id: learningId }
@@ -4182,8 +4191,14 @@ export class AragProvider implements RetrievalProvider {
           }
           const scopedCitations: Record<string, unknown> = {}
           for (const [key, value] of Object.entries(citationsMapAccum)) {
-            const resourceId = key.split('/')[0]
-            if (resourceId && citable(resourceId)) scopedCitations[key] = value
+            const mappedKey = extraContext.resources.get(key) ?? key
+            const resourceId = mappedKey.split('/')[0]
+            if (resourceId && citable(resourceId)) {
+              const existing = scopedCitations[mappedKey]
+              scopedCitations[mappedKey] = Array.isArray(existing) && Array.isArray(value)
+                ? [...existing, ...value]
+                : value
+            }
           }
           const resolveTitle = (resourceId: string) =>
             byId.get(resourceId)?.title ?? sources.find((s) => s.id === resourceId)?.title ??
@@ -4198,7 +4213,7 @@ export class AragProvider implements RetrievalProvider {
             throw new FootnoteError('unexpected_standard_citations')
           }
           const bound = parsedFootnotes
-            ? bindFootnotes(parsedFootnotes, citable, resolveTitle)
+            ? bindFootnotes(parsedFootnotes, citable, resolveTitle, extraContext.resources)
             : spliceCitationMarkers(
               fullAnswer,
               scopedCitations,

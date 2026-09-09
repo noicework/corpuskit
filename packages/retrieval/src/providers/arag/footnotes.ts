@@ -34,13 +34,15 @@ export function bindFootnotes(
   parsed: ReturnType<FootnoteStream['finish']>,
   citable: (resourceId: string) => boolean,
   resolveTitle: (resourceId: string) => string,
+  extraContextSources: ReadonlyMap<string, string> = new Map(),
 ): { text: string; citations: Citation[] } {
   const citations: Citation[] = []
   const byResource = new Map<string, number>()
   const inserts = new Map<number, Set<number>>()
   for (const anchor of parsed.anchors) {
+    const suppliedResource = extraContextSources.get(anchor.id)
     const match = /^([^/]+)\/(t|f|l|c)\/([^/]+)(?:\/(?:[^/]+\/)?\d+-\d+)?$/.exec(anchor.id)
-    if (!match) {
+    if (!match && !suppliedResource) {
       const reason = /^USER_CONTEXT_/.test(anchor.id)
         ? 'anonymous_context'
         : /^[^/]+\/a\//.test(anchor.id)
@@ -48,9 +50,11 @@ export function bindFootnotes(
         : 'unsupported_context'
       throw new FootnoteError(reason)
     }
-    if (match[3]!.startsWith('da-')) throw new FootnoteError('generated_context')
-    if (!citable(match[1]!)) throw new FootnoteError('out_of_scope')
-    const resourceId = match[1]!
+    if (match?.[3]?.startsWith('da-')) throw new FootnoteError('generated_context')
+    // Supplied context has a verified resource identity, not a fabricated
+    // native paragraph ID. Both paths retain the same scope validation.
+    const resourceId = suppliedResource ?? match![1]!
+    if (!citable(resourceId)) throw new FootnoteError('out_of_scope')
     let index = byResource.get(resourceId)
     if (index === undefined) {
       index = citations.length + 1

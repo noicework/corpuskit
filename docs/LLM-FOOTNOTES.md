@@ -29,13 +29,34 @@ Progress does not support citations with `answer_json_schema`.
   rebind claims that fail its checks; LLM footnotes are attribution, not proof that
   every claim is correct.
 - Reject malformed, missing, conflicting, generated-field and out-of-scope
-  references. Unknown anonymous extra-context aliases such as `USER_CONTEXT_0`
-  cannot be assigned to a paper safely and also fail. Capability retries retain
+  references. Server-created `sourceContext` entries keep original text and its
+  resource ID together; their exact ordered `USER_CONTEXT_n` aliases bind at
+  resource level, without inventing paragraph IDs or pages. Browser-supplied
+  previous excerpts must match a fresh, permitted original before becoming
+  source context. Prior generated answers remain conversation history, not
+  citable source material. Unknown anonymous aliases still fail. Capability retries retain
   the selected mode; they never downgrade footnotes to standard attribution.
 
 The port does not change stored retrieval filters or expansion strategies, and
 does not copy tenant-specific KSP source restrictions. It also does not change
 CorpusKit's existing fallback passage selection for resource-level citations.
+
+Footnote prose requests default explicitly to a 4,096-token generation budget:
+the trailing definitions need room after the answer. Explicit caller limits are
+respected; standard and structured-JSON requests keep their existing defaults.
+A live KSP-box probe at 1,200 tokens truncated the definition table, whereas the
+same question without that artificial cap completed. This establishes a token
+budget failure mode, not the cause of the earlier OPAX deployment failure.
+Incomplete definitions still fail validation; there is no automatic retry or
+silent downgrade to standard citations.
+
+Read-only live probes against the KSP knowledge box on 9 September 2026 passed
+for corpus-wide and document-scoped questions. A lean reformatting probe supplied
+an original-source excerpt using `sourceContext`; Progress returned
+`USER_CONTEXT_0` alongside five native paragraph mappings, all six definitions
+completed, and the provider returned one resource citation with no error. The
+previous binder would have rejected that alias. These checks verify provider
+integration, not an OPAX deployment or its tenant-specific configuration.
 
 ## Verification and release
 
@@ -48,6 +69,6 @@ standard mode.
 Run `deno task check` and `deno task build:cloudflare`. Before production release,
 also run live corpus/document/Help questions against a configured knowledge box,
 including a follow-up using extra context, and inspect citation click-throughs.
-The implementation worktree had no ARAG credentials or tenant bindings, so live
-answer quality and visual checks were not performed locally. No production
-deployment is part of this port.
+The original port was checked with test doubles only; the subsequent read-only
+provider probes are recorded above. Live portal smoke tests and browser checks
+remain release gates, rather than being replaced by those provider probes.
