@@ -15,6 +15,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  footnote-diagnostics:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/footnote-diagnostics'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read historical failure diagnostics (no deployment)
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/footnote-log-diagnostics.mjs
   gate:
     name: Typecheck, lint, format, tests, build
     runs-on: ubuntu-latest
