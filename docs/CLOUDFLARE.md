@@ -15,9 +15,18 @@ Production is published at `https://corpuskit.org`. The Worker also keeps its ge
 1. Build the SPA and Worker bundle.
 2. Run type checking, lint, formatting and tests.
 3. Validate the exact package with Wrangler's dry-run deploy.
-4. Deploy that preserved package with `cloudflare/wrangler-action@v3` and Wrangler 4.127.1.
-5. Verify health, then verify anonymous auth state and the live persona journey once runtime
-   secrets have been attached.
+4. Record the documentation demo's exact active deployment and Worker version, then deploy the
+   preserved package with `cloudflare/wrangler-action@v3` and Wrangler 4.127.1.
+5. Verify the demo's health and its real documentation corpus: search, a cited answer and an
+   out-of-corpus refusal. This is a real ARAG check, not the browser E2E test double. Production
+   waits for this job to pass. The demo has its own existing tenant, binding and Durable Object
+   state; no production tenants or credentials are copied into it.
+6. Record production's exact active deployment and version, deploy the same preserved package,
+   then verify health, custom domains, anonymous auth state and the live production persona journey
+   once runtime secrets have been attached.
+7. If post-deploy verification fails, restore that Worker's recorded previous version and verify
+   both the active version and the restored live journey. The failed release stays red even when
+   recovery succeeds.
 
 GitHub needs `CLOUDFLARE_ACCOUNT_ID` and a narrowly scoped `CLOUDFLARE_API_TOKEN` with Workers
 Scripts edit permission for the target account. Set `CORPUSKIT_BASE_URL` to
@@ -115,3 +124,35 @@ The first Worker migration is tagged `v1`; future schema changes must add a new 
 Cloudflare keeps Worker versions and deployments. Roll code back with a Cloudflare deployment
 rollback; never delete the Durable Object namespace during rollback, because it owns production
 state.
+
+The deployment workflow uses `apps/cloudflare/scripts/release-safety.ts` with pinned Wrangler
+4.127.1. Before publishing, `deployments list --json` must identify one current version serving
+100% of traffic. Empty, malformed, ambiguous or split deployments stop the release **before code
+is published**. This intentionally requires a separately reviewed bootstrap procedure for a new
+Worker; it does not silently deploy without a recovery target.
+
+After a successful publish the workflow obtains `Current Version ID` from that Wrangler action's
+`command-output`, passed via an environment variable rather than interpolated into shell code.
+Missing, malformed or multiple IDs fail closed. The active deployment must match this explicit
+published version before its deployment and version IDs are recorded as the candidate; an external
+release between publishing and snapshotting is not treated as this workflow's release. If a
+verification step fails, recovery first checks that the candidate is still active, then calls
+`wrangler rollback <recorded-previous-version> --config <exact-config> --name <exact-worker> --yes`.
+It never uses an implicit "previous" target, guesses from uploaded versions, or deletes a namespace.
+Worker/account checks prevent cross-target snapshots; a later deployment causes recovery to stop
+instead of overwriting someone else's release. The workflow concurrency group serialises pipeline
+releases, but operators should not make dashboard releases during a pipeline deployment (Cloudflare
+does not offer an atomic compare-and-swap between checking and rolling back).
+
+Recovery remains a visible failure if Cloudflare rejects rollback, the previous version does not
+become active, or the restored smoke check fails. A publish that errors partway through, or a failed
+candidate snapshot, requires manual inspection: the workflow cannot safely identify its candidate
+and will not guess. Cancelling a runner can also prevent recovery steps from running. Do not cancel
+a published release that is running verification; let it verify or recover.
+
+Code rollback preserves current Durable Object state, not a historical database snapshot. Cloudflare
+[does not permit rollback across a Durable Object class lifecycle change](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/),
+and old code may not understand newly written data. Releases that change class migrations, storage
+schemas or resource bindings need an explicitly reviewed compatibility/recovery plan. This safety
+mechanism is for compatible code releases, including the citation-provider fix; it is not a database
+backup or schema reversal mechanism.
