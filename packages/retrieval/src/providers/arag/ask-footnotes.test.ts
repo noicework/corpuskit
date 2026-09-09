@@ -203,3 +203,37 @@ Deno.test('structured JSON never receives either citation mode', async () => {
   expect(f.bodies[0]?.answer_json_schema).toBeDefined()
   expect(f.bodies[0]?.citations).toBeUndefined()
 })
+
+Deno.test('footnote validation logs fixed reason codes without leaking source IDs or payloads', async () => {
+  const originalError = console.error
+  const logs: unknown[][] = []
+  console.error = (...args: unknown[]) => logs.push(args)
+  try {
+    for (
+      const [id, reason] of [
+        ['USER_CONTEXT_0', 'anonymous_context'],
+        ['report/t/da-private-summary/0-16', 'generated_context'],
+        ['report/a/private-metadata/0-16', 'metadata_context'],
+        ['private-excluded-source/f/pdf/0-16', 'out_of_scope'],
+        ['private-unsupported-value', 'unsupported_context'],
+      ]
+    ) {
+      const f = fixture({ id })
+      const events = await collect(f.provider)
+      expect(events.some((e) => e.type === 'done' || e.type === 'citation')).toBe(false)
+      expect(events.filter((e) => e.type === 'error')).toEqual([{
+        type: 'error',
+        message: 'The response citation links could not be verified. Please try again.',
+      }])
+      expect(logs.at(-1)).toEqual([JSON.stringify({
+        event: 'arag_footnote_validation_failed',
+        reason,
+      })])
+      expect(f.bodies.length).toBe(1)
+    }
+    expect(logs.length).toBe(5)
+    expect(JSON.stringify(logs)).not.toMatch(/private|USER_CONTEXT|block-AA|Stocks|report/)
+  } finally {
+    console.error = originalError
+  }
+})

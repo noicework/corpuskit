@@ -4195,7 +4195,7 @@ export class AragProvider implements RetrievalProvider {
           ) {
             // The service returned standard attribution despite our explicit
             // footnote request. Do not quietly accept an uncited answer.
-            throw new FootnoteError()
+            throw new FootnoteError('unexpected_standard_citations')
           }
           const bound = parsedFootnotes
             ? bindFootnotes(parsedFootnotes, citable, resolveTitle)
@@ -4258,6 +4258,14 @@ export class AragProvider implements RetrievalProvider {
         yield { type: 'stage', stage: 'validating', status: 'completed' }
         return
       } catch (err) {
+        if (err instanceof FootnoteError) {
+          // Emit only fixed classifications, not answer text, source IDs,
+          // credentials or raw upstream errors. The public copy stays unchanged.
+          console.error(JSON.stringify({
+            event: 'arag_footnote_validation_failed',
+            reason: err.reason,
+          }))
+        }
         const status = err instanceof AragApiError ? err.status : 0
         // A 4xx before any output usually means an optional capability
         // (graph strategy, reranker) is unsupported here - shed it and go

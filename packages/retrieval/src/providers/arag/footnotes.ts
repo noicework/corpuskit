@@ -3,8 +3,24 @@
 // Keep answer offsets in UTF-16, just like the existing browser renderer.
 import type { Citation } from '@research-portal/core'
 
+/** Fixed, non-content diagnostics. Never attach source IDs, text or wire payloads. */
+export type FootnoteFailureReason =
+  | 'missing_definition'
+  | 'missing_mapping'
+  | 'invalid_mapping'
+  | 'conflicting_mapping'
+  | 'invalid_definition'
+  | 'conflicting_definition'
+  | 'unsupported_context'
+  | 'anonymous_context'
+  | 'metadata_context'
+  | 'generated_context'
+  | 'out_of_scope'
+  | 'stream_rewrite'
+  | 'unexpected_standard_citations'
+
 export class FootnoteError extends Error {
-  constructor() {
+  constructor(readonly reason: FootnoteFailureReason) {
     super('The response citation links could not be verified. Please try again.')
   }
 }
@@ -24,9 +40,16 @@ export function bindFootnotes(
   const inserts = new Map<number, Set<number>>()
   for (const anchor of parsed.anchors) {
     const match = /^([^/]+)\/(t|f|l|c)\/([^/]+)(?:\/(?:[^/]+\/)?\d+-\d+)?$/.exec(anchor.id)
-    if (!match || match[3]!.startsWith('da-') || !citable(match[1]!)) {
-      throw new FootnoteError()
+    if (!match) {
+      const reason = /^USER_CONTEXT_/.test(anchor.id)
+        ? 'anonymous_context'
+        : /^[^/]+\/a\//.test(anchor.id)
+        ? 'metadata_context'
+        : 'unsupported_context'
+      throw new FootnoteError(reason)
     }
+    if (match[3]!.startsWith('da-')) throw new FootnoteError('generated_context')
+    if (!citable(match[1]!)) throw new FootnoteError('out_of_scope')
     const resourceId = match[1]!
     let index = byResource.get(resourceId)
     if (index === undefined) {
@@ -110,14 +133,18 @@ export function parseFootnoteAnswer(raw: string, final = true) {
     if (!complete && (/^\s*$/.test(line) || /^\s*\[\^?\d*\]?(?::.*)?$/.test(line))) continue
     const definition = /^ {0,3}\[\^?(\d+)\]:\s*(\S+)\s*$/.exec(line)
     if (definition) {
-      if (
-        !/^block-[A-Za-z0-9_-]+$/.test(definition[2]!) ||
-        (definitions.has(definition[1]!) && definitions.get(definition[1]!) !== definition[2]!)
-      ) throw new FootnoteError()
+      if (!/^block-[A-Za-z0-9_-]+$/.test(definition[2]!)) {
+        throw new FootnoteError('invalid_definition')
+      }
+      if (definitions.has(definition[1]!) && definitions.get(definition[1]!) !== definition[2]!) {
+        throw new FootnoteError('conflicting_definition')
+      }
       definitions.set(definition[1]!, definition[2]!)
       continue
     }
-    if (complete && /^ {0,3}\[\^?\d+\]:/.test(line)) throw new FootnoteError()
+    if (complete && /^ {0,3}\[\^?\d+\]:/.test(line)) {
+      throw new FootnoteError('invalid_definition')
+    }
     if (!complete) line = line.replace(/\[\^?\d*\]?$/, '')
     for (let i = 0; i < line.length;) {
       if (line[i] === '\\' && i + 1 < line.length) {
@@ -159,12 +186,13 @@ export class FootnoteStream {
     if (item.type === 'footnote_citations') {
       const mapping = item.footnote_to_context
       if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
-        throw new FootnoteError()
+        throw new FootnoteError('invalid_mapping')
       }
       for (const [block, id] of Object.entries(mapping)) {
-        if (
-          typeof id !== 'string' || (this.contexts.has(block) && this.contexts.get(block) !== id)
-        ) throw new FootnoteError()
+        if (typeof id !== 'string') throw new FootnoteError('invalid_mapping')
+        if (this.contexts.has(block) && this.contexts.get(block) !== id) {
+          throw new FootnoteError('conflicting_mapping')
+        }
         this.contexts.set(block, id)
       }
     }
@@ -173,7 +201,7 @@ export class FootnoteStream {
     return this.delta(parseFootnoteAnswer(this.raw, false).text)
   }
   private delta(text: string) {
-    if (!text.startsWith(this.emitted)) throw new FootnoteError()
+    if (!text.startsWith(this.emitted)) throw new FootnoteError('stream_rewrite')
     const delta = text.slice(this.emitted.length)
     this.emitted = text
     return delta
@@ -182,8 +210,9 @@ export class FootnoteStream {
     const { text, references, definitions } = parseFootnoteAnswer(this.raw)
     const anchors = references.map((ref) => {
       const block = definitions.get(ref.number)
-      const id = block && this.contexts.get(block)
-      if (!id) throw new FootnoteError()
+      if (!block) throw new FootnoteError('missing_definition')
+      const id = this.contexts.get(block)
+      if (!id) throw new FootnoteError('missing_mapping')
       return { id, pos: ref.pos }
     })
     return { text, tail: this.delta(text), anchors }

@@ -1,6 +1,19 @@
 import { expect } from '@std/expect'
 import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
 
+function failureReason(run: () => unknown) {
+  try {
+    run()
+  } catch (error) {
+    if (!(error instanceof FootnoteError)) throw error
+    expect(error.message).toBe(
+      'The response citation links could not be verified. Please try again.',
+    )
+    return error.reason
+  }
+  throw new Error('Expected footnote validation to fail')
+}
+
 const answer =
   '## Heading\n\n😀 A claim [6][7].\n\nAnother claim [6].\n\n[6]: block-AA\n[7]: block-BB\n'
 const mapping = {
@@ -131,4 +144,51 @@ Deno.test('footnotes: mapping can arrive before, after or between answer chunks'
   stream.consume(mapping)
   stream.consume({ type: 'answer', text: answer.slice(15) })
   expect(stream.finish()).toEqual(finish([answer]))
+})
+
+Deno.test('footnotes: validation diagnostics distinguish definitions from mappings', () => {
+  for (
+    const [raw, reason] of [
+      ['Claim[6].', 'missing_definition'],
+      ['Claim[6].\n[6]: block-MISSING\n', 'missing_mapping'],
+      ['Claim[6].\n[6]: block-AA\n[6]: block-BB\n', 'conflicting_definition'],
+      ['Claim[6].\n[6]: invalid-private-value\n', 'invalid_definition'],
+      ['Claim[6].\n[6]: block-AA another-value\n', 'invalid_definition'],
+    ]
+  ) expect(failureReason(() => finish([raw!]))).toBe(reason)
+
+  const stream = new FootnoteStream()
+  stream.consume(mapping)
+  expect(failureReason(() => stream.consume({ type: 'footnote_citations' })))
+    .toBe('invalid_mapping')
+  expect(failureReason(() =>
+    stream.consume({
+      type: 'footnote_citations',
+      footnote_to_context: { 'block-AA': { secret: 'private-value' } },
+    })
+  )).toBe('invalid_mapping')
+  expect(failureReason(() =>
+    stream.consume({
+      type: 'footnote_citations',
+      footnote_to_context: { 'block-AA': 'private-source/f/pdf/0-5' },
+    })
+  )).toBe('conflicting_mapping')
+})
+
+Deno.test('footnotes: context failure classifications do not loosen citation validation', () => {
+  for (
+    const [id, reason] of [
+      ['USER_CONTEXT_0', 'anonymous_context'],
+      ['doc/t/da-private-summary/0-5', 'generated_context'],
+      ['doc/a/title', 'metadata_context'],
+      ['doc/a/summary/0-5', 'metadata_context'],
+      ['excluded/f/pdf/0-5', 'out_of_scope'],
+      ['private-unsupported-context', 'unsupported_context'],
+    ]
+  ) {
+    const parsed = finish([answer])
+    parsed.anchors[0]!.id = id!
+    expect(failureReason(() => bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')))
+      .toBe(reason)
+  }
 })
