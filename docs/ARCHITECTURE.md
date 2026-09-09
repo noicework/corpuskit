@@ -60,9 +60,7 @@ interface RetrievalProvider {
 
 Everything is expressed in **portal domain types** (Answer, Citation, SourcePassage, Entity,
 TrustSignal) - never vendor response shapes. `AragProvider` maps Nuclia's REST API (ask with
-`citations: 'llm_footnotes'`, `/resources`, labelsets, entity groups, task/agent config) into those types.
-The shared server-side citation flag can restore standard attribution; structured JSON does not
-use either citation mode. See `LLM-FOOTNOTES.md` for the wire protocol and compatibility boundaries.
+`citations:true`, `/resources`, labelsets, entity groups, task/agent config) into those types.
 Adding a provider is a config change, exactly as CLAUDE.md requires - but there is exactly one
 in the product, and it is live. `AskEvent` is a small
 discriminated union (`delta`, `citation`, `sources`, `quality`, `stage`, `done`) - rich enough
