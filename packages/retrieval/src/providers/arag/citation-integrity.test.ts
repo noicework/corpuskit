@@ -62,8 +62,6 @@ function provider(opts: {
   catalog?: Record<string, unknown>
 }): AragProvider {
   return new AragProvider({
-    // Regression coverage of the rollback mode's offset-binding contract.
-    citationMode: 'standard',
     resolveBinding: () => ({
       baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test-kb',
       token: 'test-token',
