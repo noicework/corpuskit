@@ -35,7 +35,6 @@ import {
   looksLikeReferenceChunk,
   parseKbUrl,
   type RetrievalProvider,
-  type SourceContext,
 } from '@research-portal/retrieval'
 import { publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { type NewTenantInput, TenantStore, type TenantStoreApi } from './tenants.ts'
@@ -146,6 +145,8 @@ import { nextRetry, RETRY_DIRECTIVE, type RetryKind } from './ask-retry.ts'
 import { applicablePrequeries } from './ask-prequeries.ts'
 import {
   isReformatFollowUp,
+  priorAnswerContext,
+  priorPassageContext,
   priorQuestions,
   priorResourceIds,
   refersToPriorTurns,
@@ -153,7 +154,6 @@ import {
   reformatBudget,
   staysWithinPriorTurns,
 } from './ask-session.ts'
-import { verifiedPriorSourceContext } from './ask-source-context.ts'
 import { topicPin } from './ask-terse.ts'
 import { StreamVerifier, type WarmText } from './ask-stream-verify.ts'
 import { composeHelpParts, helpPartsAddendum, helpQuestionParts } from './docs-answer.ts'
@@ -4431,7 +4431,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // prompt that keeps a statistic's name and enumerates on "which"; a
       // recency question gets the publication years of the matching
       // resources so no year is guessed.
-      let sourceContext: SourceContext[] | undefined
+      let extraContext: string[] | undefined
       let promptAddendum: string | undefined
       // A pinned paper is answered from first: the text's own figures with
       // their n, a figure or table named when the text holds the sample but
@@ -4452,39 +4452,28 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // paper holds in Table 1 is in front of the generator before it can
       // decline (D5-06, D4-22).
       if (!firstTurn && !documentScope) {
-        const allowedSourceIds = new Set(catalogue.map((r) => r.id))
-        // Previous answers remain conversational context, never fresh evidence.
-        // Browser excerpts become citable only after matching an original read
-        // from the current tenant, with its resource identity kept alongside it.
-        if (opts.management) {
-          const prior = await verifiedPriorSourceContext(
-            askOpts.context ?? [],
-            (id) => opts.management!.resourceExtraction(config, id).then((r) => r.text),
-            allowedSourceIds,
-          )
-          if (prior.length > 0) sourceContext = prior.slice(0, leansOnPrior ? 8 : 4)
-        }
+        const prior = [
+          ...priorPassageContext(askOpts.context ?? []).slice(0, leansOnPrior ? 8 : 4),
+          ...(reformat ? priorAnswerContext(askOpts.context ?? []) : []),
+        ]
+        if (prior.length > 0) extraContext = [...(extraContext ?? []), ...prior]
         if (priorIds.length > 0 && opts.management) {
           warmTexts(priorIds.map((id) => ({ id, title: titleOf.get(id) ?? '' })))
         }
-        if ((priorScoped || leansOnPrior) && priorIds.length > 0 && opts.management) {
-          const blocks: SourceContext[] = []
-          for (const id of priorIds.filter((id) => allowedSourceIds.has(id)).slice(0, 2)) {
+        if ((priorScoped || leansOnPrior) && !reformat && priorIds.length > 0 && opts.management) {
+          const blocks: string[] = []
+          for (const id of priorIds.slice(0, 2)) {
             try {
               const text = await extractionText(opts.management, config, id)
-              // Reformat queries carry little retrieval signal themselves;
-              // re-read the originals for the prior research questions.
-              const groundingQuery = reformat
-                ? priorQuestions(askOpts.context ?? [], 2).join(' ')
-                : query
-              for (const p of groundingParagraphs(text, groundingQuery, 3)) {
-                blocks.push({ resourceId: id, text: p.text })
+              const title = titleOf.get(id) ?? ''
+              for (const p of groundingParagraphs(text, query, 3)) {
+                blocks.push(`From "${title}" [${p.section}]: ${p.text}`)
               }
             } catch {
               // Retrieval alone grounds the follow-up.
             }
           }
-          if (blocks.length > 0) sourceContext = [...(sourceContext ?? []), ...blocks].slice(0, 12)
+          if (blocks.length > 0) extraContext = [...(extraContext ?? []), ...blocks].slice(0, 12)
         }
       }
       if (reformat) {
@@ -4506,23 +4495,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
           try {
             const text = await extractionText(opts.management, config, askOpts.resourceId!)
             const blocks = documentContextBlocks(text)
-            if (blocks.length > 0) {
-              sourceContext = blocks.map((text) => ({ resourceId: askOpts.resourceId!, text }))
-            }
+            if (blocks.length > 0) extraContext = blocks
           } catch {
             // The document's own retrieval still grounds the answer.
           }
         }
       } else if (variant === 'recency' && nearest.length > 0) {
-        // Catalogue hints are not source passages and must not acquire a
-        // USER_CONTEXT citation identity, especially when one list spans papers.
-        promptAddendum = [
-          promptAddendum,
-          'The following catalogue metadata is background guidance, not supporting evidence. ' +
-          'Cite original sources for factual claims; never infer a supporting passage or page ' +
-          'from these records.',
-          publicationYearsContext(nearest),
-        ].filter(Boolean).join('\n\n')
+        extraContext = [publicationYearsContext(nearest)]
       }
       // How the platform interpreted the question, surfaced when it lands in
       // time (first turn only - follow-ups depend on chat context).
@@ -4966,11 +4945,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
               }
               for await (
                 const event of provider.ask(config, group.query, {
-                  ...(blocks.length > 0
-                    ? {
-                      sourceContext: blocks.map((text) => ({ resourceId: group.resourceId, text })),
-                    }
-                    : {}),
+                  ...(blocks.length > 0 ? { extraContext: blocks } : {}),
                   // Exactly the shape document chat runs in - one resource on
                   // `resource_filters`, the default neighbouring-paragraph
                   // expansion, no intent configuration and no prequeries.
@@ -5071,15 +5046,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // Conclusion that carry the question's words or figures, from the
         // platform's extracted text, so the n the text states and the
         // figure the outcome sits in are both in front of the generator.
-        let attemptContext = sourceContext
+        let attemptContext = extraContext
         if (current.resourceId && opts.management) {
           try {
             const text = await extractionText(opts.management, config, current.resourceId)
-            const blocks = groundingParagraphs(text, query, 8).map((p) => ({
-              resourceId: current.resourceId!,
-              text: p.text,
-            }))
-            if (blocks.length > 0) attemptContext = [...(sourceContext ?? []), ...blocks]
+            const title = pinnedTitles[pinnedIds.indexOf(current.resourceId)] ??
+              titleOf.get(current.resourceId) ?? ''
+            const blocks = groundingParagraphs(text, query, 8).map((p) =>
+              `From "${title}" [${p.section}]: ${p.text}`
+            )
+            if (blocks.length > 0) attemptContext = [...(extraContext ?? []), ...blocks]
           } catch {
             // Retrieval alone grounds the retry.
           }
@@ -5138,7 +5114,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
               ...(pinnedQueries.length > 0 ? { pinnedQueries } : {}),
               ...(settings.ask ? { systemPrompt: settings.ask } : {}),
               ...(settings.images ? { images: true } : {}),
-              ...(attemptContext ? { sourceContext: attemptContext } : {}),
+              ...(attemptContext ? { extraContext: attemptContext } : {}),
               ...(attemptAddendum ? { promptAddendum: attemptAddendum } : {}),
               // The application manages the retry (one at most).
               ...(documentScope ? {} : { noRefusalRetry: true }),

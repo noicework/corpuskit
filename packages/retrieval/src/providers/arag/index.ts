@@ -45,14 +45,6 @@ import {
 import { variantPreamble } from '../../prompts.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
 import { spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
-import {
-  CITATION_MODE,
-  type CitationMode,
-  citationRequest,
-  FOOTNOTE_PROMPT,
-} from './citation-mode.ts'
-import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
-import { prepareExtraContext } from './extra-context.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 import { dedupeNames, isNoiseEntity, keepEntity, preferredSpelling } from './entity-filter.ts'
@@ -1146,8 +1138,6 @@ export interface AgentConfig {
 }
 
 export interface AragProviderOptions {
-  /** Server construction only. All surfaces share the code flag by default. */
-  citationMode?: CitationMode
   /** Resolve the current binding for a tenant slug - called per request so bindings can change at runtime. */
   resolveBinding: (slug: string) => KbBinding | undefined
   fetchImpl?: typeof fetch
@@ -3654,8 +3644,6 @@ export class AragProvider implements RetrievalProvider {
     opts: AskOptions = {},
   ): AsyncIterable<AskEvent> {
     const client = this.client(tenant)
-    const citationMode = this.opts.citationMode ?? CITATION_MODE
-    let footnotes = citationMode === 'llm_footnotes' ? new FootnoteStream() : undefined
     yield { type: 'stage', stage: 'preprocessing', status: 'started' }
     const catalogue = await this.listResources(tenant).catch(() => [] as ResourceSummary[])
     const byId = new Map(catalogue.map((r) => [r.id, r]))
@@ -3687,7 +3675,7 @@ export class AragProvider implements RetrievalProvider {
     const body: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
-      citations: citationRequest(citationMode),
+      citations: true,
       show: ['basic', 'origin'],
       // A sandbox box (the Extraction Lab) has none of the portal's stored
       // configurations - naming one 400s "Search configuration not found" -
@@ -3716,7 +3704,8 @@ export class AragProvider implements RetrievalProvider {
               'portal. Answer the user\'s "how do I..." question about using the portal, using ' +
               'ONLY the provided help documentation as your source. Be clear, concise and ' +
               'practical, in Australian English, and write well-structured Markdown. Cite the ' +
-              'documentation at claim level after each step or fact. If the ' +
+              'documentation at claim level with a bracketed marker like [1] after each step or ' +
+              'fact - the application assigns the real citation numbers itself. If the ' +
               'documentation does not cover the question, say so plainly and suggest where in the ' +
               'portal to look; never invent a feature that is not described in the documentation. ' +
               'Call the material "the documentation" or "the Help pages", never "the context" ' +
@@ -3730,19 +3719,23 @@ export class AragProvider implements RetrievalProvider {
               "part of the question the context does not address, say plainly that the portal's " +
               'sources do not cover it rather than answering that part from general knowledge. Write ' +
               'clear, well-structured prose with Markdown, in Australian English. Cite evidence ' +
-              'at claim level after each factual claim. If a statement is your inference rather than something ' +
+              'at claim level: after each factual claim, add a bracketed marker like [1] to show ' +
+              'a citation belongs there. The number itself does not matter and does not need to ' +
+              'be in any particular order - this application assigns the real, correctly-bound ' +
+              "citation numbers itself from the platform's own source attribution, independently " +
+              'of whatever you write here. If a statement is your inference rather than something ' +
               'the context states, mark it (inference). When the context ' +
               'contains conflicting, negative or nuanced findings (adverse observations, ' +
               'non-detections, disagreements between studies), state them explicitly with their ' +
               'specifics - a researcher needs the tension, never a smoothed summary. Refer to the ' +
               'material as "the cited sources", never as "the context"; a reader never sees the ' +
               'context, only the sources. Never write "Not enough data to answer this".')) +
-          (opts.promptAddendum?.trim() ? `\n\n${opts.promptAddendum.trim()}` : '') +
-          (footnotes ? `\n\n${FOOTNOTE_PROMPT}` : ''),
+          (opts.promptAddendum?.trim() ? `\n\n${opts.promptAddendum.trim()}` : ''),
       },
     }
-    const extraContext = prepareExtraContext(opts)
-    if (extraContext.texts.length > 0) body.extra_context = extraContext.texts
+    if (opts.extraContext && opts.extraContext.length > 0) {
+      body.extra_context = opts.extraContext.filter((t) => t.trim().length > 0).slice(0, 12)
+    }
     if (intent) {
       // The stored configuration's features win over the request's; never
       // send both (docs/ARAG-DEV.md).
@@ -3818,12 +3811,6 @@ export class AragProvider implements RetrievalProvider {
     // A table over three studies needs more than the default generation
     // budget, or its last row is cut (D4-06).
     if (opts.maxTokens && opts.maxTokens > 0) body.max_tokens = Math.min(opts.maxTokens, 4096)
-    else if (footnotes) {
-      // Footnote definitions arrive after the prose. A small knowledge-box
-      // default can finish the claims but truncate their required definitions.
-      // Leave explicit caller limits intact and keep malformed output closed.
-      body.max_tokens = 4096
-    }
 
     let sources: ScoredResource[] = []
     const contextTexts: string[] = []
@@ -3947,25 +3934,17 @@ export class AragProvider implements RetrievalProvider {
         generating = false
         heldTail = ''
         citationsMapAccum = {}
-        footnotes = citationMode === 'llm_footnotes' ? new FootnoteStream() : undefined
         validSourceIds.clear()
         excludedSourceIds.clear()
         excludedGroundingSeen = false
       }
       try {
-        // REMi sees the same original context the generator received, including
-        // supplied passages that may never appear in the scored retrieval item.
-        contextTexts.push(...extraContext.texts)
         const res = await client.postStream('/ask', body, { 'x-show-consumption': 'true' })
         const learningId = res.headers.get('nuclia-learning-id')
         if (learningId) yield { type: 'learning', id: learningId }
         for await (const line of ndjson(res)) {
           const item = (line as { item?: { type?: string } & Record<string, unknown> }).item
           if (!item?.type) continue
-          if (item.type === 'footnote_citations') {
-            footnotes?.consume(item)
-            continue
-          }
           if (item.type === 'retrieval') {
             const results = item.results as {
               resources?: Record<string, RawResource & { slug?: string; origin?: { url?: string } }>
@@ -3999,7 +3978,6 @@ export class AragProvider implements RetrievalProvider {
               yield { type: 'stage', stage: 'generating', status: 'started' }
             }
             fullAnswer += item.text
-            const footnoteDelta = footnotes?.consume(item)
             // Hold back the platform's bare guardrail refusal: buffer while
             // the answer is still a prefix of it, and swap in honest guidance
             // if that is all the model produced.
@@ -4030,23 +4008,12 @@ export class AragProvider implements RetrievalProvider {
               // once generation and citation binding both finish - see the
               // `done` event below. A marker split across chunks is held
               // back until the chunk that completes it (D2-14).
-              if (footnotes) {
-                // Earlier buffered chunks can only be a guardrail prefix.
-                // The parser's complete clean prefix is released once real prose starts.
-                const clean = parseFootnoteAnswer(fullAnswer, false).text
-                if (clean) yield { type: 'delta', text: clean }
-                continue
-              }
               const first = splitPartialMarker(fullAnswer)
               heldTail = first.hold
               yield { type: 'delta', text: stripInlineMarkers(first.emit) }
               continue
             }
             emitted = true
-            if (footnotes) {
-              if (footnoteDelta) yield { type: 'delta', text: footnoteDelta }
-              continue
-            }
             const chunk = splitPartialMarker(heldTail + item.text)
             heldTail = chunk.hold
             const visible = stripInlineMarkers(chunk.emit)
@@ -4156,9 +4123,13 @@ export class AragProvider implements RetrievalProvider {
           // rather than appending, so this reliably clears it.
           if (sources.length > 0) yield { type: 'sources', resources: [] }
         }
-        // Bind once after generation: footnotes resolve the model's authored
-        // anchors through block-to-context mappings; standard mode uses offsets.
-        // Both return one canonical text + citation table for every consumer.
+        // Deterministic citation binding: only runs once, here, against the
+        // COMPLETE answer text and the COMPLETE accumulated citations map -
+        // both are only meaningful once generation has finished. Emits the
+        // canonical Citation[] (evidence table + click-through targets) and
+        // the corrected answer text (model's own [n] markers stripped,
+        // authoritative markers spliced at the platform's char-offsets) so
+        // every rendering of a given citation index agrees by construction.
         let boundText: string | undefined
         if (!refused && fullAnswer.trim()) {
           // Scope cross-check, applied to the citations map BEFORE binding so
@@ -4179,56 +4150,31 @@ export class AragProvider implements RetrievalProvider {
           // Under docScope the research catalogue proves nothing, so an
           // unretrieved id stays excluded rather than being guessed at.
           const citable = (resourceId: string): boolean => {
-            if (opts.resourceId && resourceId !== opts.resourceId) return false
-            if (
-              !opts.resourceId && opts.resourceIds?.length && !opts.resourceIds.includes(resourceId)
-            ) {
-              return false
-            }
             if (validSourceIds.has(resourceId)) return true
             if (excludedSourceIds.has(resourceId)) return false
             return opts.docScope ? false : byId.has(resourceId)
           }
           const scopedCitations: Record<string, unknown> = {}
           for (const [key, value] of Object.entries(citationsMapAccum)) {
-            const mappedKey = extraContext.resources.get(key) ?? key
-            const resourceId = mappedKey.split('/')[0]
-            if (resourceId && citable(resourceId)) {
-              const existing = scopedCitations[mappedKey]
-              scopedCitations[mappedKey] = Array.isArray(existing) && Array.isArray(value)
-                ? [...existing, ...value]
-                : value
-            }
+            const resourceId = key.split('/')[0]
+            if (resourceId && citable(resourceId)) scopedCitations[key] = value
           }
-          const resolveTitle = (resourceId: string) =>
-            byId.get(resourceId)?.title ?? sources.find((s) => s.id === resourceId)?.title ??
-              'Untitled resource'
-          const parsedFootnotes = footnotes?.finish()
-          if (
-            parsedFootnotes && parsedFootnotes.anchors.length === 0 &&
-            Object.keys(citationsMapAccum).length > 0
-          ) {
-            // The service returned standard attribution despite our explicit
-            // footnote request. Do not quietly accept an uncited answer.
-            throw new FootnoteError('unexpected_standard_citations')
-          }
-          const bound = parsedFootnotes
-            ? bindFootnotes(parsedFootnotes, citable, resolveTitle, extraContext.resources)
-            : spliceCitationMarkers(
-              fullAnswer,
-              scopedCitations,
-              // Both branches already resolve through toSummary/displayTitle,
-              // so this never surfaces a raw hash - but a resource id absent
-              // from both (never retrieved as a scored source) still needs a
-              // clean fallback rather than citations.ts's own last-resort
-              // `?? resourceId`.
-              resolveTitle,
-            )
-          // No emit-time filtering: binding already validated the source set.
+          const bound = spliceCitationMarkers(
+            fullAnswer,
+            scopedCitations,
+            // Both branches already resolve through toSummary/displayTitle,
+            // so this never surfaces a raw hash - but a resource id absent
+            // from both (never retrieved as a scored source) still needs a
+            // clean fallback rather than citations.ts's own last-resort
+            // `?? resourceId`.
+            (resourceId) =>
+              byId.get(resourceId)?.title ?? sources.find((s) => s.id === resourceId)?.title ??
+                'Untitled resource',
+          )
+          // No filtering here: `scopedCitations` already applied it, so every
+          // marker in `bound.text` has an event by construction.
           for (const citation of bound.citations) yield { type: 'citation', citation }
           boundText = bound.text
-          // Quality scoring sees the prose, never internal block definitions.
-          if (parsedFootnotes) fullAnswer = parsedFootnotes.text
         }
         yield { type: 'stage', stage: 'generating', status: 'completed' }
         // BUG 3: done.text always carries the final answer text, refusal
@@ -4273,14 +4219,6 @@ export class AragProvider implements RetrievalProvider {
         yield { type: 'stage', stage: 'validating', status: 'completed' }
         return
       } catch (err) {
-        if (err instanceof FootnoteError) {
-          // Emit only fixed classifications, not answer text, source IDs,
-          // credentials or raw upstream errors. The public copy stays unchanged.
-          console.error(JSON.stringify({
-            event: 'arag_footnote_validation_failed',
-            reason: err.reason,
-          }))
-        }
         const status = err instanceof AragApiError ? err.status : 0
         // A 4xx before any output usually means an optional capability
         // (graph strategy, reranker) is unsupported here - shed it and go
