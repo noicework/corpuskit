@@ -30,6 +30,15 @@ export interface SearchOptions {
   docScope?: boolean
 }
 
+/** Server-created original-source material, never accepted from an HTTP request.
+ * The caller must load/verify the text from this resource in the current tenant.
+ * Resource-level provenance deliberately makes no claim about PDF fields/pages.
+ */
+export interface SourceContext {
+  resourceId: string
+  text: string
+}
+
 export interface AskOptions {
   /** Prior turns, oldest first, for multi-turn conversations. */
   context?: { author: 'USER' | 'AGENT'; text: string }[]
@@ -97,12 +106,12 @@ export interface AskOptions {
    */
   sandbox?: boolean
   /**
-   * Passages the application adds to the grounding context beside what
-   * retrieval finds (a document's tables and key-resources block for
-   * document chat, the publication years of the matching resources for a
-   * recency question). Plain text, already trimmed to size by the caller.
+   * Legacy anonymous extra context. It cannot produce a verified citation;
+   * use sourceContext for original evidence and promptAddendum for instructions.
    */
   extraContext?: string[]
+  /** Verified original-source passages with explicit resource-level provenance. */
+  sourceContext?: SourceContext[]
   /** Instructions appended to the system prompt for this ask only. */
   promptAddendum?: string
   /**
@@ -120,7 +129,7 @@ export interface AskOptions {
   /**
    * Lean retrieval: no context expansion (neighbouring paragraphs, graph
    * walks) and no cross-encoder reranking, for a turn whose material is
-   * already supplied as `extraContext` and whose retrieval only has to
+   * already supplied as `sourceContext` and whose retrieval only has to
    * produce citations to bind (a reformatting turn, D5-05).
    */
   lean?: boolean
