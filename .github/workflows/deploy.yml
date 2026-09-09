@@ -93,17 +93,29 @@ jobs:
 
   deploy:
     name: Deploy to Cloudflare Workers
-    needs: gate
+    # The documentation demo exercises the real ARAG protocol before production changes.
+    needs: [gate, deploy-demo]
     if: needs.gate.outputs.deployable == 'true'
     runs-on: ubuntu-latest
     environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: corpuskit-cloudflare-${{ github.sha }}
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Record exact previous production version
+        run: deno run --allow-env --allow-run=npx --allow-write "$GITHUB_WORKSPACE/apps/cloudflare/scripts/release-safety.ts" capture corpuskit "$RUNNER_TEMP/production-before.json"
+
       - name: Deploy the tested package
+        id: publish
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -111,13 +123,14 @@ jobs:
           wranglerVersion: 4.127.1
           command: deploy --config wrangler.jsonc
 
-      - name: Verify the live Worker
-        if: vars.CORPUSKIT_BASE_URL != ''
+      - name: Record candidate production version
+        id: candidate
         env:
-          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL }}
-        run: |
-          curl --fail --silent --show-error --retry 8 --retry-delay 5 \
-            "$BASE_URL/api/health" | grep '"ok":true'
+          WRANGLER_PUBLISH_OUTPUT: ${{ steps.publish.outputs['command-output'] }}
+        run: deno run --allow-env --allow-run=npx --allow-write apps/cloudflare/scripts/release-safety.ts capture-candidate corpuskit "$RUNNER_TEMP/production-candidate.json"
+
+      - name: Verify the live Worker
+        run: deno run --allow-env --allow-read --allow-net apps/cloudflare/scripts/release-safety.ts verify corpuskit "$RUNNER_TEMP/production-candidate.json"
 
       - name: Verify Microsoft sign-in is configured
         if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
@@ -139,11 +152,6 @@ jobs:
               --output /dev/null "https://$host/api/health"
           done
 
-      - uses: denoland/setup-deno@v2
-        if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
-        with:
-          deno-version: v2.x
-
       - name: Post-deploy persona smoke
         if: vars.CORPUSKIT_BASE_URL != '' && vars.CORPUSKIT_RUNTIME_CONFIGURED == 'true'
         env:
@@ -151,23 +159,71 @@ jobs:
           PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'opax' }}
         run: deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick
 
+      - name: Restore exact previous production version after verification failure
+        id: rollback
+        if: failure() && steps.publish.outcome == 'success' && steps.candidate.outcome == 'success'
+        run: deno run --allow-env --allow-read --allow-run=npx apps/cloudflare/scripts/release-safety.ts rollback corpuskit "$RUNNER_TEMP/production-before.json" "$RUNNER_TEMP/production-candidate.json"
+
+      - name: Verify restored production version and live journey
+        if: failure() && steps.rollback.outcome == 'success'
+        env:
+          BASE_URL: ${{ vars.CORPUSKIT_BASE_URL || 'https://corpuskit.org' }}
+          PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS || 'opax' }}
+          RUNTIME_CONFIGURED: ${{ vars.CORPUSKIT_RUNTIME_CONFIGURED }}
+        run: |
+          deno run --allow-env --allow-read --allow-net apps/cloudflare/scripts/release-safety.ts verify corpuskit "$RUNNER_TEMP/production-before.json"
+          if [ "$RUNTIME_CONFIGURED" = true ]; then
+            deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick
+          fi
+
   deploy-demo:
     name: Deploy documentation demo
     needs: gate
     if: needs.gate.outputs.deployable == 'true'
     runs-on: ubuntu-latest
     environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: corpuskit-cloudflare-${{ github.sha }}
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Record exact previous demo version
+        run: deno run --allow-env --allow-run=npx --allow-write apps/cloudflare/scripts/release-safety.ts capture corpuskit-demo "$RUNNER_TEMP/demo-before.json"
       - name: Deploy the tested demo package
+        id: publish
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 4.127.1
           command: deploy --config wrangler.demo.jsonc
+      - name: Record candidate demo version
+        id: candidate
+        env:
+          WRANGLER_PUBLISH_OUTPUT: ${{ steps.publish.outputs['command-output'] }}
+        run: deno run --allow-env --allow-run=npx --allow-write apps/cloudflare/scripts/release-safety.ts capture-candidate corpuskit-demo "$RUNNER_TEMP/demo-candidate.json"
       - name: Verify demo health
-        run: curl --fail --silent --show-error --retry 8 --retry-delay 5 https://demo.corpuskit.org/api/health
+        run: deno run --allow-env --allow-read --allow-net apps/cloudflare/scripts/release-safety.ts verify corpuskit-demo "$RUNNER_TEMP/demo-candidate.json"
+      - name: Verify real demo search, cited answer and refusal before production
+        env:
+          BASE_URL: https://demo.corpuskit.org
+          PERSONA_SMOKE_TENANTS: demo
+        run: deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick
+      - name: Restore exact previous demo version after verification failure
+        id: rollback
+        if: failure() && steps.publish.outcome == 'success' && steps.candidate.outcome == 'success'
+        run: deno run --allow-env --allow-read --allow-run=npx apps/cloudflare/scripts/release-safety.ts rollback corpuskit-demo "$RUNNER_TEMP/demo-before.json" "$RUNNER_TEMP/demo-candidate.json"
+      - name: Verify restored demo version and live journey
+        if: failure() && steps.rollback.outcome == 'success'
+        env:
+          BASE_URL: https://demo.corpuskit.org
+          PERSONA_SMOKE_TENANTS: demo
+        run: |
+          deno run --allow-env --allow-read --allow-net apps/cloudflare/scripts/release-safety.ts verify corpuskit-demo "$RUNNER_TEMP/demo-before.json"
+          deno run --allow-net --allow-env apps/api/scripts/persona-smoke.ts --quick

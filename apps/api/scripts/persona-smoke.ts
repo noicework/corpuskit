@@ -26,7 +26,7 @@
 import process from 'node:process'
 import { sseEvents } from './lib/ask-stream.ts'
 
-interface TenantJourney {
+export interface TenantJourney {
   slug: string
   /** A broad term expected to match the tenant's real, ingested corpus. */
   searchTerm: string
@@ -40,6 +40,12 @@ const OUT_OF_CORPUS_ASK =
   'What is the capital of Mongolia, and how many Michelin-starred restaurants does it have?'
 
 const ALL_TENANTS: TenantJourney[] = [
+  {
+    slug: 'demo',
+    searchTerm: 'citations',
+    goodAsk: 'How can I check the sources and confidence of an answer?',
+    outOfCorpusAsk: OUT_OF_CORPUS_ASK,
+  },
   {
     slug: 'marine',
     searchTerm: 'fisheries',
@@ -65,11 +71,15 @@ const ALL_TENANTS: TenantJourney[] = [
 // at the tenants that hold real content. A tenant still being loaded with real
 // content should not gate deploys until it is ready. Defaults to the
 // code-seeded showcase tenants for local/CI-double runs.
-const TENANT_SLUGS = (Deno.env.get('PERSONA_SMOKE_TENANTS') ?? 'marine,grains')
-  .split(',').map((s) => s.trim()).filter(Boolean)
-const TENANTS: TenantJourney[] = TENANT_SLUGS
-  .map((slug) => ALL_TENANTS.find((t) => t.slug === slug))
-  .filter((t): t is TenantJourney => Boolean(t))
+export function selectedJourneys(selection: string): TenantJourney[] {
+  const slugs = selection.split(',').map((s) => s.trim()).filter(Boolean)
+  if (slugs.length === 0) throw new Error('At least one persona smoke tenant is required')
+  return slugs.map((slug) => {
+    const journey = ALL_TENANTS.find((tenant) => tenant.slug === slug)
+    if (!journey) throw new Error(`Unknown persona smoke tenant: ${slug}`)
+    return journey
+  })
+}
 
 const FIRST_TOKEN_BUDGET_MS = 15_000
 const ASK_TIMEOUT_MS = 60_000
@@ -308,7 +318,8 @@ async function main() {
     process.exit(1)
   }
   const quick = Deno.args.includes('--quick')
-  const tenants = quick ? TENANTS.slice(0, 1) : TENANTS
+  const selected = selectedJourneys(Deno.env.get('PERSONA_SMOKE_TENANTS') ?? 'marine,grains')
+  const tenants = quick ? selected.slice(0, 1) : selected
 
   console.log(`Persona smoke test against ${base}${quick ? ' (quick mode)' : ''}`)
   console.log(`Tenants: ${tenants.map((t) => t.slug).join(', ')}\n`)
@@ -333,4 +344,4 @@ async function main() {
   console.log('All persona journeys are healthy.')
 }
 
-await main()
+if (import.meta.main) await main()
