@@ -1,3 +1,6 @@
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
+import { EnrichmentAgentStatusSchema } from '@research-portal/core'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
@@ -53,7 +56,7 @@ function Coverage({ done, total }: { done: number; total: number }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
   return (
     <div className='mt-4'>
-      <div className='flex items-baseline justify-between text-sm'>
+      <div className='flex flex-wrap items-baseline justify-between gap-2 text-sm'>
         <span className='font-medium text-ink-2'>Coverage</span>
         <span className='tabular-nums text-ink-3'>
           {done.toLocaleString()} of {total.toLocaleString()} resources
@@ -77,8 +80,9 @@ function Coverage({ done, total }: { done: number; total: number }) {
 }
 
 function AgentCard(
-  { slug, passcode, status }: { slug: string; passcode: string; status: EnrichmentAgentStatus },
+  { slug, status }: { slug: string; status: EnrichmentAgentStatus },
 ) {
+  const { runExplicit, coarseAdminEligible } = useAdminAccess()
   const queryClient = useQueryClient()
   const { agent } = status
   const [scope, setScope] = useState<'missing' | 'all'>('missing')
@@ -94,36 +98,50 @@ function AgentCard(
     setMessage(null)
     setProgress({ done: 0, total: 0, errors: 0 })
     try {
-      await runEnrichment(
-        slug,
-        passcode,
-        { agentId: agent.id, scope },
-        (event: EnrichmentRunEvent) => {
-          if (event.type === 'start') setProgress({ done: 0, total: event.total, errors: 0 })
-          if (event.type === 'item') {
-            setProgress((prev) =>
-              prev
-                ? {
-                  ...prev,
-                  done: prev.done + 1,
-                  errors: prev.errors + (event.outcome === 'error' ? 1 : 0),
-                }
-                : prev
-            )
-          }
-          if (event.type === 'done') {
-            setMessage({
-              tone: event.errors > 0 ? 'error' : 'ok',
-              text: event.enriched === 0 && event.errors === 0
-                ? 'Every resource in scope is already enriched.'
-                : `Enriched ${event.enriched} resource${event.enriched === 1 ? '' : 's'}` +
-                  (event.errors > 0 ? `, ${event.errors} could not be generated.` : '.'),
-            })
-          }
-          if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+      const result = await runExplicit(
+        scope === 'missing' ? 'Generate missing enrichments' : 'Regenerate all enrichments',
+        async (access) => {
+          let completed = false
+          let failed = false
+          await runEnrichment(
+            slug,
+            access,
+            { agentId: agent.id, scope },
+            (event: EnrichmentRunEvent) => {
+              if (event.type === 'start') setProgress({ done: 0, total: event.total, errors: 0 })
+              if (event.type === 'item') {
+                setProgress((prev) =>
+                  prev
+                    ? {
+                      ...prev,
+                      done: prev.done + 1,
+                      errors: prev.errors + (event.outcome === 'error' ? 1 : 0),
+                    }
+                    : prev
+                )
+              }
+              if (event.type === 'error') failed = true
+              if (event.type === 'done') {
+                completed = Number.isFinite(event.enriched) && Number.isFinite(event.errors)
+                setMessage({
+                  tone: event.errors > 0 ? 'error' : 'ok',
+                  text: event.enriched === 0 && event.errors === 0
+                    ? 'Every resource in scope is already enriched.'
+                    : `Enriched ${event.enriched} resource${event.enriched === 1 ? '' : 's'}` +
+                      (event.errors > 0 ? `, ${event.errors} could not be generated.` : '.'),
+                })
+              }
+              if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+            },
+          )
+          if (!completed || failed) throw new AdminAccessError()
+          return true
         },
       )
-      await queryClient.invalidateQueries({ queryKey: ['enrichment-agents', slug] })
+      if (result === undefined) return
+      if (coarseAdminEligible) {
+        await queryClient.invalidateQueries({ queryKey: ['enrichment-agents', slug] })
+      }
     } catch (err) {
       setMessage({
         tone: 'error',
@@ -193,6 +211,7 @@ function AgentCard(
               type='button'
               disabled={running}
               onClick={() => setScope(value)}
+              data-enrichment-scope={value}
               aria-pressed={scope === value}
               className={`px-3 py-1.5 text-sm font-medium transition-colors ${
                 scope === value
@@ -207,6 +226,7 @@ function AgentCard(
         <button
           type='button'
           disabled={running}
+          data-enrichment-run
           onClick={() => void run()}
           className='rp-btn rp-btn-primary'
         >
@@ -223,6 +243,11 @@ function AgentCard(
           : null}
       </div>
 
+      {running && (
+        <p role='status' className='mt-3 text-sm text-ink-3'>
+          Waiting for the confirmed result. Progress may arrive together when the action finishes.
+        </p>
+      )}
       {running && progress && progress.total > 0
         ? (
           <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2'>
@@ -242,16 +267,47 @@ function AgentCard(
   )
 }
 
-export function EnrichmentsPanel({ slug, passcode }: { slug: string; passcode: string }) {
-  const { data, isLoading, isError, error, refetch } = useQuery({
+export function EnrichmentsPanel({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const queryClient = useQueryClient()
+  const [snapshot, setSnapshot] = useState<EnrichmentAgentStatus[]>()
+  const [message, setMessage] = useState<Message | null>(null)
+  const { data: sessionData, isLoading, isError, error } = useQuery({
     queryKey: ['enrichment-agents', slug],
-    queryFn: () => getEnrichmentAgents(slug, passcode),
-    enabled: passcode.length > 0,
+    queryFn: async () =>
+      EnrichmentAgentStatusSchema.array().parse(await getEnrichmentAgents(slug, sessionAccess)),
+    enabled: coarseAdminEligible,
     retry: false,
   })
 
+  const data = coarseAdminEligible ? sessionData : snapshot
+  const load = async () => {
+    setMessage(null)
+    try {
+      const result = await runExplicit(
+        'Load enrichment schemas and coverage',
+        async (access) =>
+          EnrichmentAgentStatusSchema.array().parse(await getEnrichmentAgents(slug, access)),
+      )
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['enrichment-agents', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load enrichments.') })
+    }
+  }
+
   return (
     <div className='space-y-4'>
+      <button
+        type='button'
+        data-enrichments-read
+        className='rp-btn rp-btn-outline'
+        onClick={() => void load()}
+      >
+        Load enrichment schemas
+      </button>
+      {message && <MessagePanel message={message} />}
       <div className='rp-card p-5'>
         <h2 className='rp-display text-xl text-ink'>Enrichments</h2>
         <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
@@ -276,14 +332,12 @@ export function EnrichmentsPanel({ slug, passcode }: { slug: string; passcode: s
         ? (
           <ErrorCard
             message={error instanceof Error ? error.message : 'Could not load enrichments.'}
-            onRetry={() => void refetch()}
+            onRetry={() => void load()}
           />
         )
         : null}
 
-      {data?.map((status) => (
-        <AgentCard key={status.agent.id} slug={slug} passcode={passcode} status={status} />
-      ))}
+      {data?.map((status) => <AgentCard key={status.agent.id} slug={slug} status={status} />)}
     </div>
   )
 }

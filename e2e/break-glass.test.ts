@@ -151,6 +151,24 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let graphAgentTitle = 'Research graph'
     let analysisComplete = true
     let suggestionsMalformed = false
+    let labComplete = true
+    let labMalformed = false
+    let methodName = 'Default extraction'
+    let enrichedCount = 2
+    const labRules = { default: 'default', rules: [], visualPageCap: 60 }
+    const comparisons: { question?: string; resourceId: string }[] = []
+    const profile = {
+      pages: 2,
+      bytes: 1000,
+      chars: 200,
+      charsPerPage: 100,
+      fonts: 1,
+      imageOnlyPages: 0,
+      tableRowsPerPage: 0,
+      dictionaryHitRate: 0.9,
+      class: 'prose',
+      source: 'platform',
+    }
     const suggestions = ['one', 'two'].map((id) => ({
       id,
       kind: 'entity-type',
@@ -228,6 +246,74 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             resourceLabels: [],
             chunkLabels: [],
           })
+        }
+        if (url.pathname.endsWith('/extraction/methods')) {
+          return Response.json(
+            labMalformed ? {} : {
+              lab: 'Research sandbox',
+              available: true,
+              poppler: false,
+              methods: [{ id: 'default', name: methodName, kind: 'default' }],
+              rules: labRules,
+            },
+          )
+        }
+        if (url.pathname.endsWith('/extraction/profile')) {
+          return Response.json({ profile, filename: 'research.pdf' })
+        }
+        if (url.pathname.endsWith('/extraction/rules')) {
+          return Response.json({ ok: true, rules: await request.json() })
+        }
+        if (url.pathname.endsWith('/extraction/compare')) {
+          comparisons.push(await request.json())
+          return new Response(
+            [
+              { type: 'stage', label: 'Comparing methods' },
+              ...(labComplete
+                ? [{
+                  type: 'done',
+                  purged: 1,
+                  recommended: 'Default extraction',
+                  reason: 'Clear research text.',
+                  yields: {},
+                }]
+                : []),
+            ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'content-type': 'text/event-stream' } },
+          )
+        }
+        if (url.pathname.endsWith('/enrichments')) {
+          return Response.json(
+            labMalformed ? {} : [{
+              agent: {
+                id: 'research-summary',
+                title: 'Research summary',
+                description: 'Cited research summary fields.',
+                scope: 'resource',
+                cardinality: 'single',
+                isDefault: true,
+                fields: [{
+                  key: 'title',
+                  label: 'Title',
+                  kind: 'title',
+                  description: 'A useful research title.',
+                }],
+              },
+              jsonSchema: { type: 'object' },
+              enrichedCount,
+              totalCount: 7,
+              generationNote: 'Generated from research text.',
+            }],
+          )
+        }
+        if (url.pathname.endsWith('/enrichments/run')) {
+          return new Response(
+            [
+              { type: 'start', total: 1 },
+              ...(labComplete ? [{ type: 'done', enriched: 1, errors: 0 }] : []),
+            ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'content-type': 'text/event-stream' } },
+          )
         }
         if (url.pathname.endsWith('/analyse')) {
           return new Response(
@@ -404,6 +490,17 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         )
       }
       if (url.pathname.endsWith('/facets')) return Response.json({})
+      if (url.pathname.endsWith('/catalog')) {
+        return Response.json({
+          items: [{
+            id: 'research-one',
+            title: 'Research document',
+            status: 'processed',
+            topicIds: [],
+          }],
+          total: 1,
+        })
+      }
       if (url.pathname.endsWith('/counters')) return Response.json({ resources: 7 })
       if (behaviourActive && url.pathname === '/api/t/alpha/config') {
         return Response.json({
@@ -546,6 +643,107 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Extraction')
+          await page!.waitForSelector('[data-extraction-read]')
+          await explicitAction(() => click(page!, '[data-extraction-read]'), 'extraction-methods')
+          await fill(page!, 'input[type=number]', '42')
+          labRules.visualPageCap = 80
+          await explicitAction(
+            () => click(page!, '[data-extraction-read]'),
+            'extraction-dirty-refresh',
+          )
+          expect(
+            await page!.evaluate(() =>
+              document.querySelector<HTMLInputElement>('input[type=number]')!.value
+            ),
+          ).toBe('42')
+          await fill(page!, '[aria-label="Find a document"]', 'Research')
+          await settle(page!)
+          await explicitAction(() => clickText(page!, 'Research document'), 'extraction-profile')
+          await fill(
+            page!,
+            '[aria-label="Question for the before and after ask"]',
+            'What are the research findings?',
+          )
+          await explicitAction(() => clickText(page!, 'Run comparison'), 'extraction-compare')
+          expect(comparisons.at(-1)?.question).toBe('What are the research findings?')
+          await page!.evaluate(() =>
+            document.querySelector('[aria-label="Question for the before and after ask"]')!
+              .scrollIntoView({ block: 'center' })
+          )
+          await capture(`extraction-comparison-${palette}-${width}`)
+          await explicitAction(() => clickText(page!, 'Save rules'), 'extraction-rules')
+          labRules.visualPageCap = 90
+          await explicitAction(
+            () => click(page!, '[data-extraction-read]'),
+            'extraction-clean-refresh',
+          )
+          expect(
+            await page!.evaluate(() =>
+              document.querySelector<HTMLInputElement>('input[type=number]')!.value
+            ),
+          ).toBe('90')
+          await page!.evaluate(() =>
+            document.querySelector('input[type=number]')!.closest('.rp-card')!.scrollIntoView({
+              block: 'start',
+            })
+          )
+          await capture(`extraction-rules-${palette}-${width}`)
+          await page!.evaluate(() => scrollTo(0, 0))
+          await capture(`extraction-header-${palette}-${width}`)
+          labComplete = false
+          await clickText(page!, 'Run comparison')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await capture(`extraction-uncertain-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          labComplete = true
+          labMalformed = true
+          await click(page!, '[data-extraction-read]')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await click(page!, '[data-emergency-cancel]')
+          labMalformed = false
+          await clickText(page!, 'Enrichments')
+          await page!.waitForSelector('[data-enrichments-read]')
+          await explicitAction(() => click(page!, '[data-enrichments-read]'), 'enrichment-schemas')
+          await clickText(page!, 'Show raw schema')
+          await explicitAction(() => click(page!, '[data-enrichment-run]'), 'enrichment-missing')
+          await click(page!, '[data-enrichment-scope=all]')
+          await explicitAction(() => click(page!, '[data-enrichment-run]'), 'enrichment-all')
+          await capture(`enrichment-schema-${palette}-${width}`)
+          labComplete = false
+          await click(page!, '[data-enrichment-run]')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await capture(`enrichment-uncertain-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          labComplete = true
+        }
+      }
+      state.capability = 'session'
+      await open('manage')
+      await page!.waitForSelector('[data-admin-overview]')
+      await clickText(page!, 'Extraction')
+      await click(page!, '[data-extraction-read]')
+      methodName = 'Refreshed extraction'
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+      await settle(page!)
+      expect(await page!.evaluate(() => document.body.textContent)).toContain(methodName)
+      await clickText(page!, 'Enrichments')
+      await click(page!, '[data-enrichments-read]')
+      enrichedCount = 5
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+      await settle(page!)
+      expect(await page!.evaluate(() => document.body.textContent)).toContain('5 of 7 resources')
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
           state.capability = 'enabled'

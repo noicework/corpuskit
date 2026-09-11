@@ -72,7 +72,7 @@ function ManageContent() {
   })
   const [renaming, setRenaming] = useState(false)
   const overview = useAdminOverview(slug)
-  const { data, isLoading, coarseAdminEligible } = overview
+  const { data, isLoading } = overview
   const row = data?.find((r) => r.tenant.slug === slug)
 
   const onContentAdded = () =>
@@ -145,30 +145,6 @@ function ManageContent() {
             </nav>
 
             <div className='min-w-0'>
-              {!coarseAdminEligible &&
-                ![
-                  'details',
-                  'content',
-                  'overview',
-                  'insights',
-                  'taxonomy',
-                  'graph',
-                  'appearance',
-                  'behaviour',
-                ].includes(
-                  tab,
-                ) && (
-                <div className='rp-card p-5'>
-                  <h2 className='text-lg font-semibold'>{row.tenant.productName}</h2>
-                  <p className='mt-3 text-sm text-ink-2'>
-                    {row.resourceCount ?? 'Unknown'} documents in this snapshot.
-                  </p>
-                  <p className='mt-3 text-sm text-ink-2'>
-                    Sign in with an administrator account to load this section automatically.
-                  </p>
-                </div>
-              )}
-
               {tab === 'overview' && (
                 <div className='space-y-4'>
                   {reachable
@@ -245,16 +221,14 @@ function ManageContent() {
                 </div>
               )}
 
-              {coarseAdminEligible && tab === 'enrichments' && (
-                reachable
-                  ? <EnrichmentsPanel slug={slug} passcode='microsoft-sso' />
-                  : (
-                    <div className='rp-card p-5'>
-                      <p className='text-sm text-ink-3'>
-                        Connect a knowledge box to generate enrichments.
-                      </p>
-                    </div>
-                  )
+              {tab === 'enrichments' && (
+                reachable ? <EnrichmentsPanel slug={slug} /> : (
+                  <div className='rp-card p-5'>
+                    <p className='text-sm text-ink-3'>
+                      Connect a knowledge box to generate enrichments.
+                    </p>
+                  </div>
+                )
               )}
 
               {tab === 'taxonomy' && (
@@ -309,9 +283,7 @@ function ManageContent() {
               )}
 
               {tab === 'behaviour' && <BehaviourPanel slug={slug} />}
-              {coarseAdminEligible && tab === 'extraction' && (
-                <ExtractionPanel slug={slug} passcode='microsoft-sso' />
-              )}
+              {tab === 'extraction' && <ExtractionPanel slug={slug} />}
 
               {tab === 'details' && (
                 <div className='rp-card p-5'>
