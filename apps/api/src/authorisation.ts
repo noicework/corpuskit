@@ -27,6 +27,7 @@ import {
   verifyScopedKey,
 } from './scoped-keys.ts'
 import type { TenantStoreApi } from './tenants.ts'
+import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 
 export type RequestAuthority =
   | { kind: 'anonymous'; actor: AuditActor; provenanceSession: null }
@@ -278,6 +279,45 @@ export function authoriseOperation(
     )
   }
   if (!authorize(principal, permission, scope)) refuse(state, authority.actor, scope, permission)
+  return true
+}
+
+/** D1 platform implication for the validated new portal before it can exist in the store. */
+export function authoriseNewPortalDomain(authority: RequestAuthority, slugInput: unknown): true {
+  const state = stateFor(authority)
+  const slug = KeyPortalSlugSchema.safeParse(slugInput)
+  if (
+    !slug.success || state.request.method !== 'POST' ||
+    new URL(state.request.url).pathname !== '/api/admin/tenants'
+  ) {
+    return refuse(state, authority.actor, { kind: 'platform' }, 'domains.write')
+  }
+  authoriseOperation(authority, 'portal.create', { kind: 'platform' })
+  const scope: Scope = { kind: 'portal', slug: slug.data }
+  try {
+    if (state.deps.tenants.get(slug.data)) {
+      return refuse(state, authority.actor, scope, 'domains.write')
+    }
+  } catch (error) {
+    if (error instanceof AuditWriteError || error instanceof AuthorisationError) throw error
+    return refuse(state, authority.actor, scope, 'domains.write')
+  }
+  const principal = authority.kind === 'session'
+    ? normalisePrincipal({
+      kind: 'user',
+      tenantId: authority.session.tenantId,
+      oid: authority.session.oid,
+    }, authority.effectiveRoles)
+    : authority.kind === 'break-glass'
+    ? normalisePrincipal({
+      kind: 'user',
+      tenantId: state.deps.configuredTenantId,
+      oid: 'break-glass',
+    }, { platformRole: 'owner', portalRoles: [] })
+    : normalisePrincipal({ kind: 'anonymous' }, { portalRoles: [] })
+  if (!authorize(principal, 'domains.write', scope)) {
+    return refuse(state, authority.actor, scope, 'domains.write')
+  }
   return true
 }
 

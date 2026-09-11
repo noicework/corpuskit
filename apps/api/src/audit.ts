@@ -177,6 +177,8 @@ const actionFields = {
     'sessionOid',
     'sessionTenantId',
   ],
+  'tenant.domain.attach': ['code', 'permission', 'sessionOid', 'sessionTenantId'],
+  'tenant.domain.detach': ['code', 'permission', 'sessionOid', 'sessionTenantId'],
   'suggestion.graph.write': [
     'code',
     'permission',

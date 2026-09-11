@@ -291,7 +291,10 @@ Deno.test('explicit credentials deny without fallback on every disallowed path o
         scope: { kind: 'platform' },
         requestId: context.requestId,
       })
-      expect(events.filter((event) => event.outcome === 'denied')).toHaveLength(1)
+      expect(events.filter((event) => event.action === 'request.denied')).toHaveLength(1)
+      expect(events.filter((event) => event.action === 'break_glass.failed')).toHaveLength(
+        headers['x-admin-passcode'] === 'wrong' ? 1 : 0,
+      )
     }
     f.assertNoProtectedDispatch()
   } finally {

@@ -30,6 +30,7 @@ import {
 import type { BreakGlassService } from './break-glass.ts'
 import {
   AuthorisationError,
+  authoriseNewPortalDomain,
   authoriseOperation,
   authoriseSubActions as checkSubActions,
   type AuthorityDependencies,
@@ -515,8 +516,8 @@ const docsAskBodySchema = z.object({
 const connectBodySchema = z.object({
   url: z.string().min(12),
   token: z.string().min(20),
-})
-const createKbBodySchema = z.object({ title: z.string().min(1).max(80).optional() })
+}).strict()
+const createKbBodySchema = z.object({ title: z.string().min(1).max(80).optional() }).strict()
 const linkBodySchema = z.object({
   url: z.string().url(),
   title: z.string().optional(),
@@ -549,7 +550,7 @@ const sourcePatchSchema = z.object({
   auto: z.boolean().optional(),
   maxPages: z.number().int().min(1).max(MAX_SYNC_CAP).optional(),
 })
-const hiddenBodySchema = z.object({ hidden: z.boolean() })
+const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
 // Purge is destructive - default TRUE means "just show me the scope", never
 // "go ahead and delete". An explicit { dryRun: false } is required to delete.
 const purgeFailedBodySchema = z.object({ dryRun: z.boolean().optional() })
@@ -677,7 +678,7 @@ const SUBQUERIES_SCHEMA = {
   },
 }
 const textBodySchema = z.object({ title: z.string().min(1), body: z.string().min(1) })
-const migrateBodySchema = z.object({ from: z.string().min(1), to: z.string().min(1) })
+const migrateBodySchema = z.object({ from: KeyPortalSlugSchema, to: KeyPortalSlugSchema }).strict()
 const generateBodySchema = z.object({
   kind: GenerateKindSchema,
   query: z.string().min(3).max(2000),
@@ -702,14 +703,14 @@ const renameTenantSchema = z.object({
     accent: hexColour,
     heroFrom: hexColour,
     heroTo: hexColour,
-  }).optional(),
+  }).strict().optional(),
   typography: TypographyChoiceSchema.optional(),
   shape: ShapeIdSchema.optional(),
   textScale: TextScaleIdSchema.optional(),
   density: DensityIdSchema.optional(),
   paletteId: PaletteChoiceSchema.optional(),
   searchPlaceholder: z.string().min(3).max(120).optional(),
-})
+}).strict()
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
   includeSummaries: z.boolean().optional(),
@@ -719,7 +720,7 @@ const newTenantSchema = z.object({
   name: z.string().min(2).max(60),
   organisation: z.string().max(120).optional(),
   tagline: z.string().max(160).optional(),
-})
+}).strict()
 const promptsSchema = z.object({
   ask: z.string().max(4000).optional(),
   images: z.boolean().optional(),
@@ -745,6 +746,47 @@ const labelsetUpdateSchema = z.object({
     text: z.string().trim().max(600),
   }).array().min(1).max(60),
 })
+
+const suggestionBase = {
+  id: z.string().min(1),
+  title: z.string().min(1).max(160),
+  detail: z.string().max(500),
+  status: z.enum(['pending', 'implemented', 'ignored']),
+  createdAt: z.string().datetime(),
+}
+const suggestionPayloadSchema = z.discriminatedUnion('kind', [
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('labelset'),
+    labelset: z.object({
+      id: KeyPortalSlugSchema,
+      title: z.string().min(1).max(60),
+      paragraphs: z.boolean(),
+      labels: z.string().min(1).max(60).array().min(1).max(60),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('label-addition'),
+    labels: z.object({
+      labelsetId: KeyPortalSlugSchema,
+      labels: z.string().min(1).max(60).array().min(1).max(60),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('entity-type'),
+    entityType: z.object({
+      label: z.string().min(1).max(60),
+      description: z.string().max(400),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('graph-example'),
+    example: graphStrategySchema.shape.examples.element.strict(),
+  }).strict(),
+])
 
 /** Strip quotes, whitespace and an accidental "Bearer " prefix from a pasted token. */
 const cleanToken = (raw: string) =>
@@ -1208,6 +1250,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     action: AuditAction,
     run: () => T | Promise<T>,
     detail = {},
+    scope: Scope = classification(c).scope,
   ) =>
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
@@ -1218,12 +1261,84 @@ export function buildApp(opts: BuildAppOptions): Hono {
           requestId: requestContext(c.req.raw).requestId,
           actor: requestContext(c.req.raw).actor!,
           action,
-          scope: classification(c).scope,
+          scope,
           target: { kind: 'request' },
           detail: { permission: declaration.permission, ...detail },
         },
         run,
       }))
+
+  const adminNotFound = (c: Context) => {
+    const context = requestContext(c.req.raw)
+    if (!context.denialAudited) {
+      appendAudit(
+        requiredAudit(),
+        createAuditEvent({
+          requestId: context.requestId,
+          actor: context.actor!,
+          action: 'request.denied',
+          scope: classification(c).scope,
+          target: classification(c).target,
+          outcome: 'denied',
+          detail: {
+            code: 'forbidden',
+            permission: matchedDeclaration(c).permission,
+            method: c.req.method,
+          },
+        }, opts.now),
+      )
+      markDenialAudited(c.req.raw)
+    }
+    return c.json({ error: 'not_found' }, 404)
+  }
+  const adminResource = async (c: Context, config: TenantConfig, id: string) => {
+    const resource = await provider.resource(config, id).catch(() => null)
+    if (!resource || resource.id !== id) return false
+    const fieldId = c.req.query('fieldId')
+    if (fieldId !== undefined) {
+      if (!opts.management) return false
+      const content = await opts.management.resourceContent(config, id).catch(() => null)
+      if (
+        !content || content.id !== id || !content.files.some((file) => file.fieldId === fieldId)
+      ) return false
+    }
+    return true
+  }
+  const emptyAdminBody = async (c: Context): Promise<boolean> => {
+    const text = await c.req.text()
+    if (!text) return true
+    try {
+      return z.object({}).strict().safeParse(JSON.parse(text)).success
+    } catch {
+      return false
+    }
+  }
+  const portalSubAction = async (c: Context, name: string, slug: string, future = false) => {
+    const selected = await authoriseDeclared(c)
+    if (!selected) throw new AuthorisationError(403)
+    const declaration = matchedDeclaration(c)
+    const action = declaration.subActions?.find((item) => item.action === name)
+    if (!action || action.scope !== 'portal' || !KeyPortalSlugSchema.safeParse(slug).success) {
+      throw new AuthorisationError(403)
+    }
+    try {
+      if (future) {
+        if (action.permission !== 'domains.write') throw new AuthorisationError(403)
+        authoriseNewPortalDomain(selected, slug)
+      } else {
+        const config = tenants.get(slug)
+        authoriseOperation(
+          selected,
+          action.permission,
+          { kind: 'portal', slug },
+          config &&
+            { slug, accessMode: config.accessMode, configuredTenantId: opts.configuredTenantId },
+        )
+      }
+    } finally {
+      if (requestContext(c.req.raw).denialAudited) markDenialAudited(c.req.raw)
+    }
+  }
   registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)
     c.set(authorisationContextKey, requestHelpers(c))
@@ -3087,9 +3202,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(rows)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/knowledge-box'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/knowledge-box'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     bindings.remove(config.slug)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug) })
@@ -3103,8 +3219,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/tenants'), async (c) => {
     const parsed = newTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    const base = parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    let newSlug = base
+    for (let index = 2; tenants.get(newSlug); index++) newSlug = `${base}-${index}`
+    if (!KeyPortalSlugSchema.safeParse(newSlug).success) {
+      return c.json({ error: 'invalid_request' }, 400)
+    }
+    const newHostname = portalHostnameForSlug(newSlug)
+    if (newHostname && domains) {
+      await portalSubAction(c, 'tenant.domain.attach', newSlug, true)
+      await portalSubAction(c, 'tenant.domain.detach', newSlug, true)
+    }
+    // Allocation is rechecked after authority awaits and immediately before the synchronous add.
+    if (tenants.get(newSlug)) return c.json({ error: 'portal_conflict' }, 409)
     try {
       const config = tenants.add(parsed.data as NewTenantInput)
+      if (config.slug !== newSlug) throw new AuthorisationError(403)
       if (config.hostname) {
         return c.json({
           ok: true,
@@ -3129,12 +3259,36 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
 
+      let remoteFailure: unknown
       try {
-        const attached = await domains.attach(hostname)
+        const attached = await subAction(
+          c,
+          '/api/admin/tenants',
+          'tenant.domain.attach',
+          async () => {
+            try {
+              return await domains.attach(hostname)
+            } catch (error) {
+              remoteFailure = error
+              throw error
+            }
+          },
+          {},
+          { kind: 'portal', slug: config.slug },
+        )
         try {
           tenants.patch(config.slug, { hostname: attached.hostname })
         } catch (error) {
-          if (attached.created) await domains.detach(attached.hostname).catch(() => {})
+          if (attached.created) {
+            await subAction(
+              c,
+              '/api/admin/tenants',
+              'tenant.domain.detach',
+              () => domains.detach(attached.hostname),
+              {},
+              { kind: 'portal', slug: config.slug },
+            )
+          }
           throw error
         }
         return c.json({
@@ -3143,7 +3297,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
           domain: { status: 'active', ...attached },
         })
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'domain provisioning failed'
+        if (
+          !(error instanceof AuditExecutionError && error.code === 'operation_failed' &&
+            remoteFailure)
+        ) throw error
+        const message = remoteFailure instanceof Error
+          ? remoteFailure.message
+          : 'domain provisioning failed'
         return c.json({
           ok: true,
           slug: config.slug,
@@ -3151,6 +3311,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
     } catch (err) {
+      if (
+        err instanceof AuditWriteError || err instanceof AuditExecutionError ||
+        err instanceof AuthorisationError
+      ) throw err
       const message = err instanceof Error ? err.message : 'could not add the portal'
       return c.json({ error: 'invalid_request', message }, 400)
     }
@@ -3158,19 +3322,42 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   app.delete(declaredRoute('DELETE', '/api/admin/tenants/:slug'), async (c) => {
     const slug = c.req.param('slug')
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
     const config = tenants.get(slug)
     if (config?.hostname) {
+      await portalSubAction(c, 'tenant.domain.detach', slug)
       if (!domains) {
         return c.json({
           error: 'domain_removal_unavailable',
           message: 'Domain removal is not configured. The portal has not been removed.',
         }, 503)
       }
+      let remoteFailure: unknown
       try {
-        await domains.detach(config.hostname)
+        await subAction(
+          c,
+          '/api/admin/tenants/:slug',
+          'tenant.domain.detach',
+          async () => {
+            try {
+              return await domains.detach(config.hostname!)
+            } catch (error) {
+              remoteFailure = error
+              throw error
+            }
+          },
+          {},
+          { kind: 'portal', slug },
+        )
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'domain removal failed'
+        if (
+          !(error instanceof AuditExecutionError && error.code === 'operation_failed' &&
+            remoteFailure)
+        ) throw error
+        const message = remoteFailure instanceof Error
+          ? remoteFailure.message
+          : 'domain removal failed'
         return c.json({ error: 'domain_removal_failed', message }, 502)
       }
     }
@@ -3365,16 +3552,39 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = renameTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    const fields = Object.keys(parsed.data)
+    const actions = matchedDeclaration(c).subActions?.filter((action) =>
+      action.fields?.some((field) =>
+        fields.includes(field)
+      )
+    ).map((action) => action.action) ?? []
+    if (fields.length) await authoriseSubActions(c, actions)
+    const appearanceFields = fields.filter((field) => field !== 'searchPlaceholder')
+    if (parsed.data.searchPlaceholder && appearanceFields.length) {
+      const { name, searchPlaceholder, ...branding } = parsed.data
+      await subAction(c, '/api/admin/tenants/:slug', 'tenant.appearance.update', () =>
+        subAction(c, '/api/admin/tenants/:slug', 'tenant.behaviour.update', () =>
+          tenants.patch(config.slug, {
+            searchPlaceholder,
+            branding: { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
+          }), { changedFields: 'searchPlaceholder' }), {
+        changedFields: appearanceFields.join(','),
+      })
+      return c.json({ ok: true })
+    }
     if (parsed.data.searchPlaceholder) {
       await subAction(
         c,
         '/api/admin/tenants/:slug',
         'tenant.behaviour.update',
-        () => tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
+        () =>
+          tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
         { changedFields: 'searchPlaceholder' },
       )
     }
-    const changedFields = Object.keys(parsed.data).filter((field) => field !== 'searchPlaceholder')
+    const changedFields = Object.keys(parsed.data).filter((field) =>
+      field !== 'searchPlaceholder'
+    )
     if (changedFields.length) {
       await subAction(
         c,
@@ -3464,15 +3674,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
-    const suggestion = suggestions.list(config.slug).find((s) => s.id === c.req.param('id'))
-    if (!suggestion) return c.json({ error: 'not_found' }, 404)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    const parsed = suggestionPayloadSchema.safeParse(
+      suggestions.list(config.slug).find((s) => s.id === c.req.param('id')),
+    )
+    if (!parsed.success) return adminNotFound(c)
+    const suggestion = parsed.data
     if (suggestion.status !== 'pending') {
       return c.json({ error: 'already_decided' }, 409)
     }
+    const action = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
+      ? 'suggestion.taxonomy.write'
+      : 'suggestion.graph.write'
+    await authoriseSubActions(c, [action])
+    if (
+      suggestion.kind === 'label-addition' &&
+      !(await provider.labelsets(config)).some((labelset) =>
+        labelset.id === suggestion.labels.labelsetId
+      )
+    ) return adminNotFound(c)
     try {
-      const action = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
-        ? 'suggestion.taxonomy.write'
-        : 'suggestion.graph.write'
       const summary = await subAction(
         c,
         '/api/admin/t/:slug/suggestions/:id/implement',
@@ -3494,6 +3715,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/suggestions/:id/ignore'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!suggestions.list(config.slug).some((suggestion) => suggestion.id === c.req.param('id'))) {
+      return adminNotFound(c)
+    }
     const updated = suggestions.setStatus(config.slug, c.req.param('id'), 'ignored')
     return updated ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
@@ -3542,7 +3766,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableAd = requireManagement(c)
     if (unavailableAd) return unavailableAd
-    await management!.deleteAgent(config, c.req.param('taskId'))
+    const taskId = c.req.param('taskId')
+    if (!(await management!.listAgents(config)).some((agent) => agent.id === taskId)) {
+      return adminNotFound(c)
+    }
+    await management!.deleteAgent(config, taskId)
     return c.json({ ok: true })
   })
 
@@ -3708,6 +3936,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const unavailableOne = requireManagement(c)
     if (unavailableOne) return unavailableOne
     const id = c.req.param('id')
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    if (!await adminResource(c, config, id)) return adminNotFound(c)
     try {
       const agentId = new URL(c.req.url).searchParams.get('agentId')
       const agent = ENRICHMENT_AGENTS.find((a) => a.id === agentId) ?? DEFAULT_RESEARCH_ENRICHMENT
@@ -3903,7 +4133,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     const id = c.req.param('id')
     const existing = await provider.labelsets(config).catch(() => [])
-    if (!existing.some((ls) => ls.id === id)) return c.json({ error: 'unknown_labelset' }, 404)
+    if (!existing.some((ls) => ls.id === id)) return adminNotFound(c)
     try {
       const result = await applyLabelsetUpdate(management!, config, { id, ...parsed.data })
       return c.json({ ok: true, ...result })
@@ -4017,6 +4247,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailable) return unavailable
     const parsed = hiddenBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (!await adminResource(c, config, c.req.param('id'))) return adminNotFound(c)
     try {
       await management!.setResourceHidden(config, c.req.param('id'), parsed.data.hidden)
     } catch (err) {
@@ -4096,7 +4327,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = sourcePatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const id = c.req.param('id')
-    if (!sources.find(config.slug, id)) return c.json({ error: 'not_found' }, 404)
+    if (!sources.find(config.slug, id)) return adminNotFound(c)
     sources.update(config.slug, id, parsed.data)
     const updated = sources.summaries(config.slug).find((s) => s.id === id)
     return c.json(updated ?? { error: 'not_found' })
@@ -4105,6 +4336,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/sources/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!sources.find(config.slug, c.req.param('id'))) return adminNotFound(c)
     sources.remove(config.slug, c.req.param('id'))
     return c.json({ ok: true })
   })
@@ -4113,7 +4345,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const source = sources.find(config.slug, c.req.param('id'))
-    if (!source) return c.json({ error: 'not_found' }, 404)
+    if (!source) return adminNotFound(c)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const management = opts.management
     return streamSSE(c, async (stream) => {
@@ -4147,6 +4379,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const from = tenant(parsed.data.from)
     const to = tenant(parsed.data.to)
     if (!from || !to || from.slug === to.slug) return c.json({ error: 'invalid_tenants' }, 400)
+    await portalSubAction(c, 'migration.source', from.slug)
+    await portalSubAction(c, 'migration.destination', to.slug)
     return streamSSE(c, async (stream) => {
       const send = (event: MigrationEvent) => stream.writeSSE({ data: JSON.stringify(event) })
       try {
@@ -4222,7 +4456,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       | null
     const parsed = connectBodySchema.safeParse(
       raw && typeof raw.url === 'string' && typeof raw.token === 'string'
-        ? { url: raw.url.trim(), token: cleanToken(raw.token) }
+        ? { ...raw, url: raw.url.trim(), token: cleanToken(raw.token) }
         : raw,
     )
     if (!parsed.success) return c.json({ error: 'invalid_binding' }, 400)

@@ -542,7 +542,7 @@ describe('independent admin route permission matrix', () => {
             template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
               .replace(
                 ':id',
-                suffix.includes('sources')
+                suffix.startsWith('sources')
                   ? source.id
                   : suffix.includes('suggestions')
                   ? 'suggestion-a'
@@ -2242,7 +2242,7 @@ describe('PUT /api/admin/t/:slug/labelsets/:id', () => {
     })
     const response = await put(app, 'region', body)
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'unknown_labelset' })
+    expect(await response.json()).toEqual({ error: 'not_found' })
     expect(calls).toEqual([])
   })
 

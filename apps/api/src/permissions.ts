@@ -235,8 +235,15 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/t/:slug/followups', 'portal.generate', 'portal'),
   entry('http', 'GET', '/api/admin/overview', 'platform.settings.write', 'platform'),
   entry('http', 'DELETE', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
-  entry('http', 'POST', '/api/admin/tenants', 'portal.create', 'platform'),
-  entry('http', 'DELETE', '/api/admin/tenants/:slug', 'portal.delete', 'platform'),
+  entry('http', 'POST', '/api/admin/tenants', 'portal.create', 'platform', {
+    subActions: [
+      { action: 'tenant.domain.attach', permission: 'domains.write', scope: 'portal' },
+      { action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' },
+    ],
+  }),
+  entry('http', 'DELETE', '/api/admin/tenants/:slug', 'portal.delete', 'platform', {
+    subActions: [{ action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' }],
+  }),
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box/create', 'bindings.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/counters', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/recent', 'content.write', 'portal'),
@@ -323,6 +330,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/sources/:id/sync', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/migrate', 'platform.settings.write', 'platform', {
     detailFields: ['from', 'to'],
+    subActions: [
+      { action: 'migration.source', permission: 'content.write', scope: 'portal' },
+      { action: 'migration.destination', permission: 'content.write', scope: 'portal' },
+    ],
   }),
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
   entry('http', 'POST', '/api/t/:slug/ask', 'portal.ask', 'portal'),
