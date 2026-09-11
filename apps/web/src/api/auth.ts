@@ -35,11 +35,14 @@ const ANONYMOUS: AuthSession = {
 }
 
 export async function getAuthSession(): Promise<AuthSession> {
-  const response = await fetch('/auth/me', { headers: { accept: 'application/json' } })
-  if (!response.ok) return ANONYMOUS
+  const response = await fetch('/auth/me', { headers: { accept: 'application/json' } }).catch(() =>
+    null
+  )
+  if (!response?.ok) return ANONYMOUS
   const value: unknown = await response.json().catch(() => null)
   if (!value || typeof value !== 'object' || !('authenticated' in value)) return ANONYMOUS
   const session = value as Partial<AuthSession>
+  if (typeof session.authenticated !== 'boolean') return ANONYMOUS
   return {
     authenticated: session.authenticated === true && Boolean(session.user),
     user: session.user ?? null,
@@ -47,7 +50,8 @@ export async function getAuthSession(): Promise<AuthSession> {
     provenance: session.provenance,
     claimAgeSeconds: session.claimAgeSeconds,
     groupMappings: session.groupMappings,
-    coarseAdminEligible: session.coarseAdminEligible === true,
+    coarseAdminEligible: session.authenticated === true && Boolean(session.user) &&
+      session.coarseAdminEligible === true,
     breakGlassEnabled: session.breakGlassEnabled === true,
   }
 }
