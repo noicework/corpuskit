@@ -21,6 +21,7 @@ import { SUGGESTED_QUESTIONS_SCHEMA_ID } from '../../api/src/suggested-questions
 import { tenantConfig, type TenantPatch } from '../../api/src/tenants.ts'
 import { checkAuditUpgrade } from '../../api/src/rbac-state.test.ts'
 import { migrateLegacyKeyRecord } from '../../api/src/scoped-key-record.ts'
+import { fixtureSession } from '../../api/src/rbac-integration-fixture.ts'
 
 const legacyScopedKey: McpKeyRecord = {
   id: 'legacy-key',
@@ -312,29 +313,42 @@ function mutationFixture(management?: AragProvider) {
   const state = new DurableState(sql, sql)
   state.migrate()
   const stores = durableStores(state, {})
+  const session = fixtureSession({ oid: 'writer', tenantId: 'directory' })
+  const assignments = state.rbac.assignmentService('directory', 'corpuskit')
+  expect(assignments.observeSession(session)).toBe(true)
+  expect(
+    assignments.create({
+      subjectKind: 'active-oid',
+      subjectId: session.oid,
+      scope: { kind: 'platform' },
+      role: 'owner',
+    }, { requestId: 'seed-writer', actor: { kind: 'system' } }).ok,
+  ).toBe(true)
   const app = buildApp({
     ...stores,
+    configuredTenantId: 'directory',
+    audience: 'corpuskit',
+    breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
     provider: {
       resource: async () => ({ id: 'doc', title: 'Research', summary: '' }),
     } as unknown as RetrievalProvider,
     management,
-    requestContext: () => ({
-      requestId: crypto.randomUUID(),
-      session: {
-        verified: true,
-        oid: 'writer',
-        tenantId: 'directory',
-        roles: [],
-        groups: [],
-        groupStatus: 'complete',
-        claimIssuedAt: Date.now(),
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 10000,
-      },
-      coarseAdminEligible: true,
-      effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-      actor: { kind: 'user', id: 'writer' },
-    }),
+    requestContext: () => {
+      const grant = assignments.list().find((row) =>
+        row.subjectKind === 'active-oid' && row.subjectId === session.oid &&
+        row.scope.kind === 'platform'
+      )
+      const platformRole = grant?.role === 'owner' || grant?.role === 'platform-admin'
+        ? grant.role
+        : undefined
+      return {
+        requestId: crypto.randomUUID(),
+        session,
+        coarseAdminEligible: platformRole !== undefined,
+        effectiveRoles: { platformRole, portalRoles: [] },
+        actor: { kind: 'user', id: 'writer' },
+      }
+    },
   })
   return {
     sql,
@@ -928,22 +942,8 @@ Deno.test('Durable detached nested scope cannot write after its parent completes
 })
 
 Deno.test('actual Durable HTTP local mutation rolls back when its authoritative audit fails', async () => {
-  const sql = new TestSqlStorage()
+  const { sql, stores, app } = mutationFixture()
   try {
-    const state = new DurableState(sql, sql)
-    state.migrate()
-    const stores = durableStores(state, {})
-    const app = buildApp({
-      ...stores,
-      provider: {} as RetrievalProvider,
-      requestContext: () => ({
-        requestId: 'local-write',
-        session: null,
-        coarseAdminEligible: true,
-        effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-        actor: { kind: 'user', id: 'writer' },
-      }),
-    })
     sql.database.exec(
       "CREATE TRIGGER fail_local BEFORE INSERT ON audit_events WHEN NEW.action = 'local.mutation' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
     )

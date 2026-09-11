@@ -4,6 +4,9 @@ import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import type { TrustedSessionFacts } from './principal.ts'
 import { buildApp } from './app.ts'
+import { TenantStore } from './tenants.ts'
+import { McpKeyStore } from './stores.ts'
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 
 const session = (): TrustedSessionFacts => ({
   verified: true,
@@ -23,12 +26,15 @@ const peer = { remoteAddr: { transport: 'tcp' as const, hostname: '127.0.0.1', p
 Deno.test('local coarse gate audits disabled and missing-peer passcodes without role fallback', async () => {
   for (const production of [true, false]) {
     const db = new LocalRbacDatabase(':memory:')
+    const directory = Deno.makeTempDirSync({ prefix: 'local-gate-' })
     try {
       const rbac = new RbacState(db)
       rbac.migrate()
+      const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+      const mcpKeys = new McpKeyStore(directory, { database: db, audit: rbac.audit })
       const ingress = new LocalIngress({
         rbac,
-        tenants: { list: () => [] },
+        tenants,
         env: {
           ...env,
           ENVIRONMENT: production ? 'production' : 'development',
@@ -36,7 +42,12 @@ Deno.test('local coarse gate audits disabled and missing-peer passcodes without 
         },
       })
       const app = buildApp({
-        provider: {} as never,
+        provider: new DoubleProvider(),
+        tenants,
+        mcpKeys,
+        rbac,
+        configuredTenantId: env.ENTRA_TENANT_ID,
+        audience: 'corpuskit',
         audit: rbac.audit,
         breakGlass: ingress.breakGlass,
         requestContext: ingress.requestContext,
@@ -67,6 +78,7 @@ Deno.test('local coarse gate audits disabled and missing-peer passcodes without 
       }
     } finally {
       db.close()
+      Deno.removeSync(directory, { recursive: true })
     }
   }
 })
@@ -258,12 +270,21 @@ Deno.test('local signing and denial audit fail closed without dispatching', asyn
 Deno.test('concurrent valid sessions survive a newer login on public routes and auth/me', async () => {
   for (const path of ['/api/health', '/auth/me']) {
     const db = new LocalRbacDatabase(':memory:')
+    const directory = Deno.makeTempDirSync({ prefix: 'local-concurrent-' })
     try {
       const rbac = new RbacState(db)
       rbac.migrate()
-      const ingress = new LocalIngress({ rbac, tenants: { list: () => [] }, env })
+      const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+      const mcpKeys = new McpKeyStore(directory, { database: db, audit: rbac.audit })
+      const ingress = new LocalIngress({ rbac, tenants, env })
       const app = buildApp({
-        provider: {} as never,
+        provider: new DoubleProvider(),
+        tenants,
+        mcpKeys,
+        rbac,
+        configuredTenantId: env.ENTRA_TENANT_ID,
+        audience: 'corpuskit',
+        breakGlass: ingress.breakGlass,
         audit: rbac.audit,
         requestContext: ingress.requestContext,
       })
@@ -292,6 +313,7 @@ Deno.test('concurrent valid sessions survive a newer login on public routes and 
       )).toEqual([{ claim_iat: now - 1000 }])
     } finally {
       db.close()
+      Deno.removeSync(directory, { recursive: true })
     }
   }
 })

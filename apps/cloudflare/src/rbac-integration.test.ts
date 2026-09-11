@@ -256,7 +256,16 @@ async function loadWorker(): Promise<WorkerModule> {
       "import { AragProvider } from '@research-portal/retrieval'",
       `import { DoubleProvider } from '${
         new URL('../../../e2e/support/double-provider.ts', import.meta.url).href
-      }'; class AragProvider extends DoubleProvider { invalidate() {} }`,
+      }'; class AragProvider extends DoubleProvider {
+        invalidate() {}
+        rephrase(_config, query) { return Promise.resolve(query) }
+        async resourceExtraction(config, id) {
+          const results = await this.search(config, 'abalone')
+          const resource = results.resources.find((item) => item.id === id)
+          if (!resource) throw new Error('Unknown fixture resource')
+          return { text: resource.matchedPassage }
+        }
+      }`,
     )
     .replaceAll(
       /from '(\.\.?\/[^']+)'/g,

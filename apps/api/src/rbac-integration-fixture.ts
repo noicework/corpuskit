@@ -65,16 +65,25 @@ export async function assertIdentityJourney(h: IdentityJourney): Promise<void> {
     groupStatus: 'overage',
     groupMappings: 'disabled',
   })
+  const backup = service().create({
+    subjectKind: 'active-oid',
+    subjectId: 'backup-owner',
+    scope: platform,
+    role: 'owner',
+  }, context)
+  if (!backup.ok) throw new Error('Fixture backup owner failed')
   const create = service().create({
     subjectKind: 'active-oid',
     subjectId: session.oid,
     scope: platform,
-    role: 'platform-admin',
+    role: 'owner',
   }, context)
   expect(create.ok).toBe(true)
   if (!create.ok) throw new Error('Fixture assignment failed')
-  expect((await me()).effectiveRoles.platformRole).toBe('platform-admin')
-  expect((await h.invoke('/api/admin/overview', session)).status).toBe(200)
+  expect((await me()).effectiveRoles.platformRole).toBe('owner')
+  const overview = await h.invoke('/api/admin/overview', session)
+  expect(overview.status).toBe(200)
+  expect((await overview.json()).length).toBeGreaterThan(0)
   expect(
     (await me(fixtureSession({ oid: 'another', email: 'another@example.test' })))
       .coarseAdminEligible,
@@ -120,6 +129,7 @@ export async function assertIdentityJourney(h: IdentityJourney): Promise<void> {
     role: 'owner',
   }, context)
   if (!owner.ok) throw new Error('Fixture owner failed')
+  expect(service().remove(backup.value.id, context).ok).toBe(true)
   expect(service().remove(owner.value.id, context)).toMatchObject({ ok: false, code: 'last_owner' })
   const appOwner = fixtureSession({
     oid: 'app-owner',
@@ -162,7 +172,7 @@ export async function assertIdentityJourney(h: IdentityJourney): Promise<void> {
     .toBe(true)
 
   // Both adapters must fail before a response escapes at every mandatory request-audit boundary.
-  const privileged = fixtureSession({ roles: ['CorpusKit.PlatformAdmin'] })
+  const privileged = fixtureSession({ roles: ['CorpusKit.Owner'] })
   for (
     const condition of [
       "NEW.outcome = 'intent'",
@@ -215,5 +225,15 @@ export async function assertIdentityJourney(h: IdentityJourney): Promise<void> {
     body: JSON.stringify({ query: 'How are abalone stocks?' }),
   })
   expect(answer.status).toBe(200)
-  expect(await answer.text()).toContain('data:')
+  const answerEvents = (await answer.text()).split('\n').filter((line) => line.startsWith('data:'))
+    .map((line) => JSON.parse(line.slice(5)))
+  expect(answerEvents.filter((event) => event.type === 'error')).toEqual([])
+  expect(answerEvents.find((event) => event.type === 'done')).toMatchObject({
+    refused: false,
+    text: expect.stringContaining('Abalone populations'),
+  })
+  expect(answerEvents.some((event) => event.type === 'delta' && event.text.length > 0)).toBe(true)
+  expect(answerEvents.find((event) => event.type === 'citation')).toMatchObject({
+    citation: { index: 1, resourceId: 'res-1' },
+  })
 }

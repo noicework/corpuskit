@@ -367,7 +367,7 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
   for (const enabled of [false, true]) {
     const h = realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
     try {
-      const session = facts()
+      const session = { ...facts(), roles: ['CorpusKit.Owner'] }
       const cookie = await sessionCookie(session)
       const invoke = (passcode?: string) =>
         worker.fetch(
@@ -544,16 +544,32 @@ Deno.test('real DO auth/me resolves current assignments and preserves original c
     expect(first.coarseAdminEligible).toBe(false)
     expect(first.claimAgeSeconds).toBeGreaterThanOrEqual(120)
     const service = h.state.rbac.assignmentService(session.tenantId, 'corpuskit')
+    expect(
+      service.create({
+        subjectKind: 'active-oid',
+        subjectId: 'backup-owner',
+        scope: { kind: 'platform' },
+        role: 'owner',
+      }, { requestId: 'seed-backup', actor: { kind: 'system' } }).ok,
+    ).toBe(true)
+    const platformAdmin = { ...session, oid: 'read-only-admin', roles: ['CorpusKit.PlatformAdmin'] }
+    const adminMe = await h.object.handleTrustedRequest(
+      await principalRequest('/auth/me', platformAdmin),
+      {
+        session: platformAdmin,
+      },
+    )
+    expect((await adminMe.json()).effectiveRoles.platformRole).toBe('platform-admin')
     const created = service.create({
       subjectKind: 'active-oid',
       subjectId: session.oid,
       scope: { kind: 'platform' },
-      role: 'platform-admin',
+      role: 'owner',
     }, { requestId: 'test-create', actor: { kind: 'user', id: 'owner' } })
     expect(created.ok).toBe(true)
     const second = await read()
     expect(second.coarseAdminEligible).toBe(true)
-    expect(second.effectiveRoles.platformRole).toBe('platform-admin')
+    expect(second.effectiveRoles.platformRole).toBe('owner')
     expect(second.claimAgeSeconds).toBeGreaterThanOrEqual(first.claimAgeSeconds)
     expect(second.groupMappings).toBe('disabled')
     expect(
@@ -605,7 +621,7 @@ Deno.test('Worker auth/me retains cookie lifetime and original age across fresh 
 Deno.test('Worker signing denials require audit before returning and concurrent DO contexts stay separate', async () => {
   const h = realHarness()
   try {
-    const session = facts()
+    const session = { ...facts(), roles: ['CorpusKit.Owner'] }
     const cookie = await sessionCookie(session)
     Object.assign(h.env, { WORKER_NAME: 'invalid-deployment' })
     const request = () => new Request('https://corpuskit.test/auth/me', { headers: { cookie } })
