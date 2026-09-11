@@ -2,7 +2,7 @@ import { expect } from '@std/expect'
 import { type Permission, type Role, ROLES, type Scope } from '@research-portal/core'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { DurableState, durableStores, type SqlStorageLike } from '../../cloudflare/src/state.ts'
-import { buildApp, type PortalRequestContext } from './app.ts'
+import { buildApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from './assignments.ts'
 import type { AuthorityDependencies } from './authorisation.ts'
 import type { BreakGlassPolicy } from './break-glass.ts'
@@ -70,7 +70,9 @@ export function sessionFor(
 }
 
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
-export function createEnforcementFixture() {
+export function createEnforcementFixture(
+  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> = {},
+) {
   const directory = Deno.makeTempDirSync({ prefix: 'enforcement-' })
   const database = new LocalRbacDatabase(`${directory}/state.sqlite`)
   let clock = Date.UTC(2026, 8, 12)
@@ -80,10 +82,13 @@ export function createEnforcementFixture() {
       query: string,
       ...bindings: unknown[]
     ) {
+      const values = bindings.map((value) =>
+        value instanceof ArrayBuffer ? new Uint8Array(value) : value
+      ) as SqlValue[]
       let rows: T[] = []
       if (/^\s*(SELECT|PRAGMA)\b/i.test(query)) {
-        rows = database.all<T>(query, ...bindings as SqlValue[])
-      } else database.exec(query, ...bindings as SqlValue[])
+        rows = database.all<T>(query, ...values)
+      } else database.exec(query, ...values)
       return {
         toArray: () => rows,
         one: () => {
@@ -170,6 +175,10 @@ export function createEnforcementFixture() {
   }
   const app = buildApp({
     ...stores,
+    ...options,
+    configuredTenantId: tenantId,
+    audience,
+    now,
     provider,
     requestContext: (request) => contexts.get(request),
     breakGlass: state.rbac.breakGlassService({ environment: 'production' }),

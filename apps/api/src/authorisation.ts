@@ -49,6 +49,7 @@ export class AuthorisationError extends Error {
   constructor(
     readonly status: 401 | 403,
     readonly code = status === 401 ? 'unauthorised' : 'forbidden',
+    readonly retryAfter?: number,
   ) {
     super(code)
     this.name = 'AuthorisationError'
@@ -70,6 +71,8 @@ function refuse(
   actor: AuditActor,
   scope: Scope,
   permission?: unknown,
+  status: 401 | 403 = actor.kind === 'anonymous' ? 401 : 403,
+  retryAfter?: number,
 ): never {
   if (state.failure) throw state.failure
   try {
@@ -84,7 +87,7 @@ function refuse(
           target: { kind: 'request' },
           outcome: 'denied',
           detail: {
-            code: actor.kind === 'anonymous' ? 'unauthorised' : 'forbidden',
+            code: status === 401 ? 'unauthorised' : 'forbidden',
             ...(PermissionSchema.safeParse(permission).success ? { permission } : {}),
             ...(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(
                 state.request.method,
@@ -96,7 +99,7 @@ function refuse(
       )
       state.context.denialAudited = true
     }
-    state.failure = new AuthorisationError(actor.kind === 'anonymous' ? 401 : 403)
+    state.failure = new AuthorisationError(status, undefined, retryAfter)
   } catch {
     state.failure = new AuditWriteError()
   }
@@ -172,10 +175,15 @@ async function select(
       session: provenanceSession,
     })
     if (!result.ok) {
-      // Existing service already recorded the denial (and lock transition where applicable).
-      context.denialAudited = true
-      state.failure = new AuthorisationError(403)
-      throw state.failure
+      // The service records break-glass failure; record the request denial once as well.
+      refuse(
+        state,
+        actor,
+        scope,
+        undefined,
+        result.code === 'invalid_passcode' ? 401 : 403,
+        result.retryAfter,
+      )
     }
     authority = { kind: 'break-glass', actor: result.actor, provenanceSession }
   } else if (provenanceSession) {
@@ -216,9 +224,11 @@ function policyFor(authority: RequestAuthority, input: unknown): PortalPolicy {
   const policy = parsed.data
   try {
     const current = state.deps.tenants.get(policy.slug)
+    const enabling = state.request.method === 'POST' &&
+      new URL(state.request.url).pathname === `/api/admin/t/${policy.slug}/enable`
     if (
       !current || current.slug !== policy.slug || current.accessMode !== policy.accessMode ||
-      state.deps.tenants.isDisabled(policy.slug)
+      (!enabling && state.deps.tenants.isDisabled(policy.slug))
     ) refuse(state, authority.actor, { kind: 'portal', slug: policy.slug })
   } catch (error) {
     if (error instanceof AuditWriteError || error instanceof AuthorisationError) throw error

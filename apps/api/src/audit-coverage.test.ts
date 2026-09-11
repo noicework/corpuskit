@@ -3,7 +3,11 @@ import { Hono } from 'hono'
 import type { AuditEvent } from './audit.ts'
 import { TenantStore } from './tenants.ts'
 import { EnrichmentStore } from './enrichments.ts'
-import { buildApp } from './app.ts'
+import { buildApp as buildRawApp, type BuildAppOptions } from './app.ts'
+import { afterEach } from '@std/testing/bdd'
+import { LocalRbacDatabase } from './rbac-local.ts'
+import { RbacState } from './rbac-state.ts'
+import { sessionFor } from './enforcement-fixture.ts'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
 import { createMcpServer, type McpRoutesOptions } from './mcp.ts'
 import { AUDIT_MAX_RESPONSE_BYTES } from './audit-execution.ts'
@@ -17,6 +21,24 @@ import {
   declaredTool,
   isPrivileged,
 } from './permissions.ts'
+
+const fixtureDatabases: LocalRbacDatabase[] = []
+afterEach(() => {
+  for (const db of fixtureDatabases.splice(0)) db.close()
+})
+function buildApp(options: BuildAppOptions) {
+  const db = new LocalRbacDatabase(':memory:')
+  fixtureDatabases.push(db)
+  const rbac = new RbacState(db)
+  rbac.migrate()
+  return buildRawApp({
+    ...options,
+    rbac,
+    configuredTenantId: 'tenant-1',
+    audience: 'corpuskit',
+    breakGlass: rbac.breakGlassService({ environment: 'production' }),
+  })
+}
 
 Deno.test('cold question jobs deduplicate attribution and require every completion append for all waiters', async () => {
   for (const failAt of [0, 1, 2, 3, 4]) {
@@ -243,10 +265,10 @@ Deno.test('materialised enrichment exports above 1 MiB require successful comple
         },
         requestContext: () => ({
           requestId: 'export-request',
-          session: null,
+          session: sessionFor('owner', 'a', Date.now()),
           coarseAdminEligible: true,
           effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-          actor: { kind: 'user', id: 'export-user' },
+          actor: { kind: 'user', id: 'owner-a' },
         }),
       })
       const response = await app.request('/api/admin/t/marine/enrichments/export')
@@ -289,10 +311,10 @@ Deno.test('real privileged responses retain errors and never escape failed compl
       },
       requestContext: () => ({
         requestId: 'real-request',
-        session: null,
+        session: sessionFor('owner', 'a', Date.now()),
         coarseAdminEligible: true,
         effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-        actor: { kind: 'user', id: 'real-user' },
+        actor: { kind: 'user', id: 'owner-a' },
       }),
     })
     const response = await app.request(
@@ -311,7 +333,7 @@ Deno.test('real privileged responses retain errors and never escape failed compl
         mode === 'success' ? 'success' : mode === 'denied' ? 'denied' : 'failure',
       )
     }
-    expect(events.every((e) => e.request_id === 'real-request' && e.actor_id === 'real-user')).toBe(
+    expect(events.every((e) => e.request_id === 'real-request' && e.actor_id === 'owner-a')).toBe(
       true,
     )
     expect(JSON.stringify(events)).not.toContain('private')
@@ -334,7 +356,7 @@ Deno.test('Hono privileged SSE completes audit before response release and recor
       },
       requestContext: () => ({
         requestId: 'stream-request',
-        session: null,
+        session: sessionFor('owner', 'a', Date.now()),
         coarseAdminEligible: true,
         effectiveRoles: { platformRole: 'owner', portalRoles: [] },
       }),
@@ -367,13 +389,13 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
         },
         requestContext: () => ({
           requestId: 'inventory-request',
-          session: null,
+          session: sessionFor('owner', 'a', Date.now()),
           coarseAdminEligible: true,
           effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-          actor: { kind: 'user', id: 'inventory-user' },
+          actor: { kind: 'user', id: 'owner-a' },
         }),
       })
-      const path = declaration.path.replace(/:[^/]+/g, 'fixture')
+      const path = declaration.path.replace(':slug', 'marine').replace(/:[^/]+/g, 'fixture')
       const response = await app.request(path, {
         method: declaration.method,
         ...(declaration.method === 'GET'
@@ -382,10 +404,16 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
       })
       await response.text()
       expect(events[0]?.outcome).toBe('intent')
-      expect(events[0]?.actor_id).toBe('inventory-user')
+      expect(events[0]?.actor_id).toBe('owner-a')
       expect(events[0]?.request_id).toBe('inventory-request')
       expect(events[0]?.scope_kind).toBe(declaration.scope)
-      expect(events[0]?.target_id).toBe(declaration.target.param ? 'fixture' : null)
+      expect(events[0]?.target_id).toBe(
+        declaration.target.param === 'slug'
+          ? 'marine'
+          : declaration.target.param
+          ? 'fixture'
+          : null,
+      )
       expect(JSON.parse(events[0]!.detail_json).permission).toBe(declaration.permission)
       expect(events.at(-1)?.outcome).not.toBe('intent')
       let dispatches = 0
@@ -404,7 +432,7 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
         },
         requestContext: () => ({
           requestId: 'inventory-request',
-          session: null,
+          session: sessionFor('owner', 'a', Date.now()),
           coarseAdminEligible: true,
           effectiveRoles: { platformRole: 'owner', portalRoles: [] },
         }),

@@ -19,7 +19,6 @@ import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
-import { coarseAdminEligibility } from './assignments.ts'
 import {
   appendAudit,
   type AuditAction,
@@ -1109,14 +1108,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (declaration.aggregate || declaration.portalTarget !== 'url-slug') {
         return deny({ kind: 'platform' })
       }
-      const slug = KeyPortalSlugSchema.safeParse(c.req.param('slug'))
+      const slugIndex = declaration.path.split('/').indexOf(':slug')
+      const slug = KeyPortalSlugSchema.safeParse(c.req.path.split('/')[slugIndex])
       if (!slug.success) return deny({ kind: 'platform' })
       const scope: Scope = { kind: 'portal', slug: slug.data }
       let policy: PortalPolicy | undefined
       let publicPortal = false
       try {
         const current = tenants.get(slug.data)
-        if (!current || current.slug !== slug.data || tenants.isDisabled(slug.data)) {
+        const enabling = declaration.method === 'POST' &&
+          declaration.path === '/api/admin/t/:slug/enable'
+        if (
+          !current || current.slug !== slug.data || (!enabling && tenants.isDisabled(slug.data))
+        ) {
           return deny(scope)
         }
         const mode = AccessModeSchema.parse(current.accessMode)
@@ -1291,7 +1295,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   )
 
   app.onError((err, c) => {
-    if (err instanceof AuthorisationError) return c.json({ error: err.code }, err.status)
+    if (err instanceof AuthorisationError) {
+      if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
+      return c.json({ error: err.code }, err.status)
+    }
     if (err instanceof AuditWriteError) {
       console.error('Required request audit failed')
       return c.json({ error: 'audit_write_failed' }, 500)
@@ -1308,49 +1315,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Register before every admin handler, including extraction and routing above the old gate.
   registerInfrastructure(app, '/api/admin/*', async (c, next) => {
-    const context = requestContext(c.req.raw)
-    const requestId = context?.requestId ?? crypto.randomUUID()
-    const deny = (status: 401 | 403, code: 'unauthorised' | 'forbidden') => {
-      if (!opts.audit) throw new AuditWriteError()
-      appendAudit(
-        opts.audit,
-        createAuditEvent({
-          requestId,
-          actor: context?.session
-            ? { kind: 'user', id: context.session.oid }
-            : { kind: 'anonymous' },
-          action: 'request.denied',
-          scope: classification(c).scope,
-          target: { kind: 'request' },
-          outcome: 'denied',
-          detail: { code, method: c.req.method },
-        }),
-      )
-      markDenialAudited(c.req.raw)
-      return c.json({ error: code }, status)
-    }
-    if (c.req.raw.headers.has('x-admin-passcode')) {
-      if (!opts.breakGlass) return deny(403, 'forbidden')
-      const result = await opts.breakGlass.authorise(
-        c.req.raw,
-        context ?? { requestId, session: null },
-      )
-      if (!result.ok) {
-        if (result.retryAfter !== undefined) c.header('Retry-After', String(result.retryAfter))
-        return deny(
-          result.code === 'invalid_passcode' ? 401 : 403,
-          result.code === 'invalid_passcode' ? 'unauthorised' : 'forbidden',
-        )
-      }
-      if (context) context.actor = result.actor
-      await next()
-      return
-    }
-    if (context?.effectiveRoles && coarseAdminEligibility(context.effectiveRoles)) {
-      await next()
-      return
-    }
-    return context?.session ? deny(403, 'forbidden') : deny(401, 'unauthorised')
+    await authoriseDeclared(c)
+    await next()
   })
 
   registerInfrastructure(app, '*', async (c, next) => {

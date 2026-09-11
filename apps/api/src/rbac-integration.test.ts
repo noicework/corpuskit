@@ -299,6 +299,9 @@ Deno.test('local signed ingress integrates current assignments, audit failures a
       },
     })
     app = buildApp({
+      rbac,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
       provider: new DoubleProvider(),
       tenants,
       audit: rbac.audit,

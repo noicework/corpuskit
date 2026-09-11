@@ -10,8 +10,10 @@ import {
   type FacetCounts,
   FacetCountsSchema,
   type Labelset,
+  type Permission,
   type Question,
   type ResourceSummary,
+  type Role,
   type SearchResults,
   SearchResultsSchema,
   type TenantConfig,
@@ -21,6 +23,8 @@ import { AragApiError, type AragProvider, type RetrievalProvider } from '@resear
 import { buildApp as buildRawApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
+import { createEnforcementFixture, sessionFor } from './enforcement-fixture.ts'
+import { assertExpectedPermission } from './enforcement-fixture.ts'
 
 const fixtureDatabases: LocalRbacDatabase[] = []
 afterEach(() => {
@@ -33,6 +37,9 @@ function buildApp(options: BuildAppOptions & { adminPasscode?: string }) {
   rbac.migrate()
   return buildRawApp({
     ...options,
+    rbac,
+    configuredTenantId: 'tenant-1',
+    audience: 'corpuskit',
     audit: rbac.audit,
     breakGlass: rbac.breakGlassService({ passcode: options.adminPasscode }),
     requestContext: options.requestContext ?? (() => ({
@@ -173,7 +180,472 @@ function makeApp(enrichments?: EnrichmentStore) {
   return buildApp({ provider: new StubProvider(), tenants: freshTenants(), enrichments })
 }
 
-describe('explicit coarse admin gate', () => {
+describe('independent admin route permission matrix', () => {
+  const example = {
+    text: 'Abalone populations inhabit southern waters.',
+    entities: [{ name: 'Abalone', label: 'Species' }, { name: 'southern waters', label: 'Region' }],
+    relations: [{ source: 'Abalone', target: 'southern waters', label: 'inhabits' }],
+  }
+  const proposal = {
+    rationale: 'Describe the research corpus.',
+    entityTypes: [{ label: 'Species', description: 'Animal' }, {
+      label: 'Region',
+      description: 'Place',
+    }],
+    resourceLabels: [{ label: 'Research', description: 'Research' }],
+    chunkLabels: [{ label: 'Finding', description: 'Finding' }],
+    examples: Array.from({ length: 6 }, () => example),
+  }
+  const html = `<html><title>Research</title><main><p>${
+    'Abalone research in southern waters. '.repeat(90)
+  }</p><a href="https://example.test/article">Article</a></main></html>`
+  // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
+  const rows: [string, string, Permission, unknown?][] = [
+    ['GET', 'extraction/methods', 'content.write'],
+    ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
+    ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
+    ['PUT', 'extraction/rules', 'behaviour.write', { default: 'default', rules: [] }],
+    ['GET', 'routing', 'behaviour.write'],
+    ['GET', '/api/admin/overview', 'platform.settings.write'],
+    ['DELETE', 'knowledge-box', 'bindings.write'],
+    ['POST', '/api/admin/tenants', 'portal.create', { name: 'New portal' }],
+    ['DELETE', '/api/admin/tenants/:slug', 'portal.delete'],
+    ['POST', 'knowledge-box/create', 'bindings.write', { title: 'Research' }],
+    ['GET', 'counters', 'content.write'],
+    ['GET', 'recent', 'content.write'],
+    ['POST', 'resources/link', 'content.write', { url: 'https://example.test/article' }],
+    ['POST', 'resources/text', 'content.write', { title: 'Research', body: 'Evidence' }],
+    ['POST', 'resources/upload', 'content.write', 'evidence bytes'],
+    ['POST', 'disable', 'behaviour.write'],
+    ['POST', 'enable', 'behaviour.write'],
+    ['POST', 'analyse', 'behaviour.write', {}],
+    ['PATCH', '/api/admin/tenants/:slug', 'appearance.write', { name: 'Renamed portal' }],
+    ['POST', 'kg/propose', 'graph.write', {}],
+    ['POST', 'kg/implement', 'graph.write', { applyExisting: false }],
+    ['GET', 'suggestions', 'behaviour.write'],
+    ['POST', 'interrogate', 'behaviour.write', {}],
+    ['POST', 'suggestions/:id/implement', 'behaviour.write', {}],
+    ['POST', 'suggestions/:id/ignore', 'behaviour.write', {}],
+    ['GET', 'kg/strategy', 'graph.write'],
+    ['PUT', 'kg/strategy', 'graph.write', {
+      entityTypes: proposal.entityTypes,
+      examples: proposal.examples,
+      applyExisting: false,
+    }],
+    ['GET', 'agents', 'graph.write'],
+    ['DELETE', 'agents/:taskId', 'graph.write'],
+    ['GET', 'enrichments/export', 'portal.export'],
+    ['POST', 'enrichments/import', 'enrichments.write', {
+      research: {
+        'res-1': {
+          schemaId: 'research',
+          generatedAt: '2026-09-12T00:00:00Z',
+          data: { title: 'Research' },
+        },
+      },
+    }],
+    ['GET', 'enrichments', 'enrichments.write'],
+    ['POST', 'enrichments/run', 'enrichments.write', { limit: 1 }],
+    ['POST', 'questions/run', 'enrichments.write', { limit: 1 }],
+    ['POST', 'resources/:id/enrich', 'enrichments.write', {}],
+    ['POST', 'branding/:kind', 'appearance.write', 'image bytes'],
+    ['GET', 'prompts', 'behaviour.write'],
+    ['PUT', 'prompts', 'behaviour.write', { ask: 'Research evidence only.' }],
+    ['GET', 'search-configs', 'behaviour.write'],
+    ['POST', 'search-configs/ensure', 'behaviour.write', {}],
+    ['POST', 'docs/ingest', 'content.write', {}],
+    ['GET', 'crawl', 'content.write'],
+    ['POST', 'labelsets', 'taxonomy.write', {
+      title: 'Species',
+      labels: ['Abalone'],
+      multiple: true,
+    }],
+    ['PUT', 'labelsets/:id', 'taxonomy.write', {
+      title: 'Topic',
+      labels: [{ title: 'Research', text: 'Research evidence' }],
+      multiple: true,
+    }],
+    ['POST', 'reingest', 'content.write', { resourceId: 'res-1', html }],
+    ['GET', 'corpus-health', 'content.write'],
+    ['POST', 'purge-failed', 'content.write', { dryRun: false }],
+    ['GET', 'insights', 'content.write'],
+    ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
+    ['GET', 'sources', 'content.write'],
+    ['POST', 'sources', 'content.write', { url: 'https://example.test/new' }],
+    ['PATCH', 'sources/:id', 'content.write', { auto: false }],
+    ['DELETE', 'sources/:id', 'content.write'],
+    ['POST', 'sources/:id/sync', 'content.write', {}],
+    ['POST', '/api/admin/migrate', 'platform.settings.write', { from: 'a', to: 'b' }],
+    ['POST', 'knowledge-box', 'bindings.write', {
+      url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
+      token: 'fixture-service-account-token',
+    }],
+  ]
+  const curatorPermissions = new Set<Permission>([
+    'content.write',
+    'taxonomy.write',
+    'enrichments.write',
+    'graph.write',
+    'portal.export',
+  ])
+  const expectedDispatch: Record<string, string> = {
+    'extraction/methods': 'listExtractionMethods',
+    'extraction/profile': 'fileStream',
+    'extraction/compare': 'uploadFile',
+    'knowledge-box/create': 'fetch',
+    counters: 'counters',
+    recent: 'recentResources',
+    'resources/link': 'createText',
+    'resources/text': 'createText',
+    'resources/upload': 'uploadFile',
+    analyse: 'askStructured',
+    'kg/propose': 'askStructured',
+    'kg/implement': 'startAgent',
+    interrogate: 'askStructured',
+    'suggestions/:id/implement': 'createLabelset',
+    'GET kg/strategy': 'graphStrategy',
+    'PUT kg/strategy': 'startAgent',
+    agents: 'listAgents',
+    'agents/:taskId': 'deleteAgent',
+    enrichments: 'listResources',
+    'enrichments/run': 'listResources',
+    'questions/run': 'listResources',
+    'resources/:id/enrich': 'resourceContent',
+    'search-configs': 'listSearchConfigs',
+    'search-configs/ensure': 'ensureSearchConfigs',
+    'docs/ingest': 'ingestDocumentation',
+    crawl: 'fetch',
+    labelsets: 'createLabelset',
+    'labelsets/:id': 'updateLabelset',
+    reingest: 'deleteResource',
+    'corpus-health': 'corpusHealth',
+    'purge-failed': 'purgeFailedResources',
+    'resources/:id/hidden': 'setResourceHidden',
+    sources: 'fetch',
+    'sources/:id/sync': 'fetch',
+    '/api/admin/migrate': 'createText',
+    'POST knowledge-box': 'fetch',
+  }
+  it('covers every admin registration independently', () => {
+    const fixture = createEnforcementFixture()
+    try {
+      const actual = fixture.app.routes.filter((route) =>
+        route.method !== 'ALL' && route.path.startsWith('/api/admin/')
+      ).map((route) => `${route.method} ${route.path}`).sort()
+      const expected = rows.map(([method, suffix]) =>
+        `${method} ${suffix.startsWith('/') ? suffix : `/api/admin/t/:slug/${suffix}`}`
+      ).sort()
+      expect(actual).toEqual(expected)
+    } finally {
+      fixture.close()
+    }
+  })
+  it('denies keys, conflicting credentials and corrupt scope before provider or mutation; failed audit returns 500', async () => {
+    const fixture = createEnforcementFixture()
+    try {
+      const owner = fixture.sessionFor('owner')
+      for (
+        const headers of [
+          { authorization: `Bearer ck_${'A'.repeat(43)}` },
+          { authorization: `Bearer ck_${'A'.repeat(43)}`, 'x-admin-passcode': 'bad' },
+        ] as Record<string, string>[]
+      ) {
+        const response = await fixture.requestAs(owner, '/api/admin/overview', { headers })
+        expect(response.status).toBe(403)
+        fixture.assertNoProtectedDispatch()
+      }
+      for (const slug of ['corrupt', 'missing', 'disabled']) {
+        expect((await fixture.requestAs(owner, `/api/admin/t/${slug}/sources`)).status).toBe(403)
+        fixture.assertNoProtectedDispatch()
+      }
+      const before = fixture.stores.tenants.get('a')
+      fixture.failAudit()
+      expect(
+        (await fixture.requestAs(owner, '/api/admin/tenants/a', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'Denied name' }),
+        })).status,
+      ).toBe(500)
+      expect(fixture.stores.tenants.get('a')).toEqual(before)
+      fixture.assertNoProtectedDispatch()
+    } finally {
+      fixture.close()
+    }
+  })
+  for (const [method, suffix, permission, body] of rows) {
+    it(`${method} ${suffix} requires ${permission} before dispatch`, async () => {
+      const template = suffix.startsWith('/') ? suffix : `/api/admin/t/:slug/${suffix}`
+      const platform = ['portal.create', 'portal.delete', 'platform.settings.write'].includes(
+        permission,
+      )
+      assertExpectedPermission(method, template, permission, platform ? 'platform' : 'portal')
+      for (
+        const role of [
+          'owner',
+          'platform-admin',
+          'portal-admin',
+          'curator',
+          'analyst',
+          'wrong-portal',
+        ] as const
+      ) {
+        const calls: string[] = []
+        const content = {
+          id: 'res-1',
+          title: 'Research',
+          text: 'Evidence on abalone populations. '.repeat(40),
+          pageSummary: 'Abalone populations in southern waters respond to marine heatwaves.',
+          files: [{ fieldId: 'file', contentType: 'application/pdf' }],
+        }
+        const values: Record<string, (...args: unknown[]) => unknown> = {
+          listResources: () => [resourceOne],
+          labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
+          counters: () => ({ resources: 1 }),
+          recentResources: () => [resourceOne],
+          createText: () => ({ id: 'created' }),
+          createLink: () => ({ id: 'created' }),
+          uploadFile: () => ({ id: 'created' }),
+          createLabelset: () => undefined,
+          updateLabelset: () => undefined,
+          agentConfigs: () => [],
+          listAgents: () => [{ id: 'task-a', title: 'Existing labeller', task: 'labeler' }],
+          deleteAgent: () => undefined,
+          startAgent: () => undefined,
+          graphStrategy: () => ({ entityDefs: proposal.entityTypes, examples: [example] }),
+          augmentationModel: () => 'fixture-model',
+          resourceContent: () => content,
+          resourceExtraction: () => ({
+            status: 'PROCESSED',
+            text: content.text,
+            chars: 1200,
+            paragraphs: 1,
+            tableRows: 0,
+          }),
+          fileStream: () => new Response('fixture document'),
+          listExtractionMethods: () => [{ id: 'default', name: 'default', kind: 'default' }, {
+            id: 'table',
+            name: 'table-aware',
+            kind: 'tables',
+          }, { id: 'visual', name: 'visual-transcribe', kind: 'visual' }],
+          patchResourceMeta: () => undefined,
+          deleteResource: () => undefined,
+          patchResourceClassifications: () => undefined,
+          setResourceHidden: () => undefined,
+          invalidate: () => undefined,
+          listSearchConfigs: () => ['portal-search'],
+          ensureSearchConfigs: () => ['portal-search'],
+          ingestDocumentation: () => ({ created: 1 }),
+          corpusHealth: () => ({ total: 1, failed: 0 }),
+          purgeFailedResources: () => ({ deleted: 1 }),
+          resourceFull: () => ({
+            id: 'res-1',
+            title: 'Research',
+            slug: 'research',
+            kind: 'text',
+            originUrl: 'https://example.test/article',
+            texts: [{ body: content.text }],
+            topicIds: [],
+          }),
+          hasSlug: () => false,
+          askStructured: (_config, schema) => ({
+            object: (schema as { name: string }).name === 'knowledge_graph_strategy'
+              ? proposal
+              : (schema as { name: string }).name === 'portal_configuration'
+              ? {
+                topics: [{ id: 'research', label: 'Research', description: 'Evidence' }],
+                kinds: [],
+                assignments: [],
+                suggestedQuestions: [],
+              }
+              : { suggestions: [], score: 5, reason: 'Readable', questions: [] },
+          }),
+        }
+        const management = new Proxy({}, {
+          get: (_target, key) => {
+            if (key === 'ask') {
+              return async function* () {
+                calls.push('ask')
+                yield { type: 'delta', text: 'Research evidence' }
+                yield { type: 'done' }
+              }
+            }
+            return (...args: unknown[]) => {
+              calls.push(String(key))
+              if (!values[String(key)]) throw new Error(`Missing fixture method ${String(key)}`)
+              return Promise.resolve(values[String(key)]!(...args))
+            }
+          },
+        }) as AragProvider
+        const fixture = createEnforcementFixture({
+          management,
+          domainProvisioner: {
+            attach: (hostname) => {
+              calls.push('attach')
+              return Promise.resolve({ hostname, created: true })
+            },
+            detach: (hostname) => {
+              calls.push('detach')
+              return Promise.resolve({ hostname, removed: true })
+            },
+          },
+        })
+        const originalFetch = globalThis.fetch
+        const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
+        try {
+          const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
+          fixture.stores.enrichments.put('a', 'seeded-record', {
+            schemaId: 'research',
+            generatedAt: '2026-09-12T00:00:00Z',
+            data: { title: 'Seeded research' },
+          })
+          fixture.stores.bindings.set('a', {
+            baseUrl: 'https://example.test/kb/a',
+            token: 'fixture-token',
+            kbId: 'a',
+          })
+          fixture.stores.suggestions.replacePending('a', [{
+            id: 'suggestion-a',
+            kind: 'labelset',
+            title: 'Species',
+            detail: 'Research taxonomy',
+            status: 'pending',
+            createdAt: new Date(fixture.now()).toISOString(),
+            labelset: { id: 'species', title: 'Species', paragraphs: false, labels: ['Abalone'] },
+          }])
+          fixture.stores.kgProposals.set('a', proposal)
+          if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
+          const snapshot = () =>
+            ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
+              fixture.database.all(`SELECT * FROM ${table}`)
+            )
+          const baseline = snapshot()
+          globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+            calls.push('fetch')
+            const url = String(input)
+            if (url.includes('rag.progress.cloud')) {
+              return Promise.resolve(Response.json(
+                url.endsWith('/keys')
+                  ? { token: 'fixture-service-token' }
+                  : init?.method === 'POST'
+                  ? { id: 'fixture-knowledge-box' }
+                  : url.endsWith('/counters')
+                  ? { resources: 1 }
+                  : [],
+              ))
+            }
+            return Promise.resolve(new Response(html, { headers: { 'content-type': 'text/html' } }))
+          }) as typeof fetch
+          Deno.env.set('ARAG_NUA_KEY', 'fixture-key')
+          Deno.env.set('ARAG_ACCOUNT', 'fixture-account')
+          const path =
+            template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
+              .replace(
+                ':id',
+                suffix.includes('sources')
+                  ? source.id
+                  : suffix.includes('suggestions')
+                  ? 'suggestion-a'
+                  : suffix.includes('labelsets')
+                  ? 'topic'
+                  : 'res-1',
+              ) + (suffix === 'crawl' ? '?url=https://example.test/news' : '')
+          const session = fixture.sessionFor(
+            role === 'wrong-portal' ? 'portal-admin' : role as Role,
+            role === 'wrong-portal' ? 'b' : 'a',
+          )
+          const allowed = role === 'owner' ||
+            (role === 'platform-admin' && permission !== 'portal.delete' &&
+              permission !== 'platform.settings.write') ||
+            (!platform &&
+              (role === 'portal-admin' ||
+                role === 'curator' && curatorPermissions.has(permission) ||
+                role === 'analyst' && permission === 'portal.export'))
+          const response = await fixture.requestAs(session, path, {
+            method,
+            ...(body === undefined ? {} : {
+              headers: {
+                'content-type': suffix.startsWith('branding') ? 'image/png' : 'application/json',
+              },
+              body: typeof body === 'string' ? body : JSON.stringify(body),
+            }),
+          })
+          const result = await response.text()
+          expect(response.status, `${role} ${template}: ${result}`).toBe(allowed ? 200 : 403)
+          if (allowed) {
+            expect(result).not.toContain('"type":"error"')
+            expect(result).not.toContain('"error":')
+            const dispatch = expectedDispatch[`${method} ${suffix}`] ?? expectedDispatch[suffix]
+            if (
+              dispatch && !(method === 'GET' && suffix === 'sources') &&
+              !(method === 'DELETE' && suffix === 'knowledge-box')
+            ) {
+              expect(calls, `${template} must dispatch ${dispatch}`).toContain(dispatch)
+            } else if (suffix === '/api/admin/overview') {
+              expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(
+                true,
+              )
+              expect(
+                JSON.parse(result).some((row: { tenant: { slug: string } }) =>
+                  row.tenant.slug === 'a'
+                ),
+              ).toBe(true)
+            } else if (method === 'GET') {
+              if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+              else if (suffix === 'suggestions') {
+                expect(JSON.parse(result)[0].id).toBe('suggestion-a')
+              } else if (suffix === 'enrichments/export') {
+                expect(result).toContain('Seeded research')
+              } else if (suffix === 'prompts') {
+                expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
+              } else if (suffix === 'insights') {
+                expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
+              } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
+              else throw new Error(`Missing positive assertion for ${template}`)
+            } else {
+              expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
+              if (suffix === 'disable' || suffix === 'enable') {
+                expect(fixture.stores.tenants.isDisabled('a')).toBe(suffix === 'disable')
+              }
+              if (suffix === '/api/admin/tenants') {
+                expect(fixture.stores.tenants.get('new-portal')?.branding.productName).toBe(
+                  'New portal',
+                )
+              }
+              if (suffix === '/api/admin/tenants/:slug') {
+                expect(fixture.stores.tenants.get('a')?.branding.productName).toBe(
+                  method === 'DELETE' ? undefined : 'Renamed portal',
+                )
+              }
+              if (suffix === 'knowledge-box') {
+                expect(fixture.stores.bindings.get('a')).toBeUndefined()
+              }
+            }
+            const events = fixture.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 })
+            expect(
+              events.some((event) =>
+                event.action === 'request.privileged' && event.outcome === 'success'
+              ),
+            ).toBe(true)
+          } else {
+            expect(calls).toEqual([])
+            fixture.assertNoProtectedDispatch()
+            expect(snapshot()).toEqual(baseline)
+          }
+        } finally {
+          globalThis.fetch = originalFetch
+          for (const [key, value] of env) {
+            if (value === undefined) Deno.env.delete(key)
+            else Deno.env.set(key, value)
+          }
+          fixture.close()
+        }
+      }
+    })
+  }
+})
+
+describe('exact admin gate', () => {
   function fixture(platformRole?: 'owner' | 'platform-admin') {
     const db = new LocalRbacDatabase(':memory:')
     fixtureDatabases.push(db)
@@ -181,18 +653,21 @@ describe('explicit coarse admin gate', () => {
     rbac.migrate()
     const context: PortalRequestContext = {
       requestId: 'gate-request',
-      session: null,
+      session: platformRole ? sessionFor(platformRole, 'a', Date.now()) : null,
       clientIp: '127.0.0.1',
       // The gate must inspect the resolved platform role, not trust this compatibility flag.
       coarseAdminEligible: true,
       effectiveRoles: { platformRole, portalRoles: [{ slug: 'marine', role: 'portal-admin' }] },
     }
     const app = buildRawApp({
+      rbac,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
       provider: new StubProvider(),
       tenants: freshTenants(),
       audit: rbac.audit,
       breakGlass: rbac.breakGlassService({ passcode: 'gate-fixture' }),
-      requestContext: () => context,
+      requestContext: () => ({ ...context, denialAudited: false }),
     })
     return { db, rbac, context, app }
   }
@@ -216,7 +691,7 @@ describe('explicit coarse admin gate', () => {
     for (const role of ['owner', 'platform-admin'] as const) {
       const { app } = fixture(role)
       expect((await app.request('/api/admin/t/marine/extraction/methods')).status).toBe(503)
-      expect((await app.request('/api/admin/overview')).status).toBe(200)
+      expect((await app.request('/api/admin/overview')).status).toBe(role === 'owner' ? 200 : 403)
       expect(
         (await app.request('/api/admin/overview', { headers: { 'x-admin-passcode': 'wrong' } }))
           .status,
@@ -998,23 +1473,19 @@ describe('admin', () => {
     for (const row of rows) AdminTenantOverviewSchema.parse(row)
   })
 
-  it('accepts a platform-authenticated administrator without a fallback passcode', async () => {
-    const app = buildApp({
-      provider: new StubProvider(),
-      tenants: freshTenants(),
-      requestContext: () => ({
-        requestId: 'test-context',
-        session: null,
-        coarseAdminEligible: true,
-        effectiveRoles: { platformRole: 'platform-admin', portalRoles: [] },
-      }),
+  for (const role of ['platform-admin', 'owner'] as const) {
+    it(`requires owner for overview: ${role}`, async () => {
+      const fixture = createEnforcementFixture()
+      try {
+        const response = await fixture.requestAs(fixture.sessionFor(role), '/api/admin/overview')
+        expect(response.status).toBe(role === 'owner' ? 200 : 403)
+        if (role === 'platform-admin') fixture.assertNoProtectedDispatch()
+        else expect((await response.json()).length).toBeGreaterThan(0)
+      } finally {
+        fixture.close()
+      }
     })
-    const response = await app.request('/api/admin/overview', {
-      headers: { 'x-corpuskit-sso-admin': '1' },
-    })
-
-    expect(response.status).toBe(200)
-  })
+  }
 
   it('reverting a connected binding falls back to the demo box', async () => {
     const dir = Deno.makeTempDirSync()
@@ -1092,8 +1563,8 @@ describe('admin enrichment import and export', () => {
       body: '{}',
     })
 
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'unknown_tenant' })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
   })
 
   it('rejects a malformed archive without writing its valid records', async () => {
