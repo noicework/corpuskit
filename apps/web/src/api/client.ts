@@ -1,3 +1,4 @@
+import { AdminAccessError, adminFetch, type AdminRequestAccess } from './break-glass.ts'
 import type {
   AdminTenantOverview,
   AnalyseEvent,
@@ -33,6 +34,12 @@ import type {
   TextScaleId,
   TypographyChoice,
 } from '@research-portal/core'
+import {
+  AdminTenantOverviewSchema,
+  KnowledgeBoxStatusSchema,
+  MigrationEventSchema,
+} from '@research-portal/core'
+import { z } from 'zod'
 import { noteAskBudget } from '../lib/ask-budget.ts'
 
 /**
@@ -382,14 +389,35 @@ export async function streamAsk(
   emit(buffer)
 }
 
-async function adminRequest<T>(path: string, passcode: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      'x-admin-passcode': passcode,
-    },
-  })
+/** Reject uncertain responses before a caller changes forms, snapshots or query state. */
+function validatedAdminResult<T>(schema: z.ZodType<T>): (value: unknown) => T {
+  return (value) => {
+    const parsed = schema.safeParse(value)
+    if (!parsed.success) throw new AdminAccessError()
+    return parsed.data
+  }
+}
+const adminSuccessSchema = z.object({ ok: z.literal(true) })
+const knowledgeBoxResultSchema = adminSuccessSchema.extend({ status: KnowledgeBoxStatusSchema })
+const portalSourceSchema = z.object({
+  id: z.string().min(1),
+  url: z.string().min(1),
+  addedAt: z.string(),
+  lastSync: z.string().nullable(),
+  lastAdded: z.number().int().nonnegative(),
+  itemCount: z.number().int().nonnegative(),
+  auto: z.boolean(),
+  lastStatus: z.enum(['ok', 'error']).optional(),
+  lastError: z.string().nullable().optional(),
+  maxPages: z.number().int().positive().optional(),
+})
+
+async function adminRequest<T>(
+  path: string,
+  passcode: AdminRequestAccess,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await adminFetch(passcode, path, init)
   const body: unknown = await res.json().catch(() => null)
   if (!res.ok) {
     const message = body && typeof body === 'object' && 'message' in body &&
@@ -403,17 +431,19 @@ async function adminRequest<T>(path: string, passcode: string, init?: RequestIni
   return body as T
 }
 
-export function getAdminOverview(passcode: string): Promise<AdminTenantOverview[]> {
-  return adminRequest<AdminTenantOverview[]>('/api/admin/overview', passcode)
+export function getAdminOverview(passcode: AdminRequestAccess): Promise<AdminTenantOverview[]> {
+  return adminRequest<AdminTenantOverview[]>('/api/admin/overview', passcode).then(
+    validatedAdminResult(AdminTenantOverviewSchema.array()),
+  )
 }
 
 export function revertKnowledgeBox(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<{ ok: boolean; status: KnowledgeBoxStatus }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/knowledge-box`, passcode, {
     method: 'DELETE',
-  })
+  }).then(validatedAdminResult(knowledgeBoxResultSchema))
 }
 
 export interface ConnectResult {
@@ -424,21 +454,26 @@ export interface ConnectResult {
 
 /**
  * Connect a knowledge box to a tenant. The administrator types the KB id,
- * service-account token and admin passcode into the form themselves; values
- * go straight to the server and are never stored client-side.
+ * service-account token into the connection form. Admin access is supplied
+ * separately and can authorise only this request.
  */
 export function connectKnowledgeBox(
   slug: string,
-  input: { url: string; token: string; passcode: string },
+  input: { url: string; token: string },
+  access: AdminRequestAccess,
 ): Promise<ConnectResult> {
   return adminRequest<ConnectResult>(
     `/api/admin/t/${encodeURIComponent(slug)}/knowledge-box`,
-    input.passcode,
+    access,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url: input.url, token: input.token }),
     },
+  ).then(
+    validatedAdminResult(
+      knowledgeBoxResultSchema.extend({ resourceCount: z.number().int().nonnegative() }),
+    ),
   )
 }
 
@@ -449,27 +484,30 @@ export function connectKnowledgeBox(
  */
 export function createAdminKb(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   title?: string,
 ): Promise<{ ok: boolean; status: KnowledgeBoxStatus }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/knowledge-box/create`, passcode, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(title ? { title } : {}),
-  })
+  }).then(validatedAdminResult(knowledgeBoxResultSchema))
 }
 
-export function getAdminCounters(slug: string, passcode: string): Promise<KbCounters> {
+export function getAdminCounters(slug: string, passcode: AdminRequestAccess): Promise<KbCounters> {
   return adminRequest<KbCounters>(`/api/admin/t/${encodeURIComponent(slug)}/counters`, passcode)
 }
 
-export function getAdminRecent(slug: string, passcode: string): Promise<RecentResource[]> {
+export function getAdminRecent(
+  slug: string,
+  passcode: AdminRequestAccess,
+): Promise<RecentResource[]> {
   return adminRequest<RecentResource[]>(`/api/admin/t/${encodeURIComponent(slug)}/recent`, passcode)
 }
 
 export function addAdminLink(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: { url: string; title?: string; hidden?: boolean },
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/link`, passcode, {
@@ -481,7 +519,7 @@ export function addAdminLink(
 
 export function addAdminText(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: { title: string; body: string },
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/text`, passcode, {
@@ -498,7 +536,7 @@ export function addAdminText(
  */
 export function uploadAdminFile(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   file: File,
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/upload`, passcode, {
@@ -519,14 +557,13 @@ export function uploadAdminFile(
 export async function migrateKb(
   from: string,
   to: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   onEvent: (event: MigrationEvent) => void,
 ): Promise<void> {
-  const res = await fetch('/api/admin/migrate', {
+  const res = await adminFetch(passcode, '/api/admin/migrate', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-admin-passcode': passcode,
     },
     body: JSON.stringify({ from, to }),
   })
@@ -553,33 +590,46 @@ export async function migrateKb(
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
+  const events: MigrationEvent[] = []
   let buffer = ''
-
   const emit = (frame: string) => {
     const line = frame.trim()
     if (!line) return
-    const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
     try {
-      onEvent(JSON.parse(data) as MigrationEvent)
+      const parsed = MigrationEventSchema.safeParse(
+        JSON.parse(line.startsWith('data: ') ? line.slice(6) : line),
+      )
+      if (!parsed.success || parsed.data.type === 'error') throw new AdminAccessError()
+      events.push(parsed.data)
     } catch {
-      // A truncated trailing frame (dropped connection) is not an event.
+      throw new AdminAccessError()
     }
   }
-
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer + decoder.decode())
+    if (
+      events.at(-1)?.type !== 'done' || events.filter((event) => event.type === 'done').length !== 1
+    ) {
+      throw new AdminAccessError()
+    }
+    for (const event of events) onEvent(event)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
-  emit(buffer)
 }
 
 export function discoverCrawl(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   url: string,
   limit = 50,
 ): Promise<{ source: string; count: number; links: string[] }> {
@@ -595,14 +645,14 @@ export type NewLabelsetLabel = string | { title: string; text?: string }
 
 export function createAdminLabelset(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: { title: string; multiple: boolean; labels: NewLabelsetLabel[] },
 ): Promise<{ ok: boolean; id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/labelsets`, passcode, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+  }).then(validatedAdminResult(adminSuccessSchema.extend({ id: z.string().min(1) })))
 }
 
 export interface LabelsetUpdateInput {
@@ -636,15 +686,16 @@ export class LabelsetSaveError extends ApiError {
  */
 export async function updateAdminLabelset(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   id: string,
   input: LabelsetUpdateInput,
 ): Promise<LabelsetUpdateResult> {
-  const res = await fetch(
+  const res = await adminFetch(
+    passcode,
     `/api/admin/t/${encodeURIComponent(slug)}/labelsets/${encodeURIComponent(id)}`,
     {
       method: 'PUT',
-      headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(input),
     },
   )
@@ -662,43 +713,43 @@ export async function updateAdminLabelset(
 }
 
 export function addPortal(
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: { name: string; organisation?: string; tagline?: string },
 ): Promise<{ ok: boolean; slug: string }> {
   return adminRequest('/api/admin/tenants', passcode, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+  }).then(validatedAdminResult(adminSuccessSchema.extend({ slug: z.string().min(1) })))
 }
 
-export function removePortal(slug: string, passcode: string): Promise<{ ok: boolean }> {
+export function removePortal(slug: string, passcode: AdminRequestAccess): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/tenants/${encodeURIComponent(slug)}`, passcode, {
     method: 'DELETE',
-  })
+  }).then(validatedAdminResult(adminSuccessSchema))
 }
 
 export function setPortalDisabled(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   disabled: boolean,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
     `/api/admin/t/${encodeURIComponent(slug)}/${disabled ? 'disable' : 'enable'}`,
     passcode,
     { method: 'POST' },
-  )
+  ).then(validatedAdminResult(adminSuccessSchema))
 }
 
 /** Run corpus analysis and stream its progress events. */
 export async function analysePortal(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   onEvent: (event: AnalyseEvent) => void,
 ): Promise<void> {
-  const res = await fetch(`/api/admin/t/${encodeURIComponent(slug)}/analyse`, {
+  const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/analyse`, {
     method: 'POST',
-    headers: { 'x-admin-passcode': passcode },
+    headers: {},
   })
   if (!res.ok || !res.body) {
     throw new ApiError(res.status, res.statusText || 'Analysis failed to start')
@@ -763,7 +814,7 @@ export function getEntityGroups(
 
 export function renamePortal(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: { name?: string; organisation?: string; tagline?: string },
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/tenants/${encodeURIComponent(slug)}`, passcode, {
@@ -776,7 +827,7 @@ export function renamePortal(
 /** Save the portal's typography, text-scale, shape and/or density choice (same PATCH as rename). */
 export function updatePortalAppearance(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: {
     typography?: TypographyChoice
     shape?: ShapeId
@@ -792,7 +843,7 @@ export function updatePortalAppearance(
   })
 }
 
-export function proposeKg(slug: string, passcode: string): Promise<KgProposal> {
+export function proposeKg(slug: string, passcode: AdminRequestAccess): Promise<KgProposal> {
   return adminRequest<KgProposal>(
     `/api/admin/t/${encodeURIComponent(slug)}/kg/propose`,
     passcode,
@@ -800,13 +851,13 @@ export function proposeKg(slug: string, passcode: string): Promise<KgProposal> {
   )
 }
 
-export function getAgents(slug: string, passcode: string): Promise<KbAgent[]> {
+export function getAgents(slug: string, passcode: AdminRequestAccess): Promise<KbAgent[]> {
   return adminRequest<KbAgent[]>(`/api/admin/t/${encodeURIComponent(slug)}/agents`, passcode)
 }
 
 export function deleteAgent(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   taskId: string,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -819,13 +870,13 @@ export function deleteAgent(
 /** Implement the proposed knowledge-graph strategy, streaming progress. */
 export async function implementKg(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   opts: { applyExisting: boolean; includeSummaries: boolean; includeMemory?: boolean },
   onEvent: (event: KgImplementEvent) => void,
 ): Promise<void> {
-  const res = await fetch(`/api/admin/t/${encodeURIComponent(slug)}/kg/implement`, {
+  const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/kg/implement`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(opts),
   })
   if (!res.ok || !res.body) {
@@ -876,7 +927,7 @@ const FONT_MIME_BY_EXT: Record<string, string> = {
 
 export async function uploadBranding(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   kind: BrandingUploadKind,
   file: File,
 ): Promise<{ ok: boolean; url: string }> {
@@ -901,14 +952,14 @@ export function getTypeahead(
 
 export function getPrompts(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<{ ask?: string; images?: boolean }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode)
 }
 
 export function savePrompts(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   prompts: { ask?: string; images?: boolean },
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode, {
@@ -920,14 +971,14 @@ export function savePrompts(
 
 export function getSearchConfigs(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<Record<string, unknown>> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/search-configs`, passcode)
 }
 
 export function ensureSearchConfigs(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<{ ok: boolean; created: string[] }> {
   return adminRequest(
     `/api/admin/t/${encodeURIComponent(slug)}/search-configs/ensure`,
@@ -1178,7 +1229,7 @@ export interface InsightsSummary {
   recent: AskInsightRow[]
 }
 
-export function getInsights(slug: string, passcode: string): Promise<InsightsSummary> {
+export function getInsights(slug: string, passcode: AdminRequestAccess): Promise<InsightsSummary> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/insights`, passcode)
 }
 
@@ -1186,7 +1237,7 @@ export function getInsights(slug: string, passcode: string): Promise<InsightsSum
 
 export function setResourceHidden(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   resourceId: string,
   hidden: boolean,
 ): Promise<{ ok: boolean }> {
@@ -1226,13 +1277,15 @@ export interface AddedSource extends PortalSource {
   discoveredVia: string
 }
 
-export function getSources(slug: string, passcode: string): Promise<PortalSource[]> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/sources`, passcode)
+export function getSources(slug: string, passcode: AdminRequestAccess): Promise<PortalSource[]> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/sources`, passcode).then(
+    validatedAdminResult(portalSourceSchema.array()),
+  )
 }
 
 export function addSource(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: { url: string; auto?: boolean; maxPages?: number },
 ): Promise<AddedSource> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/sources`, passcode, {
@@ -1244,7 +1297,7 @@ export function addSource(
 
 export function updateSource(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   id: string,
   patch: { auto?: boolean; maxPages?: number },
 ): Promise<PortalSource> {
@@ -1261,7 +1314,7 @@ export function updateSource(
 
 export function deleteSource(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   id: string,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -1280,13 +1333,14 @@ export type SourceSyncEvent =
 
 export async function syncSource(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   id: string,
   onEvent: (event: SourceSyncEvent) => void,
 ): Promise<void> {
-  const res = await fetch(
+  const res = await adminFetch(
+    passcode,
     `/api/admin/t/${encodeURIComponent(slug)}/sources/${encodeURIComponent(id)}/sync`,
-    { method: 'POST', headers: { 'x-admin-passcode': passcode } },
+    { method: 'POST', headers: {} },
   )
   if (!res.ok || !res.body) throw new ApiError(res.status, 'The sync failed to start')
   const reader = res.body.getReader()
@@ -1556,7 +1610,10 @@ export interface CorpusHealthRow {
   hidden: boolean
 }
 
-export function getCorpusHealth(slug: string, passcode: string): Promise<CorpusHealthRow[]> {
+export function getCorpusHealth(
+  slug: string,
+  passcode: AdminRequestAccess,
+): Promise<CorpusHealthRow[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/corpus-health`, passcode)
 }
 
@@ -1576,7 +1633,7 @@ export interface GraphStrategy {
 
 export function getGraphStrategy(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<{ strategy: GraphStrategy | null }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/kg/strategy`, passcode)
 }
@@ -1589,13 +1646,13 @@ export interface GraphStrategyUpdate {
 
 export async function saveGraphStrategy(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   input: GraphStrategyUpdate,
   onEvent: (event: KgImplementEvent) => void,
 ): Promise<void> {
-  const res = await fetch(`/api/admin/t/${encodeURIComponent(slug)}/kg/strategy`, {
+  const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/kg/strategy`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
   })
   if (!res.ok || !res.body) {
@@ -1649,11 +1706,17 @@ export interface SetupSuggestion {
   }
 }
 
-export function getSuggestions(slug: string, passcode: string): Promise<SetupSuggestion[]> {
+export function getSuggestions(
+  slug: string,
+  passcode: AdminRequestAccess,
+): Promise<SetupSuggestion[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/suggestions`, passcode)
 }
 
-export function runInterrogation(slug: string, passcode: string): Promise<SetupSuggestion[]> {
+export function runInterrogation(
+  slug: string,
+  passcode: AdminRequestAccess,
+): Promise<SetupSuggestion[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/interrogate`, passcode, {
     method: 'POST',
   })
@@ -1661,7 +1724,7 @@ export function runInterrogation(slug: string, passcode: string): Promise<SetupS
 
 export function implementSuggestion(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   id: string,
 ): Promise<{ ok: boolean; summary: string }> {
   return adminRequest(
@@ -1673,7 +1736,7 @@ export function implementSuggestion(
 
 export function ignoreSuggestion(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   id: string,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -1700,7 +1763,7 @@ export function synthesiseInvestigation(
 /** The enrichment agents on a portal, each with its JSON schema and coverage. */
 export function getEnrichmentAgents(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<EnrichmentAgentStatus[]> {
   return adminRequest<EnrichmentAgentStatus[]>(
     `/api/admin/t/${encodeURIComponent(slug)}/enrichments`,
@@ -1712,7 +1775,7 @@ export function getEnrichmentAgents(
 export function enrichResource(
   slug: string,
   id: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
     `/api/admin/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}/enrich`,
@@ -1727,15 +1790,19 @@ export function enrichResource(
  */
 export async function runEnrichment(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   body: { agentId?: string; scope: 'all' | 'missing'; limit?: number },
   onEvent: (event: EnrichmentRunEvent) => void,
 ): Promise<void> {
-  const res = await fetch(`/api/admin/t/${encodeURIComponent(slug)}/enrichments/run`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
-    body: JSON.stringify(body),
-  })
+  const res = await adminFetch(
+    passcode,
+    `/api/admin/t/${encodeURIComponent(slug)}/enrichments/run`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
   if (!res.ok || !res.body) {
     let message = res.statusText || 'Enrichment run failed'
     try {
@@ -1822,7 +1889,7 @@ export interface RoutingRecord {
 
 export function getRouting(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<{
   recent: RoutingRecord[]
   summary: { total: number; byIntent: Record<string, number>; byStage: Record<string, number> }
@@ -1845,14 +1912,14 @@ export interface ExtractionMethodsResponse {
 
 export function getExtractionMethods(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
 ): Promise<ExtractionMethodsResponse> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/methods`, passcode)
 }
 
 export function profileExtraction(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   resourceId: string,
 ): Promise<{ profile: ExtractionProfile; filename: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/profile`, passcode, {
@@ -1864,7 +1931,7 @@ export function profileExtraction(
 
 export function saveExtractionRules(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   rules: ExtractionRules,
 ): Promise<{ ok: boolean; rules: ExtractionRules }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/rules`, passcode, {
@@ -1904,17 +1971,21 @@ export type ExtractionCompareEvent =
 
 export async function compareExtraction(
   slug: string,
-  passcode: string,
+  passcode: AdminRequestAccess,
   body: { resourceId: string; methods: string[]; question?: string; keep?: boolean },
   onEvent: (event: ExtractionCompareEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`/api/admin/t/${encodeURIComponent(slug)}/extraction/compare`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-passcode': passcode },
-    body: JSON.stringify(body),
-    signal,
-  })
+  const res = await adminFetch(
+    passcode,
+    `/api/admin/t/${encodeURIComponent(slug)}/extraction/compare`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    },
+  )
   if (!res.ok || !res.body) throw new ApiError(res.status, 'The comparison could not start')
   const reader = res.body.getReader()
   const decoder = new TextDecoder()

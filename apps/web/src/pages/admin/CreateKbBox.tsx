@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AdminTenantOverview } from '@research-portal/core'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { createAdminKb } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -12,13 +13,12 @@ import { errorMessage, type Message } from './shared.ts'
  */
 export function CreateKbBox({
   row,
-  passcode,
   onCreated,
 }: {
   row: AdminTenantOverview
-  passcode: string
   onCreated: () => Promise<unknown>
 }) {
+  const { runExplicit } = useAdminAccess()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -26,7 +26,11 @@ export function CreateKbBox({
     setBusy(true)
     setMessage(null)
     try {
-      await createAdminKb(row.tenant.slug, passcode)
+      const result = await runExplicit(
+        `Create a knowledge box for ${row.tenant.productName}`,
+        (access) => createAdminKb(row.tenant.slug, access),
+      )
+      if (result === undefined) return
       setMessage({
         tone: 'ok',
         text: 'Created a new knowledge box and connected this portal to it.',

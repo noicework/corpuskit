@@ -1,3 +1,5 @@
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -79,20 +81,21 @@ function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
 
 function SuggestionCard({
   slug,
-  passcode,
   suggestion,
+  onDecided,
 }: {
   slug: string
-  passcode: string
   suggestion: SetupSuggestion
+  onDecided: (status: SetupSuggestion['status']) => void
 }) {
+  const { runExplicit, coarseAdminEligible } = useAdminAccess()
   const [busy, setBusy] = useState<'implement' | 'ignore' | null>(null)
   const [outcome, setOutcome] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ['suggestions', slug] })
+    if (coarseAdminEligible) void queryClient.invalidateQueries({ queryKey: ['suggestions', slug] })
     void queryClient.invalidateQueries({ queryKey: ['labelsets', slug] })
   }
 
@@ -100,7 +103,13 @@ function SuggestionCard({
     setBusy('implement')
     setError(null)
     try {
-      const result = await implementSuggestion(slug, passcode, suggestion.id)
+      const result = await runExplicit('Implement this setup suggestion', async (access) => {
+        const result = await implementSuggestion(slug, access, suggestion.id)
+        if (result?.ok !== true || typeof result.summary !== 'string') throw new AdminAccessError()
+        return result
+      })
+      if (result === undefined) return
+      onDecided('implemented')
       setOutcome(result.summary)
       refresh()
     } catch (err) {
@@ -114,19 +123,27 @@ function SuggestionCard({
     setBusy('ignore')
     setError(null)
     try {
-      await ignoreSuggestion(slug, passcode, suggestion.id)
+      const result = await runExplicit('Ignore this setup suggestion', async (access) => {
+        const result = await ignoreSuggestion(slug, access, suggestion.id)
+        if (result?.ok !== true) throw new AdminAccessError()
+        return true
+      })
+      if (result === undefined) return
+      onDecided('ignored')
       refresh()
-    } catch {
-      setError('Could not update the suggestion - try again.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update the suggestion.')
     } finally {
       setBusy(null)
     }
   }
 
-  const decided = suggestion.status !== 'pending'
+  const status = suggestion.status
+  const decided = status !== 'pending'
 
   return (
     <div
+      data-suggestion={suggestion.id}
       className={`rounded-[var(--rp-radius)] border border-line bg-surface p-3.5 ${
         decided ? 'opacity-70' : ''
       }`}
@@ -135,9 +152,9 @@ function SuggestionCard({
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='rp-badge'>{KIND_COPY[suggestion.kind]}</span>
-            {suggestion.status === 'implemented'
+            {status === 'implemented'
               ? <span className='text-xs font-medium text-[var(--rp-ok-ink)]'>Implemented</span>
-              : suggestion.status === 'ignored'
+              : status === 'ignored'
               ? <span className='text-xs text-ink-3'>Ignored</span>
               : null}
           </div>
@@ -151,6 +168,7 @@ function SuggestionCard({
               <button
                 type='button'
                 disabled={busy !== null}
+                data-suggestion-implement
                 onClick={() => void implement()}
                 className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
               >
@@ -159,6 +177,7 @@ function SuggestionCard({
               <button
                 type='button'
                 disabled={busy !== null}
+                data-suggestion-ignore
                 onClick={() => void ignore()}
                 className='rp-btn rp-btn-ghost h-8 px-2.5 text-xs'
               >
@@ -174,23 +193,62 @@ function SuggestionCard({
   )
 }
 
-export function InterrogatePanel({ slug, passcode }: { slug: string; passcode: string }) {
+export function InterrogatePanel({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const [snapshot, setSnapshot] = useState<SetupSuggestion[]>()
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
-  const { data: suggestions, isLoading } = useQuery({
+  const { data: sessionSuggestions, isLoading } = useQuery({
     queryKey: ['suggestions', slug],
-    queryFn: () => getSuggestions(slug, passcode),
+    queryFn: () => getSuggestions(slug, sessionAccess),
     staleTime: 30_000,
+    enabled: coarseAdminEligible,
+    retry: false,
   })
 
-  const interrogate = async () => {
+  const suggestions = coarseAdminEligible ? sessionSuggestions : snapshot
+  const interrogate = async (readOnly = false) => {
     setRunning(true)
     setRunError(null)
     try {
-      const fresh = await runInterrogation(slug, passcode)
-      queryClient.setQueryData(['suggestions', slug], fresh)
+      const fresh = await runExplicit(
+        readOnly ? 'Load setup suggestions' : 'Interrogate this knowledge box',
+        async (access) => {
+          const result = await (readOnly ? getSuggestions : runInterrogation)(slug, access)
+          if (
+            !Array.isArray(result) ||
+            result.some((item) =>
+              !item || typeof item.id !== 'string' || typeof item.title !== 'string' ||
+              typeof item.detail !== 'string' ||
+              !['pending', 'implemented', 'ignored'].includes(item.status) ||
+              !Object.hasOwn(KIND_COPY, item.kind) ||
+              (item.labelset !== undefined &&
+                (!Array.isArray(item.labelset?.labels) ||
+                  item.labelset.labels.some((label) => typeof label !== 'string'))) ||
+              (item.labels !== undefined &&
+                (!Array.isArray(item.labels?.labels) ||
+                  item.labels.labels.some((label) => typeof label !== 'string'))) ||
+              (item.entityType !== undefined &&
+                (typeof item.entityType?.label !== 'string' ||
+                  typeof item.entityType?.description !== 'string')) ||
+              (item.example !== undefined &&
+                (typeof item.example?.text !== 'string' || !Array.isArray(item.example.relations) ||
+                  item.example.relations.some((relation) =>
+                    !relation ||
+                    [relation.source, relation.target, relation.label].some((value) =>
+                      typeof value !== 'string'
+                    )
+                  )))
+            )
+          ) throw new AdminAccessError()
+          return result
+        },
+      )
+      if (fresh === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['suggestions', slug], fresh)
+      else setSnapshot(fresh)
     } catch (err) {
       setRunError(
         err instanceof Error ? err.message : 'The interrogation could not complete - try again.',
@@ -222,6 +280,15 @@ export function InterrogatePanel({ slug, passcode }: { slug: string; passcode: s
           {running ? 'Interrogating…' : 'Run interrogation'}
         </button>
       </div>
+      <button
+        type='button'
+        data-suggestions-read
+        className='rp-btn rp-btn-outline mt-3'
+        disabled={running}
+        onClick={() => void interrogate(true)}
+      >
+        Load suggestions
+      </button>
       {running
         ? (
           <p className='mt-3 text-xs text-ink-3' role='status'>
@@ -241,8 +308,14 @@ export function InterrogatePanel({ slug, passcode }: { slug: string; passcode: s
               <SuggestionCard
                 key={suggestion.id}
                 slug={slug}
-                passcode={passcode}
                 suggestion={suggestion}
+                onDecided={(status) => {
+                  if (!coarseAdminEligible) {
+                    setSnapshot((items) =>
+                      items?.map((item) => item.id === suggestion.id ? { ...item, status } : item)
+                    )
+                  }
+                }}
               />
             ))}
           </div>
@@ -266,8 +339,14 @@ export function InterrogatePanel({ slug, passcode }: { slug: string; passcode: s
                 <SuggestionCard
                   key={suggestion.id}
                   slug={slug}
-                  passcode={passcode}
                   suggestion={suggestion}
+                  onDecided={(status) => {
+                    if (!coarseAdminEligible) {
+                      setSnapshot((items) =>
+                        items?.map((item) => item.id === suggestion.id ? { ...item, status } : item)
+                      )
+                    }
+                  }}
                 />
               ))}
             </div>

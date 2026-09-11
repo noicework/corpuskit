@@ -1,7 +1,32 @@
+import {
+  DECLARATIONS,
+  declaredRoute,
+  declaredSubAction,
+  isPrivileged,
+  registerInfrastructure,
+} from './permissions.ts'
+import {
+  AuditExecutionError,
+  executeAudited,
+  executeAuditedResponse,
+  materialisedJsonResponse,
+  stageAuditResponse,
+  trackMaterialisedResponses,
+} from './audit-execution.ts'
 import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
+import { coarseAdminEligibility } from './assignments.ts'
+import {
+  appendAudit,
+  type AuditAction,
+  type AuditActor,
+  type AuditStore,
+  AuditWriteError,
+  createAuditEvent,
+} from './audit.ts'
+import type { BreakGlassService } from './break-glass.ts'
 import {
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
@@ -706,20 +731,6 @@ const labelsetUpdateSchema = z.object({
 const cleanToken = (raw: string) =>
   raw.trim().replace(/^["']|["']$/g, '').replace(/^Bearer\s+/i, '').trim()
 
-/** Compare credentials without leaking the first mismatching byte through timing. */
-async function secretsEqual(left: string, right: string): Promise<boolean> {
-  const encoder = new TextEncoder()
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(left)),
-    crypto.subtle.digest('SHA-256', encoder.encode(right)),
-  ])
-  const a = new Uint8Array(leftHash)
-  const b = new Uint8Array(rightHash)
-  let difference = 0
-  for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!
-  return difference === 0
-}
-
 /**
  * Whether a model-written "source" label on a comparison cell actually names
  * one of the sources retrieved for this query. Guards against the model
@@ -749,7 +760,22 @@ export interface BrandingAssetStore {
   put(slug: string, kind: BrandingKind, asset: BrandingAsset): void
 }
 
+export interface PortalRequestContext {
+  requestId: string
+  session: import('./principal.ts').TrustedSessionFacts | null
+  clientIp?: string
+  coarseAdminEligible: boolean
+  effectiveRoles?: import('@research-portal/core').EffectiveRoles
+  provenance?: import('./assignments.ts').RoleProvenance[]
+  groupCapability?: import('./assignments.ts').RoleResolution['groupCapability']
+  /** Populated only after this request's break-glass verification and required audit. */
+  actor?: AuditActor
+  denialAudited?: boolean
+  user?: { id: string; tenantId: string; name: string; email: string; roles: string[] } | null
+}
+
 export interface BuildAppOptions {
+  localMutations?: import('./audit-execution.ts').LocalMutationScope
   /** Intent-routing decisions log; defaults to the on-disk JSONL store. */
   routing?: RoutingLogApi
   provider: RetrievalProvider
@@ -774,9 +800,9 @@ export interface BuildAppOptions {
   /** Runtime adapter for optional per-portal Worker custom domains. */
   domainProvisioner?: PortalDomainProvisioner | null
   zone?: string
-  adminPasscode?: string
-  /** A platform adapter may authenticate an administrator before the request reaches Hono. */
-  trustedAdmin?: (request: Request) => boolean
+  audit?: AuditStore
+  breakGlass?: BreakGlassService
+  requestContext?: (request: Request) => PortalRequestContext | undefined
   /** Authenticated portal identity forwarded by a trusted platform adapter. */
   trustedUser?: (request: Request) => TrustedPortalUser | null
   /** Where the built SPA lives; overridable in tests. Defaults to ./apps/web/dist. */
@@ -911,7 +937,118 @@ export function buildApp(opts: BuildAppOptions): Hono {
   }
   // Suggested-question generations in flight, so a page that is opened twice
   // while its openers are being written costs one generation, not two.
-  const questionsInFlight = new Map<string, Promise<string[]>>()
+  const questionsInFlight = new Map<
+    string,
+    { promise: Promise<string[]>; controller: AbortController; waiters: number }
+  >()
+
+  // Capture trusted adapter facts once. Route handlers never reconstruct identity from headers.
+  const requestContexts = new WeakMap<Request, PortalRequestContext>()
+  const ingressContexts = new WeakMap<Request, PortalRequestContext>()
+  const requestContext = (request: Request): PortalRequestContext => {
+    const existing = requestContexts.get(request)
+    if (existing) return existing
+    const supplied = opts.requestContext?.(request)
+    const legacyUser = supplied ? null : opts.trustedUser?.(request)
+    if (supplied) ingressContexts.set(request, supplied)
+    const context = supplied ? { ...supplied } : {
+      requestId: crypto.randomUUID(),
+      session: null,
+      coarseAdminEligible: false,
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(context.requestId)) {
+      context.requestId = crypto.randomUUID()
+    }
+    context.actor ??= legacyUser
+      ? { kind: 'user', id: legacyUser.id }
+      : context.session
+      ? { kind: 'user', id: context.session.oid }
+      : { kind: 'anonymous' }
+    requestContexts.set(request, context)
+    return context
+  }
+  const markDenialAudited = (request: Request) => {
+    requestContext(request).denialAudited = true
+    const ingress = ingressContexts.get(request)
+    if (ingress) ingress.denialAudited = true
+  }
+  const classification = (c: Context) => {
+    const method = c.req.method === 'HEAD' ? 'GET' : c.req.method
+    const declaration = DECLARATIONS.find((d) =>
+      d.kind === 'http' &&
+      (d.method === method || d.method === 'ALL') &&
+      new RegExp(`^${d.path.replace(/:[^/]+/g, '[^/]+').replace(/\*/g, '.*')}$`).test(c.req.path)
+    )
+    const slug = /^\/api\/(?:admin\/)?(?:t|tenants)\/([^/]+)/.exec(c.req.path)?.[1]
+    const targetIndex = declaration?.target.param
+      ? declaration.path.split('/').indexOf(`:${declaration.target.param}`)
+      : -1
+    const targetId = targetIndex >= 0 ? c.req.path.split('/')[targetIndex] : undefined
+    return {
+      declaration,
+      target: {
+        kind: declaration?.target.kind ?? 'request',
+        ...(targetId && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(targetId)
+          ? { id: targetId }
+          : {}),
+      },
+      scope: declaration?.scope === 'portal' && slug
+        ? { kind: 'portal' as const, slug }
+        : { kind: 'platform' as const },
+    }
+  }
+  const requiredAudit = () => {
+    if (!opts.audit) throw new AuditWriteError()
+    return opts.audit
+  }
+  const operationSignals = new WeakMap<Request, AbortSignal>()
+  const subAction = <T>(
+    c: Context,
+    path: string,
+    action: AuditAction,
+    run: () => T | Promise<T>,
+    detail = {},
+  ) =>
+    declaredSubAction(c.req.method, path, action, (declaration) =>
+      executeAudited({
+        audit: requiredAudit(),
+        localMutations: opts.localMutations,
+        signal: operationSignals.get(c.req.raw) ?? c.req.raw.signal,
+        input: {
+          requestId: requestContext(c.req.raw).requestId,
+          actor: requestContext(c.req.raw).actor!,
+          action,
+          scope: classification(c).scope,
+          target: { kind: 'request' },
+          detail: { permission: declaration.permission, ...detail },
+        },
+        run,
+      }))
+  registerInfrastructure(app, '*', async (c, next) => {
+    const context = requestContext(c.req.raw)
+    await next()
+    if ((c.res.status === 401 || c.res.status === 403) && !context.denialAudited) {
+      const { declaration, scope } = classification(c)
+      appendAudit(
+        requiredAudit(),
+        createAuditEvent({
+          requestId: context.requestId,
+          actor: context.actor!,
+          action: 'request.denied',
+          scope,
+          target: { kind: 'request' },
+          outcome: 'denied',
+          detail: {
+            code: c.res.status === 401 ? 'unauthorised' : 'forbidden',
+            method: c.req.method,
+            ...(declaration ? { permission: declaration.permission } : {}),
+          },
+        }),
+      )
+      markDenialAudited(c.req.raw)
+    }
+    c.header('x-request-id', context.requestId)
+  })
 
   // Rate limiting for the anonymous, paid-LLM routes - see rate-limit.ts.
   // Publishing this source open publishes the recipe for draining the
@@ -939,7 +1076,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // frame-ancestors only, not a full CSP - the app legitimately loads
   // modules from esm.sh and fonts from Google, so default-src/script-src is
   // a later work item once those origins are catalogued.
-  app.use('*', async (c, next) => {
+  registerInfrastructure(app, '*', async (c, next) => {
     await next()
     c.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains')
     c.header('X-Content-Type-Options', 'nosniff')
@@ -950,12 +1087,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // The SPA is served same-origin; no cross-origin API access is needed -
   // except reingest, where an admin's browser posts rendered HTML from the
   // source site's own origin (the passcode header still gates it).
-  app.use(
+  registerInfrastructure(
+    app,
     '/api/admin/t/*/reingest',
     cors({ origin: (origin) => origin, allowHeaders: ['content-type', 'x-admin-passcode'] }),
   )
 
   app.onError((err, c) => {
+    if (err instanceof AuditWriteError) {
+      console.error('Required request audit failed')
+      return c.json({ error: 'audit_write_failed' }, 500)
+    }
+    if (err instanceof AuditExecutionError) return c.json({ error: err.code }, 500)
     if (err instanceof KnowledgeBoxNotConnectedError) {
       return c.json({ error: 'knowledge_box_not_connected', slug: err.slug }, 503)
     }
@@ -965,17 +1108,115 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   const tenant = (slug: string): TenantConfig | undefined => tenants.get(slug)
 
+  // Register before every admin handler, including extraction and routing above the old gate.
+  registerInfrastructure(app, '/api/admin/*', async (c, next) => {
+    const context = requestContext(c.req.raw)
+    const requestId = context?.requestId ?? crypto.randomUUID()
+    const deny = (status: 401 | 403, code: 'unauthorised' | 'forbidden') => {
+      if (!opts.audit) throw new AuditWriteError()
+      appendAudit(
+        opts.audit,
+        createAuditEvent({
+          requestId,
+          actor: context?.session
+            ? { kind: 'user', id: context.session.oid }
+            : { kind: 'anonymous' },
+          action: 'request.denied',
+          scope: classification(c).scope,
+          target: { kind: 'request' },
+          outcome: 'denied',
+          detail: { code, method: c.req.method },
+        }),
+      )
+      markDenialAudited(c.req.raw)
+      return c.json({ error: code }, status)
+    }
+    if (c.req.raw.headers.has('x-admin-passcode')) {
+      if (!opts.breakGlass) return deny(403, 'forbidden')
+      const result = await opts.breakGlass.authorise(
+        c.req.raw,
+        context ?? { requestId, session: null },
+      )
+      if (!result.ok) {
+        if (result.retryAfter !== undefined) c.header('Retry-After', String(result.retryAfter))
+        return deny(
+          result.code === 'invalid_passcode' ? 401 : 403,
+          result.code === 'invalid_passcode' ? 'unauthorised' : 'forbidden',
+        )
+      }
+      if (context) context.actor = result.actor
+      await next()
+      return
+    }
+    if (context?.effectiveRoles && coarseAdminEligibility(context.effectiveRoles)) {
+      await next()
+      return
+    }
+    return context?.session ? deny(403, 'forbidden') : deny(401, 'unauthorised')
+  })
+
+  registerInfrastructure(app, '*', async (c, next) => {
+    const context = requestContext(c.req.raw)
+    const { declaration, scope, target } = classification(c)
+    if (!declaration || !isPrivileged(declaration, context.actor)) {
+      await next()
+      return
+    }
+    trackMaterialisedResponses(c)
+    const response = await executeAuditedResponse({
+      audit: requiredAudit(),
+      localMutations: opts.localMutations,
+      privileged: true,
+      signal: c.req.raw.signal,
+      input: {
+        requestId: context.requestId,
+        actor: context.actor!,
+        action: declaration.action,
+        scope,
+        target,
+        detail: {
+          permission: declaration.permission,
+          method: c.req.method,
+          operation: `${declaration.method} ${declaration.path}`,
+          ...(context.actor?.kind === 'break-glass' && context.session
+            ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
+            : {}),
+        },
+      },
+      run: async (signal) => {
+        operationSignals.set(c.req.raw, signal)
+        await next()
+        return c.res
+      },
+    })
+    // Hono records caught errors in c.error; c.res holds the onError response and real status.
+    c.res = response
+  })
+
   registerMcpRoutes(app, {
+    localMutations: opts.localMutations,
     provider,
     tenant,
     keys: mcpKeys,
-    trustedUser: opts.trustedUser,
+    audit: opts.audit,
+    requestContext,
+    trustedUser: opts.requestContext
+      ? (request) => {
+        const context = requestContext(request)
+        return context?.session
+          ? {
+            id: context.session.oid,
+            effectiveRoles: context.effectiveRoles ?? { portalRoles: [] },
+          }
+          : null
+      }
+      : opts.trustedUser,
     rateLimitPerMin: opts.rateLimitMcpAuthPerMin,
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to
   // its canonical name. API calls stay untouched.
-  app.use('/t/*', async (c, next) => {
+  app.use(declaredRoute('ALL', '/t/*'), async (c, next) => {
     const location = tenantAliasLocation(c.req.raw)
     if (!location) {
       await next()
@@ -1030,7 +1271,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // image built without `deno task build:web` fails health checks instead
   // of shipping a 404-everywhere deploy (the bug this endpoint exists for).
   const webDistPath = opts.webDistPath ?? './apps/web/dist'
-  app.get('/api/health', (c) => {
+  app.get(declaredRoute('GET', '/api/health'), (c) => {
     const web = opts.webAvailable ?? existsSync(`${webDistPath}/index.html`)
     // Documentation readiness (see docs-health.ts): a portal whose in-app
     // documentation was never ingested answers every route fine while Help
@@ -1052,7 +1293,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
   })
 
-  app.get('/api/tenants', (c) => c.json(tenants.list()))
+  app.get(declaredRoute('GET', '/api/tenants'), (c) => c.json(tenants.list()))
 
   const brandingDir = opts.brandingPath ?? process.env.BRANDING_PATH ?? './data/branding'
   const BRANDING_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg'] as const
@@ -1095,13 +1336,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   }
 
-  app.get('/api/t/:slug/config', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/config'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(withBrandingUrls(config))
   })
 
-  app.get('/api/t/:slug/branding/:kind', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/branding/:kind'), (c) => {
     const config = tenant(c.req.param('slug'))
     const kind = c.req.param('kind')
     if (!config || !isBrandingKind(kind)) {
@@ -1128,7 +1369,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.get('/api/t/:slug/resources/:id/thumbnail', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/thumbnail'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'not_found' }, 404)
@@ -1145,7 +1386,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return new Response(upstream.body, { status: 200, headers })
   })
 
-  app.get('/api/t/:slug/search', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/search'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = searchQuerySchema.safeParse({ q: c.req.query('q') })
@@ -1263,7 +1504,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Intent routing: which stored search configuration should answer this
   // question. Rules first (free, explainable), then one short classification
   // on the platform when no rule fires. Every decision is logged.
-  app.post('/api/t/:slug/route', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/route'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = routeBodySchema.safeParse(await c.req.json().catch(() => null))
@@ -1286,7 +1527,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Extraction Lab (docs/EXTRACTION-LAB.md): sandbox methods, profiling, a
   // streamed comparison, and the routing rules a portal stores.
   // ---------------------------------------------------------------------
-  app.get('/api/admin/t/:slug/extraction/methods', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/extraction/methods'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -1313,7 +1554,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       })
     }
   })
-  app.post('/api/admin/t/:slug/extraction/profile', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/extraction/profile'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -1329,7 +1570,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }, 502)
     }
   })
-  app.post('/api/admin/t/:slug/extraction/compare', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/extraction/compare'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -1351,7 +1592,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
     })
   })
-  app.put('/api/admin/t/:slug/extraction/rules', async (c) => {
+  app.put(declaredRoute('PUT', '/api/admin/t/:slug/extraction/rules'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -1363,7 +1604,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   /** Recent routing decisions and a summary - the Manage panel's audit view. */
-  app.get('/api/admin/t/:slug/routing', (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/routing'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -1378,7 +1619,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // documentation via the doc-scoped stored config + server-side cross-check;
   // never touches the research corpus. Not merchandised - doc pages carry no
   // research enrichments.
-  app.get('/api/t/:slug/docs/search', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/docs/search'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = searchQuerySchema.safeParse({ q: c.req.query('q') })
@@ -1387,7 +1628,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(results)
   })
 
-  app.get('/api/t/:slug/catalog', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/catalog'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const sortRaw = c.req.query('sort')
@@ -1417,7 +1658,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(merchandiseCatalogPage(enrichments, config.slug, page))
   })
 
-  app.get('/api/t/:slug/topics/:topicId/resources', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/topics/:topicId/resources'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const limit = Math.min(Math.max(1, Math.floor(Number(c.req.query('limit') ?? 12) || 12)), 24)
@@ -1467,7 +1708,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return out
   }
 
-  app.get('/api/t/:slug/facets', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/facets'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     // The documented name and the short form both work; by default the three
@@ -1477,20 +1718,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await facetsFor(config, labelsets))
   })
 
-  app.get('/api/t/:slug/labelsets', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/labelsets'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(await provider.labelsets(config))
   })
 
-  app.get('/api/t/:slug/suggest', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/suggest'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const q = c.req.query('q')?.trim()
     return c.json(await provider.suggest(config, q || undefined))
   })
 
-  app.get('/api/t/:slug/resources', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/resources'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(
@@ -1498,7 +1739,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
   })
 
-  app.get('/api/t/:slug/resources/:id', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const resource = await provider.resource(config, c.req.param('id'))
@@ -1507,54 +1748,115 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   // Openers written from this document, cached under their own schema id in the
-  // same store as enrichments. Falls back to [] (the page shows its generic
-  // three) rather than failing the page - suggestions are a nicety.
-  app.get('/api/t/:slug/resources/:id/questions', async (c) => {
+  // same store as enrichments. Cold requests wait for mandatory completion audit.
+  app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/questions'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const id = c.req.param('id')
 
-    const cached = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)
-    const cachedQuestions = cached?.data?.questions
-    if (Array.isArray(cachedQuestions)) return c.json({ questions: cachedQuestions })
-
-    if (!opts.management) return c.json({ questions: [] })
-    const resource = await provider.resource(config, id).catch(() => null)
-    if (!resource) return c.json({ error: 'unknown_resource' }, 404)
-    // Openers are precomputed at enrichment time; a resource the pass has not
-    // reached yet gets its openers written in the background and answers
-    // `pending` now, so the page never waits eight to ten seconds on them.
-    // `wait=1` keeps the old blocking behaviour for callers that need it.
     const key = `${config.slug}/${id}`
     let job = questionsInFlight.get(key)
     if (!job) {
-      const merchandised = merchandiseSummary(enrichments, config.slug, resource)
-      job = generateSuggestedQuestions(
-        opts.management,
-        config,
-        id,
-        merchandised.title,
-        merchandised.summary,
-      ).then((questions) => {
-        // Cache the empty result too: a document that yields nothing (a scan
-        // with no extractable text) would otherwise pay for generation on
-        // every view.
-        enrichments.put(config.slug, id, {
-          schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
-          generatedAt: new Date().toISOString(),
-          data: { questions },
-        })
-        return questions
-      }).finally(() => questionsInFlight.delete(key))
-      questionsInFlight.set(key, job)
-      // A background job's failure is a missed nicety, never an unhandled rejection.
-      job.catch(() => {})
+      const cachedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)?.data
+        ?.questions
+      if (Array.isArray(cachedQuestions)) return c.json({ questions: cachedQuestions })
+      if (!opts.management) return c.json({ questions: [] })
+      const resource = await provider.resource(config, id).catch(() => null)
+      job = questionsInFlight.get(key)
+      if (!job) {
+        const completedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)
+          ?.data?.questions
+        if (Array.isArray(completedQuestions)) return c.json({ questions: completedQuestions })
+        if (!resource) return c.json({ error: 'unknown_resource' }, 404)
+        const context = requestContext(c.req.raw)
+        const actor = { ...context.actor! }
+        const controller = new AbortController()
+        const input = {
+          requestId: context.requestId,
+          actor,
+          scope: { kind: 'portal' as const, slug: config.slug },
+          target: { kind: 'resource', id },
+          detail: {
+            ...(actor.kind === 'break-glass' && context.session
+              ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
+              : {}),
+          },
+        }
+        const merchandised = merchandiseSummary(enrichments, config.slug, resource)
+        const promise = declaredSubAction(
+          'GET',
+          '/api/t/:slug/resources/:id/questions',
+          'resource.questions.generate',
+          (declaration) =>
+            executeAudited({
+              audit: requiredAudit(),
+              localMutations: opts.localMutations,
+              signal: controller.signal,
+              input: {
+                ...input,
+                action: 'resource.questions.generate',
+                detail: { ...input.detail, permission: declaration.permission },
+              },
+              run: async (signal) => {
+                const questions = await generateSuggestedQuestions(
+                  opts.management!,
+                  config,
+                  id,
+                  merchandised.title,
+                  merchandised.summary,
+                  { signal, strict: true },
+                )
+                signal.throwIfAborted()
+                await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
+                await declaredSubAction(
+                  'GET',
+                  '/api/t/:slug/resources/:id/questions',
+                  'resource.questions.cache',
+                  (cache) =>
+                    executeAudited({
+                      audit: requiredAudit(),
+                      localMutations: opts.localMutations,
+                      signal,
+                      input: {
+                        ...input,
+                        action: 'resource.questions.cache',
+                        detail: { ...input.detail, permission: cache.permission },
+                      },
+                      run: () =>
+                        enrichments.put(config.slug, id, {
+                          schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
+                          generatedAt: new Date().toISOString(),
+                          data: { questions },
+                        }),
+                    }),
+                )
+                return questions
+              },
+            }),
+        ).finally(() => questionsInFlight.delete(key))
+        job = { promise, controller, waiters: 0 }
+        questionsInFlight.set(key, job)
+      }
     }
-    if (c.req.query('wait') === '1') return c.json({ questions: await job.catch(() => []) })
-    return c.json({ questions: [], pending: true })
+    const shared = job
+    shared.waiters++
+    let rejectAborted!: (reason: unknown) => void
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectAborted = reject
+    })
+    const onAbort = () => rejectAborted(new AuditExecutionError('client_aborted'))
+    c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      const result = Promise.race([shared.promise, aborted])
+      if (c.req.raw.signal.aborted) onAbort()
+      return c.json({ questions: await result })
+    } finally {
+      c.req.raw.signal.removeEventListener('abort', onAbort)
+      if (--shared.waiters === 0) shared.controller.abort()
+    }
   })
 
-  app.get('/api/t/:slug/resources/:id/content', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/content'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -1563,7 +1865,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(merchandiseContent(enrichments, config.slug, content))
   })
 
-  app.get('/api/t/:slug/resources/:id/file/:fieldId', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/file/:fieldId'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -1591,7 +1893,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return new Response(upstream.body, { status: upstream.status, headers })
   })
 
-  app.get('/api/t/:slug/typeahead', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/typeahead'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const q = (c.req.query('q') ?? '').trim()
@@ -1599,7 +1901,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await opts.management.typeahead(config, q))
   })
 
-  app.get('/api/t/:slug/graph/relations', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/graph/relations'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ nodes: [], edges: [] })
@@ -1631,27 +1933,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ...graph, extracting })
   })
 
-  app.get('/api/t/:slug/entities', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/entities'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json([])
     return c.json(await opts.management.entityGroups(config))
   })
 
-  app.get('/api/t/:slug/knowledge-box', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/knowledge-box'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(bindings.status(config.slug))
   })
 
-  app.get('/api/t/:slug/counters', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/counters'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     return c.json(await opts.management.counters(config))
   })
 
-  app.get('/api/t/:slug/graph', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/graph'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -1660,7 +1962,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await opts.management.graphData(config, primary, secondary))
   })
 
-  app.post('/api/t/:slug/generate', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/generate'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -2091,7 +2393,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/t/:slug/feedback', async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/feedback'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -2105,7 +2407,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/t/:slug/summarize', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/summarize'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -2124,7 +2426,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/t/:slug/subqueries', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/subqueries'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -2149,7 +2451,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   // Entity dossier: the graph neighbourhood plus the resources that discuss it.
-  app.get('/api/t/:slug/entity', async (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/entity'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -2197,20 +2499,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Research-trail sessions, synced server-side per anonymous client ----
 
-  app.get('/api/t/:slug/sessions', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/sessions'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(sessions.list(config.slug, clientId(c)))
   })
 
-  app.get('/api/t/:slug/sessions/:id', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/sessions/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const session = sessions.get(config.slug, clientId(c), c.req.param('id'))
     return session ? c.json(session) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.put('/api/t/:slug/sessions/:id', async (c) => {
+  app.put(declaredRoute('PUT', '/api/t/:slug/sessions/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = sessionPutSchema.safeParse(await c.req.json().catch(() => null))
@@ -2228,7 +2530,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ok: true })
   })
 
-  app.delete('/api/t/:slug/sessions/:id', (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/sessions/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     sessions.remove(config.slug, clientId(c), c.req.param('id'))
@@ -2237,13 +2539,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Saved searches / watches --------------------------------------------
 
-  app.get('/api/t/:slug/watches', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/watches'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(watches.list(config.slug, clientId(c)))
   })
 
-  app.post('/api/t/:slug/watches', async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/watches'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = watchBodySchema.safeParse(await c.req.json().catch(() => null))
@@ -2251,14 +2553,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(watches.add(config.slug, clientId(c), parsed.data.query))
   })
 
-  app.post('/api/t/:slug/watches/:id/seen', (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/watches/:id/seen'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     watches.update(config.slug, c.req.param('id'), { changed: false }, clientId(c))
     return c.json({ ok: true })
   })
 
-  app.delete('/api/t/:slug/watches/:id', (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/watches/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     watches.remove(config.slug, clientId(c), c.req.param('id'))
@@ -2266,7 +2568,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   // Federated ask: stream one grounded answer per enabled portal.
-  app.post('/api/ask-estate', estateRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
     const targets = tenants.list().map((t) => tenants.get(t.slug)).filter(
@@ -2328,13 +2630,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Investigations: the research workspace, per anonymous client --------
 
-  app.get('/api/t/:slug/investigations', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/investigations'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(investigations.list(config.slug, clientId(c)))
   })
 
-  app.post('/api/t/:slug/investigations', async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/investigations'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = investigationCreateSchema.safeParse(await c.req.json().catch(() => null))
@@ -2345,14 +2647,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(investigations.create(config.slug, clientId(c), parsed.data))
   })
 
-  app.get('/api/t/:slug/investigations/:id', (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/investigations/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
     return investigation ? c.json(investigation) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.patch('/api/t/:slug/investigations/:id', async (c) => {
+  app.patch(declaredRoute('PATCH', '/api/t/:slug/investigations/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = investigationPatchSchema.safeParse(await c.req.json().catch(() => null))
@@ -2361,14 +2663,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return updated ? c.json(updated) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.delete('/api/t/:slug/investigations/:id', (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     investigations.remove(config.slug, clientId(c), c.req.param('id'))
     return c.json({ ok: true })
   })
 
-  app.post('/api/t/:slug/investigations/:id/evidence', async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/investigations/:id/evidence'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = evidenceCreateSchema.safeParse(await c.req.json().catch(() => null))
@@ -2387,7 +2689,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return item ? c.json(item) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.patch('/api/t/:slug/investigations/:id/evidence/:eid', async (c) => {
+  app.patch(declaredRoute('PATCH', '/api/t/:slug/investigations/:id/evidence/:eid'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = evidencePatchSchema.safeParse(await c.req.json().catch(() => null))
@@ -2402,14 +2704,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return ok ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.delete('/api/t/:slug/investigations/:id/evidence/:eid', (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id/evidence/:eid'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     investigations.removeEvidence(config.slug, clientId(c), c.req.param('id'), c.req.param('eid'))
     return c.json({ ok: true })
   })
 
-  app.post('/api/t/:slug/investigations/:id/artefacts', async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/investigations/:id/artefacts'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = artefactCreateSchema.safeParse(await c.req.json().catch(() => null))
@@ -2427,119 +2729,125 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Synthesis from an investigation's own evidence - no fresh retrieval, so
   // every statement traces to a passage the researcher chose to keep.
-  app.post('/api/t/:slug/investigations/:id/synthesise', expensiveRateLimit, async (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
-    const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
-    if (!investigation) return c.json({ error: 'not_found' }, 404)
-    if (investigation.evidence.length === 0) {
-      return c.json({
-        error: 'no_evidence',
-        message: 'Save some evidence first - synthesis works only from kept passages.',
-      }, 400)
-    }
-    // Evidence the researcher judged not relevant is left out; what is left
-    // carries the researcher's verdict, tags and note so the synthesis works
-    // from their judgement, not just the raw passage.
-    const kept = investigation.evidence
-      .filter((item) => item.verdict !== 'not-relevant')
-      .slice(0, 40)
-    if (kept.length === 0) {
-      return c.json({
-        error: 'no_evidence',
-        message: 'Every saved passage is marked not relevant - judge or add evidence first.',
-      }, 400)
-    }
-    const numbered = kept.map((item, index) => {
-      const head = [
-        `[${index + 1}]`,
-        `verdict: ${item.verdict ?? 'unjudged'}`,
-        item.tags.length > 0 ? `tags: ${item.tags.join(', ')}` : null,
-        item.resourceTitle,
-      ].filter(Boolean).join(' | ')
-      const note = item.note.trim() ? `Researcher's note: ${item.note.trim().slice(0, 600)}\n` : ''
-      const denominators = passageDenominators(item.passage)
-      const carry = denominators.length > 0
-        ? `Denominators this passage carries, to be written beside any of its figures you use: ${
-          denominators.join('; ')
-        }\n`
-        : ''
-      return `${head}\n${note}${carry}${item.passage.slice(0, 1200)}`
-    })
-    const prompt = [
-      `Research question: ${investigation.question || investigation.name}`,
-      '',
-      'Synthesise a brief STRICTLY from the numbered evidence passages below - never from ' +
-      'outside knowledge. Cite passages inline as [n]. In `summary` give a clear, careful ' +
-      'answer (or state that the evidence is insufficient). In `supported` list claims the ' +
-      'evidence establishes, each with its [n] citations. In `contested` list points where ' +
-      'passages disagree, naming both sides with citations. In `gaps` list what a researcher ' +
-      'would still need to find out. Australian English.',
-      '',
-      "Each passage carries the researcher's verdict on it: `supports` means it supports an " +
-      'answer to the question; `partial` means it bears on the question only in part; ' +
-      "`contradicts` means the researcher judged it to contradict the question's premise or " +
-      'the other evidence - report it as opposing evidence, never as support; `unjudged` ' +
-      'means no verdict yet - use it with care and say so. A "Researcher\'s note" is the ' +
-      "researcher's own reading of that passage and overrides the passage's surface " +
-      'claim: if a note says the figures belong to a different intervention, study or ' +
-      'population than the passage appears to describe, do not attribute them to the ' +
-      "question's subject, and mention the caveat in `contested` or `gaps`.",
-      '',
-      "Figures: every proportion or rate you repeat from a passage carries that passage's " +
-      'denominator beside it, written as the passage gives it (for example "64.2% (2698/4201)" ' +
-      'or "71.1% (n = 1644)"). A retention, response or seizure-freedom rate is a proportion, ' +
-      'never a "denominator": the denominator is the number of patients the rate is computed ' +
-      'over. `gaps` lists only what no passage covers: never say a population, subgroup, ' +
-      'denominator or time point is not detailed when a passage states it. Use and cite every ' +
-      'passage that bears on the question, including subgroup and comparison passages; a ' +
-      'passage you leave uncited is reported by the portal as not used.',
-      '',
-      ...numbered,
-    ].join('\n')
-    try {
-      const result = await opts.management.askStructured(config, SYNTHESIS_SCHEMA, prompt)
-      const raw = result.object as {
-        summary?: string
-        supported?: string[]
-        contested?: string[]
-        gaps?: string[]
+  app.post(
+    declaredRoute('POST', '/api/t/:slug/investigations/:id/synthesise'),
+    expensiveRateLimit,
+    async (c) => {
+      const config = tenant(c.req.param('slug'))
+      if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
+      const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
+      if (!investigation) return c.json({ error: 'not_found' }, 404)
+      if (investigation.evidence.length === 0) {
+        return c.json({
+          error: 'no_evidence',
+          message: 'Save some evidence first - synthesis works only from kept passages.',
+        }, 400)
       }
-      // The synthesis never says "the context": the researcher sees passages.
-      const voice = (v: string | undefined) => v === undefined ? undefined : rewriteSentinels(v)
-      const list = (v: string[] | undefined) => v?.map((item) => rewriteSentinels(item))
-      const brief = {
-        ...raw,
-        summary: voice(raw.summary),
-        supported: list(raw.supported),
-        contested: list(raw.contested),
-        gaps: list(raw.gaps),
+      // Evidence the researcher judged not relevant is left out; what is left
+      // carries the researcher's verdict, tags and note so the synthesis works
+      // from their judgement, not just the raw passage.
+      const kept = investigation.evidence
+        .filter((item) => item.verdict !== 'not-relevant')
+        .slice(0, 40)
+      if (kept.length === 0) {
+        return c.json({
+          error: 'no_evidence',
+          message: 'Every saved passage is marked not relevant - judge or add evidence first.',
+        }, 400)
       }
-      const references = kept.map((item, index) => ({
-        n: index + 1,
-        resourceId: item.resourceId,
-        resourceTitle: item.resourceTitle,
-      }))
-      // Every reference is cited or listed as not used (D2-16).
-      const notUsed = unusedReferences(brief, kept.length)
-      const artefact = investigations.addArtefact(config.slug, clientId(c), investigation.id, {
-        kind: 'synthesis',
-        title: `Synthesis - ${tenantToday(config.timezone)}`,
-        data: { ...brief, references, notUsed },
+      const numbered = kept.map((item, index) => {
+        const head = [
+          `[${index + 1}]`,
+          `verdict: ${item.verdict ?? 'unjudged'}`,
+          item.tags.length > 0 ? `tags: ${item.tags.join(', ')}` : null,
+          item.resourceTitle,
+        ].filter(Boolean).join(' | ')
+        const note = item.note.trim()
+          ? `Researcher's note: ${item.note.trim().slice(0, 600)}\n`
+          : ''
+        const denominators = passageDenominators(item.passage)
+        const carry = denominators.length > 0
+          ? `Denominators this passage carries, to be written beside any of its figures you use: ${
+            denominators.join('; ')
+          }\n`
+          : ''
+        return `${head}\n${note}${carry}${item.passage.slice(0, 1200)}`
       })
-      return c.json({ ok: true, artefact })
-    } catch {
-      return c.json({
-        error: 'synthesis_failed',
-        message: 'The synthesis could not be generated - try again shortly.',
-      }, 502)
-    }
-  })
+      const prompt = [
+        `Research question: ${investigation.question || investigation.name}`,
+        '',
+        'Synthesise a brief STRICTLY from the numbered evidence passages below - never from ' +
+        'outside knowledge. Cite passages inline as [n]. In `summary` give a clear, careful ' +
+        'answer (or state that the evidence is insufficient). In `supported` list claims the ' +
+        'evidence establishes, each with its [n] citations. In `contested` list points where ' +
+        'passages disagree, naming both sides with citations. In `gaps` list what a researcher ' +
+        'would still need to find out. Australian English.',
+        '',
+        "Each passage carries the researcher's verdict on it: `supports` means it supports an " +
+        'answer to the question; `partial` means it bears on the question only in part; ' +
+        "`contradicts` means the researcher judged it to contradict the question's premise or " +
+        'the other evidence - report it as opposing evidence, never as support; `unjudged` ' +
+        'means no verdict yet - use it with care and say so. A "Researcher\'s note" is the ' +
+        "researcher's own reading of that passage and overrides the passage's surface " +
+        'claim: if a note says the figures belong to a different intervention, study or ' +
+        'population than the passage appears to describe, do not attribute them to the ' +
+        "question's subject, and mention the caveat in `contested` or `gaps`.",
+        '',
+        "Figures: every proportion or rate you repeat from a passage carries that passage's " +
+        'denominator beside it, written as the passage gives it (for example "64.2% (2698/4201)" ' +
+        'or "71.1% (n = 1644)"). A retention, response or seizure-freedom rate is a proportion, ' +
+        'never a "denominator": the denominator is the number of patients the rate is computed ' +
+        'over. `gaps` lists only what no passage covers: never say a population, subgroup, ' +
+        'denominator or time point is not detailed when a passage states it. Use and cite every ' +
+        'passage that bears on the question, including subgroup and comparison passages; a ' +
+        'passage you leave uncited is reported by the portal as not used.',
+        '',
+        ...numbered,
+      ].join('\n')
+      try {
+        const result = await opts.management.askStructured(config, SYNTHESIS_SCHEMA, prompt)
+        const raw = result.object as {
+          summary?: string
+          supported?: string[]
+          contested?: string[]
+          gaps?: string[]
+        }
+        // The synthesis never says "the context": the researcher sees passages.
+        const voice = (v: string | undefined) => v === undefined ? undefined : rewriteSentinels(v)
+        const list = (v: string[] | undefined) => v?.map((item) => rewriteSentinels(item))
+        const brief = {
+          ...raw,
+          summary: voice(raw.summary),
+          supported: list(raw.supported),
+          contested: list(raw.contested),
+          gaps: list(raw.gaps),
+        }
+        const references = kept.map((item, index) => ({
+          n: index + 1,
+          resourceId: item.resourceId,
+          resourceTitle: item.resourceTitle,
+        }))
+        // Every reference is cited or listed as not used (D2-16).
+        const notUsed = unusedReferences(brief, kept.length)
+        const artefact = investigations.addArtefact(config.slug, clientId(c), investigation.id, {
+          kind: 'synthesis',
+          title: `Synthesis - ${tenantToday(config.timezone)}`,
+          data: { ...brief, references, notUsed },
+        })
+        return c.json({ ok: true, artefact })
+      } catch {
+        return c.json({
+          error: 'synthesis_failed',
+          message: 'The synthesis could not be generated - try again shortly.',
+        }, 502)
+      }
+    },
+  )
 
   // Per-source relevance verdicts for an answer's sources - one structured
   // generation covering all passages, so triage is a single scan.
-  app.post('/api/t/:slug/verdicts', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/verdicts'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -2582,7 +2890,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Always 200 with a (possibly empty) list: the page renders nothing when
   // there is nothing good to offer, and a follow-up must never look like a
   // failure of the answer it follows.
-  app.post('/api/t/:slug/followups', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/followups'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ questions: [] })
@@ -2593,29 +2901,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  // Admin: connect a knowledge box to a tenant. The administrator enters the
-  // KB id and service-account token in the app; both stay server-side. When
-  // ADMIN_PASSCODE is configured every admin call must present it.
-  app.use('/api/admin/*', async (c, next) => {
-    if (opts.trustedAdmin?.(c.req.raw)) {
-      await next()
-      return
-    }
-    // Fail closed: with no passcode configured the admin surface is disabled,
-    // never open. Local dev sets ADMIN_PASSCODE in .env.
-    if (!opts.adminPasscode) {
-      return c.json({
-        error: 'admin_disabled',
-        message: 'Administration is not configured on this server - set ADMIN_PASSCODE.',
-      }, 503)
-    }
-    if (!(await secretsEqual(c.req.header('x-admin-passcode') ?? '', opts.adminPasscode))) {
-      return c.json({ error: 'unauthorised' }, 401)
-    }
-    await next()
-  })
-
-  app.get('/api/admin/overview', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/overview'), async (c) => {
     const rows = await Promise.all(
       tenants.list(true).map(async (summary) => {
         const config = tenant(summary.slug)
@@ -2639,7 +2925,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(rows)
   })
 
-  app.delete('/api/admin/t/:slug/knowledge-box', (c) => {
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/knowledge-box'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     bindings.remove(config.slug)
@@ -2652,7 +2938,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const requireManagement = (c: Context) =>
     management ? null : c.json({ error: 'management_unavailable' }, 503)
 
-  app.post('/api/admin/tenants', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/tenants'), async (c) => {
     const parsed = newTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     try {
@@ -2708,7 +2994,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.delete('/api/admin/tenants/:slug', async (c) => {
+  app.delete(declaredRoute('DELETE', '/api/admin/tenants/:slug'), async (c) => {
     const slug = c.req.param('slug')
     if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
     const config = tenants.get(slug)
@@ -2737,7 +3023,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.post('/api/admin/t/:slug/knowledge-box/create', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box/create'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!accountOpsAvailable()) {
@@ -2765,7 +3051,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.get('/api/admin/t/:slug/counters', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/counters'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -2773,7 +3059,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await management!.counters(config))
   })
 
-  app.get('/api/admin/t/:slug/recent', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/recent'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -2781,7 +3067,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await management!.recentResources(config))
   })
 
-  app.post('/api/admin/t/:slug/resources/link', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/link'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -2835,7 +3121,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/resources/text', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/text'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -2851,7 +3137,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/resources/upload', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/upload'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -2870,21 +3156,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/disable', (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/disable'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     tenants.setDisabled(config.slug, true)
     return c.json({ ok: true })
   })
 
-  app.post('/api/admin/t/:slug/enable', (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/enable'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     tenants.setDisabled(config.slug, false)
     return c.json({ ok: true })
   })
 
-  app.post('/api/admin/t/:slug/analyse', (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/analyse'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableAn = requireManagement(c)
@@ -2912,29 +3198,45 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.patch('/api/admin/tenants/:slug', async (c) => {
+  app.patch(declaredRoute('PATCH', '/api/admin/tenants/:slug'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = renameTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     if (parsed.data.searchPlaceholder) {
-      tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder })
+      await subAction(
+        c,
+        '/api/admin/tenants/:slug',
+        'tenant.behaviour.update',
+        () => tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
+        { changedFields: 'searchPlaceholder' },
+      )
     }
-    tenants.patchBranding(config.slug, {
-      ...(parsed.data.colours ? { colours: parsed.data.colours } : {}),
-      productName: parsed.data.name,
-      organisation: parsed.data.organisation,
-      tagline: parsed.data.tagline,
-      typography: parsed.data.typography,
-      shape: parsed.data.shape,
-      textScale: parsed.data.textScale,
-      density: parsed.data.density,
-      paletteId: parsed.data.paletteId,
-    })
+    const changedFields = Object.keys(parsed.data).filter((field) => field !== 'searchPlaceholder')
+    if (changedFields.length) {
+      await subAction(
+        c,
+        '/api/admin/tenants/:slug',
+        'tenant.appearance.update',
+        () =>
+          tenants.patchBranding(config.slug, {
+            ...(parsed.data.colours ? { colours: parsed.data.colours } : {}),
+            productName: parsed.data.name,
+            organisation: parsed.data.organisation,
+            tagline: parsed.data.tagline,
+            typography: parsed.data.typography,
+            shape: parsed.data.shape,
+            textScale: parsed.data.textScale,
+            density: parsed.data.density,
+            paletteId: parsed.data.paletteId,
+          }),
+        { changedFields: changedFields.join(',') },
+      )
+    }
     return c.json({ ok: true })
   })
 
-  app.post('/api/admin/t/:slug/kg/propose', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/kg/propose'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableKg = requireManagement(c)
@@ -2951,7 +3253,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/kg/implement', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/kg/implement'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableKgI = requireManagement(c)
@@ -2972,13 +3274,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.get('/api/admin/t/:slug/suggestions', (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/suggestions'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(suggestions.list(config.slug))
   })
 
-  app.post('/api/admin/t/:slug/interrogate', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/interrogate'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -2995,7 +3297,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/suggestions/:id/implement', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/suggestions/:id/implement'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3006,10 +3308,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return c.json({ error: 'already_decided' }, 409)
     }
     try {
-      const summary = await implementSuggestion(management!, config, suggestion)
+      const action = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
+        ? 'suggestion.taxonomy.write'
+        : 'suggestion.graph.write'
+      const summary = await subAction(
+        c,
+        '/api/admin/t/:slug/suggestions/:id/implement',
+        action,
+        () => implementSuggestion(management!, config, suggestion),
+        { suggestionId: suggestion.id, suggestionKind: suggestion.kind },
+      )
       suggestions.setStatus(config.slug, suggestion.id, 'implemented')
       return c.json({ ok: true, summary })
     } catch (err) {
+      if (err instanceof AuditWriteError) throw err
       return c.json({
         error: 'implement_failed',
         message: err instanceof Error ? err.message : 'The suggestion could not be implemented.',
@@ -3017,14 +3329,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/suggestions/:id/ignore', (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/suggestions/:id/ignore'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const updated = suggestions.setStatus(config.slug, c.req.param('id'), 'ignored')
     return updated ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.get('/api/admin/t/:slug/kg/strategy', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/kg/strategy'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3033,7 +3345,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ strategy })
   })
 
-  app.put('/api/admin/t/:slug/kg/strategy', async (c) => {
+  app.put(declaredRoute('PUT', '/api/admin/t/:slug/kg/strategy'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3051,7 +3363,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.get('/api/admin/t/:slug/agents', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/agents'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableAg = requireManagement(c)
@@ -3063,7 +3375,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.delete('/api/admin/t/:slug/agents/:taskId', async (c) => {
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/agents/:taskId'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableAd = requireManagement(c)
@@ -3089,7 +3401,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     'generated; a resource whose structured generation fails still gets a ' +
     'partial entry from that page summary rather than being left unenriched.'
 
-  app.get('/api/admin/t/:slug/enrichments/export', (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/enrichments/export'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     c.header('cache-control', 'no-store')
@@ -3097,7 +3409,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(enrichments.exportRecords(config.slug))
   })
 
-  app.post('/api/admin/t/:slug/enrichments/import', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/enrichments/import'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
 
@@ -3138,7 +3450,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.get('/api/admin/t/:slug/enrichments', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/enrichments'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableEn = requireManagement(c)
@@ -3159,7 +3471,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(rows)
   })
 
-  app.post('/api/admin/t/:slug/enrichments/run', (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/enrichments/run'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableRun = requireManagement(c)
@@ -3199,7 +3511,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Precompute per-document openers over the corpus (the same pass the
   // scheduler runs), so resource pages never generate them on demand.
-  app.post('/api/admin/t/:slug/questions/run', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/questions/run'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3228,7 +3540,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.post('/api/admin/t/:slug/resources/:id/enrich', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/:id/enrich'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableOne = requireManagement(c)
@@ -3251,7 +3563,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/branding/:kind', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/branding/:kind'), async (c) => {
     const config = tenant(c.req.param('slug'))
     const kind = c.req.param('kind')
     if (!config || !isBrandingKind(kind)) {
@@ -3309,13 +3621,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ok: true, url: `/api/t/${config.slug}/branding/${kind}` })
   })
 
-  app.get('/api/admin/t/:slug/prompts', (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/prompts'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(tenants.promptsFor(config.slug))
   })
 
-  app.put('/api/admin/t/:slug/prompts', async (c) => {
+  app.put(declaredRoute('PUT', '/api/admin/t/:slug/prompts'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = promptsSchema.safeParse(await c.req.json().catch(() => null))
@@ -3324,7 +3636,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ok: true })
   })
 
-  app.get('/api/admin/t/:slug/search-configs', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/search-configs'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableSc = requireManagement(c)
@@ -3332,7 +3644,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await management!.listSearchConfigs(config))
   })
 
-  app.post('/api/admin/t/:slug/search-configs/ensure', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/search-configs/ensure'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableSe = requireManagement(c)
@@ -3347,7 +3659,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Ensures the label-isolated search configs exist first, so the Help search
   // and the research exclusion are both wired the moment the docs land. On a
   // busy box the ingestion returns 503 (ingestion_busy) rather than a bare 500.
-  app.post('/api/admin/t/:slug/docs/ingest', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/docs/ingest'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableDi = requireManagement(c)
@@ -3366,7 +3678,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.get('/api/admin/t/:slug/crawl', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/crawl'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const url = c.req.query('url')
@@ -3380,7 +3692,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post('/api/admin/t/:slug/labelsets', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/labelsets'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableLs = requireManagement(c)
@@ -3413,7 +3725,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Saving re-instantiates every labeller agent that carries the set (delete,
   // then start the replacement for NEW resources only) so the agent picks up
   // the new labels and definitions; existing resources are never reprocessed.
-  app.put('/api/admin/t/:slug/labelsets/:id', async (c) => {
+  app.put(declaredRoute('PUT', '/api/admin/t/:slug/labelsets/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableLu = requireManagement(c)
@@ -3448,7 +3760,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Replace a crawled link resource with clean main-content text. The HTML
   // comes from the caller (an admin's browser can render pages the server
   // cannot fetch); labels, title and origin carry over.
-  app.post('/api/admin/t/:slug/reingest', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/reingest'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3490,7 +3802,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ok: true, newId: created.id, words: cleaned.body.split(/\s+/).length })
   })
 
-  app.get('/api/admin/t/:slug/corpus-health', async (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/corpus-health'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3504,7 +3816,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // dry run: the caller must send an explicit { dryRun: false } to delete
   // anything. Streamed over SSE (like kg/implement) since a full-catalogue
   // purge on a large box can run long enough to risk a plain-JSON timeout.
-  app.post('/api/admin/t/:slug/purge-failed', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/purge-failed'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3530,13 +3842,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.get('/api/admin/t/:slug/insights', (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     return c.json(insights.summary(config.slug))
   })
 
-  app.post('/api/admin/t/:slug/resources/:id/hidden', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/:id/hidden'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
@@ -3561,7 +3873,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // re-discovers the site, diffs against the urls already ingested from it,
   // and ingests what is new (bounded by the source's own page cap).
 
-  app.get('/api/admin/t/:slug/sources', (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/sources'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     // `summaries`, not `list`: the stored `synced` url ledger runs to
@@ -3569,7 +3881,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(sources.summaries(config.slug))
   })
 
-  app.post('/api/admin/t/:slug/sources', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/sources'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = sourceBodySchema.safeParse(await c.req.json().catch(() => null))
@@ -3616,7 +3928,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Change how a registered source behaves: daily auto-sync on or off, and
   // how many new pages one run may ingest.
-  app.patch('/api/admin/t/:slug/sources/:id', async (c) => {
+  app.patch(declaredRoute('PATCH', '/api/admin/t/:slug/sources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = sourcePatchSchema.safeParse(await c.req.json().catch(() => null))
@@ -3628,14 +3940,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(updated ?? { error: 'not_found' })
   })
 
-  app.delete('/api/admin/t/:slug/sources/:id', (c) => {
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/sources/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     sources.remove(config.slug, c.req.param('id'))
     return c.json({ ok: true })
   })
 
-  app.post('/api/admin/t/:slug/sources/:id/sync', (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/sources/:id/sync'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const source = sources.find(config.slug, c.req.param('id'))
@@ -3651,19 +3963,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
           config,
           source,
           (label) => emit({ type: 'item', label }),
+          operationSignals.get(c.req.raw),
         )
         await emit({ type: 'done', added, deferred })
       } catch (err) {
         // Persist the failure against the source as well as streaming it, so
         // it is still visible after the log panel is closed - and identical
         // to what a failed scheduled run leaves behind.
+        if (operationSignals.get(c.req.raw)?.aborted) return
         const message = recordSyncFailure(sources, config.slug, source, err)
         await emit({ type: 'error', message })
       }
     })
   })
 
-  app.post('/api/admin/migrate', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/migrate'), async (c) => {
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
     const parsed = migrateBodySchema.safeParse(await c.req.json().catch(() => null))
@@ -3738,7 +4052,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  app.post('/api/admin/t/:slug/knowledge-box', async (c) => {
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const raw = await c.req.json().catch(() => null) as
@@ -3782,7 +4096,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ok: true, status: bindings.status(config.slug), resourceCount })
   })
 
-  app.post('/api/t/:slug/ask', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/ask'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = askBodySchema.safeParse(await c.req.json().catch(() => null))
@@ -5311,7 +5625,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // streamed ask contract as the research assistant, but never retrieves,
   // grounds or cites research content - and research ask never sees these docs.
   // Documentation questions are not logged to the research insights store.
-  app.post('/api/t/:slug/docs/ask', expensiveRateLimit, async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/docs/ask'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = docsAskBodySchema.safeParse(await c.req.json().catch(() => null))

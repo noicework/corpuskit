@@ -11,6 +11,8 @@ import {
 import { ErrorCard, prettyLabel, Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 
 // Mirrors the server's schema so problems surface before a save attempt.
 export const TITLE_MAX = 60
@@ -322,7 +324,6 @@ function ProblemList({ problems }: { problems: string[] }) {
 
 function LabelsetEditor({
   slug,
-  passcode,
   labelset,
   draft,
   notice,
@@ -331,7 +332,6 @@ function LabelsetEditor({
   organisation,
 }: {
   slug: string
-  passcode: string
   labelset: Labelset
   draft: Draft
   /** A message from the panel (e.g. the set was just created). */
@@ -340,6 +340,7 @@ function LabelsetEditor({
   onSaved: () => Promise<unknown>
   organisation: string
 }) {
+  const { runExplicit } = useAdminAccess()
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [previous, setPrevious] = useState<unknown>(null)
@@ -355,7 +356,12 @@ function LabelsetEditor({
     setPrevious(null)
     const body = normalise(draft)
     try {
-      const result = await updateAdminLabelset(slug, passcode, labelset.id, body)
+      const result = await runExplicit(`Save label set ${body.title}`, async (access) => {
+        const saved = await updateAdminLabelset(slug, access, labelset.id, body)
+        if (saved?.ok !== true || !Array.isArray(saved.agents)) throw new AdminAccessError()
+        return saved
+      })
+      if (result === undefined) return
       setMessage({ tone: 'ok', text: resultMessage(body.title, result) })
       onDraft(null)
       await onSaved()
@@ -444,18 +450,17 @@ function LabelsetEditor({
  */
 function NewLabelsetForm({
   slug,
-  passcode,
   existingIds,
   onCreated,
   onCancel,
 }: {
   slug: string
-  passcode: string
   existingIds: string[]
   onCreated: (id: string, title: string) => Promise<unknown>
   /** Absent for the first set, where there is nothing to go back to. */
   onCancel?: () => void
 }) {
+  const { runExplicit } = useAdminAccess()
   const [draft, setDraft] = useState<Draft>(blankDraft)
   const [touched, setTouched] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -470,10 +475,16 @@ function NewLabelsetForm({
     setMessage(null)
     const body = normalise(draft)
     try {
-      const created = await createAdminLabelset(slug, passcode, body)
+      const created = await runExplicit(`Create label set ${body.title}`, async (access) => {
+        const result = await createAdminLabelset(slug, access, body)
+        if (result?.ok !== true || typeof result.id !== 'string') throw new AdminAccessError()
+        return result
+      })
+      if (created === undefined) return
       await onCreated(created.id, body.title)
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not create this label set.') })
+    } finally {
       setBusy(false)
     }
   }
@@ -534,11 +545,9 @@ function NewLabelsetForm({
  */
 export function LabelsetsPanel({
   slug,
-  passcode,
   organisation = '',
 }: {
   slug: string
-  passcode: string
   organisation?: string
 }) {
   const queryClient = useQueryClient()
@@ -611,7 +620,6 @@ export function LabelsetsPanel({
           <div className='mt-3'>
             <NewLabelsetForm
               slug={slug}
-              passcode={passcode}
               existingIds={[]}
               onCreated={onCreated}
             />
@@ -681,7 +689,6 @@ export function LabelsetsPanel({
             ? (
               <NewLabelsetForm
                 slug={slug}
-                passcode={passcode}
                 existingIds={labelsets.map((ls) => ls.id)}
                 onCreated={onCreated}
                 onCancel={() =>
@@ -692,7 +699,6 @@ export function LabelsetsPanel({
               <LabelsetEditor
                 key={selected.id}
                 slug={slug}
-                passcode={passcode}
                 labelset={selected}
                 draft={drafts[selected.id] ?? draftFrom(selected)}
                 notice={notice}

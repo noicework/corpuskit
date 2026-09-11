@@ -61,6 +61,7 @@
     "binding": "CF_VERSION_METADATA"
   },
   "vars": {
+    "WORKER_NAME": "corpuskit",
     "ENVIRONMENT": "production",
     "ENTRA_CLIENT_ID": "147a13c9-2a9e-4e32-aa01-3f020d2a18cd",
     "ENTRA_TENANT_ID": "15c1eb19-1f38-4a09-bb25-7ff9892387b8",

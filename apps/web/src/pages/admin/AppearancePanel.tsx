@@ -24,8 +24,20 @@ import {
 } from '../../lib/theme.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 
 const MAX_BYTES = 5 * 1024 * 1024
+
+function useAppearanceSave(slug: string) {
+  const { runExplicit } = useAdminAccess()
+  return (input: Parameters<typeof updatePortalAppearance>[2], label: string) =>
+    runExplicit(label, async (access) => {
+      const result = await updatePortalAppearance(slug, access, input)
+      if (result?.ok !== true) throw new AdminAccessError()
+      return true
+    })
+}
 
 type Branding = TenantConfig['branding']
 type ImageKind = 'logo' | 'hero'
@@ -43,19 +55,18 @@ function brandingUrl(slug: string, kind: ImageKind, version: number): string {
 /** One upload card: preview, guidance copy and an "Upload…" pill button. */
 function UploadCard({
   slug,
-  passcode,
   kind,
   title,
   guidance,
   onUploaded,
 }: {
   slug: string
-  passcode: string
   kind: ImageKind
   title: string
   guidance: string
   onUploaded: () => Promise<unknown>
 }) {
+  const { runExplicit } = useAdminAccess()
   const [version, setVersion] = useState(0)
   const [missing, setMissing] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -72,7 +83,15 @@ function UploadCard({
     setBusy(true)
     setMessage(null)
     try {
-      await uploadBranding(slug, passcode, kind, file)
+      const uploaded = await runExplicit(
+        `Upload ${title.toLowerCase()} for ${slug}`,
+        async (access) => {
+          const result = await uploadBranding(slug, access, kind, file)
+          if (result?.ok !== true || typeof result.url !== 'string') throw new AdminAccessError()
+          return true
+        },
+      )
+      if (uploaded === undefined) return
       setVersion((v) => v + 1)
       setMissing(false)
       await onUploaded()
@@ -121,6 +140,7 @@ function UploadCard({
         {busy ? 'Uploading…' : 'Upload…'}
         <input
           type='file'
+          data-branding-upload={kind}
           accept='image/png,image/jpeg,image/webp,image/svg+xml'
           className='sr-only'
           disabled={busy}
@@ -258,27 +278,25 @@ function miniFromLibrary(palette: Palette): MiniPalette {
 
 function ColoursSection({
   slug,
-  passcode,
   branding,
 }: {
   slug: string
-  passcode: string
   branding: Branding
 }) {
   const queryClient = useQueryClient()
+  const saveAppearance = useAppearanceSave(slug)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const selected: PaletteChoice = branding.paletteId ?? 'default'
+  const [selected, setSelected] = useState<PaletteChoice>(branding.paletteId ?? 'default')
 
-  const choose = async (paletteId: PaletteChoice, label: string) => {
-    if (paletteId === selected) return
+  const choose = async () => {
     setBusy(true)
     setMessage(null)
     try {
-      await updatePortalAppearance(slug, passcode, { paletteId })
+      if (!await saveAppearance({ paletteId: selected }, 'Save portal colours')) return
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
-      setMessage({ tone: 'ok', text: `Saved - this portal now uses ${label}.` })
+      setMessage({ tone: 'ok', text: 'Saved - the portal colours are updated.' })
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
@@ -303,15 +321,15 @@ function ColoursSection({
       <h3 className='text-sm font-semibold text-ink'>Colours</h3>
       <p className='mt-1 text-xs text-ink-3'>
         The portal's colour identity - its own brand colours, or a palette from the library. Each
-        library palette carries its matching greys; Observatory is a dark interface. Applies as soon
-        as you choose.
+        library palette carries its matching greys; Observatory is a dark interface. Choose a
+        preview, then save to apply it.
       </p>
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
         <ChoiceTile
           selected={selected === 'default'}
           disabled={busy}
-          onSelect={() => void choose('default', 'its own brand colours')}
+          onSelect={() => setSelected('default')}
           label='Portal default colours'
         >
           <PaletteMini palette={defaultMini} />
@@ -327,7 +345,7 @@ function ColoursSection({
               key={id}
               selected={selected === id}
               disabled={busy}
-              onSelect={() => void choose(id, entry.label)}
+              onSelect={() => setSelected(id)}
               label={`${entry.label} palette`}
             >
               <PaletteMini palette={miniFromLibrary(entry.palette)} />
@@ -337,6 +355,16 @@ function ColoursSection({
           )
         })}
       </div>
+
+      <button
+        type='button'
+        data-appearance-save='colours'
+        disabled={busy || ((branding.paletteId ?? 'default') === selected)}
+        onClick={() => void choose()}
+        className='rp-btn rp-btn-primary mt-4'
+      >
+        {busy ? 'Saving…' : 'Save colours'}
+      </button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -356,46 +384,37 @@ function firstFamily(stack: string): string {
 
 function TypographySection({
   slug,
-  passcode,
   branding,
 }: {
   slug: string
-  passcode: string
   branding: Branding
 }) {
   useAllPairingFonts()
   const queryClient = useQueryClient()
+  const saveAppearance = useAppearanceSave(slug)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const selected: TypographyChoice = branding.typography ?? 'default'
-  const selectedScale: TextScaleId = branding.textScale ?? 'default'
+  const [selected, setSelected] = useState<TypographyChoice>(branding.typography ?? 'default')
+  const [selectedScale, setSelectedScale] = useState<TextScaleId>(branding.textScale ?? 'default')
 
-  const save = async (
-    input: { typography?: TypographyChoice; textScale?: TextScaleId },
-    confirmation: string,
-  ) => {
+  const save = async () => {
     setBusy(true)
     setMessage(null)
     try {
-      await updatePortalAppearance(slug, passcode, input)
+      if (
+        !await saveAppearance(
+          { typography: selected, textScale: selectedScale },
+          'Save portal typography',
+        )
+      ) return
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
-      setMessage({ tone: 'ok', text: confirmation })
+      setMessage({ tone: 'ok', text: 'Saved - the portal typography is updated.' })
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
       setBusy(false)
     }
-  }
-
-  const choose = (choice: TypographyChoice, label: string) => {
-    if (choice === selected) return
-    return save({ typography: choice }, `Saved - this portal now uses ${label}.`)
-  }
-
-  const chooseScale = (scale: TextScaleId, label: string) => {
-    if (scale === selectedScale) return
-    return save({ textScale: scale }, `Saved - text size is now ${label.toLowerCase()}.`)
   }
 
   const previews: {
@@ -446,7 +465,7 @@ function TypographySection({
       <h3 className='text-sm font-semibold text-ink'>Typography</h3>
       <p className='mt-1 text-xs text-ink-3'>
         The heading and body faces used across this portal - pick a pairing, or upload your own.
-        Applies as soon as you choose.
+        Choose a preview, then save to apply it.
       </p>
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
@@ -455,7 +474,7 @@ function TypographySection({
             key={option.id}
             selected={selected === option.id}
             disabled={busy}
-            onSelect={() => void choose(option.id, option.label)}
+            onSelect={() => setSelected(option.id)}
             label={`${option.label} typeface pairing`}
           >
             <span className='block truncate pr-6 text-xl text-ink' style={option.headingStyle}>
@@ -473,7 +492,7 @@ function TypographySection({
         <ChoiceTile
           selected={selected === 'custom'}
           disabled={busy}
-          onSelect={() => void choose('custom', 'your uploaded fonts')}
+          onSelect={() => setSelected('custom')}
           label='Custom uploaded fonts'
         >
           <span
@@ -500,7 +519,6 @@ function TypographySection({
         <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
           <FontUploadCard
             slug={slug}
-            passcode={passcode}
             kind='font-heading'
             title='Heading font'
             uploaded={Boolean(branding.headingFontUrl)}
@@ -508,7 +526,6 @@ function TypographySection({
           />
           <FontUploadCard
             slug={slug}
-            passcode={passcode}
             kind='font-body'
             title='Body font'
             uploaded={Boolean(branding.bodyFontUrl)}
@@ -527,7 +544,7 @@ function TypographySection({
             key={option.id}
             selected={selectedScale === option.id}
             disabled={busy}
-            onSelect={() => void chooseScale(option.id, option.label)}
+            onSelect={() => setSelectedScale(option.id)}
             label={`${option.label} text size`}
           >
             <span
@@ -542,6 +559,18 @@ function TypographySection({
           </ChoiceTile>
         ))}
       </div>
+
+      <button
+        type='button'
+        data-appearance-save='typography'
+        disabled={busy ||
+          ((branding.typography ?? 'default') === selected &&
+            (branding.textScale ?? 'default') === selectedScale)}
+        onClick={() => void save()}
+        className='rp-btn rp-btn-primary mt-4'
+      >
+        {busy ? 'Saving…' : 'Save typography'}
+      </button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -571,20 +600,19 @@ const TEXT_SCALE_OPTIONS: {
 
 function FontUploadCard({
   slug,
-  passcode,
   kind,
   title,
   uploaded,
   previewFamily,
 }: {
   slug: string
-  passcode: string
   kind: FontKind
   title: string
   uploaded: boolean
   previewFamily: string
 }) {
   const queryClient = useQueryClient()
+  const { runExplicit } = useAdminAccess()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -599,7 +627,15 @@ function FontUploadCard({
     setBusy(true)
     setMessage(null)
     try {
-      await uploadBranding(slug, passcode, kind, file)
+      const uploaded = await runExplicit(
+        `Upload ${title.toLowerCase()} for ${slug}`,
+        async (access) => {
+          const result = await uploadBranding(slug, access, kind, file)
+          if (result?.ok !== true || typeof result.url !== 'string') throw new AdminAccessError()
+          return true
+        },
+      )
+      if (uploaded === undefined) return
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       setMessage({ tone: 'ok', text: 'Uploaded - the portal now uses it.' })
     } catch (err) {
@@ -614,9 +650,9 @@ function FontUploadCard({
 
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
-      <div className='flex items-center justify-between gap-3'>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
         <h4 className='text-sm font-semibold text-ink'>{title}</h4>
-        <span className={`rp-badge ${uploaded ? 'rp-badge-ok' : 'rp-badge-quiet'}`}>
+        <span className={`rp-badge shrink-0 ${uploaded ? 'rp-badge-ok' : 'rp-badge-quiet'}`}>
           {uploaded ? 'In use' : 'None yet'}
         </span>
       </div>
@@ -631,6 +667,7 @@ function FontUploadCard({
         {busy ? 'Uploading…' : 'Upload…'}
         <input
           type='file'
+          data-branding-upload={kind}
           accept='.woff2,.woff,.ttf,.otf'
           className='sr-only'
           disabled={busy}
@@ -650,27 +687,25 @@ const SHAPE_OPTIONS: { id: ShapeId; label: string; description: string }[] = [
 
 function ShapeSection({
   slug,
-  passcode,
   branding,
 }: {
   slug: string
-  passcode: string
   branding: Branding
 }) {
   const queryClient = useQueryClient()
+  const saveAppearance = useAppearanceSave(slug)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const selected: ShapeId = branding.shape ?? 'square'
+  const [selected, setSelected] = useState<ShapeId>(branding.shape ?? 'square')
 
-  const choose = async (shape: ShapeId, label: string) => {
-    if (shape === selected) return
+  const choose = async () => {
     setBusy(true)
     setMessage(null)
     try {
-      await updatePortalAppearance(slug, passcode, { shape })
+      if (!await saveAppearance({ shape: selected }, 'Save portal shape')) return
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
-      setMessage({ tone: 'ok', text: `Saved - this portal is now ${label.toLowerCase()}.` })
+      setMessage({ tone: 'ok', text: `Saved - this portal is now ${selected}.` })
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
@@ -682,7 +717,8 @@ function ShapeSection({
     <div className='rp-card p-5'>
       <h3 className='text-sm font-semibold text-ink'>Shape</h3>
       <p className='mt-1 text-xs text-ink-3'>
-        How rounded surfaces, buttons and tags are across the portal. Applies as soon as you choose.
+        How rounded surfaces, buttons and tags are across the portal. Choose a preview, then save to
+        apply it.
       </p>
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3'>
@@ -693,7 +729,7 @@ function ShapeSection({
               key={option.id}
               selected={selected === option.id}
               disabled={busy}
-              onSelect={() => void choose(option.id, option.label)}
+              onSelect={() => setSelected(option.id)}
               label={`${option.label} shape`}
             >
               {/* Miniature of a card with a button and a tag in this shape. */}
@@ -722,6 +758,16 @@ function ShapeSection({
         })}
       </div>
 
+      <button
+        type='button'
+        data-appearance-save='shape'
+        disabled={busy || ((branding.shape ?? 'square') === selected)}
+        onClick={() => void choose()}
+        className='rp-btn rp-btn-primary mt-4'
+      >
+        {busy ? 'Saving…' : 'Save shape'}
+      </button>
+
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
   )
@@ -736,27 +782,25 @@ const DENSITY_OPTIONS: { id: DensityId; label: string; description: string }[] =
 
 function DensitySection({
   slug,
-  passcode,
   branding,
 }: {
   slug: string
-  passcode: string
   branding: Branding
 }) {
   const queryClient = useQueryClient()
+  const saveAppearance = useAppearanceSave(slug)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const selected: DensityId = branding.density ?? 'default'
+  const [selected, setSelected] = useState<DensityId>(branding.density ?? 'default')
 
-  const choose = async (density: DensityId, label: string) => {
-    if (density === selected) return
+  const choose = async () => {
     setBusy(true)
     setMessage(null)
     try {
-      await updatePortalAppearance(slug, passcode, { density })
+      if (!await saveAppearance({ density: selected }, 'Save portal density')) return
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
-      setMessage({ tone: 'ok', text: `Saved - density is now ${label.toLowerCase()}.` })
+      setMessage({ tone: 'ok', text: `Saved - density is now ${selected}.` })
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
@@ -768,8 +812,8 @@ function DensitySection({
     <div className='rp-card p-5'>
       <h3 className='text-sm font-semibold text-ink'>Density</h3>
       <p className='mt-1 text-xs text-ink-3'>
-        How much air the interface keeps around content. Spacing changes; text size does not.
-        Applies as soon as you choose.
+        How much air the interface keeps around content. Spacing changes; text size does not. Choose
+        a preview, then save to apply it.
       </p>
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4'>
@@ -780,7 +824,7 @@ function DensitySection({
               key={option.id}
               selected={selected === option.id}
               disabled={busy}
-              onSelect={() => void choose(option.id, option.label)}
+              onSelect={() => setSelected(option.id)}
               label={`${option.label} density`}
             >
               {/* Miniature card whose padding and line rhythm follow the dial. */}
@@ -807,6 +851,16 @@ function DensitySection({
         })}
       </div>
 
+      <button
+        type='button'
+        data-appearance-save='density'
+        disabled={busy || ((branding.density ?? 'default') === selected)}
+        onClick={() => void choose()}
+        className='rp-btn rp-btn-primary mt-4'
+      >
+        {busy ? 'Saving…' : 'Save density'}
+      </button>
+
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
   )
@@ -814,16 +868,13 @@ function DensitySection({
 
 /**
  * Appearance: the portal's images (logo, hero), typeface pairing, shape
- * language and density. Every choice saves immediately and re-themes the
- * live portal - including this page, which is the fastest possible preview.
+ * language and density. Choices stay local until saved. Each upload is a separate explicit request.
  */
 export function AppearancePanel({
   slug,
-  passcode,
   branding,
 }: {
   slug: string
-  passcode: string
   branding: Branding
 }) {
   const queryClient = useQueryClient()
@@ -844,7 +895,6 @@ export function AppearancePanel({
         <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2'>
           <UploadCard
             slug={slug}
-            passcode={passcode}
             kind='logo'
             title='Logo'
             guidance='PNG or SVG with transparency works best - shown in the header at 28px tall.'
@@ -852,7 +902,6 @@ export function AppearancePanel({
           />
           <UploadCard
             slug={slug}
-            passcode={passcode}
             kind='hero'
             title='Hero image'
             guidance='Wide photographic image, at least 1600px - shown behind the portal hero.'
@@ -861,10 +910,10 @@ export function AppearancePanel({
         </div>
       </div>
 
-      <ColoursSection slug={slug} passcode={passcode} branding={branding} />
-      <TypographySection slug={slug} passcode={passcode} branding={branding} />
-      <ShapeSection slug={slug} passcode={passcode} branding={branding} />
-      <DensitySection slug={slug} passcode={passcode} branding={branding} />
+      <ColoursSection slug={slug} branding={branding} />
+      <TypographySection slug={slug} branding={branding} />
+      <ShapeSection slug={slug} branding={branding} />
+      <DensitySection slug={slug} branding={branding} />
     </div>
   )
 }

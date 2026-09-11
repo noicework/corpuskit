@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ensureSearchConfigs,
   getPrompts,
@@ -11,21 +11,55 @@ import {
 import { intentSummary } from '../../components/RouteChip.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
+
+type Prompts = Awaited<ReturnType<typeof getPrompts>>
+type Routing = Awaited<ReturnType<typeof getRouting>>
+
+function validPrompts(value: Prompts): Prompts {
+  if (
+    !value || typeof value !== 'object' || Array.isArray(value) ||
+    (value.ask !== undefined && typeof value.ask !== 'string') ||
+    (value.images !== undefined && typeof value.images !== 'boolean')
+  ) throw new AdminAccessError()
+  return value
+}
+
+function validConfigs(value: Record<string, unknown>): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AdminAccessError()
+  return value
+}
+
+function validRouting(value: Routing): Routing {
+  if (
+    !value || !Array.isArray(value.recent) || !Number.isFinite(value.summary?.total) ||
+    !value.summary?.byIntent || !value.summary?.byStage
+  ) throw new AdminAccessError()
+  for (const counts of [value.summary.byIntent, value.summary.byStage]) {
+    validConfigs(counts)
+    if (Object.values(counts).some((count) => !Number.isFinite(count))) throw new AdminAccessError()
+  }
+  return value
+}
 
 /**
  * Ask system prompt editor. Loads the current prompt (if any), lets the
  * librarian override it, and saves straight back through the admin API.
  */
-function AskPromptEditor({ slug, passcode }: { slug: string; passcode: string }) {
+function AskPromptEditor({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
   const [value, setValue] = useState('')
   const [images, setImages] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ['admin-prompts', slug],
-    queryFn: () => getPrompts(slug, passcode),
+    queryFn: async () => validPrompts(await getPrompts(slug, sessionAccess)),
+    enabled: coarseAdminEligible,
+    retry: false,
   })
 
   useEffect(() => {
@@ -36,11 +70,35 @@ function AskPromptEditor({ slug, passcode }: { slug: string; passcode: string })
     }
   }, [data, loaded])
 
+  const onLoad = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const result = await runExplicit(
+        'Load the current ask prompt',
+        async (access) => validPrompts(await getPrompts(slug, access)),
+      )
+      if (result === undefined) return
+      setValue(result.ask ?? '')
+      setImages(result.images ?? false)
+      setLoaded(true)
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load the prompt.') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onSave = async () => {
     setBusy(true)
     setMessage(null)
     try {
-      await savePrompts(slug, passcode, { ask: value.trim() || undefined, images })
+      const result = await runExplicit('Save the ask prompt', async (access) => {
+        const saved = await savePrompts(slug, access, { ask: value.trim() || undefined, images })
+        if (saved?.ok !== true) throw new AdminAccessError()
+        return true
+      })
+      if (result === undefined) return
       setMessage({ tone: 'ok', text: 'Saved - the new prompt applies to the next answer.' })
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the prompt.') })
@@ -55,7 +113,26 @@ function AskPromptEditor({ slug, passcode }: { slug: string; passcode: string })
       <p className='mt-1 text-xs text-ink-3'>
         Used for every grounded answer on this portal. Leave empty for the default analyst prompt.
       </p>
+      <button
+        type='button'
+        data-behaviour-read='prompts'
+        disabled={busy}
+        onClick={() => void onLoad()}
+        className='rp-btn rp-btn-outline mt-3'
+      >
+        {loaded ? 'Reload current prompt' : 'Load current prompt'}
+      </button>
+      {!loaded && (
+        <p className='mt-3 text-sm text-ink-3'>
+          {isError
+            ? 'Could not load the current prompt.'
+            : 'Load the current prompt before editing.'}
+        </p>
+      )}
       <textarea
+        data-behaviour-prompt
+        aria-label='Ask system prompt'
+        disabled={busy || !loaded}
         className='rp-input mt-3'
         rows={8}
         value={value}
@@ -65,6 +142,7 @@ function AskPromptEditor({ slug, passcode }: { slug: string; passcode: string })
       <label className='mt-3 flex items-center gap-2 text-sm text-ink-2'>
         <input
           type='checkbox'
+          disabled={busy || !loaded}
           checked={images}
           onChange={(e) => setImages(e.target.checked)}
         />
@@ -77,7 +155,8 @@ function AskPromptEditor({ slug, passcode }: { slug: string; passcode: string })
       <div className='mt-3 flex items-center gap-3'>
         <button
           type='button'
-          disabled={busy}
+          data-behaviour-save
+          disabled={busy || !loaded}
           onClick={() => void onSave()}
           className='rp-btn rp-btn-primary'
         >
@@ -90,21 +169,56 @@ function AskPromptEditor({ slug, passcode }: { slug: string; passcode: string })
 }
 
 /** Search configurations block: create the platform defaults and inspect what's there. */
-function SearchConfigsBlock({ slug, passcode }: { slug: string; passcode: string }) {
+function SearchConfigsBlock({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<string[] | null>(null)
   const [message, setMessage] = useState<Message | null>(null)
+  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null)
 
-  const { data, refetch, isLoading, isError } = useQuery({
+  const { data: sessionData, refetch, isLoading, isError } = useQuery({
     queryKey: ['admin-search-configs', slug],
-    queryFn: () => getSearchConfigs(slug, passcode),
+    queryFn: async () => validConfigs(await getSearchConfigs(slug, sessionAccess)),
+    enabled: coarseAdminEligible,
+    retry: false,
   })
+  const data = coarseAdminEligible ? sessionData : snapshot
+
+  const onLoad = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const result = await runExplicit(
+        'Load search configurations',
+        async (access) => validConfigs(await getSearchConfigs(slug, access)),
+      )
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['admin-search-configs', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not load search configurations.'),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const onEnsure = async () => {
     setBusy(true)
     setMessage(null)
     try {
-      const result = await ensureSearchConfigs(slug, passcode)
+      const result = await runExplicit('Create default search configurations', async (access) => {
+        const saved = await ensureSearchConfigs(slug, access)
+        if (
+          saved?.ok !== true || !Array.isArray(saved.created) ||
+          saved.created.some((name) => typeof name !== 'string')
+        ) throw new AdminAccessError()
+        return saved
+      })
+      if (result === undefined) return
       setCreated(result.created)
       setMessage({
         tone: 'ok',
@@ -114,7 +228,7 @@ function SearchConfigsBlock({ slug, passcode }: { slug: string; passcode: string
           }.`
           : 'All default configurations already exist.',
       })
-      await refetch()
+      if (coarseAdminEligible) await refetch()
     } catch (err) {
       setMessage({
         tone: 'error',
@@ -136,13 +250,29 @@ function SearchConfigsBlock({ slug, passcode }: { slug: string; passcode: string
         </div>
         <button
           type='button'
+          data-behaviour-ensure
           disabled={busy}
           onClick={() => void onEnsure()}
-          className='rp-btn rp-btn-outline'
+          className='rp-btn rp-btn-outline h-auto whitespace-normal py-2'
         >
           {busy ? 'Creating…' : 'Create default configurations'}
         </button>
       </div>
+
+      <button
+        type='button'
+        data-behaviour-read='configs'
+        disabled={busy}
+        onClick={() => void onLoad()}
+        className='rp-btn rp-btn-outline mt-3 h-auto whitespace-normal py-2'
+      >
+        Refresh search configurations
+      </button>
+      {!data && !isLoading && (
+        <p className='mt-3 text-sm text-ink-3'>
+          Load search configurations to inspect the current settings.
+        </p>
+      )}
 
       {created && created.length > 0 && (
         <ul className='mt-3 flex flex-wrap gap-1.5'>
@@ -153,7 +283,6 @@ function SearchConfigsBlock({ slug, passcode }: { slug: string; passcode: string
       {message && <MessagePanel message={message} className='mt-3' />}
       <IntentsTable
         slug={slug}
-        passcode={passcode}
         live={data ?? null}
         loading={isLoading}
         error={isError}
@@ -181,11 +310,11 @@ function SearchConfigsBlock({ slug, passcode }: { slug: string; passcode: string
  * Behaviour: the portal's grounded-answer system prompt and its search
  * configurations. Both are platform-facing settings, not content.
  */
-export function BehaviourPanel({ slug, passcode }: { slug: string; passcode: string }) {
+export function BehaviourPanel({ slug }: { slug: string }) {
   return (
     <div className='space-y-4'>
-      <AskPromptEditor slug={slug} passcode={passcode} />
-      <SearchConfigsBlock slug={slug} passcode={passcode} />
+      <AskPromptEditor slug={slug} />
+      <SearchConfigsBlock slug={slug} />
     </div>
   )
 }
@@ -197,23 +326,47 @@ export function BehaviourPanel({ slug, passcode }: { slug: string; passcode: str
  * every intent configuration too.
  */
 function IntentsTable(
-  { slug, passcode, live, loading, error }: {
+  { slug, live, loading, error }: {
     slug: string
-    passcode: string
     live: Record<string, unknown> | null
     loading: boolean
     error: boolean
   },
 ) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const queryClient = useQueryClient()
+  const [snapshot, setSnapshot] = useState<Routing | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<Message | null>(null)
   const { data: config } = useQuery({
     queryKey: ['tenant-config', slug],
     queryFn: () => getTenantConfig(slug),
   })
-  const { data: routing } = useQuery({
+  const { data: sessionRouting } = useQuery({
     queryKey: ['admin-routing', slug],
-    queryFn: () => getRouting(slug, passcode),
-    refetchInterval: 30_000,
+    queryFn: async () => validRouting(await getRouting(slug, sessionAccess)),
+    enabled: coarseAdminEligible,
+    retry: false,
+    refetchInterval: coarseAdminEligible ? 30_000 : false,
   })
+  const routing = coarseAdminEligible ? sessionRouting : snapshot
+  const onLoad = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const result = await runExplicit(
+        'Load routing activity',
+        async (access) => validRouting(await getRouting(slug, access)),
+      )
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['admin-routing', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load routing activity.') })
+    } finally {
+      setBusy(false)
+    }
+  }
   const intents = config?.intents ?? []
   if (intents.length === 0) return null
   const defaultIntent = config?.defaultIntent
@@ -243,8 +396,24 @@ function IntentsTable(
               {Object.entries(summary.byStage).map(([k, v]) => `${v} ${k}`).join(', ')}
             </p>
           )
-          : <p className='text-xs text-ink-3'>No routing decisions logged yet.</p>}
+          : (
+            <p className='text-xs text-ink-3'>
+              {routing
+                ? 'No routing decisions logged yet.'
+                : 'Load routing activity to view decisions.'}
+            </p>
+          )}
       </div>
+      <button
+        type='button'
+        data-behaviour-read='routing'
+        disabled={busy}
+        onClick={() => void onLoad()}
+        className='rp-btn rp-btn-outline my-3'
+      >
+        Refresh routing activity
+      </button>
+      {message && <MessagePanel message={message} className='mt-3' />}
       <div className='mt-2 overflow-x-auto'>
         <table className='w-full text-left text-xs'>
           <thead className='text-ink-3'>

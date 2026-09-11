@@ -1,6 +1,13 @@
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { KgImplementEvent, KgProposal } from '@research-portal/core'
+import {
+  KbAgentSchema,
+  type KgImplementEvent,
+  type KgProposal,
+  KgProposalSchema,
+} from '@research-portal/core'
 import { deleteAgent, getAgents, implementKg, proposeKg } from '../../api/client.ts'
 import { KgStrategyEditor } from './KgStrategyEditor.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
@@ -38,8 +45,10 @@ function ChipGroup({
  * while it can actually be seen.
  */
 export function KgPanel(
-  { slug, passcode, open }: { slug: string; passcode: string; open: boolean },
+  { slug, open }: { slug: string; open: boolean },
 ) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getAgents>>>()
   const queryClient = useQueryClient()
   const [proposing, setProposing] = useState(false)
   const [proposal, setProposal] = useState<KgProposal | null>(null)
@@ -52,15 +61,20 @@ export function KgPanel(
 
   const agentsQuery = useQuery({
     queryKey: ['kb-agents', slug],
-    queryFn: () => getAgents(slug, passcode),
-    enabled: open,
+    queryFn: () => getAgents(slug, sessionAccess),
+    enabled: open && coarseAdminEligible,
+    retry: false,
   })
 
   const onPropose = async () => {
     setProposing(true)
     setMessage(null)
     try {
-      const result = await proposeKg(slug, passcode)
+      const result = await runExplicit(
+        'Propose a graph strategy',
+        async (access) => KgProposalSchema.parse(await proposeKg(slug, access)),
+      )
+      if (result === undefined) return
       setProposal(result)
     } catch (err) {
       setMessage({
@@ -77,27 +91,38 @@ export function KgPanel(
     setLog([])
     setMessage(null)
     try {
-      await implementKg(
-        slug,
-        passcode,
-        { applyExisting, includeSummaries, includeMemory },
-        (event) => {
-          setLog((prev) => [...prev, event])
-          if (event.type === 'done') {
-            setMessage({
-              tone: 'ok',
-              text: `Strategy implemented - ${event.agents} ${
-                event.agents === 1 ? 'agent' : 'agents'
-              } installed on the box.`,
-            })
-          }
-          if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
-        },
-      )
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] }),
-        queryClient.invalidateQueries({ queryKey: ['kg-strategy', slug] }),
-      ])
+      const result = await runExplicit('Implement the graph strategy', async (access) => {
+        let completed = false
+        let failed = false
+        await implementKg(
+          slug,
+          access,
+          { applyExisting, includeSummaries, includeMemory },
+          (event) => {
+            setLog((prev) => [...prev, event])
+            if (event.type === 'error') failed = true
+            if (event.type === 'done') {
+              completed = Number.isFinite(event.agents)
+              setMessage({
+                tone: 'ok',
+                text: `Strategy implemented - ${event.agents} ${
+                  event.agents === 1 ? 'agent' : 'agents'
+                } installed on the box.`,
+              })
+            }
+            if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+          },
+        )
+        if (!completed || failed) throw new AdminAccessError()
+        return true
+      })
+      if (result === undefined) return
+      if (coarseAdminEligible) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] }),
+          queryClient.invalidateQueries({ queryKey: ['kg-strategy', slug] }),
+        ])
+      }
     } catch (err) {
       setMessage({
         tone: 'error',
@@ -111,14 +136,36 @@ export function KgPanel(
   const onRemoveAgent = async (taskId: string) => {
     setMessage(null)
     try {
-      await deleteAgent(slug, passcode, taskId)
-      await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
+      const result = await runExplicit('Remove this graph agent', async (access) => {
+        const result = await deleteAgent(slug, access, taskId)
+        if (result?.ok !== true) throw new AdminAccessError()
+        return true
+      })
+      if (result === undefined) return
+      setSnapshot((agents) => agents?.filter((agent) => agent.id !== taskId))
+      if (coarseAdminEligible) {
+        await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
+      }
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not remove the agent.') })
     }
   }
 
-  const agents = agentsQuery.data ?? []
+  const onReadAgents = async () => {
+    try {
+      const result = await runExplicit('Load graph agents', async (access) => {
+        const agents = await getAgents(slug, access)
+        return KbAgentSchema.array().parse(agents)
+      })
+      if (result !== undefined) {
+        if (coarseAdminEligible) queryClient.setQueryData(['kb-agents', slug], result)
+        else setSnapshot(result)
+      }
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load agents.') })
+    }
+  }
+  const agents = (coarseAdminEligible ? agentsQuery.data : snapshot) ?? []
 
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
@@ -140,6 +187,11 @@ export function KgPanel(
         </button>
       </div>
 
+      {(proposing || implementing) && (
+        <p role='status' className='mt-3 text-sm text-ink-3'>
+          Waiting for the confirmed result. Progress may arrive together when the action finishes.
+        </p>
+      )}
       {proposal && (
         <div className='mt-4 space-y-3 rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
           <p className='text-sm text-ink-2'>{proposal.rationale}</p>
@@ -217,6 +269,14 @@ export function KgPanel(
 
       <div className='mt-4 border-t border-line pt-3'>
         <p className='text-sm font-medium text-ink'>Agents on this box</p>
+        <button
+          type='button'
+          data-graph-read='agents'
+          className='rp-btn rp-btn-outline mt-2'
+          onClick={() => void onReadAgents()}
+        >
+          Load graph agents
+        </button>
 
         {open && agentsQuery.isLoading && <p className='mt-2 text-sm text-ink-3'>Loading…</p>}
 
@@ -258,7 +318,7 @@ export function KgPanel(
           fully editable.
         </p>
         <div className='mt-3'>
-          <KgStrategyEditor slug={slug} passcode={passcode} />
+          <KgStrategyEditor slug={slug} />
         </div>
       </div>
     </div>

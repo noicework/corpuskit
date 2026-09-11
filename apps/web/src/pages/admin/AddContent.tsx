@@ -6,6 +6,8 @@ import {
   discoverCrawl,
   uploadAdminFile,
 } from '../../api/client.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { type AdminRequestAccess, sessionAccess } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
@@ -27,13 +29,12 @@ const CRAWL_LIMITS = [25, 50, 100] as const
  */
 function CrawlTab({
   slug,
-  passcode,
   onAdded,
 }: {
   slug: string
-  passcode: string
   onAdded: () => Promise<unknown>
 }) {
+  const { runExplicit, coarseAdminEligible } = useAdminAccess()
   const [url, setUrl] = useState('')
   const [limit, setLimit] = useState<(typeof CRAWL_LIMITS)[number]>(50)
   const [discovering, setDiscovering] = useState(false)
@@ -52,7 +53,11 @@ function CrawlTab({
     setLinks(null)
     setProgress(null)
     try {
-      const result = await discoverCrawl(slug, passcode, url, limit)
+      const result = await runExplicit(
+        'Discover site links',
+        (access) => discoverCrawl(slug, access, url, limit),
+      )
+      if (result === undefined) return
       setLinks(result.links)
       setChecked(Object.fromEntries(result.links.map((link) => [link, true])))
       if (result.links.length === 0) {
@@ -74,7 +79,7 @@ function CrawlTab({
   }
 
   const onIngest = async () => {
-    if (selectedLinks.length === 0) return
+    if (!coarseAdminEligible || selectedLinks.length === 0) return
     setIngesting(true)
     setMessage(null)
     setProgress({ done: 0, total: selectedLinks.length })
@@ -85,7 +90,7 @@ function CrawlTab({
     for (const link of selectedLinks) {
       attempted += 1
       try {
-        await addAdminLink(slug, passcode, { url: link })
+        await addAdminLink(slug, sessionAccess, { url: link })
         added += 1
       } catch (err) {
         // The knowledge box's processing queue is full - stop the batch
@@ -132,6 +137,12 @@ function CrawlTab({
 
   return (
     <div className='space-y-4'>
+      {!coarseAdminEligible && (
+        <p className='text-sm text-ink-2'>
+          Discovery is one request. Sign in with an administrator account to ingest selected links
+          as a batch, or add each link separately.
+        </p>
+      )}
       <form onSubmit={onDiscover} className='space-y-3'>
         <div>
           <label
@@ -174,11 +185,11 @@ function CrawlTab({
 
       {links && links.length > 0 && (
         <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-4'>
-          <div className='flex items-center justify-between gap-3'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
             <p className='text-sm font-medium text-ink'>
               {links.length} {links.length === 1 ? 'link' : 'links'} found
             </p>
-            <div className='flex items-center gap-3 text-sm font-medium text-ink-2'>
+            <div className='flex flex-wrap items-center gap-3 text-sm font-medium text-ink-2'>
               <button
                 type='button'
                 onClick={() => toggleAll(true)}
@@ -215,7 +226,7 @@ function CrawlTab({
           <button
             type='button'
             onClick={() => void onIngest()}
-            disabled={ingesting || selectedLinks.length === 0}
+            disabled={!coarseAdminEligible || ingesting || selectedLinks.length === 0}
             className='rp-btn rp-btn-primary mt-4'
           >
             {ingesting
@@ -238,13 +249,12 @@ function CrawlTab({
  */
 export function AddContent({
   slug,
-  passcode,
   onAdded,
 }: {
   slug: string
-  passcode: string
   onAdded: () => Promise<unknown>
 }) {
+  const { runExplicit, coarseAdminEligible } = useAdminAccess()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('upload')
   const [busy, setBusy] = useState(false)
@@ -258,13 +268,21 @@ export function AddContent({
   const [textBody, setTextBody] = useState('')
 
   const run = async (
-    action: () => Promise<{ id: string }>,
+    action: (access: AdminRequestAccess) => Promise<{ id: string }>,
     successText: string,
+    label: string,
+    sessionOnly = false,
   ): Promise<boolean> => {
     setBusy(true)
     setMessage(null)
     try {
-      await action()
+      const result = sessionOnly ? await action(sessionAccess) : await runExplicit(label, action)
+      if (result === undefined) return false
+      if (!result.id) {
+        throw new Error(
+          'We could not confirm the result. Check whether the action completed before trying again.',
+        )
+      }
       setMessage({ tone: 'ok', text: successText })
       await onAdded()
       return true
@@ -281,17 +299,26 @@ export function AddContent({
 
   const uploadMany = (files: File[]) => {
     if (files.length === 0) return
-    // Sequential so a bulk drop cannot swamp the box; one status at the end.
+    if (files.length > 1 && !coarseAdminEligible) {
+      setMessage({
+        tone: 'error',
+        text:
+          'Choose one file for emergency access. Sign in with an administrator account to upload multiple files.',
+      })
+      return
+    }
+    // Session-only batches remain sequential; an emergency upload dispatches one file.
     void run(
-      async () => {
-        for (const file of files) {
-          await uploadAdminFile(slug, passcode, file)
-        }
-        return { id: '' }
+      async (access) => {
+        let result = { id: '' }
+        for (const file of files) result = await uploadAdminFile(slug, access, file)
+        return result
       },
       files.length === 1
         ? `Uploaded "${files[0]?.name}" - it will appear below once processed.`
         : `Uploaded ${files.length} files - they will appear below once processed.`,
+      'Upload one file',
+      files.length > 1,
     )
   }
 
@@ -311,8 +338,8 @@ export function AddContent({
   const onSubmitLink = async (event: FormEvent) => {
     event.preventDefault()
     const ok = await run(
-      () =>
-        addAdminLink(slug, passcode, {
+      (access) =>
+        addAdminLink(slug, access, {
           url,
           title: linkTitle.trim() || undefined,
           hidden: linkDraft || undefined,
@@ -320,6 +347,7 @@ export function AddContent({
       linkDraft
         ? 'Link added as a draft - publish it from Recent additions once processed.'
         : 'Link added - it will appear below once processed.',
+      'Add one link',
     )
     if (ok) {
       setUrl('')
@@ -331,8 +359,9 @@ export function AddContent({
   const onSubmitText = async (event: FormEvent) => {
     event.preventDefault()
     const ok = await run(
-      () => addAdminText(slug, passcode, { title: textTitle, body: textBody }),
+      (access) => addAdminText(slug, access, { title: textTitle, body: textBody }),
       'Text added - it will appear below once processed.',
+      'Add text',
     )
     if (ok) {
       setTextTitle('')
@@ -354,7 +383,7 @@ export function AddContent({
 
       {open && (
         <div className='mt-3 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
-          <div className='rp-no-scrollbar flex gap-0 overflow-x-auto whitespace-nowrap rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
+          <div className='flex flex-wrap gap-1 rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -393,11 +422,17 @@ export function AddContent({
                 }}
               >
                 <p className='text-sm text-ink-2'>Drag a file here, or choose one to upload.</p>
+                {!coarseAdminEligible && (
+                  <p className='mt-2 text-xs text-ink-3'>
+                    Emergency access uploads one file per confirmation. Multiple files require an
+                    administrator sign-in.
+                  </p>
+                )}
                 <label className='rp-btn rp-btn-primary mt-3 cursor-pointer'>
                   {busy ? 'Uploading…' : 'Choose file'}
                   <input
                     type='file'
-                    multiple
+                    multiple={coarseAdminEligible}
                     className='sr-only'
                     disabled={busy}
                     onChange={onChooseFile}
@@ -497,7 +532,7 @@ export function AddContent({
               </form>
             )}
 
-            {tab === 'crawl' && <CrawlTab slug={slug} passcode={passcode} onAdded={onAdded} />}
+            {tab === 'crawl' && <CrawlTab slug={slug} onAdded={onAdded} />}
           </div>
 
           {tab !== 'crawl' && message && <MessagePanel message={message} className='mt-4' />}

@@ -10,9 +10,11 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import type { RetrievalProvider } from '@research-portal/retrieval'
-import { buildApp } from './app.ts'
-import { constantTimeHashEqual } from './mcp.ts'
+import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
+import { buildApp, type BuildAppOptions } from './app.ts'
+import { type AuditEvent, AuditWriteError } from './audit.ts'
+import { constantTimeHashEqual, executeMcpTool } from './mcp.ts'
+import { DECLARATIONS } from './permissions.ts'
 import { McpKeyStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
 
@@ -24,6 +26,51 @@ const RESOURCE: ResourceSummary = {
   topicIds: ['stock-assessment'],
   keyFacts: ['Survey abundance was stable in the latest reporting period.'],
 }
+
+Deno.test('future privileged MCP declaration classifies logical and provider failure and fails closed', async () => {
+  const declaration = {
+    ...DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === 'search_corpus')!,
+    permission: 'portal.generate' as const,
+  }
+  for (const mode of ['logical', 'denied', 'intent', 'completion'] as const) {
+    const events: AuditEvent[] = []
+    let calls = 0
+    const context = {
+      requestId: 'future-tool',
+      actor: { kind: 'legacy-key' as const, id: 'key-id' },
+      slug: 'marine',
+      mandatoryFailure: undefined as AuditWriteError | undefined,
+    }
+    const operation = executeMcpTool(declaration, context, {
+      append: (event) => {
+        if (mode === 'intent' || (mode === 'completion' && events.length === 1)) {
+          throw new AuditWriteError()
+        }
+        events.push(event)
+      },
+      read: () => events,
+    }, () => {
+      calls++
+      if (mode === 'denied') throw new AragApiError(401, 'private-url', 'private-body')
+      return Promise.resolve({ isError: mode === 'logical' })
+    })
+    if (mode === 'logical') {
+      expect(await operation).toEqual({ isError: true })
+      expect(events.at(-1)?.outcome).toBe('failure')
+    } else {
+      await expect(operation).rejects.toThrow()
+      if (mode === 'denied') {
+        expect(events.map((e) => `${e.action}:${e.outcome}`)).toEqual([
+          'request.privileged:intent',
+          'request.denied:denied',
+          'request.privileged:denied',
+        ])
+      } else expect(context.mandatoryFailure).toBeInstanceOf(AuditWriteError)
+    }
+    expect(calls).toBe(mode === 'intent' ? 0 : 1)
+    expect(JSON.stringify(events)).not.toContain('private')
+  }
+})
 
 class McpStubProvider implements RetrievalProvider {
   listResources(): Promise<ResourceSummary[]> {
@@ -99,7 +146,10 @@ interface McpHarness {
   dataDir: string
 }
 
-function harness(rateLimitMcpAuthPerMin = 60): McpHarness {
+function harness(
+  rateLimitMcpAuthPerMin = 60,
+  overrides: Partial<BuildAppOptions> = {},
+): McpHarness {
   const dataDir = Deno.makeTempDirSync()
   const keys = new McpKeyStore(dataDir)
   const tenants = new TenantStore({ TENANTS_PATH: `${dataDir}/tenants.json` })
@@ -107,17 +157,75 @@ function harness(rateLimitMcpAuthPerMin = 60): McpHarness {
     dataDir,
     keys,
     app: buildApp({
+      audit: { append: () => {}, read: () => [] },
       provider: new McpStubProvider(),
       tenants,
       mcpKeys: keys,
       rateLimitMcpAuthPerMin,
       trustedUser: (request) => {
         const id = request.headers.get('x-test-user')
-        return id ? { id, isAdmin: request.headers.get('x-test-admin') === '1' } : null
+        return id
+          ? {
+            id,
+            effectiveRoles: {
+              portalRoles: [],
+              ...(request.headers.get('x-test-admin') === '1'
+                ? { platformRole: 'owner' as const }
+                : {}),
+            },
+          }
+          : null
       },
+      ...overrides,
     }),
   }
 }
+
+Deno.test('MCP transport and provider denials are audited without key material and audit failure is HTTP 500', async () => {
+  for (const fail of [false, true]) {
+    const events: AuditEvent[] = []
+    class DeniedProvider extends McpStubProvider {
+      override search(): Promise<SearchResults> {
+        throw new AragApiError(403, 'private-url', 'private-body')
+      }
+    }
+    const test = harness(60, {
+      provider: new DeniedProvider(),
+      audit: {
+        append: (event) => {
+          if (fail && event.action === 'request.denied') throw new AuditWriteError()
+          events.push(event)
+        },
+        read: () => events,
+      },
+    })
+    const { key, credential } = await mint(test)
+    expect(events.every((event) => event.actor_id === 'admin-user-id')).toBe(true)
+    events.length = 0
+    const response = await mcpRequest(test, 'marine', key, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'search_corpus', arguments: { query: 'Research' } },
+    })
+    expect(response.status).toBe(fail ? 500 : 200)
+    if (!fail) {
+      expect((await response.json()).result.isError).toBe(true)
+      expect(events).toHaveLength(1)
+      expect(events[0]?.actor_kind).toBe('legacy-key')
+      expect(events[0]?.actor_id).toBe(credential.id)
+      expect(events[0]?.target_id).toBe('search_corpus')
+    }
+    const invalid = await mcpRequest(test, 'marine', 'invalid-secret', {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+    })
+    expect(invalid.status).toBe(fail ? 500 : 401)
+    expect(JSON.stringify(events)).not.toContain(key)
+    expect(JSON.stringify(events)).not.toContain('private-')
+  }
+})
 
 const adminHeaders = {
   'content-type': 'application/json',

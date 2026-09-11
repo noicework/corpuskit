@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { addPortal } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -10,7 +11,8 @@ import { errorMessage, type Message } from './shared.ts'
  * existing endpoint. Collapsed to a slim button row by default so it doesn't
  * compete with the portal list for attention.
  */
-export function AddPortal({ passcode }: { passcode: string }) {
+export function AddPortal() {
+  const { runExplicit } = useAdminAccess()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -24,11 +26,13 @@ export function AddPortal({ passcode }: { passcode: string }) {
     setBusy(true)
     setMessage(null)
     try {
-      const result = await addPortal(passcode, {
-        name,
-        organisation: organisation || undefined,
-        tagline: tagline || undefined,
-      })
+      const result = await runExplicit('Create a portal', (access) =>
+        addPortal(access, {
+          name,
+          organisation: organisation || undefined,
+          tagline: tagline || undefined,
+        }))
+      if (result === undefined) return
       setName('')
       setOrganisation('')
       setTagline('')

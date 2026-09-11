@@ -14,6 +14,7 @@ import type { BindingStoreApi } from '../../api/src/bindings.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
+import { type RbacDatabase, RbacState, type RbacStores } from '../../api/src/rbac-state.ts'
 import type {
   AskInsight,
   EnrichmentCollisionPolicy,
@@ -46,6 +47,15 @@ import {
   tenantSummary,
   withPlatformHostname,
 } from '../../api/src/tenants.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import {
+  appendAudit,
+  type AuditInput,
+  AuditWriteError,
+  createAuditEvent,
+} from '../../api/src/audit.ts'
+import type { LocalMutationScope } from '../../api/src/audit-execution.ts'
+import { DECLARATIONS } from '../../api/src/permissions.ts'
 
 type SqlValue = ArrayBuffer | string | number | null
 type SqlRow = Record<string, SqlValue>
@@ -62,8 +72,197 @@ export interface SqlStorageLike {
  * Keeping the adapter synchronous preserves the mature route/store contracts
  * while SQLite output gates make every mutation durable before the response.
  */
+interface LocalContext {
+  input: Omit<AuditInput, 'outcome'>
+  signal: AbortSignal
+  closed: boolean
+  failure?: AuditWriteError
+  parent?: LocalContext
+}
+
 export class DurableState {
-  constructor(private readonly sql: SqlStorageLike) {}
+  readonly rbacDatabase: RbacDatabase
+  readonly rbac: RbacState
+  private readonly localContext = new AsyncLocalStorage<LocalContext>()
+  private mutating = false
+  readonly localMutations: LocalMutationScope = {
+    run: (input, signal, work) => {
+      const parent = this.localContext.getStore()
+      const context: LocalContext = {
+        input,
+        signal,
+        closed: false,
+        parent: parent?.input.requestId === input.requestId ? parent : undefined,
+        failure: undefined as AuditWriteError | undefined,
+      }
+      return this.localContext.run(context, async () => {
+        try {
+          const result = await work()
+          if (context.failure) throw context.failure
+          return result
+        } catch (error) {
+          throw context.failure ?? error
+        } finally {
+          context.closed = true
+        }
+      })
+    },
+  }
+
+  /** Covers whole synchronous store methods, including their multiple SQL statements. */
+  localMutation<T>(operation: string, args: unknown[], work: () => T): T {
+    const context = this.localContext.getStore()
+    if (!context) return work()
+    this.guardLocalScope()
+    const declaration = DECLARATIONS.find((d) => d.kind === 'local' && d.path === operation)
+    if (!declaration) throw this.failLocalAudit()
+    if (this.mutating) return work()
+    try {
+      return this.rbacDatabase.transactionSync(() => {
+        this.mutating = true
+        const result = work()
+        const first = args[0] as
+          | { tenant?: string; slug?: string; id?: string }
+          | string
+          | undefined
+        const slug = typeof first === 'string' ? first : first?.tenant
+        const returnedId = typeof result === 'object' && result !== null && 'id' in result
+          ? result.id
+          : typeof result === 'object' && result !== null && 'slug' in result
+          ? result.slug
+          : undefined
+        const [store, method] = operation.split('.')
+        const argumentId = store === 'sessions'
+          ? (method === 'put' ? (args[2] as { id: string }).id : args[2])
+          : store === 'investigations'
+          ? (method === 'updateEvidence' || method === 'removeEvidence' ? args[3] : args[2])
+          : store === 'watches'
+          ? (method === 'remove' ? args[2] : method === 'update' ? args[1] : undefined)
+          : ['sources', 'mcpKeys', 'enrichments', 'branding', 'suggestions'].includes(store!)
+          ? args[1]
+          : typeof first === 'string'
+          ? first
+          : first?.slug
+        const id = returnedId ?? (typeof first === 'object' ? first?.id : undefined) ??
+          (typeof argumentId === 'string' ? argumentId : undefined) ?? context.input.target.id
+        const safeId = typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(id)
+          ? id
+          : undefined
+        const detail = context.input.detail as Record<string, unknown>
+        appendAudit(
+          this.rbac.audit,
+          createAuditEvent({
+            ...context.input,
+            action: 'local.mutation',
+            outcome: 'success',
+            scope: declaration.scope === 'platform'
+              ? { kind: 'platform' }
+              : slug
+              ? { kind: 'portal', slug }
+              : context.input.scope,
+            target: { kind: operation.split('.')[0]!, ...(safeId ? { id: safeId } : {}) },
+            detail: {
+              permission: declaration.permission,
+              mutation: operation,
+              ...(detail?.operation ? { operation: detail.operation } : {}),
+              ...(detail?.sessionOid
+                ? { sessionOid: detail.sessionOid, sessionTenantId: detail.sessionTenantId }
+                : {}),
+            },
+          }),
+        )
+        return result
+      })
+    } catch (error) {
+      if (error instanceof AuditWriteError) this.failLocalAudit(error)
+      throw error
+    } finally {
+      this.mutating = false
+    }
+  }
+
+  private failLocalAudit(error = new AuditWriteError()): AuditWriteError {
+    for (let context = this.localContext.getStore(); context; context = context.parent) {
+      context.failure = error
+    }
+    return error
+  }
+
+  private guardLocalScope(): void {
+    for (let context = this.localContext.getStore(); context; context = context.parent) {
+      context.signal.throwIfAborted()
+      if (context.failure) throw context.failure
+      if (context.closed) throw this.failLocalAudit()
+    }
+  }
+
+  /** Fail closed if a new store method bypasses the declared synchronous boundary. */
+  private guardLocalWrite(): void {
+    const context = this.localContext.getStore()
+    if (!context) return
+    this.guardLocalScope()
+    if (!this.mutating) throw this.failLocalAudit()
+  }
+
+  auditedStore<T extends object>(name: string, store: T): T {
+    return new Proxy(store, {
+      get: (target, property, receiver) => {
+        const value = Reflect.get(target, property, receiver)
+        if (typeof value !== 'function') return value
+        const operation = `${name}.${String(property)}`
+        if (!DECLARATIONS.some((d) => d.kind === 'local' && d.path === operation)) {
+          return value.bind(target)
+        }
+        return (...args: unknown[]) =>
+          this.localMutation(operation, args, () => value.apply(target, args))
+      },
+    })
+  }
+
+  constructor(
+    private readonly sql: SqlStorageLike,
+    private readonly transactions?: Pick<RbacDatabase, 'transactionSync'>,
+    now: () => number = Date.now,
+  ) {
+    let inTransaction = false
+    const transactionSync = <T>(callback: () => T): T => {
+      if (!transactions) throw new Error('RBAC requires a transaction capability')
+      if (inTransaction) throw new Error('Nested RBAC transactions are not supported')
+      if (callback.constructor.name === 'AsyncFunction') {
+        throw new Error('RBAC transactions must be synchronous')
+      }
+      return transactions.transactionSync(() => {
+        inTransaction = true
+        try {
+          const result = callback()
+          if (
+            result !== null && (typeof result === 'object' || typeof result === 'function') &&
+            'then' in result
+          ) {
+            throw new Error('RBAC transactions must be synchronous')
+          }
+          return result
+        } finally {
+          inTransaction = false
+        }
+      })
+    }
+    this.rbacDatabase = {
+      exec: (query, ...bindings) => {
+        const write = () => {
+          sql.exec(query, ...bindings)
+        }
+        if (inTransaction) write()
+        else transactionSync(write)
+      },
+      all: <T extends object>(
+        query: string,
+        ...bindings: import('../../api/src/rbac-state.ts').SqlValue[]
+      ): T[] => sql.exec(query, ...bindings).toArray() as T[],
+      transactionSync,
+    }
+    this.rbac = new RbacState(this.rbacDatabase, now)
+  }
 
   migrate(): void {
     this.sql.exec(`
@@ -96,6 +295,8 @@ export class DurableState {
       CREATE INDEX IF NOT EXISTS routing_records_by_tenant
         ON routing_records (tenant_slug, id);
     `)
+    // Legacy construction remains usable until the Worker injects storage in plan 02-04.
+    if (this.transactions) this.rbac.migrate()
   }
 
   get<T>(key: string, fallback: T): T {
@@ -113,6 +314,7 @@ export class DurableState {
   }
 
   put(key: string, value: unknown): void {
+    this.guardLocalWrite()
     this.sql.exec(
       `INSERT INTO state (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -123,6 +325,7 @@ export class DurableState {
   }
 
   delete(key: string): void {
+    this.guardLocalWrite()
     this.sql.exec('DELETE FROM state WHERE key = ?', key)
   }
 
@@ -144,6 +347,7 @@ export class DurableState {
 
   /** Append one routing decision and trim the tenant's log to `keep` rows. */
   appendRouting(slug: string, record: unknown, keep: number): void {
+    this.guardLocalWrite()
     this.sql.exec(
       'INSERT INTO routing_records (tenant_slug, record, created_at) VALUES (?, ?, ?)',
       slug,
@@ -227,6 +431,7 @@ export class DurableState {
   }
 
   putEnrichment(slug: string, resourceId: string, enrichment: Enrichment): void {
+    this.guardLocalWrite()
     this.sql.exec(
       `INSERT INTO enrichment_records
         (tenant_slug, agent_id, resource_id, enrichment, updated_at)
@@ -246,6 +451,7 @@ export class DurableState {
     records: EnrichmentRecords,
     collision: EnrichmentCollisionPolicy,
   ): EnrichmentImportResult {
+    this.guardLocalWrite()
     const existing = new Map<string, Set<string>>()
     for (
       const row of this.sql.exec<{ agent_id: string; resource_id: string }>(
@@ -344,6 +550,7 @@ export class DurableState {
   }
 
   putAsset(key: string, asset: BrandingAsset): void {
+    this.guardLocalWrite()
     const bytes = asset.bytes.buffer.slice(
       asset.bytes.byteOffset,
       asset.bytes.byteOffset + asset.bytes.byteLength,
@@ -954,19 +1161,17 @@ export class DurableSuggestionStore implements SuggestionStoreApi {
 }
 
 export class DurableEnrichmentStore implements EnrichmentStoreApi {
-  private readonly migratedSlugs = new Set<string>()
-
   constructor(private readonly state: DurableState) {}
 
   private migrateLegacy(slug: string): void {
-    if (this.migratedSlugs.has(slug)) return
     const legacyKey = key('enrichments', slug)
     const legacy = this.state.get<EnrichmentRecords>(legacyKey, {})
     if (Object.keys(legacy).length > 0) {
-      this.state.importEnrichments(slug, legacy, 'skip')
-      this.state.delete(legacyKey)
+      this.state.localMutation('enrichments.migrateLegacy', [slug], () => {
+        this.state.importEnrichments(slug, legacy, 'skip')
+        this.state.delete(legacyKey)
+      })
     }
-    this.migratedSlugs.add(slug)
   }
 
   get(
@@ -1107,7 +1312,9 @@ export class DurableRoutingLog implements RoutingLogApi {
   }
 }
 
-export interface DurableStores {
+export interface DurableStores extends RbacStores {
+  localMutations: LocalMutationScope
+  rbac: RbacState
   bindings: DurableBindingStore
   tenants: DurableTenantStore
   insights: DurableInsightsStore
@@ -1128,18 +1335,23 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
-    bindings: new DurableBindingStore(state, env),
-    tenants: new DurableTenantStore(state),
-    insights: new DurableInsightsStore(state),
-    sessions: new DurableSessionsStore(state),
-    watches: new DurableWatchStore(state),
-    sources: new DurableSourceStore(state),
-    investigations: new DurableInvestigationStore(state),
-    suggestions: new DurableSuggestionStore(state),
-    enrichments: new DurableEnrichmentStore(state),
-    kgProposals: new DurableKgProposalStore(state),
-    branding: new DurableBrandingStore(state),
-    mcpKeys: new DurableMcpKeyStore(state),
-    routing: new DurableRoutingLog(state),
+    localMutations: state.localMutations,
+    rbac: state.rbac,
+    audit: state.rbac.audit,
+    assignments: state.rbac.assignments,
+    locks: state.rbac.locks,
+    bindings: state.auditedStore('bindings', new DurableBindingStore(state, env)),
+    tenants: state.auditedStore('tenants', new DurableTenantStore(state)),
+    insights: state.auditedStore('insights', new DurableInsightsStore(state)),
+    sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
+    watches: state.auditedStore('watches', new DurableWatchStore(state)),
+    sources: state.auditedStore('sources', new DurableSourceStore(state)),
+    investigations: state.auditedStore('investigations', new DurableInvestigationStore(state)),
+    suggestions: state.auditedStore('suggestions', new DurableSuggestionStore(state)),
+    enrichments: state.auditedStore('enrichments', new DurableEnrichmentStore(state)),
+    kgProposals: state.auditedStore('kgProposals', new DurableKgProposalStore(state)),
+    branding: state.auditedStore('branding', new DurableBrandingStore(state)),
+    mcpKeys: state.auditedStore('mcpKeys', new DurableMcpKeyStore(state)),
+    routing: state.auditedStore('routing', new DurableRoutingLog(state)),
   }
 }

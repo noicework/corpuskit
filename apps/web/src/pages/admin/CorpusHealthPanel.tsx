@@ -3,6 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { CorpusHealthRow } from '../../api/client.ts'
 import { getCorpusHealth, setResourceHidden } from '../../api/client.ts'
 import { errorMessage, type Message } from './shared.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 
 /**
@@ -13,14 +15,13 @@ import { MessagePanel } from './MessagePanel.tsx'
 function HealthRow({
   row,
   slug,
-  passcode,
   onChanged,
 }: {
   row: CorpusHealthRow
   slug: string
-  passcode: string
-  onChanged: () => Promise<unknown>
+  onChanged: (id: string, hidden: boolean) => Promise<unknown>
 }) {
+  const { runExplicit } = useAdminAccess()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -28,8 +29,13 @@ function HealthRow({
     setBusy(true)
     setMessage(null)
     try {
-      await setResourceHidden(slug, passcode, row.id, !row.hidden)
-      await onChanged()
+      const result = await runExplicit(
+        row.hidden ? 'Publish resource' : 'Hide resource',
+        (access) => setResourceHidden(slug, access, row.id, !row.hidden),
+      )
+      if (result === undefined) return
+      if (result.ok !== true) throw new AdminAccessError()
+      await onChanged(row.id, !row.hidden)
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not update that resource.') })
     } finally {
@@ -77,7 +83,8 @@ function HealthRow({
  * automatically - the scan reads every resource's extracted text, which is
  * slow on a large box, so the librarian triggers it deliberately.
  */
-export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: string }) {
+export function CorpusHealthPanel({ slug }: { slug: string }) {
+  const { runExplicit, coarseAdminEligible, pending } = useAdminAccess()
   const queryClient = useQueryClient()
   const [rows, setRows] = useState<CorpusHealthRow[] | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -88,7 +95,12 @@ export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: 
     setScanning(true)
     setError(null)
     try {
-      const result = await getCorpusHealth(slug, passcode)
+      const result = await runExplicit('Read corpus health', async (access) => {
+        const health = await getCorpusHealth(slug, access)
+        if (!Array.isArray(health)) throw new AdminAccessError()
+        return health
+      })
+      if (result === undefined) return
       setRows(result)
     } catch (err) {
       setError(errorMessage(err, 'The scan failed - please try again.'))
@@ -97,9 +109,9 @@ export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: 
     }
   }
 
-  const onChanged = async () => {
+  const onChanged = async (id: string, hidden: boolean) => {
+    setRows((previous) => previous?.map((row) => row.id === id ? { ...row, hidden } : row) ?? null)
     await queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
-    await scan()
   }
 
   const needsAttention = (rows ?? [])
@@ -108,7 +120,10 @@ export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: 
   const healthy = (rows ?? []).filter((r) => r.status === 'ok')
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
+    <div
+      className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'
+      data-admin-health
+    >
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div>
           <p className='text-sm font-semibold text-ink'>Corpus health</p>
@@ -119,13 +134,19 @@ export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: 
         </div>
         <button
           type='button'
-          disabled={scanning}
+          disabled={pending || scanning}
           onClick={() => void scan()}
           className='rp-btn rp-btn-primary shrink-0'
         >
           {scanning ? 'Scanning…' : rows ? 'Rescan corpus' : 'Scan corpus'}
         </button>
       </div>
+
+      {!coarseAdminEligible && (
+        <p className='mt-3 text-xs text-ink-3'>
+          Health results are a snapshot. Each scan and visibility change needs its own confirmation.
+        </p>
+      )}
 
       {scanning
         ? (
@@ -155,7 +176,6 @@ export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: 
                         key={row.id}
                         row={row}
                         slug={slug}
-                        passcode={passcode}
                         onChanged={onChanged}
                       />
                     ))}
@@ -188,7 +208,6 @@ export function CorpusHealthPanel({ slug, passcode }: { slug: string; passcode: 
                             key={row.id}
                             row={row}
                             slug={slug}
-                            passcode={passcode}
                             onChanged={onChanged}
                           />
                         ))}

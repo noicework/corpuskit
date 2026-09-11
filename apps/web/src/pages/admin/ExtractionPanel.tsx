@@ -1,3 +1,10 @@
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
+import {
+  ExtractionMethodSchema,
+  ExtractionProfileSchema,
+  ExtractionRulesSchema,
+} from '@research-portal/core'
 /**
  * The Extraction Lab admin panel: profile a document, compare extraction
  * methods against a sandbox knowledge box, and set the routing rules that
@@ -6,7 +13,7 @@
  * Admin-only surface documented in docs/EXTRACTION-LAB.md. Serves: R26, P4-10.
  */
 import { useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   CatalogItem,
   ExtractionClass,
@@ -32,26 +39,67 @@ import { errorMessage, type Message } from './shared.ts'
  * extraction methods in the sandbox box, and set the routing rules. Tokens
  * only - every colour, radius and control comes from the appearance system.
  */
-export function ExtractionPanel({ slug, passcode }: { slug: string; passcode: string }) {
-  const { data: lab, refetch: refetchLab } = useQuery({
+function validLab(value: LabInfo): LabInfo {
+  if (
+    !value || typeof value.lab !== 'string' || typeof value.available !== 'boolean' ||
+    typeof value.poppler !== 'boolean'
+  ) throw new AdminAccessError()
+  return {
+    ...value,
+    methods: ExtractionMethodSchema.array().parse(value.methods),
+    rules: value.rules === null ? null : ExtractionRulesSchema.parse(value.rules),
+  }
+}
+
+export function ExtractionPanel({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const queryClient = useQueryClient()
+  const [snapshot, setSnapshot] = useState<LabInfo>()
+  const [message, setMessage] = useState<Message | null>(null)
+  const { data: sessionLab } = useQuery({
     queryKey: ['extraction-methods', slug],
-    queryFn: () => getExtractionMethods(slug, passcode),
+    queryFn: async () => validLab(await getExtractionMethods(slug, sessionAccess)),
+    enabled: coarseAdminEligible,
+    retry: false,
   })
+  const lab = coarseAdminEligible ? sessionLab : snapshot
+  const load = async () => {
+    setMessage(null)
+    try {
+      const result = await runExplicit(
+        'Load extraction methods and routing rules',
+        async (access) => validLab(await getExtractionMethods(slug, access)),
+      )
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['extraction-methods', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load extraction methods.') })
+    }
+  }
   return (
     <div className='space-y-4'>
+      <button
+        type='button'
+        data-extraction-read
+        className='rp-btn rp-btn-outline'
+        onClick={() => void load()}
+      >
+        Load extraction methods
+      </button>
+      {message && <MessagePanel message={message} />}
       <MethodsCard lab={lab} />
-      <CompareCard
-        slug={slug}
-        passcode={passcode}
-        methods={lab?.methods ?? []}
-        available={lab?.available ?? false}
-      />
+      <CompareCard slug={slug} methods={lab?.methods ?? []} available={lab?.available ?? false} />
       <RulesCard
         slug={slug}
-        passcode={passcode}
         methods={lab?.methods ?? []}
         rules={lab?.rules ?? null}
-        onSaved={() => void refetchLab()}
+        onSaved={(rules) => {
+          if (!lab) return
+          const next = { ...lab, rules }
+          if (coarseAdminEligible) queryClient.setQueryData(['extraction-methods', slug], next)
+          else setSnapshot(next)
+        }}
       />
     </div>
   )
@@ -142,13 +190,13 @@ interface MethodResult {
 }
 
 function CompareCard(
-  { slug, passcode, methods, available }: {
+  { slug, methods, available }: {
     slug: string
-    passcode: string
     methods: ExtractionMethod[]
     available: boolean
   },
 ) {
+  const { runExplicit } = useAdminAccess()
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<CatalogItem | null>(null)
   const [profile, setProfile] = useState<{ profile: ExtractionProfile; filename: string } | null>(
@@ -169,6 +217,7 @@ function CompareCard(
   const [message, setMessage] = useState<Message | null>(null)
   const [busy, setBusy] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => abortRef.current?.abort(), [])
   useEffect(() => {
     if (selected.length === 0 && methods.length > 0) setSelected(methods.map((m) => m.id))
   }, [methods, selected.length])
@@ -197,15 +246,23 @@ function CompareCard(
       : 0
 
   async function onProfile(item: CatalogItem) {
-    setPicked(item)
-    setProfile(null)
-    setResults([])
-    setDone(null)
+    setBusy(true)
     setMessage(null)
     try {
-      setProfile(await profileExtraction(slug, passcode, item.id))
+      const result = await runExplicit('Profile this document for extraction', async (access) => {
+        const result = await profileExtraction(slug, access, item.id)
+        if (typeof result?.filename !== 'string') throw new AdminAccessError()
+        return { ...result, profile: ExtractionProfileSchema.parse(result.profile) }
+      })
+      if (result === undefined) return
+      setPicked(item)
+      setProfile(result)
+      setResults([])
+      setDone(null)
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not profile the document.') })
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -219,49 +276,57 @@ function CompareCard(
     setDone(null)
     setMessage(null)
     try {
-      await compareExtraction(slug, passcode, {
-        resourceId: picked.id,
-        methods: selected,
-        ...(question.trim() ? { question: question.trim() } : {}),
-      }, (event: ExtractionCompareEvent) => {
-        if (event.type === 'stage') setStage(event.label)
-        else if (event.type === 'profile') {
-          setProfile({ profile: event.profile, filename: event.filename })
-        } else if (event.type === 'method') {
-          setResults((prev) => [
-            ...prev.filter((r) => r.method.id !== event.method.id),
-            { method: event.method, metrics: event.metrics, textPreview: event.textPreview },
-          ])
-        } else if (event.type === 'ask') {
-          setResults((prev) =>
-            prev.map((r) =>
-              r.method.id === event.method.id
-                ? {
-                  ...r,
-                  ask: {
-                    question: event.question,
-                    answer: event.answer,
-                    citations: event.citations,
-                  },
-                }
-                : r
+      await runExplicit('Compare extraction methods for this document', async (access) => {
+        let completed = false
+        let failed = false
+        await compareExtraction(slug, access, {
+          resourceId: picked.id,
+          methods: selected,
+          ...(question.trim() ? { question: question.trim() } : {}),
+        }, (event: ExtractionCompareEvent) => {
+          if (event.type === 'stage') setStage(event.label)
+          else if (event.type === 'profile') {
+            setProfile({ profile: event.profile, filename: event.filename })
+          } else if (event.type === 'method') {
+            setResults((prev) => [
+              ...prev.filter((r) => r.method.id !== event.method.id),
+              { method: event.method, metrics: event.metrics, textPreview: event.textPreview },
+            ])
+          } else if (event.type === 'ask') {
+            setResults((prev) =>
+              prev.map((r) =>
+                r.method.id === event.method.id
+                  ? {
+                    ...r,
+                    ask: {
+                      question: event.question,
+                      answer: event.answer,
+                      citations: event.citations,
+                    },
+                  }
+                  : r
+              )
             )
-          )
-        } else if (event.type === 'error') {
-          setMessage({
-            tone: 'error',
-            text: event.method ? `${event.method}: ${event.message}` : event.message,
-          })
-        } else if (event.type === 'done') {
-          setDone({
-            recommended: event.recommended,
-            reason: event.reason,
-            purged: event.purged,
-            yields: event.yields,
-          })
-          setStage(null)
-        }
-      }, controller.signal)
+          } else if (event.type === 'error') {
+            failed = true
+            setMessage({
+              tone: 'error',
+              text: event.method ? `${event.method}: ${event.message}` : event.message,
+            })
+          } else if (event.type === 'done') {
+            completed = Number.isFinite(event.purged) && typeof event.reason === 'string'
+            setDone({
+              recommended: event.recommended,
+              reason: event.reason,
+              purged: event.purged,
+              yields: event.yields,
+            })
+            setStage(null)
+          }
+        }, controller.signal)
+        if (!completed || failed) throw new AdminAccessError()
+        return true
+      })
     } catch (err) {
       if (!controller.signal.aborted) {
         setMessage({ tone: 'error', text: errorMessage(err, 'The comparison failed.') })
@@ -299,6 +364,7 @@ function CompareCard(
               <li key={item.id}>
                 <button
                   type='button'
+                  disabled={busy}
                   onClick={() => void onProfile(item)}
                   className='rp-focus block w-full px-3 py-2 text-left text-sm text-ink-2 hover:bg-[var(--rp-wash)]'
                 >
@@ -382,6 +448,12 @@ function CompareCard(
                   </span>
                 )
                 : null}
+              {busy && (
+                <p role='status' className='text-xs text-ink-3'>
+                  Waiting for the confirmed result. Progress may arrive together when the action
+                  finishes.
+                </p>
+              )}
               {stage ? <span className='text-xs text-ink-3' role='status'>{stage}…</span> : null}
             </div>
           </div>
@@ -522,23 +594,25 @@ function ResultColumn(
 }
 
 function RulesCard(
-  { slug, passcode, methods, rules, onSaved }: {
+  { slug, methods, rules, onSaved }: {
     slug: string
-    passcode: string
     methods: ExtractionMethod[]
     rules: ExtractionRules | null
-    onSaved: () => void
+    onSaved: (rules: ExtractionRules) => void
   },
 ) {
+  const { runExplicit } = useAdminAccess()
   const [draft, setDraft] = useState<ExtractionRules>({
     default: 'default',
     rules: [],
     visualPageCap: 60,
   })
   const [loaded, setLoaded] = useState(false)
+  const dirtyRef = useRef(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   useEffect(() => {
+    if (loaded && rules && !dirtyRef.current) setDraft(rules)
     if (!loaded && (rules || methods.length > 0)) {
       if (rules) setDraft(rules)
       else {
@@ -564,21 +638,30 @@ function RulesCard(
   }, [rules, methods, loaded])
   const methodFor = (cls: ExtractionClass) =>
     draft.rules.find((r) => r.when === cls)?.method ?? draft.default
-  const setFor = (cls: ExtractionClass, method: string) =>
+  const setFor = (cls: ExtractionClass, method: string) => {
+    dirtyRef.current = true
     setDraft((d) => ({
       ...d,
       rules: [...d.rules.filter((r) => r.when !== cls), { when: cls, method }],
     }))
+  }
   async function onSave() {
     setBusy(true)
     setMessage(null)
     try {
-      await saveExtractionRules(slug, passcode, draft)
+      const result = await runExplicit('Save extraction routing rules', async (access) => {
+        const result = await saveExtractionRules(slug, access, draft)
+        if (result?.ok !== true) throw new AdminAccessError()
+        return ExtractionRulesSchema.parse(result.rules)
+      })
+      if (result === undefined) return
+      dirtyRef.current = false
+      setDraft(result)
       setMessage({
         tone: 'ok',
         text: 'Routing rules saved. New uploads through the portal and the loader follow them.',
       })
-      onSaved()
+      onSaved(result)
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the rules.') })
     } finally {
@@ -592,33 +675,37 @@ function RulesCard(
         Which method each class of document gets. The visual page cap sends long scans to the
         default method regardless.
       </p>
-      <table className='mt-3 w-full text-left text-xs'>
-        <thead className='text-ink-3'>
-          <tr>
-            <th className='py-1.5 pr-3 font-medium'>Profile class</th>
-            <th className='py-1.5 font-medium'>Method</th>
-          </tr>
-        </thead>
-        <tbody>
-          {CLASSES.map((cls) => (
-            <tr key={cls.id} className='border-t border-line'>
-              <td className='py-2 pr-3'>
-                <span className='font-medium text-ink'>{cls.label}</span>
-                <span className='block text-ink-3'>{cls.hint}</span>
-              </td>
-              <td className='py-2'>
-                <select
-                  value={methodFor(cls.id)}
-                  onChange={(e) => setFor(cls.id, e.target.value)}
-                  className='rp-input py-1 text-sm'
-                >
-                  {methods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </td>
+      <div className='overflow-x-auto'>
+        <table className='mt-3 block w-full text-left text-xs sm:table'>
+          <thead className='hidden text-ink-3 sm:table-header-group'>
+            <tr>
+              <th className='py-1.5 pr-3 font-medium'>Profile class</th>
+              <th className='py-1.5 font-medium'>Method</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className='block sm:table-row-group'>
+            {CLASSES.map((cls) => (
+              <tr key={cls.id} className='block border-t border-line sm:table-row'>
+                <td className='block pt-3 pb-1 sm:table-cell sm:py-2 sm:pr-3'>
+                  <span className='font-medium text-ink'>{cls.label}</span>
+                  <span className='block text-ink-3'>{cls.hint}</span>
+                </td>
+                <td className='block pb-3 sm:table-cell sm:py-2'>
+                  <select
+                    aria-label={`${cls.label} extraction method`}
+                    value={methodFor(cls.id)}
+                    onChange={(e) =>
+                      setFor(cls.id, e.target.value)}
+                    className='rp-input py-1 text-sm'
+                  >
+                    {methods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className='mt-3 flex flex-wrap items-center gap-3'>
         <label className='flex items-center gap-2 text-xs text-ink-2'>
           Visual page cap
@@ -626,14 +713,16 @@ function RulesCard(
             type='number'
             min={1}
             value={draft.visualPageCap ?? 60}
-            onChange={(e) =>
-              setDraft((d) => ({ ...d, visualPageCap: Math.max(1, Number(e.target.value) || 60) }))}
+            onChange={(e) => {
+              dirtyRef.current = true
+              setDraft((d) => ({ ...d, visualPageCap: Math.max(1, Number(e.target.value) || 60) }))
+            }}
             className='rp-input w-20 py-1 text-sm'
           />
         </label>
         <button
           type='button'
-          disabled={busy}
+          disabled={busy || !loaded}
           onClick={() => void onSave()}
           className='rp-btn rp-btn-primary'
         >

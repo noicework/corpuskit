@@ -11,6 +11,130 @@ import { type Source, type SourceStoreApi, type WatchStoreApi } from './stores.t
 import { type EnrichmentStoreApi, runEnrichmentOverCorpus } from './enrichments.ts'
 import { runSuggestedQuestionsOverCorpus } from './suggested-questions.ts'
 import type { TenantStoreApi } from './tenants.ts'
+import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
+import type { RbacState } from './rbac-state.ts'
+import { executeAudited, type LocalMutationScope } from './audit-execution.ts'
+import { DECLARATIONS } from './permissions.ts'
+
+interface SystemJobContext {
+  localMutations?: LocalMutationScope
+  audit: AuditStore
+  requestId: string
+}
+type SystemAction =
+  | 'maintenance.source.sync'
+  | 'maintenance.watch.run'
+  | 'maintenance.enrichment.run'
+  | 'maintenance.questions.run'
+function scopedSystemAction<T>(
+  context: SystemJobContext | undefined,
+  action: SystemAction,
+  slug: string,
+  target: { kind: string; id: string },
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (!context) return run(new AbortController().signal)
+  const declaration = DECLARATIONS.find((d) => d.kind === 'internal' && d.path === action)
+  if (!declaration) throw new Error('Missing internal audit declaration')
+  return executeAudited({
+    audit: context.audit,
+    localMutations: context.localMutations,
+    input: {
+      requestId: context.requestId,
+      actor: { kind: 'system' },
+      action,
+      scope: { kind: 'portal', slug },
+      target,
+      detail: { permission: declaration.permission },
+    },
+    run,
+  })
+}
+
+/** A typo must never silently shorten audit retention. */
+export function auditRetentionDays(raw: string | undefined): number {
+  if (raw === undefined) return 400
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error('AUDIT_RETENTION_DAYS must be a positive integer')
+  }
+  return Number(raw)
+}
+
+/** Internal jobs record intent before work and never replay side effects after audit failure. */
+export async function runSystemJob(
+  audit: AuditStore,
+  job: 'sync' | 'watch' | 'enrichment',
+  work: (context: SystemJobContext) => Promise<void>,
+): Promise<void> {
+  const requestId = crypto.randomUUID()
+  const record = (outcome: 'intent' | 'success' | 'failure' | 'uncertain') =>
+    appendAudit(
+      audit,
+      createAuditEvent({
+        requestId,
+        actor: { kind: 'system' },
+        action: 'maintenance.run',
+        scope: { kind: 'platform' },
+        target: { kind: 'maintenance', id: job },
+        outcome,
+        detail: outcome === 'failure' || outcome === 'uncertain'
+          ? { code: 'operation_failed' }
+          : {},
+      }),
+    )
+  record('intent')
+  try {
+    await work({ audit, requestId })
+  } catch (error) {
+    try {
+      record('failure')
+    } catch (auditError) {
+      console.error('[scheduler] required failure audit could not be written')
+      throw auditError
+    }
+    throw error
+  }
+  try {
+    record('success')
+  } catch (error) {
+    // Work already completed remotely. This is an audit failure, never a rollback claim.
+    console.error('[scheduler] job completed but its required completion audit failed')
+    try {
+      record('uncertain')
+    } catch {
+      console.error('[scheduler] required uncertain-outcome audit could not be written')
+    }
+    throw error
+  }
+}
+
+interface MaintenanceStores {
+  localMutations?: LocalMutationScope
+  rbac: RbacState
+  tenants: TenantStoreApi
+  sources: SourceStoreApi
+  watches: WatchStoreApi
+  enrichments: EnrichmentStoreApi
+}
+
+export async function runSystemMaintenance(
+  management: AragProvider,
+  stores: MaintenanceStores,
+  retentionDays: string | undefined,
+  jobs: readonly ('sync' | 'watch' | 'enrichment')[] = ['sync', 'watch', 'enrichment'],
+  retain = true,
+): Promise<void> {
+  const days = auditRetentionDays(retentionDays)
+  if (retain) stores.rbac.retainAudit(days)
+  for (const job of jobs) {
+    await runSystemJob(stores.rbac.audit, job, (context) => {
+      context.localMutations = stores.localMutations
+      if (job === 'sync') return runAutoSyncs(management, stores.tenants, stores.sources, context)
+      if (job === 'watch') return runWatches(management, stores.tenants, stores.watches, context)
+      return runAutoEnrichments(management, stores.tenants, stores.enrichments, context)
+    })
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Background upkeep: re-sync registered sources (ingest pages that appeared
@@ -51,6 +175,7 @@ export async function syncSource(
   config: TenantConfig,
   source: Source,
   emit: (label: string) => void | Promise<void>,
+  signal?: AbortSignal,
 ): Promise<{ added: number; deferred: number }> {
   const perRun = pagesPerRun(source)
   const discovered = await discoverLinks(source.url, DISCOVER_CAP)
@@ -69,6 +194,7 @@ export async function syncSource(
   /** The first refusal reason seen, reported once instead of per page. */
   let rejectedReason: string | undefined
   for (const [i, url] of fresh.entries()) {
+    signal?.throwIfAborted()
     try {
       // Fetch and clean the page ourselves so the index holds body content,
       // not nav chrome - and so bot walls never enter the corpus.
@@ -76,7 +202,9 @@ export async function syncSource(
       try {
         const res = await fetch(url, {
           headers: { 'user-agent': CRAWLER_USER_AGENT },
-          signal: AbortSignal.timeout(25_000),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(25_000)])
+            : AbortSignal.timeout(25_000),
         })
         if (!res.ok) {
           // A refusal (typically a bot wall answering 403) used to fall
@@ -102,6 +230,7 @@ export async function syncSource(
           }
           const cleaned = extractMainContent(html)
           if (cleaned) {
+            signal?.throwIfAborted()
             await management.createText(config, {
               title: cleaned.title,
               body: cleaned.body,
@@ -112,6 +241,7 @@ export async function syncSource(
           }
         }
       } catch (err) {
+        signal?.throwIfAborted()
         // Errors from the knowledge box are not fetch/parse failures and must
         // not be masked as "the site was awkward, skip it". Back-pressure
         // needs the outer catch's deferral, and a 401/403 means the box
@@ -173,6 +303,7 @@ export async function syncSource(
         'they were not added rather than added empty.',
     )
   }
+  signal?.throwIfAborted()
   sources.update(config.slug, source.id, {
     lastSync: new Date().toISOString(),
     lastAdded: added,
@@ -212,16 +343,21 @@ export async function runWatches(
   management: AragProvider,
   tenants: TenantStoreApi,
   watches: WatchStoreApi,
+  context?: SystemJobContext,
 ): Promise<void> {
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
     for (const watch of watches.list(config.slug)) {
-      try {
+      await scopedSystemAction(context, 'maintenance.watch.run', config.slug, {
+        kind: 'watch',
+        id: watch.id,
+      }, async (signal) => {
         const results = await management.search(config, watch.query, {
           mode: 'hybrid',
           pageSize: 10,
         })
+        signal.throwIfAborted()
         const fingerprint = results.resources.map((r) => r.id).sort().join('|')
         watches.update(config.slug, watch.id, {
           lastRun: new Date().toISOString(),
@@ -230,9 +366,7 @@ export async function runWatches(
           changed: watch.changed ||
             (watch.fingerprint !== null && watch.fingerprint !== fingerprint),
         })
-      } catch {
-        // box offline or rebinding - try again next cycle
-      }
+      })
     }
   }
 }
@@ -269,43 +403,53 @@ export async function runAutoEnrichments(
   management: AragProvider,
   tenants: TenantStoreApi,
   enrichments: EnrichmentStoreApi,
+  context?: SystemJobContext,
 ): Promise<void> {
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
     try {
-      let problem: string | undefined
-      for await (
-        const event of runEnrichmentOverCorpus(management, enrichments, config, {
-          scope: 'missing',
-          limit: AUTO_ENRICH_CAP,
-        })
-      ) {
-        if (event.type === 'error') problem = event.message
-      }
-      if (problem) {
-        console.warn(`[scheduler] auto-enrichment paused for ${config.slug}: ${problem}`)
-        // Tenants share the platform account. Once one box says it is
-        // strained, moving straight to the next box would only transfer the
-        // pressure; leave every remaining portal for the next cadence.
-        return
-      }
-      // Openers for the resource pages ride the same cadence, so a page never
-      // generates them on demand once the pass has caught up.
-      for await (
-        const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
-          limit: AUTO_QUESTIONS_CAP,
-        })
-      ) {
-        if (event.type === 'error') {
-          console.warn(
-            `[scheduler] suggested questions paused for ${config.slug}: ${event.message}`,
-          )
+      await scopedSystemAction(context, 'maintenance.enrichment.run', config.slug, {
+        kind: 'portal',
+        id: config.slug,
+      }, async (signal) => {
+        let problem: string | undefined
+        for await (
+          const event of runEnrichmentOverCorpus(management, enrichments, config, {
+            scope: 'missing',
+            limit: AUTO_ENRICH_CAP,
+          })
+        ) {
+          signal.throwIfAborted()
+          if (event.type === 'error') problem = event.message
         }
-      }
+        if (problem) {
+          // Tenants share the platform account. Once one box says it is
+          // strained, moving straight to the next box would only transfer the
+          // pressure; leave every remaining portal for the next cadence.
+          throw new Error('Scheduled enrichment did not complete')
+        }
+      })
+      await scopedSystemAction(context, 'maintenance.questions.run', config.slug, {
+        kind: 'portal',
+        id: config.slug,
+      }, async (signal) => {
+        // Openers for the resource pages ride the same cadence, so a page never
+        // generates them on demand once the pass has caught up.
+        for await (
+          const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
+            limit: AUTO_QUESTIONS_CAP,
+          })
+        ) {
+          signal.throwIfAborted()
+          if (event.type === 'error') {
+            throw new Error('Scheduled suggested questions did not complete')
+          }
+        }
+      })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'unknown error'
-      console.error(`[scheduler] auto-enrichment failed for ${config.slug}: ${message}`)
+      console.error(`[scheduler] auto-enrichment failed for ${config.slug}`)
+      throw err
     }
   }
 }
@@ -315,21 +459,29 @@ export async function runAutoSyncs(
   management: AragProvider,
   tenants: TenantStoreApi,
   sources: SourceStoreApi,
+  context?: SystemJobContext,
 ): Promise<void> {
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
     for (const source of sources.list(config.slug)) {
       if (!source.auto) continue
-      try {
-        await syncSource(management, sources, config, source, () => {})
-      } catch (err) {
-        // The site is unreachable, or the box refuses writes. Either way the
-        // run is over for this source - but record WHY against the source so
-        // an administrator can see it in Manage, then carry on with the rest.
-        const message = recordSyncFailure(sources, config.slug, source, err)
-        console.error(`[scheduler] auto-sync failed for ${config.slug} ${source.url}: ${message}`)
-      }
+      await scopedSystemAction(context, 'maintenance.source.sync', config.slug, {
+        kind: 'source',
+        id: source.id,
+      }, async (signal) => {
+        try {
+          await syncSource(management, sources, config, source, () => {}, signal)
+        } catch (err) {
+          // The site is unreachable, or the box refuses writes. Record the reason
+          // against the source for Manage, then stop this run.
+          // The internal caller must observe and audit the failed maintenance pass.
+          signal.throwIfAborted()
+          recordSyncFailure(sources, config.slug, source, err)
+          console.error(`[scheduler] auto-sync failed for ${config.slug}`)
+          throw err
+        }
+      })
     }
   }
 }
@@ -352,12 +504,14 @@ export function startScheduler(
   sources: SourceStoreApi,
   watches: WatchStoreApi,
   enrichments: EnrichmentStoreApi,
+  rbac: RbacState,
+  env: Record<string, string | undefined>,
 ): () => void {
-  const runDaily = async () => {
-    await runAutoSyncs(management, tenants, sources).catch(() => {})
-    await runWatches(management, tenants, watches).catch(() => {})
-  }
-  const runEnrichments = () => runAutoEnrichments(management, tenants, enrichments)
+  const stores = { rbac, tenants, sources, watches, enrichments }
+  const runDaily = () =>
+    runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'])
+  const runEnrichments = () =>
+    runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false)
 
   // Serialise scheduled platform work. A configurable enrichment timer must
   // never overlap the daily ingest pass and recreate the contention this
@@ -365,7 +519,10 @@ export function startScheduler(
   let stopped = false
   let queue = Promise.resolve()
   const enqueue = (task: () => Promise<void>) => {
-    queue = queue.then(() => stopped ? undefined : task()).catch(() => {})
+    queue = queue.then(() => stopped ? undefined : task()).catch(() => {
+      // Keep the timer usable for its next cadence, without replaying this failed task.
+      console.error('[scheduler] maintenance failed; no automatic retry')
+    })
   }
 
   // First pass shortly after boot (machines may sleep between requests).
@@ -375,7 +532,7 @@ export function startScheduler(
       await runEnrichments()
     }), 90_000)
   const daily = setInterval(() => enqueue(runDaily), 24 * 3600 * 1000)
-  const cadence = autoEnrichmentCadenceMs(Deno.env.get('AUTO_ENRICH_CADENCE_HOURS'))
+  const cadence = autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS)
   const enrichment = setInterval(() => enqueue(runEnrichments), cadence)
   return () => {
     stopped = true

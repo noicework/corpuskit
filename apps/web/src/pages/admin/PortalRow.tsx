@@ -8,6 +8,7 @@ import {
   revertKnowledgeBox,
   setPortalDisabled,
 } from '../../api/client.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { CreateKbBox } from './CreateKbBox.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { RenamePortal } from './RenamePortal.tsx'
@@ -45,15 +46,14 @@ function StatusBadge({ status }: { status: Status }) {
  */
 export function PortalRow({
   row,
-  passcode,
   expanded,
   onToggleExpanded,
 }: {
   row: AdminTenantOverview
-  passcode: string
   expanded: boolean
   onToggleExpanded: () => void
 }) {
+  const { runExplicit } = useAdminAccess()
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
   const [token, setToken] = useState('')
@@ -68,7 +68,11 @@ export function PortalRow({
     setBusy(true)
     setMessage(null)
     try {
-      const outcome = await connectKnowledgeBox(row.tenant.slug, { url, token, passcode })
+      const outcome = await runExplicit(
+        `Connect the knowledge box for ${row.tenant.productName}`,
+        (access) => connectKnowledgeBox(row.tenant.slug, { url, token }, access),
+      )
+      if (outcome === undefined) return
       setUrl('')
       setToken('')
       setMessage({
@@ -92,7 +96,17 @@ export function PortalRow({
     setBusy(true)
     setMessage(null)
     try {
-      await setPortalDisabled(row.tenant.slug, passcode, !row.disabled)
+      const result = await runExplicit(
+        `${row.disabled ? 'Enable' : 'Disable'} ${row.tenant.productName}`,
+        (access) => setPortalDisabled(row.tenant.slug, access, !row.disabled),
+      )
+      if (result === undefined) return
+      setMessage({
+        tone: 'ok',
+        text: `Portal ${
+          row.disabled ? 'enabled' : 'disabled'
+        }. Refresh the overview to see its latest state.`,
+      })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
@@ -112,7 +126,15 @@ export function PortalRow({
     setBusy(true)
     setMessage(null)
     try {
-      await removePortal(row.tenant.slug, passcode)
+      const result = await runExplicit(
+        `Remove ${row.tenant.productName}`,
+        (access) => removePortal(row.tenant.slug, access),
+      )
+      if (result === undefined) return
+      setMessage({
+        tone: 'ok',
+        text: 'Portal removed. Refresh the overview to see its latest state.',
+      })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
@@ -122,6 +144,7 @@ export function PortalRow({
         tone: 'error',
         text: err instanceof Error ? err.message : 'Could not remove the portal.',
       })
+    } finally {
       setBusy(false)
     }
   }
@@ -130,7 +153,11 @@ export function PortalRow({
     setBusy(true)
     setMessage(null)
     try {
-      await revertKnowledgeBox(row.tenant.slug, passcode)
+      const result = await runExplicit(
+        `Revert ${row.tenant.productName} to its demo knowledge box`,
+        (access) => revertKnowledgeBox(row.tenant.slug, access),
+      )
+      if (result === undefined) return
       setMessage({ tone: 'ok', text: 'Reverted to the demo knowledge box.' })
       await refresh()
     } catch (err) {
@@ -186,7 +213,6 @@ export function PortalRow({
               ? (
                 <RenamePortal
                   slug={row.tenant.slug}
-                  passcode={passcode}
                   initialName={row.tenant.productName}
                   initialOrganisation={row.tenant.organisation}
                   initialTagline={row.tenant.tagline}
@@ -212,9 +238,17 @@ export function PortalRow({
                 </div>
               )}
 
-            <div className='flex shrink-0 flex-col items-end gap-2'>
+            <div className='flex min-w-0 max-w-full flex-col items-start gap-2 sm:items-end'>
               <StatusBadge status={row.knowledgeBox.status} />
-              <Link to={`/t/${row.tenant.slug}/manage`} className='rp-btn rp-btn-primary'>
+              <Link
+                to={`/t/${row.tenant.slug}/manage`}
+                className='rp-btn rp-btn-primary max-w-full whitespace-normal text-center'
+                style={{
+                  height: 'auto',
+                  minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
+                  paddingBlock: '0.5rem',
+                }}
+              >
                 Open portal management &rarr;
               </Link>
               <Link
@@ -241,7 +275,7 @@ export function PortalRow({
               </div>
             </dl>
 
-            <CreateKbBox row={row} passcode={passcode} onCreated={refresh} />
+            <CreateKbBox row={row} onCreated={refresh} />
 
             <form onSubmit={onConnect} className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
               <div>

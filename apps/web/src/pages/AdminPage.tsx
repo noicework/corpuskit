@@ -1,110 +1,162 @@
-import { type FormEvent, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { type ReactNode, useEffect, useLayoutEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ApiError, getAdminOverview } from '../api/client.ts'
-import { ErrorCard, Skeleton } from '../components/ui.tsx'
+import { getAdminOverview } from '../api/client.ts'
+import { Skeleton } from '../components/ui.tsx'
 import { AddPortal } from './admin/AddPortal.tsx'
 import { MigratePanel } from './admin/MigratePanel.tsx'
 import { PortalRow } from './admin/PortalRow.tsx'
-import { getAuthSession, microsoftLoginUrl } from '../api/auth.ts'
+import { type AuthSession, getAuthSession, microsoftLoginUrl } from '../api/auth.ts'
+import { EmergencyAccessProvider, useAdminAccess } from '../components/EmergencyAccess.tsx'
 
-/**
- * Global connections: passcode-gated overview of every portal and its
- * knowledge box connection - connect, replace, revert, disable or remove.
- * The passcode lives in sessionStorage for the tab, never anywhere else.
- * Everything else about a portal (content, appearance, behaviour, analysis)
- * lives in that portal's own Manage workspace at /t/:slug/manage.
- *
- * Portals render as a compact accordion - one collapsed summary row each,
- * with only one expanded at a time - so the whole overview fits a single
- * viewport rather than one long scroll.
- */
-export function AdminPage() {
-  const [passcode, setPasscode] = useState(() => sessionStorage.getItem('rp-admin-passcode') ?? '')
-  const [draft, setDraft] = useState('')
-  const [expandedSlug, setExpandedSlug] = useState<string | null>(null)
-  const { data: auth, isLoading: authLoading } = useQuery({
+/** A capability or identity change remounts forms and discards protected query results. */
+function AdminScope(
+  { session, children }: { session: AuthSession | undefined; children: ReactNode },
+) {
+  const client = useQueryClient()
+  useLayoutEffect(() => () => {
+    const filters = {
+      predicate: (query: { queryKey: readonly unknown[] }) => {
+        const key = String(query.queryKey[0])
+        return key.startsWith('admin-') ||
+          [
+            'kb-agents',
+            'kg-strategy',
+            'suggestions',
+            'extraction-methods',
+            'lab-pick',
+            'lab-pick-id',
+            'enrichment-agents',
+          ].includes(key)
+      },
+    }
+    void client.cancelQueries(filters)
+    client.removeQueries(filters)
+  }, [client])
+  return <EmergencyAccessProvider session={session}>{children}</EmergencyAccessProvider>
+}
+
+export function AdminPageAccess({ children }: { children: ReactNode }) {
+  const { data: auth } = useQuery({
     queryKey: ['auth-session'],
     queryFn: getAuthSession,
     staleTime: 60_000,
     retry: false,
   })
-  const ssoAdmin = auth?.user?.isAdmin === true
-  const adminCredential = ssoAdmin ? 'microsoft-sso' : passcode
+  useEffect(() => {
+    sessionStorage.removeItem('rp-admin-passcode')
+  }, [])
+  const identity = JSON.stringify([
+    auth?.user?.tenantId,
+    auth?.user?.id,
+    auth?.coarseAdminEligible === true,
+    auth?.breakGlassEnabled === true,
+  ])
+  return <AdminScope key={identity} session={auth}>{children}</AdminScope>
+}
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    // The passcode is part of the key: submitting a new one must run a fresh
-    // check, not replay the cached 401 from an earlier wrong entry.
-    queryKey: ['admin-overview', adminCredential],
-    queryFn: () => getAdminOverview(adminCredential),
-    enabled: adminCredential.length > 0,
+/** Session reads can refetch. An emergency result is a snapshot, never a session unlock. */
+export function useAdminOverview(scope: string) {
+  const { data: auth } = useQuery({
+    queryKey: ['auth-session'],
+    queryFn: getAuthSession,
+    staleTime: 60_000,
     retry: false,
   })
-
-  const unauthorised = isError && error instanceof ApiError && error.status === 401
-
-  const submitPasscode = (event: FormEvent) => {
-    event.preventDefault()
-    sessionStorage.setItem('rp-admin-passcode', draft)
-    setPasscode(draft)
+  const { sessionAccess, runExplicit, coarseAdminEligible, breakGlassEnabled, pending } =
+    useAdminAccess()
+  const query = useQuery({
+    queryKey: ['admin-overview', auth?.user?.tenantId ?? null, auth?.user?.id ?? null, scope],
+    queryFn: () => getAdminOverview(sessionAccess),
+    enabled: coarseAdminEligible,
+    retry: false,
+  })
+  const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getAdminOverview>>>()
+  const [operationError, setOperationError] = useState<string>()
+  const refresh = async () => {
+    setOperationError(undefined)
+    if (coarseAdminEligible) {
+      await query.refetch()
+      return
+    }
+    try {
+      const result = await runExplicit(
+        'Read the knowledge box overview',
+        (access) => getAdminOverview(access),
+      )
+      if (result !== undefined) setSnapshot(result)
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Could not load the overview.')
+    }
   }
-
-  if (authLoading && !passcode) {
-    return <main className='min-h-screen bg-app' aria-busy='true' />
+  return {
+    data: coarseAdminEligible ? query.data : snapshot,
+    isLoading: query.isLoading,
+    error: operationError ?? (query.error instanceof Error ? query.error.message : undefined),
+    refresh,
+    pending,
+    coarseAdminEligible,
+    breakGlassEnabled,
+    auth,
   }
+}
 
-  if (!adminCredential || unauthorised) {
-    return (
-      <main className='flex min-h-screen flex-col items-center justify-center bg-app px-6'>
-        <div className='rp-card w-full max-w-sm p-8'>
-          <p className='rp-eyebrow text-ink-3'>Research portal</p>
-          <h1 className='mt-1 text-xl font-semibold tracking-tight text-ink'>Knowledge boxes</h1>
-          {auth?.user
-            ? (
-              <p className='mt-4 text-sm text-ink-2'>
-                {auth.user.email} is signed in but does not have the CorpusKit administrator role.
-              </p>
-            )
-            : (
-              <a href={microsoftLoginUrl('/admin')} className='rp-btn rp-btn-primary mt-5 w-full'>
-                Sign in with Microsoft
-              </a>
-            )}
-          <form onSubmit={submitPasscode} className='mt-5 space-y-4'>
-            <div>
-              <label htmlFor='admin-passcode' className='mb-1.5 block text-sm font-medium text-ink'>
-                Admin passcode
-              </label>
-              <input
-                id='admin-passcode'
-                type='password'
-                className='rp-input'
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                autoComplete='off'
-                required
-              />
-            </div>
-            {unauthorised && (
-              <p role='alert' className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
-                That passcode was not accepted.
-              </p>
-            )}
-            <button type='submit' className='rp-btn rp-btn-primary w-full'>
-              Enter
-            </button>
-          </form>
-          <Link to='/' className='mt-4 inline-block text-sm text-ink-3 hover:text-[var(--rp-ink)]'>
-            &larr; Back to portals
-          </Link>
-        </div>
-      </main>
-    )
-  }
+export function OverviewAccess(
+  { overview, returnTo }: { overview: ReturnType<typeof useAdminOverview>; returnTo: string },
+) {
+  return (
+    <div className='mt-5 space-y-4' data-admin-unavailable={!overview.data ? true : undefined}>
+      {!overview.coarseAdminEligible && (
+        <>
+          <p className='text-sm text-ink-2'>
+            {overview.data
+              ? 'This overview is a snapshot. Each emergency action needs its own confirmation.'
+              : 'You do not have access to this administration page.'}
+          </p>
+        </>
+      )}
+      <div className='flex flex-wrap gap-3'>
+        {!overview.coarseAdminEligible && (
+          <a href={microsoftLoginUrl(returnTo)} className='rp-btn rp-btn-primary'>
+            Sign in with Microsoft
+          </a>
+        )}
+        {(overview.coarseAdminEligible || overview.breakGlassEnabled) && (
+          <button
+            type='button'
+            disabled={overview.pending}
+            onClick={() => void overview.refresh()}
+            className='rp-btn rp-btn-outline'
+          >
+            {overview.coarseAdminEligible ? 'Refresh overview' : 'Use emergency access'}
+          </button>
+        )}
+      </div>
+      {overview.error && (
+        <p role='alert' className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
+          {overview.error}
+        </p>
+      )}
+    </div>
+  )
+}
 
+/** Global knowledge box connections. Each emergency operation needs a fresh request. */
+export function AdminPage() {
+  return (
+    <AdminPageAccess>
+      <AdminContent />
+    </AdminPageAccess>
+  )
+}
+
+function AdminContent() {
+  const [expandedSlug, setExpandedSlug] = useState<string | null>(null)
+  const overview = useAdminOverview('platform')
+  const { data, isLoading } = overview
   return (
     <main className='min-h-screen bg-app'>
-      <div className='mx-auto max-w-3xl px-6 py-12'>
+      <div className='rp-shell py-12'>
         <div className='flex flex-wrap items-start justify-between gap-3'>
           <div className='min-w-0'>
             <p className='rp-eyebrow text-ink-3'>Research portal</p>
@@ -130,25 +182,17 @@ export function AdminPage() {
           </div>
         )}
 
-        {isError && !unauthorised && (
-          <div className='mt-8'>
-            <ErrorCard
-              message={error instanceof Error ? error.message : 'Could not load the overview.'}
-              onRetry={() => void refetch()}
-            />
-          </div>
-        )}
+        <OverviewAccess overview={overview} returnTo='/admin' />
 
         {data && (
-          <div className='mt-8 space-y-4'>
-            <AddPortal passcode={adminCredential} />
+          <div className='mt-8 space-y-4' data-admin-overview>
+            <AddPortal />
 
             <div className='space-y-3'>
               {data.map((row) => (
                 <PortalRow
                   key={row.tenant.slug}
                   row={row}
-                  passcode={adminCredential}
                   expanded={expandedSlug === row.tenant.slug}
                   onToggleExpanded={() =>
                     setExpandedSlug((prev) => (prev === row.tenant.slug ? null : row.tenant.slug))}
@@ -156,7 +200,7 @@ export function AdminPage() {
               ))}
             </div>
 
-            <MigratePanel rows={data} passcode={adminCredential} />
+            <MigratePanel rows={data} />
           </div>
         )}
       </div>

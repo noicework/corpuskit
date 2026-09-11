@@ -1,3 +1,5 @@
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { KgImplementEvent } from '@research-portal/core'
@@ -225,13 +227,13 @@ function EntityTypeRow({
         style={{ background: colourFor(index) }}
       />
       <input
-        className='rp-input min-w-[9rem] flex-1'
+        className='rp-input min-w-0 w-full basis-full sm:flex-1'
         placeholder='Type name, e.g. Person'
         value={type.label}
         onChange={(e) => onChange({ label: e.target.value })}
       />
       <input
-        className='rp-input min-w-[12rem] flex-[2]'
+        className='rp-input min-w-0 w-full basis-full sm:flex-[2]'
         placeholder='Description (optional)'
         value={type.description}
         onChange={(e) => onChange({ description: e.target.value })}
@@ -427,13 +429,18 @@ function ExampleCard({
  * mode - with a sticky save bar appearing once the draft diverges from what
  * is registered on the box.
  */
-export function KgStrategyEditor({ slug, passcode }: { slug: string; passcode: string }) {
+export function KgStrategyEditor({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getGraphStrategy>>>()
   const queryClient = useQueryClient()
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data: sessionData, isLoading, isError } = useQuery({
     queryKey: ['kg-strategy', slug],
-    queryFn: () => getGraphStrategy(slug, passcode),
+    enabled: coarseAdminEligible,
+    retry: false,
+    queryFn: () => getGraphStrategy(slug, sessionAccess),
   })
 
+  const data = coarseAdminEligible ? sessionData : snapshot
   const [draft, setDraft] = useState<Draft | null>(null)
   const baselineRef = useRef<Draft | null>(null)
   const dirtyRef = useRef(false)
@@ -459,31 +466,53 @@ export function KgStrategyEditor({ slug, passcode }: { slug: string; passcode: s
     dirtyRef.current = dirty
   }, [dirty])
 
-  if (isLoading) {
-    return (
-      <div className='space-y-2'>
-        <Skeleton className='h-9 w-full' />
-        <Skeleton className='h-9 w-full' />
-        <Skeleton className='h-28 w-full' />
-      </div>
-    )
+  const load = async () => {
+    try {
+      const result = await runExplicit('Load the current graph strategy', async (access) => {
+        const result = await getGraphStrategy(slug, access)
+        if (
+          !result ||
+          (result.strategy !== null &&
+            (!Array.isArray(result.strategy?.entityDefs) ||
+              !Array.isArray(result.strategy?.examples)))
+        ) throw new AdminAccessError()
+        return result
+      })
+      if (result !== undefined) {
+        if (coarseAdminEligible) queryClient.setQueryData(['kg-strategy', slug], result)
+        else setSnapshot(result)
+      }
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load the strategy.') })
+    }
   }
-
-  if (isError) {
-    return (
-      <ErrorCard
-        message='Could not load the knowledge-graph strategy.'
-        onRetry={() => void refetch()}
-      />
-    )
-  }
-
+  const readControl = (
+    <button
+      type='button'
+      data-graph-read='strategy'
+      className='rp-btn rp-btn-outline'
+      onClick={() => void load()}
+    >
+      Load current strategy
+    </button>
+  )
+  if (isLoading) return <Skeleton className='h-9 w-full' />
   if (!data?.strategy || !draft) {
     return (
-      <EmptyState
-        title='No knowledge graph agent is registered yet'
-        description='Propose and implement one above, then refine it here.'
-      />
+      <div className='space-y-3'>
+        {readControl}
+        {isError && (
+          <ErrorCard
+            message='Could not load the knowledge-graph strategy.'
+            onRetry={() => void load()}
+          />
+        )}
+        <EmptyState
+          title='Load the current graph strategy'
+          description='Read the strategy before editing. If no agent is registered, propose and implement one above.'
+        />
+        {message && <MessagePanel message={message} />}
+      </div>
     )
   }
 
@@ -496,45 +525,53 @@ export function KgStrategyEditor({ slug, passcode }: { slug: string; passcode: s
     setLog([])
     setMessage(null)
     try {
-      await saveGraphStrategy(
-        slug,
-        passcode,
-        {
-          entityTypes: draft.entityTypes.map((t) => ({
-            label: t.label.trim(),
-            description: t.description.trim() || undefined,
-          })),
-          examples: draft.examples.map((e) => ({
-            text: e.text.trim(),
-            entities: e.entities.map((en) => ({ name: en.name.trim(), label: en.label.trim() })),
-            relations: e.relations.map((r) => ({
-              source: r.source.trim(),
-              target: r.target.trim(),
-              label: r.label.trim(),
+      const result = await runExplicit('Save the graph strategy', async (access) => {
+        let completed = false
+        let failed = false
+        await saveGraphStrategy(
+          slug,
+          access,
+          {
+            entityTypes: draft.entityTypes.map((t) => ({
+              label: t.label.trim(),
+              description: t.description.trim() || undefined,
             })),
-          })),
-          applyExisting,
-        },
-        (event) => {
-          setLog((prev) => [...prev, event])
-          if (event.type === 'done') {
-            setMessage({
-              tone: 'ok',
-              text: `Strategy saved - ${event.agents} ${
-                event.agents === 1 ? 'agent' : 'agents'
-              } re-registered.`,
-            })
-          }
-          if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
-        },
-      )
-      const result = await refetch()
-      const fresh = result.data?.strategy ?? null
-      const next = fresh ? draftFromStrategy(fresh) : null
-      baselineRef.current = next
+            examples: draft.examples.map((e) => ({
+              text: e.text.trim(),
+              entities: e.entities.map((en) => ({ name: en.name.trim(), label: en.label.trim() })),
+              relations: e.relations.map((r) => ({
+                source: r.source.trim(),
+                target: r.target.trim(),
+                label: r.label.trim(),
+              })),
+            })),
+            applyExisting,
+          },
+          (event) => {
+            setLog((prev) => [...prev, event])
+            if (event.type === 'error') failed = true
+            if (event.type === 'done') {
+              completed = Number.isFinite(event.agents)
+              setMessage({
+                tone: 'ok',
+                text: `Strategy saved - ${event.agents} ${
+                  event.agents === 1 ? 'agent' : 'agents'
+                } re-registered.`,
+              })
+            }
+            if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+          },
+        )
+        if (!completed || failed) throw new AdminAccessError()
+        return true
+      })
+      if (result === undefined) return
+      baselineRef.current = draft
       dirtyRef.current = false
-      setDraft(next)
-      await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
+      setDraft({ ...draft })
+      if (coarseAdminEligible) {
+        await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
+      }
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the strategy.') })
     } finally {
@@ -544,6 +581,7 @@ export function KgStrategyEditor({ slug, passcode }: { slug: string; passcode: s
 
   return (
     <div className='space-y-5 pb-1'>
+      {readControl}
       <div>
         <p className='text-sm font-semibold text-ink'>Entity types</p>
         <p className='mt-0.5 text-xs text-ink-3'>The kinds of things the extractor recognises.</p>

@@ -8,7 +8,8 @@ import { ErrorCard, Skeleton } from '../components/ui.tsx'
 import { MessagePanel } from './admin/MessagePanel.tsx'
 import { errorMessage, inputClass, type Message } from './admin/shared.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
-import { getAuthSession } from '../api/auth.ts'
+import { AdminPageAccess } from './AdminPage.tsx'
+import { useAdminAccess } from '../components/EmergencyAccess.tsx'
 
 /** Whether a labelset has any indexed value at all - one with none is hidden. */
 export function labelsetHasCounts(counts: Record<string, number> | undefined): boolean {
@@ -110,21 +111,15 @@ function LabelsetCard({
 
 function AddLabelsetCard({
   slug,
-  credential,
-  ssoAdmin,
   onAdded,
 }: {
   slug: string
-  /** The admin credential ManagePage would send: `microsoft-sso` or the passcode. */
-  credential: string
-  /** A signed-in administrator needs no passcode field. */
-  ssoAdmin: boolean
   onAdded: () => Promise<unknown>
 }) {
   const [title, setTitle] = useState('')
   const [multiple, setMultiple] = useState(false)
   const [seed, setSeed] = useState('')
-  const [passcode, setPasscode] = useState(credential)
+  const { runExplicit } = useAdminAccess()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -138,11 +133,16 @@ function AddLabelsetCard({
     setBusy(true)
     setMessage(null)
     try {
-      await createAdminLabelset(slug, ssoAdmin ? 'microsoft-sso' : passcode, {
-        title: title.trim(),
-        multiple,
-        labels,
-      })
+      const result = await runExplicit(
+        `Add category to ${slug}`,
+        (access) =>
+          createAdminLabelset(slug, access, {
+            title: title.trim(),
+            multiple,
+            labels,
+          }),
+      )
+      if (result === undefined) return
       setMessage({ tone: 'ok', text: `Added "${title.trim()}" - it will appear once indexed.` })
       setTitle('')
       setSeed('')
@@ -226,26 +226,6 @@ function AddLabelsetCard({
           />
         </div>
 
-        {!ssoAdmin && (
-          <div>
-            <label
-              htmlFor='taxonomy-passcode'
-              className='mb-1.5 block text-sm font-medium text-ink'
-            >
-              Admin passcode
-            </label>
-            <input
-              id='taxonomy-passcode'
-              type='password'
-              className={inputClass}
-              value={passcode}
-              onChange={(e) => setPasscode(e.target.value)}
-              autoComplete='off'
-              required
-            />
-          </div>
-        )}
-
         <button
           type='submit'
           disabled={busy}
@@ -279,21 +259,18 @@ function LabelsetCardSkeleton() {
  * from the knowledge box, plus an admin affordance to add a new category.
  */
 export function TaxonomyPage() {
+  return (
+    <AdminPageAccess>
+      <TaxonomyContent />
+    </AdminPageAccess>
+  )
+}
+
+function TaxonomyContent() {
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const queryClient = useQueryClient()
-  // Same administrator rule as ManagePage: a signed-in administrator
-  // (Microsoft SSO) or the session passcode; SSO sends `microsoft-sso`.
-  const { data: auth } = useQuery({
-    queryKey: ['auth-session'],
-    queryFn: getAuthSession,
-    staleTime: 60_000,
-    retry: false,
-  })
-  const ssoAdmin = auth?.user?.isAdmin === true
-  const passcode = sessionStorage.getItem('rp-admin-passcode') ?? ''
-  const isAdmin = ssoAdmin || passcode.length > 0
-  const adminCredential = ssoAdmin ? 'microsoft-sso' : passcode
+  const { coarseAdminEligible, breakGlassEnabled } = useAdminAccess()
 
   const {
     data: labelsets,
@@ -367,12 +344,10 @@ export function TaxonomyPage() {
                 resources={counters?.resources}
               />
             ))}
-            {isAdmin
+            {(coarseAdminEligible || breakGlassEnabled)
               ? (
                 <AddLabelsetCard
                   slug={slug}
-                  credential={adminCredential}
-                  ssoAdmin={ssoAdmin}
                   onAdded={refreshAll}
                 />
               )
