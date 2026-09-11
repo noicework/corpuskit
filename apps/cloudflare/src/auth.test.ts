@@ -189,3 +189,29 @@ Deno.test('/auth/logout clears a session across every corpuskit.org portal', asy
   )
   expect(response?.headers.get('set-cookie')).toContain('Domain=corpuskit.org')
 })
+
+Deno.test('80 UUID groups sign in within the cookie budget and auth/me reports overage', async () => {
+  const { callback } = await signedLogin({
+    roles: ['CorpusKit.Admin'],
+    preferred_username: 'admin@example.test',
+    groups: Array.from({ length: 80 }, () => crypto.randomUUID()),
+  })
+  expect(callback.status).toBe(302)
+  const cookie = callback.headers.getSetCookie().find((value) =>
+    value.startsWith('__Secure-corpuskit_session=')
+  )!.split(';')[0]!
+  expect(new TextEncoder().encode(cookie).byteLength).toBeLessThan(4096)
+  expect(new TextEncoder().encode(cookie).byteLength).toBeLessThanOrEqual(3800)
+  const me = (await handleAuthRequest(
+    new Request('https://corpuskit.test/auth/me', { headers: { cookie } }),
+    config,
+  ))!
+  expect(me.status).toBe(200)
+  expect(await me.json()).toMatchObject({
+    authenticated: true,
+    user: {
+      roles: ['CorpusKit.Admin'],
+      sessionFacts: { roles: ['CorpusKit.Admin'], groups: [], groupStatus: 'overage' },
+    },
+  })
+})

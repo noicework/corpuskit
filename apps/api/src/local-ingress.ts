@@ -157,6 +157,7 @@ export class LocalIngress {
           claimAgeSeconds: session
             ? Math.max(0, Math.floor((Date.now() - session.claimIssuedAt) / 1000))
             : null,
+          groupStatus: session?.groupStatus ?? 'unverified',
           groupMappings: resolution.groupCapability,
           coarseAdminEligible: principal.coarseAdminEligible,
           breakGlassEnabled: this.breakGlassEnabled,

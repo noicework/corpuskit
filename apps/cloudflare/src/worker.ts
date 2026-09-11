@@ -183,6 +183,7 @@ export class PortalDurableObject extends DurableObject<Env> {
           claimAgeSeconds: principal.session
             ? Math.max(0, Math.floor((Date.now() - principal.session.claimIssuedAt) / 1000))
             : null,
+          groupStatus: principal.session?.groupStatus ?? 'unverified',
           groupMappings: principal.groupCapability,
           coarseAdminEligible: principal.coarseAdminEligible,
           breakGlassEnabled: this.breakGlass.enabled,

@@ -50,6 +50,21 @@ export async function assertIdentityJourney(h: IdentityJourney): Promise<void> {
     breakGlassEnabled: true,
   })
   expect(first.claimAgeSeconds).toBe(120)
+  expect(
+    await me(fixtureSession({
+      oid: 'group-overage-admin',
+      email: 'admin@example.test',
+      roles: ['CorpusKit.Admin'],
+      groups: [],
+      groupStatus: 'overage',
+    })),
+  ).toMatchObject({
+    authenticated: true,
+    user: { roles: ['CorpusKit.Admin'] },
+    effectiveRoles: { platformRole: 'platform-admin' },
+    groupStatus: 'overage',
+    groupMappings: 'disabled',
+  })
   const create = service().create({
     subjectKind: 'active-oid',
     subjectId: session.oid,

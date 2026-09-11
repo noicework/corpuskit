@@ -60,6 +60,7 @@ interface IdTokenClaims {
 
 const STATE_COOKIE = '__Secure-corpuskit_oidc'
 const SESSION_COOKIE = '__Secure-corpuskit_session'
+const SESSION_COOKIE_MAX_BYTES = 3800
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
@@ -245,11 +246,25 @@ async function finishLogin(request: Request, url: URL, config: AuthConfig): Prom
       expiresAt: Math.min(Date.now() + 8 * 3600_000, claims.iat! * 1000 + 8 * 3600_000),
     },
   }
-  const session = await seal<SessionPayload>(
+  let session = await seal<SessionPayload>(
     { ...user, expiresAt: user.sessionFacts.expiresAt },
     config.sessionSecret,
     SESSION_COOKIE,
   )
+  const cookieBytes = () => textEncoder.encode(`${SESSION_COOKIE}=${session}`).byteLength
+  if (cookieBytes() > SESSION_COOKIE_MAX_BYTES && user.sessionFacts.groups.length > 0) {
+    // Retain no partial membership: unavailable groups must fail closed during role resolution.
+    user.sessionFacts.groups = []
+    user.sessionFacts.groupStatus = 'overage'
+    session = await seal<SessionPayload>(
+      { ...user, expiresAt: user.sessionFacts.expiresAt },
+      config.sessionSecret,
+      SESSION_COOKIE,
+    )
+  }
+  if (cookieBytes() > SESSION_COOKIE_MAX_BYTES) {
+    return authError('The Microsoft identity response is too large to create a session.')
+  }
   const headers = new Headers({
     location: state.returnTo,
     'cache-control': 'no-store',
