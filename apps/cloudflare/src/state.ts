@@ -14,6 +14,7 @@ import type { BindingStoreApi } from '../../api/src/bindings.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
+import { type RbacDatabase, RbacState, type RbacStores } from '../../api/src/rbac-state.ts'
 import type {
   AskInsight,
   EnrichmentCollisionPolicy,
@@ -63,7 +64,53 @@ export interface SqlStorageLike {
  * while SQLite output gates make every mutation durable before the response.
  */
 export class DurableState {
-  constructor(private readonly sql: SqlStorageLike) {}
+  readonly rbacDatabase: RbacDatabase
+  readonly rbac: RbacState
+
+  constructor(
+    private readonly sql: SqlStorageLike,
+    private readonly transactions?: Pick<RbacDatabase, 'transactionSync'>,
+    now: () => number = Date.now,
+  ) {
+    let inTransaction = false
+    const transactionSync = <T>(callback: () => T): T => {
+      if (!transactions) throw new Error('RBAC requires a transaction capability')
+      if (inTransaction) throw new Error('Nested RBAC transactions are not supported')
+      if (callback.constructor.name === 'AsyncFunction') {
+        throw new Error('RBAC transactions must be synchronous')
+      }
+      return transactions.transactionSync(() => {
+        inTransaction = true
+        try {
+          const result = callback()
+          if (
+            result !== null && (typeof result === 'object' || typeof result === 'function') &&
+            'then' in result
+          ) {
+            throw new Error('RBAC transactions must be synchronous')
+          }
+          return result
+        } finally {
+          inTransaction = false
+        }
+      })
+    }
+    this.rbacDatabase = {
+      exec: (query, ...bindings) => {
+        const write = () => {
+          sql.exec(query, ...bindings)
+        }
+        if (inTransaction) write()
+        else transactionSync(write)
+      },
+      all: <T extends object>(
+        query: string,
+        ...bindings: import('../../api/src/rbac-state.ts').SqlValue[]
+      ): T[] => sql.exec(query, ...bindings).toArray() as T[],
+      transactionSync,
+    }
+    this.rbac = new RbacState(this.rbacDatabase, now)
+  }
 
   migrate(): void {
     this.sql.exec(`
@@ -96,6 +143,8 @@ export class DurableState {
       CREATE INDEX IF NOT EXISTS routing_records_by_tenant
         ON routing_records (tenant_slug, id);
     `)
+    // Legacy construction remains usable until the Worker injects storage in plan 02-04.
+    if (this.transactions) this.rbac.migrate()
   }
 
   get<T>(key: string, fallback: T): T {
@@ -1107,7 +1156,8 @@ export class DurableRoutingLog implements RoutingLogApi {
   }
 }
 
-export interface DurableStores {
+export interface DurableStores extends RbacStores {
+  rbac: RbacState
   bindings: DurableBindingStore
   tenants: DurableTenantStore
   insights: DurableInsightsStore
@@ -1128,6 +1178,10 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    rbac: state.rbac,
+    audit: state.rbac.audit,
+    assignments: state.rbac.assignments,
+    locks: state.rbac.locks,
     bindings: new DurableBindingStore(state, env),
     tenants: new DurableTenantStore(state),
     insights: new DurableInsightsStore(state),

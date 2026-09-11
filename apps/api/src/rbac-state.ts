@@ -41,6 +41,20 @@ export interface AssignmentReader {
 export interface RbacStores {
   audit: AuditStore
   assignments: AssignmentReader
+  locks: { lockedUntil(trustedIp: string): number | null }
+}
+
+interface AssignmentRow {
+  id: string
+  tenant_id: string
+  subject_kind: RoleAssignment['subjectKind']
+  subject_id: string
+  scope_kind: Scope['kind']
+  scope_slug: string
+  role: Role
+  email_provenance: string | null
+  created_at: number
+  updated_at: number
 }
 
 // Schema constants come from the core catalogue; no grant policy is duplicated here.
@@ -99,8 +113,36 @@ const schema = [
 /** Internal persistence foundation. Guarded services receive the database at construction. */
 export class RbacState {
   readonly audit: AuditStore
+  readonly assignments: AssignmentReader
+  readonly locks: RbacStores['locks']
 
   constructor(private readonly database: RbacDatabase, private readonly now = Date.now) {
+    this.assignments = Object.freeze({
+      list: (tenantId: string): RoleAssignment[] =>
+        database.all<AssignmentRow>(
+          'SELECT * FROM role_assignments WHERE tenant_id = ? ORDER BY id',
+          tenantId,
+        ).map((row) => ({
+          id: row.id,
+          tenantId: row.tenant_id,
+          subjectKind: row.subject_kind,
+          subjectId: row.subject_id,
+          scope: row.scope_kind === 'platform'
+            ? { kind: 'platform' }
+            : { kind: 'portal', slug: row.scope_slug },
+          role: row.role,
+          emailProvenance: row.email_provenance,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+    })
+    this.locks = Object.freeze({
+      lockedUntil: (trustedIp: string): number | null =>
+        database.all<{ locked_until: number }>(
+          'SELECT locked_until FROM break_glass_locks WHERE trusted_ip = ?',
+          trustedIp,
+        )[0]?.locked_until ?? null,
+    })
     this.audit = Object.freeze({
       append: (event: AuditEvent): void => {
         try {

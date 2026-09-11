@@ -21,7 +21,10 @@ interface DurableObjectSqlStorage {
 }
 
 interface DurableObjectState {
-  storage: { sql: DurableObjectSqlStorage }
+  storage: {
+    sql: DurableObjectSqlStorage
+    transactionSync<T>(callback: () => T): T
+  }
 }
 
 interface DurableObjectStub extends Fetcher {}

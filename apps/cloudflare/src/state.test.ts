@@ -5,6 +5,7 @@ import {
   DurableEnrichmentStore,
   DurableRoutingLog,
   DurableState,
+  durableStores,
   DurableTenantStore,
   type SqlStorageLike,
 } from './state.ts'
@@ -14,12 +15,29 @@ import { DurableMcpKeyStore } from './state.ts'
 class TestSqlStorage implements SqlStorageLike {
   readonly database = new DatabaseSync(':memory:')
 
+  transactionSync<T>(callback: () => T): T {
+    this.database.exec('BEGIN IMMEDIATE')
+    try {
+      const result = callback()
+      this.database.exec('COMMIT')
+      return result
+    } catch (error) {
+      this.database.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   exec<T extends Record<string, ArrayBuffer | string | number | null>>(
     query: string,
     ...bindings: unknown[]
   ): { toArray(): T[]; one(): T } {
     let rows: T[] = []
-    if (bindings.length === 0) {
+    if (/^\s*(BEGIN|SAVEPOINT|COMMIT|ROLLBACK)\b/i.test(query)) {
+      throw new Error('Manual transactions are forbidden in Durable SQL')
+    }
+    if (/^\s*(SELECT|PRAGMA)\b/i.test(query)) {
+      rows = this.database.prepare(query).all(...bindings as SQLInputValue[]) as T[]
+    } else if (bindings.length === 0) {
       this.database.exec(query)
     } else {
       const statement = this.database.prepare(query)
@@ -39,6 +57,52 @@ class TestSqlStorage implements SqlStorageLike {
     }
   }
 }
+
+Deno.test('Durable RBAC migrates additively and rolls back rows with failed audit', () => {
+  const sql = new TestSqlStorage()
+  const state = new DurableState(sql, sql, () => 1000)
+  try {
+    state.migrate()
+    state.put('tenant:existing', { slug: 'existing' })
+    state.migrate()
+    const stores = durableStores(state, {})
+    expect(stores.assignments.list('tenant-1')).toEqual([])
+    expect(stores.locks.lockedUntil('ip')).toBeNull()
+    expect(state.get('tenant:existing', null)).toEqual({ slug: 'existing' })
+    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 1 }])
+    expect(() =>
+      state.rbacDatabase.transactionSync(() => {
+        state.rbacDatabase.exec('INSERT INTO break_glass_locks VALUES (?,?)', 'ip', 2000)
+        stores.audit.append({} as never)
+      })
+    ).toThrow()
+    expect(stores.locks.lockedUntil('ip')).toBeNull()
+    state.rbacDatabase.transactionSync(() => {
+      state.rbacDatabase.exec('INSERT INTO break_glass_locks VALUES (?,?)', 'ip', 2000)
+    })
+    expect(new DurableState(sql, sql).rbac.locks.lockedUntil('ip')).toBe(2000)
+    expect(() => state.rbacDatabase.transactionSync(async () => {})).toThrow('synchronous')
+    expect(() => state.rbacDatabase.transactionSync(() => Promise.resolve())).toThrow('synchronous')
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable RBAC refuses mutation without an injected transaction capability', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql)
+    state.migrate()
+    state.put('legacy', true)
+    expect(state.get('legacy', false)).toBe(true)
+    expect(() => state.rbac.migrate()).toThrow('transaction capability')
+    expect(() => state.rbacDatabase.exec('CREATE TABLE forbidden (id TEXT)')).toThrow(
+      'transaction capability',
+    )
+  } finally {
+    sql.database.close()
+  }
+})
 
 function enrichment(title: string): Enrichment {
   return {
