@@ -246,7 +246,7 @@ function ManageContent() {
                   )
               )}
 
-              {coarseAdminEligible && tab === 'taxonomy' && (
+              {tab === 'taxonomy' && (
                 // One container: the tab card. Everything inside is a flat
                 // section (heading, then controls), separated by hairlines.
                 <div className='rp-card p-5'>
@@ -264,11 +264,14 @@ function ManageContent() {
                       <>
                         <LabelsetsPanel
                           slug={slug}
-                          passcode='microsoft-sso'
                           organisation={config.branding.organisation}
                         />
-                        <AnalysePanel slug={slug} passcode='microsoft-sso' />
-                        <InterrogatePanel slug={slug} passcode='microsoft-sso' />
+                        {coarseAdminEligible && (
+                          <AnalysePanel slug={slug} passcode='microsoft-sso' />
+                        )}
+                        {coarseAdminEligible && (
+                          <InterrogatePanel slug={slug} passcode='microsoft-sso' />
+                        )}
                       </>
                     )
                     : (

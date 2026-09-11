@@ -1,5 +1,7 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
+import { LabelsetSaveError, updateAdminLabelset } from '../../api/client.ts'
+import { AdminAccessError, runWithEmergencyAccess, sessionAccess } from '../../api/break-glass.ts'
 import {
   blankDraft,
   createdMessage,
@@ -71,14 +73,44 @@ describe('LabelsetsPanel - creating a set in place', () => {
 })
 
 describe('TaxonomyPage - administrator rule', () => {
-  it('uses the ManagePage credential rule: signed-in administrator or passcode', () => {
-    expect(taxonomySource).toContain('const ssoAdmin = auth?.user?.isAdmin === true')
-    expect(taxonomySource).toContain('const isAdmin = ssoAdmin || passcode.length > 0')
-    expect(taxonomySource).toContain(
-      "const adminCredential = ssoAdmin ? 'microsoft-sso' : passcode",
-    )
-    expect(taxonomySource).not.toContain(
-      "const isAdmin = Boolean(sessionStorage.getItem('rp-admin-passcode'))",
-    )
+  it('uses explicit request access for both taxonomy entry points', () => {
+    expect(taxonomySource).toContain('useAdminAccess')
+    expect(taxonomySource).toContain('runExplicit')
+    expect(panelSource).toContain('runExplicit')
+    expect(panelSource).not.toContain('passcode')
+    expect(taxonomySource).not.toContain('passcode')
   })
+})
+
+Deno.test('partial labelset failure preserves session recovery and never replays emergency work', async () => {
+  const original = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = () => {
+    calls++
+    return Promise.resolve(
+      Response.json({
+        message: 'Labeller replacement failed',
+        previous: { title: 'Previous labeller' },
+      }, { status: 500 }),
+    )
+  }
+  try {
+    const draft = { title: 'Region', multiple: false, labels: [{ title: 'North', text: '' }] }
+    try {
+      await updateAdminLabelset('alpha', sessionAccess, 'region', draft)
+      throw new Error('Expected failure')
+    } catch (error) {
+      expect(error).toBeInstanceOf(LabelsetSaveError)
+      expect((error as LabelsetSaveError).previous).toEqual({ title: 'Previous labeller' })
+    }
+    await expect(
+      runWithEmergencyAccess(
+        'test-only',
+        (access) => updateAdminLabelset('alpha', access, 'region', draft),
+      ),
+    ).rejects.toBeInstanceOf(AdminAccessError)
+    expect(calls).toBe(2)
+  } finally {
+    globalThis.fetch = original
+  }
 })

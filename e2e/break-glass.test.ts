@@ -51,7 +51,7 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const marker = `pages-${crypto.randomUUID()}`
-    const directory = `.planning/logs/02-11-${marker}`
+    const directory = `.planning/logs/02-12-${marker}`
     await Deno.mkdir(directory, { recursive: true })
     const root = Deno.cwd()
     // Bundle real page components; only their network responses and outlet config are fixtures.
@@ -140,6 +140,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let syncComplete = true
     let syncMalformed = false
     let malformedRead = false
+    let taxonomyPopulated = false
+    const taxonomyBodies: unknown[] = []
     const source = {
       id: 'source-one',
       url: 'https://example.invalid/research',
@@ -187,6 +189,10 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             status: status === 429 ? 403 : status,
             headers: status === 429 ? { 'retry-after': '125' } : {},
           })
+        }
+        if (url.pathname.includes('/labelsets')) {
+          taxonomyBodies.push(await request.json())
+          return Response.json({ ok: true, id: 'region', agents: [] })
         }
         if (url.pathname.endsWith('/sources/source-one/sync')) {
           return new Response(
@@ -282,7 +288,20 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             : { ok: true, id: 'region', slug: 'created', resourceCount: 7 },
         )
       }
-      if (url.pathname.endsWith('/labelsets')) return Response.json([])
+      if (url.pathname.endsWith('/labelsets')) {
+        return Response.json(
+          taxonomyPopulated
+            ? [{
+              id: 'region',
+              title: 'Region',
+              multiple: false,
+              kind: 'RESOURCES',
+              labels: ['North', 'South'],
+              definitions: { North: 'Northern research' },
+            }]
+            : [],
+        )
+      }
       if (url.pathname.endsWith('/facets')) return Response.json({})
       if (url.pathname.endsWith('/counters')) return Response.json({ resources: 7 })
       return fetch(`${base.url}${url.pathname}${url.search}`, request)
@@ -374,6 +393,73 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          taxonomyPopulated = true
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Taxonomy')
+          await page!.waitForSelector('#ls-region-title')
+          const before = requests.length
+          await fill(page!, '#ls-region-title', 'Research region')
+          await clickText(page!, 'Remove')
+          await clickText(page!, 'Save')
+          await page!.waitForSelector('[role=dialog]')
+          await capture(`taxonomy-prompt-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          expect(requests.length).toBe(before)
+          expect(
+            await page!.evaluate(() =>
+              document.querySelector<HTMLInputElement>('#ls-region-title')!.value
+            ),
+          ).toBe('Research region')
+          await clickText(page!, 'Save')
+          await confirm()
+          expect(requests.length).toBe(before + 1)
+          expect(taxonomyBodies.at(-1)).toEqual({
+            title: 'Research region',
+            multiple: false,
+            labels: [{ title: 'South', text: '' }],
+          })
+          expect(await page!.evaluate(() => document.body.textContent)).toContain(
+            'No labeller carries this set',
+          )
+          await page!.evaluate(() =>
+            document.querySelector('#ls-region-title')!.scrollIntoView({ block: 'center' })
+          )
+          await capture(`taxonomy-editor-${palette}-${width}`)
+          await fill(page!, '#ls-region-title', 'Uncertain region')
+          state.status = 500
+          await clickText(page!, 'Save')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          expect(await page!.evaluate(() => document.body.textContent)).toContain(
+            'Check whether the action completed',
+          )
+          await click(page!, '[data-emergency-cancel]')
+          await page!.evaluate(() => {
+            dispatchEvent(new Event('fixture-invalidate'))
+            dispatchEvent(new Event('focus'))
+          })
+          await settle(page!)
+          expect(requests.length).toBe(before + 2)
+          state.status = 200
+          await clickText(page!, 'New label set')
+          await fill(page!, '#ls-new-title', 'New region')
+          await fill(page!, '#ls-new-label-0', 'West')
+          await clickText(page!, 'Create label set')
+          await click(page!, '[data-emergency-cancel]')
+          await clickText(page!, 'Create label set')
+          await confirm()
+          expect(requests.length).toBe(before + 3)
+          expect(requests.slice(before).every((r) => r.emergency)).toBe(true)
+        }
+      }
+      taxonomyPopulated = false
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
           state.capability = 'enabled'
