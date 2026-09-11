@@ -1,5 +1,18 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
+import * as core from '@research-portal/core'
+import type {
+  AccessMode,
+  AuthorisationPrincipal,
+  EffectiveRoles,
+  Permission,
+  PlatformRole,
+  PortalPolicy,
+  PortalRole,
+  Principal,
+  Role,
+  Scope,
+} from '@research-portal/core'
 import {
   ACCESS_MODES,
   AccessModeSchema,
@@ -26,6 +39,61 @@ const publicPolicy = { slug: 'alpha', accessMode: 'public', configuredTenantId: 
 const noRoles = { portalRoles: [] }
 const alpha = { kind: 'portal', slug: 'alpha' }
 const platform = { kind: 'platform' }
+
+describe('shared core barrel contract', () => {
+  it('exports the same functions, ten schemas and five catalogues as the direct module', () => {
+    const exports = {
+      authorize,
+      normalisePrincipal,
+      PortalRoleSchema,
+      PlatformRoleSchema,
+      RoleSchema,
+      PermissionSchema,
+      ScopeSchema,
+      AccessModeSchema,
+      PrincipalSchema,
+      EffectiveRolesSchema,
+      PortalPolicySchema,
+      AuthorisationPrincipalSchema,
+      PORTAL_ROLES,
+      PLATFORM_ROLES,
+      ROLES,
+      PERMISSIONS,
+      ACCESS_MODES,
+    }
+    for (const name of Object.keys(exports) as (keyof typeof exports)[]) {
+      expect(core[name]).toBe(exports[name])
+    }
+  })
+
+  it('exposes schema-derived types for trusted callers through the existing alias', () => {
+    const identity: Principal = { kind: 'user', tenantId: 'tenant-a', oid: 'user-a' }
+    const portalRole: PortalRole = 'curator'
+    const platformRole: PlatformRole = 'platform-admin'
+    const role: Role = portalRole
+    const permission: Permission = 'content.write'
+    const scope: Scope = { kind: 'portal', slug: 'alpha' }
+    const accessMode: AccessMode = 'restricted'
+    const effectiveRoles: EffectiveRoles = {
+      platformRole,
+      portalRoles: [{ slug: 'alpha', role: portalRole }],
+    }
+    const portalPolicy: PortalPolicy = { slug: 'alpha', accessMode, configuredTenantId: 'tenant-a' }
+    const principal: AuthorisationPrincipal = { identity, effectiveRoles, portalPolicy }
+    expect(core.PrincipalSchema.parse(identity)).toEqual(identity)
+    expect(core.PortalRoleSchema.parse(portalRole)).toBe(portalRole)
+    expect(core.PlatformRoleSchema.parse(platformRole)).toBe(platformRole)
+    expect(core.RoleSchema.parse(role)).toBe(role)
+    expect(core.PermissionSchema.parse(permission)).toBe(permission)
+    expect(core.ScopeSchema.parse(scope)).toEqual(scope)
+    expect(core.AccessModeSchema.parse(accessMode)).toBe(accessMode)
+    expect(core.EffectiveRolesSchema.parse(effectiveRoles)).toEqual(effectiveRoles)
+    expect(core.PortalPolicySchema.parse(portalPolicy)).toEqual(portalPolicy)
+    expect(core.AuthorisationPrincipalSchema.parse(principal)).toEqual(principal)
+    expect(core.normalisePrincipal(identity, effectiveRoles, portalPolicy)).toEqual(principal)
+    expect(core.authorize(principal, permission, scope)).toBe(true)
+  })
+})
 
 // D1 oracle copied from DECISIONS.md, independent of production catalogues and grant maps.
 const decisionPermissions = [
