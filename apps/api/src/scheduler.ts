@@ -13,10 +13,11 @@ import { runSuggestedQuestionsOverCorpus } from './suggested-questions.ts'
 import type { TenantStoreApi } from './tenants.ts'
 import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
 import type { RbacState } from './rbac-state.ts'
-import { executeAudited } from './audit-execution.ts'
+import { executeAudited, type LocalMutationScope } from './audit-execution.ts'
 import { DECLARATIONS } from './permissions.ts'
 
 interface SystemJobContext {
+  localMutations?: LocalMutationScope
   audit: AuditStore
   requestId: string
 }
@@ -37,6 +38,7 @@ function scopedSystemAction<T>(
   if (!declaration) throw new Error('Missing internal audit declaration')
   return executeAudited({
     audit: context.audit,
+    localMutations: context.localMutations,
     input: {
       requestId: context.requestId,
       actor: { kind: 'system' },
@@ -107,6 +109,7 @@ export async function runSystemJob(
 }
 
 interface MaintenanceStores {
+  localMutations?: LocalMutationScope
   rbac: RbacState
   tenants: TenantStoreApi
   sources: SourceStoreApi
@@ -125,6 +128,7 @@ export async function runSystemMaintenance(
   if (retain) stores.rbac.retainAudit(days)
   for (const job of jobs) {
     await runSystemJob(stores.rbac.audit, job, (context) => {
+      context.localMutations = stores.localMutations
       if (job === 'sync') return runAutoSyncs(management, stores.tenants, stores.sources, context)
       if (job === 'watch') return runWatches(management, stores.tenants, stores.watches, context)
       return runAutoEnrichments(management, stores.tenants, stores.enrichments, context)

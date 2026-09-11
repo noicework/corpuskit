@@ -773,6 +773,7 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  localMutations?: import('./audit-execution.ts').LocalMutationScope
   /** Intent-routing decisions log; defaults to the on-disk JSONL store. */
   routing?: RoutingLogApi
   provider: RetrievalProvider
@@ -1009,6 +1010,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
         audit: requiredAudit(),
+        localMutations: opts.localMutations,
         signal: operationSignals.get(c.req.raw) ?? c.req.raw.signal,
         input: {
           requestId: requestContext(c.req.raw).requestId,
@@ -1160,6 +1162,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     const response = await executeAuditedResponse({
       audit: requiredAudit(),
+      localMutations: opts.localMutations,
       privileged: true,
       signal: c.req.raw.signal,
       input: {
@@ -1188,6 +1191,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   registerMcpRoutes(app, {
+    localMutations: opts.localMutations,
     provider,
     tenant,
     keys: mcpKeys,
@@ -1783,6 +1787,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           (declaration) =>
             executeAudited({
               audit: requiredAudit(),
+              localMutations: opts.localMutations,
               signal: controller.signal,
               input: {
                 ...input,
@@ -1807,6 +1812,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                   (cache) =>
                     executeAudited({
                       audit: requiredAudit(),
+                      localMutations: opts.localMutations,
                       signal,
                       input: {
                         ...input,

@@ -13,7 +13,7 @@ import {
   AuditWriteError,
   createAuditEvent,
 } from './audit.ts'
-import { executeAudited, stageAuditResponse } from './audit-execution.ts'
+import { executeAudited, type LocalMutationScope, stageAuditResponse } from './audit-execution.ts'
 import type { PortalRequestContext } from './app.ts'
 import { type Context, Hono } from 'hono'
 import '@cfworker/json-schema'
@@ -57,6 +57,7 @@ export interface TrustedPortalUser {
 }
 
 export interface McpRoutesOptions {
+  localMutations?: LocalMutationScope
   provider: RetrievalProvider
   tenant: (slug: string) => TenantConfig | undefined
   keys: McpKeyStoreApi
@@ -80,6 +81,7 @@ export async function executeMcpTool(
   context: McpAuditContext,
   audit: AuditStore | undefined,
   call: () => Promise<Record<string, unknown>>,
+  localMutations?: LocalMutationScope,
 ): Promise<Record<string, unknown>> {
   const input = {
     requestId: context.requestId,
@@ -115,6 +117,7 @@ export async function executeMcpTool(
     if (!audit) throw new AuditWriteError()
     const execution = await executeAudited({
       audit,
+      localMutations,
       signal: context.signal,
       input: { ...input, action: 'request.privileged' },
       run: async (signal) => {
@@ -265,7 +268,9 @@ export function createMcpServer(opts: McpRoutesOptions): {
     const declaration = DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === name)
     const auditContext = context.http?.authInfo?.extra?.auditContext as McpAuditContext | undefined
     if (!declaration || !auditContext) throw new AuditWriteError()
-    return safeTool(() => executeMcpTool(declaration, auditContext, opts.audit, call))
+    return safeTool(() =>
+      executeMcpTool(declaration, auditContext, opts.audit, call, opts.localMutations)
+    )
   }
 
   const tenantFor = (context: ServerContext): TenantConfig => {

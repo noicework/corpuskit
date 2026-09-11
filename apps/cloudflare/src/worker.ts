@@ -101,6 +101,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       routing: this.stores.routing,
       zone: bindings.ARAG_ZONE,
       audit: this.stores.audit,
+      localMutations: this.stores.localMutations,
       breakGlass: this.breakGlass,
       requestContext: (request) => this.contexts.get(request),
       invalidate: (slug) => this.provider.invalidate(slug),

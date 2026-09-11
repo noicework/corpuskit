@@ -9,13 +9,13 @@ export interface SubAction {
   readonly fields?: readonly string[]
 }
 export interface Declaration {
-  readonly kind: 'http' | 'mcp' | 'boundary' | 'internal'
+  readonly kind: 'http' | 'mcp' | 'boundary' | 'internal' | 'local'
   readonly method: string
   readonly path: string
   readonly permission: Permission
   readonly scope: 'portal' | 'platform' | 'public'
   readonly reason?: string
-  readonly action: 'request.privileged'
+  readonly action: 'request.privileged' | 'local.mutation'
   readonly target: { readonly kind: 'request' | 'tool'; readonly param?: string }
   readonly subActions?: readonly SubAction[]
   readonly detailFields?: readonly string[]
@@ -34,7 +34,7 @@ function entry(
     path,
     permission,
     scope,
-    action: 'request.privileged',
+    action: kind === 'local' ? 'local.mutation' : 'request.privileged',
     target: Object.freeze({
       kind: kind === 'mcp' ? 'tool' : 'request',
       ...(path.includes(':id') ? { param: 'id' } : path.includes(':slug') ? { param: 'slug' } : {}),
@@ -56,6 +56,47 @@ function entry(
 
 /** D11's sole route/tool catalogue. Labels classify audit only in Phase 2. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  ...([
+    ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
+    ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
+    ['tenants', ['remove'], 'portal.delete', 'platform'],
+    ['tenants', ['setDisabled', 'patch'], 'behaviour.write', 'portal'],
+    ['tenants', ['patchBranding'], 'appearance.write', 'portal'],
+    ['sessions', ['put', 'remove'], 'portal.ask', 'portal'],
+    ['insights', ['record'], 'portal.ask', 'portal'],
+    ['routing', ['record'], 'portal.ask', 'portal'],
+    ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],
+    ['sources', ['add', 'update', 'remove'], 'content.write', 'portal'],
+    [
+      'investigations',
+      [
+        'create',
+        'update',
+        'remove',
+        'addEvidence',
+        'updateEvidence',
+        'removeEvidence',
+        'addArtefact',
+      ],
+      'portal.investigate',
+      'portal',
+    ],
+    ['suggestions', ['replacePending', 'setStatus'], 'behaviour.write', 'portal'],
+    ['enrichments', ['put', 'importRecords', 'migrateLegacy'], 'enrichments.write', 'portal'],
+    ['kgProposals', ['set'], 'graph.write', 'portal'],
+    ['branding', ['put'], 'appearance.write', 'portal'],
+    ['mcpKeys', ['add', 'revoke'], 'keys.manage', 'portal'],
+  ] as const).flatMap(([store, methods, permission, scope]) =>
+    methods.map((method) =>
+      entry(
+        'local',
+        'LOCAL',
+        `${store}.${method}`,
+        permission,
+        scope,
+      )
+    )
+  ),
   entry('internal', 'SYSTEM', 'maintenance.source.sync', 'content.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.watch.run', 'portal.watch', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.enrichment.run', 'enrichments.write', 'portal'),

@@ -11,6 +11,666 @@ import {
 } from './state.ts'
 import type { McpKeyRecord, RoutingRecord } from '../../api/src/stores.ts'
 import { DurableMcpKeyStore } from './state.ts'
+import { buildApp } from '../../api/src/app.ts'
+import type { AragProvider, RetrievalProvider } from '@research-portal/retrieval'
+import { executeAudited, executeAuditedResponse } from '../../api/src/audit-execution.ts'
+import type { AuditInput } from '../../api/src/audit.ts'
+import { runSystemMaintenance } from '../../api/src/scheduler.ts'
+import { executeMcpTool } from '../../api/src/mcp.ts'
+import { SUGGESTED_QUESTIONS_SCHEMA_ID } from '../../api/src/suggested-questions.ts'
+
+function mutationFixture(management?: AragProvider) {
+  const sql = new TestSqlStorage()
+  const state = new DurableState(sql, sql)
+  state.migrate()
+  const stores = durableStores(state, {})
+  const app = buildApp({
+    ...stores,
+    provider: {
+      resource: async () => ({ id: 'doc', title: 'Research', summary: '' }),
+    } as unknown as RetrievalProvider,
+    management,
+    requestContext: () => ({
+      requestId: crypto.randomUUID(),
+      session: {
+        verified: true,
+        oid: 'writer',
+        tenantId: 'directory',
+        roles: [],
+        groups: [],
+        groupStatus: 'complete',
+        claimIssuedAt: Date.now(),
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 10000,
+      },
+      coarseAdminEligible: true,
+      effectiveRoles: { platformRole: 'owner', portalRoles: [] },
+      actor: { kind: 'user', id: 'writer' },
+    }),
+  })
+  return {
+    sql,
+    state,
+    stores,
+    app,
+    fail: (condition = "NEW.action = 'local.mutation'") =>
+      sql.database.exec(
+        `CREATE TRIGGER fail_local BEFORE INSERT ON audit_events WHEN ${condition} BEGIN SELECT RAISE(ABORT, 'fixture'); END`,
+      ),
+    recover: () => sql.database.exec('DROP TRIGGER fail_local'),
+    snapshot: () => sql.database.prepare('SELECT key, value FROM state ORDER BY key').all(),
+    request: (path: string, method = 'POST', body?: unknown) =>
+      app.request(path, {
+        method,
+        headers: { 'content-type': 'application/json', 'x-rp-client': 'client' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+  }
+}
+
+const mutationInput: Omit<AuditInput, 'outcome'> = {
+  requestId: 'local-test',
+  actor: { kind: 'user', id: 'writer' },
+  action: 'request.privileged',
+  scope: { kind: 'portal', slug: 'marine' },
+  target: { kind: 'portal', id: 'marine' },
+  detail: { permission: 'behaviour.write', operation: 'POST /api/admin/t/:slug/disable' },
+}
+
+Deno.test('Durable HTTP prompts, keys, watches and research writes roll back on local audit failure', async (t) => {
+  const fixture = mutationFixture()
+  const { stores, request, fail, recover, snapshot, sql } = fixture
+  try {
+    const watch = stores.watches.add('marine', 'client', 'Research')
+    const investigation = stores.investigations.create('marine', 'client', { name: 'Original' })
+    const evidence = stores.investigations.addEvidence('marine', 'client', investigation.id, {
+      passage: 'Original passage',
+      resourceId: 'doc',
+      resourceTitle: 'Research',
+      score: null,
+      question: '',
+      verdict: null,
+      aiRelevance: null,
+      note: '',
+      tags: [],
+    })!
+    const issuedResponse = await request('/api/t/marine/mcp/keys', 'POST', {
+      label: 'Existing key',
+    })
+    expect(issuedResponse.status).toBe(201)
+    const issued = await issuedResponse.json()
+    const research = `/api/t/marine/investigations/${investigation.id}`
+    const cases: [string, string, unknown?][] = [
+      ['/api/admin/t/marine/prompts', 'PUT', { ask: 'Override' }],
+      ['/api/t/marine/mcp/keys', 'POST', { label: 'New key' }],
+      [`/api/t/marine/mcp/keys/${issued.credential.id}`, 'DELETE'],
+      ['/api/t/marine/watches', 'POST', { query: 'New research' }],
+      [`/api/t/marine/watches/${watch.id}/seen`, 'POST'],
+      [`/api/t/marine/watches/${watch.id}`, 'DELETE'],
+      ['/api/t/marine/investigations', 'POST', { name: 'New project' }],
+      [research, 'PATCH', { name: 'Updated project' }],
+      [research, 'DELETE'],
+      [`${research}/evidence`, 'POST', {
+        passage: 'New passage',
+        resourceId: 'doc2',
+        resourceTitle: 'New research',
+      }],
+      [`${research}/evidence/${evidence.id}`, 'PATCH', { note: 'Updated note' }],
+      [`${research}/evidence/${evidence.id}`, 'DELETE'],
+      [`${research}/artefacts`, 'POST', {
+        kind: 'brief',
+        title: 'Research brief',
+        data: { text: 'Private content' },
+      }],
+    ]
+    for (const [path, method, body] of cases) {
+      await t.step(`${method} ${path}`, async () => {
+        const before = snapshot()
+        fail()
+        expect((await request(path, method, body)).status).toBe(500)
+        expect(snapshot()).toEqual(before)
+        recover()
+      })
+    }
+    const rpc = await appRpc(fixture.app, issued.key, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+    })
+    expect(rpc.status).toBe(200)
+    expect(stores.mcpKeys.list('marine')).toHaveLength(1)
+    expect(stores.mcpKeys.list('marine')[0]!.revokedAt).toBeNull()
+    expect((await request(`/api/t/marine/mcp/keys/${issued.credential.id}`, 'DELETE')).status).toBe(
+      200,
+    )
+    const local = stores.audit.read({ scope: { kind: 'portal', slug: 'marine' }, limit: 200 })
+      .filter((event) => event.action === 'local.mutation')
+    expect(local).toHaveLength(2)
+    expect(local.every((event) => event.target_id === issued.credential.id)).toBe(true)
+    expect(JSON.stringify(local)).not.toContain(issued.key)
+  } finally {
+    sql.database.close()
+  }
+})
+
+function appRpc(app: ReturnType<typeof buildApp>, key: string, body: unknown) {
+  return app.request('/api/t/marine/mcp', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${key}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+Deno.test('Durable HTTP local writes commit their intended changes and one matching audit per method', async () => {
+  const fixture = mutationFixture()
+  const { stores, request } = fixture
+  const local = () =>
+    stores.audit.read({ scope: { kind: 'portal', slug: 'marine' }, limit: 200 })
+      .filter((event) => event.action === 'local.mutation')
+  const change = async (mutation: string, path: string, method: string, body?: unknown) => {
+    const before = local().length
+    const response = await request(path, method, body)
+    expect(response.status).toBe(200)
+    const records = local()
+    expect(records).toHaveLength(before + 1)
+    expect(records.filter((event) => JSON.parse(event.detail_json).mutation === mutation)).not
+      .toHaveLength(0)
+    expect(records.every((event) => event.outcome === 'success' && event.actor_id === 'writer'))
+      .toBe(true)
+    return await response.json()
+  }
+  try {
+    await change('tenants.patch', '/api/admin/t/marine/prompts', 'PUT', { ask: 'Override' })
+    expect(stores.tenants.promptsFor('marine')).toEqual({ ask: 'Override' })
+    const watch = await change('watches.add', '/api/t/marine/watches', 'POST', {
+      query: 'Research',
+    })
+    expect(stores.watches.list('marine', 'client')[0]!.id).toBe(watch.id)
+    stores.watches.update('marine', watch.id, { changed: true })
+    await change('watches.update', `/api/t/marine/watches/${watch.id}/seen`, 'POST')
+    expect(stores.watches.list('marine', 'client')[0]!.changed).toBe(false)
+    await change('watches.remove', `/api/t/marine/watches/${watch.id}`, 'DELETE')
+    expect(stores.watches.list('marine', 'client')).toEqual([])
+    const research = await change('investigations.create', '/api/t/marine/investigations', 'POST', {
+      name: 'Original',
+    })
+    const path = `/api/t/marine/investigations/${research.id}`
+    const get = () => stores.investigations.get('marine', 'client', research.id)
+    expect(get()!.name).toBe('Original')
+    await change('investigations.update', path, 'PATCH', { name: 'Updated' })
+    expect(get()!.name).toBe('Updated')
+    const evidence = await change('investigations.addEvidence', `${path}/evidence`, 'POST', {
+      passage: 'Evidence passage',
+      resourceId: 'doc',
+      resourceTitle: 'Research',
+    })
+    expect(get()!.evidence[0]!.id).toBe(evidence.id)
+    await change('investigations.updateEvidence', `${path}/evidence/${evidence.id}`, 'PATCH', {
+      note: 'Updated note',
+    })
+    expect(get()!.evidence[0]!.note).toBe('Updated note')
+    const artefact = await change('investigations.addArtefact', `${path}/artefacts`, 'POST', {
+      kind: 'brief',
+      title: 'Research brief',
+      data: { text: 'Private content' },
+    })
+    expect(get()!.artefacts[0]!.id).toBe(artefact.id)
+    await change('investigations.removeEvidence', `${path}/evidence/${evidence.id}`, 'DELETE')
+    expect(get()!.evidence).toEqual([])
+    await change('investigations.remove', path, 'DELETE')
+    expect(get()).toBeNull()
+    expect(local()).toHaveLength(11)
+    expect(JSON.stringify(local())).not.toContain('Private content')
+    expect(JSON.stringify(local())).not.toContain('Updated note')
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable cold question cache is atomic while later overall failure retains its audited local step', async (t) => {
+  for (const later of [false, true]) {
+    await t.step(later ? 'overall result failure' : 'local audit failure', async () => {
+      let remoteCalls = 0
+      const fixture = mutationFixture({
+        resourceContent: async () => {
+          remoteCalls++
+          return null
+        },
+      } as unknown as AragProvider)
+      try {
+        fixture.fail(
+          later
+            ? "NEW.action = 'resource.questions.generate' AND NEW.outcome = 'success'"
+            : undefined,
+        )
+        expect((await fixture.app.request('/api/t/marine/resources/doc/questions')).status).toBe(
+          500,
+        )
+        expect(remoteCalls).toBe(1)
+        const cached = fixture.stores.enrichments.get(
+          'marine',
+          'doc',
+          SUGGESTED_QUESTIONS_SCHEMA_ID,
+        )
+        expect(Boolean(cached)).toBe(later)
+        const local = fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
+          .filter((e) => e.action === 'local.mutation')
+        expect(local).toHaveLength(later ? 1 : 0)
+        if (later) {
+          expect(local[0]!.target_id).toBe('doc')
+          expect((await fixture.app.request('/api/t/marine/resources/doc/questions')).status).toBe(
+            200,
+          )
+          expect(remoteCalls).toBe(1)
+        }
+      } finally {
+        fixture.sql.database.close()
+      }
+    })
+  }
+})
+
+Deno.test('Durable scheduled watch update rolls back after remote search and preserves system attribution', async () => {
+  const fixture = mutationFixture()
+  let searches = 0
+  const management = {
+    search: async () => {
+      searches++
+      return { resources: [{ id: 'doc' }] }
+    },
+  } as unknown as AragProvider
+  try {
+    fixture.stores.watches.add('marine', 'client', 'Research')
+    const before = fixture.snapshot()
+    fixture.fail()
+    await expect(runSystemMaintenance(management, fixture.stores, undefined, ['watch'], false))
+      .rejects.toThrow()
+    expect(fixture.snapshot()).toEqual(before)
+    expect(searches).toBe(1)
+    fixture.recover()
+    await runSystemMaintenance(management, fixture.stores, undefined, ['watch'], false)
+    const local = fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } }).find((
+      e,
+    ) => e.action === 'local.mutation')!
+    expect(local.actor_kind).toBe('system')
+    expect(local.target_id).toBe(fixture.stores.watches.list('marine')[0]!.id)
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable scheduled question workers cannot swallow a failed local cache audit', async () => {
+  const fixture = mutationFixture()
+  let contentCalls = 0
+  const management = {
+    listResources: async () => [{ id: 'doc', title: 'Research', summary: '' }],
+    invalidate: () => {},
+    resourceContent: async () => {
+      contentCalls++
+      return null
+    },
+  } as unknown as AragProvider
+  try {
+    fixture.stores.enrichments.put('marine', 'doc', enrichment('Existing'))
+    const before = fixture.state.enrichmentRecords('marine')
+    fixture.fail()
+    await expect(runSystemMaintenance(management, fixture.stores, undefined, ['enrichment'], false))
+      .rejects.toThrow()
+    expect(contentCalls).toBe(1)
+    expect(fixture.state.enrichmentRecords('marine')).toEqual(before)
+    expect(
+      fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
+        .filter((e) => e.action === 'maintenance.questions.run' && e.outcome === 'success'),
+    ).toHaveLength(0)
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable synthesis returns 500 when its caught local audit fails after generation', async () => {
+  let generations = 0
+  const fixture = mutationFixture({
+    askStructured: async () => {
+      generations++
+      return { object: { summary: 'A result [1].' } }
+    },
+  } as unknown as AragProvider)
+  try {
+    const investigation = fixture.stores.investigations.create('marine', 'client', {
+      name: 'Research',
+    })
+    fixture.stores.investigations.addEvidence('marine', 'client', investigation.id, {
+      passage: 'Original passage',
+      resourceId: 'doc',
+      resourceTitle: 'Research',
+      score: null,
+      question: '',
+      verdict: null,
+      aiRelevance: null,
+      note: '',
+      tags: [],
+    })
+    const before = fixture.snapshot()
+    fixture.fail()
+    const response = await fixture.request(
+      `/api/t/marine/investigations/${investigation.id}/synthesise`,
+    )
+    expect(response.status).toBe(500)
+    expect(generations).toBe(1)
+    expect(fixture.snapshot()).toEqual(before)
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable asynchronous scopes keep actors and portal targets isolated', async () => {
+  const fixture = mutationFixture()
+  const first = Promise.withResolvers<void>()
+  const ready = Promise.withResolvers<void>()
+  try {
+    const held = executeAudited({
+      ...fixture.stores,
+      input: mutationInput,
+      run: async () => {
+        ready.resolve()
+        await first.promise
+        fixture.stores.enrichments.put('marine', 'first-doc', enrichment('First'))
+      },
+    })
+    await ready.promise
+    await executeAudited({
+      ...fixture.stores,
+      input: { ...mutationInput, requestId: 'second', actor: { kind: 'user', id: 'second-actor' } },
+      run: () => fixture.stores.enrichments.put('grains', 'second-doc', enrichment('Second')),
+    })
+    first.resolve()
+    await held
+    for (
+      const [slug, actor, target] of [['marine', 'writer', 'first-doc'], [
+        'grains',
+        'second-actor',
+        'second-doc',
+      ]]
+    ) {
+      const local = fixture.stores.audit.read({ scope: { kind: 'portal', slug: slug! } }).find((
+        e,
+      ) => e.action === 'local.mutation')!
+      expect(local.actor_id).toBe(actor)
+      expect(local.target_id).toBe(target)
+    }
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable raw JSON, cache, routing and asset writes require an audited transaction in privileged scopes', async () => {
+  const fixture = mutationFixture()
+  try {
+    const writes = [
+      () => fixture.state.put('unguarded', true),
+      () => fixture.state.delete('unguarded'),
+      () => fixture.state.putEnrichment('marine', 'doc', enrichment('New')),
+      () => fixture.state.importEnrichments('marine', {}, 'skip'),
+      () => fixture.state.appendRouting('marine', {}, 5),
+      () =>
+        fixture.state.putAsset('asset', {
+          bytes: new Uint8Array([1]),
+          contentType: 'image/png',
+          version: '1',
+        }),
+    ]
+    for (const run of writes) {
+      await expect(executeAudited({ ...fixture.stores, input: mutationInput, run })).rejects
+        .toThrow()
+    }
+    expect(fixture.state.get('unguarded', null)).toBeNull()
+    expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(0)
+    expect(fixture.state.routingRecords('marine', 5)).toEqual([])
+    expect(fixture.state.getAsset('asset')).toBeNull()
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable nested legacy cache migration and writes roll back together and can be retried', async (t) => {
+  for (const method of ['get', 'put', 'import'] as const) {
+    await t.step(method, async () => {
+      const fixture = mutationFixture()
+      const legacy = { [DEFAULT_RESEARCH_ENRICHMENT.id]: { old: enrichment('Old') } }
+      try {
+        fixture.state.put('enrichments:marine', legacy)
+        const run = () =>
+          method === 'get'
+            ? fixture.stores.enrichments.get('marine', 'old')
+            : method === 'put'
+            ? fixture.stores.enrichments.put('marine', 'new', enrichment('New'))
+            : fixture.stores.enrichments.importRecords('marine', {
+              [DEFAULT_RESEARCH_ENRICHMENT.id]: { new: enrichment('New') },
+            }, 'skip')
+        fixture.fail()
+        await expect(executeAudited({ ...fixture.stores, input: mutationInput, run })).rejects
+          .toThrow()
+        expect(fixture.state.get('enrichments:marine', null)).toEqual(legacy)
+        expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(0)
+        fixture.recover()
+        await executeAudited({ ...fixture.stores, input: mutationInput, run })
+        expect(fixture.state.get('enrichments:marine', null)).toBeNull()
+        expect(fixture.stores.enrichments.get('marine', 'old')).toEqual(enrichment('Old'))
+        expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(
+          method === 'get' ? 1 : 2,
+        )
+        expect(
+          fixture.stores.audit.read({ scope: mutationInput.scope }).filter((e) =>
+            e.action === 'local.mutation'
+          ),
+        ).toHaveLength(1)
+      } finally {
+        fixture.sql.database.close()
+      }
+    })
+  }
+})
+
+Deno.test('Durable scope preserves mandatory failure through caught nested errors and rejects undeclared writes', async () => {
+  const fixture = mutationFixture()
+  try {
+    for (const raw of [false, true]) {
+      if (!raw) fixture.fail()
+      const response = await executeAuditedResponse({
+        privileged: true,
+        ...fixture.stores,
+        input: mutationInput,
+        run: async () => {
+          try {
+            await executeAudited({
+              ...fixture.stores,
+              input: mutationInput,
+              run: () => {
+                if (raw) fixture.state.put('unclassified', true)
+                else fixture.stores.tenants.setDisabled('marine', true)
+              },
+            })
+          } catch { /* Simulate a handler which turns provider errors into a response. */ }
+          return Response.json({ ok: true })
+        },
+      })
+      expect(response.status).toBe(500)
+      expect(fixture.stores.tenants.isDisabled('marine')).toBe(false)
+      expect(fixture.state.get('unclassified', null)).toBeNull()
+      if (!raw) fixture.recover()
+    }
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable privileged MCP tools inherit local rollback even if their SDK result catches the error', async () => {
+  const fixture = mutationFixture()
+  try {
+    fixture.fail()
+    const context = {
+      requestId: 'mcp-local',
+      actor: { kind: 'legacy-key' as const, id: 'key-id' },
+      slug: 'marine',
+    }
+    await expect(
+      executeMcpTool(
+        {
+          kind: 'mcp',
+          method: 'MCP',
+          path: 'future_mutation',
+          action: 'request.privileged',
+          target: { kind: 'tool' },
+          permission: 'content.write',
+          scope: 'portal',
+        },
+        context,
+        fixture.stores.audit,
+        async () => {
+          try {
+            fixture.stores.tenants.setDisabled('marine', true)
+          } catch { /* SDK protocol result. */ }
+          return { content: [], isError: false }
+        },
+        fixture.stores.localMutations,
+      ),
+    ).rejects.toThrow()
+    expect(fixture.stores.tenants.isDisabled('marine')).toBe(false)
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('Durable local scope prevents late writes after deadline, client abort and successful completion', async (t) => {
+  for (const reason of ['deadline', 'abort', 'complete'] as const) {
+    await t.step(reason, async () => {
+      const fixture = mutationFixture()
+      const gate = Promise.withResolvers<void>()
+      const ready = Promise.withResolvers<void>()
+      const finished = Promise.withResolvers<void>()
+      const controller = new AbortController()
+      let expire!: () => void
+      let rejected = false
+      try {
+        const late = async () => {
+          ready.resolve()
+          await gate.promise
+          try {
+            fixture.stores.tenants.setDisabled('marine', true)
+          } catch {
+            rejected = true
+          } finally {
+            finished.resolve()
+          }
+        }
+        const pending = executeAudited({
+          ...fixture.stores,
+          input: mutationInput,
+          signal: controller.signal,
+          schedule: (callback) => {
+            expire = callback
+            return () => {}
+          },
+          run: () => {
+            const job = late()
+            return reason === 'complete' ? undefined : job
+          },
+        })
+        await ready.promise
+        if (reason === 'complete') {
+          await pending
+        } else {
+          if (reason === 'deadline') expire()
+          else controller.abort()
+          await expect(pending).rejects.toThrow()
+        }
+        gate.resolve()
+        await finished.promise
+        expect(rejected).toBe(true)
+        expect(fixture.stores.tenants.isDisabled('marine')).toBe(false)
+        expect(
+          fixture.stores.audit.read({ scope: mutationInput.scope }).filter((e) =>
+            e.action === 'local.mutation'
+          ),
+        ).toHaveLength(0)
+      } finally {
+        fixture.sql.database.close()
+      }
+    })
+  }
+})
+
+Deno.test('Durable detached nested scope cannot write after its parent completes', async () => {
+  const fixture = mutationFixture()
+  const ready = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  let child!: Promise<void>
+  try {
+    await executeAudited({
+      ...fixture.stores,
+      input: mutationInput,
+      run: async () => {
+        child = executeAudited({
+          ...fixture.stores,
+          input: mutationInput,
+          run: async () => {
+            ready.resolve()
+            await release.promise
+            fixture.stores.tenants.setDisabled('marine', true)
+          },
+        })
+        await ready.promise
+      },
+    })
+    release.resolve()
+    await expect(child).rejects.toThrow()
+    expect(fixture.stores.tenants.isDisabled('marine')).toBe(false)
+    expect(
+      fixture.stores.audit.read({ scope: mutationInput.scope }).filter((e) =>
+        e.action === 'local.mutation'
+      ),
+    ).toHaveLength(0)
+  } finally {
+    fixture.sql.database.close()
+  }
+})
+
+Deno.test('actual Durable HTTP local mutation rolls back when its authoritative audit fails', async () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const stores = durableStores(state, {})
+    const app = buildApp({
+      ...stores,
+      provider: {} as RetrievalProvider,
+      requestContext: () => ({
+        requestId: 'local-write',
+        session: null,
+        coarseAdminEligible: true,
+        effectiveRoles: { platformRole: 'owner', portalRoles: [] },
+        actor: { kind: 'user', id: 'writer' },
+      }),
+    })
+    sql.database.exec(
+      "CREATE TRIGGER fail_local BEFORE INSERT ON audit_events WHEN NEW.action = 'local.mutation' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    const response = await app.request('/api/admin/t/marine/disable', { method: 'POST' })
+    expect(response.status).toBe(500)
+    expect(stores.tenants.isDisabled('marine')).toBe(false)
+    sql.database.exec('DROP TRIGGER fail_local')
+    expect((await app.request('/api/admin/t/marine/disable', { method: 'POST' })).status).toBe(200)
+    expect(stores.tenants.isDisabled('marine')).toBe(true)
+    const records = stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
+    expect(records.filter((e) => e.action === 'local.mutation')).toHaveLength(1)
+  } finally {
+    sql.database.close()
+  }
+})
 
 class TestSqlStorage implements SqlStorageLike {
   readonly database = new DatabaseSync(':memory:')

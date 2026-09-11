@@ -22,11 +22,20 @@ export class AuditExecutionError extends Error {
   }
 }
 type ResultOutcome = Exclude<AuditOutcome, 'intent'>
+/** Adapter-owned scope; only individual synchronous store mutations enter a SQL transaction. */
+export interface LocalMutationScope {
+  run<T>(
+    input: Omit<AuditInput, 'outcome'>,
+    signal: AbortSignal,
+    work: () => T | Promise<T>,
+  ): Promise<T>
+}
 interface AuditExecutionOptions<T> {
   audit: Pick<AuditStore, 'append'>
   input: Omit<AuditInput, 'outcome'>
   run: (signal: AbortSignal) => T | Promise<T>
   signal?: AbortSignal
+  localMutations?: LocalMutationScope
   /** May tighten the production bound, never relax it. */
   timeoutMs?: number
   classify?: (result: T) => ResultOutcome
@@ -109,7 +118,9 @@ export async function executeAudited<T>(options: AuditExecutionOptions<T>): Prom
     const running = Promise.resolve().then(() => {
       if (upstream.signal.aborted) throw upstream.signal.reason
       dispatched = true
-      return options.run(upstream.signal)
+      return options.localMutations
+        ? options.localMutations.run(input, upstream.signal, () => options.run(upstream.signal))
+        : options.run(upstream.signal)
     })
     const pending = Promise.race([running, stopped])
     if (options.signal?.aborted) onClientAbort()

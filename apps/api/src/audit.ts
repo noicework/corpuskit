@@ -95,6 +95,7 @@ const fields = {
     `${item.method} ${item.path}`,
     ...(item.subActions?.map((action) => action.action) ?? []),
   ])),
+  mutation: member(DECLARATIONS.filter((item) => item.kind === 'local').map((item) => item.path)),
   // Comma-separated names only, never field values or the submitted body.
   changedFields: (value: unknown): value is string =>
     typeof value === 'string' && value.length <= 256 &&
@@ -107,6 +108,7 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'local.mutation': ['permission', 'operation', 'mutation', 'sessionOid', 'sessionTenantId'],
   'assignment.create': ['role', 'subjectKind'],
   'assignment.update': ['role', 'previousRole', 'subjectKind'],
   'assignment.delete': ['previousRole', 'subjectKind'],
