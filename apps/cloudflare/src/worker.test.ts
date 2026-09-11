@@ -363,6 +363,49 @@ function realHarness(extraEnv: Record<string, string> = {}) {
   return { ...harness, object, database, state: new DurableState(storage.sql, storage) }
 }
 
+Deno.test('Worker break-glass uses trusted peer lockout and production policy with session co-attribution', async () => {
+  for (const enabled of [false, true]) {
+    const h = realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
+    try {
+      const session = facts()
+      const cookie = await sessionCookie(session)
+      const invoke = (passcode?: string) =>
+        worker.fetch(
+          new Request('https://corpuskit.test/api/admin/overview', {
+            headers: {
+              cookie,
+              'cf-connecting-ip': '192.0.2.1',
+              'x-forwarded-for': crypto.randomUUID(),
+              ...(passcode === undefined ? {} : { 'x-admin-passcode': passcode }),
+            },
+          }),
+          h.env,
+        )
+      expect((await invoke()).status).toBe(200)
+      const me = await worker.fetch(new Request('https://corpuskit.test/auth/me'), h.env)
+      expect((await me.json()).breakGlassEnabled).toBe(enabled)
+      expect((await invoke('fixture')).status).toBe(enabled ? 200 : 403)
+      if (enabled) {
+        for (let i = 0; i < 5; i++) expect((await invoke('wrong')).status).toBe(i === 4 ? 403 : 401)
+        const locked = await invoke('fixture')
+        expect(locked.status).toBe(403)
+        expect(locked.headers.get('retry-after')).toBe('600')
+        const used = h.state.rbac.audit.read({ scope: { kind: 'platform' } }).find((e) =>
+          e.action === 'break_glass.used'
+        )!
+        expect(JSON.parse(used.detail_json)).toEqual({
+          sessionOid: session.oid,
+          sessionTenantId: session.tenantId,
+        })
+        expect(h.state.rbac.locks.lockedUntil('192.0.2.1')).toBeGreaterThan(Date.now())
+      }
+      expect((await invoke()).status).toBe(200)
+    } finally {
+      h.database.close()
+    }
+  }
+})
+
 Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling stays non-system', async () => {
   const h = realHarness()
   try {
@@ -581,7 +624,7 @@ Deno.test('Worker signing denials require audit before returning and concurrent 
         session: ordinary,
       }),
     ])
-    expect(responses.map((response) => response.status)).toEqual([200, 401])
+    expect(responses.map((response) => response.status)).toEqual([200, 403])
     h.database.exec(
       "CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'test audit failure'); END",
     )

@@ -15,6 +15,7 @@ import {
 } from '../../api/src/principal.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from '../../api/src/assignments.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
+import type { BreakGlassService } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { AragProvider } from '@research-portal/retrieval'
 import {
@@ -58,6 +59,7 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly stores: DurableStores
   private readonly bindings: Record<string, string | undefined>
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
+  private readonly breakGlass: BreakGlassService
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -66,6 +68,11 @@ export class PortalDurableObject extends DurableObject<Env> {
     const bindings = stringEnv(env)
     this.bindings = bindings
     this.stores = durableStores(state, bindings)
+    this.breakGlass = this.stores.rbac.breakGlassService({
+      passcode: bindings.ADMIN_PASSCODE,
+      environment: bindings.ENVIRONMENT,
+      explicitFlag: bindings.ADMIN_BREAK_GLASS,
+    })
     if (bindings.ENTRA_TENANT_ID) {
       this.stores.rbac.assignmentService(bindings.ENTRA_TENANT_ID, bindings.WORKER_NAME)
         .bootstrapAdminEmails(bindings.ENTRA_ADMIN_EMAILS ?? '')
@@ -93,7 +100,8 @@ export class PortalDurableObject extends DurableObject<Env> {
       mcpKeys: this.stores.mcpKeys,
       routing: this.stores.routing,
       zone: bindings.ARAG_ZONE,
-      adminPasscode: bindings.ADMIN_PASSCODE,
+      audit: this.stores.audit,
+      breakGlass: this.breakGlass,
       requestContext: (request) => this.contexts.get(request),
       invalidate: (slug) => this.provider.invalidate(slug),
       webAvailable: true,
@@ -176,16 +184,14 @@ export class PortalDurableObject extends DurableObject<Env> {
             : null,
           groupMappings: principal.groupCapability,
           coarseAdminEligible: principal.coarseAdminEligible,
-          breakGlassEnabled: Boolean(this.bindings.ADMIN_PASSCODE) &&
-            (this.bindings.ADMIN_BREAK_GLASS === 'true' ||
-              this.bindings.ENVIRONMENT !== 'production'),
+          breakGlassEnabled: this.breakGlass.enabled,
         }, 200)
       }
       const forwarded = new Request(request, { headers: stripIdentityHeaders(request.headers) })
       this.contexts.set(forwarded, principal)
       try {
         const response = await this.app.fetch(forwarded)
-        if (response.status === 401 || response.status === 403) {
+        if ((response.status === 401 || response.status === 403) && !principal.denialAudited) {
           await this.auditDenial(request, response.status, principal)
         }
         return response

@@ -1,4 +1,6 @@
-import { describe, it } from '@std/testing/bdd'
+import { afterEach, describe, it } from '@std/testing/bdd'
+import { LocalRbacDatabase } from './rbac-local.ts'
+import { RbacState } from './rbac-state.ts'
 import { expect } from '@std/expect'
 import type { TenantConfig } from '@research-portal/core'
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
@@ -354,14 +356,30 @@ describe('recordSyncFailure', () => {
 })
 
 describe('admin source routes', () => {
-  const app = () =>
-    buildApp({
+  const databases: LocalRbacDatabase[] = []
+  afterEach(() => {
+    for (const db of databases.splice(0)) db.close()
+  })
+  const app = () => {
+    const database = new LocalRbacDatabase(':memory:')
+    databases.push(database)
+    const rbac = new RbacState(database)
+    rbac.migrate()
+    return buildApp({
       provider: {
         search: async () => ({ query: '', resources: [], relatedQuestions: [] }),
       } as never,
       tenants: freshTenants(),
-      adminPasscode: PASSCODE,
+      audit: rbac.audit,
+      breakGlass: rbac.breakGlassService({ passcode: PASSCODE }),
+      requestContext: () => ({
+        requestId: crypto.randomUUID(),
+        session: null,
+        clientIp: '127.0.0.1',
+        coarseAdminEligible: false,
+      }),
     })
+  }
 
   const post = (body: unknown) => ({
     method: 'POST',

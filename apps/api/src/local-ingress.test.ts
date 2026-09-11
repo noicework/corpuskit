@@ -3,6 +3,7 @@ import { LocalIngress } from './local-ingress.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import type { TrustedSessionFacts } from './principal.ts'
+import { buildApp } from './app.ts'
 
 const session = (): TrustedSessionFacts => ({
   verified: true,
@@ -18,6 +19,57 @@ const session = (): TrustedSessionFacts => ({
 })
 const env = { ENTRA_TENANT_ID: 'tenant-1', ADMIN_PASSCODE: 'fixture' }
 const peer = { remoteAddr: { transport: 'tcp' as const, hostname: '127.0.0.1', port: 1234 } }
+
+Deno.test('local coarse gate audits disabled and missing-peer passcodes without role fallback', async () => {
+  for (const production of [true, false]) {
+    const db = new LocalRbacDatabase(':memory:')
+    try {
+      const rbac = new RbacState(db)
+      rbac.migrate()
+      const ingress = new LocalIngress({
+        rbac,
+        tenants: { list: () => [] },
+        env: {
+          ...env,
+          ENVIRONMENT: production ? 'production' : 'development',
+          SESSION_SECRET: 'x'.repeat(32),
+        },
+      })
+      const app = buildApp({
+        provider: {} as never,
+        audit: rbac.audit,
+        breakGlass: ingress.breakGlass,
+        requestContext: ingress.requestContext,
+      })
+      const owner = { ...session(), roles: ['CorpusKit.Owner'] }
+      const invoke = (credential: boolean, actualPeer = true) =>
+        ingress.handle(
+          new Request('http://localhost/api/admin/overview', {
+            headers: credential
+              ? { 'x-admin-passcode': 'fixture', 'x-forwarded-for': '127.0.0.1' }
+              : {},
+          }),
+          (request) => app.fetch(request),
+          actualPeer ? peer : undefined,
+          owner,
+        )
+      expect((await invoke(false)).status).toBe(200)
+      expect((await invoke(true)).status).toBe(production ? 403 : 200)
+      expect((await invoke(true, false)).status).toBe(403)
+      const events = rbac.audit.read({ scope: { kind: 'platform' } })
+      expect(events.filter((e) => e.action === 'break_glass.failed')).toHaveLength(
+        production ? 2 : 1,
+      )
+      expect(events.filter((e) => e.action === 'request.denied')).toHaveLength(production ? 2 : 1)
+      if (!production) {
+        expect(JSON.parse(events.find((e) => e.action === 'break_glass.used')!.detail_json))
+          .toEqual({ sessionOid: owner.oid, sessionTenantId: owner.tenantId })
+      }
+    } finally {
+      db.close()
+    }
+  }
+})
 
 Deno.test('local ingress strips caller authority and uses only actual peer metadata', async () => {
   const db = new LocalRbacDatabase(':memory:')
@@ -45,7 +97,7 @@ Deno.test('local ingress strips caller authority and uses only actual peer metad
           expect(request.headers.get('x-corpuskit-principal')).toBeNull()
           expect(request.headers.get('x-corpuskit-sso-admin')).toBeNull()
           expect(request.headers.get('x-sso-user-id')).toBeNull()
-          expect(request.headers.has('x-admin-passcode')).toBe(Boolean(info))
+          expect(request.headers.has('x-admin-passcode')).toBe(true)
           return new Response('ok')
         },
         info,
@@ -152,7 +204,7 @@ Deno.test('local production never uses a dev secret or accepts disabled passcode
         headers: { 'x-admin-passcode': 'fixture' },
       }),
       (request) => {
-        expect(request.headers.has('x-admin-passcode')).toBe(false)
+        expect(request.headers.has('x-admin-passcode')).toBe(true)
         return new Response()
       },
       peer,

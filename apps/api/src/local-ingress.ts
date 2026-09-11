@@ -1,6 +1,7 @@
 import type { PortalRequestContext } from './app.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from './assignments.ts'
 import { appendAudit, createAuditEvent } from './audit.ts'
+import { type BreakGlassService } from './break-glass.ts'
 import {
   PRINCIPAL_HEADER,
   type PrincipalEnvelope,
@@ -27,6 +28,7 @@ export class LocalIngress {
   private readonly audience: string
   private readonly tenantId: string
   readonly breakGlassEnabled: boolean
+  readonly breakGlass: BreakGlassService
 
   constructor(private readonly options: LocalIngressOptions) {
     const { env, rbac } = options
@@ -45,8 +47,12 @@ export class LocalIngress {
       ).join('')
     this.audience = env.WORKER_NAME ?? 'corpuskit'
     this.tenantId = env.ENTRA_TENANT_ID ?? ''
-    this.breakGlassEnabled = Boolean(env.ADMIN_PASSCODE) &&
-      (env.ADMIN_BREAK_GLASS === 'true' || env.ENVIRONMENT !== 'production')
+    this.breakGlass = rbac.breakGlassService({
+      passcode: env.ADMIN_PASSCODE,
+      environment: env.ENVIRONMENT,
+      explicitFlag: env.ADMIN_BREAK_GLASS,
+    })
+    this.breakGlassEnabled = this.breakGlass.enabled
     if (this.tenantId) {
       rbac.assignmentService(this.tenantId, this.audience)
         .bootstrapAdminEmails(env.ENTRA_ADMIN_EMAILS ?? '')
@@ -157,12 +163,12 @@ export class LocalIngress {
         }, { headers: { 'cache-control': 'no-store' } })
       }
       const cleanHeaders = stripIdentityHeaders(headers)
-      if (!this.breakGlassEnabled || !principal.clientIp) cleanHeaders.delete('x-admin-passcode')
+      // Preserve explicit credentials so the shared gate refuses and audits ineligible attempts.
       const forwarded = new Request(request, { headers: cleanHeaders })
       this.contexts.set(forwarded, principal)
       try {
         const response = await dispatch(forwarded)
-        if (response.status === 401 || response.status === 403) {
+        if ((response.status === 401 || response.status === 403) && !principal.denialAudited) {
           appendAudit(
             rbac.audit,
             createAuditEvent({

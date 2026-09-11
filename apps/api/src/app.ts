@@ -2,6 +2,15 @@ import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
+import { coarseAdminEligibility } from './assignments.ts'
+import {
+  appendAudit,
+  type AuditActor,
+  type AuditStore,
+  AuditWriteError,
+  createAuditEvent,
+} from './audit.ts'
+import type { BreakGlassService } from './break-glass.ts'
 import {
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
@@ -706,20 +715,6 @@ const labelsetUpdateSchema = z.object({
 const cleanToken = (raw: string) =>
   raw.trim().replace(/^["']|["']$/g, '').replace(/^Bearer\s+/i, '').trim()
 
-/** Compare credentials without leaking the first mismatching byte through timing. */
-async function secretsEqual(left: string, right: string): Promise<boolean> {
-  const encoder = new TextEncoder()
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(left)),
-    crypto.subtle.digest('SHA-256', encoder.encode(right)),
-  ])
-  const a = new Uint8Array(leftHash)
-  const b = new Uint8Array(rightHash)
-  let difference = 0
-  for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!
-  return difference === 0
-}
-
 /**
  * Whether a model-written "source" label on a comparison cell actually names
  * one of the sources retrieved for this query. Guards against the model
@@ -757,6 +752,9 @@ export interface PortalRequestContext {
   effectiveRoles?: import('@research-portal/core').EffectiveRoles
   provenance?: import('./assignments.ts').RoleProvenance[]
   groupCapability?: import('./assignments.ts').RoleResolution['groupCapability']
+  /** Populated only after this request's break-glass verification and required audit. */
+  actor?: AuditActor
+  denialAudited?: boolean
   user?: { id: string; tenantId: string; name: string; email: string; roles: string[] } | null
 }
 
@@ -785,9 +783,8 @@ export interface BuildAppOptions {
   /** Runtime adapter for optional per-portal Worker custom domains. */
   domainProvisioner?: PortalDomainProvisioner | null
   zone?: string
-  adminPasscode?: string
-  /** A platform adapter may authenticate an administrator before the request reaches Hono. */
-  trustedAdmin?: (request: Request) => boolean
+  audit?: AuditStore
+  breakGlass?: BreakGlassService
   requestContext?: (request: Request) => PortalRequestContext | undefined
   /** Authenticated portal identity forwarded by a trusted platform adapter. */
   trustedUser?: (request: Request) => TrustedPortalUser | null
@@ -968,6 +965,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   )
 
   app.onError((err, c) => {
+    if (err instanceof AuditWriteError) {
+      console.error('Required request audit failed')
+      return c.json({ error: 'audit_write_failed' }, 500)
+    }
     if (err instanceof KnowledgeBoxNotConnectedError) {
       return c.json({ error: 'knowledge_box_not_connected', slug: err.slug }, 503)
     }
@@ -976,6 +977,53 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   const tenant = (slug: string): TenantConfig | undefined => tenants.get(slug)
+
+  // Register before every admin handler, including extraction and routing above the old gate.
+  app.use('/api/admin/*', async (c, next) => {
+    const context = opts.requestContext?.(c.req.raw)
+    const requestId = context?.requestId ?? crypto.randomUUID()
+    const deny = (status: 401 | 403, code: 'unauthorised' | 'forbidden') => {
+      if (!opts.audit) throw new AuditWriteError()
+      appendAudit(
+        opts.audit,
+        createAuditEvent({
+          requestId,
+          actor: context?.session
+            ? { kind: 'user', id: context.session.oid }
+            : { kind: 'anonymous' },
+          action: 'request.denied',
+          scope: { kind: 'platform' },
+          target: { kind: 'request' },
+          outcome: 'denied',
+          detail: { code, method: c.req.method },
+        }),
+      )
+      if (context) context.denialAudited = true
+      return c.json({ error: code }, status)
+    }
+    if (c.req.raw.headers.has('x-admin-passcode')) {
+      if (!opts.breakGlass) return deny(403, 'forbidden')
+      const result = await opts.breakGlass.authorise(
+        c.req.raw,
+        context ?? { requestId, session: null },
+      )
+      if (!result.ok) {
+        if (result.retryAfter !== undefined) c.header('Retry-After', String(result.retryAfter))
+        return deny(
+          result.code === 'invalid_passcode' ? 401 : 403,
+          result.code === 'invalid_passcode' ? 'unauthorised' : 'forbidden',
+        )
+      }
+      if (context) context.actor = result.actor
+      await next()
+      return
+    }
+    if (context?.effectiveRoles && coarseAdminEligibility(context.effectiveRoles)) {
+      await next()
+      return
+    }
+    return context?.session ? deny(403, 'forbidden') : deny(401, 'unauthorised')
+  })
 
   registerMcpRoutes(app, {
     provider,
@@ -2610,31 +2658,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({
       questions: await generateFollowUpQuestions(opts.management, config, parsed.data),
     })
-  })
-
-  // Admin: connect a knowledge box to a tenant. The administrator enters the
-  // KB id and service-account token in the app; both stay server-side. When
-  // ADMIN_PASSCODE is configured every admin call must present it.
-  app.use('/api/admin/*', async (c, next) => {
-    const compatibility = opts.requestContext
-      ? opts.requestContext(c.req.raw)?.coarseAdminEligible === true
-      : opts.trustedAdmin?.(c.req.raw) === true
-    if (compatibility) {
-      await next()
-      return
-    }
-    // Fail closed: with no passcode configured the admin surface is disabled,
-    // never open. Local dev sets ADMIN_PASSCODE in .env.
-    if (!opts.adminPasscode) {
-      return c.json({
-        error: 'admin_disabled',
-        message: 'Administration is not configured on this server - set ADMIN_PASSCODE.',
-      }, 503)
-    }
-    if (!(await secretsEqual(c.req.header('x-admin-passcode') ?? '', opts.adminPasscode))) {
-      return c.json({ error: 'unauthorised' }, 401)
-    }
-    await next()
   })
 
   app.get('/api/admin/overview', async (c) => {

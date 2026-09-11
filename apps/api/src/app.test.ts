@@ -1,4 +1,4 @@
-import { describe, it } from '@std/testing/bdd'
+import { afterEach, describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import {
   AdminTenantOverviewSchema,
@@ -18,7 +18,31 @@ import {
   TenantConfigSchema,
 } from '@research-portal/core'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
-import { buildApp } from './app.ts'
+import { buildApp as buildRawApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
+import { LocalRbacDatabase } from './rbac-local.ts'
+import { RbacState } from './rbac-state.ts'
+
+const fixtureDatabases: LocalRbacDatabase[] = []
+afterEach(() => {
+  for (const db of fixtureDatabases.splice(0)) db.close()
+})
+function buildApp(options: BuildAppOptions & { adminPasscode?: string }) {
+  const db = new LocalRbacDatabase(':memory:')
+  fixtureDatabases.push(db)
+  const rbac = new RbacState(db)
+  rbac.migrate()
+  return buildRawApp({
+    ...options,
+    audit: rbac.audit,
+    breakGlass: rbac.breakGlassService({ passcode: options.adminPasscode }),
+    requestContext: options.requestContext ?? (() => ({
+      requestId: crypto.randomUUID(),
+      session: null,
+      clientIp: '127.0.0.1',
+      coarseAdminEligible: false,
+    })),
+  })
+}
 import { TenantStore } from './tenants.ts'
 import { tenantsWithNeuro } from './fixtures/neuro-tenant.ts'
 import { EnrichmentStore } from './enrichments.ts'
@@ -148,6 +172,109 @@ class StubProvider implements RetrievalProvider {
 function makeApp(enrichments?: EnrichmentStore) {
   return buildApp({ provider: new StubProvider(), tenants: freshTenants(), enrichments })
 }
+
+describe('explicit coarse admin gate', () => {
+  function fixture(platformRole?: 'owner' | 'platform-admin') {
+    const db = new LocalRbacDatabase(':memory:')
+    fixtureDatabases.push(db)
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const context: PortalRequestContext = {
+      requestId: 'gate-request',
+      session: null,
+      clientIp: '127.0.0.1',
+      // The gate must inspect the resolved platform role, not trust this compatibility flag.
+      coarseAdminEligible: true,
+      effectiveRoles: { platformRole, portalRoles: [{ slug: 'marine', role: 'portal-admin' }] },
+    }
+    const app = buildRawApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      audit: rbac.audit,
+      breakGlass: rbac.breakGlassService({ passcode: 'gate-fixture' }),
+      requestContext: () => context,
+    })
+    return { db, rbac, context, app }
+  }
+
+  it('denies every registered early and late admin handler before dispatch', async () => {
+    const { app, rbac } = fixture()
+    const routes = app.routes.filter((r) => r.path.startsWith('/api/admin/') && r.method !== 'ALL')
+    expect(routes.length).toBeGreaterThan(40)
+    for (const route of routes) {
+      const response = await app.request(route.path.replace(/:[A-Za-z]+/g, 'marine'), {
+        method: route.method,
+      })
+      expect(response.status, `${route.method} ${route.path}`).toBe(401)
+    }
+    expect(rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 })).toHaveLength(
+      routes.length,
+    )
+  })
+
+  it('accepts platform roles but refuses explicit invalid passcodes without session fallback', async () => {
+    for (const role of ['owner', 'platform-admin'] as const) {
+      const { app } = fixture(role)
+      expect((await app.request('/api/admin/t/marine/extraction/methods')).status).toBe(503)
+      expect((await app.request('/api/admin/overview')).status).toBe(200)
+      expect(
+        (await app.request('/api/admin/overview', { headers: { 'x-admin-passcode': 'wrong' } }))
+          .status,
+      ).toBe(401)
+    }
+  })
+
+  it('requires audit before side effects and uses a request-only break-glass actor', async () => {
+    const { app, db, rbac } = fixture()
+    const headers = { 'x-admin-passcode': 'gate-fixture' }
+    expect((await app.request('/api/admin/overview', { headers })).status).toBe(200)
+    expect((await app.request('/api/admin/overview')).status).toBe(401)
+    expect(
+      rbac.audit.read({ scope: { kind: 'platform' } }).filter((e) =>
+        e.action === 'break_glass.used'
+      ),
+    ).toHaveLength(1)
+    db.exec(
+      "CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect((await app.request('/api/admin/t/marine/disable', { method: 'POST', headers })).status)
+      .toBe(500)
+    expect((await app.request('/api/admin/t/marine/disable', { method: 'POST' })).status).toBe(500)
+    expect((await app.request('/api/t/marine/config')).status).toBe(200)
+  })
+
+  it('refuses portal-only verified users with 403 and disabled or missing-peer credentials', async () => {
+    const { app, context, rbac } = fixture()
+    const now = Date.now()
+    context.session = {
+      verified: true,
+      tenantId: 'tenant-1',
+      oid: 'oid-1',
+      roles: [],
+      groups: [],
+      groupStatus: 'absent',
+      claimIssuedAt: now,
+      createdAt: now,
+      expiresAt: now + 60000,
+    }
+    expect((await app.request('/api/admin/overview')).status).toBe(403)
+    expect(
+      (await app.request('/api/admin/overview', {
+        headers: { 'x-admin-passcode': 'gate-fixture' },
+      })).status,
+    ).toBe(200)
+    expect(
+      rbac.audit.read({ scope: { kind: 'platform' } }).find((e) => e.action === 'break_glass.used')
+        ?.detail_json,
+    ).toBe('{"sessionOid":"oid-1","sessionTenantId":"tenant-1"}')
+    context.clientIp = undefined
+    expect(
+      (await app.request('/api/admin/overview', {
+        headers: { 'x-admin-passcode': 'gate-fixture', 'x-forwarded-for': '127.0.0.1' },
+      })).status,
+    ).toBe(403)
+  })
+})
 
 describe('GET /api/tenants', () => {
   it('returns the seeded tenants', async () => {
@@ -840,10 +967,10 @@ describe('POST /api/t/:slug/ask', () => {
 describe('admin', () => {
   const passcode = 'test-passcode'
 
-  it('disables the admin surface entirely when no passcode is configured', async () => {
+  it('requires identity when no passcode is configured', async () => {
     const app = buildApp({ provider: new StubProvider(), tenants: freshTenants() })
     const response = await app.request('/api/admin/overview')
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(401)
   })
 
   it('rejects admin calls without the passcode', async () => {
@@ -881,6 +1008,7 @@ describe('admin', () => {
         requestId: 'test-context',
         session: null,
         coarseAdminEligible: true,
+        effectiveRoles: { platformRole: 'platform-admin', portalRoles: [] },
       }),
     })
     const response = await app.request('/api/admin/overview', {
