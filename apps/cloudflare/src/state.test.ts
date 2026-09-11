@@ -19,6 +19,16 @@ import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { executeMcpTool } from '../../api/src/mcp.ts'
 import { SUGGESTED_QUESTIONS_SCHEMA_ID } from '../../api/src/suggested-questions.ts'
 import { tenantConfig, type TenantPatch } from '../../api/src/tenants.ts'
+import { checkAuditUpgrade } from '../../api/src/rbac-state.test.ts'
+
+Deno.test('Durable audit upgrade preserves history and rolls back copy, marker, append and commit failures', () => {
+  const sql = new TestSqlStorage()
+  try {
+    checkAuditUpgrade(new DurableState(sql, sql).rbacDatabase)
+  } finally {
+    sql.database.close()
+  }
+})
 
 Deno.test('Durable portal policy survives reload and repeated migration for seed and custom portals', () => {
   const sql = new TestSqlStorage()
@@ -814,7 +824,7 @@ Deno.test('Durable RBAC migrates additively and rolls back rows with failed audi
     expect(stores.assignments.list('tenant-1')).toEqual([])
     expect(stores.locks.lockedUntil('ip')).toBeNull()
     expect(state.get('tenant:existing', null)).toEqual({ slug: 'existing' })
-    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 1 }])
+    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 2 }])
     expect(() =>
       state.rbacDatabase.transactionSync(() => {
         state.rbacDatabase.exec('INSERT INTO break_glass_locks VALUES (?,?)', 'ip', 2000)

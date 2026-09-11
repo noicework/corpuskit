@@ -63,20 +63,25 @@ interface AssignmentRow {
 
 // Schema constants come from the core catalogue; no grant policy is duplicated here.
 const sqlRoles = (roles: readonly string[]) => roles.map((role) => `'${role}'`).join(',')
-const schema = [
-  `CREATE TABLE IF NOT EXISTS audit_events (
+const auditSchema = (table: 'audit_events' | 'audit_events_v2') =>
+  `CREATE TABLE IF NOT EXISTS ${table} (
     id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, request_id TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('anonymous','user','break-glass','legacy-key','system')),
+    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('anonymous','user','break-glass','key','legacy-key','system')),
     actor_id TEXT, actor_label TEXT, action TEXT NOT NULL,
     scope_kind TEXT NOT NULL CHECK(scope_kind IN ('platform','portal')), scope_slug TEXT,
     target_kind TEXT NOT NULL, target_id TEXT,
     outcome TEXT NOT NULL CHECK(outcome IN ('intent','success','denied','failure','uncertain')),
     detail_json TEXT NOT NULL,
     CHECK((scope_kind = 'platform' AND scope_slug IS NULL) OR
-      (scope_kind = 'portal' AND length(scope_slug) > 0)))`,
+      (scope_kind = 'portal' AND length(scope_slug) > 0)))`
+const auditIndexes = [
   'CREATE INDEX IF NOT EXISTS audit_events_by_at ON audit_events(at)',
   'CREATE INDEX IF NOT EXISTS audit_events_by_request ON audit_events(request_id)',
   'CREATE INDEX IF NOT EXISTS audit_events_by_scope ON audit_events(scope_kind,scope_slug,at)',
+]
+const schema = [
+  auditSchema('audit_events'),
+  ...auditIndexes,
   `CREATE TABLE IF NOT EXISTS role_assignments (
     id TEXT PRIMARY KEY NOT NULL, tenant_id TEXT NOT NULL CHECK(length(tenant_id) > 0),
     subject_kind TEXT NOT NULL CHECK(subject_kind IN ('active-oid','pending-email','group')),
@@ -290,6 +295,23 @@ export class RbacState {
   migrate(): void {
     this.database.transactionSync(() => {
       for (const query of schema) this.database.exec(query)
+      const marker = 'rbac-audit-actors-v2'
+      if (!this.database.all('SELECT name FROM rbac_migrations WHERE name = ?', marker).length) {
+        this.database.exec(auditSchema('audit_events_v2'))
+        const columns =
+          'id,at,request_id,actor_kind,actor_id,actor_label,action,scope_kind,scope_slug,target_kind,target_id,outcome,detail_json'
+        this.database.exec(
+          `INSERT INTO audit_events_v2 (${columns}) SELECT ${columns} FROM audit_events`,
+        )
+        this.database.exec('DROP TABLE audit_events')
+        this.database.exec('ALTER TABLE audit_events_v2 RENAME TO audit_events')
+        for (const query of auditIndexes) this.database.exec(query)
+        this.database.exec(
+          'INSERT INTO rbac_migrations (name,completed_at) VALUES (?,?)',
+          marker,
+          this.now(),
+        )
+      }
       this.database.exec(
         'INSERT OR IGNORE INTO rbac_migrations (name,completed_at) VALUES (?,?)',
         'rbac-schema-v1',

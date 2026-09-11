@@ -1,8 +1,14 @@
-import { PERMISSIONS, ROLES, type Scope } from '@research-portal/core'
+import {
+  AccessModeSchema,
+  PERMISSIONS,
+  PORTAL_ROLES,
+  ROLES,
+  type Scope,
+} from '@research-portal/core'
 import { DECLARATIONS } from './permissions.ts'
 
 export type AuditActor = {
-  kind: 'anonymous' | 'user' | 'break-glass' | 'legacy-key' | 'system'
+  kind: 'anonymous' | 'user' | 'break-glass' | 'key' | 'legacy-key' | 'system'
   id?: string
   label?: string
 }
@@ -75,6 +81,12 @@ const declaredFields = DECLARATIONS.flatMap((item) =>
   item.subActions?.flatMap((action) => action.fields ?? []) ?? []
 )
 const fields = {
+  previousAccessMode: member(AccessModeSchema.options),
+  accessMode: member(AccessModeSchema.options),
+  keyRole: member(PORTAL_ROLES),
+  creatorOid: id,
+  creatorTenantId: id,
+  keyStatus: member(['active', 'expired', 'revoked', 'unproven_creator', 'creator_no_access']),
   role: member(ROLES),
   previousRole: member(ROLES),
   permission: member(PERMISSIONS),
@@ -115,8 +127,20 @@ const actionFields = {
   'assignment.activate': ['role', 'subjectKind'],
   'assignment.denied': ['code'],
   'migration.admin_emails': ['count'],
-  'request.denied': ['code', 'permission', 'method'],
+  'request.denied': [
+    'code',
+    'permission',
+    'method',
+    'keyRole',
+    'creatorOid',
+    'creatorTenantId',
+    'keyStatus',
+  ],
   'request.privileged': [
+    'keyRole',
+    'creatorOid',
+    'creatorTenantId',
+    'keyStatus',
     'code',
     'permission',
     'method',
@@ -142,6 +166,14 @@ const actionFields = {
     'code',
     'permission',
     'changedFields',
+    'sessionOid',
+    'sessionTenantId',
+  ],
+  'tenant.access.update': [
+    'previousAccessMode',
+    'accessMode',
+    'code',
+    'permission',
     'sessionOid',
     'sessionTenantId',
   ],
@@ -255,7 +287,9 @@ export function validateAuditEvent(event: AuditEvent): void {
       ![event.id, event.request_id, event.target_kind].every(id) ||
       (event.actor_id !== null && !id(event.actor_id)) ||
       (event.target_id !== null && !id(event.target_id)) ||
-      !['anonymous', 'user', 'break-glass', 'legacy-key', 'system'].includes(event.actor_kind) ||
+      !['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(
+        event.actor_kind,
+      ) ||
       !['intent', 'success', 'denied', 'failure', 'uncertain'].includes(event.outcome) ||
       !(event.scope_kind === 'platform'
         ? event.scope_slug === null
