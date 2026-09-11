@@ -1,8 +1,7 @@
-import { type FormEvent, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
-import { ApiError, getAdminOverview } from '../api/client.ts'
-import { ErrorCard, Skeleton } from '../components/ui.tsx'
+import { Skeleton } from '../components/ui.tsx'
 import { AddContent } from './admin/AddContent.tsx'
 import { AnalysePanel } from './admin/AnalysePanel.tsx'
 import { InterrogatePanel } from './admin/InterrogatePanel.tsx'
@@ -19,7 +18,7 @@ import { RenamePortal } from './admin/RenamePortal.tsx'
 import { SourcesPanel } from './admin/SourcesPanel.tsx'
 import { StatTiles } from './admin/StatTiles.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
-import { getAuthSession, microsoftLoginUrl } from '../api/auth.ts'
+import { AdminPageAccess, OverviewAccess, useAdminOverview } from './AdminPage.tsx'
 
 type TabId =
   | 'overview'
@@ -50,15 +49,21 @@ const TABS: { id: TabId; label: string }[] = [
  * The portal's librarian workspace: everything that used to hang off the
  * global admin accordion, scoped to a single tenant and organised as tabs
  * rather than a stack of collapsible sections. Reuses the same
- * sessionStorage passcode as the global admin page.
+ * request-only access as the global admin page.
  */
 export function ManagePage() {
+  return (
+    <AdminPageAccess>
+      <ManageContent />
+    </AdminPageAccess>
+  )
+}
+
+function ManageContent() {
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const queryClient = useQueryClient()
 
-  const [passcode, setPasscode] = useState(() => sessionStorage.getItem('rp-admin-passcode') ?? '')
-  const [draft, setDraft] = useState('')
   const [searchParams] = useSearchParams()
   // A deep link (Tools > Extraction Lab) can open a tab directly.
   const [tab, setTab] = useState<TabId>(() => {
@@ -66,32 +71,9 @@ export function ManagePage() {
     return TABS.some((t) => t.id === wanted) ? wanted as TabId : 'overview'
   })
   const [renaming, setRenaming] = useState(false)
-  const { data: auth, isLoading: authLoading } = useQuery({
-    queryKey: ['auth-session'],
-    queryFn: getAuthSession,
-    staleTime: 60_000,
-    retry: false,
-  })
-  const ssoAdmin = auth?.user?.isAdmin === true
-  const adminCredential = ssoAdmin ? 'microsoft-sso' : passcode
-
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    // Passcode in the key so a corrected entry re-checks instead of replaying
-    // a cached 401 (invalidateQueries below matches by prefix, so it still hits).
-    queryKey: ['admin-overview', adminCredential],
-    queryFn: () => getAdminOverview(adminCredential),
-    enabled: adminCredential.length > 0,
-    retry: false,
-  })
-
-  const unauthorised = isError && error instanceof ApiError && error.status === 401
+  const overview = useAdminOverview(slug)
+  const { data, isLoading, coarseAdminEligible } = overview
   const row = data?.find((r) => r.tenant.slug === slug)
-
-  const submitPasscode = (event: FormEvent) => {
-    event.preventDefault()
-    sessionStorage.setItem('rp-admin-passcode', draft)
-    setPasscode(draft)
-  }
 
   const onContentAdded = () =>
     Promise.all([
@@ -103,70 +85,6 @@ export function ManagePage() {
   const onRenamed = () => {
     setRenaming(false)
     void queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
-  }
-
-  if (authLoading && !passcode) {
-    return (
-      <main className='min-h-[calc(100dvh-var(--rp-header-h,126px))] bg-app' aria-busy='true' />
-    )
-  }
-
-  if (!adminCredential || unauthorised) {
-    return (
-      <main className='flex min-h-[calc(100dvh-var(--rp-header-h,126px))] flex-col items-center justify-center bg-app px-6'>
-        <div className='rp-card w-full max-w-sm p-8'>
-          <p className='rp-eyebrow text-ink-3'>{config.branding.productName}</p>
-          <h1 className='mt-1 text-xl font-semibold tracking-tight text-ink'>Manage this portal</h1>
-          {auth?.user
-            ? (
-              <p className='mt-4 text-sm text-ink-2'>
-                {auth.user.email} is signed in but does not have the CorpusKit administrator role.
-              </p>
-            )
-            : (
-              <a
-                href={microsoftLoginUrl(`/t/${slug}/manage`)}
-                className='rp-btn rp-btn-primary mt-5 w-full'
-              >
-                Sign in with Microsoft
-              </a>
-            )}
-          <form onSubmit={submitPasscode} className='mt-5 space-y-4'>
-            <div>
-              <label
-                htmlFor='manage-passcode'
-                className='mb-1.5 block text-sm font-medium text-ink'
-              >
-                Admin passcode
-              </label>
-              <input
-                id='manage-passcode'
-                type='password'
-                className='rp-input'
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                autoComplete='off'
-                required
-              />
-            </div>
-            {unauthorised && (
-              <p role='alert' className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
-                That passcode was not accepted.
-              </p>
-            )}
-            <button type='submit' className='rp-btn rp-btn-primary w-full'>
-              Enter
-            </button>
-          </form>
-          <Link
-            to={`/t/${slug}`}
-            className='mt-4 inline-block text-sm text-ink-3 hover:text-[var(--rp-ink)]'
-          >
-            &larr; Back to the portal
-          </Link>
-        </div>
-      </main>
-    )
   }
 
   const reachable = row ? row.resourceCount !== null : false
@@ -198,17 +116,13 @@ export function ManagePage() {
           </div>
         )}
 
-        {isError && !unauthorised && (
-          <div className='mt-8'>
-            <ErrorCard
-              message={error instanceof Error ? error.message : 'Could not load this portal.'}
-              onRetry={() => void refetch()}
-            />
-          </div>
-        )}
+        <OverviewAccess overview={overview} returnTo={`/t/${slug}/manage`} />
 
         {row && (
-          <div className='mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'>
+          <div
+            data-admin-overview
+            className='mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'
+          >
             <nav
               aria-label='Manage sections'
               className='rp-no-scrollbar -mx-1 flex gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
@@ -231,14 +145,26 @@ export function ManagePage() {
             </nav>
 
             <div className='min-w-0'>
-              {tab === 'overview' && (
+              {!coarseAdminEligible && tab !== 'details' && (
+                <div className='rp-card p-5'>
+                  <h2 className='text-lg font-semibold'>{row.tenant.productName}</h2>
+                  <p className='mt-3 text-sm text-ink-2'>
+                    {row.resourceCount ?? 'Unknown'} documents in this snapshot.
+                  </p>
+                  <p className='mt-3 text-sm text-ink-2'>
+                    Sign in with an administrator account to load this section automatically.
+                  </p>
+                </div>
+              )}
+
+              {coarseAdminEligible && tab === 'overview' && (
                 <div className='space-y-4'>
                   {reachable
                     ? (
                       <div className='rp-card p-5'>
                         <StatTiles
                           slug={slug}
-                          passcode={adminCredential}
+                          passcode='microsoft-sso'
                           resourceCount={row.resourceCount ?? 0}
                         />
                       </div>
@@ -257,15 +183,15 @@ export function ManagePage() {
                       </div>
                     )}
                   <div className='rp-card p-5'>
-                    <RecentList slug={slug} passcode={adminCredential} />
+                    <RecentList slug={slug} passcode='microsoft-sso' />
                   </div>
                 </div>
               )}
 
-              {tab === 'insights' && (
+              {coarseAdminEligible && tab === 'insights' && (
                 <div className='rp-card p-5'>
                   {reachable
-                    ? <InsightsPanel slug={slug} passcode={adminCredential} />
+                    ? <InsightsPanel slug={slug} passcode='microsoft-sso' />
                     : (
                       <p className='text-sm text-ink-3'>
                         Connect a knowledge box to see insights.{' '}
@@ -280,14 +206,14 @@ export function ManagePage() {
                 </div>
               )}
 
-              {tab === 'content' && (
+              {coarseAdminEligible && tab === 'content' && (
                 <div className='space-y-4'>
                   <div className='rp-card p-5'>
                     {reachable
                       ? (
                         <AddContent
                           slug={slug}
-                          passcode={adminCredential}
+                          passcode='microsoft-sso'
                           onAdded={onContentAdded}
                         />
                       )
@@ -303,14 +229,14 @@ export function ManagePage() {
                         </p>
                       )}
                   </div>
-                  {reachable && <SourcesPanel slug={slug} passcode={adminCredential} />}
-                  {reachable && <CorpusHealthPanel slug={slug} passcode={adminCredential} />}
+                  {reachable && <SourcesPanel slug={slug} passcode='microsoft-sso' />}
+                  {reachable && <CorpusHealthPanel slug={slug} passcode='microsoft-sso' />}
                 </div>
               )}
 
-              {tab === 'enrichments' && (
+              {coarseAdminEligible && tab === 'enrichments' && (
                 reachable
-                  ? <EnrichmentsPanel slug={slug} passcode={adminCredential} />
+                  ? <EnrichmentsPanel slug={slug} passcode='microsoft-sso' />
                   : (
                     <div className='rp-card p-5'>
                       <p className='text-sm text-ink-3'>
@@ -320,7 +246,7 @@ export function ManagePage() {
                   )
               )}
 
-              {tab === 'taxonomy' && (
+              {coarseAdminEligible && tab === 'taxonomy' && (
                 // One container: the tab card. Everything inside is a flat
                 // section (heading, then controls), separated by hairlines.
                 <div className='rp-card p-5'>
@@ -338,11 +264,11 @@ export function ManagePage() {
                       <>
                         <LabelsetsPanel
                           slug={slug}
-                          passcode={adminCredential}
+                          passcode='microsoft-sso'
                           organisation={config.branding.organisation}
                         />
-                        <AnalysePanel slug={slug} passcode={adminCredential} />
-                        <InterrogatePanel slug={slug} passcode={adminCredential} />
+                        <AnalysePanel slug={slug} passcode='microsoft-sso' />
+                        <InterrogatePanel slug={slug} passcode='microsoft-sso' />
                       </>
                     )
                     : (
@@ -353,10 +279,10 @@ export function ManagePage() {
                 </div>
               )}
 
-              {tab === 'graph' && (
+              {coarseAdminEligible && tab === 'graph' && (
                 <div className='rp-card p-5'>
                   {reachable
-                    ? <KgPanel slug={slug} passcode={adminCredential} open={tab === 'graph'} />
+                    ? <KgPanel slug={slug} passcode='microsoft-sso' open={tab === 'graph'} />
                     : (
                       <p className='text-sm text-ink-3'>
                         Connect a knowledge box to build a knowledge graph.
@@ -365,16 +291,20 @@ export function ManagePage() {
                 </div>
               )}
 
-              {tab === 'appearance' && (
+              {coarseAdminEligible && tab === 'appearance' && (
                 <AppearancePanel
                   slug={slug}
-                  passcode={adminCredential}
+                  passcode='microsoft-sso'
                   branding={config.branding}
                 />
               )}
 
-              {tab === 'behaviour' && <BehaviourPanel slug={slug} passcode={adminCredential} />}
-              {tab === 'extraction' && <ExtractionPanel slug={slug} passcode={adminCredential} />}
+              {coarseAdminEligible && tab === 'behaviour' && (
+                <BehaviourPanel slug={slug} passcode='microsoft-sso' />
+              )}
+              {coarseAdminEligible && tab === 'extraction' && (
+                <ExtractionPanel slug={slug} passcode='microsoft-sso' />
+              )}
 
               {tab === 'details' && (
                 <div className='rp-card p-5'>
@@ -382,7 +312,7 @@ export function ManagePage() {
                     ? (
                       <RenamePortal
                         slug={slug}
-                        passcode={adminCredential}
+                        passcode='microsoft-sso'
                         initialName={config.branding.productName}
                         initialOrganisation={config.branding.organisation}
                         initialTagline={config.branding.tagline}
