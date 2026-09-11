@@ -146,7 +146,9 @@ function ManageContent() {
 
             <div className='min-w-0'>
               {!coarseAdminEligible &&
-                !['details', 'content', 'overview', 'insights'].includes(tab) && (
+                !['details', 'content', 'overview', 'insights', 'taxonomy', 'appearance'].includes(
+                  tab,
+                ) && (
                 <div className='rp-card p-5'>
                   <h2 className='text-lg font-semibold'>{row.tenant.productName}</h2>
                   <p className='mt-3 text-sm text-ink-2'>
@@ -294,10 +296,9 @@ function ManageContent() {
                 </div>
               )}
 
-              {coarseAdminEligible && tab === 'appearance' && (
+              {tab === 'appearance' && (
                 <AppearancePanel
                   slug={slug}
-                  passcode='microsoft-sso'
                   branding={config.branding}
                 />
               )}

@@ -142,6 +142,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let malformedRead = false
     let taxonomyPopulated = false
     const taxonomyBodies: unknown[] = []
+    const brandingUploads: { path: string; contentType: string | null; bytes: number }[] = []
     const source = {
       id: 'source-one',
       url: 'https://example.invalid/research',
@@ -193,6 +194,14 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         if (url.pathname.includes('/labelsets')) {
           taxonomyBodies.push(await request.json())
           return Response.json({ ok: true, id: 'region', agents: [] })
+        }
+        if (url.pathname.includes('/branding/')) {
+          brandingUploads.push({
+            path: url.pathname,
+            contentType: request.headers.get('content-type'),
+            bytes: (await request.arrayBuffer()).byteLength,
+          })
+          return Response.json({ ok: true, url: '/api/t/alpha/branding/logo' })
         }
         if (url.pathname.endsWith('/sources/source-one/sync')) {
           return new Response(
@@ -391,8 +400,114 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await click(page!, '[role=dialog] [type=submit]')
       await settle(page!)
     }
+    async function explicitAction(action: () => Promise<void>, label: string) {
+      const before = requests.length
+      await action()
+      await page!.waitForSelector('[role=dialog]')
+      expect(requests.length).toBe(before)
+      await click(page!, '[data-emergency-cancel]')
+      await settle(page!)
+      expect(requests.length).toBe(before)
+      await action()
+      await confirm()
+      await settle(page!)
+      expect(requests.length).toBe(before + 1)
+      expect(requests.at(-1)?.emergency).toBe(true)
+      expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+      await page!.evaluate(() => {
+        dispatchEvent(new Event('fixture-invalidate'))
+        dispatchEvent(new Event('focus'))
+        dispatchEvent(new Event('fixture-inspect'))
+      })
+      await settle(page!)
+      expect(requests.length).toBe(before + 1)
+      expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain(
+        'one-request-test-value',
+      )
+      evidence.push({ action: label, requests: 1 })
+    }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Appearance')
+          await page!.waitForSelector('[aria-label="Rounded shape"]')
+          const before = requests.length
+          for (
+            const label of [
+              palette === 'light' ? 'Observatory palette' : 'Portal default colours',
+              'Rounded shape',
+              'Comfortable density',
+              'Custom uploaded fonts',
+              'Larger text size',
+            ]
+          ) {
+            await click(page!, `[aria-label="${label}"]`)
+            expect(requests.length).toBe(before)
+            expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+          }
+          for (const name of ['colours', 'typography', 'shape', 'density']) {
+            await page!.evaluate(
+              (name) =>
+                document.querySelector(`[data-appearance-save=${name}]`)!.scrollIntoView({
+                  block: 'center',
+                }),
+              { args: [name] },
+            )
+            await capture(`appearance-${name}-${palette}-${width}`)
+            await explicitAction(
+              () => click(page!, `[data-appearance-save=${name}]`),
+              `save-${name}`,
+            )
+          }
+          for (const kind of ['logo', 'hero', 'font-heading', 'font-body']) {
+            const upload = async () => {
+              await page!.evaluate((kind) => {
+                const input = document.querySelector<HTMLInputElement>(
+                  `input[data-branding-upload=${kind}]`,
+                )!
+                const transfer = new DataTransfer()
+                transfer.items.add(
+                  new File(['fixture-file'], kind.startsWith('font') ? 'test.woff2' : 'test.svg', {
+                    type: 'image/svg+xml',
+                  }),
+                )
+                input.files = transfer.files
+                input.dispatchEvent(new Event('change', { bubbles: true }))
+              }, { args: [kind] })
+              await settle(page!)
+            }
+            await explicitAction(upload, `upload-${kind}`)
+            expect(brandingUploads.at(-1)).toEqual({
+              path: `/api/admin/t/alpha/branding/${kind}`,
+              contentType: kind.startsWith('font') ? 'font/woff2' : 'image/svg+xml',
+              bytes: 12,
+            })
+            await page!.evaluate((kind) => {
+              const input = document.querySelector(`input[data-branding-upload=${kind}]`)!
+              input.parentElement!.parentElement!.scrollIntoView({ block: 'start' })
+            }, { args: [kind] })
+            await capture(`appearance-upload-${kind}-${palette}-${width}`)
+          }
+          await click(page!, '[aria-label="Square shape"]')
+          state.status = 500
+          const failureStart = requests.length
+          await click(page!, '[data-appearance-save=shape]')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await capture(`appearance-failed-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          await settle(page!)
+          expect(requests.length).toBe(failureStart + 1)
+          state.status = 200
+        }
+      }
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
           state.capability = 'enabled'
