@@ -749,6 +749,17 @@ export interface BrandingAssetStore {
   put(slug: string, kind: BrandingKind, asset: BrandingAsset): void
 }
 
+export interface PortalRequestContext {
+  requestId: string
+  session: import('./principal.ts').TrustedSessionFacts | null
+  clientIp?: string
+  coarseAdminEligible: boolean
+  effectiveRoles?: import('@research-portal/core').EffectiveRoles
+  provenance?: import('./assignments.ts').RoleProvenance[]
+  groupCapability?: import('./assignments.ts').RoleResolution['groupCapability']
+  user?: { id: string; tenantId: string; name: string; email: string; roles: string[] } | null
+}
+
 export interface BuildAppOptions {
   /** Intent-routing decisions log; defaults to the on-disk JSONL store. */
   routing?: RoutingLogApi
@@ -777,6 +788,7 @@ export interface BuildAppOptions {
   adminPasscode?: string
   /** A platform adapter may authenticate an administrator before the request reaches Hono. */
   trustedAdmin?: (request: Request) => boolean
+  requestContext?: (request: Request) => PortalRequestContext | undefined
   /** Authenticated portal identity forwarded by a trusted platform adapter. */
   trustedUser?: (request: Request) => TrustedPortalUser | null
   /** Where the built SPA lives; overridable in tests. Defaults to ./apps/web/dist. */
@@ -969,7 +981,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     provider,
     tenant,
     keys: mcpKeys,
-    trustedUser: opts.trustedUser,
+    trustedUser: opts.requestContext
+      ? (request) => {
+        const context = opts.requestContext!(request)
+        return context?.session
+          ? { id: context.session.oid, isAdmin: context.coarseAdminEligible === true }
+          : null
+      }
+      : opts.trustedUser,
     rateLimitPerMin: opts.rateLimitMcpAuthPerMin,
   })
 
@@ -2597,7 +2616,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // KB id and service-account token in the app; both stay server-side. When
   // ADMIN_PASSCODE is configured every admin call must present it.
   app.use('/api/admin/*', async (c, next) => {
-    if (opts.trustedAdmin?.(c.req.raw)) {
+    const compatibility = opts.requestContext
+      ? opts.requestContext(c.req.raw)?.coarseAdminEligible === true
+      : opts.trustedAdmin?.(c.req.raw) === true
+    if (compatibility) {
       await next()
       return
     }

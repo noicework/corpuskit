@@ -27,7 +27,18 @@ interface DurableObjectState {
   }
 }
 
-interface DurableObjectStub extends Fetcher {}
+interface DurableObjectStub extends Fetcher {
+  handleTrustedRequest(
+    request: Request,
+    context: import('./worker.ts').TrustedRequestContext,
+  ): Promise<Response>
+  requestPrincipal(
+    request: Request,
+    context: import('./worker.ts').TrustedRequestContext,
+  ): Promise<import('../../api/src/app.ts').PortalRequestContext>
+  auditDenial(request: Request, status: 401 | 403): Promise<void>
+  maintenance(): Promise<void>
+}
 
 interface DurableObjectNamespace<T = unknown> {
   getByName(name: string, options?: { locationHint?: string }): DurableObjectStub

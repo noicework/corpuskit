@@ -51,6 +51,7 @@
     "binding": "CF_VERSION_METADATA"
   },
   "vars": {
+    "WORKER_NAME": "corpuskit-demo",
     "ENVIRONMENT": "demo",
     "ARAG_DA_AGENT_MODEL": "openai-compatible"
   }

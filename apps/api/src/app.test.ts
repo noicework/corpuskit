@@ -877,7 +877,11 @@ describe('admin', () => {
     const app = buildApp({
       provider: new StubProvider(),
       tenants: freshTenants(),
-      trustedAdmin: (request) => request.headers.get('x-corpuskit-sso-admin') === '1',
+      requestContext: () => ({
+        requestId: 'test-context',
+        session: null,
+        coarseAdminEligible: true,
+      }),
     })
     const response = await app.request('/api/admin/overview', {
       headers: { 'x-corpuskit-sso-admin': '1' },
