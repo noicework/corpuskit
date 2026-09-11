@@ -83,6 +83,9 @@ export class PortalDurableObject extends DurableObject<Env> {
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
     })
     this.app = buildApp({
+      rbac: this.stores.rbac,
+      configuredTenantId: bindings.ENTRA_TENANT_ID,
+      audience: bindings.WORKER_NAME,
       provider: this.provider,
       management: this.provider,
       bindings: this.stores.bindings,

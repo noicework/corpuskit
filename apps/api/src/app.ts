@@ -4,6 +4,7 @@ import {
   declaredSubAction,
   infrastructureHandler,
   isPrivileged,
+  matchedDeclaration,
   registerInfrastructure,
 } from './permissions.ts'
 import {
@@ -28,6 +29,24 @@ import {
   createAuditEvent,
 } from './audit.ts'
 import type { BreakGlassService } from './break-glass.ts'
+import {
+  AuthorisationError,
+  authoriseOperation,
+  authoriseSubActions as checkSubActions,
+  type AuthorityDependencies,
+  type RequestAuthority,
+  researchOwner as resolveResearchOwner,
+  selectRequestAuthority,
+} from './authorisation.ts'
+import {
+  AccessModeSchema,
+  type PortalPolicy,
+  PortalPolicySchema,
+  type Scope,
+} from '@research-portal/core'
+import { KeyPortalSlugSchema } from './scoped-key-record.ts'
+import type { ResearchOwner } from './research-owner.ts'
+import type { RbacState } from './rbac-state.ts'
 import {
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
@@ -776,6 +795,11 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  /** Internally supplied authoritative state, never sourced from a request. */
+  rbac?: RbacState
+  configuredTenantId?: string
+  audience?: string
+  now?: () => number
   localMutations?: import('./audit-execution.ts').LocalMutationScope
   /** Intent-routing decisions log; defaults to the on-disk JSONL store. */
   routing?: RoutingLogApi
@@ -830,6 +854,31 @@ export interface BuildAppOptions {
   rateLimitEstatePerMin?: number
   /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
   rateLimitMcpAuthPerMin?: number
+}
+
+interface RequestAuthorisation {
+  declared(): Promise<RequestAuthority | null>
+  subActions(names: readonly string[]): Promise<RequestAuthority>
+  owner(): Promise<ResearchOwner>
+}
+const authorisationContextKey = 'corpuskit.authorisation'
+function requestAuthorisation(c: Context): RequestAuthorisation {
+  const helpers = c.get(authorisationContextKey) as RequestAuthorisation | undefined
+  if (!helpers) throw new AuthorisationError(403)
+  return helpers
+}
+/** Dormant until a route family explicitly invokes its declared operation guard. */
+export function authoriseDeclared(c: Context): Promise<RequestAuthority | null> {
+  return requestAuthorisation(c).declared()
+}
+export function authoriseSubActions(
+  c: Context,
+  names: readonly string[],
+): Promise<RequestAuthority> {
+  return requestAuthorisation(c).subActions(names)
+}
+export function researchOwner(c: Context): Promise<ResearchOwner> {
+  return requestAuthorisation(c).owner()
 }
 
 export function buildApp(opts: BuildAppOptions): Hono {
@@ -1002,6 +1051,152 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.audit) throw new AuditWriteError()
     return opts.audit
   }
+  const authorityDependencies: AuthorityDependencies | undefined =
+    opts.rbac && opts.configuredTenantId && opts.audience && opts.audit && opts.breakGlass
+      ? {
+        keys: mcpKeys,
+        creatorStores: { rbac: opts.rbac, audience: opts.audience },
+        configuredTenantId: opts.configuredTenantId,
+        tenants,
+        audit: opts.audit,
+        breakGlass: opts.breakGlass,
+        now: opts.now,
+      }
+      : undefined
+  const requestHelpers = (c: Context): RequestAuthorisation => {
+    const context = requestContext(c.req.raw)
+    let selection: Promise<RequestAuthority> | undefined
+    let failure: Error | undefined
+    const deny = (scope: Scope): never => {
+      if (failure) throw failure
+      try {
+        if (!context.denialAudited) {
+          appendAudit(
+            requiredAudit(),
+            createAuditEvent({
+              requestId: context.requestId,
+              actor: context.session
+                ? { kind: 'user', id: context.session.oid }
+                : { kind: 'anonymous' },
+              action: 'request.denied',
+              scope,
+              target: { kind: 'request' },
+              outcome: 'denied',
+              detail: { code: context.session ? 'forbidden' : 'unauthorised' },
+            }, opts.now),
+          )
+          markDenialAudited(c.req.raw)
+        }
+        failure = new AuthorisationError(context.session ? 403 : 401)
+      } catch {
+        failure = new AuditWriteError()
+      }
+      throw failure
+    }
+    const operation = () => {
+      if (failure) throw failure
+      try {
+        return matchedDeclaration(c)
+      } catch {
+        return deny({ kind: 'platform' })
+      }
+    }
+    const target = () => {
+      const declaration = operation()
+      if (declaration.scope !== 'portal') {
+        return { declaration, scope: { kind: 'platform' } as Scope }
+      }
+      if (declaration.aggregate || declaration.portalTarget !== 'url-slug') {
+        return deny({ kind: 'platform' })
+      }
+      const slug = KeyPortalSlugSchema.safeParse(c.req.param('slug'))
+      if (!slug.success) return deny({ kind: 'platform' })
+      const scope: Scope = { kind: 'portal', slug: slug.data }
+      let policy: PortalPolicy | undefined
+      let publicPortal = false
+      try {
+        const current = tenants.get(slug.data)
+        if (!current || current.slug !== slug.data || tenants.isDisabled(slug.data)) {
+          return deny(scope)
+        }
+        const mode = AccessModeSchema.parse(current.accessMode)
+        publicPortal = mode === 'public'
+        if (opts.configuredTenantId) {
+          policy = PortalPolicySchema.parse({
+            slug: current.slug,
+            accessMode: current.accessMode,
+            ...(opts.configuredTenantId ? { configuredTenantId: opts.configuredTenantId } : {}),
+          })
+        }
+      } catch {
+        return deny(scope)
+      }
+      return { declaration, scope, policy, publicPortal }
+    }
+    const authority = (scope: Scope) => {
+      if (failure) throw failure
+      if (!authorityDependencies) return deny(scope)
+      selection ??= selectRequestAuthority(c.req.raw, context, authorityDependencies).then(
+        (value) => {
+          context.actor = value.actor
+          return value
+        },
+      ).catch((error) => {
+        if (context.denialAudited) markDenialAudited(c.req.raw)
+        failure = error
+        throw error
+      })
+      return selection
+    }
+    return {
+      declared: async () => {
+        const { declaration, scope, policy, publicPortal } = target()
+        if (declaration.scope === 'public') return null
+        if (
+          !authorityDependencies && !context.session &&
+          !c.req.raw.headers.has('authorization') && !c.req.raw.headers.has('x-admin-passcode') &&
+          publicPortal && !isPrivileged(declaration)
+        ) return null
+        const selected = await authority(scope)
+        try {
+          authoriseOperation(selected, declaration.permission, scope, policy)
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+        return selected
+      },
+      subActions: async (names) => {
+        const { declaration, scope, policy } = target()
+        if (!names.length || new Set(names).size !== names.length) return deny(scope)
+        const actions = names.map((name) =>
+          declaration.subActions?.find((item) => item.action === name)
+        )
+        if (actions.some((item) => !item)) return deny(scope)
+        const selected = await authority(scope)
+        try {
+          checkSubActions(
+            selected,
+            actions as NonNullable<typeof declaration.subActions>,
+            scope,
+            policy,
+          )
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+        return selected
+      },
+      owner: async () => {
+        const { declaration, scope, policy } = target()
+        if (declaration.owned !== 'research') return deny(scope)
+        const selected = await authority(scope)
+        try {
+          return resolveResearchOwner(selected, policy, c.req.header('x-rp-client'))
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+      },
+    }
+  }
   const operationSignals = new WeakMap<Request, AbortSignal>()
   const subAction = <T>(
     c: Context,
@@ -1027,6 +1222,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }))
   registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)
+    c.set(authorisationContextKey, requestHelpers(c))
     await next()
     if ((c.res.status === 401 || c.res.status === 403) && !context.denialAudited) {
       const { declaration, scope } = classification(c)
@@ -1095,6 +1291,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   )
 
   app.onError((err, c) => {
+    if (err instanceof AuthorisationError) return c.json({ error: err.code }, err.status)
     if (err instanceof AuditWriteError) {
       console.error('Required request audit failed')
       return c.json({ error: 'audit_write_failed' }, 500)

@@ -1,11 +1,20 @@
 /// <reference path="./runtime.d.ts" />
 /// <reference path="../../../worker-configuration.d.ts" />
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
-import { DurableState } from './state.ts'
+import { DurableState, type DurableStores } from './state.ts'
+import { expect } from '@std/expect'
+import { Hono } from 'hono'
+import { authoriseDeclared } from '../../api/src/app.ts'
+import { AuthorisationError } from '../../api/src/authorisation.ts'
+import { issueScopedKey } from '../../api/src/scoped-keys.ts'
 import type { TrustedSessionFacts } from '../../api/src/principal.ts'
 import type { AuthUser } from './auth.ts'
 import type { PortalDurableObject } from './worker.ts'
-import { assertIdentityJourney, fixtureSecret } from '../../api/src/rbac-integration-fixture.ts'
+import {
+  assertIdentityJourney,
+  fixtureSecret,
+  fixtureSession,
+} from '../../api/src/rbac-integration-fixture.ts'
 type WorkerHandler = {
   fetch(request: Request, env: Env): Promise<Response>
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>
@@ -143,6 +152,92 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
         )
       },
     })
+    // Activate one real handler only in this test. Runtime routes remain dormant until their cutover.
+    const runtime = object! as unknown as { app: Hono; stores: DurableStores }
+    const guarded = new Hono()
+    let dispatched = 0
+    for (const route of runtime.app.routes) {
+      const handler = route.handler
+      guarded.on(
+        route.method,
+        route.path,
+        route.method === 'GET' && route.path === '/api/t/:slug/catalog'
+          ? async (c, next) => {
+            const authority = await authoriseDeclared(c)
+            expect(await authoriseDeclared(c)).toBe(authority)
+            dispatched++
+            return handler(c, next)
+          }
+          : handler,
+      )
+    }
+    guarded.onError((error, c) =>
+      error instanceof AuthorisationError
+        ? c.json({ error: error.code }, error.status)
+        : c.json({ error: 'failed' }, 500)
+    )
+    runtime.app = guarded
+    const session = fixtureSession({ oid: 'key-creator' })
+    const invoke = async (token?: string, facts = session) =>
+      workerModule.default.fetch(
+        new Request('https://corpuskit.test/api/t/marine/catalog', {
+          headers: {
+            cookie: await sessionCookie(facts),
+            ...(token ? { authorization: `Bearer ${token}` } : {}),
+          },
+        }),
+        env,
+      )
+    expect((await invoke()).status).toBe(200)
+    const context = { requestId: 'key-seed', actor: { kind: 'system' as const } }
+    const service = runtime.stores.rbac.assignmentService('tenant-1', 'corpuskit')
+    const assignment = service.create({
+      subjectKind: 'active-oid',
+      subjectId: session.oid,
+      scope: { kind: 'portal', slug: 'marine' },
+      role: 'curator',
+    }, context)
+    if (!assignment.ok) throw new Error('Fixture assignment failed')
+    const prepared = await issueScopedKey(
+      { slug: 'marine', label: 'Fixture', role: 'viewer' },
+      session,
+      {
+        keys: runtime.stores.mcpKeys,
+        creatorStores: { rbac: runtime.stores.rbac, audience: 'corpuskit' },
+        configuredTenantId: 'tenant-1',
+      },
+    )
+    // The real Durable mutation boundary owns persistence and its required audit.
+    await runtime.stores.localMutations.run(
+      {
+        requestId: 'key-seed',
+        actor: context.actor,
+        action: 'request.privileged',
+        target: { kind: 'request' },
+        scope: { kind: 'portal', slug: 'marine' },
+      },
+      new AbortController().signal,
+      async () => {
+        prepared.commit()
+      },
+    )
+    const allowed = await invoke(prepared.key)
+    expect(allowed.status).toBe(200)
+    expect((await allowed.json()).items.length).toBeGreaterThan(0)
+    expect(service.remove(assignment.value.id, context).ok).toBe(true)
+    const before = dispatched
+    expect(
+      (await invoke(
+        prepared.key,
+        fixtureSession({ oid: 'ambient-owner', roles: ['CorpusKit.Owner'] }),
+      )).status,
+    ).toBe(403)
+    expect(dispatched).toBe(before)
+    database!.exec(
+      "CREATE TRIGGER fail_authority BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect((await invoke(prepared.key)).status).toBe(500)
+    expect(dispatched).toBe(before)
   } finally {
     database!.close()
     Date.now = originalNow
