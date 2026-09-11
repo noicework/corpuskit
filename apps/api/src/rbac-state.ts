@@ -12,6 +12,7 @@ import {
   AuditWriteError,
   validateAuditEvent,
 } from './audit.ts'
+import { AssignmentService } from './assignments.ts'
 
 /** Shared scalar subset supported by both DatabaseSync and Durable Object SQL. */
 export type SqlValue = string | number | null
@@ -115,6 +116,11 @@ export class RbacState {
   readonly audit: AuditStore
   readonly assignments: AssignmentReader
   readonly locks: RbacStores['locks']
+
+  /** Internal factory. The configured tenant and deployment audience come from trusted config. */
+  assignmentService(configuredTenantId: string, audience?: string): AssignmentService {
+    return new AssignmentService(this.database, this.audit, configuredTenantId, this.now, audience)
+  }
 
   constructor(private readonly database: RbacDatabase, private readonly now = Date.now) {
     this.assignments = Object.freeze({
