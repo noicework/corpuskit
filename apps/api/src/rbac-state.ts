@@ -15,6 +15,7 @@ import {
   validateAuditEvent,
 } from './audit.ts'
 import { AssignmentService } from './assignments.ts'
+import { type BreakGlassPolicy, BreakGlassService } from './break-glass.ts'
 
 /** Shared scalar subset supported by both DatabaseSync and Durable Object SQL. */
 export type SqlValue = string | number | null
@@ -118,6 +119,10 @@ export class RbacState {
   readonly audit: AuditStore
   readonly assignments: AssignmentReader
   readonly locks: RbacStores['locks']
+
+  breakGlassService(policy: BreakGlassPolicy): BreakGlassService {
+    return new BreakGlassService(this.database, this.audit, policy, this.now)
+  }
 
   /** Internal maintenance only. Purge and its evidence commit or roll back together. */
   retainAudit(
