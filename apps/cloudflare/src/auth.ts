@@ -1,3 +1,5 @@
+import { type TrustedSessionFacts, validSessionFacts } from '../../api/src/principal.ts'
+
 export interface AuthConfig {
   clientId: string
   clientSecret: string
@@ -15,6 +17,7 @@ export interface AuthUser {
   email: string
   roles: string[]
   isAdmin: boolean
+  sessionFacts: TrustedSessionFacts
 }
 
 interface OidcState {
@@ -50,6 +53,9 @@ interface IdTokenClaims {
   email?: string
   preferred_username?: string
   roles?: string[]
+  groups?: unknown
+  hasgroups?: unknown
+  _claim_names?: { groups?: unknown }
 }
 
 const STATE_COOKIE = '__Secure-corpuskit_oidc'
@@ -68,7 +74,13 @@ export async function authUser(request: Request, config: AuthConfig): Promise<Au
   const token = cookie(request, SESSION_COOKIE)
   if (!token) return null
   const session = await unseal<SessionPayload>(token, config.sessionSecret, SESSION_COOKIE)
-  if (!session || session.expiresAt <= Date.now()) return null
+  if (
+    !session || !validSessionFacts(session.sessionFacts) ||
+    session.expiresAt !== session.sessionFacts.expiresAt ||
+    session.tenantId !== config.tenantId || session.tenantId !== session.sessionFacts.tenantId ||
+    session.id !== session.sessionFacts.oid ||
+    JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles)
+  ) return null
   const { expiresAt: _expiresAt, ...user } = session
   return user
 }
@@ -212,15 +224,29 @@ async function finishLogin(request: Request, url: URL, config: AuthConfig): Prom
     ),
   )
   const user: AuthUser = {
-    id: String(claims.oid || claims.sub),
+    id: claims.oid!,
     tenantId: String(claims.tid),
     name: String(claims.name || email || 'Microsoft user'),
     email,
     roles,
     isAdmin: roles.includes('CorpusKit.Admin') || adminEmails.has(email),
+    sessionFacts: {
+      verified: true,
+      tenantId: claims.tid!,
+      oid: claims.oid!,
+      email,
+      preferredUsername: typeof claims.preferred_username === 'string'
+        ? claims.preferred_username
+        : undefined,
+      roles,
+      ...groupFacts(claims),
+      claimIssuedAt: claims.iat! * 1000,
+      createdAt: Date.now(),
+      expiresAt: Math.min(Date.now() + 8 * 3600_000, claims.iat! * 1000 + 8 * 3600_000),
+    },
   }
   const session = await seal<SessionPayload>(
-    { ...user, expiresAt: Date.now() + 8 * 60 * 60_000 },
+    { ...user, expiresAt: user.sessionFacts.expiresAt },
     config.sessionSecret,
     SESSION_COOKIE,
   )
@@ -278,11 +304,31 @@ async function verifyIdToken(
   if (claims.tid !== config.tenantId) throw new Error('Invalid tenant')
   if (!claims.exp || claims.exp <= now - 60) throw new Error('Expired token')
   if (claims.nbf && claims.nbf > now + 60) throw new Error('Token not active')
-  if (!claims.oid && !claims.sub) throw new Error('Missing subject')
+  if (typeof claims.oid !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(claims.oid)) {
+    throw new Error('Missing object id')
+  }
+  if (
+    !Number.isSafeInteger(claims.iat) || claims.iat! < 0 || claims.iat! > now + 30 ||
+    claims.iat! + 8 * 3600 <= now
+  ) throw new Error('Invalid claim time')
   if (!claims.nonce || !(await valuesEqual(claims.nonce, expectedNonce))) {
     throw new Error('Invalid nonce')
   }
   return claims
+}
+
+function groupFacts(claims: IdTokenClaims): Pick<TrustedSessionFacts, 'groups' | 'groupStatus'> {
+  if (claims.hasgroups !== undefined || claims._claim_names?.groups !== undefined) {
+    return { groups: [], groupStatus: 'overage' }
+  }
+  if (claims.groups === undefined) return { groups: [], groupStatus: 'absent' }
+  if (
+    !Array.isArray(claims.groups) || claims.groups.length > 1024 ||
+    !claims.groups.every((value) =>
+      typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
+    )
+  ) return { groups: [], groupStatus: 'malformed' }
+  return { groups: claims.groups, groupStatus: 'complete' }
 }
 
 async function openIdConfiguration(tenantId: string): Promise<OpenIdConfiguration> {

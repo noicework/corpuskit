@@ -1,4 +1,34 @@
 import { z } from 'zod'
+import type { VerifiedAssignmentSession } from './assignments.ts'
+
+/** Only passed by trusted ingress methods, never decoded from request headers. */
+export interface TrustedSessionFacts extends VerifiedAssignmentSession {
+  createdAt: number
+}
+
+export const TrustedSessionFactsSchema = z.object({
+  verified: z.literal(true),
+  tenantId: z.string().min(1),
+  oid: z.string().min(1),
+  email: z.string().max(254).optional(),
+  preferredUsername: z.string().max(254).optional(),
+  roles: z.array(z.string().min(1).max(256)).max(1024),
+  groups: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/)).max(1024),
+  groupStatus: z.enum(['complete', 'absent', 'malformed', 'overage', 'unverified']),
+  claimIssuedAt: z.number().int().nonnegative(),
+  createdAt: z.number().int().nonnegative(),
+  expiresAt: z.number().int().nonnegative(),
+}).strict()
+
+export function validSessionFacts(value: unknown, now = Date.now()): value is TrustedSessionFacts {
+  const parsed = TrustedSessionFactsSchema.safeParse(value)
+  if (!parsed.success) return false
+  const facts = parsed.data
+  return facts.claimIssuedAt <= now + 30_000 && facts.createdAt <= now + 30_000 &&
+    facts.createdAt >= facts.claimIssuedAt - 30_000 && facts.expiresAt > now &&
+    facts.expiresAt > facts.createdAt && facts.expiresAt <= facts.claimIssuedAt + 8 * 3600_000 &&
+    (facts.groupStatus === 'complete' || facts.groups.length === 0)
+}
 
 export const PRINCIPAL_HEADER = 'x-corpuskit-principal'
 const maximumHeaderBytes = 8192

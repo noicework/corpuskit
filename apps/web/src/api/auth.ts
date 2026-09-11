@@ -1,3 +1,5 @@
+import type { EffectiveRoles, Role, Scope } from '@research-portal/core'
+
 export interface AuthUser {
   id: string
   tenantId: string
@@ -10,9 +12,27 @@ export interface AuthUser {
 export interface AuthSession {
   authenticated: boolean
   user: AuthUser | null
+  effectiveRoles?: EffectiveRoles
+  provenance?: { source: 'app-role' | 'group' | 'local'; scope: Scope; role: Role }[]
+  claimAgeSeconds?: number | null
+  groupMappings?:
+    | 'enabled'
+    | 'disabled'
+    | 'complete'
+    | 'absent'
+    | 'malformed'
+    | 'overage'
+    | 'unverified'
+  coarseAdminEligible?: boolean
+  breakGlassEnabled?: boolean
 }
 
-const ANONYMOUS: AuthSession = { authenticated: false, user: null }
+const ANONYMOUS: AuthSession = {
+  authenticated: false,
+  user: null,
+  coarseAdminEligible: false,
+  breakGlassEnabled: false,
+}
 
 export async function getAuthSession(): Promise<AuthSession> {
   const response = await fetch('/auth/me', { headers: { accept: 'application/json' } })
@@ -23,6 +43,12 @@ export async function getAuthSession(): Promise<AuthSession> {
   return {
     authenticated: session.authenticated === true && Boolean(session.user),
     user: session.user ?? null,
+    effectiveRoles: session.effectiveRoles,
+    provenance: session.provenance,
+    claimAgeSeconds: session.claimAgeSeconds,
+    groupMappings: session.groupMappings,
+    coarseAdminEligible: session.coarseAdminEligible === true,
+    breakGlassEnabled: session.breakGlassEnabled === true,
   }
 }
 
