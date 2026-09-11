@@ -395,7 +395,8 @@ export class AssignmentService {
       this.configuredTenantId,
       session.oid,
     )[0]
-    if (old && old.claim_iat > session.claimIssuedAt) return false
+    // Concurrent valid sessions remain usable without replacing newer owner evidence.
+    if (old && old.claim_iat > session.claimIssuedAt) return true
     // Equal issuance times cannot restore a claim contradicted by another verified observation.
     const roles = old?.claim_iat === session.claimIssuedAt
       ? session.roles.filter((role) => (JSON.parse(old.roles_json) as string[]).includes(role))

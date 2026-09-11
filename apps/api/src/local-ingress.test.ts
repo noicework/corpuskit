@@ -254,3 +254,44 @@ Deno.test('local signing and denial audit fail closed without dispatching', asyn
     db.close()
   }
 })
+
+Deno.test('concurrent valid sessions survive a newer login on public routes and auth/me', async () => {
+  for (const path of ['/api/health', '/auth/me']) {
+    const db = new LocalRbacDatabase(':memory:')
+    try {
+      const rbac = new RbacState(db)
+      rbac.migrate()
+      const ingress = new LocalIngress({ rbac, tenants: { list: () => [] }, env })
+      const app = buildApp({
+        provider: {} as never,
+        audit: rbac.audit,
+        requestContext: ingress.requestContext,
+      })
+      const now = Date.now()
+      const statuses: number[] = []
+      for (const claimIssuedAt of [now - 2000, now - 1000, now - 2000]) {
+        const response = await ingress.handle(
+          new Request(`http://localhost${path}`),
+          (request) => app.fetch(request),
+          peer,
+          {
+            ...session(),
+            roles: ['CorpusKit.Owner'],
+            claimIssuedAt,
+            expiresAt: claimIssuedAt + 8 * 3600_000,
+          },
+        )
+        statuses.push(response.status)
+        await response.arrayBuffer()
+      }
+      expect(statuses).toEqual([200, 200, 200])
+      expect(db.all<{ claim_iat: number }>(
+        'SELECT claim_iat FROM rbac_owner_evidence WHERE tenant_id = ? AND oid = ?',
+        'tenant-1',
+        'person-1',
+      )).toEqual([{ claim_iat: now - 1000 }])
+    } finally {
+      db.close()
+    }
+  }
+})
