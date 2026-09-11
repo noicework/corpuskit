@@ -14,7 +14,7 @@ import {
   createAuditEvent,
   validateAuditEvent,
 } from './audit.ts'
-import { AssignmentService } from './assignments.ts'
+import { AssignmentService, type GrantClaims } from './assignments.ts'
 import { type BreakGlassPolicy, BreakGlassService } from './break-glass.ts'
 
 /** Shared scalar subset supported by both DatabaseSync and Durable Object SQL. */
@@ -40,6 +40,14 @@ export interface RoleAssignment {
 }
 export interface AssignmentReader {
   list(tenantId: string): RoleAssignment[]
+}
+/** Persisted, previously verified identity. Expired claims do not erase identity provenance. */
+export interface CreatorEvidence extends GrantClaims {
+  tenantId: string
+  oid: string
+  claimIssuedAt: number
+  expiresAt: number
+  observedAt: number
 }
 /** Guarded assignment services are constructed internally using the database contract. */
 export interface RbacStores {
@@ -124,6 +132,52 @@ export class RbacState {
   readonly audit: AuditStore
   readonly assignments: AssignmentReader
   readonly locks: RbacStores['locks']
+
+  /** Internal read only. No HTTP fields or assignment row can create verified provenance. */
+  creatorEvidence(tenantId: string, oid: string): CreatorEvidence | null {
+    const identifier = (value: unknown): value is string =>
+      typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
+    if (!identifier(tenantId) || !identifier(oid)) return null
+    const row = this.database.all<{
+      tenant_id: string
+      oid: string
+      roles_json: string
+      groups_json: string
+      group_status: string
+      claim_iat: number
+      expires_at: number
+      observed_at: number
+    }>('SELECT * FROM rbac_owner_evidence WHERE tenant_id = ? AND oid = ?', tenantId, oid)[0]
+    if (!row) return null
+    try {
+      const roles: unknown = JSON.parse(row.roles_json)
+      const groups: unknown = JSON.parse(row.groups_json)
+      if (
+        row.tenant_id !== tenantId || row.oid !== oid ||
+        !Array.isArray(roles) || roles.length > 1024 ||
+        !roles.every((role) => typeof role === 'string' && role.length > 0 && role.length <= 256) ||
+        !Array.isArray(groups) || groups.length > 1024 || !groups.every(identifier) ||
+        !['complete', 'absent', 'malformed', 'overage', 'unverified'].includes(row.group_status) ||
+        ![row.claim_iat, row.expires_at, row.observed_at].every((time) =>
+          Number.isSafeInteger(time) && time >= 0
+        ) ||
+        row.claim_iat > row.observed_at + 30_000 || row.observed_at > this.now() ||
+        row.expires_at <= row.claim_iat || row.expires_at > row.claim_iat + 28_800_000
+      ) return null
+      return {
+        tenantId,
+        oid,
+        roles,
+        groups,
+        groupStatus: row.group_status as GrantClaims['groupStatus'],
+        claimIssuedAt: row.claim_iat,
+        expiresAt: row.expires_at,
+        observedAt: row.observed_at,
+      }
+    } catch {
+      return null
+    }
+  }
 
   breakGlassService(policy: BreakGlassPolicy): BreakGlassService {
     return new BreakGlassService(this.database, this.audit, policy, this.now)
