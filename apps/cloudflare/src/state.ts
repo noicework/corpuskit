@@ -43,8 +43,8 @@ import {
   tenantConfig,
   type TenantPatch,
   tenantRecord,
+  tenantSlugs,
   type TenantStoreApi,
-  tenantSummaries,
   tenantSummary,
   validateTenantPatch,
   withPlatformHostname,
@@ -808,22 +808,25 @@ export class DurableTenantStore implements TenantStoreApi {
     this.save(data)
   }
 
-  list(includeDisabled = false): TenantSummary[] {
+  list(includeDisabled = false, visible?: (config: TenantConfig) => boolean): TenantSummary[] {
     const data = this.load()
     const rows: TenantSummary[] = []
     const slugs = new Set([
-      ...tenantSummaries().map((row) => row.slug),
+      ...tenantSlugs(),
       ...Object.keys(data.custom),
     ])
     for (const slug of slugs) {
+      if (!includeDisabled && data.disabled.includes(slug)) continue
+      let config: TenantConfig | undefined
       try {
-        const config = this.get(slug)
-        if (config) rows.push(tenantSummary(config))
+        config = this.get(slug)
       } catch {
         // Corrupt portal configuration never appears in an aggregate response.
+        continue
       }
+      if (config && (!visible || visible(config))) rows.push(tenantSummary(config))
     }
-    return includeDisabled ? rows : rows.filter((row) => !data.disabled.includes(row.slug))
+    return rows
   }
 
   add(input: NewTenantInput): TenantConfig {

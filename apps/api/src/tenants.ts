@@ -173,6 +173,11 @@ export function tenantSummaries(): TenantSummary[] {
   return Object.values(tenantsBySlug).map((tenant) => tenantSummary(withPlatformHostname(tenant)))
 }
 
+/** Registry identifiers without projecting portal metadata. */
+export function tenantSlugs(): string[] {
+  return Object.keys(tenantsBySlug)
+}
+
 // ---------------------------------------------------------------------------
 // Dynamic tenant store: the seed above plus knowledge box portals added in the
 // app, persisted as JSON (TENANTS_PATH, default ./data/tenants.json).
@@ -334,17 +339,20 @@ export class TenantStore {
     return Object.hasOwn(this.overrides, slug) ? validateTenantPatch(this.overrides[slug]) : {}
   }
 
-  list(includeDisabled = false): TenantSummary[] {
+  list(includeDisabled = false, visible?: (config: TenantConfig) => boolean): TenantSummary[] {
     const all: TenantSummary[] = []
     for (const slug of new Set([...Object.keys(tenantsBySlug), ...Object.keys(this.custom)])) {
+      if (!includeDisabled && this.disabled.has(slug)) continue
+      let config: TenantConfig | undefined
       try {
-        const config = this.get(slug)
-        if (config) all.push(tenantSummary(config))
+        config = this.get(slug)
       } catch {
         // A corrupt portal is unavailable, including in aggregate listings.
+        continue
       }
+      if (config && (!visible || visible(config))) all.push(tenantSummary(config))
     }
-    return includeDisabled ? all : all.filter((t) => !this.disabled.has(t.slug))
+    return all
   }
 
   add(input: NewTenantInput): TenantConfig {

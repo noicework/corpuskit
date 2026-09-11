@@ -6,6 +6,270 @@ import type { AragProvider } from '@research-portal/retrieval'
 import { issueScopedKey } from './scoped-keys.ts'
 import type { TrustedSessionFacts } from './principal.ts'
 import { buildApp } from './app.ts'
+import { type TenantConfig } from '@research-portal/core'
+
+const estateInit = (slugs?: unknown): RequestInit => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ query: 'Abalone', ...(slugs === undefined ? {} : { slugs }) }),
+})
+const eventSlugs = (text: string) =>
+  [
+    ...new Set(
+      text.split('\n').filter((line) => line.startsWith('data: ')).map((line) =>
+        JSON.parse(line.slice(6)).slug
+      ).filter(Boolean),
+    ),
+  ].sort()
+
+Deno.test('aggregate persona matrix returns only exact visible sets before stream consumption', async () => {
+  const f = createEnforcementFixture()
+  const publicSlugs = ['grains', 'marine', 'public-a', 'public-b']
+  try {
+    for (
+      const [session, extra] of [
+        [null, []],
+        [f.otherTenant, []],
+        [f.unassigned, ['authenticated-a', 'authenticated-b']],
+        [f.sessionFor('viewer'), ['a', 'authenticated-a', 'authenticated-b']],
+        [f.sessionFor('viewer', 'b'), ['b', 'authenticated-a', 'authenticated-b']],
+        [f.sessionFor('platform-admin'), ['a', 'b', 'authenticated-a', 'authenticated-b']],
+      ] as [TrustedSessionFacts | null, string[]][]
+    ) {
+      const expected = [...publicSlugs, ...extra].sort()
+      const directory = await f.requestAs(session, '/api/tenants')
+      expect(directory.status).toBe(200)
+      expect(directory.headers.get('cache-control')).toBe('private, no-store')
+      expect((await directory.json()).map((row: { slug: string }) => row.slug).sort()).toEqual(
+        expected,
+      )
+      f.providerCalls.length = 0
+      const estate = await f.requestAs(session, '/api/ask-estate', estateInit())
+      expect(estate.status).toBe(200)
+      // Calls already begun before a consumer reads the stream must also be scoped.
+      expect(
+        f.providerCalls.filter((call) => call.method === 'ask').map((call) =>
+          (call.args[0] as TenantConfig).slug
+        ).sort(),
+      ).toEqual(expected)
+      expect(estate.headers.get('cache-control')).toBe('private, no-store')
+      const body = await estate.text()
+      expect(eventSlugs(body)).toEqual(expected)
+      expect(body).toContain('estate-done')
+      expect(body).toContain('"type":"delta"')
+      expect(body).not.toContain('"type":"error"')
+    }
+    expect(f.database.all("SELECT id FROM audit_events WHERE action='request.denied'")).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('aggregate empty or foreign selections deny once; malformed selections never dispatch', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (const selection of [[], ['b'], ['missing'], ['disabled'], ['corrupt']]) {
+      const before =
+        f.database.all("SELECT id FROM audit_events WHERE action='request.denied'").length
+      const response = await f.requestAs(
+        f.sessionFor('viewer'),
+        '/api/ask-estate',
+        estateInit(selection),
+      )
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'forbidden' })
+      expect(f.database.all("SELECT id FROM audit_events WHERE action='request.denied'"))
+        .toHaveLength(before + 1)
+      f.assertNoProtectedDispatch()
+    }
+    for (const selection of [null, 'a', [1], ['../a'], ['']]) {
+      const response = await f.requestAs(null, '/api/ask-estate', estateInit(selection))
+      expect(response.status).toBe(400)
+      await response.text()
+      f.assertNoProtectedDispatch()
+    }
+    for (const { slug } of f.stores.tenants.list()) {
+      f.stores.tenants.patch(slug, { accessMode: 'restricted' })
+    }
+    for (
+      const [path, init] of [['/api/tenants', undefined], [
+        '/api/ask-estate',
+        estateInit(),
+      ]] as const
+    ) {
+      const response = await f.requestAs(null, path, init)
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({ error: 'unauthorised' })
+      f.failAudit()
+      const failed = await f.requestAs(null, path, init)
+      expect(failed.status).toBe(500)
+      expect(failed.headers.get('cache-control')).toBe('private, no-store')
+      expect(await failed.json()).toEqual({ error: 'audit_write_failed' })
+      f.recoverAudit()
+      f.assertNoProtectedDispatch()
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('aggregate scoped keys reject before registry enumeration even with an ambient owner', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const prepared = await issueScopedKey(
+      { slug: 'a', label: 'Read', role: 'viewer' },
+      f.creator,
+      f.authorityDependencies(),
+    )
+    prepared.commit()
+    for (const session of [null, f.sessionFor('owner')]) {
+      const context = await f.contextFor(session)
+      const app = buildApp({
+        ...f.stores,
+        provider: f.provider,
+        configuredTenantId: f.tenantId,
+        audience: f.audience,
+        now: f.now,
+        requestContext: () => ({ ...context, requestId: crypto.randomUUID() }),
+        breakGlass: f.rbac.breakGlassService({ environment: 'production' }),
+      })
+      const original = f.stores.tenants.list.bind(f.stores.tenants)
+      let enumerations = 0
+      f.stores.tenants.list = (...args) => {
+        enumerations++
+        return original(...args)
+      }
+      try {
+        for (
+          const [path, init] of [['/api/tenants', {}], [
+            '/api/ask-estate',
+            estateInit(['a']),
+          ]] as const
+        ) {
+          const response = await app.request(path, {
+            ...init,
+            headers: {
+              ...Object.fromEntries(new Headers(init.headers)),
+              authorization: `Bearer ${prepared.key}`,
+            },
+          })
+          expect(response.status).toBe(session ? 403 : 401)
+          expect(await response.json()).toEqual({ error: session ? 'forbidden' : 'unauthorised' })
+          expect(enumerations).toBe(0)
+          f.assertNoProtectedDispatch()
+        }
+      } finally {
+        f.stores.tenants.list = original
+      }
+    }
+    expect(f.database.all("SELECT id FROM audit_events WHERE action='request.denied'"))
+      .toHaveLength(4)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('an allowed provider failure never dispatches to or identifies a hidden estate target', async () => {
+  const f = createEnforcementFixture()
+  try {
+    f.provider.ask = () => {
+      throw new Error('upstream fixture failure')
+    }
+    const response = await f.requestAs(null, '/api/ask-estate', estateInit(['public-a', 'a']))
+    expect(response.status).toBe(200)
+    expect(f.providerCalls.map((call) => (call.args[0] as TenantConfig).slug)).toEqual(['public-a'])
+    const text = await response.text()
+    expect(eventSlugs(text)).toEqual(['public-a'])
+    expect(text).toContain('"type":"error"')
+    expect(text).toContain('estate-done')
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('local and Durable registry predicates run before metadata projection and propagate failures', () => {
+  const f = createEnforcementFixture()
+  try {
+    const local = new TenantStore({ TENANTS_PATH: `${f.directory}/local-tenants.json` })
+    for (const store of [local, f.stores.tenants]) {
+      const original = store.get.bind(store)
+      store.get = (slug) => {
+        const config = original(slug)
+        return config && new Proxy(config, {
+          get(target, property) {
+            if (property === 'branding') throw new Error('metadata was projected')
+            return Reflect.get(target, property)
+          },
+        })
+      }
+      expect(store.list(false, () => false)).toEqual([])
+      expect(() =>
+        store.list(false, () => {
+          throw new Error('predicate failure')
+        })
+      ).toThrow('predicate failure')
+      store.get = original
+      expect(store.list(false, (config) => config.slug === 'marine').map((row) => row.slug))
+        .toEqual(['marine'])
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('estate cancellation closes the selected provider iterator without consuming hidden targets', async () => {
+  const f = createEnforcementFixture()
+  let count = 0
+  const finished = Promise.withResolvers<void>()
+  try {
+    f.provider.ask = async function* () {
+      try {
+        for (let index = 0; index < 20; index++) {
+          count++
+          yield { type: 'delta' as const, text: 'chunk' }
+        }
+      } finally {
+        finished.resolve()
+      }
+    }
+    const response = await f.requestAs(null, '/api/ask-estate', estateInit(['public-a', 'a']))
+    const reader = response.body!.getReader()
+    expect((await reader.read()).done).toBe(false)
+    await reader.cancel()
+    await finished.promise
+    expect(count).toBeLessThan(20)
+    expect(f.providerCalls.map((call) => (call.args[0] as TenantConfig).slug)).toEqual(['public-a'])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('directory and estate fan-out exclude every hidden portal without poisoning visible targets', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const response = await f.requestAs(null, '/api/tenants')
+    const slugs = (await response.json()).map((row: { slug: string }) => row.slug)
+    expect(slugs).toContain('public-a')
+    expect(slugs).not.toContain('a')
+    expect(slugs).not.toContain('authenticated-a')
+    const estate = await f.requestAs(null, '/api/ask-estate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'Abalone', slugs: ['public-a', 'a'] }),
+    })
+    expect(estate.status).toBe(200)
+    const text = await estate.text()
+    expect(text).toContain('"slug":"public-a"')
+    expect(text).not.toContain('"slug":"a"')
+    expect(
+      f.providerCalls.filter((call) => call.method === 'ask').map((call) =>
+        (call.args[0] as { slug: string }).slug
+      ),
+    ).toEqual(['public-a'])
+  } finally {
+    f.close()
+  }
+})
 
 function readFixture() {
   const calls: string[] = []

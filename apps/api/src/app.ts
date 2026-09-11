@@ -40,6 +40,8 @@ import {
 } from './authorisation.ts'
 import {
   AccessModeSchema,
+  authorize,
+  normalisePrincipal,
   type PortalPolicy,
   PortalPolicySchema,
   type Scope,
@@ -83,7 +85,7 @@ import {
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicErrorMessage, publicSseEvent } from './public-error.ts'
-import { type NewTenantInput, TenantStore, type TenantStoreApi } from './tenants.ts'
+import { type NewTenantInput, TenantStore, type TenantStoreApi, tenantSummary } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
@@ -533,7 +535,10 @@ const summarizeBodySchema = z.object({
   kind: z.enum(['simple', 'extended']).optional(),
 })
 const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) })
-const estateAskSchema = z.object({ query: z.string().min(1).max(2000) })
+const estateAskSchema = z.object({
+  query: z.string().min(1).max(2000),
+  slugs: z.array(KeyPortalSlugSchema).max(100).optional(),
+}).strict()
 const sessionPutSchema = z.object({
   id: z.string().min(1).max(64),
   title: z.string().min(1).max(200),
@@ -901,6 +906,8 @@ interface RequestAuthorisation {
   declared(): Promise<RequestAuthority | null>
   subActions(names: readonly string[]): Promise<RequestAuthority>
   owner(): Promise<ResearchOwner>
+  aggregateAuthority(): Promise<RequestAuthority | null>
+  aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
 }
 const authorisationContextKey = 'corpuskit.authorisation'
 function requestAuthorisation(c: Context): RequestAuthorisation {
@@ -1195,7 +1202,76 @@ export function buildApp(opts: BuildAppOptions): Hono {
       })
       return selection
     }
+    const aggregateAuthority = async () => {
+      const declaration = operation()
+      const scope: Scope = { kind: 'platform' }
+      if (declaration.aggregate !== 'authorised-portals' || declaration.scope !== 'portal') {
+        return deny(scope)
+      }
+      if (
+        !authorityDependencies && !context.session &&
+        !c.req.raw.headers.has('authorization') && !c.req.raw.headers.has('x-admin-passcode')
+      ) return null
+      // Selection rejects every aggregate bearer before any portal enumeration, including
+      // a key accompanied by an otherwise privileged ambient session.
+      return await authority(scope)
+    }
     return {
+      aggregateAuthority,
+      aggregate: async (slugs) => {
+        const selected = await aggregateAuthority()
+        const declaration = operation()
+        const requested = slugs ? new Set(slugs) : undefined
+        const targets: TenantConfig[] = []
+        tenants.list(false, (config) => {
+          const slug = config.slug
+          if (requested && !requested.has(slug)) return false
+          if (!AccessModeSchema.safeParse(config.accessMode).success) return false
+          const policy = {
+            slug,
+            accessMode: config.accessMode,
+            configuredTenantId: opts.configuredTenantId,
+          }
+          // Candidate filtering is pure: a hidden portal must not latch a request denial.
+          const principal = selected?.kind === 'break-glass'
+            ? normalisePrincipal({
+              kind: 'user',
+              tenantId: opts.configuredTenantId,
+              oid: 'break-glass',
+            }, { platformRole: 'owner', portalRoles: [] })
+            : normalisePrincipal(
+              selected?.kind === 'session'
+                ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
+                : { kind: 'anonymous' },
+              selected?.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
+              policy,
+            )
+          const allowed = selected
+            ? authorize(principal, declaration.permission, { kind: 'portal', slug })
+            : config.accessMode === 'public' && !isPrivileged(declaration)
+          if (allowed) targets.push(config)
+          return allowed
+        })
+        if (targets.length === 0) return deny({ kind: 'platform' })
+        // Terminal guards run only after the complete candidate set is filtered.
+        if (selected) {
+          try {
+            for (const config of targets) {
+              authoriseOperation(selected, declaration.permission, {
+                kind: 'portal',
+                slug: config.slug,
+              }, {
+                slug: config.slug,
+                accessMode: config.accessMode,
+                configuredTenantId: opts.configuredTenantId,
+              })
+            }
+          } finally {
+            if (context.denialAudited) markDenialAudited(c.req.raw)
+          }
+        }
+        return targets
+      },
       declared: async () => {
         const { declaration, scope, policy, publicPortal } = target()
         if (declaration.scope === 'public') return null
@@ -1347,7 +1423,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
     // Portal modes and assignments are mutable, even for currently public bytes.
-    if (c.req.path.startsWith('/api/t/')) c.header('Cache-Control', 'private, no-store')
+    if (
+      c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
+      c.req.path === '/api/ask-estate'
+    ) c.header('Cache-Control', 'private, no-store')
   })
   registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)
@@ -1458,6 +1537,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     ) await authoriseDeclared(c)
     await next()
   })
+
+  for (const path of ['/api/tenants', '/api/ask-estate']) {
+    registerInfrastructure(app, path, async (c, next) => {
+      await requestAuthorisation(c).aggregateAuthority()
+      await next()
+    })
+  }
 
   registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)
@@ -1595,7 +1681,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
   })
 
-  app.get(declaredRoute('GET', '/api/tenants'), (c) => c.json(tenants.list()))
+  app.get(declaredRoute('GET', '/api/tenants'), async (c) => {
+    const targets = await requestAuthorisation(c).aggregate()
+    return c.json(targets.map(tenantSummary))
+  })
 
   const brandingDir = opts.brandingPath ?? process.env.BRANDING_PATH ?? './data/branding'
   const BRANDING_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg'] as const
@@ -2885,9 +2974,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
-    const targets = tenants.list().map((t) => tenants.get(t.slug)).filter(
-      (t): t is TenantConfig => t !== undefined,
-    )
+    const targets = await requestAuthorisation(c).aggregate(parsed.data.slugs)
     return streamSSE(c, async (stream) => {
       let chain: Promise<void> = Promise.resolve()
       const write = (slug: string, event: unknown) => {
@@ -2899,9 +2986,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return chain
       }
       await Promise.all(targets.map(async (config) => {
+        if (stream.aborted || c.req.raw.signal.aborted) return
         const record = { citations: 0, groundedness: null as number | null, failed: false }
         try {
           for await (const event of provider.ask(config, parsed.data.query, {})) {
+            if (stream.aborted || c.req.raw.signal.aborted) return
             if (event.type === 'citation') record.citations += 1
             if (event.type === 'quality') record.groundedness = event.groundedness
             if (event.type === 'error') record.failed = true
@@ -2913,6 +3002,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             }
           }
         } catch (err) {
+          if (stream.aborted || c.req.raw.signal.aborted) return
           record.failed = true
           await write(config.slug, {
             type: 'error',
@@ -2936,6 +3026,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }
       }))
       await chain
+      if (stream.aborted || c.req.raw.signal.aborted) return
       await stream.writeSSE({
         data: JSON.stringify({ slug: null, event: { type: 'estate-done' } }),
       })
