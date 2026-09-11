@@ -152,6 +152,7 @@ function ManageContent() {
                   'overview',
                   'insights',
                   'taxonomy',
+                  'graph',
                   'appearance',
                   'behaviour',
                 ].includes(
@@ -292,10 +293,10 @@ function ManageContent() {
                 </div>
               )}
 
-              {coarseAdminEligible && tab === 'graph' && (
-                <div className='rp-card p-5'>
+              {tab === 'graph' && (
+                <div className='min-w-0'>
                   {reachable
-                    ? <KgPanel slug={slug} passcode='microsoft-sso' open={tab === 'graph'} />
+                    ? <KgPanel slug={slug} open={tab === 'graph'} />
                     : (
                       <p className='text-sm text-ink-3'>
                         Connect a knowledge box to build a knowledge graph.

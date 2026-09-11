@@ -51,7 +51,7 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const marker = `pages-${crypto.randomUUID()}`
-    const directory = `.planning/logs/02-12-${marker}`
+    const directory = `.planning/logs/02-13-${marker}`
     await Deno.mkdir(directory, { recursive: true })
     const root = Deno.cwd()
     // Bundle real page components; only their network responses and outlet config are fixtures.
@@ -146,6 +146,17 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let behaviourActive = false
     let behaviourMalformed = false
     let promptText = 'Answer with cited research.'
+    let graphComplete = true
+    let graphMalformed = false
+    let graphAgentTitle = 'Research graph'
+    const graphStrategy = {
+      entityDefs: [{ label: 'Person', description: 'Research participants' }],
+      examples: Array.from({ length: 6 }, (_, index) => ({
+        text: `Alex works with Sam on research ${index + 1}.`,
+        entities: [{ name: 'Alex', label: 'Person' }, { name: 'Sam', label: 'Person' }],
+        relations: [{ source: 'Alex', target: 'Sam', label: 'works with' }],
+      })),
+    }
     const source = {
       id: 'source-one',
       url: 'https://example.invalid/research',
@@ -197,6 +208,33 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         if (url.pathname.includes('/labelsets')) {
           taxonomyBodies.push(await request.json())
           return Response.json({ ok: true, id: 'region', agents: [] })
+        }
+        if (url.pathname.endsWith('/kg/propose')) {
+          if (graphMalformed) return Response.json({ rationale: 'Invalid response' })
+          return Response.json({
+            rationale: 'Connect research participants.',
+            entityTypes: [],
+            resourceLabels: [],
+            chunkLabels: [],
+          })
+        }
+        if (url.pathname.endsWith('/agents')) {
+          return Response.json([{ id: 'agent-one', task: 'graph', title: graphAgentTitle }])
+        }
+        if (url.pathname.endsWith('/kg/strategy') && request.method === 'GET') {
+          return Response.json({ strategy: graphStrategy })
+        }
+        if (
+          url.pathname.endsWith('/kg/implement') ||
+          (url.pathname.endsWith('/kg/strategy') && request.method === 'PUT')
+        ) {
+          return new Response(
+            [
+              { type: 'stage', label: 'Preparing graph agents' },
+              ...(graphComplete ? [{ type: 'done', agents: 1 }] : []),
+            ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'content-type': 'text/event-stream' } },
+          )
         }
         if (url.pathname.includes('/branding/')) {
           brandingUploads.push({
@@ -478,6 +516,62 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Knowledge graph')
+          await page!.waitForSelector('[data-graph-read=agents]')
+          await explicitAction(() => clickText(page!, 'Propose strategy'), 'graph-propose')
+          await explicitAction(() => clickText(page!, 'Implement strategy'), 'graph-implement')
+          await explicitAction(() => click(page!, '[data-graph-read=agents]'), 'graph-agents')
+          await explicitAction(() => clickText(page!, 'Remove'), 'graph-remove-agent')
+          await explicitAction(() => click(page!, '[data-graph-read=strategy]'), 'graph-strategy')
+          await fill(page!, 'input[placeholder="Description (optional)"]', 'Research people')
+          await explicitAction(() => clickText(page!, 'Save and re-register agent'), 'graph-save')
+          await capture(`graph-editor-${palette}-${width}`)
+          await page!.evaluate(() => scrollTo(0, 0))
+          await capture(`graph-header-${palette}-${width}`)
+          await page!.evaluate(() => scrollTo(0, document.body.scrollHeight))
+          await capture(`graph-examples-${palette}-${width}`)
+          graphComplete = false
+          await clickText(page!, 'Implement strategy')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await capture(`graph-uncertain-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          graphComplete = true
+          graphMalformed = true
+          await clickText(page!, 'Propose strategy')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await click(page!, '[data-emergency-cancel]')
+          graphMalformed = false
+        }
+      }
+      state.capability = 'session'
+      await open('manage')
+      await page!.waitForSelector('[data-admin-overview]')
+      await clickText(page!, 'Knowledge graph')
+      await page!.waitForSelector('input[placeholder="Description (optional)"]')
+      await click(page!, '[data-graph-read=agents]')
+      await click(page!, '[data-graph-read=strategy]')
+      graphAgentTitle = 'Refreshed graph agent'
+      graphStrategy.entityDefs[0]!.description = 'Refreshed research participants'
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+      await settle(page!)
+      expect(await page!.evaluate(() => document.body.textContent)).toContain(graphAgentTitle)
+      expect(
+        await page!.evaluate(() =>
+          document.querySelector<HTMLInputElement>('input[placeholder="Description (optional)"]')!
+            .value
+        ),
+      ).toBe(graphStrategy.entityDefs[0]!.description)
+      expect(requests.slice(-4).every((request) => !request.emergency)).toBe(true)
       behaviourActive = true
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
