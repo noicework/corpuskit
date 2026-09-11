@@ -42,9 +42,11 @@ import {
   type NewTenantInput,
   tenantConfig,
   type TenantPatch,
+  tenantRecord,
   type TenantStoreApi,
   tenantSummaries,
   tenantSummary,
+  validateTenantPatch,
   withPlatformHostname,
 } from '../../api/src/tenants.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -309,6 +311,7 @@ export class DurableState {
       return JSON.parse(row.value) as T
     } catch (error) {
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
+      if (key === 'tenants') throw new Error('Invalid persisted portal configuration')
       return fallback
     }
   }
@@ -647,8 +650,8 @@ const displayId = (binding: KbBinding) =>
 const truncate = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…` : id)
 
 interface TenantState {
-  custom: Record<string, TenantConfig>
-  overrides: Record<string, TenantPatch>
+  custom: Record<string, unknown>
+  overrides: Record<string, unknown>
   disabled: string[]
 }
 
@@ -663,15 +666,10 @@ export class DurableTenantStore implements TenantStoreApi {
   constructor(private readonly state: DurableState) {}
 
   private load(): TenantState {
-    const raw = this.state.get<Partial<TenantState>>('tenants', {})
-    const custom: Record<string, TenantConfig> = {}
-    for (const [slug, value] of Object.entries(raw.custom ?? {})) {
-      const parsed = TenantConfigSchema.safeParse(value)
-      if (parsed.success) custom[slug] = parsed.data
-    }
+    const raw = tenantRecord(this.state.get<unknown>('tenants', {}))
     return {
-      custom,
-      overrides: raw.overrides ?? {},
+      custom: Object.hasOwn(raw, 'custom') ? tenantRecord(raw.custom) : {},
+      overrides: Object.hasOwn(raw, 'overrides') ? tenantRecord(raw.overrides) : {},
       disabled: Array.isArray(raw.disabled) ? raw.disabled : [],
     }
   }
@@ -690,16 +688,25 @@ export class DurableTenantStore implements TenantStoreApi {
 
   get(slug: string): TenantConfig | undefined {
     const data = this.load()
-    const base = tenantConfig(slug) ?? data.custom[slug]
+    const custom = Object.hasOwn(data.custom, slug)
+      ? TenantConfigSchema.parse(data.custom[slug])
+      : undefined
+    if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
+    const base = tenantConfig(slug) ?? custom
     if (!base) return undefined
-    const override = data.overrides[slug]
-    if (!override) return withPlatformHostname(base)
+    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base)
+    const override = validateTenantPatch(data.overrides[slug])
     const { prompts: _prompts, ...configPatch } = override
-    return withPlatformHostname({ ...base, ...configPatch })
+    return withPlatformHostname(TenantConfigSchema.parse({ ...base, ...configPatch }))
   }
 
   promptsFor(slug: string): { ask?: string; images?: boolean } {
-    return this.load().overrides[slug]?.prompts ?? {}
+    this.get(slug)
+    return this.existingPatch(this.load(), slug).prompts ?? {}
+  }
+
+  private existingPatch(data: TenantState, slug: string): TenantPatch {
+    return Object.hasOwn(data.overrides, slug) ? validateTenantPatch(data.overrides[slug]) : {}
   }
 
   isCustom(slug: string): boolean {
@@ -747,25 +754,37 @@ export class DurableTenantStore implements TenantStoreApi {
       ...(branding.density ? { density: branding.density } : {}),
       ...(branding.paletteId ? { paletteId: branding.paletteId } : {}),
     }
-    if (data.custom[slug]) data.custom[slug] = { ...data.custom[slug], branding: merged }
-    else data.overrides[slug] = { ...data.overrides[slug], branding: merged }
+    if (data.custom[slug]) {
+      data.custom[slug] = { ...TenantConfigSchema.parse(data.custom[slug]), branding: merged }
+    } else data.overrides[slug] = { ...this.existingPatch(data, slug), branding: merged }
     this.save(data)
   }
 
   patch(slug: string, patch: TenantPatch): void {
+    validateTenantPatch(patch)
+    const base = this.get(slug)
+    if (!base) throw new Error('Unknown portal')
+    TenantConfigSchema.parse({ ...base, ...patch })
     const data = this.load()
-    data.overrides[slug] = { ...data.overrides[slug], ...patch }
+    data.overrides[slug] = { ...this.existingPatch(data, slug), ...patch }
     this.save(data)
   }
 
   list(includeDisabled = false): TenantSummary[] {
     const data = this.load()
-    const rows = [
-      ...tenantSummaries(),
-      ...Object.values(data.custom).map((tenant) =>
-        tenantSummary(this.get(tenant.slug) ?? withPlatformHostname(tenant))
-      ),
-    ]
+    const rows: TenantSummary[] = []
+    const slugs = new Set([
+      ...tenantSummaries().map((row) => row.slug),
+      ...Object.keys(data.custom),
+    ])
+    for (const slug of slugs) {
+      try {
+        const config = this.get(slug)
+        if (config) rows.push(tenantSummary(config))
+      } catch {
+        // Corrupt portal configuration never appears in an aggregate response.
+      }
+    }
     return includeDisabled ? rows : rows.filter((row) => !data.disabled.includes(row.slug))
   }
 

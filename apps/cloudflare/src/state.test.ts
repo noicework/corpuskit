@@ -18,6 +18,91 @@ import type { AuditInput } from '../../api/src/audit.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { executeMcpTool } from '../../api/src/mcp.ts'
 import { SUGGESTED_QUESTIONS_SCHEMA_ID } from '../../api/src/suggested-questions.ts'
+import { tenantConfig, type TenantPatch } from '../../api/src/tenants.ts'
+
+Deno.test('Durable portal policy survives reload and repeated migration for seed and custom portals', () => {
+  const sql = new TestSqlStorage()
+  try {
+    let state = new DurableState(sql, sql)
+    state.migrate()
+    let store = new DurableTenantStore(state)
+    state.put('tenants', {
+      custom: { legacy: { ...tenantConfig('marine'), slug: 'legacy', accessMode: undefined } },
+      overrides: { marine: { searchPlaceholder: 'Legacy seed' } },
+    })
+    expect(store.get('legacy')?.accessMode).toBe('public')
+    expect(store.get('marine')?.accessMode).toBe('public')
+    expect(store.get('marine')?.searchPlaceholder).toBe('Legacy seed')
+    store.add({ name: 'Custom' })
+    expect(store.get('custom')?.accessMode).toBe('public')
+    for (const slug of ['marine', 'custom']) {
+      for (const accessMode of ['public', 'authenticated', 'restricted'] as const) {
+        store.patch(slug, { accessMode })
+        store.setDisabled(slug, true)
+        const branding = store.get(slug)?.branding
+        for (let repeat = 0; repeat < 2; repeat++) {
+          state = new DurableState(sql, sql)
+          state.migrate()
+          store = new DurableTenantStore(state)
+          expect(store.get(slug)?.accessMode).toBe(accessMode)
+          expect(store.get(slug)?.branding).toEqual(branding)
+          expect(store.isDisabled(slug)).toBe(true)
+          expect(store.list().some((item) => item.slug === slug)).toBe(false)
+          expect(store.list(true).some((item) => item.slug === slug)).toBe(true)
+        }
+      }
+    }
+    for (const patch of [{ accessMode: null }, { accessMode: 'private' }, null, []]) {
+      expect(() => store.patch('marine', patch as unknown as TenantPatch)).toThrow()
+      expect(store.get('marine')?.accessMode).toBe('restricted')
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable corrupt policy never exposes seed fallback and survives unrelated writes', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    for (const value of [null, 'private', false, {}, []]) {
+      for (
+        const raw of [
+          { custom: { marine: { ...tenantConfig('marine'), accessMode: value } }, overrides: {} },
+          { custom: {}, overrides: { marine: { accessMode: value } } },
+          ...(value && typeof value === 'object' && !Array.isArray(value)
+            ? []
+            : [{ custom: {}, overrides: { marine: value } }]),
+        ]
+      ) {
+        state.put('tenants', raw)
+        for (let repeat = 0; repeat < 2; repeat++) {
+          const restart = new DurableState(sql, sql)
+          restart.migrate()
+          const store = new DurableTenantStore(restart)
+          expect(() => store.get('marine')).toThrow()
+          expect(store.list(true).some((item) => item.slug === 'marine')).toBe(false)
+          expect(store.get('grains')?.accessMode).toBe('public')
+          store.patch('grains', { searchPlaceholder: 'Still available' })
+        }
+      }
+    }
+    for (const raw of [null, [], { custom: null }, { custom: {}, overrides: [] }]) {
+      state.put('tenants', raw)
+      expect(() => new DurableTenantStore(state).get('marine')).toThrow()
+      expect(() => new DurableTenantStore(state).list()).toThrow()
+    }
+    sql.database.prepare('UPDATE state SET value = ? WHERE key = ?').run('{broken', 'tenants')
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const restarted = new DurableState(sql, sql)
+      restarted.migrate()
+      expect(() => new DurableTenantStore(restarted).get('marine')).toThrow()
+    }
+  } finally {
+    sql.database.close()
+  }
+})
 
 function mutationFixture(management?: AragProvider) {
   const sql = new TestSqlStorage()
