@@ -1,6 +1,13 @@
 import process from 'node:process'
-import { type TenantConfig, TenantConfigSchema, type TenantSummary } from '@research-portal/core'
-import { readJsonSafe, writeJsonAtomic } from './persist.ts'
+import { readFileSync } from 'node:fs'
+import {
+  type AccessMode,
+  AccessModeSchema,
+  type TenantConfig,
+  TenantConfigSchema,
+  type TenantSummary,
+} from '@research-portal/core'
+import { writeJsonAtomic } from './persist.ts'
 
 // ---------------------------------------------------------------------------
 // Seed tenant configs - the single source of truth for tenant-driven theming
@@ -187,6 +194,7 @@ export interface NewTenantInput {
 
 /** Config fields corpus analysis is allowed to rewrite. */
 export interface TenantPatch {
+  accessMode?: AccessMode
   hostname?: TenantConfig['hostname']
   topics?: TenantConfig['topics']
   suggestedQuestions?: TenantConfig['suggestedQuestions']
@@ -201,42 +209,64 @@ export interface TenantPatch {
   intents?: TenantConfig['intents']
 }
 
+/** Never interpret malformed persisted policy as a missing legacy field. */
+export function tenantRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid persisted portal configuration')
+  }
+  return value as Record<string, unknown>
+}
+
+export function validateTenantPatch(value: unknown): TenantPatch {
+  const patch = tenantRecord(value)
+  if (patch.accessMode !== undefined) AccessModeSchema.parse(patch.accessMode)
+  return patch as TenantPatch
+}
+
 export class TenantStore {
-  private custom: Record<string, TenantConfig> = {}
+  private custom: Record<string, unknown> = {}
   /** Analysis-derived overrides, applicable to seeded portals too. */
-  private overrides: Record<string, TenantPatch> = {}
+  private overrides: Record<string, unknown> = {}
   private disabled = new Set<string>()
   private readonly path: string
 
   constructor(env: Record<string, string | undefined> = process.env) {
     this.path = env.TENANTS_PATH ?? './data/tenants.json'
-    const raw = readJsonSafe<Record<string, unknown>>(this.path, {})
+    let raw: Record<string, unknown>
+    try {
+      raw = tenantRecord(JSON.parse(readFileSync(this.path, 'utf8')))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      raw = {}
+    }
     // v2 format: { custom, overrides, disabled }. v1 was a bare custom map.
-    const customSource = (raw.custom ?? raw) as Record<string, unknown>
-    for (const [slug, value] of Object.entries(customSource)) {
-      const parsed = TenantConfigSchema.safeParse(value)
-      if (parsed.success) this.custom[slug] = parsed.data
-    }
-    if (raw.overrides && typeof raw.overrides === 'object') {
-      this.overrides = raw.overrides as Record<string, TenantPatch>
-    }
+    this.custom = tenantRecord(Object.hasOwn(raw, 'custom') ? raw.custom : raw)
+    if (Object.hasOwn(raw, 'overrides')) this.overrides = tenantRecord(raw.overrides)
     if (Array.isArray(raw.disabled)) {
       this.disabled = new Set(raw.disabled.filter((s): s is string => typeof s === 'string'))
     }
   }
 
   get(slug: string): TenantConfig | undefined {
-    const base = tenantsBySlug[slug] ?? this.custom[slug]
+    // Validate even a shadowed custom record: corruption cannot reveal a seed.
+    const custom = Object.hasOwn(this.custom, slug)
+      ? TenantConfigSchema.parse(this.custom[slug])
+      : undefined
+    if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
+    const base = tenantsBySlug[slug] ?? custom
     if (!base) return undefined
-    const override = this.overrides[slug]
-    if (!override) return withPlatformHostname(base)
+    if (!Object.hasOwn(this.overrides, slug)) return withPlatformHostname(base)
+    const override = validateTenantPatch(this.overrides[slug])
     const { prompts: _prompts, ...configPatch } = override
-    return withPlatformHostname({ ...base, ...configPatch })
+    return withPlatformHostname(TenantConfigSchema.parse({ ...base, ...configPatch }))
   }
 
   /** App-side settings that never reach the public config payload. */
   promptsFor(slug: string): { ask?: string; images?: boolean } {
-    return this.overrides[slug]?.prompts ?? {}
+    this.get(slug)
+    return Object.hasOwn(this.overrides, slug)
+      ? validateTenantPatch(this.overrides[slug]).prompts ?? {}
+      : {}
   }
 
   isCustom(slug: string): boolean {
@@ -283,26 +313,37 @@ export class TenantStore {
       ...(branding.paletteId ? { paletteId: branding.paletteId } : {}),
     }
     if (this.custom[slug]) {
-      this.custom[slug] = { ...this.custom[slug], branding: merged }
+      this.custom[slug] = { ...TenantConfigSchema.parse(this.custom[slug]), branding: merged }
     } else {
-      this.overrides[slug] = { ...this.overrides[slug], branding: merged }
+      this.overrides[slug] = { ...this.existingPatch(slug), branding: merged }
     }
     this.persist()
   }
 
   /** Apply analysis-derived config (topics, questions, placeholder). */
   patch(slug: string, patch: TenantPatch): void {
-    this.overrides[slug] = { ...this.overrides[slug], ...patch }
+    validateTenantPatch(patch)
+    const base = this.get(slug)
+    if (!base) throw new Error('Unknown portal')
+    TenantConfigSchema.parse({ ...base, ...patch })
+    this.overrides[slug] = { ...this.existingPatch(slug), ...patch }
     this.persist()
   }
 
+  private existingPatch(slug: string): TenantPatch {
+    return Object.hasOwn(this.overrides, slug) ? validateTenantPatch(this.overrides[slug]) : {}
+  }
+
   list(includeDisabled = false): TenantSummary[] {
-    const all = [
-      ...tenantSummaries(),
-      ...Object.values(this.custom).map((tenant) =>
-        tenantSummary(this.get(tenant.slug) ?? withPlatformHostname(tenant))
-      ),
-    ]
+    const all: TenantSummary[] = []
+    for (const slug of new Set([...Object.keys(tenantsBySlug), ...Object.keys(this.custom)])) {
+      try {
+        const config = this.get(slug)
+        if (config) all.push(tenantSummary(config))
+      } catch {
+        // A corrupt portal is unavailable, including in aggregate listings.
+      }
+    }
     return includeDisabled ? all : all.filter((t) => !this.disabled.has(t.slug))
   }
 

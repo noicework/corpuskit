@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { PaletteChoiceSchema } from './palettes.ts'
+import { AccessModeSchema } from './rbac.ts'
 
 // ---------------------------------------------------------------------------
 // Tenant configuration - the single document that drives the whole portal UI.
@@ -378,6 +379,7 @@ export const TenantSummarySchema = z.object({
 
 export const TenantConfigSchema = z.object({
   slug: z.string().min(1),
+  accessMode: AccessModeSchema.default('public'),
   /** Present only when this portal has a working dedicated hostname. */
   hostname: TenantHostnameSchema.optional(),
   branding: BrandingSchema,
