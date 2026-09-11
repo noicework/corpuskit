@@ -2,6 +2,7 @@ import {
   DECLARATIONS,
   declaredRoute,
   declaredSubAction,
+  infrastructureHandler,
   isPrivileged,
   registerInfrastructure,
 } from './permissions.ts'
@@ -1066,11 +1067,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const askPerMinPerIp = opts.rateLimitAskPerMinPerIp ??
     Number(process.env.RATE_LIMIT_ASK_PER_MIN_IP ?? askPerMin * 5)
   const expensiveIpLimiter = new SlidingWindowLimiter({ limit: askPerMinPerIp, windowMs: 60_000 })
-  const expensiveRateLimit = rateLimitLayered([
+  const expensiveRateLimit = infrastructureHandler(rateLimitLayered([
     { limiter: expensiveLimiter, keyFn: clientKey },
     { limiter: expensiveIpLimiter, keyFn: clientIp },
-  ])
-  const estateRateLimit = rateLimit(estateLimiter, clientIp)
+  ]))
+  const estateRateLimit = infrastructureHandler(rateLimit(estateLimiter, clientIp))
 
   // Baseline security headers on every response. Deliberately narrow for now:
   // frame-ancestors only, not a full CSP - the app legitimately loads

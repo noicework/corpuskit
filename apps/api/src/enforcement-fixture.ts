@@ -10,6 +10,19 @@ import { type TrustedSessionFacts, validSessionFacts } from './principal.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import type { SqlValue } from './rbac-state.ts'
 import { tenantConfig } from './tenants.ts'
+import { type Declaration, declarationFor } from './permissions.ts'
+
+/** Expectations are supplied independently by each activated route family's fixtures. */
+export function assertExpectedPermission(
+  method: string,
+  path: string,
+  permission: Permission,
+  scope: Declaration['scope'],
+): void {
+  const declaration = declarationFor(method, path)
+  expect(declaration.permission).toBe(permission)
+  expect(declaration.scope).toBe(scope)
+}
 
 export interface ProviderCall {
   method: string

@@ -3,6 +3,7 @@ import {
   DECLARATIONS,
   declaredRoute,
   declaredTool,
+  infrastructureHandler,
   isPrivileged,
 } from './permissions.ts'
 import { coarseAdminEligibility } from './assignments.ts'
@@ -494,46 +495,50 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     return context.json({ ok: true })
   })
 
-  app.all(declaredRoute('ALL', MCP_ROUTE), authRateLimit, async (context) => {
-    const slug = context.req.param('slug')
-    const request = opts.requestContext?.(context.req.raw)
-    if (request && context.req.header('authorization')) request.actor = { kind: 'legacy-key' }
-    const credential = await verifyMcpCredential(
-      opts.keys,
-      slug,
-      context.req.header('authorization'),
-    )
-    if (!credential) {
-      context.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
-      context.header('cache-control', 'no-store')
-      return context.json({ error: 'unauthorised' }, 401)
-    }
-    const actor: AuditActor = { kind: 'legacy-key', id: credential.id }
-    if (request) request.actor = actor
-    if (context.req.method !== 'POST') {
-      context.header('allow', 'POST')
-      context.header('cache-control', 'no-store')
-      return context.json({ error: 'method_not_allowed' }, 405)
-    }
-    if (!opts.tenant(slug)) return context.json({ error: 'unknown_tenant' }, 404)
+  app.all(
+    declaredRoute('ALL', MCP_ROUTE),
+    infrastructureHandler(authRateLimit),
+    async (context) => {
+      const slug = context.req.param('slug')
+      const request = opts.requestContext?.(context.req.raw)
+      if (request && context.req.header('authorization')) request.actor = { kind: 'legacy-key' }
+      const credential = await verifyMcpCredential(
+        opts.keys,
+        slug,
+        context.req.header('authorization'),
+      )
+      if (!credential) {
+        context.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
+        context.header('cache-control', 'no-store')
+        return context.json({ error: 'unauthorised' }, 401)
+      }
+      const actor: AuditActor = { kind: 'legacy-key', id: credential.id }
+      if (request) request.actor = actor
+      if (context.req.method !== 'POST') {
+        context.header('allow', 'POST')
+        context.header('cache-control', 'no-store')
+        return context.json({ error: 'method_not_allowed' }, 405)
+      }
+      if (!opts.tenant(slug)) return context.json({ error: 'unknown_tenant' }, 404)
 
-    await connected
-    const auditContext: McpAuditContext = {
-      requestId: request?.requestId ?? crypto.randomUUID(),
-      actor,
-      slug,
-      signal: context.req.raw.signal,
-    }
-    const response = await transport.handleRequest(context.req.raw, {
-      authInfo: {
-        token: 'credential-verified',
-        clientId: credential.issuerUserId,
-        scopes: ['corpus:read'],
-        extra: { tenant: slug, auditContext },
-      },
-    })
-    // The SDK converts callback exceptions into protocol errors; mandatory audit errors remain HTTP failures.
-    if (auditContext.mandatoryFailure) throw auditContext.mandatoryFailure
-    return withNoStore(response)
-  })
+      await connected
+      const auditContext: McpAuditContext = {
+        requestId: request?.requestId ?? crypto.randomUUID(),
+        actor,
+        slug,
+        signal: context.req.raw.signal,
+      }
+      const response = await transport.handleRequest(context.req.raw, {
+        authInfo: {
+          token: 'credential-verified',
+          clientId: credential.issuerUserId,
+          scopes: ['corpus:read'],
+          extra: { tenant: slug, auditContext },
+        },
+      })
+      // The SDK converts callback exceptions into protocol errors; mandatory audit errors remain HTTP failures.
+      if (auditContext.mandatoryFailure) throw auditContext.mandatoryFailure
+      return withNoStore(response)
+    },
+  )
 }

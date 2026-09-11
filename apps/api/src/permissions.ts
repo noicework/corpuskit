@@ -1,5 +1,6 @@
 import type { Permission } from '@research-portal/core'
-import type { Hono, MiddlewareHandler } from 'hono'
+import type { Context, Hono, MiddlewareHandler } from 'hono'
+import { matchedRoutes } from 'hono/route'
 import type { AuditActor } from './audit.ts'
 
 export interface SubAction {
@@ -15,6 +16,10 @@ export interface Declaration {
   readonly permission: Permission
   readonly scope: 'portal' | 'platform' | 'public'
   readonly reason?: string
+  readonly portalTarget?: 'url-slug'
+  readonly aggregate?: 'authorised-portals'
+  readonly safeMetadata?: true
+  readonly owned?: 'research'
   readonly action: 'request.privileged' | 'local.mutation'
   readonly target: { readonly kind: 'request' | 'tool'; readonly param?: string }
   readonly subActions?: readonly SubAction[]
@@ -26,7 +31,12 @@ function entry(
   path: string,
   permission: Permission,
   scope: Declaration['scope'],
-  extra: Partial<Pick<Declaration, 'reason' | 'subActions' | 'detailFields'>> = {},
+  extra: Partial<
+    Pick<
+      Declaration,
+      'reason' | 'subActions' | 'detailFields' | 'aggregate' | 'safeMetadata' | 'owned'
+    >
+  > = {},
 ): Declaration {
   return Object.freeze({
     kind,
@@ -34,6 +44,7 @@ function entry(
     path,
     permission,
     scope,
+    ...(scope === 'portal' && path.includes(':slug') ? { portalTarget: 'url-slug' as const } : {}),
     action: kind === 'local' ? 'local.mutation' : 'request.privileged',
     target: Object.freeze({
       kind: kind === 'mcp' ? 'tool' : 'request',
@@ -104,10 +115,14 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/health', 'portal.read', 'public', {
     reason: 'Health only; no research or administrative state.',
   }),
-  entry('http', 'GET', '/api/tenants', 'portal.read', 'public', {
-    reason: 'Current public portal directory compatibility; no new non-public mode in Phase 2.',
+  entry('http', 'GET', '/api/tenants', 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
   }),
-  entry('http', 'GET', '/api/t/:slug/config', 'portal.read', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/config', 'portal.read', 'portal', {
+    safeMetadata: true,
+    reason:
+      'D9 permits only the safe pre-auth projection without portal.read; full config remains protected.',
+  }),
   entry('http', 'GET', '/api/t/:slug/branding/:kind', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/thumbnail', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/search', 'portal.read', 'portal'),
@@ -144,29 +159,53 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/t/:slug/summarize', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/subqueries', 'portal.generate', 'portal'),
   entry('http', 'GET', '/api/t/:slug/entity', 'portal.read', 'portal'),
-  entry('http', 'GET', '/api/t/:slug/sessions', 'portal.ask', 'portal'),
-  entry('http', 'GET', '/api/t/:slug/sessions/:id', 'portal.ask', 'portal'),
-  entry('http', 'PUT', '/api/t/:slug/sessions/:id', 'portal.ask', 'portal'),
-  entry('http', 'DELETE', '/api/t/:slug/sessions/:id', 'portal.ask', 'portal'),
-  entry('http', 'GET', '/api/t/:slug/watches', 'portal.read', 'portal'),
-  entry('http', 'POST', '/api/t/:slug/watches', 'portal.watch', 'portal'),
-  entry('http', 'POST', '/api/t/:slug/watches/:id/seen', 'portal.watch', 'portal'),
-  entry('http', 'DELETE', '/api/t/:slug/watches/:id', 'portal.watch', 'portal'),
-  entry('http', 'POST', '/api/ask-estate', 'portal.ask', 'public', {
-    reason: 'Current public estate ask compatibility; Phase 3 must scope non-public portals.',
+  entry('http', 'GET', '/api/t/:slug/sessions', 'portal.ask', 'portal', { owned: 'research' }),
+  entry('http', 'GET', '/api/t/:slug/sessions/:id', 'portal.ask', 'portal', { owned: 'research' }),
+  entry('http', 'PUT', '/api/t/:slug/sessions/:id', 'portal.ask', 'portal', { owned: 'research' }),
+  entry('http', 'DELETE', '/api/t/:slug/sessions/:id', 'portal.ask', 'portal', {
+    owned: 'research',
   }),
-  entry('http', 'GET', '/api/t/:slug/investigations', 'portal.read', 'portal'),
-  entry('http', 'POST', '/api/t/:slug/investigations', 'portal.investigate', 'portal'),
-  entry('http', 'GET', '/api/t/:slug/investigations/:id', 'portal.read', 'portal'),
-  entry('http', 'PATCH', '/api/t/:slug/investigations/:id', 'portal.investigate', 'portal'),
-  entry('http', 'DELETE', '/api/t/:slug/investigations/:id', 'portal.investigate', 'portal'),
-  entry('http', 'POST', '/api/t/:slug/investigations/:id/evidence', 'portal.investigate', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/watches', 'portal.read', 'portal', { owned: 'research' }),
+  entry('http', 'POST', '/api/t/:slug/watches', 'portal.watch', 'portal', { owned: 'research' }),
+  entry('http', 'POST', '/api/t/:slug/watches/:id/seen', 'portal.watch', 'portal', {
+    owned: 'research',
+  }),
+  entry('http', 'DELETE', '/api/t/:slug/watches/:id', 'portal.watch', 'portal', {
+    owned: 'research',
+  }),
+  entry('http', 'POST', '/api/ask-estate', 'portal.ask', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('http', 'GET', '/api/t/:slug/investigations', 'portal.read', 'portal', {
+    owned: 'research',
+  }),
+  entry('http', 'POST', '/api/t/:slug/investigations', 'portal.investigate', 'portal', {
+    owned: 'research',
+  }),
+  entry('http', 'GET', '/api/t/:slug/investigations/:id', 'portal.read', 'portal', {
+    owned: 'research',
+  }),
+  entry('http', 'PATCH', '/api/t/:slug/investigations/:id', 'portal.investigate', 'portal', {
+    owned: 'research',
+  }),
+  entry('http', 'DELETE', '/api/t/:slug/investigations/:id', 'portal.investigate', 'portal', {
+    owned: 'research',
+  }),
+  entry(
+    'http',
+    'POST',
+    '/api/t/:slug/investigations/:id/evidence',
+    'portal.investigate',
+    'portal',
+    { owned: 'research' },
+  ),
   entry(
     'http',
     'PATCH',
     '/api/t/:slug/investigations/:id/evidence/:eid',
     'portal.investigate',
     'portal',
+    { owned: 'research' },
   ),
   entry(
     'http',
@@ -174,6 +213,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     '/api/t/:slug/investigations/:id/evidence/:eid',
     'portal.investigate',
     'portal',
+    { owned: 'research' },
   ),
   entry(
     'http',
@@ -181,6 +221,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     '/api/t/:slug/investigations/:id/artefacts',
     'portal.investigate',
     'portal',
+    { owned: 'research' },
   ),
   entry(
     'http',
@@ -188,6 +229,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     '/api/t/:slug/investigations/:id/synthesise',
     'portal.investigate',
     'portal',
+    { owned: 'research' },
   ),
   entry('http', 'POST', '/api/t/:slug/verdicts', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/followups', 'portal.generate', 'portal'),
@@ -305,10 +347,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
 ])
 
 export function declarationFor(method: string, path: string): Declaration {
-  const normal = method === 'HEAD' ? 'GET' : method
-  const declaration = DECLARATIONS.find((item) =>
-    item.kind === 'http' && item.path === path && (item.method === normal || item.method === 'ALL')
-  )
+  const normal = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
+  const candidates = DECLARATIONS.filter((item) => item.kind === 'http' && item.path === path)
+  const declaration = candidates.find((item) => item.method === normal) ??
+    candidates.find((item) => item.method === 'ALL')
   if (!declaration) throw new Error('Missing route permission declaration')
   return declaration
 }
@@ -345,17 +387,45 @@ export function isPrivileged(declaration: Declaration, actor?: AuditActor): bool
 
 /** Only these registered handler identities are infrastructure, never an application prefix. */
 const middleware = new WeakSet<MiddlewareHandler>()
-export function registerInfrastructure(app: Hono, path: string, handler: MiddlewareHandler): void {
+export function infrastructureHandler<T extends MiddlewareHandler>(handler: T): T {
   middleware.add(handler)
-  app.use(path, handler)
+  return handler
 }
-export function assertRouteInventory(app: Hono): void {
-  const actual = new Set(
-    app.routes.filter((route) => !middleware.has(route.handler))
-      .map((route) => `${route.method} ${route.path}`),
-  )
+export function registerInfrastructure(app: Hono, path: string, handler: MiddlewareHandler): void {
+  app.use(path, infrastructureHandler(handler))
+}
+export function assertDeclarationInventory(
+  declarations: readonly Declaration[] = DECLARATIONS,
+): void {
+  const keys = declarations.map((item) => `${item.kind} ${item.method} ${item.path}`)
+  if (new Set(keys).size !== keys.length) throw new Error('Duplicate permission declaration')
+  for (const item of declarations) {
+    if (item.scope === 'public' && !item.reason?.trim()) throw new Error('Missing public reason')
+    const names = item.subActions?.map((action) => action.action) ?? []
+    if (new Set(names).size !== names.length) throw new Error('Duplicate sub-action declaration')
+  }
+}
+assertDeclarationInventory()
+
+/** Resolve Hono's actual operation, excluding only explicitly registered infrastructure identities. */
+export function matchedDeclaration(c: Context): Declaration {
+  const operations = matchedRoutes(c).filter((route) => !middleware.has(route.handler))
+  if (operations.length !== 1) throw new Error('Missing or ambiguous registered operation')
+  const route = operations[0]!
+  return declarationFor(route.method, route.path)
+}
+
+export function assertRouteInventory(
+  app: Hono,
+  declarations: readonly Declaration[] = DECLARATIONS,
+): void {
+  assertDeclarationInventory(declarations)
+  const registrations = app.routes.filter((route) => !middleware.has(route.handler))
+    .map((route) => `${route.method} ${route.path}`)
+  const actual = new Set(registrations)
+  if (actual.size !== registrations.length) throw new Error('Duplicate concrete route registration')
   const declared = new Set(
-    DECLARATIONS.filter((item) => item.kind === 'http')
+    declarations.filter((item) => item.kind === 'http')
       .map((item) => `${item.method} ${item.path}`),
   )
   if (actual.size !== declared.size || [...actual].some((key) => !declared.has(key))) {
