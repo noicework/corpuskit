@@ -107,6 +107,7 @@ function harness(rateLimitMcpAuthPerMin = 60): McpHarness {
     dataDir,
     keys,
     app: buildApp({
+      audit: { append: () => {}, read: () => [] },
       provider: new McpStubProvider(),
       tenants,
       mcpKeys: keys,

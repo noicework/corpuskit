@@ -1,4 +1,11 @@
-import { declaredRoute, declaredSubAction, registerInfrastructure } from './permissions.ts'
+import {
+  DECLARATIONS,
+  declaredRoute,
+  declaredSubAction,
+  isPrivileged,
+  registerInfrastructure,
+} from './permissions.ts'
+import { executeAudited, executeAuditedResponse } from './audit-execution.ts'
 import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
@@ -6,6 +13,7 @@ import { z } from 'zod'
 import { coarseAdminEligibility } from './assignments.ts'
 import {
   appendAudit,
+  type AuditAction,
   type AuditActor,
   type AuditStore,
   AuditWriteError,
@@ -923,6 +931,110 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // while its openers are being written costs one generation, not two.
   const questionsInFlight = new Map<string, Promise<string[]>>()
 
+  // Capture trusted adapter facts once. Route handlers never reconstruct identity from headers.
+  const requestContexts = new WeakMap<Request, PortalRequestContext>()
+  const ingressContexts = new WeakMap<Request, PortalRequestContext>()
+  const requestContext = (request: Request): PortalRequestContext => {
+    const existing = requestContexts.get(request)
+    if (existing) return existing
+    const supplied = opts.requestContext?.(request)
+    if (supplied) ingressContexts.set(request, supplied)
+    const context = supplied ? { ...supplied } : {
+      requestId: crypto.randomUUID(),
+      session: null,
+      coarseAdminEligible: false,
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(context.requestId)) {
+      context.requestId = crypto.randomUUID()
+    }
+    context.actor ??= context.session
+      ? { kind: 'user', id: context.session.oid }
+      : { kind: 'anonymous' }
+    requestContexts.set(request, context)
+    return context
+  }
+  const markDenialAudited = (request: Request) => {
+    requestContext(request).denialAudited = true
+    const ingress = ingressContexts.get(request)
+    if (ingress) ingress.denialAudited = true
+  }
+  const classification = (c: Context) => {
+    const method = c.req.method === 'HEAD' ? 'GET' : c.req.method
+    const declaration = DECLARATIONS.find((d) =>
+      d.kind === 'http' &&
+      (d.method === method || d.method === 'ALL') &&
+      new RegExp(`^${d.path.replace(/:[^/]+/g, '[^/]+').replace(/\*/g, '.*')}$`).test(c.req.path)
+    )
+    const slug = /^\/api\/(?:admin\/)?(?:t|tenants)\/([^/]+)/.exec(c.req.path)?.[1]
+    const targetIndex = declaration?.target.param
+      ? declaration.path.split('/').indexOf(`:${declaration.target.param}`)
+      : -1
+    const targetId = targetIndex >= 0 ? c.req.path.split('/')[targetIndex] : undefined
+    return {
+      declaration,
+      target: {
+        kind: declaration?.target.kind ?? 'request',
+        ...(targetId && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(targetId)
+          ? { id: targetId }
+          : {}),
+      },
+      scope: declaration?.scope === 'portal' && slug
+        ? { kind: 'portal' as const, slug }
+        : { kind: 'platform' as const },
+    }
+  }
+  const requiredAudit = () => {
+    if (!opts.audit) throw new AuditWriteError()
+    return opts.audit
+  }
+  const operationSignals = new WeakMap<Request, AbortSignal>()
+  const subAction = <T>(
+    c: Context,
+    path: string,
+    action: AuditAction,
+    run: () => T | Promise<T>,
+    detail = {},
+  ) =>
+    declaredSubAction(c.req.method, path, action, (declaration) =>
+      executeAudited({
+        audit: requiredAudit(),
+        signal: operationSignals.get(c.req.raw) ?? c.req.raw.signal,
+        input: {
+          requestId: requestContext(c.req.raw).requestId,
+          actor: requestContext(c.req.raw).actor!,
+          action,
+          scope: classification(c).scope,
+          target: { kind: 'request' },
+          detail: { permission: declaration.permission, ...detail },
+        },
+        run,
+      }))
+  registerInfrastructure(app, '*', async (c, next) => {
+    const context = requestContext(c.req.raw)
+    await next()
+    if ((c.res.status === 401 || c.res.status === 403) && !context.denialAudited) {
+      const { declaration, scope } = classification(c)
+      appendAudit(
+        requiredAudit(),
+        createAuditEvent({
+          requestId: context.requestId,
+          actor: context.actor!,
+          action: 'request.denied',
+          scope,
+          target: { kind: 'request' },
+          outcome: 'denied',
+          detail: {
+            code: c.res.status === 401 ? 'unauthorised' : 'forbidden',
+            method: c.req.method,
+            ...(declaration ? { permission: declaration.permission } : {}),
+          },
+        }),
+      )
+      markDenialAudited(c.req.raw)
+    }
+    c.header('x-request-id', context.requestId)
+  })
+
   // Rate limiting for the anonymous, paid-LLM routes - see rate-limit.ts.
   // Publishing this source open publishes the recipe for draining the
   // connected ARAG account unless every such route is throttled per caller.
@@ -982,7 +1094,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Register before every admin handler, including extraction and routing above the old gate.
   registerInfrastructure(app, '/api/admin/*', async (c, next) => {
-    const context = opts.requestContext?.(c.req.raw)
+    const context = requestContext(c.req.raw)
     const requestId = context?.requestId ?? crypto.randomUUID()
     const deny = (status: 401 | 403, code: 'unauthorised' | 'forbidden') => {
       if (!opts.audit) throw new AuditWriteError()
@@ -994,13 +1106,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
             ? { kind: 'user', id: context.session.oid }
             : { kind: 'anonymous' },
           action: 'request.denied',
-          scope: { kind: 'platform' },
+          scope: classification(c).scope,
           target: { kind: 'request' },
           outcome: 'denied',
           detail: { code, method: c.req.method },
         }),
       )
-      if (context) context.denialAudited = true
+      markDenialAudited(c.req.raw)
       return c.json({ error: code }, status)
     }
     if (c.req.raw.headers.has('x-admin-passcode')) {
@@ -1027,13 +1139,49 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return context?.session ? deny(403, 'forbidden') : deny(401, 'unauthorised')
   })
 
+  registerInfrastructure(app, '*', async (c, next) => {
+    const context = requestContext(c.req.raw)
+    const { declaration, scope, target } = classification(c)
+    if (!declaration || !isPrivileged(declaration, context.actor)) {
+      await next()
+      return
+    }
+    const response = await executeAuditedResponse({
+      audit: requiredAudit(),
+      privileged: true,
+      signal: c.req.raw.signal,
+      input: {
+        requestId: context.requestId,
+        actor: context.actor!,
+        action: declaration.action,
+        scope,
+        target,
+        detail: {
+          permission: declaration.permission,
+          method: c.req.method,
+          operation: `${declaration.method} ${declaration.path}`,
+          ...(context.actor?.kind === 'break-glass' && context.session
+            ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
+            : {}),
+        },
+      },
+      run: async (signal) => {
+        operationSignals.set(c.req.raw, signal)
+        await next()
+        return c.res
+      },
+    })
+    // Hono records caught errors in c.error; c.res holds the onError response and real status.
+    c.res = response
+  })
+
   registerMcpRoutes(app, {
     provider,
     tenant,
     keys: mcpKeys,
     trustedUser: opts.requestContext
       ? (request) => {
-        const context = opts.requestContext!(request)
+        const context = requestContext(request)
         return context?.session
           ? { id: context.session.oid, isAdmin: context.coarseAdminEligible === true }
           : null
@@ -2983,19 +3131,35 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = renameTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     if (parsed.data.searchPlaceholder) {
-      tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder })
+      await subAction(
+        c,
+        '/api/admin/tenants/:slug',
+        'tenant.behaviour.update',
+        () => tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
+        { changedFields: 'searchPlaceholder' },
+      )
     }
-    tenants.patchBranding(config.slug, {
-      ...(parsed.data.colours ? { colours: parsed.data.colours } : {}),
-      productName: parsed.data.name,
-      organisation: parsed.data.organisation,
-      tagline: parsed.data.tagline,
-      typography: parsed.data.typography,
-      shape: parsed.data.shape,
-      textScale: parsed.data.textScale,
-      density: parsed.data.density,
-      paletteId: parsed.data.paletteId,
-    })
+    const changedFields = Object.keys(parsed.data).filter((field) => field !== 'searchPlaceholder')
+    if (changedFields.length) {
+      await subAction(
+        c,
+        '/api/admin/tenants/:slug',
+        'tenant.appearance.update',
+        () =>
+          tenants.patchBranding(config.slug, {
+            ...(parsed.data.colours ? { colours: parsed.data.colours } : {}),
+            productName: parsed.data.name,
+            organisation: parsed.data.organisation,
+            tagline: parsed.data.tagline,
+            typography: parsed.data.typography,
+            shape: parsed.data.shape,
+            textScale: parsed.data.textScale,
+            density: parsed.data.density,
+            paletteId: parsed.data.paletteId,
+          }),
+        { changedFields: changedFields.join(',') },
+      )
+    }
     return c.json({ ok: true })
   })
 
@@ -3071,10 +3235,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return c.json({ error: 'already_decided' }, 409)
     }
     try {
-      const summary = await implementSuggestion(management!, config, suggestion)
+      const action = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
+        ? 'suggestion.taxonomy.write'
+        : 'suggestion.graph.write'
+      const summary = await subAction(
+        c,
+        '/api/admin/t/:slug/suggestions/:id/implement',
+        action,
+        () => implementSuggestion(management!, config, suggestion),
+        { suggestionId: suggestion.id, suggestionKind: suggestion.kind },
+      )
       suggestions.setStatus(config.slug, suggestion.id, 'implemented')
       return c.json({ ok: true, summary })
     } catch (err) {
+      if (err instanceof AuditWriteError) throw err
       return c.json({
         error: 'implement_failed',
         message: err instanceof Error ? err.message : 'The suggestion could not be implemented.',

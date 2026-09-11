@@ -94,7 +94,12 @@ function fakeManagement(): AragProvider {
 
 Deno.test('buildApp routes HTTP watch writes through the exact WatchStore instance it was given', async () => {
   const watches = new SpyWatchStore()
-  const app = buildApp({ provider: stubProvider as never, tenants: freshTenants(), watches })
+  const app = buildApp({
+    audit: { append: () => {}, read: () => [] },
+    provider: stubProvider as never,
+    tenants: freshTenants(),
+    watches,
+  })
 
   const response = await app.request('/api/t/marine/watches', {
     method: 'POST',
@@ -113,7 +118,12 @@ Deno.test(
   async () => {
     const tenants = freshTenants()
     const watches = new SpyWatchStore()
-    const app = buildApp({ provider: stubProvider as never, tenants, watches })
+    const app = buildApp({
+      audit: { append: () => {}, read: () => [] },
+      provider: stubProvider as never,
+      tenants,
+      watches,
+    })
 
     await app.request('/api/t/marine/watches', {
       method: 'POST',
