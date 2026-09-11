@@ -1,5 +1,10 @@
 import { expect } from '@std/expect'
-import { AssignmentService, type VerifiedAssignmentSession } from './assignments.ts'
+import {
+  AssignmentService,
+  coarseAdminEligibility,
+  resolveEffectiveRoles,
+  type VerifiedAssignmentSession,
+} from './assignments.ts'
 import { AuditWriteError } from './audit.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
@@ -13,6 +18,189 @@ const owner = (subjectId: string) => ({
   scope: { kind: 'platform' as const },
 })
 const start = Date.UTC(2026, 8, 12)
+
+Deno.test('resolver reads current grants, preserves scope and orders provenance without lowering roles', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const state = new RbacState(db, () => start)
+    state.migrate()
+    const service = state.assignmentService('tenant-1', 'corpuskit')
+    const portals = [{ slug: 'a' }, { slug: 'b' }]
+    const stores = { rbac: state, tenants: { list: () => portals }, audience: 'corpuskit' }
+    db.exec(
+      "INSERT INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',?)",
+      start,
+    )
+    service.create({
+      subjectKind: 'group',
+      subjectId: 'group-1',
+      scope: { kind: 'portal', slug: 'a' },
+      role: 'analyst',
+    }, context)
+    const local = service.create({
+      subjectKind: 'active-oid',
+      subjectId: 'oid-1',
+      scope: { kind: 'portal', slug: 'a' },
+      role: 'curator',
+    }, context)
+    expect(local.ok).toBe(true)
+    const user = session('oid-1', { groups: ['group-1'] })
+    const initial = await resolveEffectiveRoles(user, stores, 'tenant-1', start)
+    expect(initial.effectiveRoles).toEqual({ portalRoles: [{ slug: 'a', role: 'curator' }] })
+    expect(initial.provenance.map((p) => p.source)).toEqual(['group', 'local'])
+    expect(coarseAdminEligibility(initial.effectiveRoles)).toBe(false)
+    if (local.ok) service.change(local.value.id, { role: 'viewer' }, context)
+    expect(
+      (await resolveEffectiveRoles(user, stores, 'tenant-1', start)).effectiveRoles.portalRoles,
+    )
+      .toEqual([{ slug: 'a', role: 'analyst' }])
+    service.create(owner('oid-1'), context)
+    const elevated = await resolveEffectiveRoles(
+      session('oid-1', { roles: ['CorpusKit.Admin'], groups: ['group-1'] }),
+      stores,
+      'tenant-1',
+      start,
+    )
+    expect(elevated.effectiveRoles.platformRole).toBe('owner')
+    expect(elevated.provenance.map((p) => p.source)).toEqual([
+      'app-role',
+      'group',
+      'local',
+      'local',
+    ])
+    expect(elevated.effectiveRoles.portalRoles).toEqual([{ slug: 'a', role: 'portal-admin' }, {
+      slug: 'b',
+      role: 'portal-admin',
+    }])
+    portals.push({ slug: 'new' })
+    expect(
+      (await resolveEffectiveRoles(user, stores, 'tenant-1', start)).effectiveRoles.portalRoles,
+    ).toHaveLength(3)
+    expect(coarseAdminEligibility(elevated.effectiveRoles)).toBe(true)
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('resolver rejects wrong or stale identity and all unavailable group states', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const state = new RbacState(db, () => start)
+    state.migrate()
+    state.assignmentService('tenant-1').create(
+      { ...owner('group-1'), subjectKind: 'group' },
+      context,
+    )
+    const stores = { rbac: state, tenants: { list: () => [{ slug: 'a' }] }, audience: 'corpuskit' }
+    const user = session('oid-1', { groups: ['group-1'] })
+    expect((await resolveEffectiveRoles(user, stores, 'tenant-1', start)).groupCapability).toBe(
+      'disabled',
+    )
+    db.exec(
+      "INSERT INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',?)",
+      start,
+    )
+    for (const status of ['absent', 'malformed', 'overage', 'unverified'] as const) {
+      const result = await resolveEffectiveRoles(
+        { ...user, groupStatus: status },
+        stores,
+        'tenant-1',
+        start,
+      )
+      expect(result.effectiveRoles).toEqual({ portalRoles: [] })
+      expect(result.groupCapability).toBe(status)
+    }
+    expect(
+      (await resolveEffectiveRoles({ ...user, groups: ['bad group'] }, stores, 'tenant-1', start))
+        .groupCapability,
+    ).toBe('malformed')
+    expect(
+      (await resolveEffectiveRoles(
+        user,
+        { ...stores, audience: 'corpuskit-demo' },
+        'tenant-1',
+        start,
+      )).effectiveRoles,
+    ).toEqual({ portalRoles: [] })
+    expect(
+      (await resolveEffectiveRoles(user, stores, 'tenant-1', start)).effectiveRoles.platformRole,
+    ).toBe('owner')
+    for (
+      const overrides of [
+        { tenantId: 'other' },
+        { verified: false as never },
+        { expiresAt: start },
+        { claimIssuedAt: start + 30_001 },
+      ]
+    ) {
+      expect(
+        (await resolveEffectiveRoles(
+          { ...user, roles: ['CorpusKit.Owner'], ...overrides },
+          stores,
+          'tenant-1',
+          start,
+        )).effectiveRoles,
+      ).toEqual({ portalRoles: [] })
+    }
+    expect((await resolveEffectiveRoles(null, stores, 'tenant-1', start)).effectiveRoles).toEqual({
+      portalRoles: [],
+    })
+    expect(coarseAdminEligibility({ portalRoles: [{ slug: 'a', role: 'portal-admin' }] })).toBe(
+      false,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('resolver maps exact app aliases and persists bounded unknown identifiers without claim dumps', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const state = new RbacState(db, () => start)
+    state.migrate()
+    const logs: string[] = []
+    const stores = {
+      rbac: state,
+      tenants: { list: () => [] },
+      audience: 'corpuskit',
+      logUnknownRole: (id: string) => logs.push(id),
+    }
+    for (
+      const [appRole, expected] of [['CorpusKit.Owner', 'owner'], [
+        'CorpusKit.PlatformAdmin',
+        'platform-admin',
+      ], ['CorpusKit.Admin', 'platform-admin']]
+    ) {
+      expect(
+        (await resolveEffectiveRoles(
+          session('oid-1', { roles: [appRole!] }),
+          stores,
+          'tenant-1',
+          start,
+        )).effectiveRoles.platformRole,
+      ).toBe(expected)
+    }
+    const user = session('oid-1', {
+      roles: ['unknown private role', 'CorpusKit.owner', '__proto__'],
+    })
+    expect((await resolveEffectiveRoles(user, stores, 'tenant-1', start)).effectiveRoles).toEqual({
+      portalRoles: [],
+    })
+    await resolveEffectiveRoles(user, { ...stores, rbac: new RbacState(db) }, 'tenant-1', start)
+    expect(logs).toHaveLength(3)
+    expect(logs.every((id) => /^[0-9a-f]{64}$/.test(id))).toBe(true)
+    await resolveEffectiveRoles(
+      session('oid-1', { roles: Array.from({ length: 300 }, (_, i) => `unknown-${i}`) }),
+      stores,
+      'tenant-1',
+      start,
+    )
+    expect(logs).toHaveLength(256)
+    expect(db.all('SELECT identifier FROM rbac_unknown_roles')).toHaveLength(256)
+  } finally {
+    db.close()
+  }
+})
 function session(
   oid: string,
   overrides: Partial<VerifiedAssignmentSession> = {},

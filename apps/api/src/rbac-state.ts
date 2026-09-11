@@ -117,6 +117,40 @@ export class RbacState {
   readonly assignments: AssignmentReader
   readonly locks: RbacStores['locks']
 
+  /** Deployment evidence is configured internally, never by incoming claims. */
+  groupCapability(audience: string): 'disabled' | 'verified-supported' {
+    const row = this.database.all<{ status: string; verified_at: number | null }>(
+      'SELECT status,verified_at FROM rbac_group_capabilities WHERE audience = ?',
+      audience,
+    )[0]
+    return row?.status === 'verified-supported' && Number.isSafeInteger(row.verified_at) &&
+        row.verified_at! >= 0 && row.verified_at! <= this.now()
+      ? 'verified-supported'
+      : 'disabled'
+  }
+
+  /** Persist only a SHA-256 identifier, bounded to 256 first observations per database. */
+  observeUnknownRole(identifier: string): boolean {
+    if (!/^[0-9a-f]{64}$/.test(identifier)) throw new Error('Invalid role identifier')
+    return this.database.transactionSync(() => {
+      if (
+        this.database.all(
+          'SELECT identifier FROM rbac_unknown_roles WHERE identifier = ?',
+          identifier,
+        ).length
+      ) return false
+      this.database.exec(
+        'INSERT OR IGNORE INTO rbac_unknown_roles (identifier,observed_at) VALUES (?,?)',
+        identifier,
+        this.now(),
+      )
+      return this.database.all(
+        'SELECT identifier FROM rbac_unknown_roles WHERE identifier = ?',
+        identifier,
+      ).length === 1
+    })
+  }
+
   /** Internal factory. The configured tenant and deployment audience come from trusted config. */
   assignmentService(configuredTenantId: string, audience?: string): AssignmentService {
     return new AssignmentService(this.database, this.audit, configuredTenantId, this.now, audience)
