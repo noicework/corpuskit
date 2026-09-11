@@ -1,4 +1,5 @@
 import { PERMISSIONS, ROLES, type Scope } from '@research-portal/core'
+import { DECLARATIONS } from './permissions.ts'
 
 export type AuditActor = {
   kind: 'anonymous' | 'user' | 'break-glass' | 'legacy-key' | 'system'
@@ -59,6 +60,7 @@ const codes = [
   'operation_failed',
   'deadline_exceeded',
   'response_too_large',
+  'client_aborted',
 ] as const
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/
 type DetailValue = string | number | boolean
@@ -69,6 +71,9 @@ const count: Validator = (value): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const id: Validator = (value): value is string =>
   typeof value === 'string' && identifier.test(value) && !value.includes('://')
+const declaredFields = DECLARATIONS.flatMap((item) =>
+  item.subActions?.flatMap((action) => action.fields ?? []) ?? []
+)
 const fields = {
   role: member(ROLES),
   previousRole: member(ROLES),
@@ -86,6 +91,18 @@ const fields = {
   lockedUntil: count,
   sessionOid: id,
   sessionTenantId: id,
+  operation: member(DECLARATIONS.flatMap((item) => [
+    `${item.method} ${item.path}`,
+    ...(item.subActions?.map((action) => action.action) ?? []),
+  ])),
+  // Comma-separated names only, never field values or the submitted body.
+  changedFields: (value: unknown): value is string =>
+    typeof value === 'string' && value.length <= 256 &&
+    value.split(',').every((name) => declaredFields.includes(name)),
+  from: id,
+  to: id,
+  suggestionId: id,
+  suggestionKind: member(['labelset', 'label-addition', 'entity-type', 'graph-example']),
   method: member(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']),
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
@@ -97,7 +114,59 @@ const actionFields = {
   'assignment.denied': ['code'],
   'migration.admin_emails': ['count'],
   'request.denied': ['code', 'permission', 'method'],
-  'request.privileged': ['code', 'permission', 'method'],
+  'request.privileged': [
+    'code',
+    'permission',
+    'method',
+    'sessionOid',
+    'sessionTenantId',
+    'operation',
+    'changedFields',
+    'from',
+    'to',
+    'suggestionId',
+    'suggestionKind',
+  ],
+  'resource.questions.generate': ['code', 'permission', 'sessionOid', 'sessionTenantId'],
+  'resource.questions.cache': ['code', 'permission', 'sessionOid', 'sessionTenantId'],
+  'tenant.appearance.update': [
+    'code',
+    'permission',
+    'changedFields',
+    'sessionOid',
+    'sessionTenantId',
+  ],
+  'tenant.behaviour.update': [
+    'code',
+    'permission',
+    'changedFields',
+    'sessionOid',
+    'sessionTenantId',
+  ],
+  'suggestion.graph.write': [
+    'code',
+    'permission',
+    'suggestionKind',
+    'suggestionId',
+    'sessionOid',
+    'sessionTenantId',
+  ],
+  'suggestion.taxonomy.write': [
+    'code',
+    'permission',
+    'suggestionKind',
+    'suggestionId',
+    'sessionOid',
+    'sessionTenantId',
+  ],
+  'suggestion.content.write': [
+    'code',
+    'permission',
+    'suggestionKind',
+    'suggestionId',
+    'sessionOid',
+    'sessionTenantId',
+  ],
   'break_glass.used': ['sessionOid', 'sessionTenantId'],
   'break_glass.failed': ['code', 'count', 'sessionOid', 'sessionTenantId'],
   'break_glass.locked': ['code', 'count', 'lockedUntil', 'sessionOid', 'sessionTenantId'],
