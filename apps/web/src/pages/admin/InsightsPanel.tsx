@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AskInsightRow } from '../../api/client.ts'
 import { getInsights } from '../../api/client.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 
 /** Same relative-time shape as the agentic trace table, applied to ISO timestamps. */
@@ -38,21 +41,43 @@ function StatTile({ label, value }: { label: string; value: string }) {
  * questions the corpus could not ground well, so the librarian knows exactly
  * what content to add next.
  */
-export function InsightsPanel({ slug, passcode }: { slug: string; passcode: string }) {
+export function InsightsPanel({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+  const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getInsights>>>()
+  const [error, setError] = useState<string>()
   const queryClient = useQueryClient()
 
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+  const query = useQuery({
     queryKey: ['admin-insights', slug],
-    queryFn: () => getInsights(slug, passcode),
+    queryFn: () => getInsights(slug, sessionAccess),
+    enabled: coarseAdminEligible,
+    retry: false,
   })
 
-  const onRefresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ['admin-insights', slug] })
-    void refetch()
+  const { isLoading, isError, isFetching } = query
+  const data = coarseAdminEligible ? query.data : snapshot
+  const onRefresh = async () => {
+    setError(undefined)
+    try {
+      const result = await runExplicit('Read ask insights', async (access) => {
+        const insights = await getInsights(slug, access)
+        if (
+          !insights ||
+          ![insights.totalAsks, insights.answered, insights.unanswered].every(Number.isFinite) ||
+          ![insights.topQuestions, insights.gaps, insights.recent].every(Array.isArray)
+        ) throw new AdminAccessError()
+        return insights
+      })
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['admin-insights', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load insights.')
+    }
   }
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-4' data-admin-insights>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
           <h3 className='text-sm font-semibold text-ink'>Insights</h3>
@@ -62,17 +87,23 @@ export function InsightsPanel({ slug, passcode }: { slug: string; passcode: stri
         </div>
         <button
           type='button'
-          disabled={isFetching}
-          onClick={onRefresh}
+          disabled={pending || isFetching}
+          onClick={() => void onRefresh()}
           className='rp-btn rp-btn-outline'
         >
-          {isFetching ? 'Refreshing…' : 'Refresh'}
+          {isFetching ? 'Refreshing…' : 'Refresh insights'}
         </button>
       </div>
 
+      {!coarseAdminEligible && (
+        <p className='text-xs text-ink-3'>
+          Insights are a snapshot. Refresh explicitly to read them again.
+        </p>
+      )}
+      {error && <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
       {isLoading && (
         <div className='space-y-3'>
-          <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+          <div className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
             <Skeleton className='h-16 w-full' />
             <Skeleton className='h-16 w-full' />
             <Skeleton className='h-16 w-full' />
@@ -95,7 +126,7 @@ export function InsightsPanel({ slug, passcode }: { slug: string; passcode: stri
 
       {data && data.totalAsks > 0 && (
         <>
-          <dl className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+          <dl className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
             <StatTile label='Questions asked' value={String(data.totalAsks)} />
             <StatTile label='Answered' value={String(data.answered)} />
             <StatTile label='Unanswered' value={String(data.unanswered)} />
@@ -138,7 +169,12 @@ export function InsightsPanel({ slug, passcode }: { slug: string; passcode: stri
                     <li key={index} className='bg-surface px-4 py-2.5'>
                       <div className='flex flex-wrap items-start justify-between gap-2'>
                         <p className='min-w-0 text-sm text-ink'>{gap.question}</p>
-                        <span className='rp-badge rp-badge-warn shrink-0'>{gap.reason}</span>
+                        <span
+                          className='rp-badge rp-badge-warn shrink-0'
+                          style={{ whiteSpace: 'normal' }}
+                        >
+                          {gap.reason}
+                        </span>
                       </div>
                       <p className='mt-1 text-xs text-ink-3'>{relativeTime(gap.ts)}</p>
                     </li>

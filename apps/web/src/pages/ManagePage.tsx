@@ -145,7 +145,8 @@ function ManageContent() {
             </nav>
 
             <div className='min-w-0'>
-              {!coarseAdminEligible && !['details', 'content'].includes(tab) && (
+              {!coarseAdminEligible &&
+                !['details', 'content', 'overview', 'insights'].includes(tab) && (
                 <div className='rp-card p-5'>
                   <h2 className='text-lg font-semibold'>{row.tenant.productName}</h2>
                   <p className='mt-3 text-sm text-ink-2'>
@@ -157,14 +158,13 @@ function ManageContent() {
                 </div>
               )}
 
-              {coarseAdminEligible && tab === 'overview' && (
+              {tab === 'overview' && (
                 <div className='space-y-4'>
                   {reachable
                     ? (
                       <div className='rp-card p-5'>
                         <StatTiles
                           slug={slug}
-                          passcode='microsoft-sso'
                           resourceCount={row.resourceCount ?? 0}
                         />
                       </div>
@@ -188,21 +188,19 @@ function ManageContent() {
                 </div>
               )}
 
-              {coarseAdminEligible && tab === 'insights' && (
+              {tab === 'insights' && (
                 <div className='rp-card p-5'>
-                  {reachable
-                    ? <InsightsPanel slug={slug} passcode='microsoft-sso' />
-                    : (
-                      <p className='text-sm text-ink-3'>
-                        Connect a knowledge box to see insights.{' '}
-                        <Link
-                          to='/admin'
-                          className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
-                        >
-                          Go to connections
-                        </Link>
-                      </p>
-                    )}
+                  {reachable ? <InsightsPanel slug={slug} /> : (
+                    <p className='text-sm text-ink-3'>
+                      Connect a knowledge box to see insights.{' '}
+                      <Link
+                        to='/admin'
+                        className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
+                      >
+                        Go to connections
+                      </Link>
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -232,9 +230,7 @@ function ManageContent() {
                   <div className='rp-card p-5'>
                     <RecentList slug={slug} />
                   </div>
-                  {reachable && coarseAdminEligible && (
-                    <CorpusHealthPanel slug={slug} passcode='microsoft-sso' />
-                  )}
+                  {reachable && <CorpusHealthPanel slug={slug} />}
                 </div>
               )}
 

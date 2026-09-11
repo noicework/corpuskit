@@ -139,6 +139,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let renameOk = true
     let syncComplete = true
     let syncMalformed = false
+    let malformedRead = false
     const source = {
       id: 'source-one',
       url: 'https://example.invalid/research',
@@ -210,7 +211,48 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         }
         if (url.pathname.endsWith('/recent')) return Response.json(recent)
         if (url.pathname.endsWith('/counters')) {
-          return Response.json({ paragraphs: 12, sentences: 24, indexMb: 1.5 })
+          return Response.json(malformedRead ? {} : { paragraphs: 12, sentences: 24, indexMb: 1.5 })
+        }
+        if (url.pathname.endsWith('/insights')) {
+          return Response.json(
+            malformedRead ? {} : {
+              totalAsks: 3,
+              answered: 2,
+              unanswered: 1,
+              avgGroundedness: 4.2,
+              avgAnswerRelevance: 4.5,
+              topQuestions: [{ question: 'How do research findings help?', count: 2 }],
+              gaps: [{
+                question: 'What evidence is missing?',
+                ts: '2026-09-12',
+                reason: 'Few sources',
+              }],
+              recent: [{
+                ts: '2026-09-12',
+                question: 'How do research findings help?',
+                answered: true,
+                citations: 2,
+                durationSec: 1.2,
+                answerRelevance: 4.5,
+                groundedness: 4.2,
+                contextRelevance: 4,
+              }],
+            },
+          )
+        }
+        if (url.pathname.endsWith('/corpus-health')) {
+          return Response.json(
+            malformedRead ? {} : [
+              { id: 'thin', title: 'Thin research page', words: 8, status: 'thin', hidden: false },
+              {
+                id: 'healthy',
+                title: 'Complete research paper',
+                words: 2400,
+                status: 'ok',
+                hidden: false,
+              },
+            ],
+          )
         }
         if (url.pathname.endsWith('/crawl')) {
           return Response.json({
@@ -310,9 +352,18 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       expect(metrics.bodyFont).toContain('Zilla Slab')
       expect(metrics.lexendLoaded).toBe(true)
       expect(metrics.zillaLoaded).toBe(true)
-      expect(metrics.controlOverflow).toBeLessThanOrEqual(1)
       const screenshot = `${directory}/${name}.png`
       await Deno.writeFile(screenshot, await page!.screenshot())
+      if (metrics.controlOverflow > 1) {
+        console.log(
+          await page!.evaluate(() =>
+            [...document.querySelectorAll<HTMLElement>('.rp-btn, .rp-badge')].filter((el) =>
+              el.scrollWidth - el.clientWidth > 1
+            ).map((el) => ({ text: el.textContent, width: el.clientWidth, scroll: el.scrollWidth }))
+          ),
+        )
+      }
+      expect(metrics.controlOverflow).toBeLessThanOrEqual(1)
       evidence.push({ name, metrics, screenshot })
     }
     async function confirm() {
@@ -323,6 +374,124 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          for (
+            const [section, action, selector, content] of [
+              ['Overview', 'Refresh metrics', '[data-admin-metrics]', '1.5'],
+              [
+                'Insights',
+                'Refresh insights',
+                '[data-admin-insights]',
+                'What evidence is missing?',
+              ],
+              ['Content', 'Scan corpus', '[data-admin-health]', 'Thin research page'],
+            ]
+          ) {
+            const before = requests.length
+            await clickText(page!, section!)
+            await settle(page!)
+            expect(requests.length).toBe(before)
+            await clickText(page!, action!)
+            await page!.waitForSelector('[role=dialog]')
+            expect(requests.length).toBe(before)
+            await click(page!, '[data-emergency-cancel]')
+            expect(requests.length).toBe(before)
+            await clickText(page!, action!)
+            await confirm()
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            expect(requests.at(-1)?.emergency).toBe(true)
+            expect(
+              await page!.evaluate(
+                (selector, content) =>
+                  document.querySelector(selector)!.textContent!.includes(content),
+                {
+                  args: [selector!, content!],
+                },
+              ),
+            ).toBe(true)
+            await page!.evaluate(
+              (selector) => document.querySelector(selector)!.scrollIntoView({ block: 'start' }),
+              { args: [selector!] },
+            )
+            await capture(`reads-${section!.toLowerCase()}-${palette}-${width}`)
+            if (section === 'Insights') {
+              await page!.evaluate(() =>
+                [...document.querySelectorAll('h4')].find((h) =>
+                  h.textContent === 'Knowledge gaps'
+                )!.scrollIntoView({ block: 'center' })
+              )
+              await capture(`reads-insights-detail-${palette}-${width}`)
+            }
+            const repeat = section === 'Content' ? 'Rescan corpus' : action!
+            state.status = 500
+            await clickText(page!, repeat)
+            await confirm()
+            await page!.waitForSelector('[role=dialog] [role=alert]')
+            expect(requests.length).toBe(before + 2)
+            expect(
+              await page!.evaluate(
+                (selector, content) =>
+                  document.querySelector(selector)!.textContent!.includes(content),
+                {
+                  args: [selector!, content!],
+                },
+              ),
+            ).toBe(true)
+            await click(page!, '[data-emergency-cancel]')
+            state.status = 200
+            malformedRead = true
+            await clickText(page!, repeat)
+            await confirm()
+            await page!.waitForSelector('[role=dialog] [role=alert]')
+            expect(requests.length).toBe(before + 3)
+            await click(page!, '[data-emergency-cancel]')
+            malformedRead = false
+            if (section === 'Content') {
+              for (const visibility of ['Hide', 'Publish']) {
+                const beforeToggle = requests.length
+                await clickText(page!, visibility)
+                await page!.waitForSelector('[role=dialog]')
+                await click(page!, '[data-emergency-cancel]')
+                expect(requests.length).toBe(beforeToggle)
+                await clickText(page!, visibility)
+                await confirm()
+                await settle(page!)
+                expect(requests.length).toBe(beforeToggle + 1)
+                expect(requests.at(-1)?.path.endsWith('/hidden')).toBe(true)
+              }
+              await clickText(page!, '1 healthy resource')
+            }
+            const beforeBackground = requests.length
+            await page!.evaluate(() => {
+              dispatchEvent(new Event('fixture-invalidate'))
+              dispatchEvent(new Event('focus'))
+              dispatchEvent(new Event('fixture-inspect'))
+            })
+            await settle(page!)
+            expect(requests.length).toBe(beforeBackground)
+            expect(
+              await page!.evaluate(() =>
+                document.body.dataset.cache!.includes('one-request-test-value')
+              ),
+            ).toBe(false)
+            expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+          }
+          state.capability = 'disabled'
+          await page!.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
+          await page!.waitForSelector('[data-admin-unavailable]')
+          expect(await page!.evaluate(() => document.querySelector('[data-admin-health]'))).toBe(
+            null,
+          )
+        }
+      }
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
           state.capability = 'enabled'
