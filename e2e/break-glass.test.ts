@@ -149,6 +149,17 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let graphComplete = true
     let graphMalformed = false
     let graphAgentTitle = 'Research graph'
+    let analysisComplete = true
+    let suggestionsMalformed = false
+    const suggestions = ['one', 'two'].map((id) => ({
+      id,
+      kind: 'entity-type',
+      title: `Research suggestion ${id}`,
+      detail: 'Add research participants.',
+      status: 'pending',
+      createdAt: '2026-09-12',
+      entityType: { label: 'Person', description: 'Research participants' },
+    }))
     const graphStrategy = {
       entityDefs: [{ label: 'Person', description: 'Research participants' }],
       examples: Array.from({ length: 6 }, (_, index) => ({
@@ -217,6 +228,25 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             resourceLabels: [],
             chunkLabels: [],
           })
+        }
+        if (url.pathname.endsWith('/analyse')) {
+          return new Response(
+            [
+              { type: 'stage', label: 'Analysing research' },
+              ...(analysisComplete
+                ? [{ type: 'done', topics: 2, kinds: 1, labelled: 3, questions: 4 }]
+                : []),
+            ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'content-type': 'text/event-stream' } },
+          )
+        }
+        if (url.pathname.endsWith('/interrogate') || url.pathname.endsWith('/suggestions')) {
+          return Response.json(
+            suggestionsMalformed ? [{ ...suggestions[0], entityType: { label: 5 } }] : suggestions,
+          )
+        }
+        if (url.pathname.includes('/suggestions/') && url.pathname.endsWith('/implement')) {
+          return Response.json({ ok: true, summary: 'Suggestion implemented.' })
         }
         if (url.pathname.endsWith('/agents')) {
           return Response.json([{ id: 'agent-one', task: 'graph', title: graphAgentTitle }])
@@ -516,6 +546,52 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Taxonomy')
+          await page!.waitForSelector('[data-suggestions-read]')
+          await explicitAction(() => clickText(page!, 'Run analysis'), 'analysis-run')
+          await explicitAction(() => click(page!, '[data-suggestions-read]'), 'suggestions-read')
+          await explicitAction(() => clickText(page!, 'Run interrogation'), 'interrogation-run')
+          await explicitAction(
+            () => click(page!, '[data-suggestion=one] [data-suggestion-implement]'),
+            'suggestion-implement',
+          )
+          await explicitAction(
+            () => click(page!, '[data-suggestion=two] [data-suggestion-ignore]'),
+            'suggestion-ignore',
+          )
+          await capture(`suggestions-${palette}-${width}`)
+          await explicitAction(() => click(page!, '[data-suggestions-read]'), 'suggestions-refresh')
+          await page!.waitForSelector('[data-suggestion=one] [data-suggestion-implement]')
+          await page!.waitForSelector('[data-suggestion=two] [data-suggestion-ignore]')
+          suggestionsMalformed = true
+          await click(page!, '[data-suggestions-read]')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await click(page!, '[data-emergency-cancel]')
+          suggestionsMalformed = false
+          analysisComplete = false
+          await clickText(page!, 'Run analysis')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await capture(`analysis-uncertain-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          analysisComplete = true
+          state.status = 500
+          await clickText(page!, 'Run interrogation')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await click(page!, '[data-emergency-cancel]')
+          state.status = 200
+        }
+      }
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
           state.capability = 'enabled'

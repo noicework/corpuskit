@@ -277,12 +277,8 @@ function ManageContent() {
                           slug={slug}
                           organisation={config.branding.organisation}
                         />
-                        {coarseAdminEligible && (
-                          <AnalysePanel slug={slug} passcode='microsoft-sso' />
-                        )}
-                        {coarseAdminEligible && (
-                          <InterrogatePanel slug={slug} passcode='microsoft-sso' />
-                        )}
+                        <AnalysePanel slug={slug} />
+                        <InterrogatePanel slug={slug} />
                       </>
                     )
                     : (

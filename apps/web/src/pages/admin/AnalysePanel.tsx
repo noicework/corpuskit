@@ -1,3 +1,5 @@
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { AnalyseEvent } from '@research-portal/core'
@@ -10,7 +12,8 @@ import { errorMessage, type Message } from './shared.ts'
  * topic taxonomy, the graph dimensions and the suggested questions, and
  * applies all of it - live progress below.
  */
-export function AnalysePanel({ slug, passcode }: { slug: string; passcode: string }) {
+export function AnalysePanel({ slug }: { slug: string }) {
+  const { runExplicit, coarseAdminEligible } = useAdminAccess()
   const queryClient = useQueryClient()
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState<AnalyseEvent[]>([])
@@ -21,19 +24,30 @@ export function AnalysePanel({ slug, passcode }: { slug: string; passcode: strin
     setLog([])
     setMessage(null)
     try {
-      await analysePortal(slug, passcode, (event) => {
-        setLog((prev) => [...prev, event])
-        if (event.type === 'done') {
-          setMessage({
-            tone: 'ok',
-            text: `Analysis complete - ${event.topics} topics, ${event.kinds} kinds, ` +
-              `${event.labelled} resources labelled, ${event.questions} suggested questions. ` +
-              'The portal now reflects what is in the box.',
-          })
-        }
-        if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+      const result = await runExplicit('Analyse and configure this portal', async (access) => {
+        let completed = false
+        let failed = false
+        await analysePortal(slug, access, (event) => {
+          setLog((prev) => [...prev, event])
+          if (event.type === 'error') failed = true
+          if (event.type === 'done') {
+            completed = [event.topics, event.kinds, event.labelled, event.questions].every(
+              Number.isFinite,
+            )
+            setMessage({
+              tone: 'ok',
+              text: `Analysis complete - ${event.topics} topics, ${event.kinds} kinds, ` +
+                `${event.labelled} resources labelled, ${event.questions} suggested questions. ` +
+                'The portal now reflects what is in the box.',
+            })
+          }
+          if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+        })
+        if (!completed || failed) throw new AdminAccessError()
+        return true
       })
-      await queryClient.invalidateQueries()
+      if (result === undefined) return
+      if (coarseAdminEligible) await queryClient.invalidateQueries()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Analysis failed - please retry.') })
     } finally {
@@ -60,6 +74,11 @@ export function AnalysePanel({ slug, passcode }: { slug: string; passcode: strin
         </button>
       </div>
 
+      {running && (
+        <p role='status' className='mt-3 text-sm text-ink-3'>
+          Waiting for the confirmed result. Progress may arrive together when the action finishes.
+        </p>
+      )}
       {log.length > 0 && (
         <ol className='mt-3 max-h-56 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface p-3 text-xs'>
           {log.map((event, index) => (
