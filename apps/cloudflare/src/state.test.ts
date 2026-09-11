@@ -20,6 +20,199 @@ import { executeMcpTool } from '../../api/src/mcp.ts'
 import { SUGGESTED_QUESTIONS_SCHEMA_ID } from '../../api/src/suggested-questions.ts'
 import { tenantConfig, type TenantPatch } from '../../api/src/tenants.ts'
 import { checkAuditUpgrade } from '../../api/src/rbac-state.test.ts'
+import { migrateLegacyKeyRecord } from '../../api/src/scoped-key-record.ts'
+
+const legacyScopedKey: McpKeyRecord = {
+  id: 'legacy-key',
+  tenant: 'marine',
+  issuerUserId: 'unproven-user',
+  label: 'Original label',
+  prefix: 'ck_mcp_abcdefghijkl',
+  hash: 'd'.repeat(64),
+  createdAt: '2026-09-01T00:00:00.000Z',
+  revokedAt: '2026-09-02T00:00:00.000Z',
+}
+const verifiedScopedKey = {
+  ...migrateLegacyKeyRecord(legacyScopedKey),
+  id: 'new-key',
+  prefix: 'new-prefix',
+  hash: 'e'.repeat(64),
+  creator: { tenantId: 'entra-tenant', oid: 'creator' },
+  provenance: 'verified-session' as const,
+  role: 'curator' as const,
+  expiresAt: '2027-01-01T00:00:00.000Z',
+  revokedAt: null,
+}
+
+Deno.test('Durable key startup migrates mixed metadata once with system audit and read-only lookup', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const seed = new DurableState(sql, sql)
+    seed.migrate()
+    seed.put('mcp-keys:marine', [legacyScopedKey, verifiedScopedKey])
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      const keys = durableStores(state, {}).mcpKeys
+      expect(keys.findByHash('marine', legacyScopedKey.hash)).toEqual(
+        migrateLegacyKeyRecord(legacyScopedKey),
+      )
+      expect(keys.findByHash('marine', verifiedScopedKey.hash)).toEqual(verifiedScopedKey)
+      expect(keys.findByHash('grains', verifiedScopedKey.hash)).toBeUndefined()
+      expect(state.get('mcp-keys:marine', [])).toEqual([
+        migrateLegacyKeyRecord(legacyScopedKey),
+        verifiedScopedKey,
+      ])
+      const events = state.rbac.audit.read({ scope: { kind: 'platform' } })
+      expect(events).toHaveLength(1)
+      expect(events[0]?.actor_kind).toBe('system')
+      expect(JSON.stringify(events)).not.toContain(legacyScopedKey.hash)
+    }
+    seed.put('mcp-keys:marine', [legacyScopedKey])
+    expect(new DurableMcpKeyStore(seed).list('marine')).toEqual([
+      migrateLegacyKeyRecord(legacyScopedKey),
+    ])
+    expect(seed.get('mcp-keys:marine', [])).toEqual([legacyScopedKey])
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable key corruption survives migration, reads and rejected writes', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const keys = new DurableMcpKeyStore(state)
+    for (
+      const value of [
+        '{broken',
+        'null',
+        '{}',
+        JSON.stringify([legacyScopedKey, {}]),
+        JSON.stringify([legacyScopedKey, legacyScopedKey]),
+        JSON.stringify([{ ...legacyScopedKey, tenant: 'grains' }]),
+      ]
+    ) {
+      sql.database.prepare('INSERT OR REPLACE INTO state VALUES (?,?,?)').run(
+        'mcp-keys:marine',
+        value,
+        1,
+      )
+      expect(() => new DurableState(sql, sql).migrate()).toThrow()
+      expect(() => keys.list('marine')).toThrow()
+      expect(() => keys.add(verifiedScopedKey)).toThrow()
+      expect(() => keys.revoke('marine', legacyScopedKey.id, legacyScopedKey.createdAt)).toThrow()
+      expect(
+        sql.database.prepare('SELECT value FROM state WHERE key = ?').get('mcp-keys:marine')?.value,
+      ).toBe(value)
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable key migration rolls back rewrite, audit append and commit failures', () => {
+  for (const failure of ['write', 'append', 'commit']) {
+    const sql = new TestSqlStorage()
+    try {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      state.put('mcp-keys:marine', [legacyScopedKey])
+      const original = sql.database.prepare('SELECT * FROM state WHERE key = ?').get(
+        'mcp-keys:marine',
+      )
+      if (failure === 'write') {
+        sql.database.exec(
+          "CREATE TRIGGER fail_keys BEFORE UPDATE ON state WHEN NEW.key = 'mcp-keys:marine' BEGIN SELECT RAISE(ABORT, 'write failed'); END",
+        )
+      }
+      if (failure === 'append') {
+        sql.database.exec(
+          "CREATE TRIGGER fail_keys BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'append failed'); END",
+        )
+      }
+      if (failure === 'commit') {
+        sql.database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE parent_key (id INTEGER PRIMARY KEY); CREATE TABLE child_key (id INTEGER REFERENCES parent_key(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_keys AFTER UPDATE ON state BEGIN INSERT INTO child_key VALUES (1); END',
+        )
+      }
+      expect(() => new DurableState(sql, sql).migrate()).toThrow()
+      expect(sql.database.prepare('SELECT * FROM state WHERE key = ?').get('mcp-keys:marine'))
+        .toEqual(original)
+      expect(state.rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+      sql.database.exec('DROP TRIGGER fail_keys')
+      new DurableState(sql, sql).migrate()
+      expect(new DurableMcpKeyStore(state).findByHash('marine', legacyScopedKey.hash)).toEqual(
+        migrateLegacyKeyRecord(legacyScopedKey),
+      )
+    } finally {
+      sql.database.close()
+    }
+  }
+})
+
+Deno.test('Durable key ordinary writes retain caller audit and roll back failed append', async () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const keys = durableStores(state, {}).mcpKeys
+    const input = {
+      requestId: 'key-test',
+      actor: { kind: 'user' as const, id: 'creator' },
+      action: 'request.privileged' as const,
+      scope: { kind: 'portal' as const, slug: 'marine' },
+      target: { kind: 'key', id: verifiedScopedKey.id },
+    }
+    const signal = new AbortController().signal
+    sql.database.exec(
+      "CREATE TRIGGER fail_keys BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'append failed'); END",
+    )
+    await expect(state.localMutations.run(input, signal, () => keys.add(verifiedScopedKey))).rejects
+      .toThrow()
+    expect(keys.list('marine')).toEqual([])
+    sql.database.exec('DROP TRIGGER fail_keys')
+    await state.localMutations.run(input, signal, () => keys.add(verifiedScopedKey))
+    for (
+      const patch of [{ id: 'other', prefix: 'other' }, { id: 'other', hash: 'f'.repeat(64) }, {
+        prefix: 'other',
+        hash: 'f'.repeat(64),
+      }, { token: 'ck_secret' }]
+    ) {
+      expect(() => keys.add({ ...verifiedScopedKey, ...patch })).toThrow()
+    }
+    expect(() => keys.revoke('marine', verifiedScopedKey.id, 'bad')).toThrow()
+    expect(() => keys.list('../marine')).toThrow()
+    sql.database.exec(
+      "CREATE TRIGGER fail_keys BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'append failed'); END",
+    )
+    await expect(
+      state.localMutations.run(
+        input,
+        signal,
+        () => keys.revoke('marine', verifiedScopedKey.id, legacyScopedKey.createdAt),
+      ),
+    ).rejects.toThrow()
+    expect(keys.findByHash('marine', verifiedScopedKey.hash)?.revokedAt).toBeNull()
+    sql.database.exec('DROP TRIGGER fail_keys')
+    await state.localMutations.run(
+      input,
+      signal,
+      () => keys.revoke('marine', verifiedScopedKey.id, legacyScopedKey.createdAt),
+    )
+    expect(keys.findByHash('marine', verifiedScopedKey.hash)?.revokedAt).toBe(
+      legacyScopedKey.createdAt,
+    )
+    expect(
+      state.rbac.audit.read({ scope: { kind: 'platform' } }).every((event) =>
+        event.actor_kind === 'user'
+      ),
+    ).toBe(true)
+  } finally {
+    sql.database.close()
+  }
+})
 
 Deno.test('Durable audit upgrade preserves history and rolls back copy, marker, append and commit failures', () => {
   const sql = new TestSqlStorage()

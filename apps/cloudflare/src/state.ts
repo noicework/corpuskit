@@ -58,6 +58,13 @@ import {
 } from '../../api/src/audit.ts'
 import type { LocalMutationScope } from '../../api/src/audit-execution.ts'
 import { DECLARATIONS } from '../../api/src/permissions.ts'
+import {
+  decodeScopedKeyRecords,
+  KeyPortalSlugSchema,
+  KeyTimeSchema,
+  migrateLegacyKeyRecord,
+  type ScopedKeyRecord,
+} from '../../api/src/scoped-key-record.ts'
 
 type SqlValue = ArrayBuffer | string | number | null
 type SqlRow = Record<string, SqlValue>
@@ -299,6 +306,36 @@ export class DurableState {
     `)
     // Legacy construction remains usable until the Worker injects storage in plan 02-04.
     if (this.transactions) this.rbac.migrate()
+    // Startup only: lookups cannot create an internal system actor or rewrite key state.
+    const changes = this.sql.exec<{ key: string; value: string }>(
+      "SELECT key, value FROM state WHERE key LIKE 'mcp-keys:%'",
+    ).toArray().flatMap((row) => {
+      const slug = KeyPortalSlugSchema.parse(row.key.slice('mcp-keys:'.length))
+      const raw: unknown = JSON.parse(row.value)
+      const records = decodeScopedKeyRecords(raw, slug)
+      return (raw as { v?: number }[]).some((record) => record.v === undefined)
+        ? [{ key: row.key, slug, records }]
+        : []
+    })
+    if (changes.length) {
+      this.rbacDatabase.transactionSync(() => {
+        for (const change of changes) {
+          this.put(change.key, change.records)
+          appendAudit(
+            this.rbac.audit,
+            createAuditEvent({
+              requestId: crypto.randomUUID(),
+              actor: { kind: 'system' },
+              action: 'local.mutation',
+              scope: { kind: 'portal', slug: change.slug },
+              target: { kind: 'migration', id: 'scoped-keys-v1' },
+              outcome: 'success',
+              detail: { permission: 'keys.manage', mutation: 'mcpKeys.add' },
+            }),
+          )
+        }
+      })
+    }
   }
 
   get<T>(key: string, fallback: T): T {
@@ -310,6 +347,7 @@ export class DurableState {
     try {
       return JSON.parse(row.value) as T
     } catch (error) {
+      if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
       if (key === 'tenants') throw new Error('Invalid persisted portal configuration')
       return fallback
@@ -1265,28 +1303,30 @@ export class DurableMcpKeyStore implements McpKeyStoreApi {
   constructor(private readonly state: DurableState) {}
 
   private storageKey(slug: string): string {
-    return key('mcp-keys', slug)
+    return key('mcp-keys', KeyPortalSlugSchema.parse(slug))
   }
 
-  list(slug: string): McpKeyRecord[] {
-    return this.state.get<McpKeyRecord[]>(this.storageKey(slug), [])
-      .filter((record) => record.tenant === slug)
+  list(slug: string): ScopedKeyRecord[] {
+    return decodeScopedKeyRecords(this.state.get<unknown>(this.storageKey(slug), []), slug)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
   }
 
-  findByPrefix(slug: string, prefix: string): McpKeyRecord | undefined {
+  findByHash(slug: string, hash: string): ScopedKeyRecord | undefined {
+    return this.list(slug).find((record) => record.hash === hash)
+  }
+
+  findByPrefix(slug: string, prefix: string): ScopedKeyRecord | undefined {
     return this.list(slug).find((record) => record.prefix === prefix)
   }
 
-  add(record: McpKeyRecord): void {
-    const all = this.list(record.tenant)
-    if (all.some((existing) => existing.id === record.id || existing.prefix === record.prefix)) {
-      throw new Error('MCP credential identifier collision')
-    }
-    this.state.put(this.storageKey(record.tenant), [...all, record])
+  add(input: McpKeyRecord | ScopedKeyRecord): void {
+    const record = migrateLegacyKeyRecord(input)
+    const all = decodeScopedKeyRecords([...this.list(record.tenant), record], record.tenant)
+    this.state.put(this.storageKey(record.tenant), all)
   }
 
   revoke(slug: string, id: string, revokedAt: string): boolean {
+    KeyTimeSchema.parse(revokedAt)
     const all = this.list(slug)
     const found = all.find((record) => record.id === id)
     if (!found) return false

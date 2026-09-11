@@ -3,7 +3,18 @@ import { dirname, join } from 'node:path'
 import process from 'node:process'
 import type { Enrichment } from '@research-portal/core'
 import { EnrichmentStore } from './enrichments.ts'
-import { readJsonSafe, writeJsonAtomic } from './persist.ts'
+import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from './persist.ts'
+import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
+import type { RbacDatabase } from './rbac-state.ts'
+import {
+  decodeScopedKeyRecords,
+  KeyPortalSlugSchema,
+  KeyTimeSchema,
+  type LegacyMcpKeyRecord,
+  migrateLegacyKeyRecord,
+  type ScopedKeyRecord,
+  type ScopedKeyStore,
+} from './scoped-key-record.ts'
 
 // ---------------------------------------------------------------------------
 // Volume-backed stores for the portal's own operational data: ask insights
@@ -541,43 +552,97 @@ export class InvestigationStore {
  * `hash` is a SHA-256 digest of the complete credential. The complete value is
  * returned only by the minting response and is never persisted.
  */
-export interface McpKeyRecord {
-  id: string
-  tenant: string
-  issuerUserId: string
-  label: string
-  prefix: string
-  hash: string
-  createdAt: string
-  revokedAt: string | null
+export type McpKeyRecord = LegacyMcpKeyRecord
+
+function readKeyText(path: string): string {
+  // Reject malformed bytes and retain a BOM so parsing cannot silently rewrite original data.
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(path))
 }
 
-export class McpKeyStore {
-  constructor(private readonly dataDir = DATA_DIR) {}
-
-  private pathFor(slug: string): string {
-    return join(this.dataDir, 'mcp-keys', `${safeSegment(slug)}.json`)
+export class McpKeyStore implements ScopedKeyStore {
+  /** Construct at startup. HTTP lookups never rewrite records or assume system authority. */
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    migration?: { database: RbacDatabase; audit: AuditStore },
+  ) {
+    let files: string[]
+    try {
+      files = readdirSync(join(dataDir, 'mcp-keys')).filter((name) => name.endsWith('.json')).sort()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    const changes = files.flatMap((name) => {
+      const slug = KeyPortalSlugSchema.parse(name.slice(0, -5))
+      const path = this.pathFor(slug)
+      const original = readKeyText(path)
+      const raw: unknown = JSON.parse(original)
+      const records = decodeScopedKeyRecords(raw, slug)
+      return (raw as { v?: number }[]).some((record) => record.v === undefined)
+        ? [{ slug, path, original, records }]
+        : []
+    })
+    if (!changes.length) return
+    if (!migration) throw new Error('Key migration requires startup audit storage')
+    const written: typeof changes = []
+    try {
+      migration.database.transactionSync(() => {
+        for (const change of changes) {
+          writeJsonAtomic(change.path, change.records)
+          written.push(change)
+          appendAudit(
+            migration.audit,
+            createAuditEvent({
+              requestId: crypto.randomUUID(),
+              actor: { kind: 'system' },
+              action: 'local.mutation',
+              scope: { kind: 'portal', slug: change.slug },
+              target: { kind: 'migration', id: 'scoped-keys-v1' },
+              outcome: 'success',
+              detail: { permission: 'keys.manage', mutation: 'mcpKeys.add' },
+            }),
+          )
+        }
+      })
+    } catch (error) {
+      // JSON and SQLite cannot share crash atomicity. Restore exact bytes on observed failure.
+      for (const change of written.reverse()) writeFileAtomic(change.path, change.original)
+      throw error
+    }
   }
 
-  list(slug: string): McpKeyRecord[] {
-    return readJson<McpKeyRecord[]>(this.pathFor(slug), [])
-      .filter((record) => record.tenant === slug)
+  private pathFor(slug: string): string {
+    return join(this.dataDir, 'mcp-keys', `${KeyPortalSlugSchema.parse(slug)}.json`)
+  }
+
+  list(slug: string): ScopedKeyRecord[] {
+    let raw: string
+    try {
+      raw = readKeyText(this.pathFor(slug))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    return decodeScopedKeyRecords(JSON.parse(raw), slug)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
   }
 
-  findByPrefix(slug: string, prefix: string): McpKeyRecord | undefined {
+  findByHash(slug: string, hash: string): ScopedKeyRecord | undefined {
+    return this.list(slug).find((record) => record.hash === hash)
+  }
+
+  findByPrefix(slug: string, prefix: string): ScopedKeyRecord | undefined {
     return this.list(slug).find((record) => record.prefix === prefix)
   }
 
-  add(record: McpKeyRecord): void {
-    const all = this.list(record.tenant)
-    if (all.some((existing) => existing.id === record.id || existing.prefix === record.prefix)) {
-      throw new Error('MCP credential identifier collision')
-    }
-    writeJson(this.pathFor(record.tenant), [...all, record])
+  add(input: McpKeyRecord | ScopedKeyRecord): void {
+    const record = migrateLegacyKeyRecord(input)
+    const all = decodeScopedKeyRecords([...this.list(record.tenant), record], record.tenant)
+    writeJson(this.pathFor(record.tenant), all)
   }
 
   revoke(slug: string, id: string, revokedAt: string): boolean {
+    KeyTimeSchema.parse(revokedAt)
     const all = this.list(slug)
     const found = all.find((record) => record.id === id)
     if (!found) return false
@@ -593,7 +658,7 @@ export type SessionsStoreApi = Pick<SessionsStore, keyof SessionsStore>
 export type WatchStoreApi = Pick<WatchStore, keyof WatchStore>
 export type SourceStoreApi = Pick<SourceStore, keyof SourceStore>
 export type InvestigationStoreApi = Pick<InvestigationStore, keyof InvestigationStore>
-export type McpKeyStoreApi = Pick<McpKeyStore, keyof McpKeyStore>
+export type McpKeyStoreApi = ScopedKeyStore
 export type RoutingLogApi = Pick<RoutingLog, keyof RoutingLog>
 
 // --- Enrichment import/export ----------------------------------------------

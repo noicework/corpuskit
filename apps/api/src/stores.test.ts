@@ -1,6 +1,207 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect } from '@std/expect'
+import { migrateLegacyKeyRecord } from './scoped-key-record.ts'
+import { openLocalRbac } from './rbac-local.ts'
+import type { McpKeyRecord } from './stores.ts'
+
+const oldKey: McpKeyRecord = {
+  id: 'legacy-key',
+  tenant: 'marine',
+  issuerUserId: 'unproven-user',
+  label: 'Original label',
+  prefix: 'ck_mcp_abcdefghijkl',
+  hash: 'd'.repeat(64),
+  createdAt: '2026-09-01T00:00:00.000Z',
+  revokedAt: '2026-09-02T00:00:00.000Z',
+}
+const newKey = {
+  ...migrateLegacyKeyRecord(oldKey),
+  id: 'new-key',
+  prefix: 'new-prefix',
+  hash: 'e'.repeat(64),
+  creator: { tenantId: 'entra-tenant', oid: 'creator' },
+  provenance: 'verified-session' as const,
+  role: 'curator' as const,
+  expiresAt: '2027-01-01T00:00:00.000Z',
+  revokedAt: null,
+}
+
+Deno.test('local key startup upgrades mixed records once and read-only decoding never audits', () => {
+  const dataDir = Deno.makeTempDirSync()
+  const path = join(dataDir, 'mcp-keys', 'marine.json')
+  writeJsonAtomic(path, [oldKey, newKey])
+  const original = readFileSync(path, 'utf8')
+  expect(() => new McpKeyStore(dataDir)).toThrow('startup audit storage')
+  expect(readFileSync(path, 'utf8')).toBe(original)
+  const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+  try {
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const store = new McpKeyStore(dataDir, { database, audit: rbac.audit })
+      expect(store.findByHash('marine', oldKey.hash)).toEqual(migrateLegacyKeyRecord(oldKey))
+      expect(store.findByHash('marine', newKey.hash)).toEqual(newKey)
+      expect(store.findByHash('grains', newKey.hash)).toBeUndefined()
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual([
+        migrateLegacyKeyRecord(oldKey),
+        newKey,
+      ])
+      expect(rbac.audit.read({ scope: { kind: 'platform' } })).toHaveLength(1)
+    }
+    const events = rbac.audit.read({ scope: { kind: 'platform' } })
+    expect(events[0]?.actor_kind).toBe('system')
+    expect(JSON.stringify(events)).not.toContain(oldKey.hash)
+    const store = new McpKeyStore(dataDir, { database, audit: rbac.audit })
+    writeJsonAtomic(path, [oldKey])
+    const before = readFileSync(path, 'utf8')
+    expect(store.list('marine')).toEqual([migrateLegacyKeyRecord(oldKey)])
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(rbac.audit.read({ scope: { kind: 'platform' } })).toHaveLength(1)
+  } finally {
+    database.close()
+    Deno.removeSync(dataDir, { recursive: true })
+  }
+})
+
+Deno.test('local key corruption is retained across startup, reads and rejected writes', () => {
+  const dataDir = Deno.makeTempDirSync()
+  const path = join(dataDir, 'mcp-keys', 'marine.json')
+  const store = new McpKeyStore(dataDir)
+  for (
+    const value of [
+      '{broken',
+      'null',
+      '{}',
+      JSON.stringify([oldKey, {}]),
+      JSON.stringify([{ ...oldKey, tenant: 'grains' }]),
+      JSON.stringify([oldKey, oldKey]),
+    ]
+  ) {
+    writeFileAtomic(path, value)
+    expect(() => new McpKeyStore(dataDir)).toThrow()
+    expect(() => store.list('marine')).toThrow()
+    expect(() => store.add(newKey)).toThrow()
+    expect(() => store.revoke('marine', oldKey.id, oldKey.createdAt)).toThrow()
+    expect(readFileSync(path, 'utf8')).toBe(value)
+  }
+  Deno.removeSync(dataDir, { recursive: true })
+})
+
+Deno.test('local key reads reject malformed UTF-8 without replacing original bytes', () => {
+  const dataDir = Deno.makeTempDirSync()
+  const path = join(dataDir, 'mcp-keys', 'marine.json')
+  const store = new McpKeyStore(dataDir)
+  const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify([{ ...oldKey, label: 'X' }]))
+    bytes[bytes.indexOf('X'.charCodeAt(0))] = 255
+    Deno.mkdirSync(join(dataDir, 'mcp-keys'))
+    writeFileSync(path, bytes)
+    expect(() => new McpKeyStore(dataDir, { database, audit: rbac.audit })).toThrow()
+    expect(() => store.list('marine')).toThrow()
+    expect(() => store.add(newKey)).toThrow()
+    expect(new Uint8Array(readFileSync(path))).toEqual(bytes)
+    expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+  } finally {
+    database.close()
+    Deno.removeSync(dataDir, { recursive: true })
+  }
+})
+
+Deno.test('local key migration restores original bytes on write, append and commit failure', () => {
+  for (const failure of ['write', 'append', 'commit']) {
+    const dataDir = Deno.makeTempDirSync()
+    const path = join(dataDir, 'mcp-keys', 'marine.json')
+    const original = JSON.stringify([oldKey], null, 4)
+    writeFileAtomic(path, original)
+    const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+    try {
+      if (failure === 'write') Deno.mkdirSync(`${path}.tmp`)
+      if (failure === 'commit') {
+        database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE parent_key (id INTEGER PRIMARY KEY); CREATE TABLE child_key (id INTEGER REFERENCES parent_key(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_keys AFTER INSERT ON audit_events BEGIN INSERT INTO child_key VALUES (1); END',
+        )
+      }
+      const migration = {
+        database,
+        audit: {
+          ...rbac.audit,
+          append: (event: Parameters<typeof rbac.audit.append>[0]) => {
+            rbac.audit.append(event)
+            if (failure === 'append') throw new Error('append failed')
+          },
+        },
+      }
+      expect(() => new McpKeyStore(dataDir, migration)).toThrow()
+      expect(readFileSync(path, 'utf8')).toBe(original)
+      expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+      if (failure === 'write') Deno.removeSync(`${path}.tmp`)
+      if (failure === 'commit') database.exec('DROP TRIGGER fail_keys')
+      expect(new McpKeyStore(dataDir, { database, audit: rbac.audit }).list('marine')).toEqual([
+        migrateLegacyKeyRecord(oldKey),
+      ])
+      expect(rbac.audit.read({ scope: { kind: 'platform' } })).toHaveLength(1)
+    } finally {
+      database.close()
+      Deno.removeSync(dataDir, { recursive: true })
+    }
+  }
+})
+
+Deno.test('local key writes validate all metadata and reject digest, prefix and ID collisions', () => {
+  const dataDir = Deno.makeTempDirSync()
+  try {
+    const store = new McpKeyStore(dataDir)
+    store.add(newKey)
+    const before = readFileSync(join(dataDir, 'mcp-keys', 'marine.json'), 'utf8')
+    for (
+      const change of [
+        { id: 'other', prefix: 'other' },
+        { id: 'other', hash: 'f'.repeat(64) },
+        { prefix: 'other', hash: 'f'.repeat(64) },
+        { hash: 'invalid' },
+        { token: 'ck_secret' },
+      ]
+    ) expect(() => store.add({ ...newKey, ...change })).toThrow()
+    expect(() => store.revoke('marine', newKey.id, 'invalid')).toThrow()
+    expect(() => store.list('../marine')).toThrow()
+    expect(readFileSync(join(dataDir, 'mcp-keys', 'marine.json'), 'utf8')).toBe(before)
+    expect(store.revoke('marine', newKey.id, oldKey.createdAt)).toBe(true)
+    expect(store.revoke('marine', newKey.id, oldKey.revokedAt!)).toBe(true)
+    expect(store.findByHash('marine', newKey.hash)?.revokedAt).toBe(oldKey.createdAt)
+  } finally {
+    Deno.removeSync(dataDir, { recursive: true })
+  }
+})
+
+Deno.test('local key migration restores earlier portal files when a later write fails', () => {
+  const dataDir = Deno.makeTempDirSync()
+  const paths = ['grains', 'marine'].map((slug) => join(dataDir, 'mcp-keys', `${slug}.json`))
+  const originals = ['grains', 'marine'].map((tenant) => JSON.stringify([{ ...oldKey, tenant }]))
+  paths.forEach((path, index) => writeFileAtomic(path, originals[index]!))
+  const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+  try {
+    Deno.mkdirSync(`${paths[1]}.tmp`)
+    expect(() => new McpKeyStore(dataDir, { database, audit: rbac.audit })).toThrow()
+    paths.forEach((path, index) => expect(readFileSync(path, 'utf8')).toBe(originals[index]))
+    expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+    Deno.removeSync(`${paths[1]}.tmp`)
+    new McpKeyStore(dataDir, { database, audit: rbac.audit })
+  } finally {
+    database.close()
+  }
+  const reopened = openLocalRbac({ DATA_DIR: dataDir })
+  try {
+    const store = new McpKeyStore(dataDir, {
+      database: reopened.database,
+      audit: reopened.rbac.audit,
+    })
+    expect(store.findByHash('marine', oldKey.hash)?.creator).toBeNull()
+    expect(reopened.rbac.audit.read({ scope: { kind: 'platform' } })).toHaveLength(2)
+  } finally {
+    reopened.database.close()
+    Deno.removeSync(dataDir, { recursive: true })
+  }
+})
 
 // DATA_DIR is read at module load, so point it at a temp dir before importing.
 const dir = await Deno.makeTempDir()
