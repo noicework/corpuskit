@@ -2038,6 +2038,58 @@ function fakeManagement(texts: Record<string, string>): AragProvider {
 }
 
 describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
+  it('preserves verified authored groups through Ask and search completion while retaining sentence audits', async () => {
+    const sentences = [
+      'The portal helps readers explore the research collection.',
+      'Readers can open sources to check the supporting evidence.',
+      'The library provides searchable documents for further reading.',
+    ]
+    const original = sentences.join(' ')
+    for (const surface of ['ask', 'search']) {
+      for (const enabled of [false, true]) {
+        class GroupedProvider extends StubProvider {
+          override async *ask(): AsyncIterable<AskEvent> {
+            yield {
+              type: 'sources',
+              resources: [{ ...resourceOne, relevance: 0.95, citedCount: 1 }],
+            }
+            yield { type: 'delta', text: original }
+            yield {
+              type: 'citation',
+              citation: { index: 7, resourceId: resourceOne.id, title: resourceOne.title },
+            }
+            yield {
+              type: 'done',
+              refused: false,
+              text: `${original}[7]`,
+              ...(enabled ? { citationPresentation: 'authored_blocks' as const } : {}),
+            }
+          }
+        }
+        const app = buildApp({
+          provider: new GroupedProvider(),
+          tenants: freshTenants(),
+          management: fakeManagement({ [resourceOne.id]: original }),
+        })
+        const response = await app.request('/api/t/marine/ask', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            query: 'Explain the collection and its supporting evidence.',
+            surface,
+          }),
+        })
+        const events = await sseEvents(response)
+        const done = events.find((e) => e.type === 'done')
+        expect(done?.type === 'done' && done.text).toBe(
+          enabled ? `${original}[1]` : sentences.map((s) => `${s}[1]`).join(' '),
+        )
+        const audit = events.find((e) => e.type === 'audit')
+        expect(audit?.type === 'audit' && audit.sentencesCited).toBe(3)
+      }
+    }
+  })
+
   it('re-binds each sentence to the text that carries it, renumbers, and audits the figures', async () => {
     class SprayingProvider extends StubProvider {
       override async *ask(): AsyncIterable<AskEvent> {

@@ -3715,8 +3715,11 @@ export class AragProvider implements RetrievalProvider {
             ? `You are the help assistant for the ${tenant.branding.productName} research ` +
               'portal. Answer the user\'s "how do I..." question about using the portal, using ' +
               'ONLY the provided help documentation as your source. Be clear, concise and ' +
-              'practical, in Australian English, and write well-structured Markdown. Cite the ' +
-              'documentation at claim level after each step or fact. If the ' +
+              'practical, in Australian English, and write well-structured Markdown. ' +
+              (footnotes
+                ? 'Support the steps and facts with citations to the documentation. '
+                : 'Cite the documentation at claim level after each step or fact. ') +
+              'If the ' +
               'documentation does not cover the question, say so plainly and suggest where in the ' +
               'portal to look; never invent a feature that is not described in the documentation. ' +
               'Call the material "the documentation" or "the Help pages", never "the context" ' +
@@ -3729,8 +3732,11 @@ export class AragProvider implements RetrievalProvider {
               'is not enough data, and never refuse, when any relevant context is present. For any ' +
               "part of the question the context does not address, say plainly that the portal's " +
               'sources do not cover it rather than answering that part from general knowledge. Write ' +
-              'clear, well-structured prose with Markdown, in Australian English. Cite evidence ' +
-              'at claim level after each factual claim. If a statement is your inference rather than something ' +
+              'clear, well-structured prose with Markdown, in Australian English. ' +
+              (footnotes
+                ? 'Support factual claims with citations to the evidence. '
+                : 'Cite evidence at claim level after each factual claim. ') +
+              'If a statement is your inference rather than something ' +
               'the context states, mark it (inference). When the context ' +
               'contains conflicting, negative or nuanced findings (adverse observations, ' +
               'non-detections, disagreements between studies), state them explicitly with their ' +
@@ -4263,7 +4269,12 @@ export class AragProvider implements RetrievalProvider {
             }),
           ]).catch(() => null)
           : null
-        yield { type: 'done', refused, ...(doneText !== undefined ? { text: doneText } : {}) }
+        yield {
+          type: 'done',
+          refused,
+          ...(doneText !== undefined ? { text: doneText } : {}),
+          ...(!refused && footnotes ? { citationPresentation: 'authored_blocks' as const } : {}),
+        }
         yield { type: 'stage', stage: 'validating', status: 'started' }
         if (qualityPending) {
           const quality = await qualityPending

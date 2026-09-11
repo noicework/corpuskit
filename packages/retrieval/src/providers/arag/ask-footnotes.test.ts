@@ -1,8 +1,9 @@
 import { expect } from '@std/expect'
 import type { AskEvent, TenantConfig } from '@research-portal/core'
+import { TenantConfigSchema } from '@research-portal/core'
 import type { AskOptions } from '../../provider.ts'
 import { AragProvider } from './index.ts'
-import { CITATION_MODE, type CitationMode } from './citation-mode.ts'
+import { CITATION_MODE, type CitationMode, FOOTNOTE_PROMPT } from './citation-mode.ts'
 
 const tenant: TenantConfig = {
   slug: 'test',
@@ -24,6 +25,7 @@ function fixture(opts: {
   mode?: CitationMode
   broken?: boolean
   retry?: boolean
+  answer?: string
 } = {}) {
   const bodies: Record<string, unknown>[] = []
   const resource = {
@@ -62,7 +64,7 @@ function fixture(opts: {
       }
       const raw = opts.mode === 'standard'
         ? 'Stocks recovered.'
-        : '## Findings\n\nStocks recovered [7] .\n\n[7]: block-AA\n'
+        : opts.answer ?? '## Findings\n\nStocks recovered [7] .\n\n[7]: block-AA\n'
       const items: unknown[] = [
         { type: 'retrieval', results: { resources: { report: resource } } },
         ...Array.from(raw).map((text) => ({ type: 'answer', text })),
@@ -80,9 +82,9 @@ function fixture(opts: {
   })
   return { provider, bodies }
 }
-async function collect(provider: AragProvider, opts: AskOptions = {}) {
+async function collect(provider: AragProvider, opts: AskOptions = {}, config = tenant) {
   const events: AskEvent[] = []
-  for await (const event of provider.ask(tenant, 'What happened?', opts)) events.push(event)
+  for await (const event of provider.ask(config, 'What happened?', opts)) events.push(event)
   return events
 }
 
@@ -96,6 +98,7 @@ Deno.test('all prose surfaces use the code flag, with claim-level footnotes afte
       type: 'done',
       refused: false,
       text: '## Findings\n\nStocks recovered.[1]\n\n',
+      citationPresentation: 'authored_blocks',
     })
     expect(events.filter((e) => e.type === 'citation')).toEqual([{
       type: 'citation',
@@ -119,6 +122,68 @@ Deno.test('footnote instruction survives custom prompt and addendum', async () =
   expect(prompt.system).toContain('Extra instructions')
   expect(prompt.system).toContain('supplied footnote protocol')
   expect(prompt.system).not.toContain('number itself does not matter')
+})
+
+Deno.test('footnote grouping guidance is shared across prose surfaces and overrides', async () => {
+  const config = TenantConfigSchema.parse({
+    ...tenant,
+    intents: [{
+      id: 'review',
+      label: 'Review',
+      description: '',
+      retrieval: { features: ['keyword', 'semantic'], topK: 20, reranker: 'predict' },
+      answer: { surfaces: ['ask', 'search'], strategy: 'none', promptVariant: 'synthesis' },
+    }],
+  })
+  const options: AskOptions[] = [
+    {},
+    { resourceId: 'report' },
+    { docScope: true },
+    { sandbox: true },
+    { intent: 'review' },
+    { systemPrompt: 'Cite every sentence.', promptAddendum: 'Use a factual claim per sentence.' },
+  ]
+  for (const opts of options) {
+    const f = fixture({ doc: opts.docScope })
+    await collect(f.provider, opts, config)
+    const prompt = (f.bodies[0]?.prompt as { system: string }).system
+    expect(prompt.endsWith(FOOTNOTE_PROMPT)).toBe(true)
+    expect(prompt).toContain('same passage or passages')
+    expect(prompt).toContain('Sharing a document is not enough')
+    expect(prompt).toContain('Cite direct quotations, statistics and specific findings immediately')
+    expect(prompt).toContain('give each separate paragraph or bullet its own citations')
+    expect(prompt).not.toContain('after each factual claim')
+    expect(prompt).not.toContain('after each step or fact')
+  }
+})
+
+Deno.test('standard citation mode retains its existing per-claim and per-step guidance', async () => {
+  for (const docScope of [false, true]) {
+    const f = fixture({ mode: 'standard', doc: docScope })
+    await collect(f.provider, { docScope })
+    const prompt = (f.bodies[0]?.prompt as { system: string }).system
+    expect(prompt).toContain(docScope ? 'after each step or fact' : 'after each factual claim')
+    expect(prompt).not.toContain(FOOTNOTE_PROMPT)
+  }
+})
+
+Deno.test('grouping is generation guidance, not post-generation removal of repeated anchors', async () => {
+  for (
+    const prose of [
+      'Stocks recovered. Monitoring continued.[7]',
+      'Stocks recovered.[7] Monitoring continued.[7]',
+    ]
+  ) {
+    const f = fixture({ answer: `${prose}\n\n[7]: block-AA\n` })
+    const events = await collect(f.provider)
+    expect(events.find((e) => e.type === 'done')).toEqual({
+      type: 'done',
+      refused: false,
+      text: `${prose.replaceAll('[7]', '[1]')}\n\n`,
+      citationPresentation: 'authored_blocks',
+    })
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+  }
 })
 
 Deno.test('broken or excluded references fail explicitly without success or standard-mode retry', async () => {
