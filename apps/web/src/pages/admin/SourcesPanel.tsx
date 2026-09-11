@@ -2,6 +2,8 @@ import { type FormEvent, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PortalSource, SourceSyncEvent } from '../../api/client.ts'
 import { addSource, deleteSource, getSources, syncSource, updateSource } from '../../api/client.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -27,14 +29,13 @@ const pageWord = (n: number) => (n === 1 ? 'page' : 'pages')
 function SourceRow({
   source,
   slug,
-  passcode,
   onChanged,
 }: {
   source: PortalSource
   slug: string
-  passcode: string
   onChanged: () => Promise<unknown>
 }) {
+  const { runExplicit } = useAdminAccess()
   const [syncing, setSyncing] = useState(false)
   const [log, setLog] = useState<SourceSyncEvent[]>([])
   const [deleting, setDeleting] = useState(false)
@@ -45,7 +46,11 @@ function SourceRow({
     setSaving(true)
     setMessage(null)
     try {
-      await updateSource(slug, passcode, source.id, change)
+      const result = await runExplicit(
+        'Update website source',
+        (access) => updateSource(slug, access, source.id, change),
+      )
+      if (result === undefined) return
       await onChanged()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that change.') })
@@ -59,23 +64,33 @@ function SourceRow({
     setLog([])
     setMessage(null)
     try {
-      await syncSource(slug, passcode, source.id, (event) => {
-        setLog((prev) => [...prev, event])
-        if (event.type === 'done') {
-          const deferred = event.deferred ?? 0
-          setMessage({
-            // Deferring pages under back-pressure is graceful handling, not a
-            // failure - the sync still made progress and will finish itself.
-            tone: 'ok',
-            text: deferred > 0
-              ? `Synced - ${event.added} ${pageWord(event.added)} added. ` +
-                `The knowledge box was busy, so ${deferred} ${
-                  deferred === 1 ? 'page was' : 'pages were'
-                } left for the next sync.`
-              : `Synced - ${event.added} ${pageWord(event.added)} added.`,
-          })
-        }
-        if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
+      const result = await runExplicit('Sync website source', async (access) => {
+        let completed: Extract<SourceSyncEvent, { type: 'done' }> | undefined
+        let failed = false
+        const events: SourceSyncEvent[] = []
+        await syncSource(slug, access, source.id, (event) => {
+          if (event.type === 'done') {
+            if (
+              !Number.isFinite(event.added) || event.added < 0 ||
+              (event.deferred !== undefined &&
+                (!Number.isFinite(event.deferred) || event.deferred < 0))
+            ) failed = true
+            else completed = event
+          } else if (event.type === 'error') failed = true
+          else if (event.type === 'item') events.push(event)
+          else failed = true
+        })
+        if (!completed || failed) throw new AdminAccessError()
+        return { completed, events }
+      })
+      if (result === undefined) return
+      setLog([...result.events, result.completed])
+      setMessage({
+        tone: 'ok',
+        text: `Synced - ${result.completed.added} ${pageWord(result.completed.added)} added.` +
+          (result.completed.deferred
+            ? ` ${result.completed.deferred} left for the next sync.`
+            : ''),
       })
       await onChanged()
     } catch (err) {
@@ -89,10 +104,16 @@ function SourceRow({
     setDeleting(true)
     setMessage(null)
     try {
-      await deleteSource(slug, passcode, source.id)
+      const result = await runExplicit(
+        'Remove website source',
+        (access) => deleteSource(slug, access, source.id),
+      )
+      if (result === undefined) return
+      if (result.ok !== true) throw new AdminAccessError()
       await onChanged()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not remove that source.') })
+    } finally {
       setDeleting(false)
     }
   }
@@ -137,14 +158,14 @@ function SourceRow({
             </p>
           )}
         </div>
-        <div className='flex shrink-0 items-center gap-2'>
+        <div className='flex flex-wrap items-center gap-2'>
           <button
             type='button'
             disabled={syncing}
             onClick={() => void onSync()}
             className='rp-btn rp-btn-outline'
           >
-            {syncing ? 'Syncing…' : 'Sync now'}
+            {syncing ? 'Sending request...' : 'Sync now'}
           </button>
           <button
             type='button'
@@ -169,13 +190,13 @@ function SourceRow({
           />
           Sync automatically each day
         </label>
-        <div className='flex items-center gap-2'>
-          <label htmlFor={capId} className='whitespace-nowrap text-xs text-ink-2'>
+        <div className='flex flex-wrap items-center gap-2'>
+          <label htmlFor={capId} className='text-xs text-ink-2'>
             New pages per run
           </label>
           <select
             id={capId}
-            className='rp-input w-24'
+            className='rp-input w-24 shrink-0'
             value={cap}
             disabled={saving || syncing}
             onChange={(e) => void patch({ maxPages: Number(e.target.value) })}
@@ -219,7 +240,9 @@ function SourceRow({
  * the portal re-checks daily and ingests newly published pages from. Distinct
  * from the one-off "Add content" ingestion methods, which never re-check.
  */
-export function SourcesPanel({ slug, passcode }: { slug: string; passcode: string }) {
+export function SourcesPanel({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+  const [snapshot, setSnapshot] = useState<PortalSource[]>()
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
   const [maxPages, setMaxPages] = useState<number>(DEFAULT_CAP)
@@ -227,10 +250,26 @@ export function SourcesPanel({ slug, passcode }: { slug: string; passcode: strin
   const [adding, setAdding] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const query = useQuery({
     queryKey: ['admin-sources', slug],
-    queryFn: () => getSources(slug, passcode),
+    queryFn: () => getSources(slug, sessionAccess),
+    enabled: coarseAdminEligible,
+    retry: false,
   })
+
+  const { isLoading, isError } = query
+  const data = coarseAdminEligible ? query.data : snapshot
+  const refresh = async () => {
+    setMessage(null)
+    try {
+      const result = await runExplicit('Read website sources', (access) => getSources(slug, access))
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['admin-sources', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load sources.') })
+    }
+  }
 
   const onChanged = () =>
     Promise.all([
@@ -246,7 +285,13 @@ export function SourcesPanel({ slug, passcode }: { slug: string; passcode: strin
       // The server checks the site is genuinely readable before registering
       // it, and tells us what it found - report that rather than a bare
       // "added", so a site that cannot be crawled is obvious immediately.
-      const added = await addSource(slug, passcode, { url, auto, maxPages })
+      const added = await runExplicit(
+        'Add website source',
+        (access) => addSource(slug, access, { url, auto, maxPages }),
+      )
+      if (added === undefined) return
+      if (!added.id || !Number.isFinite(added.discovered)) throw new AdminAccessError()
+      if (!coarseAdminEligible) setSnapshot((previous) => [...(previous ?? []), added])
       setUrl('')
       setMessage({
         tone: 'ok',
@@ -327,6 +372,19 @@ export function SourcesPanel({ slug, passcode }: { slug: string; passcode: strin
       {message && <MessagePanel message={message} className='mt-3' />}
 
       <div className='mt-4 border-t border-line pt-3'>
+        <button
+          type='button'
+          className='rp-btn rp-btn-outline mb-3'
+          disabled={pending}
+          onClick={() => void refresh()}
+        >
+          Refresh sources
+        </button>
+        {!coarseAdminEligible && (
+          <p className='mb-3 text-xs text-ink-3'>
+            Sources are a snapshot. Refresh explicitly after changes.
+          </p>
+        )}
         {isLoading && (
           <div className='space-y-2'>
             <Skeleton className='h-12 w-full' />
@@ -339,7 +397,7 @@ export function SourcesPanel({ slug, passcode }: { slug: string; passcode: strin
             Could not load sources.{' '}
             <button
               type='button'
-              onClick={() => void refetch()}
+              onClick={() => void refresh()}
               className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
             >
               Try again
@@ -360,7 +418,6 @@ export function SourcesPanel({ slug, passcode }: { slug: string; passcode: strin
                 key={source.id}
                 source={source}
                 slug={slug}
-                passcode={passcode}
                 onChanged={onChanged}
               />
             ))}

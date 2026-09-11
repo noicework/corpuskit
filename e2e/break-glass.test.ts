@@ -15,11 +15,10 @@ async function click(page: Page, selector: string) {
 }
 
 async function settle(page: Page) {
-  await page.evaluate(() =>
-    new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-    )
-  )
+  await page.bringToFront()
+  // Use the runner clock: Chromium may suspend page timers after a polling wait.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  await page.evaluate(() => document.readyState)
 }
 
 async function clickText(page: Page, text: string) {
@@ -35,8 +34,13 @@ async function clickText(page: Page, text: string) {
 
 async function fill(page: Page, selector: string, value: string) {
   await page.evaluate((selector, value) => {
-    const input = document.querySelector<HTMLInputElement>(selector)!
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!
+    Object.getOwnPropertyDescriptor(
+      input instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype,
+      'value',
+    )!.set!.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }, { args: [selector, value] })
 }
@@ -47,7 +51,7 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const marker = `pages-${crypto.randomUUID()}`
-    const directory = `.planning/logs/02-10-${marker}`
+    const directory = `.planning/logs/02-11-${marker}`
     await Deno.mkdir(directory, { recursive: true })
     const root = Deno.cwd()
     // Bundle real page components; only their network responses and outlet config are fixtures.
@@ -133,6 +137,25 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     const requests: { path: string; method: string; emergency: boolean }[] = []
     let migrationComplete = true
     let renameOk = true
+    let syncComplete = true
+    let syncMalformed = false
+    const source = {
+      id: 'source-one',
+      url: 'https://example.invalid/research',
+      addedAt: '2026-09-12',
+      lastSync: null,
+      lastAdded: 0,
+      itemCount: 0,
+      auto: true,
+      maxPages: 25,
+    }
+    const recent = [{
+      id: 'resource-one',
+      title: 'Research resource',
+      status: 'pending',
+      hidden: false,
+      created: '2026-09-12',
+    }]
     let sessionIdentity = 'original-user'
     const renameBodies: unknown[] = []
     const rows = ['alpha', 'beta'].map((slug) => ({
@@ -164,6 +187,36 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             headers: status === 429 ? { 'retry-after': '125' } : {},
           })
         }
+        if (url.pathname.endsWith('/sources/source-one/sync')) {
+          return new Response(
+            [
+              { type: 'item', label: 'Research page' },
+              ...(syncComplete ? [{ type: 'done', added: syncMalformed ? 'invalid' : 1 }] : []),
+            ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            { headers: { 'content-type': 'text/event-stream' } },
+          )
+        }
+        if (url.pathname.endsWith('/sources')) {
+          return Response.json(
+            request.method === 'GET'
+              ? [source]
+              : { ...source, discovered: 3, discoveredVia: 'sitemap' },
+          )
+        }
+        if (url.pathname.endsWith('/sources/source-one')) {
+          return Response.json(
+            request.method === 'PATCH' ? { ...source, ...await request.json() } : { ok: true },
+          )
+        }
+        if (url.pathname.endsWith('/recent')) return Response.json(recent)
+        if (url.pathname.endsWith('/counters')) {
+          return Response.json({ paragraphs: 12, sentences: 24, indexMb: 1.5 })
+        }
+        if (url.pathname.endsWith('/crawl')) {
+          return Response.json({
+            links: ['https://example.invalid/one', 'https://example.invalid/two'],
+          })
+        }
         if (url.pathname === '/api/admin/migrate') {
           return new Response(
             [
@@ -193,7 +246,13 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       return fetch(`${base.url}${url.pathname}${url.search}`, request)
     })
     const url = `http://127.0.0.1:${(proxy.addr as Deno.NetAddr).port}`
-    const browser = await launch()
+    const browser = await launch({
+      args: [
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+      ],
+    })
     const evidence: unknown[] = []
     let page: Page | undefined
     async function open(kind: string, palette = 'light', width = 390) {
@@ -264,6 +323,206 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Content')
+          const contentStart = requests.length
+          await clickText(page!, 'Add content')
+          await clickText(page!, 'Add link')
+          await fill(page!, '#link-url-alpha', 'https://example.invalid/research')
+          const submit = async (selector: string) => {
+            await page!.evaluate(
+              (selector) => document.querySelector(selector)!.closest('form')!.requestSubmit(),
+              { args: [selector] },
+            )
+            await settle(page!)
+          }
+          const oneAction = async (action: () => Promise<void>, name: string) => {
+            console.log(`Content action: ${name} ${palette} ${width}`)
+            const before = requests.length
+            await action()
+            await page!.waitForSelector('[role=dialog]')
+            expect(requests.length).toBe(before)
+            await click(page!, '[data-emergency-cancel]')
+            expect(requests.length).toBe(before)
+            await action()
+            await confirm()
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            expect(requests.at(-1)?.emergency).toBe(true)
+            expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+            await page!.evaluate(() => {
+              dispatchEvent(new Event('fixture-invalidate'))
+              dispatchEvent(new Event('focus'))
+            })
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            evidence.push({ action: name, palette, width, requests: 1 })
+          }
+          expect(requests.length).toBe(contentStart)
+          await oneAction(() => submit('#link-url-alpha'), 'add-link')
+          await fill(page!, '#link-url-alpha', 'https://example.invalid/failure')
+          state.status = 500
+          const beforeFailure = requests.length
+          await submit('#link-url-alpha')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          expect(requests.length).toBe(beforeFailure + 1)
+          expect(
+            await page!.evaluate(() =>
+              document.querySelector<HTMLInputElement>('#link-url-alpha')!.value
+            ),
+          ).toBe('https://example.invalid/failure')
+          await click(page!, '[data-emergency-cancel]')
+          state.status = 200
+          await clickText(page!, 'Paste text')
+          await fill(page!, '#text-title-alpha', 'Research note')
+          await fill(page!, '#text-body-alpha', 'A research note for the portal.')
+          await oneAction(() => submit('#text-title-alpha'), 'add-text')
+          await clickText(page!, 'Upload file')
+          const upload = async (count = 1) => {
+            await page!.evaluate((count) => {
+              const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+              const transfer = new DataTransfer()
+              for (let i = 0; i < count; i++) {
+                transfer.items.add(
+                  new File(['Research content'], `research-${i}.txt`, { type: 'text/plain' }),
+                )
+              }
+              input.files = transfer.files
+              input.dispatchEvent(new Event('change', { bubbles: true }))
+            }, { args: [count] })
+            await settle(page!)
+          }
+          const beforeBulk = requests.length
+          await upload(2)
+          expect(requests.length).toBe(beforeBulk)
+          expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+          await oneAction(() => upload(), 'upload-file')
+          await clickText(page!, 'Crawl site')
+          await fill(page!, '#crawl-url-alpha', 'https://example.invalid')
+          await oneAction(() => submit('#crawl-url-alpha'), 'discover-crawl')
+          expect(
+            await page!.evaluate(() =>
+              [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+                b.textContent?.includes('Ingest 2 selected')
+              )?.disabled
+            ),
+          ).toBe(true)
+          await page!.evaluate(() =>
+            document.querySelector('#crawl-url-alpha')!.scrollIntoView({ block: 'center' })
+          )
+          await capture(`content-crawl-${palette}-${width}`)
+          await fill(page!, '#source-url-alpha', 'https://example.invalid/research')
+          await oneAction(() => submit('#source-url-alpha'), 'add-source')
+          await oneAction(() => clickText(page!, 'Refresh sources'), 'read-sources')
+          await oneAction(() => clickText(page!, 'Sync now'), 'sync-source')
+          for (const malformed of [false, true]) {
+            syncComplete = malformed
+            syncMalformed = malformed
+            await clickText(page!, 'Sync now')
+            await confirm()
+            await page!.waitForSelector('[role=dialog] [role=alert]')
+            await click(page!, '[data-emergency-cancel]')
+            expect(
+              await page!.evaluate(() =>
+                document.body.textContent!.includes('We could not confirm the result')
+              ),
+            ).toBe(true)
+          }
+          syncComplete = true
+          syncMalformed = false
+          await oneAction(async () => {
+            await page!.evaluate(() => {
+              const select = document.querySelector<HTMLSelectElement>('#source-cap-source-one')!
+              select.value = '50'
+              select.dispatchEvent(new Event('change', { bubbles: true }))
+            })
+            await settle(page!)
+          }, 'update-source')
+          await oneAction(async () => {
+            await page!.evaluate(() =>
+              document.querySelector<HTMLInputElement>('#source-cap-source-one')!.closest('li')!
+                .querySelector<HTMLInputElement>('input[type=checkbox]')!.click()
+            )
+            await settle(page!)
+          }, 'source-auto')
+          await page!.evaluate(() =>
+            document.querySelector('#source-cap-source-one')!.scrollIntoView({ block: 'center' })
+          )
+          await capture(`content-sources-${palette}-${width}`)
+          await oneAction(() => clickText(page!, 'Remove'), 'delete-source')
+          await oneAction(() => clickText(page!, 'Refresh recent additions'), 'read-recent')
+          await oneAction(() => clickText(page!, 'Hide'), 'hide-resource')
+          recent[0]!.hidden = true
+          await oneAction(() => clickText(page!, 'Refresh recent additions'), 'refresh-draft')
+          await oneAction(() => clickText(page!, 'Publish'), 'publish-resource')
+          recent[0]!.hidden = false
+          const beforePoll = requests.length
+          await new Promise((resolve) => setTimeout(resolve, 4200))
+          await page!.evaluate(() => {
+            dispatchEvent(new Event('fixture-invalidate'))
+            dispatchEvent(new Event('focus'))
+            dispatchEvent(new Event('fixture-inspect'))
+          })
+          await settle(page!)
+          expect(requests.length).toBe(beforePoll)
+          expect(
+            await page!.evaluate(() =>
+              document.body.dataset.cache!.includes('one-request-test-value')
+            ),
+          ).toBe(false)
+          await page!.evaluate(() =>
+            [...document.querySelectorAll('h3')].find((h) => h.textContent === 'Recent additions')!
+              .scrollIntoView({ block: 'center' })
+          )
+          await capture(`content-recent-${palette}-${width}`)
+        }
+      }
+      state.capability = 'session'
+      await open('manage')
+      await page!.waitForSelector('[data-admin-overview]')
+      await clickText(page!, 'Content')
+      await clickText(page!, 'Add content')
+      const sessionStart = requests.length
+      await page!.evaluate(() => {
+        const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+        const transfer = new DataTransfer()
+        for (let i = 0; i < 2; i++) transfer.items.add(new File(['Research'], `research-${i}.txt`))
+        input.files = transfer.files
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await settle(page!)
+      expect(
+        requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
+      ).toBe(2)
+      expect(requests.slice(sessionStart).every((r) => !r.emergency)).toBe(true)
+      await clickText(page!, 'Crawl site')
+      await fill(page!, '#crawl-url-alpha', 'https://example.invalid')
+      await clickText(page!, 'Discover')
+      await settle(page!)
+      state.status = 503
+      const beforeBusy = requests.length
+      await clickText(page!, 'Ingest 2 selected')
+      await settle(page!)
+      expect(requests.slice(beforeBusy).filter((r) => r.path.endsWith('/resources/link')).length)
+        .toBe(1)
+      expect(await page!.evaluate(() => document.body.textContent!.includes('remaining 1 link')))
+        .toBe(true)
+      state.status = 200
+      const beforeSessionPoll = requests.length
+      await new Promise((resolve) => setTimeout(resolve, 4200))
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+      await settle(page!)
+      expect(requests.length).toBeGreaterThan(beforeSessionPoll)
+      expect(requests.slice(beforeSessionPoll).every((r) => !r.emergency)).toBe(true)
+      expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
       for (const kind of ['admin', 'manage', 'taxonomy']) {
         for (const palette of ['light', 'observatory']) {
           for (const width of [1440, 390]) {
@@ -631,7 +890,13 @@ Deno.test({
       delayMs: 0,
     }
     const server = startTestServer({ emergencyFixture: { directory, state } })
-    const browser = await launch()
+    const browser = await launch({
+      args: [
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+      ],
+    })
     const evidence: unknown[] = []
     let page: Page | undefined
     try {

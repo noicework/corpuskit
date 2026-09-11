@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RecentResource } from '@research-portal/core'
 import { getAdminRecent, setResourceHidden } from '../../api/client.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 import { errorMessage } from './shared.ts'
 
@@ -24,15 +26,14 @@ function StatusChip({ status }: { status: RecentResource['status'] }) {
  * or publish a draft one, and refetch the list on success. */
 function VisibilityControl({
   slug,
-  passcode,
   resource,
   onChanged,
 }: {
   slug: string
-  passcode: string
   resource: RecentResource
   onChanged: () => Promise<unknown>
 }) {
+  const { runExplicit } = useAdminAccess()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,7 +41,12 @@ function VisibilityControl({
     setBusy(true)
     setError(null)
     try {
-      await setResourceHidden(slug, passcode, resource.id, !resource.hidden)
+      const result = await runExplicit(
+        resource.hidden ? 'Publish resource' : 'Hide resource',
+        (access) => setResourceHidden(slug, access, resource.id, !resource.hidden),
+      )
+      if (result === undefined) return
+      if (result.ok !== true) throw new AdminAccessError()
       await onChanged()
     } catch (err) {
       setError(errorMessage(err, 'Could not change visibility.'))
@@ -50,7 +56,7 @@ function VisibilityControl({
   }
 
   return (
-    <span className='flex shrink-0 items-center gap-2'>
+    <span className='flex flex-wrap items-center gap-2'>
       {resource.hidden && <span className='rp-badge rp-badge-quiet'>Draft</span>}
       <button
         type='button'
@@ -71,20 +77,55 @@ function VisibilityControl({
  * without a manual refresh. Each row also carries a visibility control so
  * the librarian can hide a resource (draft) or publish it again.
  */
-export function RecentList({ slug, passcode }: { slug: string; passcode: string }) {
+export function RecentList({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+  const [snapshot, setSnapshot] = useState<RecentResource[]>()
+  const [error, setError] = useState<string>()
   const queryClient = useQueryClient()
-  const { data, isLoading, isError } = useQuery({
+  const query = useQuery({
     queryKey: ['admin-recent', slug],
-    queryFn: () => getAdminRecent(slug, passcode),
+    queryFn: () => getAdminRecent(slug, sessionAccess),
+    enabled: coarseAdminEligible,
+    retry: false,
     refetchInterval: (query) =>
-      query.state.data?.some((r) => r.status === 'pending') ? 4000 : false,
+      coarseAdminEligible && query.state.data?.some((r) => r.status === 'pending') ? 4000 : false,
   })
 
+  const { isLoading, isError } = query
+  const data = coarseAdminEligible ? query.data : snapshot
+  const refresh = async () => {
+    setError(undefined)
+    try {
+      const result = await runExplicit(
+        'Read recent additions',
+        (access) => getAdminRecent(slug, access),
+      )
+      if (result === undefined) return
+      if (coarseAdminEligible) queryClient.setQueryData(['admin-recent', slug], result)
+      else setSnapshot(result)
+    } catch (err) {
+      setError(errorMessage(err, 'Could not load recent additions.'))
+    }
+  }
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
 
   return (
     <div>
       <h3 className='text-sm font-medium text-ink'>Recent additions</h3>
+      <button
+        type='button'
+        className='rp-btn rp-btn-outline mt-3'
+        disabled={pending}
+        onClick={() => void refresh()}
+      >
+        Refresh recent additions
+      </button>
+      {!coarseAdminEligible && (
+        <p className='mt-2 text-xs text-ink-3'>
+          This is a snapshot. Refresh explicitly to check processing or visibility changes.
+        </p>
+      )}
+      {error && <p role='alert' className='mt-2 text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
 
       {isLoading && (
         <div className='mt-2 space-y-2'>
@@ -105,14 +146,13 @@ export function RecentList({ slug, passcode }: { slug: string; passcode: string 
               className='flex flex-wrap items-center justify-between gap-2 bg-surface px-4 py-2.5'
             >
               <span className='min-w-0 truncate text-sm text-ink'>{resource.title}</span>
-              <span className='flex shrink-0 flex-wrap items-center gap-3'>
+              <span className='flex min-w-0 flex-wrap items-center gap-3'>
                 {resource.created && (
                   <span className='text-xs text-ink-3'>{resource.created.slice(0, 10)}</span>
                 )}
                 <StatusChip status={resource.status} />
                 <VisibilityControl
                   slug={slug}
-                  passcode={passcode}
                   resource={resource}
                   onChanged={onChanged}
                 />

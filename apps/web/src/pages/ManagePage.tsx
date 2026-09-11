@@ -145,7 +145,7 @@ function ManageContent() {
             </nav>
 
             <div className='min-w-0'>
-              {!coarseAdminEligible && tab !== 'details' && (
+              {!coarseAdminEligible && !['details', 'content'].includes(tab) && (
                 <div className='rp-card p-5'>
                   <h2 className='text-lg font-semibold'>{row.tenant.productName}</h2>
                   <p className='mt-3 text-sm text-ink-2'>
@@ -183,7 +183,7 @@ function ManageContent() {
                       </div>
                     )}
                   <div className='rp-card p-5'>
-                    <RecentList slug={slug} passcode='microsoft-sso' />
+                    <RecentList slug={slug} />
                   </div>
                 </div>
               )}
@@ -206,14 +206,13 @@ function ManageContent() {
                 </div>
               )}
 
-              {coarseAdminEligible && tab === 'content' && (
+              {tab === 'content' && (
                 <div className='space-y-4'>
                   <div className='rp-card p-5'>
                     {reachable
                       ? (
                         <AddContent
                           slug={slug}
-                          passcode='microsoft-sso'
                           onAdded={onContentAdded}
                         />
                       )
@@ -229,8 +228,13 @@ function ManageContent() {
                         </p>
                       )}
                   </div>
-                  {reachable && <SourcesPanel slug={slug} passcode='microsoft-sso' />}
-                  {reachable && <CorpusHealthPanel slug={slug} passcode='microsoft-sso' />}
+                  {reachable && <SourcesPanel slug={slug} />}
+                  <div className='rp-card p-5'>
+                    <RecentList slug={slug} />
+                  </div>
+                  {reachable && coarseAdminEligible && (
+                    <CorpusHealthPanel slug={slug} passcode='microsoft-sso' />
+                  )}
                 </div>
               )}
 
