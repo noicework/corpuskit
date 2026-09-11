@@ -1271,30 +1271,106 @@ describe('GET /api/health', () => {
     expect(body.web).toBe(false)
   })
 
-  it('reports documentation readiness per portal without failing liveness (P7-08)', async () => {
+  it('never reads or exposes restricted portal readiness on anonymous health', async () => {
     const dir = Deno.makeTempDirSync()
-    Deno.writeTextFileSync(`${dir}/index.html`, '<!doctype html>')
+    const slug = 'private-readiness-canary'
     const status = {
-      neuro: { documents: 0, ok: false, checkedAt: '2026-09-04T00:00:00.000Z' },
+      [slug]: {
+        documents: 987654321,
+        ok: false,
+        checkedAt: '2026-09-04T00:00:00.000Z',
+        error: 'private-provider-error-canary',
+      },
     }
+    const calls: string[] = []
+    try {
+      const config = { ...freshTenants().get('marine')!, slug, accessMode: 'restricted' }
+      Deno.writeTextFileSync(`${dir}/tenants.json`, JSON.stringify({ custom: { [slug]: config } }))
+      const tenants = new TenantStore({ TENANTS_PATH: `${dir}/tenants.json` })
+      expect(tenants.get(slug)?.accessMode).toBe('restricted')
+      const provider = new Proxy(new StubProvider(), {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver)
+          return typeof value === 'function'
+            ? () => {
+              calls.push(String(property))
+              throw new Error('Health must not call the provider')
+            }
+            : value
+        },
+      })
+      for (const webAvailable of [true, false]) {
+        const app = buildApp({
+          provider,
+          tenants,
+          webAvailable,
+          buildSha: 'api-commit',
+          webBuild: { sha: 'web-commit', builtAt: '2026-09-12T00:00:00Z' },
+          docsHealth: {
+            snapshot: () => {
+              calls.push('snapshot')
+              return status
+            },
+            ok: () => {
+              calls.push('ok')
+              return false
+            },
+            checkTenant: () => {
+              calls.push('checkTenant')
+              return Promise.resolve(status[slug]!)
+            },
+          },
+        })
+        const response = await app.request('/api/health')
+        expect(response.status).toBe(webAvailable ? 200 : 503)
+        const body = await response.json()
+        expect(body).toEqual({
+          ok: webAvailable,
+          web: webAvailable,
+          version: 'api-commit',
+          buildSha: 'web-commit',
+          builtAt: '2026-09-12T00:00:00Z',
+        })
+        for (
+          const secret of [
+            slug,
+            '987654321',
+            status[slug]!.error,
+            'documents',
+            'docs',
+            'docsOk',
+            'error',
+            'checkedAt',
+          ]
+        ) {
+          expect(JSON.stringify(body)).not.toContain(secret)
+        }
+        expect(calls).toEqual([])
+      }
+    } finally {
+      Deno.removeSync(dir, { recursive: true })
+    }
+  })
+
+  it('bounds and flattens build stamps without serialising extra build properties', async () => {
     const app = buildApp({
       provider: new StubProvider(),
-      tenants: freshTenants(),
-      webDistPath: dir,
-      docsHealth: {
-        snapshot: () => status,
-        ok: () => false,
-        checkTenant: () => Promise.resolve(status.neuro),
-      },
+      webAvailable: true,
+      buildSha: 'a'.repeat(300),
+      webBuild: {
+        sha: 'b'.repeat(300),
+        builtAt: 'c'.repeat(300),
+        private: 'hidden',
+      } as BuildAppOptions['webBuild'],
     })
-
-    const response = await app.request('/api/health')
-
-    expect(response.status).toBe(200)
-    const body = await response.json()
-    expect(body.ok).toBe(true)
-    expect(body.docsOk).toBe(false)
-    expect(body.docs.neuro.documents).toBe(0)
+    const body = await (await app.request('/api/health')).json()
+    expect(body).toEqual({
+      ok: true,
+      web: true,
+      version: 'a'.repeat(160),
+      buildSha: 'b'.repeat(160),
+      builtAt: 'c'.repeat(160),
+    })
   })
 
   it('requires no authentication', async () => {

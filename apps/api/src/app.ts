@@ -834,7 +834,7 @@ export interface BuildAppOptions {
   webDistPath?: string
   /** Runtime adapters that serve assets outside the local filesystem set this explicitly. */
   webAvailable?: boolean
-  /** Documentation readiness probe (docs-health.ts); reported on /api/health as `docs`. */
+  /** Internal documentation readiness probe; never exposed by public health. */
   docsHealth?: Pick<DocsHealth, 'snapshot' | 'ok' | 'checkTenant'>
   buildSha?: string
   /** The web bundle's stamp (commit and build time), from `deno task build:web`. */
@@ -1471,21 +1471,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const webDistPath = opts.webDistPath ?? './apps/web/dist'
   app.get(declaredRoute('GET', '/api/health'), (c) => {
     const web = opts.webAvailable ?? existsSync(`${webDistPath}/index.html`)
-    // Documentation readiness (see docs-health.ts): a portal whose in-app
-    // documentation was never ingested answers every route fine while Help
-    // returns nothing. It is reported here, per portal, so a deploy without
-    // docs is visible - but it never fails liveness, so a missing help
-    // section cannot take a serving portal out of rotation.
-    const docs = opts.docsHealth?.snapshot()
-    const docsOk = opts.docsHealth?.ok() ?? true
+    // Explicit scalar projection keeps portal readiness and extra build metadata private.
+    const stamp = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value.slice(0, 160) : undefined
+    const builtAt = stamp(opts.webBuild?.builtAt)
+    const buildSha = stamp(opts.webBuild?.sha)
     return c.json(
       {
         ok: web,
         web,
-        version: opts.buildSha ?? process.env.BUILD_SHA ?? 'dev',
+        version: stamp(opts.buildSha ?? process.env.BUILD_SHA) ?? 'dev',
         // The bundle actually served, so a stale build is visible (D1-21).
-        ...(opts.webBuild ? { build: opts.webBuild } : {}),
-        ...(docs ? { docs, docsOk } : {}),
+        ...(builtAt ? { builtAt } : {}),
+        ...(buildSha ? { buildSha } : {}),
       },
       web ? 200 : 503,
     )
@@ -3865,7 +3863,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     try {
       const configs = await management!.ensureSearchConfigs(config).catch(() => [] as string[])
       const result = await management!.ingestDocumentation(config)
-      // Refresh the readiness signal so /api/health reflects the ingestion
+      // Refresh the internal documentation readiness signal after ingestion
       // (best effort: a freshly ingested page can take a minute to index).
       void opts.docsHealth?.checkTenant(config).catch(() => {})
       return c.json({ ok: true, searchConfigs: configs, ...result })
