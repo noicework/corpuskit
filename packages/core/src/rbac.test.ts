@@ -4,7 +4,9 @@ import {
   ACCESS_MODES,
   AccessModeSchema,
   AuthorisationPrincipalSchema,
+  authorize,
   EffectiveRolesSchema,
+  normalisePrincipal,
   PERMISSIONS,
   PermissionSchema,
   PLATFORM_ROLES,
@@ -22,6 +24,227 @@ const user = { kind: 'user', tenantId: 'tenant-a', oid: 'user-a' }
 const anonymous = { kind: 'anonymous' }
 const publicPolicy = { slug: 'alpha', accessMode: 'public', configuredTenantId: 'tenant-a' }
 const noRoles = { portalRoles: [] }
+const alpha = { kind: 'portal', slug: 'alpha' }
+const platform = { kind: 'platform' }
+
+describe('explicit D2 principal normalisation', () => {
+  it('requires contextual authority and exactly three evaluator arguments', () => {
+    expect(authorize.length).toBe(3)
+    expect(authorize(anonymous, 'portal.read', alpha)).toBe(false)
+    expect(authorize(user, 'portal.read', alpha)).toBe(false)
+    for (const identity of [anonymous, user]) {
+      const principal = normalisePrincipal(identity, noRoles)
+      expect(principal).toEqual({ identity, effectiveRoles: noRoles })
+      expect(authorize(principal, 'portal.read', alpha)).toBe(false)
+    }
+  })
+
+  it('adds only viewer on the exact public policy slug for anonymous and signed identities', () => {
+    for (const identity of [anonymous, user, { ...user, tenantId: 'other-tenant' }]) {
+      const principal = normalisePrincipal(identity, noRoles, publicPolicy)
+      expect(principal).toEqual({
+        identity,
+        effectiveRoles: { portalRoles: [{ slug: 'alpha', role: 'viewer' }] },
+        portalPolicy: publicPolicy,
+      })
+      for (const permission of PERMISSIONS) {
+        expect(authorize(principal, permission, alpha)).toBe(
+          permission === 'portal.read' || permission === 'portal.ask',
+        )
+        expect(authorize(principal, permission, { kind: 'portal', slug: 'beta' })).toBe(false)
+        expect(authorize(principal, permission, platform)).toBe(false)
+      }
+    }
+  })
+
+  it('requires exact configured tenant equality for authenticated implicit viewer', () => {
+    const policy = { ...publicPolicy, accessMode: 'authenticated' }
+    expect(authorize(normalisePrincipal(user, noRoles, policy), 'portal.ask', alpha)).toBe(true)
+    for (
+      const identity of [anonymous, { ...user, tenantId: 'Tenant-a' }, {
+        ...user,
+        tenantId: 'tenant-a ',
+      }]
+    ) {
+      const principal = normalisePrincipal(identity, noRoles, policy)
+      expect(principal?.effectiveRoles).toEqual(noRoles)
+      expect(authorize(principal, 'portal.read', alpha)).toBe(false)
+    }
+  })
+
+  it('adds no implicit authority for restricted portals', () => {
+    for (const identity of [anonymous, user]) {
+      const principal = normalisePrincipal(identity, noRoles, {
+        ...publicPolicy,
+        accessMode: 'restricted',
+      })
+      expect(principal?.effectiveRoles).toEqual(noRoles)
+      for (const permission of PERMISSIONS) {
+        expect(authorize(principal, permission, alpha)).toBe(false)
+      }
+    }
+  })
+
+  it('preserves higher explicit roles, unrelated assignments and platform authority', () => {
+    const roles = {
+      platformRole: 'owner',
+      portalRoles: [{ slug: 'alpha', role: 'curator' }, { slug: 'beta', role: 'analyst' }],
+    }
+    for (
+      const policy of [undefined, publicPolicy, { ...publicPolicy, accessMode: 'authenticated' }, {
+        ...publicPolicy,
+        accessMode: 'restricted',
+      }]
+    ) {
+      const principal = normalisePrincipal(user, roles, policy)
+      expect(principal?.effectiveRoles).toEqual(roles)
+      expect(authorize(principal, 'portal.delete', platform)).toBe(true)
+    }
+    const assigned = { portalRoles: [{ slug: 'alpha', role: 'curator' }] }
+    const wrongTenant = normalisePrincipal({ ...user, tenantId: 'other' }, assigned, {
+      ...publicPolicy,
+      accessMode: 'authenticated',
+    })
+    expect(authorize(wrongTenant, 'content.write', alpha)).toBe(true)
+    expect(
+      normalisePrincipal(user, assigned, { ...publicPolicy, slug: 'beta' })?.effectiveRoles
+        .portalRoles,
+    ).toEqual([
+      { slug: 'alpha', role: 'curator' },
+      { slug: 'beta', role: 'viewer' },
+    ])
+  })
+
+  it('rejects all anonymous explicit assignments, even viewer with public policy', () => {
+    for (const role of PORTAL_ROLES) {
+      expect(
+        normalisePrincipal(anonymous, { portalRoles: [{ slug: 'alpha', role }] }, publicPolicy),
+      ).toBeNull()
+    }
+    for (const platformRole of PLATFORM_ROLES) {
+      expect(normalisePrincipal(anonymous, { ...noRoles, platformRole }, publicPolicy)).toBeNull()
+    }
+  })
+
+  it('rejects malformed inputs without retaining a permissive subset', () => {
+    for (
+      const identity of [null, {}, { ...anonymous, isAdmin: true }, { ...user, tenantId: '' }, {
+        kind: 'key',
+      }, { kind: 'system' }]
+    ) {
+      expect(normalisePrincipal(identity, noRoles, publicPolicy)).toBeNull()
+    }
+    for (
+      const roles of [null, {}, { ...noRoles, platformRole: 'unknown' }, {
+        platformRole: 'owner',
+        portalRoles: [{ slug: 'alpha', role: 'unknown' }],
+      }]
+    ) {
+      expect(normalisePrincipal(user, roles, publicPolicy)).toBeNull()
+    }
+    for (
+      const policy of [null, {}, { ...publicPolicy, accessMode: 'unknown' }, {
+        ...publicPolicy,
+        configuredTenantId: '',
+      }]
+    ) {
+      expect(normalisePrincipal(user, { ...noRoles, platformRole: 'owner' }, policy)).toBeNull()
+    }
+  })
+
+  it('returns fresh contextual objects without mutating input authority', () => {
+    const roles = { portalRoles: [{ slug: 'beta', role: 'curator' }] }
+    const before = structuredClone({ user, roles, publicPolicy })
+    const principal = normalisePrincipal(user, roles, publicPolicy)
+    expect({ user, roles, publicPolicy }).toEqual(before)
+    expect(principal?.identity).not.toBe(user)
+    expect(principal?.effectiveRoles).not.toBe(roles)
+    expect(principal?.effectiveRoles.portalRoles[0]).not.toBe(roles.portalRoles[0])
+    expect(principal?.portalPolicy).not.toBe(publicPolicy)
+  })
+})
+
+describe('D1 permission boundaries', () => {
+  it('grants each portal role its boundary and denies the next level or platform-only action', () => {
+    const cases = [
+      ['viewer', 'portal.ask', 'portal.generate'],
+      ['analyst', 'portal.watch', 'content.write'],
+      ['curator', 'graph.write', 'behaviour.write'],
+      ['portal-admin', 'members.manage', 'portal.create'],
+    ] as const
+    for (const [role, allowed, denied] of cases) {
+      const principal = normalisePrincipal(user, { portalRoles: [{ slug: 'alpha', role }] })
+      expect(authorize(principal, allowed, alpha)).toBe(true)
+      expect(authorize(principal, denied, alpha)).toBe(false)
+      expect(authorize(principal, allowed, { kind: 'portal', slug: 'beta' })).toBe(false)
+    }
+  })
+
+  it('grants platform roles in their domain and implies portal-admin on future portals', () => {
+    for (const platformRole of PLATFORM_ROLES) {
+      const principal = normalisePrincipal(user, { ...noRoles, platformRole })
+      expect(authorize(principal, 'portal.create', platform)).toBe(true)
+      expect(authorize(principal, 'portal.delete', platform)).toBe(platformRole === 'owner')
+      expect(authorize(principal, 'platform.members.manage', platform)).toBe(
+        platformRole === 'owner',
+      )
+      expect(authorize(principal, 'platform.settings.write', platform)).toBe(
+        platformRole === 'owner',
+      )
+      expect(authorize(principal, 'members.manage', { kind: 'portal', slug: 'future' })).toBe(true)
+      expect(authorize(principal, 'portal.read', platform)).toBe(false)
+      expect(authorize(principal, 'portal.delete', alpha)).toBe(false)
+    }
+  })
+
+  it('keeps both audit permissions independently scoped', () => {
+    const portalAdmin = normalisePrincipal(user, {
+      portalRoles: [{ slug: 'alpha', role: 'portal-admin' }],
+    })
+    const curator = normalisePrincipal(user, { portalRoles: [{ slug: 'alpha', role: 'curator' }] })
+    const platformAdmin = normalisePrincipal(user, { ...noRoles, platformRole: 'platform-admin' })
+    for (const permission of ['audit.read', 'audit.export']) {
+      expect(authorize(portalAdmin, permission, alpha)).toBe(true)
+      expect(authorize(portalAdmin, permission, platform)).toBe(false)
+      expect(authorize(curator, permission, alpha)).toBe(false)
+      expect(authorize(platformAdmin, permission, alpha)).toBe(true)
+      expect(authorize(platformAdmin, permission, platform)).toBe(true)
+    }
+  })
+
+  it('validates the whole input before platform authority can grant anything', () => {
+    const owner = { identity: user, effectiveRoles: { ...noRoles, platformRole: 'owner' } }
+    for (
+      const principal of [
+        null,
+        undefined,
+        {},
+        { ...owner, extra: true },
+        { ...owner, identity: { ...user, tenantId: '' } },
+        {
+          ...owner,
+          effectiveRoles: {
+            platformRole: 'owner',
+            portalRoles: [{ slug: 'beta', role: 'unknown' }],
+          },
+        },
+        { ...owner, portalPolicy: { ...publicPolicy, accessMode: 'unknown' } },
+        { ...owner, identity: anonymous },
+      ]
+    ) expect(authorize(principal, 'portal.create', platform)).toBe(false)
+    for (const permission of [null, undefined, '', 'unknown', 'constructor', '*', {}]) {
+      expect(authorize(owner, permission, platform)).toBe(false)
+    }
+    for (
+      const scope of [null, undefined, {}, { kind: 'portal', slug: '' }, {
+        kind: 'platform',
+        slug: 'alpha',
+      }]
+    ) {
+      expect(authorize(owner, 'portal.create', scope)).toBe(false)
+    }
+  })
+})
 
 describe('RBAC catalogue and schema contracts', () => {
   it('exports exactly the ordered domains and permission catalogue', () => {
