@@ -1,6 +1,8 @@
 import { type FormEvent, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { renamePortal } from '../../api/client.ts'
+import { AdminAccessError } from '../../api/break-glass.ts'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
@@ -11,7 +13,6 @@ import { errorMessage, type Message } from './shared.ts'
  */
 export function RenamePortal({
   slug,
-  passcode,
   initialName,
   initialOrganisation,
   initialTagline,
@@ -19,13 +20,13 @@ export function RenamePortal({
   onSaved,
 }: {
   slug: string
-  passcode: string
   initialName: string
   initialOrganisation: string
   initialTagline: string
   onCancel: () => void
   onSaved: () => void
 }) {
+  const { runExplicit } = useAdminAccess()
   const queryClient = useQueryClient()
   const [name, setName] = useState(initialName)
   const [organisation, setOrganisation] = useState(initialOrganisation)
@@ -38,11 +39,16 @@ export function RenamePortal({
     setBusy(true)
     setMessage(null)
     try {
-      await renamePortal(slug, passcode, {
-        name: name.trim(),
-        organisation: organisation.trim(),
-        tagline: tagline.trim(),
+      const completed = await runExplicit(`Rename ${initialName}`, async (access) => {
+        const result = await renamePortal(slug, access, {
+          name: name.trim(),
+          organisation: organisation.trim(),
+          tagline: tagline.trim(),
+        })
+        if (result?.ok !== true) throw new AdminAccessError()
+        return true
       })
+      if (completed === undefined) return
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
@@ -96,9 +102,9 @@ export function RenamePortal({
           />
         </div>
       </div>
-      <div className='flex items-center gap-3'>
+      <div className='flex flex-wrap items-center gap-3'>
         <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? 'Sending request...' : 'Save'}
         </button>
         <button type='button' disabled={busy} onClick={onCancel} className='rp-btn rp-btn-outline'>
           Cancel

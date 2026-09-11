@@ -312,7 +312,6 @@ function ManageContent() {
                     ? (
                       <RenamePortal
                         slug={slug}
-                        passcode='microsoft-sso'
                         initialName={config.branding.productName}
                         initialOrganisation={config.branding.organisation}
                         initialTagline={config.branding.tagline}

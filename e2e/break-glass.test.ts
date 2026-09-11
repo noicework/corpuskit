@@ -2,6 +2,9 @@ import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { type EmergencyFixtureState, startTestServer } from './support/test-server.ts'
 
+// Suite duration must not age a build that was fresh when this test run started.
+const browserRunStartedAt = Date.now()
+
 async function digest(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer))]
     .map((value) => value.toString(16).padStart(2, '0')).join('')
@@ -78,10 +81,11 @@ function Layout() {
  const refresh = () => client.invalidateQueries({ queryKey: ['auth-session'] })
  const invalidate = () => client.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'auth-session' })
  const inspect = () => { document.body.dataset.cache = JSON.stringify(client.getQueryCache().getAll().map(q => ({ key: q.queryKey, data: q.state.data }))) }
+ const unsubscribe = client.getQueryCache().subscribe(() => { document.body.dataset.authId = client.getQueryData(['auth-session'])?.user?.id ?? 'anonymous' })
  addEventListener('fixture-refresh-capability', refresh)
  addEventListener('fixture-invalidate', invalidate)
  addEventListener('fixture-inspect', inspect)
- return () => { removeEventListener('fixture-refresh-capability', refresh); removeEventListener('fixture-invalidate', invalidate); removeEventListener('fixture-inspect', inspect) }
+ return () => { unsubscribe(); removeEventListener('fixture-refresh-capability', refresh); removeEventListener('fixture-invalidate', invalidate); removeEventListener('fixture-inspect', inspect) }
  }, [])
  return <div className='rp-tenant min-h-screen bg-app text-ink' style={tenantThemeVars(branding)} data-fixture-build='${marker}'><header className='border-b border-line bg-surface p-6'>CorpusKit administration</header><Outlet context={{ config: { slug: 'alpha', branding } }} /></div>
 }
@@ -116,7 +120,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     const appHash = await digest(await Deno.readFile('apps/web/dist/app.js'))
     const fixtureHash = await digest(await Deno.readFile(`${directory}/entry.js`))
     const stamp = JSON.parse(await Deno.readTextFile('apps/web/dist/build.json'))
-    expect(Date.now() - Date.parse(stamp.builtAt)).toBeLessThan(180_000)
+    expect(browserRunStartedAt - Date.parse(stamp.builtAt)).toBeLessThan(180_000)
+    expect(Date.parse(stamp.builtAt)).toBeLessThanOrEqual(browserRunStartedAt)
     const state: EmergencyFixtureState = {
       capability: 'enabled',
       status: 200,
@@ -127,6 +132,9 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     const base = startTestServer({ emergencyFixture: { directory, state } })
     const requests: { path: string; method: string; emergency: boolean }[] = []
     let migrationComplete = true
+    let renameOk = true
+    let sessionIdentity = 'original-user'
+    const renameBodies: unknown[] = []
     const rows = ['alpha', 'beta'].map((slug) => ({
       tenant: {
         slug,
@@ -141,11 +149,15 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }))
     const proxy = Deno.serve({ port: 0, hostname: '127.0.0.1', onListen() {} }, async (request) => {
       const url = new URL(request.url)
+      if (url.pathname === '/auth/me' && state.capability === 'session') {
+        const session = await (await fetch(`${base.url}/auth/me`)).json()
+        return Response.json({ ...session, user: { ...session.user, id: sessionIdentity } })
+      }
       if (url.pathname.startsWith('/api/admin/')) {
         const emergency = request.headers.has('x-admin-passcode')
         requests.push({ path: url.pathname, method: request.method, emergency })
-        if (state.delayMs) await new Promise((resolve) => setTimeout(resolve, state.delayMs))
         const status = !emergency && state.capability !== 'session' ? 403 : state.status
+        if (state.delayMs) await new Promise((resolve) => setTimeout(resolve, state.delayMs))
         if (status !== 200) {
           return Response.json({ message: 'Refused' }, {
             status: status === 429 ? 403 : status,
@@ -164,6 +176,10 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
               headers: { 'content-type': 'text/event-stream' },
             },
           )
+        }
+        if (request.method === 'PATCH' && url.pathname === '/api/admin/tenants/alpha') {
+          renameBodies.push(await request.json())
+          return Response.json(renameOk ? { ok: true } : {})
         }
         return Response.json(
           url.pathname === '/api/admin/overview'
@@ -462,6 +478,105 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           }
         }
       }
+      for (const kind of ['admin', 'manage']) {
+        for (const palette of ['light', 'observatory']) {
+          for (const width of [1440, 390]) {
+            state.capability = 'enabled'
+            state.status = 200
+            await open(kind, palette, width)
+            await clickText(page!, 'Use emergency access')
+            await confirm()
+            await page!.waitForSelector('[data-admin-overview]')
+            await clickText(page!, kind === 'admin' ? 'Protected alpha' : 'Details')
+            await clickText(page!, 'Rename')
+            await fill(page!, '#rename-name-alpha', 'Renamed portal')
+            await fill(page!, '#rename-org-alpha', 'Renamed organisation')
+            await fill(page!, '#rename-tagline-alpha', 'Renamed tagline')
+            const name = `rename-${kind}-${palette}-${width}`
+            await page!.evaluate(() =>
+              document.querySelector('#rename-name-alpha')?.closest('form')?.scrollIntoView({
+                block: 'center',
+              })
+            )
+            await capture(`${name}-form`)
+            const before = requests.length
+            await clickText(page!, 'Save')
+            expect(requests.length).toBe(before)
+            await page!.waitForSelector('[role=dialog]')
+            await capture(`${name}-prompt`)
+            await click(page!, '[data-emergency-cancel]')
+            expect(requests.length).toBe(before)
+            expect(
+              await page!.evaluate(() =>
+                document.querySelector<HTMLInputElement>('#rename-name-alpha')?.value
+              ),
+            ).toBe('Renamed portal')
+            await clickText(page!, 'Save')
+            await confirm()
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            expect(requests.at(-1)).toEqual({
+              path: '/api/admin/tenants/alpha',
+              method: 'PATCH',
+              emergency: true,
+            })
+            expect(renameBodies.at(-1)).toEqual({
+              name: 'Renamed portal',
+              organisation: 'Renamed organisation',
+              tagline: 'Renamed tagline',
+            })
+            expect(await page!.evaluate(() => document.querySelector('#rename-name-alpha'))).toBe(
+              null,
+            )
+            await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            await capture(`${name}-result`)
+            await clickText(page!, 'Rename')
+            for (const status of [401, 500, 200]) {
+              state.status = status
+              renameOk = false
+              await clickText(page!, 'Save')
+              await confirm()
+              await page!.waitForSelector('[role=dialog] [role=alert]')
+              expect(
+                await page!.evaluate(() => Boolean(document.querySelector('#rename-name-alpha'))),
+              ).toBe(true)
+              const message = await page!.evaluate(() =>
+                document.querySelector('[role=dialog] [role=alert]')?.textContent
+              )
+              expect(message).toContain(
+                status === 401 ? 'not accepted' : 'could not confirm the result',
+              )
+              await capture(`${name}-${status}-failure`)
+              await click(page!, '[data-emergency-cancel]')
+            }
+            renameOk = true
+          }
+        }
+      }
+      state.status = 200
+      state.capability = 'session'
+      await open('admin')
+      await page!.waitForSelector('[data-admin-overview]')
+      sessionIdentity = 'replacement-user'
+      state.delayMs = 300
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
+      await page!.waitForSelector('body[data-auth-id=replacement-user]')
+      await settle(page!)
+      expect(await page!.evaluate(() => document.querySelector('[data-admin-overview]'))).toBe(null)
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-inspect')))
+      expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain('original-user')
+      state.capability = 'disabled'
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
+      await page!.waitForSelector('body[data-auth-id=anonymous]')
+      await settle(page!)
+      expect(await page!.evaluate(() => document.querySelector('[data-admin-overview]'))).toBe(null)
+      await page!.evaluate(() => dispatchEvent(new Event('fixture-inspect')))
+      expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain(
+        'Protected alpha',
+      )
+      state.delayMs = 0
     } finally {
       await Deno.writeTextFile(`${directory}/evidence.json`, JSON.stringify(evidence, null, 2))
       await page?.close()
@@ -506,7 +621,8 @@ Deno.test({
     const appHash = await digest(await Deno.readFile('apps/web/dist/app.js'))
     const fixtureHash = await digest(await Deno.readFile(`${directory}/entry.js`))
     const stamp = JSON.parse(await Deno.readTextFile('apps/web/dist/build.json'))
-    expect(Date.now() - Date.parse(stamp.builtAt)).toBeLessThan(180_000)
+    expect(browserRunStartedAt - Date.parse(stamp.builtAt)).toBeLessThan(180_000)
+    expect(Date.parse(stamp.builtAt)).toBeLessThanOrEqual(browserRunStartedAt)
     const state: EmergencyFixtureState = {
       capability: 'enabled',
       status: 200,

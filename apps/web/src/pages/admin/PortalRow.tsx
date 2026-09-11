@@ -213,7 +213,6 @@ export function PortalRow({
               ? (
                 <RenamePortal
                   slug={row.tenant.slug}
-                  passcode='microsoft-sso'
                   initialName={row.tenant.productName}
                   initialOrganisation={row.tenant.organisation}
                   initialTagline={row.tenant.tagline}
