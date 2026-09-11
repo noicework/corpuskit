@@ -143,6 +143,9 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     let taxonomyPopulated = false
     const taxonomyBodies: unknown[] = []
     const brandingUploads: { path: string; contentType: string | null; bytes: number }[] = []
+    let behaviourActive = false
+    let behaviourMalformed = false
+    let promptText = 'Answer with cited research.'
     const source = {
       id: 'source-one',
       url: 'https://example.invalid/research',
@@ -202,6 +205,27 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             bytes: (await request.arrayBuffer()).byteLength,
           })
           return Response.json({ ok: true, url: '/api/t/alpha/branding/logo' })
+        }
+        if (url.pathname.endsWith('/prompts')) {
+          if (request.method === 'PUT') {
+            promptText = (await request.json()).ask
+            return Response.json({ ok: true })
+          }
+          return Response.json(behaviourMalformed ? { ask: 12 } : { ask: promptText, images: true })
+        }
+        if (url.pathname.endsWith('/search-configs/ensure')) {
+          return Response.json({ ok: true, created: ['portal-ask'] })
+        }
+        if (url.pathname.endsWith('/search-configs')) {
+          return Response.json(behaviourMalformed ? [] : { 'portal-ask': {}, 'portal-search': {} })
+        }
+        if (url.pathname.endsWith('/routing')) {
+          return Response.json(
+            behaviourMalformed ? {} : {
+              recent: [],
+              summary: { total: 4, byIntent: { research: 4 }, byStage: { rule: 4 } },
+            },
+          )
         }
         if (url.pathname.endsWith('/sources/source-one/sync')) {
           return new Response(
@@ -313,6 +337,32 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       }
       if (url.pathname.endsWith('/facets')) return Response.json({})
       if (url.pathname.endsWith('/counters')) return Response.json({ resources: 7 })
+      if (behaviourActive && url.pathname === '/api/t/alpha/config') {
+        return Response.json({
+          slug: 'alpha',
+          defaultIntent: 'research',
+          intents: [{
+            id: 'research',
+            label: 'Research',
+            description: 'Cited research answers',
+            retrieval: {
+              features: ['semantic'],
+              topK: 10,
+              reranker: 'noop',
+              only: [],
+              exclude: [],
+            },
+            answer: {
+              surfaces: ['ask', 'search'],
+              strategy: 'full',
+              graph: false,
+              promptVariant: 'default',
+              prequeries: [],
+              minScore: 0.35,
+            },
+          }],
+        })
+      }
       return fetch(`${base.url}${url.pathname}${url.search}`, request)
     })
     const url = `http://127.0.0.1:${(proxy.addr as Deno.NetAddr).port}`
@@ -428,6 +478,116 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
+      behaviourActive = true
+      for (const palette of ['light', 'observatory']) {
+        for (const width of [1440, 390]) {
+          state.capability = 'enabled'
+          state.status = 200
+          promptText = 'Answer with cited research.'
+          await open('manage', palette, width)
+          await clickText(page!, 'Use emergency access')
+          await confirm()
+          await page!.waitForSelector('[data-admin-overview]')
+          await clickText(page!, 'Behaviour')
+          await page!.waitForSelector('[data-behaviour-read=prompts]')
+          const start = requests.length
+          expect(
+            await page!.evaluate(() =>
+              document.querySelector<HTMLButtonElement>('[data-behaviour-save]')!.disabled
+            ),
+          ).toBe(true)
+          await page!.evaluate(() => {
+            dispatchEvent(new Event('fixture-invalidate'))
+            dispatchEvent(new Event('focus'))
+          })
+          await settle(page!)
+          expect(requests.length).toBe(start)
+          await explicitAction(() => click(page!, '[data-behaviour-read=prompts]'), 'read-prompts')
+          expect(
+            await page!.evaluate(() =>
+              document.querySelector<HTMLTextAreaElement>('[data-behaviour-prompt]')!.value
+            ),
+          ).toBe(promptText)
+          await fill(page!, '[data-behaviour-prompt]', 'Keep all answers cited.')
+          await explicitAction(() => click(page!, '[data-behaviour-save]'), 'save-prompts')
+          expect(promptText).toBe('Keep all answers cited.')
+          for (const name of ['configs', 'routing']) {
+            await explicitAction(
+              () => click(page!, `[data-behaviour-read=${name}]`),
+              `read-${name}`,
+            )
+          }
+          await explicitAction(
+            () => click(page!, '[data-behaviour-ensure]'),
+            'ensure-search-configs',
+          )
+          for (const name of ['prompts', 'configs', 'routing']) {
+            await page!.evaluate(
+              (name) =>
+                document.querySelector(`[data-behaviour-read=${name}]`)!.scrollIntoView({
+                  block: 'center',
+                }),
+              { args: [name] },
+            )
+            await capture(`behaviour-${name}-${palette}-${width}`)
+            behaviourMalformed = true
+            const beforeMalformed = requests.length
+            await click(page!, `[data-behaviour-read=${name}]`)
+            await confirm()
+            await page!.waitForSelector('[role=dialog] [role=alert]')
+            await click(page!, '[data-emergency-cancel]')
+            expect(requests.length).toBe(beforeMalformed + 1)
+            expect(
+              await page!.evaluate(() =>
+                document.querySelector<HTMLTextAreaElement>('[data-behaviour-prompt]')!.value
+              ),
+            ).toBe('Keep all answers cited.')
+            behaviourMalformed = false
+          }
+          state.status = 500
+          await click(page!, '[data-behaviour-save]')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          await capture(`behaviour-uncertain-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          state.status = 200
+          const after = requests.length
+          if (palette === 'observatory' && width === 390) {
+            await new Promise((resolve) => setTimeout(resolve, 31_000))
+          }
+          await page!.evaluate(() => {
+            dispatchEvent(new Event('fixture-invalidate'))
+            dispatchEvent(new Event('focus'))
+            dispatchEvent(new Event('fixture-inspect'))
+          })
+          await settle(page!)
+          expect(requests.length).toBe(after)
+          expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain(
+            'Keep all answers cited.',
+          )
+        }
+      }
+      state.capability = 'session'
+      await open('manage')
+      await page!.waitForSelector('[data-admin-overview]')
+      await clickText(page!, 'Behaviour')
+      await page!.waitForSelector('[data-behaviour-prompt]:not(:disabled)')
+      const sessionBehaviourStart = requests.length
+      await new Promise((resolve) => setTimeout(resolve, 31_000))
+      await page!.evaluate(() => {
+        dispatchEvent(new Event('fixture-invalidate'))
+        dispatchEvent(new Event('focus'))
+      })
+      await settle(page!)
+      expect(requests.slice(sessionBehaviourStart).some((r) => r.path.endsWith('/routing'))).toBe(
+        true,
+      )
+      expect(requests.slice(sessionBehaviourStart).every((r) => !r.emergency)).toBe(true)
+      await click(page!, '[data-behaviour-save]')
+      await settle(page!)
+      expect(requests.at(-1)?.emergency).toBe(false)
+      expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+      behaviourActive = false
       for (const palette of ['light', 'observatory']) {
         for (const width of [1440, 390]) {
           state.capability = 'enabled'

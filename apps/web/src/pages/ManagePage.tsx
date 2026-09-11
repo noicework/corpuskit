@@ -146,7 +146,15 @@ function ManageContent() {
 
             <div className='min-w-0'>
               {!coarseAdminEligible &&
-                !['details', 'content', 'overview', 'insights', 'taxonomy', 'appearance'].includes(
+                ![
+                  'details',
+                  'content',
+                  'overview',
+                  'insights',
+                  'taxonomy',
+                  'appearance',
+                  'behaviour',
+                ].includes(
                   tab,
                 ) && (
                 <div className='rp-card p-5'>
@@ -303,9 +311,7 @@ function ManageContent() {
                 />
               )}
 
-              {coarseAdminEligible && tab === 'behaviour' && (
-                <BehaviourPanel slug={slug} passcode='microsoft-sso' />
-              )}
+              {tab === 'behaviour' && <BehaviourPanel slug={slug} />}
               {coarseAdminEligible && tab === 'extraction' && (
                 <ExtractionPanel slug={slug} passcode='microsoft-sso' />
               )}
