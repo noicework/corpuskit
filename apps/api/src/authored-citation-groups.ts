@@ -56,7 +56,7 @@ export function captureAuthoredGroups(
     const markerKeys = markers.map(String)
     if (
       sentences.some((s) =>
-        !same(s.bound.map(String), markerKeys) ||
+        !same([...s.bound].sort((a, b) => a - b).map(String), markerKeys) ||
         !same([...new Set(s.block)].sort((a, b) => a - b).map(String), markerKeys)
       )
     ) continue

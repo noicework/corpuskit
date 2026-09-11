@@ -30,6 +30,25 @@ Deno.test('authored paragraph group survives gate renumbering without changing s
     .toBe(`${source}[1]`)
 })
 
+Deno.test('multi-source authored groups compare support sets independent of sentence ranking order', () => {
+  const allCitations = [...citations, { index: 8, resourceId: 'second', title: 'Second guide' }]
+  const allTexts = new Map([[7, source], [8, source]])
+  const bound = bindSentences({
+    text: `${source}[7][8]`,
+    citations: allCitations,
+    texts: allTexts,
+    keepNumbering: true,
+  })
+  // Sentence relevance can rank the same supporting resources differently.
+  bound.sentences[1]!.bound = [8, 7]
+  const groups = captureAuthoredGroups(bound, allTexts, [])
+  expect(groups.length).toBe(1)
+  const rendered = renderBound(bound.layout, bound.sentences, new Set())
+  expect(compactAuthoredGroups(rendered, groups, bound.sentences, bound.citations))
+    .toBe(`${source}[7][8]`)
+  expect(bound.sentences[1]!.bound).toEqual([8, 7])
+})
+
 Deno.test('explicit repeated inline markers and separate paragraph/bullet groups are not merged', () => {
   expect(fixture(statements.map((s) => `${s}[7]`).join(' ')).groups).toEqual([])
   expect(fixture([...statements, ...statements.slice(0, 2)].join(' ') + '[7]').groups).toEqual([])
