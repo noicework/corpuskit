@@ -533,8 +533,8 @@ const feedbackBodySchema = z.object({
 const summarizeBodySchema = z.object({
   resourceIds: z.string().min(1).array().min(1).max(20),
   kind: z.enum(['simple', 'extended']).optional(),
-})
-const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) })
+}).strict()
+const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) }).strict()
 const estateAskSchema = z.object({
   query: z.string().min(1).max(2000),
   slugs: z.array(KeyPortalSlugSchema).max(100).optional(),
@@ -632,8 +632,8 @@ const verdictsBodySchema = z.object({
     id: z.string().min(1),
     title: z.string().min(1).max(300),
     passage: z.string().min(1).max(4000),
-  }).array().min(1).max(12),
-})
+  }).strict().array().min(1).max(12),
+}).strict()
 
 const VERDICTS_SCHEMA = {
   name: 'source_verdicts',
@@ -669,8 +669,8 @@ const followUpsBodySchema = z.object({
   passages: z.object({
     title: z.string().min(1).max(300),
     text: z.string().min(1).max(4000),
-  }).array().max(12),
-})
+  }).strict().array().max(12),
+}).strict()
 
 const SUBQUERIES_SCHEMA = {
   name: 'research_subquestions',
@@ -697,7 +697,7 @@ const generateBodySchema = z.object({
    * what is left is trimmed back to it (D6-09).
    */
   count: z.number().int().min(1).max(20).optional(),
-})
+}).strict()
 const hexColour = z.string().regex(/^#[0-9a-fA-F]{6}$/)
 const renameTenantSchema = z.object({
   name: z.string().min(2).max(60).optional(),
@@ -1532,7 +1532,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return
     }
     if (
-      declaration.permission === 'portal.read' && !declaration.owned &&
+      (declaration.permission === 'portal.read' || declaration.permission === 'portal.generate') &&
+      !declaration.owned &&
       !declaration.path.includes('/mcp')
     ) await authoriseDeclared(c)
     await next()
@@ -2816,6 +2817,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const parsed = summarizeBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    for (const id of parsed.data.resourceIds) {
+      if (!await adminResource(c, config, id)) return adminNotFound(c)
+    }
     try {
       const summary = await opts.management.summarize(
         config,
@@ -3259,6 +3263,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = verdictsBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const { question, sources } = parsed.data
+    for (const source of sources) {
+      if (!await adminResource(c, config, source.id)) return adminNotFound(c)
+    }
     const prompt = [
       `Research question: ${question}`,
       '',

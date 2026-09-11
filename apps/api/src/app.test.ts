@@ -25,6 +25,135 @@ import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import { createEnforcementFixture, sessionFor } from './enforcement-fixture.ts'
 import { assertExpectedPermission } from './enforcement-fixture.ts'
+import { issueScopedKey } from './scoped-keys.ts'
+
+const generationCases = [
+  ['generate', { kind: 'briefing', query: 'Marine evidence' }],
+  ['summarize', { resourceIds: ['res-1'] }],
+  ['subqueries', { query: 'Marine evidence' }],
+  ['verdicts', {
+    question: 'Marine evidence?',
+    sources: [{ id: 'res-1', title: 'Evidence', passage: 'Evidence passage' }],
+  }],
+  ['followups', {
+    question: 'Marine evidence?',
+    answer: 'Evidence answer',
+    passages: [{
+      title: 'Evidence',
+      text: 'Marine stocks declined across southern waters. '.repeat(8),
+    }],
+  }],
+] as const
+
+Deno.test('generation routes require same-portal analyst authority before protected dispatch', async () => {
+  let calls = 0
+  const management = {
+    summarize: () => {
+      calls++
+      return Promise.resolve('A grounded summary')
+    },
+    askStructured: () => {
+      calls++
+      return Promise.resolve({
+        object: { questions: [], verdicts: [] },
+        sources: [],
+        insufficientGrounding: true,
+      })
+    },
+  } as unknown as AragProvider
+  const f = createEnforcementFixture({ management })
+  try {
+    const key = await issueScopedKey(
+      {
+        slug: 'a',
+        label: 'Expired',
+        role: 'analyst',
+        expiresAt: new Date(f.now() + 1000).toISOString(),
+      },
+      f.creator,
+      f.authorityDependencies(),
+    )
+    key.commit()
+    f.advance(2000)
+    for (const [route, body] of generationCases) {
+      const init = {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+      for (
+        const [session, slug] of [[null, 'public-a'], [
+          f.sessionFor('viewer', 'public-a'),
+          'public-a',
+        ], [f.sessionFor('analyst', 'b'), 'a']] as const
+      ) {
+        calls = 0
+        const before = f.providerCalls.length
+        const response = await f.requestAs(session, `/api/t/${slug}/${route}`, init)
+        expect(response.status).toBe(session ? 403 : 401)
+        expect(calls).toBe(0)
+        f.assertNoProtectedDispatch(before)
+      }
+      calls = 0
+      const expired = await f.requestAs(f.sessionFor('owner'), `/api/t/a/${route}`, {
+        ...init,
+        headers: { ...init.headers, authorization: `Bearer ${key.key}` },
+      })
+      expect(expired.status).toBe(403)
+      expect(calls).toBe(0)
+      const analyst = f.sessionFor('analyst')
+      calls = 0
+      const allowed = await f.requestAs(analyst, `/api/t/a/${route}`, init)
+      expect(allowed.status).toBe(200)
+      expect(calls).toBeGreaterThan(0)
+      expect(await allowed.json()).toBeDefined()
+      for (
+        const injected of [{ actor: 'system' }, { scope: { kind: 'platform' } }, {
+          grants: ['owner'],
+        }]
+      ) {
+        calls = 0
+        expect(
+          (await f.requestAs(analyst, `/api/t/a/${route}`, {
+            ...init,
+            body: JSON.stringify({ ...body, ...injected }),
+          })).status,
+        ).toBe(400)
+        expect(calls).toBe(0)
+      }
+      f.failAudit()
+      calls = 0
+      expect((await f.requestAs(analyst, `/api/t/a/${route}`, init)).status).toBe(500)
+      expect(calls).toBe(0)
+      f.recoverAudit()
+      f.database.exec(
+        "CREATE TRIGGER fixture_fail_completion BEFORE INSERT ON audit_events WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'fixture completion failure'); END",
+      )
+      calls = 0
+      const completion = await f.requestAs(analyst, `/api/t/a/${route}`, init)
+      expect(completion.status).toBe(500)
+      expect(await completion.json()).toEqual({ error: 'audit_write_failed' })
+      expect(calls).toBeGreaterThan(0)
+      f.database.exec('DROP TRIGGER fixture_fail_completion')
+      if (route === 'summarize' || route === 'verdicts') {
+        calls = 0
+        const missing = route === 'summarize' ? { resourceIds: ['other-portal-only'] } : {
+          question: 'Marine evidence?',
+          sources: [{ id: 'other-portal-only', title: 'Foreign', passage: 'Foreign passage' }],
+        }
+        expect(
+          (await f.requestAs(analyst, `/api/t/a/${route}`, {
+            ...init,
+            body: JSON.stringify(missing),
+          })).status,
+        ).toBe(404)
+        expect(calls).toBe(0)
+      }
+    }
+  } finally {
+    f.close()
+  }
+})
 
 const fixtureDatabases: LocalRbacDatabase[] = []
 afterEach(() => {

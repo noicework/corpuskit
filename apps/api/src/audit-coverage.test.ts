@@ -86,7 +86,11 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         },
         requestContext: (request) => ({
           requestId: request.headers.get('x-test-request')!,
-          session: null,
+          session: {
+            ...sessionFor('curator', 'marine', Date.now()),
+            oid: request.headers.get('x-test-request')!,
+          },
+          effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
           coarseAdminEligible: false,
           actor: { kind: 'user', id: request.headers.get('x-test-request')! },
         }),
