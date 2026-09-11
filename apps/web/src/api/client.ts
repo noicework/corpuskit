@@ -1,4 +1,4 @@
-import { type AdminAccessInput, adminFetch } from './break-glass.ts'
+import { adminFetch, type AdminRequestAccess } from './break-glass.ts'
 import type {
   AdminTenantOverview,
   AnalyseEvent,
@@ -385,7 +385,7 @@ export async function streamAsk(
 
 async function adminRequest<T>(
   path: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   init?: RequestInit,
 ): Promise<T> {
   const res = await adminFetch(passcode, path, init)
@@ -402,13 +402,13 @@ async function adminRequest<T>(
   return body as T
 }
 
-export function getAdminOverview(passcode: AdminAccessInput): Promise<AdminTenantOverview[]> {
+export function getAdminOverview(passcode: AdminRequestAccess): Promise<AdminTenantOverview[]> {
   return adminRequest<AdminTenantOverview[]>('/api/admin/overview', passcode)
 }
 
 export function revertKnowledgeBox(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<{ ok: boolean; status: KnowledgeBoxStatus }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/knowledge-box`, passcode, {
     method: 'DELETE',
@@ -428,8 +428,8 @@ export interface ConnectResult {
  */
 export function connectKnowledgeBox(
   slug: string,
-  input: { url: string; token: string; passcode?: AdminAccessInput },
-  access: AdminAccessInput = input.passcode ?? '',
+  input: { url: string; token: string },
+  access: AdminRequestAccess,
 ): Promise<ConnectResult> {
   return adminRequest<ConnectResult>(
     `/api/admin/t/${encodeURIComponent(slug)}/knowledge-box`,
@@ -449,7 +449,7 @@ export function connectKnowledgeBox(
  */
 export function createAdminKb(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   title?: string,
 ): Promise<{ ok: boolean; status: KnowledgeBoxStatus }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/knowledge-box/create`, passcode, {
@@ -459,20 +459,20 @@ export function createAdminKb(
   })
 }
 
-export function getAdminCounters(slug: string, passcode: AdminAccessInput): Promise<KbCounters> {
+export function getAdminCounters(slug: string, passcode: AdminRequestAccess): Promise<KbCounters> {
   return adminRequest<KbCounters>(`/api/admin/t/${encodeURIComponent(slug)}/counters`, passcode)
 }
 
 export function getAdminRecent(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<RecentResource[]> {
   return adminRequest<RecentResource[]>(`/api/admin/t/${encodeURIComponent(slug)}/recent`, passcode)
 }
 
 export function addAdminLink(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: { url: string; title?: string; hidden?: boolean },
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/link`, passcode, {
@@ -484,7 +484,7 @@ export function addAdminLink(
 
 export function addAdminText(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: { title: string; body: string },
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/text`, passcode, {
@@ -501,7 +501,7 @@ export function addAdminText(
  */
 export function uploadAdminFile(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   file: File,
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/upload`, passcode, {
@@ -522,7 +522,7 @@ export function uploadAdminFile(
 export async function migrateKb(
   from: string,
   to: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   onEvent: (event: MigrationEvent) => void,
 ): Promise<void> {
   const res = await adminFetch(passcode, '/api/admin/migrate', {
@@ -581,7 +581,7 @@ export async function migrateKb(
 
 export function discoverCrawl(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   url: string,
   limit = 50,
 ): Promise<{ source: string; count: number; links: string[] }> {
@@ -597,7 +597,7 @@ export type NewLabelsetLabel = string | { title: string; text?: string }
 
 export function createAdminLabelset(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: { title: string; multiple: boolean; labels: NewLabelsetLabel[] },
 ): Promise<{ ok: boolean; id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/labelsets`, passcode, {
@@ -638,7 +638,7 @@ export class LabelsetSaveError extends ApiError {
  */
 export async function updateAdminLabelset(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   id: string,
   input: LabelsetUpdateInput,
 ): Promise<LabelsetUpdateResult> {
@@ -665,7 +665,7 @@ export async function updateAdminLabelset(
 }
 
 export function addPortal(
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: { name: string; organisation?: string; tagline?: string },
 ): Promise<{ ok: boolean; slug: string }> {
   return adminRequest('/api/admin/tenants', passcode, {
@@ -675,7 +675,7 @@ export function addPortal(
   })
 }
 
-export function removePortal(slug: string, passcode: AdminAccessInput): Promise<{ ok: boolean }> {
+export function removePortal(slug: string, passcode: AdminRequestAccess): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/tenants/${encodeURIComponent(slug)}`, passcode, {
     method: 'DELETE',
   })
@@ -683,7 +683,7 @@ export function removePortal(slug: string, passcode: AdminAccessInput): Promise<
 
 export function setPortalDisabled(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   disabled: boolean,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -696,7 +696,7 @@ export function setPortalDisabled(
 /** Run corpus analysis and stream its progress events. */
 export async function analysePortal(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   onEvent: (event: AnalyseEvent) => void,
 ): Promise<void> {
   const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/analyse`, {
@@ -766,7 +766,7 @@ export function getEntityGroups(
 
 export function renamePortal(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: { name?: string; organisation?: string; tagline?: string },
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/tenants/${encodeURIComponent(slug)}`, passcode, {
@@ -779,7 +779,7 @@ export function renamePortal(
 /** Save the portal's typography, text-scale, shape and/or density choice (same PATCH as rename). */
 export function updatePortalAppearance(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: {
     typography?: TypographyChoice
     shape?: ShapeId
@@ -795,7 +795,7 @@ export function updatePortalAppearance(
   })
 }
 
-export function proposeKg(slug: string, passcode: AdminAccessInput): Promise<KgProposal> {
+export function proposeKg(slug: string, passcode: AdminRequestAccess): Promise<KgProposal> {
   return adminRequest<KgProposal>(
     `/api/admin/t/${encodeURIComponent(slug)}/kg/propose`,
     passcode,
@@ -803,13 +803,13 @@ export function proposeKg(slug: string, passcode: AdminAccessInput): Promise<KgP
   )
 }
 
-export function getAgents(slug: string, passcode: AdminAccessInput): Promise<KbAgent[]> {
+export function getAgents(slug: string, passcode: AdminRequestAccess): Promise<KbAgent[]> {
   return adminRequest<KbAgent[]>(`/api/admin/t/${encodeURIComponent(slug)}/agents`, passcode)
 }
 
 export function deleteAgent(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   taskId: string,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -822,7 +822,7 @@ export function deleteAgent(
 /** Implement the proposed knowledge-graph strategy, streaming progress. */
 export async function implementKg(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   opts: { applyExisting: boolean; includeSummaries: boolean; includeMemory?: boolean },
   onEvent: (event: KgImplementEvent) => void,
 ): Promise<void> {
@@ -879,7 +879,7 @@ const FONT_MIME_BY_EXT: Record<string, string> = {
 
 export async function uploadBranding(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   kind: BrandingUploadKind,
   file: File,
 ): Promise<{ ok: boolean; url: string }> {
@@ -904,14 +904,14 @@ export function getTypeahead(
 
 export function getPrompts(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<{ ask?: string; images?: boolean }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode)
 }
 
 export function savePrompts(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   prompts: { ask?: string; images?: boolean },
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode, {
@@ -923,14 +923,14 @@ export function savePrompts(
 
 export function getSearchConfigs(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<Record<string, unknown>> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/search-configs`, passcode)
 }
 
 export function ensureSearchConfigs(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<{ ok: boolean; created: string[] }> {
   return adminRequest(
     `/api/admin/t/${encodeURIComponent(slug)}/search-configs/ensure`,
@@ -1181,7 +1181,7 @@ export interface InsightsSummary {
   recent: AskInsightRow[]
 }
 
-export function getInsights(slug: string, passcode: AdminAccessInput): Promise<InsightsSummary> {
+export function getInsights(slug: string, passcode: AdminRequestAccess): Promise<InsightsSummary> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/insights`, passcode)
 }
 
@@ -1189,7 +1189,7 @@ export function getInsights(slug: string, passcode: AdminAccessInput): Promise<I
 
 export function setResourceHidden(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   resourceId: string,
   hidden: boolean,
 ): Promise<{ ok: boolean }> {
@@ -1229,13 +1229,13 @@ export interface AddedSource extends PortalSource {
   discoveredVia: string
 }
 
-export function getSources(slug: string, passcode: AdminAccessInput): Promise<PortalSource[]> {
+export function getSources(slug: string, passcode: AdminRequestAccess): Promise<PortalSource[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/sources`, passcode)
 }
 
 export function addSource(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: { url: string; auto?: boolean; maxPages?: number },
 ): Promise<AddedSource> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/sources`, passcode, {
@@ -1247,7 +1247,7 @@ export function addSource(
 
 export function updateSource(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   id: string,
   patch: { auto?: boolean; maxPages?: number },
 ): Promise<PortalSource> {
@@ -1264,7 +1264,7 @@ export function updateSource(
 
 export function deleteSource(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   id: string,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -1283,7 +1283,7 @@ export type SourceSyncEvent =
 
 export async function syncSource(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   id: string,
   onEvent: (event: SourceSyncEvent) => void,
 ): Promise<void> {
@@ -1562,7 +1562,7 @@ export interface CorpusHealthRow {
 
 export function getCorpusHealth(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<CorpusHealthRow[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/corpus-health`, passcode)
 }
@@ -1583,7 +1583,7 @@ export interface GraphStrategy {
 
 export function getGraphStrategy(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<{ strategy: GraphStrategy | null }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/kg/strategy`, passcode)
 }
@@ -1596,7 +1596,7 @@ export interface GraphStrategyUpdate {
 
 export async function saveGraphStrategy(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   input: GraphStrategyUpdate,
   onEvent: (event: KgImplementEvent) => void,
 ): Promise<void> {
@@ -1658,14 +1658,14 @@ export interface SetupSuggestion {
 
 export function getSuggestions(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<SetupSuggestion[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/suggestions`, passcode)
 }
 
 export function runInterrogation(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<SetupSuggestion[]> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/interrogate`, passcode, {
     method: 'POST',
@@ -1674,7 +1674,7 @@ export function runInterrogation(
 
 export function implementSuggestion(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   id: string,
 ): Promise<{ ok: boolean; summary: string }> {
   return adminRequest(
@@ -1686,7 +1686,7 @@ export function implementSuggestion(
 
 export function ignoreSuggestion(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   id: string,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
@@ -1713,7 +1713,7 @@ export function synthesiseInvestigation(
 /** The enrichment agents on a portal, each with its JSON schema and coverage. */
 export function getEnrichmentAgents(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<EnrichmentAgentStatus[]> {
   return adminRequest<EnrichmentAgentStatus[]>(
     `/api/admin/t/${encodeURIComponent(slug)}/enrichments`,
@@ -1725,7 +1725,7 @@ export function getEnrichmentAgents(
 export function enrichResource(
   slug: string,
   id: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<{ ok: boolean }> {
   return adminRequest(
     `/api/admin/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}/enrich`,
@@ -1740,7 +1740,7 @@ export function enrichResource(
  */
 export async function runEnrichment(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   body: { agentId?: string; scope: 'all' | 'missing'; limit?: number },
   onEvent: (event: EnrichmentRunEvent) => void,
 ): Promise<void> {
@@ -1839,7 +1839,7 @@ export interface RoutingRecord {
 
 export function getRouting(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<{
   recent: RoutingRecord[]
   summary: { total: number; byIntent: Record<string, number>; byStage: Record<string, number> }
@@ -1862,14 +1862,14 @@ export interface ExtractionMethodsResponse {
 
 export function getExtractionMethods(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
 ): Promise<ExtractionMethodsResponse> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/methods`, passcode)
 }
 
 export function profileExtraction(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   resourceId: string,
 ): Promise<{ profile: ExtractionProfile; filename: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/profile`, passcode, {
@@ -1881,7 +1881,7 @@ export function profileExtraction(
 
 export function saveExtractionRules(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   rules: ExtractionRules,
 ): Promise<{ ok: boolean; rules: ExtractionRules }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/extraction/rules`, passcode, {
@@ -1921,7 +1921,7 @@ export type ExtractionCompareEvent =
 
 export async function compareExtraction(
   slug: string,
-  passcode: AdminAccessInput,
+  passcode: AdminRequestAccess,
   body: { resourceId: string; methods: string[]; question?: string; keep?: boolean },
   onEvent: (event: ExtractionCompareEvent) => void,
   signal?: AbortSignal,

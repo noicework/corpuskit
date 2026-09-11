@@ -51,7 +51,7 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const marker = `pages-${crypto.randomUUID()}`
-    const directory = `.planning/logs/02-13-${marker}`
+    const directory = `.planning/logs/02-14-${marker}`
     await Deno.mkdir(directory, { recursive: true })
     const root = Deno.cwd()
     // Bundle real page components; only their network responses and outlet config are fixtures.
@@ -84,12 +84,14 @@ function Layout() {
  useEffect(() => {
  const refresh = () => client.invalidateQueries({ queryKey: ['auth-session'] })
  const invalidate = () => client.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'auth-session' })
+ const seedProtected = () => client.setQueryData(['suggestions', 'alpha'], [{ title: 'Prior identity private suggestion' }])
  const inspect = () => { document.body.dataset.cache = JSON.stringify(client.getQueryCache().getAll().map(q => ({ key: q.queryKey, data: q.state.data }))) }
  const unsubscribe = client.getQueryCache().subscribe(() => { document.body.dataset.authId = client.getQueryData(['auth-session'])?.user?.id ?? 'anonymous' })
+ addEventListener('fixture-seed-protected', seedProtected)
  addEventListener('fixture-refresh-capability', refresh)
  addEventListener('fixture-invalidate', invalidate)
  addEventListener('fixture-inspect', inspect)
- return () => { unsubscribe(); removeEventListener('fixture-refresh-capability', refresh); removeEventListener('fixture-invalidate', invalidate); removeEventListener('fixture-inspect', inspect) }
+ return () => { removeEventListener('fixture-seed-protected', seedProtected); unsubscribe(); removeEventListener('fixture-refresh-capability', refresh); removeEventListener('fixture-invalidate', invalidate); removeEventListener('fixture-inspect', inspect) }
  }, [])
  return <div className='rp-tenant min-h-screen bg-app text-ink' style={tenantThemeVars(branding)} data-fixture-build='${marker}'><header className='border-b border-line bg-surface p-6'>CorpusKit administration</header><Outlet context={{ config: { slug: 'alpha', branding } }} /></div>
 }
@@ -1716,6 +1718,13 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       state.capability = 'session'
       await open('admin')
       await page!.waitForSelector('[data-admin-overview]')
+      await page!.evaluate(() => {
+        dispatchEvent(new Event('fixture-seed-protected'))
+        dispatchEvent(new Event('fixture-inspect'))
+      })
+      expect(await page!.evaluate(() => document.body.dataset.cache)).toContain(
+        'Prior identity private suggestion',
+      )
       sessionIdentity = 'replacement-user'
       state.delayMs = 300
       await page!.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
@@ -1724,6 +1733,16 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       expect(await page!.evaluate(() => document.querySelector('[data-admin-overview]'))).toBe(null)
       await page!.evaluate(() => dispatchEvent(new Event('fixture-inspect')))
       expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain('original-user')
+      expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain(
+        'Prior identity private suggestion',
+      )
+      await page!.evaluate(() => {
+        dispatchEvent(new Event('fixture-seed-protected'))
+        dispatchEvent(new Event('fixture-inspect'))
+      })
+      expect(await page!.evaluate(() => document.body.dataset.cache)).toContain(
+        'Prior identity private suggestion',
+      )
       state.capability = 'disabled'
       await page!.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
       await page!.waitForSelector('body[data-auth-id=anonymous]')
@@ -1732,6 +1751,9 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await page!.evaluate(() => dispatchEvent(new Event('fixture-inspect')))
       expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain(
         'Protected alpha',
+      )
+      expect(await page!.evaluate(() => document.body.dataset.cache)).not.toContain(
+        'Prior identity private suggestion',
       )
       state.delayMs = 0
     } finally {

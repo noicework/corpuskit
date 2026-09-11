@@ -3,9 +3,6 @@ export interface AdminRequestAccess {
   request(input: string, init?: RequestInit): Promise<Response>
 }
 
-/** Temporary migration bridge. Only empty and microsoft-sso strings are accepted. */
-export type AdminAccessInput = AdminRequestAccess | string
-
 export class AdminAccessError extends Error {
   constructor(
     readonly status = 0,
@@ -44,18 +41,10 @@ export const sessionAccess: AdminRequestAccess = Object.freeze({
 })
 
 export async function adminFetch(
-  access: AdminAccessInput,
+  access: AdminRequestAccess,
   input: string,
   init?: RequestInit,
 ): Promise<Response> {
-  if (typeof access === 'string') {
-    if (access !== '' && access !== 'microsoft-sso') {
-      throw new Error(
-        'Stored passcodes are no longer accepted. Use emergency access for this action.',
-      )
-    }
-    return await sessionAccess.request(input, init)
-  }
   return await access.request(input, init)
 }
 

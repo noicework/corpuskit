@@ -41,7 +41,7 @@ Deno.test('one confirmation dispatches once and cannot retain access', async () 
   }
 })
 
-Deno.test('session markers never send credentials and old values fail before fetch', async () => {
+Deno.test('session access sends no credentials and all legacy strings fail before fetch', async () => {
   const original = globalThis.fetch
   let calls = 0
   globalThis.fetch = (_input, init) => {
@@ -50,17 +50,43 @@ Deno.test('session markers never send credentials and old values fail before fet
     return Promise.resolve(new Response('[]'))
   }
   try {
-    for (const access of [sessionAccess, '', 'microsoft-sso']) await getAdminOverview(access)
-    await assertRejects(() => getAdminOverview('old-stored-value'))
+    await getAdminOverview(sessionAccess)
+    for (const legacy of ['', 'microsoft-sso', 'old-stored-value']) {
+      await assertRejects(() => getAdminOverview(legacy as never))
+    }
     await assertRejects(() =>
       adminFetch(sessionAccess, '/api/admin/overview', {
         headers: { 'x-admin-passcode': 'old-stored-value' },
       })
     )
-    assertEquals(calls, 3)
+    assertEquals(calls, 1)
   } finally {
     globalThis.fetch = original
   }
+})
+
+Deno.test('browser source inventory contains no credential bridge, persistence or query leases', async () => {
+  async function inspect(directory: URL): Promise<void> {
+    for await (const entry of Deno.readDir(directory)) {
+      const path = new URL(entry.name + (entry.isDirectory ? '/' : ''), directory)
+      if (entry.isDirectory) await inspect(path)
+      else if (/\.tsx?$/.test(entry.name) && !entry.name.endsWith('.test.ts')) {
+        const source = await Deno.readTextFile(path)
+        expect(source, path.pathname).not.toMatch(/microsoft-sso|AdminAccessInput|input\.passcode/)
+        expect(source, path.pathname).not.toMatch(
+          /(?:sessionStorage|localStorage)\.(?:getItem|setItem)[^\n]*(?:passcode|credential)/i,
+        )
+        expect(source, path.pathname).not.toMatch(/queryKey:[^\n]*\b(?:passcode|credential)\b/i)
+        if (entry.name !== 'EmergencyAccess.tsx' && entry.name !== 'break-glass.ts') {
+          expect(source, path.pathname).not.toMatch(
+            /passcode\s*[?:]\s*string|credential\s*[?:]\s*string/,
+          )
+          expect(source, path.pathname).not.toMatch(/['"]x-admin-passcode['"]\s*[: ,)]/)
+        }
+      }
+    }
+  }
+  await inspect(new URL('../', import.meta.url))
 })
 
 Deno.test('JSON, multipart and SSE share the same budget and cancellation', async () => {

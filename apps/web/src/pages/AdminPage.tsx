@@ -22,6 +22,7 @@ function AdminScope(
           [
             'kb-agents',
             'kg-strategy',
+            'suggestions',
             'extraction-methods',
             'lab-pick',
             'lab-pick-id',
