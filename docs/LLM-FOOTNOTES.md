@@ -22,6 +22,18 @@ Progress does not support citations with `answer_json_schema`.
   each block using the streamed `footnote_citations.footnote_to_context` mapping.
 - Stream clean provisional prose without raw footnote syntax or block identifiers.
   The canonical `done.text` adds verified markers after adjacent punctuation.
+- Prefer one citation group at the end of a short coherent paragraph or bullet of 2–4 sentences when
+  the same supporting passages cover every sentence. A shared document alone is not
+  enough. Quotes, statistics and specific findings keep immediate citations, and a
+  change in evidence or a separate paragraph/bullet needs its own group. This is
+  generation guidance, not UI deduplication or permission to weaken evidence checks.
+- Footnote completions opt into provider-neutral `citationPresentation: 'authored_blocks'`.
+  The sentence audit still binds and checks every sentence. After all rewrites, a
+  shared authored tail group is restored only if its unchanged sentences retain
+  identical support and each source has a bounded passage supporting the entire
+  group. Quotes, figures, explicit inline anchors, changed/removed/rebound members,
+  long blocks and ambiguous locations retain sentence-level display. Standard mode
+  does not opt in. The final answer and exports consume the same corrected text.
 - Keep CorpusKit's existing resource-level numbering and evidence-card contract.
   Different passages in one resource share its number. This port does not introduce
   the KSP portal's separate passage-numbering UI or PDF locator components.

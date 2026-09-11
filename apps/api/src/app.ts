@@ -4570,7 +4570,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // surface as not used - or nothing, when none is close.
         await sendDecline(lastSources)
       }
-      const finishAnswered = async (doneText: string | undefined) => {
+      const finishAnswered = async (
+        doneText: string | undefined,
+        citationPresentation?: 'authored_blocks',
+      ) => {
         finished = true
         const tail = stripFenceLines(sentinels.flush())
         if (tail) await send({ type: 'delta', text: tail })
@@ -4652,6 +4655,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           })
           try {
             const bound = await bindAndAudit({
+              citationPresentation,
               management: opts.management,
               config,
               query,
@@ -5216,7 +5220,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 }
                 await finishRefused()
               } else {
-                await finishAnswered(event.text)
+                await finishAnswered(event.text, event.citationPresentation)
                 if (retry) break
               }
               continue

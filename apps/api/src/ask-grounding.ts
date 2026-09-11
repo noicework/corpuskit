@@ -5,6 +5,7 @@
  * audited one (docs/TRUST-LAYER.md).
  */
 import type { Citation, ResourceSummary, ScoredResource, TenantConfig } from '@research-portal/core'
+import { captureAuthoredGroups, compactAuthoredGroups } from './authored-citation-groups.ts'
 import {
   auditAddendum,
   denominatorsMissing,
@@ -244,6 +245,8 @@ export function publicationYearsContext(resources: readonly ScoredResource[]): s
 // ---------------------------------------------------------------------------
 
 export interface BindAndAuditInput {
+  /** Only opted-in provider completions may retain verified authored paragraph/bullet groups. */
+  citationPresentation?: 'authored_blocks'
   management: ExtractionSource
   config: TenantConfig
   query: string
@@ -855,6 +858,9 @@ export async function bindAndAudit(raw: BindAndAuditInput): Promise<BindAndAudit
     // The gate renumbers once it has decided what stays.
     keepNumbering: true,
   })
+  const authoredGroups = input.citationPresentation === 'authored_blocks'
+    ? captureAuthoredGroups(bound, texts, lexicon)
+    : []
   // Every cited text that carries the study the question names, in the
   // provider's numbering: what the gate checks an unbound sentence against,
   // and what it may lend a marker from. The display floor does not apply
@@ -1861,7 +1867,8 @@ export async function bindAndAudit(raw: BindAndAuditInput): Promise<BindAndAudit
   })
 
   return {
-    text,
+    // Last, after every audit/rewrite: presentation never changes sentence-level evidence.
+    text: compactAuthoredGroups(text, authoredGroups, gated.sentences, citations),
     citations,
     sources,
     emptied: !rescuedAnswer &&
