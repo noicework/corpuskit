@@ -366,8 +366,9 @@ function renderCitationMarkers(
         <sup key={`${keyPrefix}-${index}`}>
           <Link
             to={citationHref(slug, citation.resourceId, matchedPassage, source?.matchedPage)}
-            className='rp-focus inline-flex min-h-6 min-w-6 items-center justify-center px-0.5 font-semibold no-underline'
+            className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
+            aria-label={`Source ${citationIndex}, ${citation.title}`}
             title={`Source ${citationIndex} - ${citation.title}; click to open, or find it in the Evidence table below`}
           >
             [{citationIndex}]
