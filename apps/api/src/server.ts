@@ -10,10 +10,12 @@ import { DocsHealth } from './docs-health.ts'
 import { TenantStore } from './tenants.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
+import { LocalIngress } from './local-ingress.ts'
+import { openLocalRbac } from './rbac-local.ts'
 
 loadRootEnv()
 
-const port = Number(process.env.PORT ?? 8787)
+const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
 const bindings = new BindingStore()
@@ -30,6 +32,8 @@ const provider = new AragProvider({
 const sources = new SourceStore()
 const watches = new WatchStore()
 const enrichments = new EnrichmentStore()
+const { rbac } = openLocalRbac(process.env)
+const ingress = new LocalIngress({ rbac, tenants, env: process.env })
 
 // Documentation readiness: probe every bound portal's documentation-scoped
 // search at boot and report it on /api/health, so a portal provisioned
@@ -70,6 +74,7 @@ const app = buildApp({
   enrichments,
   zone,
   adminPasscode: process.env.ADMIN_PASSCODE,
+  requestContext: ingress.requestContext,
   invalidate: (slug) => provider.invalidate(slug),
   docsHealth,
   buildSha: process.env.BUILD_SHA ?? webBuild?.sha,
@@ -128,4 +133,4 @@ app.get('*', (c) => {
   return c.html(indexHtml)
 })
 
-Deno.serve({ port }, app.fetch)
+Deno.serve({ port }, (request, info) => ingress.handle(request, (clean) => app.fetch(clean), info))

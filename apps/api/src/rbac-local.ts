@@ -1,5 +1,22 @@
 import { DatabaseSync } from 'node:sqlite'
-import type { RbacDatabase, SqlValue } from './rbac-state.ts'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { type RbacDatabase, RbacState, type SqlValue } from './rbac-state.ts'
+
+/** App and scheduler share this single persistent RBAC connection. */
+export function openLocalRbac(env: Record<string, string | undefined>) {
+  const path = env.RBAC_PATH ?? join(env.DATA_DIR ?? './data', 'rbac.sqlite')
+  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
+  const database = new LocalRbacDatabase(path)
+  try {
+    const rbac = new RbacState(database)
+    rbac.migrate()
+    return { database, rbac }
+  } catch (error) {
+    database.close()
+    throw error
+  }
+}
 
 /** One owned SQLite connection, also suitable for real transactional test fixtures. */
 export class LocalRbacDatabase implements RbacDatabase {
