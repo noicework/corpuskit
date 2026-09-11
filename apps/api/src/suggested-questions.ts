@@ -197,8 +197,8 @@ export function questionContextFor(content: ResourceContent | null): string {
 }
 
 /**
- * Generate openers for one resource. Returns [] rather than throwing: openers
- * are a nicety, and the caller falls back to its generic three.
+ * Generate openers for one resource. Audited callers use strict failures and
+ * cancellation checks; existing batch callers retain their empty-result fallback.
  */
 export async function generateSuggestedQuestions(
   management: AragProvider,
@@ -206,8 +206,14 @@ export async function generateSuggestedQuestions(
   resourceId: string,
   title: string,
   summary?: string,
+  options: { signal?: AbortSignal; strict?: boolean } = {},
 ): Promise<string[]> {
-  const content = await management.resourceContent(config, resourceId).catch(() => null)
+  options.signal?.throwIfAborted()
+  const content = await management.resourceContent(config, resourceId).catch((error) => {
+    if (options.strict) throw error
+    return null
+  })
+  options.signal?.throwIfAborted()
   const excerpt = questionContextFor(content)
   if (!excerpt) return []
 
@@ -232,9 +238,11 @@ export async function generateSuggestedQuestions(
       resourceId,
       model: FAST_MODEL,
     })
+    options.signal?.throwIfAborted()
     const object = result.object as { questions?: unknown } | null
     return selectQuestions(object?.questions, excerpt)
-  } catch {
+  } catch (error) {
+    if (options.strict || options.signal?.aborted) throw error
     return []
   }
 }

@@ -5,7 +5,12 @@ import {
   isPrivileged,
   registerInfrastructure,
 } from './permissions.ts'
-import { executeAudited, executeAuditedResponse } from './audit-execution.ts'
+import {
+  AuditExecutionError,
+  executeAudited,
+  executeAuditedResponse,
+  stageAuditResponse,
+} from './audit-execution.ts'
 import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
@@ -929,7 +934,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   }
   // Suggested-question generations in flight, so a page that is opened twice
   // while its openers are being written costs one generation, not two.
-  const questionsInFlight = new Map<string, Promise<string[]>>()
+  const questionsInFlight = new Map<
+    string,
+    { promise: Promise<string[]>; controller: AbortController; waiters: number }
+  >()
 
   // Capture trusted adapter facts once. Route handlers never reconstruct identity from headers.
   const requestContexts = new WeakMap<Request, PortalRequestContext>()
@@ -938,6 +946,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const existing = requestContexts.get(request)
     if (existing) return existing
     const supplied = opts.requestContext?.(request)
+    const legacyUser = supplied ? null : opts.trustedUser?.(request)
     if (supplied) ingressContexts.set(request, supplied)
     const context = supplied ? { ...supplied } : {
       requestId: crypto.randomUUID(),
@@ -947,7 +956,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(context.requestId)) {
       context.requestId = crypto.randomUUID()
     }
-    context.actor ??= context.session
+    context.actor ??= legacyUser
+      ? { kind: 'user', id: legacyUser.id }
+      : context.session
       ? { kind: 'user', id: context.session.oid }
       : { kind: 'anonymous' }
     requestContexts.set(request, context)
@@ -1083,6 +1094,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       console.error('Required request audit failed')
       return c.json({ error: 'audit_write_failed' }, 500)
     }
+    if (err instanceof AuditExecutionError) return c.json({ error: err.code }, 500)
     if (err instanceof KnowledgeBoxNotConnectedError) {
       return c.json({ error: 'knowledge_box_not_connected', slug: err.slug }, 503)
     }
@@ -1179,11 +1191,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     provider,
     tenant,
     keys: mcpKeys,
+    audit: opts.audit,
+    requestContext,
     trustedUser: opts.requestContext
       ? (request) => {
         const context = requestContext(request)
         return context?.session
-          ? { id: context.session.oid, isAdmin: context.coarseAdminEligible === true }
+          ? {
+            id: context.session.oid,
+            effectiveRoles: context.effectiveRoles ?? { portalRoles: [] },
+          }
           : null
       }
       : opts.trustedUser,
@@ -1724,63 +1741,110 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   // Openers written from this document, cached under their own schema id in the
-  // same store as enrichments. Falls back to [] (the page shows its generic
-  // three) rather than failing the page - suggestions are a nicety.
+  // same store as enrichments. Cold requests wait for mandatory completion audit.
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/questions'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const id = c.req.param('id')
 
-    const cached = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)
-    const cachedQuestions = cached?.data?.questions
-    if (Array.isArray(cachedQuestions)) return c.json({ questions: cachedQuestions })
-
-    if (!opts.management) return c.json({ questions: [] })
-    const resource = await provider.resource(config, id).catch(() => null)
-    if (!resource) return c.json({ error: 'unknown_resource' }, 404)
-    // Openers are precomputed at enrichment time; a resource the pass has not
-    // reached yet gets its openers written in the background and answers
-    // `pending` now, so the page never waits eight to ten seconds on them.
-    // `wait=1` keeps the old blocking behaviour for callers that need it.
     const key = `${config.slug}/${id}`
     let job = questionsInFlight.get(key)
     if (!job) {
-      const merchandised = merchandiseSummary(enrichments, config.slug, resource)
-      job = declaredSubAction(
-        'GET',
-        '/api/t/:slug/resources/:id/questions',
-        'resource.questions.generate',
-        () =>
-          generateSuggestedQuestions(
-            opts.management!,
-            config,
-            id,
-            merchandised.title,
-            merchandised.summary,
-          ),
-      ).then((questions) => {
-        // Cache the empty result too: a document that yields nothing (a scan
-        // with no extractable text) would otherwise pay for generation on
-        // every view.
-        declaredSubAction(
+      const cachedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)?.data
+        ?.questions
+      if (Array.isArray(cachedQuestions)) return c.json({ questions: cachedQuestions })
+      if (!opts.management) return c.json({ questions: [] })
+      const resource = await provider.resource(config, id).catch(() => null)
+      job = questionsInFlight.get(key)
+      if (!job) {
+        const completedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)
+          ?.data?.questions
+        if (Array.isArray(completedQuestions)) return c.json({ questions: completedQuestions })
+        if (!resource) return c.json({ error: 'unknown_resource' }, 404)
+        const context = requestContext(c.req.raw)
+        const actor = { ...context.actor! }
+        const controller = new AbortController()
+        const input = {
+          requestId: context.requestId,
+          actor,
+          scope: { kind: 'portal' as const, slug: config.slug },
+          target: { kind: 'resource', id },
+          detail: {
+            ...(actor.kind === 'break-glass' && context.session
+              ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
+              : {}),
+          },
+        }
+        const merchandised = merchandiseSummary(enrichments, config.slug, resource)
+        const promise = declaredSubAction(
           'GET',
           '/api/t/:slug/resources/:id/questions',
-          'resource.questions.cache',
-          () =>
-            enrichments.put(config.slug, id, {
-              schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
-              generatedAt: new Date().toISOString(),
-              data: { questions },
+          'resource.questions.generate',
+          (declaration) =>
+            executeAudited({
+              audit: requiredAudit(),
+              signal: controller.signal,
+              input: {
+                ...input,
+                action: 'resource.questions.generate',
+                detail: { ...input.detail, permission: declaration.permission },
+              },
+              run: async (signal) => {
+                const questions = await generateSuggestedQuestions(
+                  opts.management!,
+                  config,
+                  id,
+                  merchandised.title,
+                  merchandised.summary,
+                  { signal, strict: true },
+                )
+                signal.throwIfAborted()
+                await stageAuditResponse(Response.json({ questions }), signal)
+                await declaredSubAction(
+                  'GET',
+                  '/api/t/:slug/resources/:id/questions',
+                  'resource.questions.cache',
+                  (cache) =>
+                    executeAudited({
+                      audit: requiredAudit(),
+                      signal,
+                      input: {
+                        ...input,
+                        action: 'resource.questions.cache',
+                        detail: { ...input.detail, permission: cache.permission },
+                      },
+                      run: () =>
+                        enrichments.put(config.slug, id, {
+                          schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
+                          generatedAt: new Date().toISOString(),
+                          data: { questions },
+                        }),
+                    }),
+                )
+                return questions
+              },
             }),
-        )
-        return questions
-      }).finally(() => questionsInFlight.delete(key))
-      questionsInFlight.set(key, job)
-      // A background job's failure is a missed nicety, never an unhandled rejection.
-      job.catch(() => {})
+        ).finally(() => questionsInFlight.delete(key))
+        job = { promise, controller, waiters: 0 }
+        questionsInFlight.set(key, job)
+      }
     }
-    if (c.req.query('wait') === '1') return c.json({ questions: await job.catch(() => []) })
-    return c.json({ questions: [], pending: true })
+    const shared = job
+    shared.waiters++
+    let rejectAborted!: (reason: unknown) => void
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectAborted = reject
+    })
+    const onAbort = () => rejectAborted(new AuditExecutionError('client_aborted'))
+    c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      const result = Promise.race([shared.promise, aborted])
+      if (c.req.raw.signal.aborted) onAbort()
+      return c.json({ questions: await result })
+    } finally {
+      c.req.raw.signal.removeEventListener('abort', onAbort)
+      if (--shared.waiters === 0) shared.controller.abort()
+    }
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/content'), async (c) => {
@@ -3890,12 +3954,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
           config,
           source,
           (label) => emit({ type: 'item', label }),
+          operationSignals.get(c.req.raw),
         )
         await emit({ type: 'done', added, deferred })
       } catch (err) {
         // Persist the failure against the source as well as streaming it, so
         // it is still visible after the log panel is closed - and identical
         // to what a failed scheduled run leaves behind.
+        if (operationSignals.get(c.req.raw)?.aborted) return
         const message = recordSyncFailure(sources, config.slug, source, err)
         await emit({ type: 'error', message })
       }

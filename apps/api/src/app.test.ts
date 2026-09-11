@@ -769,11 +769,9 @@ describe('GET /api/t/:slug/resources/:id/questions', () => {
     })
     const cached = await app.request('/api/t/marine/resources/res-1/questions')
     expect(await cached.json()).toEqual({ questions: ['What drove the decline?'] })
-    // A resource the pass has not reached answers at once and fills the
-    // store in the background rather than holding the page for the model.
+    // Cold requests wait for generation, cache and mandatory completion audit.
     const pending = await app.request('/api/t/marine/resources/res-2/questions')
-    expect(await pending.json()).toEqual({ questions: [], pending: true })
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(await pending.json()).toEqual({ questions: [] })
     expect(generated).toBe(1)
     expect(enrichments.get('marine', 'res-2', 'suggested-questions')?.data).toEqual({
       questions: [],

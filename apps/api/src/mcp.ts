@@ -1,4 +1,20 @@
-import { declaredRoute, declaredTool } from './permissions.ts'
+import {
+  type Declaration,
+  DECLARATIONS,
+  declaredRoute,
+  declaredTool,
+  isPrivileged,
+} from './permissions.ts'
+import { coarseAdminEligibility } from './assignments.ts'
+import {
+  appendAudit,
+  type AuditActor,
+  type AuditStore,
+  AuditWriteError,
+  createAuditEvent,
+} from './audit.ts'
+import { executeAudited, stageAuditResponse } from './audit-execution.ts'
+import type { PortalRequestContext } from './app.ts'
 import { type Context, Hono } from 'hono'
 import '@cfworker/json-schema'
 import {
@@ -7,8 +23,8 @@ import {
   WebStandardStreamableHTTPServerTransport,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
-import type { TenantConfig } from '@research-portal/core'
-import type { RetrievalProvider } from '@research-portal/retrieval'
+import type { EffectiveRoles, TenantConfig } from '@research-portal/core'
+import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
 import { type McpKeyRecord, type McpKeyStoreApi } from './stores.ts'
 import { clientIp, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
 
@@ -37,7 +53,7 @@ export interface McpKeySummary {
 
 export interface TrustedPortalUser {
   id: string
-  isAdmin: boolean
+  effectiveRoles: EffectiveRoles
 }
 
 export interface McpRoutesOptions {
@@ -46,6 +62,81 @@ export interface McpRoutesOptions {
   keys: McpKeyStoreApi
   trustedUser?: (request: Request) => TrustedPortalUser | null
   rateLimitPerMin?: number
+  audit?: AuditStore
+  requestContext?: (request: Request) => PortalRequestContext
+}
+
+interface McpAuditContext {
+  requestId: string
+  actor: AuditActor
+  slug: string
+  signal?: AbortSignal
+  mandatoryFailure?: AuditWriteError
+}
+
+/** Shared wrapper also covers future privileged tools declared in the sole catalogue. */
+export async function executeMcpTool(
+  declaration: Declaration,
+  context: McpAuditContext,
+  audit: AuditStore | undefined,
+  call: () => Promise<Record<string, unknown>>,
+): Promise<Record<string, unknown>> {
+  const input = {
+    requestId: context.requestId,
+    actor: context.actor,
+    scope: { kind: 'portal' as const, slug: context.slug },
+    target: { kind: 'tool', id: declaration.path },
+    detail: { permission: declaration.permission, operation: `MCP ${declaration.path}` },
+  }
+  const invoke = async () => {
+    try {
+      return await call()
+    } catch (error) {
+      if (error instanceof AragApiError && (error.status === 401 || error.status === 403)) {
+        if (!audit) throw new AuditWriteError()
+        appendAudit(
+          audit,
+          createAuditEvent({
+            ...input,
+            action: 'request.denied',
+            outcome: 'denied',
+            detail: {
+              permission: declaration.permission,
+              code: error.status === 401 ? 'unauthorised' : 'forbidden',
+            },
+          }),
+        )
+      }
+      throw error
+    }
+  }
+  try {
+    if (!isPrivileged(declaration, context.actor)) return await invoke()
+    if (!audit) throw new AuditWriteError()
+    const execution = await executeAudited({
+      audit,
+      signal: context.signal,
+      input: { ...input, action: 'request.privileged' },
+      run: async (signal) => {
+        try {
+          const result = await invoke()
+          const staged = await stageAuditResponse(Response.json(result), signal)
+          return { result, outcome: staged.outcome, error: undefined }
+        } catch (error) {
+          if (error instanceof AragApiError && (error.status === 401 || error.status === 403)) {
+            return { result: undefined, outcome: 'denied' as const, error }
+          }
+          throw error
+        }
+      },
+      classify: (result) => result.outcome,
+    })
+    if (execution.error) throw execution.error
+    return execution.result!
+  } catch (error) {
+    if (error instanceof AuditWriteError) context.mandatoryFailure = error
+    throw error
+  }
 }
 
 function base64Url(bytes: Uint8Array): string {
@@ -155,7 +246,8 @@ function toolError(message: string) {
 async function safeTool(call: () => Promise<Record<string, unknown>>) {
   try {
     return jsonResult(await call())
-  } catch {
+  } catch (error) {
+    if (error instanceof AuditWriteError) throw error
     return toolError('The corpus could not complete this request. Please try again.')
   }
 }
@@ -165,6 +257,16 @@ export function createMcpServer(opts: McpRoutesOptions): {
   connected: Promise<void>
 } {
   const server = new McpServer({ name: 'corpuskit-knowledge-box', version: '1.0.0' })
+  const auditedTool = (
+    name: string,
+    context: ServerContext,
+    call: () => Promise<Record<string, unknown>>,
+  ) => {
+    const declaration = DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === name)
+    const auditContext = context.http?.authInfo?.extra?.auditContext as McpAuditContext | undefined
+    if (!declaration || !auditContext) throw new AuditWriteError()
+    return safeTool(() => executeMcpTool(declaration, auditContext, opts.audit, call))
+  }
 
   const tenantFor = (context: ServerContext): TenantConfig => {
     const slug = context.http?.authInfo?.extra?.tenant
@@ -186,7 +288,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
       annotations: { ...READ_ONLY_TOOL, idempotentHint: true },
     },
     ({ query, mode, limit }, context) =>
-      safeTool(async () => {
+      auditedTool('search_corpus', context, async () => {
         const result = await opts.provider.search(tenantFor(context), query, {
           mode,
           pageSize: limit,
@@ -209,7 +311,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
       annotations: { ...READ_ONLY_TOOL, idempotentHint: false },
     },
     ({ question }, context) =>
-      safeTool(async () => {
+      auditedTool('answer_question', context, async () => {
         let answer = ''
         let refused = false
         let sources: unknown[] = []
@@ -258,7 +360,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
       annotations: { ...READ_ONLY_TOOL, idempotentHint: true },
     },
     ({ id }, context) =>
-      safeTool(async () => {
+      auditedTool('get_document', context, async () => {
         const document = await opts.provider.resource(tenantFor(context), id)
         if (!document) throw new Error('Unknown document')
         return { document }
@@ -280,7 +382,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
       annotations: { ...READ_ONLY_TOOL, idempotentHint: true },
     },
     ({ page, pageSize, query, sort, order }, context) =>
-      safeTool(async () => ({
+      auditedTool('browse_catalogue', context, async () => ({
         catalogue: await opts.provider.catalog(tenantFor(context), {
           page,
           pageSize,
@@ -298,7 +400,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
   return { transport, connected: server.connect(transport) }
 }
 
-function trustedAdmin(
+function coarseKeyManager(
   opts: McpRoutesOptions,
   context: Context,
 ): TrustedPortalUser | Response {
@@ -306,7 +408,7 @@ function trustedAdmin(
   if (!user) {
     return context.json({ error: 'unauthenticated', message: 'Sign in to manage MCP keys.' }, 401)
   }
-  if (!user.isAdmin) {
+  if (!coarseAdminEligibility(user.effectiveRoles)) {
     return context.json({ error: 'forbidden', message: 'Administrator access is required.' }, 403)
   }
   return user
@@ -335,7 +437,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
   )
 
   app.get(declaredRoute('GET', '/api/t/:slug/mcp/keys'), (context) => {
-    const user = trustedAdmin(opts, context)
+    const user = coarseKeyManager(opts, context)
     if (user instanceof Response) return user
     const config = opts.tenant(context.req.param('slug'))
     if (!config) return context.json({ error: 'unknown_tenant' }, 404)
@@ -344,7 +446,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/mcp/keys'), async (context) => {
-    const user = trustedAdmin(opts, context)
+    const user = coarseKeyManager(opts, context)
     if (user instanceof Response) return user
     const config = opts.tenant(context.req.param('slug'))
     if (!config) return context.json({ error: 'unknown_tenant' }, 404)
@@ -368,7 +470,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
   })
 
   app.delete(declaredRoute('DELETE', '/api/t/:slug/mcp/keys/:id'), (context) => {
-    const user = trustedAdmin(opts, context)
+    const user = coarseKeyManager(opts, context)
     if (user instanceof Response) return user
     const config = opts.tenant(context.req.param('slug'))
     if (!config) return context.json({ error: 'unknown_tenant' }, 404)
@@ -384,6 +486,8 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
 
   app.all(declaredRoute('ALL', MCP_ROUTE), authRateLimit, async (context) => {
     const slug = context.req.param('slug')
+    const request = opts.requestContext?.(context.req.raw)
+    if (request && context.req.header('authorization')) request.actor = { kind: 'legacy-key' }
     const credential = await verifyMcpCredential(
       opts.keys,
       slug,
@@ -394,6 +498,8 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
       context.header('cache-control', 'no-store')
       return context.json({ error: 'unauthorised' }, 401)
     }
+    const actor: AuditActor = { kind: 'legacy-key', id: credential.id }
+    if (request) request.actor = actor
     if (context.req.method !== 'POST') {
       context.header('allow', 'POST')
       context.header('cache-control', 'no-store')
@@ -402,15 +508,22 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     if (!opts.tenant(slug)) return context.json({ error: 'unknown_tenant' }, 404)
 
     await connected
-    return withNoStore(
-      await transport.handleRequest(context.req.raw, {
-        authInfo: {
-          token: 'credential-verified',
-          clientId: credential.issuerUserId,
-          scopes: ['corpus:read'],
-          extra: { tenant: slug },
-        },
-      }),
-    )
+    const auditContext: McpAuditContext = {
+      requestId: request?.requestId ?? crypto.randomUUID(),
+      actor,
+      slug,
+      signal: context.req.raw.signal,
+    }
+    const response = await transport.handleRequest(context.req.raw, {
+      authInfo: {
+        token: 'credential-verified',
+        clientId: credential.issuerUserId,
+        scopes: ['corpus:read'],
+        extra: { tenant: slug, auditContext },
+      },
+    })
+    // The SDK converts callback exceptions into protocol errors; mandatory audit errors remain HTTP failures.
+    if (auditContext.mandatoryFailure) throw auditContext.mandatoryFailure
+    return withNoStore(response)
   })
 }

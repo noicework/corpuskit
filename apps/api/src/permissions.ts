@@ -9,7 +9,7 @@ export interface SubAction {
   readonly fields?: readonly string[]
 }
 export interface Declaration {
-  readonly kind: 'http' | 'mcp' | 'boundary'
+  readonly kind: 'http' | 'mcp' | 'boundary' | 'internal'
   readonly method: string
   readonly path: string
   readonly permission: Permission
@@ -56,6 +56,10 @@ function entry(
 
 /** D11's sole route/tool catalogue. Labels classify audit only in Phase 2. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('internal', 'SYSTEM', 'maintenance.source.sync', 'content.write', 'portal'),
+  entry('internal', 'SYSTEM', 'maintenance.watch.run', 'portal.watch', 'portal'),
+  entry('internal', 'SYSTEM', 'maintenance.enrichment.run', 'enrichments.write', 'portal'),
+  entry('internal', 'SYSTEM', 'maintenance.questions.run', 'portal.generate', 'portal'),
   entry('http', 'GET', '/api/health', 'portal.read', 'public', {
     reason: 'Health only; no research or administrative state.',
   }),

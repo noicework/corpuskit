@@ -103,6 +103,7 @@ function hit(id: string, title: string, score: number, text = 'A retrieved passa
 
 function makeApp(askLines: unknown[], enrichments?: EnrichmentStore) {
   return buildApp({
+    audit: { append: () => {}, read: () => [] },
     provider: new UnusedProvider(),
     tenants: freshTenants(),
     management: buildManagement(askLines),

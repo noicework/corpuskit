@@ -172,6 +172,10 @@ const actionFields = {
   'break_glass.locked': ['code', 'count', 'lockedUntil', 'sessionOid', 'sessionTenantId'],
   'audit.retention': ['retentionDays', 'deletedCount', 'cutoff'],
   'maintenance.run': ['code', 'count'],
+  'maintenance.source.sync': ['code', 'permission'],
+  'maintenance.watch.run': ['code', 'permission'],
+  'maintenance.enrichment.run': ['code', 'permission'],
+  'maintenance.questions.run': ['code', 'permission'],
 } as const satisfies Record<string, readonly Field[]>
 export type AuditAction = keyof typeof actionFields
 

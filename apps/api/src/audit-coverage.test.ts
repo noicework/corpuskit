@@ -2,6 +2,7 @@ import { expect } from '@std/expect'
 import { Hono } from 'hono'
 import type { AuditEvent } from './audit.ts'
 import { TenantStore } from './tenants.ts'
+import { EnrichmentStore } from './enrichments.ts'
 import { buildApp } from './app.ts'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
 import { createMcpServer, type McpRoutesOptions } from './mcp.ts'
@@ -15,6 +16,207 @@ import {
   declaredTool,
   isPrivileged,
 } from './permissions.ts'
+
+Deno.test('cold question jobs deduplicate attribution and require every completion append for all waiters', async () => {
+  for (const failAt of [0, 1, 2, 3, 4]) {
+    const directory = Deno.makeTempDirSync()
+    try {
+      const events: AuditEvent[] = []
+      const enrichments = new EnrichmentStore(directory)
+      let release!: () => void
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let started!: () => void
+      const ready = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      let calls = 0
+      let appends = 0
+      const app = buildApp({
+        provider: {
+          resource: () =>
+            Promise.resolve({
+              id: 'doc',
+              title: 'Document',
+              summary: 'Summary',
+              type: 'pdf',
+              topicIds: [],
+              keyFacts: [],
+            }),
+        } as unknown as RetrievalProvider,
+        management: {
+          resourceContent: async () => {
+            calls++
+            started()
+            await held
+            return null
+          },
+        } as unknown as AragProvider,
+        enrichments,
+        audit: {
+          append: (event) => {
+            if (++appends === failAt) throw new Error('private')
+            events.push(event)
+          },
+          read: () => events,
+        },
+        requestContext: (request) => ({
+          requestId: request.headers.get('x-test-request')!,
+          session: null,
+          coarseAdminEligible: false,
+          actor: { kind: 'user', id: request.headers.get('x-test-request')! },
+        }),
+      })
+      const first = app.request('/api/t/marine/resources/doc/questions', {
+        headers: { 'x-test-request': 'first' },
+      })
+      if (failAt === 1) {
+        expect((await first).status).toBe(500)
+        expect(calls).toBe(0)
+        continue
+      }
+      await ready
+      let returned = false
+      const second = Promise.resolve(app.request('/api/t/marine/resources/doc/questions?wait=1', {
+        headers: { 'x-test-request': 'second' },
+      })).then((response) => {
+        returned = true
+        return response
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(returned).toBe(false)
+      release()
+      for (const response of await Promise.all([first, second])) {
+        expect(response.status).toBe(failAt ? 500 : 200)
+        expect(await response.json()).toEqual(
+          failAt ? { error: 'audit_write_failed' } : { questions: [] },
+        )
+      }
+      expect(calls).toBe(1)
+      expect(events.every((event) => event.request_id === 'first' && event.actor_id === 'first'))
+        .toBe(true)
+      if (!failAt) {
+        expect(events.map((e) => `${e.action}:${e.outcome}`)).toEqual([
+          'resource.questions.generate:intent',
+          'resource.questions.cache:intent',
+          'resource.questions.cache:success',
+          'resource.questions.generate:success',
+        ])
+        const count = events.length
+        expect(
+          (await app.request('/api/t/marine/resources/doc/questions', {
+            headers: { 'x-test-request': 'cached' },
+          })).status,
+        ).toBe(200)
+        expect(events.length).toBe(count)
+        expect(calls).toBe(1)
+      }
+    } finally {
+      Deno.removeSync(directory, { recursive: true })
+    }
+  }
+})
+
+Deno.test('question waiter arriving during cache write joins mandatory completion instead of reading cache', async () => {
+  const dir = Deno.makeTempDirSync()
+  try {
+    let late!: Response | Promise<Response>
+    class JoiningStore extends EnrichmentStore {
+      override put(...args: Parameters<EnrichmentStore['put']>) {
+        super.put(...args)
+        late = app.request('/api/t/marine/resources/doc/questions?wait=1')
+      }
+    }
+    const app = buildApp({
+      provider: {
+        resource: () =>
+          Promise.resolve({
+            id: 'doc',
+            title: 'Title',
+            type: 'pdf',
+            summary: '',
+            topicIds: [],
+            keyFacts: [],
+          }),
+      } as unknown as RetrievalProvider,
+      management: { resourceContent: () => Promise.resolve(null) } as unknown as AragProvider,
+      enrichments: new JoiningStore(dir),
+      audit: {
+        append: (event) => {
+          if (
+            event.action === 'resource.questions.generate' && event.outcome === 'success'
+          ) throw new Error('fixture')
+        },
+        read: () => [],
+      },
+    })
+    expect((await app.request('/api/t/marine/resources/doc/questions')).status).toBe(500)
+    expect((await late).status).toBe(500)
+  } finally {
+    Deno.removeSync(dir, { recursive: true })
+  }
+})
+
+Deno.test('question cancellation detaches one waiter and last-waiter abort prevents late cache writes', async () => {
+  for (const join of [false, true]) {
+    const dir = Deno.makeTempDirSync()
+    try {
+      let release!: () => void
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let started!: () => void
+      const ready = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      const events: AuditEvent[] = []
+      const enrichments = new EnrichmentStore(dir)
+      const app = buildApp({
+        provider: {
+          resource: () =>
+            Promise.resolve({
+              id: 'doc',
+              title: 'Title',
+              type: 'pdf',
+              summary: '',
+              topicIds: [],
+              keyFacts: [],
+            }),
+        } as unknown as RetrievalProvider,
+        management: {
+          resourceContent: async () => {
+            started()
+            await held
+            return null
+          },
+        } as unknown as AragProvider,
+        enrichments,
+        audit: {
+          append: (event) => {
+            events.push(event)
+          },
+          read: () => events,
+        },
+      })
+      const abort = new AbortController()
+      const first = app.request('/api/t/marine/resources/doc/questions', { signal: abort.signal })
+      await ready
+      const second = join ? app.request('/api/t/marine/resources/doc/questions?wait=1') : undefined
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      abort.abort()
+      expect((await first).status).toBe(500)
+      release()
+      if (second) expect((await second).status).toBe(200)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(!!enrichments.get('marine', 'doc', 'suggested-questions')).toBe(join)
+      expect(events.filter((e) => e.action === 'resource.questions.generate').map((e) => e.outcome))
+        .toEqual(['intent', join ? 'success' : 'uncertain'])
+    } finally {
+      Deno.removeSync(dir, { recursive: true })
+    }
+  }
+})
 
 Deno.test('real privileged responses retain errors and never escape failed completion audit', async () => {
   for (const mode of ['success', 'throw', 'denied', 'audit'] as const) {

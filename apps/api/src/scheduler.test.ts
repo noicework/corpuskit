@@ -48,6 +48,102 @@ const { TenantStore } = await import('./tenants.ts')
 const freshTenants = () =>
   new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` })
 
+Deno.test('scheduled watch mutations carry portal target and shared system correlation', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const tenants = freshTenants()
+    const watches = new WatchStore()
+    const watch = watches.add('marine', 'fixture-client', 'private-query')
+    const stores = {
+      rbac,
+      tenants,
+      watches,
+      sources: new SourceStore(),
+      enrichments: new EnrichmentStore(),
+    }
+    await runSystemMaintenance(fakeManagement(), stores, undefined, ['watch'], false)
+    const all = rbac.audit.read({ scope: { kind: 'platform' } })
+    const scoped = all.filter((e) => e.scope_slug === 'marine')
+    expect(scoped.map((e) => e.outcome).sort()).toEqual(['intent', 'success'])
+    expect(scoped.every((e) => e.actor_kind === 'system' && e.target_id === watch.id)).toBe(true)
+    expect(new Set(all.map((e) => e.request_id)).size).toBe(1)
+    expect(JSON.stringify(all)).not.toContain('private-query')
+    db.exec(
+      "CREATE TRIGGER fail_scoped BEFORE INSERT ON audit_events WHEN NEW.scope_kind = 'portal' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    let searches = 0
+    await expect(runSystemMaintenance(
+      {
+        search: () => {
+          searches++
+          return Promise.resolve({ resources: [] })
+        },
+      } as unknown as AragProvider,
+      stores,
+      undefined,
+      ['watch'],
+      false,
+    )).rejects.toThrow()
+    expect(searches).toBe(0)
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('scheduled sources and generation passes record actual portal actions without source URLs', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  const originalFetch = globalThis.fetch
+  try {
+    globalThis.fetch = () =>
+      Promise.resolve(new Response('<html></html>', { headers: { 'content-type': 'text/html' } }))
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const tenants = freshTenants()
+    for (const t of tenants.list()) if (t.slug !== 'marine') tenants.setDisabled(t.slug, true)
+    const sources = new SourceStore()
+    const source = sources.add('marine', 'https://example.org/private-source', true)
+    const stores = {
+      rbac,
+      tenants,
+      sources,
+      watches: new WatchStore(),
+      enrichments: new SpyEnrichmentStore(),
+    }
+    await runSystemMaintenance(
+      {
+        listResources: () => Promise.resolve([{ id: 'r1', title: 'Report', summary: '' }]),
+        invalidate: () => {},
+      } as unknown as AragProvider,
+      stores,
+      undefined,
+      ['sync', 'enrichment'],
+      false,
+    )
+    const events = rbac.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
+    for (
+      const action of [
+        'maintenance.source.sync',
+        'maintenance.enrichment.run',
+        'maintenance.questions.run',
+      ]
+    ) {
+      const scoped = events.filter((e) => e.action === action)
+      expect(scoped.map((e) => e.outcome).sort()).toEqual(['intent', 'success'])
+      expect(scoped.every((e) => e.actor_kind === 'system')).toBe(true)
+      if (action === 'maintenance.source.sync') {
+        expect(scoped.every((e) => e.target_id === source.id)).toBe(true)
+      }
+    }
+    expect(JSON.stringify(events)).not.toContain('private-source')
+    sources.remove('marine', source.id)
+  } finally {
+    globalThis.fetch = originalFetch
+    db.close()
+  }
+})
+
 class SpyWatchStore extends WatchStore {
   calls: string[] = []
   override list(...args: Parameters<InstanceType<typeof WatchStore>['list']>) {
