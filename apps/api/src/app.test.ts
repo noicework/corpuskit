@@ -773,12 +773,12 @@ describe('GET /api/t/:slug/config', () => {
     TenantConfigSchema.parse(await response.json())
   })
 
-  it('returns 404 for an unknown tenant', async () => {
+  it('denies an unknown tenant before returning configuration', async () => {
     const app = makeApp()
     const response = await app.request('/api/t/nope/config')
 
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'unknown_tenant' })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
   })
 })
 
@@ -940,7 +940,7 @@ describe('portal domain lifecycle', () => {
 })
 
 describe('GET /api/t/:slug/resources/:id/thumbnail', () => {
-  it('keeps stable thumbnails warm and forwards validators from the platform', async () => {
+  it('prevents thumbnail caching and forwards validators from the platform', async () => {
     const management = {
       thumbnailResponse: () =>
         Promise.resolve(
@@ -964,7 +964,7 @@ describe('GET /api/t/:slug/resources/:id/thumbnail', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe(
-      'public, max-age=86400, stale-while-revalidate=604800',
+      'private, no-store',
     )
     expect(response.headers.get('content-type')).toBe('image/webp')
     expect(response.headers.get('content-length')).toBe('3')

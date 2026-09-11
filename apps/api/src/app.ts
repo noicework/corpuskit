@@ -1035,6 +1035,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Capture trusted adapter facts once. Route handlers never reconstruct identity from headers.
   const requestContexts = new WeakMap<Request, PortalRequestContext>()
+  const safeMetadataRequests = new WeakSet<Request>()
   const ingressContexts = new WeakMap<Request, PortalRequestContext>()
   const requestContext = (request: Request): PortalRequestContext => {
     const existing = requestContexts.get(request)
@@ -1206,6 +1207,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const selected = await authority(scope)
         try {
           authoriseOperation(selected, declaration.permission, scope, policy)
+        } catch (error) {
+          // D9 is available only after credential and portal validation succeeded.
+          if (!declaration.safeMetadata || !(error instanceof AuthorisationError)) throw error
+          safeMetadataRequests.add(c.req.raw)
         } finally {
           if (context.denialAudited) markDenialAudited(c.req.raw)
         }
@@ -1340,6 +1345,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   }
   registerInfrastructure(app, '*', async (c, next) => {
+    await next()
+    // Portal modes and assignments are mutable, even for currently public bytes.
+    if (c.req.path.startsWith('/api/t/')) c.header('Cache-Control', 'private, no-store')
+  })
+  registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)
     c.set(authorisationContextKey, requestHelpers(c))
     await next()
@@ -1431,6 +1441,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Register before every admin handler, including extraction and routing above the old gate.
   registerInfrastructure(app, '/api/admin/*', async (c, next) => {
     await authoriseDeclared(c)
+    await next()
+  })
+
+  registerInfrastructure(app, '/api/t/*', async (c, next) => {
+    let declaration
+    try {
+      declaration = matchedDeclaration(c)
+    } catch {
+      await authoriseDeclared(c)
+      return
+    }
+    if (
+      declaration.permission === 'portal.read' && !declaration.owned &&
+      !declaration.path.includes('/mcp')
+    ) await authoriseDeclared(c)
     await next()
   })
 
@@ -1616,6 +1641,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/config'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (safeMetadataRequests.has(c.req.raw)) {
+      const { productName, organisation, colours, paletteId } = config.branding
+      return c.json({
+        slug: config.slug,
+        branding: {
+          productName,
+          organisation,
+          logoUrl: brandingUrl(config.slug, 'logo') ?? config.branding.logoUrl ?? null,
+          colours,
+          paletteId: paletteId ?? null,
+        },
+        accessMode: config.accessMode,
+      })
+    }
     return c.json(withBrandingUrls(config))
   })
 
@@ -1628,7 +1667,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const stored = opts.branding?.get(config.slug, kind)
     if (stored) {
       return new Response(stored.bytes, {
-        headers: { 'content-type': stored.contentType, 'cache-control': 'public, max-age=300' },
+        headers: { 'content-type': stored.contentType, 'cache-control': 'private, no-store' },
       })
     }
     const path = brandingFile(config.slug, kind)
@@ -1642,7 +1681,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? `font/${ext}`
       : `image/${ext === 'jpg' ? 'jpeg' : ext}`
     return new Response(readFileSync(path), {
-      headers: { 'content-type': type, 'cache-control': 'public, max-age=300' },
+      headers: { 'content-type': type, 'cache-control': 'private, no-store' },
     })
   })
 
@@ -1657,9 +1696,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const value = upstream.headers.get(name)
       if (value) headers.set(name, value)
     }
-    // A processed resource's thumbnail is stable, but not strictly immutable:
-    // keep it fresh for a day, then allow a stale image while caches revalidate.
-    headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800')
+    headers.set('cache-control', 'private, no-store')
     return new Response(upstream.body, { status: 200, headers })
   })
 
