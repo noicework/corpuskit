@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { AdminTenantOverview, MigrationEvent } from '@research-portal/core'
+import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
 import { migrateKb } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -24,12 +26,13 @@ const OUTCOME_BADGE: Record<ItemEvent['outcome'], string> = {
 
 /**
  * Copies every resource from one portal's knowledge box into another's,
- * streaming live progress from the server as it goes. Sits at the bottom of
+ * showing results once the server confirms the audited request. Sits at the bottom of
  * the connections page, its own card, independent of any single tenant.
  */
 export function MigratePanel(
-  { rows, passcode }: { rows: AdminTenantOverview[]; passcode: string },
+  { rows }: { rows: AdminTenantOverview[] },
 ) {
+  const { runExplicit } = useAdminAccess()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [from, setFrom] = useState('')
@@ -50,12 +53,23 @@ export function MigratePanel(
     setItems([])
     setSummary(null)
     try {
-      await migrateKb(from, to, passcode, (event) => {
+      const events: MigrationEvent[] = []
+      const completed = await runExplicit(
+        `Migrate resources from ${from} to ${to}`,
+        async (access) => {
+          await migrateKb(from, to, access, (event) => events.push(event))
+          if (!events.some((event) => event.type === 'done')) throw new AdminAccessError()
+          return true
+        },
+      )
+      if (completed === undefined) return
+      // The server stages privileged progress until mandatory auditing completes.
+      for (const event of events) {
         if (event.type === 'start') setTotal(event.total)
         else if (event.type === 'item') setItems((prev) => [...prev, event])
         else if (event.type === 'done') setSummary(event)
         else if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
-      })
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['admin-recent'] }),
@@ -90,7 +104,8 @@ export function MigratePanel(
       {open && (
         <div className='border-t border-line px-6 py-5'>
           <p className='text-sm text-ink-3'>
-            Copy every resource from one portal's knowledge box into another's.
+            Copy every resource from one portal's knowledge box into another's. Results appear after
+            the request is confirmed.
           </p>
 
           <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
@@ -140,7 +155,7 @@ export function MigratePanel(
             onClick={() => void onRun()}
             className='rp-btn rp-btn-primary mt-4'
           >
-            {running ? 'Migrating…' : 'Run migration'}
+            {running ? 'Sending request...' : 'Run migration'}
           </button>
 
           {total !== null && (
@@ -149,8 +164,11 @@ export function MigratePanel(
               <ul className='mt-2 max-h-64 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>
                 {items.map((item) => (
                   <li key={item.id} className='flex items-center justify-between gap-3 text-sm'>
-                    <span className='truncate text-ink-2'>{item.title}</span>
-                    <span title={item.detail} className={`rp-badge ${OUTCOME_BADGE[item.outcome]}`}>
+                    <span className='min-w-0 flex-1 truncate text-ink-2'>{item.title}</span>
+                    <span
+                      title={item.detail}
+                      className={`rp-badge shrink-0 ${OUTCOME_BADGE[item.outcome]}`}
+                    >
                       {OUTCOME_LABEL[item.outcome]}
                     </span>
                   </li>

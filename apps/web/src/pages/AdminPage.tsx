@@ -192,7 +192,6 @@ function AdminContent() {
                 <PortalRow
                   key={row.tenant.slug}
                   row={row}
-                  passcode='microsoft-sso'
                   expanded={expandedSlug === row.tenant.slug}
                   onToggleExpanded={() =>
                     setExpandedSlug((prev) => (prev === row.tenant.slug ? null : row.tenant.slug))}
@@ -200,7 +199,7 @@ function AdminContent() {
               ))}
             </div>
 
-            <MigratePanel rows={data} passcode='microsoft-sso' />
+            <MigratePanel rows={data} />
           </div>
         )}
       </div>

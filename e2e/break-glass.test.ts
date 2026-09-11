@@ -126,6 +126,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     const base = startTestServer({ emergencyFixture: { directory, state } })
     const requests: { path: string; method: string; emergency: boolean }[] = []
+    let migrationComplete = true
     const rows = ['alpha', 'beta'].map((slug) => ({
       tenant: {
         slug,
@@ -150,6 +151,19 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             status: status === 429 ? 403 : status,
             headers: status === 429 ? { 'retry-after': '125' } : {},
           })
+        }
+        if (url.pathname === '/api/admin/migrate') {
+          return new Response(
+            [
+              { type: 'start', total: 1 },
+              { type: 'item', id: 'one', title: 'Example resource', outcome: 'copied' },
+              { type: 'done', copied: 1, skipped: 0, errors: 0 },
+            ].filter((event) => migrationComplete || event.type !== 'done')
+              .map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+            {
+              headers: { 'content-type': 'text/event-stream' },
+            },
+          )
         }
         return Response.json(
           url.pathname === '/api/admin/overview'
@@ -209,12 +223,19 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         bodyFont: getComputedStyle(document.querySelector('main')!).fontFamily,
         lexendLoaded: document.fonts.check('16px Lexend'),
         zillaLoaded: document.fonts.check('16px "Zilla Slab"'),
+        controlOverflow: Math.max(
+          0,
+          ...[...document.querySelectorAll<HTMLElement>('.rp-btn, .rp-badge')].map((element) =>
+            element.scrollWidth - element.clientWidth
+          ),
+        ),
       }))
       expect(metrics.overflow).toBeLessThanOrEqual(1)
       expect(metrics.rootFont).toBe('22px')
       expect(metrics.bodyFont).toContain('Zilla Slab')
       expect(metrics.lexendLoaded).toBe(true)
       expect(metrics.zillaLoaded).toBe(true)
+      expect(metrics.controlOverflow).toBeLessThanOrEqual(1)
       const screenshot = `${directory}/${name}.png`
       await Deno.writeFile(screenshot, await page!.screenshot())
       evidence.push({ name, metrics, screenshot })
@@ -348,6 +369,99 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await settle(page!)
       expect(requests.slice(before).some((r) => r.method === 'POST' && !r.emergency)).toBe(true)
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+
+      for (
+        const action of [
+          'Create new box',
+          'Verify and connect',
+          'Revert to demo box',
+          'Disable',
+          'Enable',
+          'Remove',
+          'Run migration',
+        ]
+      ) {
+        for (const palette of ['light', 'observatory']) {
+          for (const width of [1440, 390]) {
+            state.capability = 'enabled'
+            state.status = 200
+            rows[0]!.knowledgeBox.status = action === 'Create new box' ? 'demo' : 'connected'
+            rows[0]!.disabled = action === 'Enable'
+            await open('admin', palette, width)
+            await clickText(page!, 'Use emergency access')
+            await confirm()
+            await page!.waitForSelector('[data-admin-overview]')
+            if (action === 'Run migration') {
+              await clickText(page!, 'Migrate resources')
+              await page!.evaluate(() => {
+                for (const [id, value] of [['migrate-from', 'alpha'], ['migrate-to', 'beta']]) {
+                  const select = document.getElementById(id!) as HTMLSelectElement
+                  select.value = value!
+                  select.dispatchEvent(new Event('change', { bubbles: true }))
+                }
+              })
+            } else {
+              await clickText(page!, 'Protected alpha')
+              if (action === 'Verify and connect') {
+                await fill(page!, '#kb-id-alpha', 'https://example.invalid/api/v1/kb/example')
+                await fill(page!, '#kb-token-alpha', 'fixture-service-key')
+              }
+            }
+            await page!.evaluate(() => {
+              globalThis.confirm = () => true
+            })
+            const before = requests.length
+            await clickText(page!, action)
+            // Before migration, these controls send session requests instead of opening a prompt.
+            expect(requests.length).toBe(before)
+            await page!.waitForSelector('[role=dialog]')
+            const name = `${action.toLowerCase().replaceAll(' ', '-')}-${palette}-${width}`
+            await capture(`${name}-prompt`)
+            await click(page!, '[data-emergency-cancel]')
+            expect(requests.length).toBe(before)
+            await clickText(page!, action)
+            await confirm()
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            expect(requests.at(-1)?.emergency).toBe(true)
+            expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+            await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+            await settle(page!)
+            expect(requests.length).toBe(before + 1)
+            await page!.evaluate((migration) => {
+              document.querySelector(migration ? '#migrate-from' : '#kb-id-alpha')?.scrollIntoView({
+                block: 'center',
+              })
+            }, { args: [action === 'Run migration'] })
+            await capture(`${name}-result`)
+            if (action === 'Run migration') {
+              expect(await page!.evaluate(() => document.body.textContent)).toContain(
+                'Copied 1, skipped 0, 0 errors.',
+              )
+              state.status = 500
+              const failedBefore = requests.length
+              await clickText(page!, action)
+              await confirm()
+              await page!.waitForSelector('[role=dialog] [role=alert]')
+              expect(requests.length).toBe(failedBefore + 1)
+              expect(await page!.evaluate(() => document.body.textContent)).not.toContain(
+                'Copied 1, skipped 0, 0 errors.',
+              )
+              await capture(`${name}-uncertain`)
+              await click(page!, '[data-emergency-cancel]')
+              state.status = 200
+              migrationComplete = false
+              await clickText(page!, action)
+              await confirm()
+              await page!.waitForSelector('[role=dialog] [role=alert]')
+              expect(await page!.evaluate(() => document.body.textContent)).not.toContain(
+                'Copied 1, skipped 0, 0 errors.',
+              )
+              migrationComplete = true
+            }
+          }
+        }
+      }
     } finally {
       await Deno.writeTextFile(`${directory}/evidence.json`, JSON.stringify(evidence, null, 2))
       await page?.close()
