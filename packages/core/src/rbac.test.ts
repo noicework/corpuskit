@@ -27,6 +27,253 @@ const noRoles = { portalRoles: [] }
 const alpha = { kind: 'portal', slug: 'alpha' }
 const platform = { kind: 'platform' }
 
+// D1 oracle copied from DECISIONS.md, independent of production catalogues and grant maps.
+const decisionPermissions = [
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.export',
+  'portal.watch',
+  'content.write',
+  'taxonomy.write',
+  'enrichments.write',
+  'graph.write',
+  'behaviour.write',
+  'appearance.write',
+  'bindings.write',
+  'domains.write',
+  'keys.manage',
+  'members.manage',
+  'portal.create',
+  'portal.delete',
+  'platform.members.manage',
+  'platform.settings.write',
+  'audit.read',
+  'audit.export',
+]
+const viewerGrants = ['portal.read', 'portal.ask']
+const analystGrants = [
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.export',
+  'portal.watch',
+]
+const curatorGrants = [
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.export',
+  'portal.watch',
+  'content.write',
+  'taxonomy.write',
+  'enrichments.write',
+  'graph.write',
+]
+const portalAdminGrants = [
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.export',
+  'portal.watch',
+  'content.write',
+  'taxonomy.write',
+  'enrichments.write',
+  'graph.write',
+  'behaviour.write',
+  'appearance.write',
+  'bindings.write',
+  'domains.write',
+  'keys.manage',
+  'members.manage',
+  'audit.read',
+  'audit.export',
+]
+
+describe('independent D1 decision oracle', () => {
+  it('checks exactly 396 allow and deny cells across six roles, 22 permissions and three scopes', () => {
+    expect(PERMISSIONS).toEqual(decisionPermissions)
+    expect(new Set(PERMISSIONS).size).toBe(22)
+    const fixtures = [
+      { role: 'viewer', portal: viewerGrants, platform: [], global: false },
+      { role: 'analyst', portal: analystGrants, platform: [], global: false },
+      { role: 'curator', portal: curatorGrants, platform: [], global: false },
+      { role: 'portal-admin', portal: portalAdminGrants, platform: [], global: false },
+      {
+        role: 'platform-admin',
+        portal: portalAdminGrants,
+        platform: ['portal.create', 'audit.read', 'audit.export'],
+        global: true,
+      },
+      {
+        role: 'owner',
+        portal: portalAdminGrants,
+        platform: [
+          'portal.create',
+          'audit.read',
+          'audit.export',
+          'portal.delete',
+          'platform.members.manage',
+          'platform.settings.write',
+        ],
+        global: true,
+      },
+    ]
+    const locations = [
+      { kind: 'platform' },
+      { kind: 'portal', slug: 'alpha' },
+      { kind: 'portal', slug: 'beta' },
+    ] as const
+    let decisions = 0
+    for (const fixture of fixtures) {
+      const roles = fixture.global
+        ? { platformRole: fixture.role, portalRoles: [] }
+        : { portalRoles: [{ slug: 'alpha', role: fixture.role }] }
+      const principal = normalisePrincipal(user, roles)
+      expect(principal).not.toBeNull()
+      for (const permission of decisionPermissions) {
+        for (const scope of locations) {
+          const expected = scope.kind === 'platform'
+            ? fixture.platform.includes(permission)
+            : (fixture.global || scope.slug === 'alpha') && fixture.portal.includes(permission)
+          expect({
+            role: fixture.role,
+            permission,
+            scope,
+            allowed: authorize(principal, permission, scope),
+          })
+            .toEqual({ role: fixture.role, permission, scope, allowed: expected })
+          decisions++
+        }
+      }
+    }
+    expect(decisions).toBe(396)
+  })
+})
+
+describe('independent complete D2 tables', () => {
+  it('checks every permission for each unassigned identity and policy boundary', () => {
+    const fixtures = [
+      { identity: anonymous, policy: publicPolicy, viewer: true },
+      { identity: user, policy: publicPolicy, viewer: true },
+      { identity: { ...user, tenantId: 'other' }, policy: publicPolicy, viewer: true },
+      {
+        identity: anonymous,
+        policy: { ...publicPolicy, accessMode: 'authenticated' },
+        viewer: false,
+      },
+      { identity: anonymous, policy: { ...publicPolicy, accessMode: 'restricted' }, viewer: false },
+      { identity: anonymous, policy: undefined, viewer: false },
+      { identity: user, policy: { ...publicPolicy, accessMode: 'authenticated' }, viewer: true },
+      {
+        identity: { ...user, tenantId: 'other' },
+        policy: { ...publicPolicy, accessMode: 'authenticated' },
+        viewer: false,
+      },
+      {
+        identity: { ...user, tenantId: 'Tenant-a' },
+        policy: { ...publicPolicy, accessMode: 'authenticated' },
+        viewer: false,
+      },
+      { identity: user, policy: { ...publicPolicy, accessMode: 'restricted' }, viewer: false },
+      { identity: user, policy: undefined, viewer: false },
+    ]
+    for (const fixture of fixtures) {
+      const principal = normalisePrincipal(fixture.identity, noRoles, fixture.policy)
+      expect(principal).not.toBeNull()
+      for (const permission of decisionPermissions) {
+        expect(authorize(principal, permission, alpha)).toBe(
+          fixture.viewer && viewerGrants.includes(permission),
+        )
+        expect(authorize(principal, permission, { kind: 'portal', slug: 'beta' })).toBe(false)
+        expect(authorize(principal, permission, platform)).toBe(false)
+      }
+    }
+    for (const identity of [anonymous, user]) {
+      const principal = normalisePrincipal(identity, noRoles, { ...publicPolicy, slug: 'beta' })
+      for (const permission of decisionPermissions) {
+        expect(authorize(principal, permission, alpha)).toBe(false)
+        expect(authorize(principal, permission, { kind: 'portal', slug: 'beta' })).toBe(
+          viewerGrants.includes(permission),
+        )
+      }
+    }
+  })
+
+  it('preserves each explicit role despite absent, restricted or different-tenant policy', () => {
+    for (
+      const [role, grants] of [
+        ['viewer', viewerGrants],
+        ['analyst', analystGrants],
+        ['curator', curatorGrants],
+        ['portal-admin', portalAdminGrants],
+      ] as const
+    ) {
+      const roles = { portalRoles: [{ slug: 'alpha', role }] }
+      for (
+        const policy of [
+          undefined,
+          publicPolicy,
+          { ...publicPolicy, accessMode: 'restricted' },
+          { ...publicPolicy, accessMode: 'authenticated' },
+          { ...publicPolicy, accessMode: 'authenticated', configuredTenantId: 'other' },
+        ]
+      ) {
+        const principal = normalisePrincipal(user, roles, policy)
+        expect(principal?.effectiveRoles).toEqual(roles)
+        for (const permission of decisionPermissions) {
+          expect(authorize(principal, permission, alpha)).toBe(grants.includes(permission))
+        }
+      }
+    }
+  })
+
+  it('denies manually forged anonymous contexts and unsupported identity kinds', () => {
+    const contexts = [
+      {
+        identity: anonymous,
+        effectiveRoles: { ...noRoles, platformRole: 'owner' },
+        portalPolicy: publicPolicy,
+      },
+      {
+        identity: anonymous,
+        effectiveRoles: { portalRoles: [{ slug: 'alpha', role: 'analyst' }] },
+        portalPolicy: publicPolicy,
+      },
+      { identity: anonymous, effectiveRoles: { portalRoles: [{ slug: 'alpha', role: 'viewer' }] } },
+      {
+        identity: anonymous,
+        effectiveRoles: { portalRoles: [{ slug: 'beta', role: 'viewer' }] },
+        portalPolicy: publicPolicy,
+      },
+      {
+        identity: anonymous,
+        effectiveRoles: { portalRoles: [{ slug: 'alpha', role: 'viewer' }] },
+        portalPolicy: { ...publicPolicy, accessMode: 'restricted' },
+      },
+    ]
+    for (const identity of [{ kind: 'key', slug: 'alpha', role: 'viewer' }, { kind: 'system' }]) {
+      expect(normalisePrincipal(identity, noRoles, publicPolicy)).toBeNull()
+      contexts.push({
+        identity,
+        effectiveRoles: { ...noRoles, platformRole: 'owner' },
+        portalPolicy: publicPolicy,
+      })
+    }
+    for (const principal of contexts) {
+      for (const permission of decisionPermissions) {
+        for (const scope of [alpha, platform]) {
+          expect(authorize(principal, permission, scope)).toBe(false)
+        }
+      }
+    }
+  })
+})
+
 describe('explicit D2 principal normalisation', () => {
   it('requires contextual authority and exactly three evaluator arguments', () => {
     expect(authorize.length).toBe(3)
