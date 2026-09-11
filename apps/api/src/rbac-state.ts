@@ -6,10 +6,12 @@ import {
   ScopeSchema,
 } from '@research-portal/core'
 import {
+  appendAudit,
   type AuditEvent,
   type AuditReadFilter,
   type AuditStore,
   AuditWriteError,
+  createAuditEvent,
   validateAuditEvent,
 } from './audit.ts'
 import { AssignmentService } from './assignments.ts'
@@ -116,6 +118,43 @@ export class RbacState {
   readonly audit: AuditStore
   readonly assignments: AssignmentReader
   readonly locks: RbacStores['locks']
+
+  /** Internal maintenance only. Purge and its evidence commit or roll back together. */
+  retainAudit(
+    retentionDays: number,
+  ): { cutoff: string; deletedCount: number; retentionDays: number } {
+    const now = this.now()
+    const cutoffAt = now - retentionDays * 86400_000
+    if (
+      !Number.isSafeInteger(retentionDays) || retentionDays <= 0 ||
+      !Number.isSafeInteger(cutoffAt) || Math.abs(cutoffAt) > 8.64e15
+    ) {
+      throw new Error('Invalid AUDIT_RETENTION_DAYS cutoff')
+    }
+    const cutoff = new Date(cutoffAt).toISOString()
+    if (!/^\d{4}-/.test(cutoff)) throw new Error('Invalid AUDIT_RETENTION_DAYS cutoff')
+    return this.database.transactionSync(() => {
+      const deletedCount = this.database.all<{ count: number }>(
+        'SELECT count(*) AS count FROM audit_events WHERE at < ?',
+        cutoff,
+      )[0]!.count
+      this.database.exec('DELETE FROM audit_events WHERE at < ?', cutoff)
+      const detail = { cutoff, deletedCount, retentionDays }
+      appendAudit(
+        this.audit,
+        createAuditEvent({
+          requestId: crypto.randomUUID(),
+          actor: { kind: 'system' },
+          action: 'audit.retention',
+          scope: { kind: 'platform' },
+          target: { kind: 'audit' },
+          outcome: 'success',
+          detail,
+        }, () => now),
+      )
+      return detail
+    })
+  }
 
   /** Deployment evidence is configured internally, never by incoming claims. */
   groupCapability(audience: string): 'disabled' | 'verified-supported' {

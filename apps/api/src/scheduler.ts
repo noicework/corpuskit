@@ -11,6 +11,91 @@ import { type Source, type SourceStoreApi, type WatchStoreApi } from './stores.t
 import { type EnrichmentStoreApi, runEnrichmentOverCorpus } from './enrichments.ts'
 import { runSuggestedQuestionsOverCorpus } from './suggested-questions.ts'
 import type { TenantStoreApi } from './tenants.ts'
+import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
+import type { RbacState } from './rbac-state.ts'
+
+/** A typo must never silently shorten audit retention. */
+export function auditRetentionDays(raw: string | undefined): number {
+  if (raw === undefined) return 400
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new Error('AUDIT_RETENTION_DAYS must be a positive integer')
+  }
+  return Number(raw)
+}
+
+/** Internal jobs record intent before work and never replay side effects after audit failure. */
+export async function runSystemJob(
+  audit: AuditStore,
+  job: 'sync' | 'watch' | 'enrichment',
+  work: () => Promise<void>,
+): Promise<void> {
+  const requestId = crypto.randomUUID()
+  const record = (outcome: 'intent' | 'success' | 'failure' | 'uncertain') =>
+    appendAudit(
+      audit,
+      createAuditEvent({
+        requestId,
+        actor: { kind: 'system' },
+        action: 'maintenance.run',
+        scope: { kind: 'platform' },
+        target: { kind: 'maintenance', id: job },
+        outcome,
+        detail: outcome === 'failure' || outcome === 'uncertain'
+          ? { code: 'operation_failed' }
+          : {},
+      }),
+    )
+  record('intent')
+  try {
+    await work()
+  } catch (error) {
+    try {
+      record('failure')
+    } catch (auditError) {
+      console.error('[scheduler] required failure audit could not be written')
+      throw auditError
+    }
+    throw error
+  }
+  try {
+    record('success')
+  } catch (error) {
+    // Work already completed remotely. This is an audit failure, never a rollback claim.
+    console.error('[scheduler] job completed but its required completion audit failed')
+    try {
+      record('uncertain')
+    } catch {
+      console.error('[scheduler] required uncertain-outcome audit could not be written')
+    }
+    throw error
+  }
+}
+
+interface MaintenanceStores {
+  rbac: RbacState
+  tenants: TenantStoreApi
+  sources: SourceStoreApi
+  watches: WatchStoreApi
+  enrichments: EnrichmentStoreApi
+}
+
+export async function runSystemMaintenance(
+  management: AragProvider,
+  stores: MaintenanceStores,
+  retentionDays: string | undefined,
+  jobs: readonly ('sync' | 'watch' | 'enrichment')[] = ['sync', 'watch', 'enrichment'],
+  retain = true,
+): Promise<void> {
+  const days = auditRetentionDays(retentionDays)
+  if (retain) stores.rbac.retainAudit(days)
+  for (const job of jobs) {
+    await runSystemJob(stores.rbac.audit, job, () => {
+      if (job === 'sync') return runAutoSyncs(management, stores.tenants, stores.sources)
+      if (job === 'watch') return runWatches(management, stores.tenants, stores.watches)
+      return runAutoEnrichments(management, stores.tenants, stores.enrichments)
+    })
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Background upkeep: re-sync registered sources (ingest pages that appeared
@@ -230,8 +315,9 @@ export async function runWatches(
           changed: watch.changed ||
             (watch.fingerprint !== null && watch.fingerprint !== fingerprint),
         })
-      } catch {
-        // box offline or rebinding - try again next cycle
+      } catch (error) {
+        // The internal caller records failure; do not report a successful maintenance pass.
+        throw error
       }
     }
   }
@@ -284,11 +370,10 @@ export async function runAutoEnrichments(
         if (event.type === 'error') problem = event.message
       }
       if (problem) {
-        console.warn(`[scheduler] auto-enrichment paused for ${config.slug}: ${problem}`)
         // Tenants share the platform account. Once one box says it is
         // strained, moving straight to the next box would only transfer the
         // pressure; leave every remaining portal for the next cadence.
-        return
+        throw new Error('Scheduled enrichment did not complete')
       }
       // Openers for the resource pages ride the same cadence, so a page never
       // generates them on demand once the pass has caught up.
@@ -298,14 +383,12 @@ export async function runAutoEnrichments(
         })
       ) {
         if (event.type === 'error') {
-          console.warn(
-            `[scheduler] suggested questions paused for ${config.slug}: ${event.message}`,
-          )
+          throw new Error('Scheduled suggested questions did not complete')
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'unknown error'
-      console.error(`[scheduler] auto-enrichment failed for ${config.slug}: ${message}`)
+      console.error(`[scheduler] auto-enrichment failed for ${config.slug}`)
+      throw err
     }
   }
 }
@@ -324,11 +407,12 @@ export async function runAutoSyncs(
       try {
         await syncSource(management, sources, config, source, () => {})
       } catch (err) {
-        // The site is unreachable, or the box refuses writes. Either way the
-        // run is over for this source - but record WHY against the source so
-        // an administrator can see it in Manage, then carry on with the rest.
-        const message = recordSyncFailure(sources, config.slug, source, err)
-        console.error(`[scheduler] auto-sync failed for ${config.slug} ${source.url}: ${message}`)
+        // The site is unreachable, or the box refuses writes. Record the reason
+        // against the source for Manage, then stop this run.
+        // The internal caller must observe and audit the failed maintenance pass.
+        recordSyncFailure(sources, config.slug, source, err)
+        console.error(`[scheduler] auto-sync failed for ${config.slug}`)
+        throw err
       }
     }
   }
@@ -352,12 +436,14 @@ export function startScheduler(
   sources: SourceStoreApi,
   watches: WatchStoreApi,
   enrichments: EnrichmentStoreApi,
+  rbac: RbacState,
+  env: Record<string, string | undefined>,
 ): () => void {
-  const runDaily = async () => {
-    await runAutoSyncs(management, tenants, sources).catch(() => {})
-    await runWatches(management, tenants, watches).catch(() => {})
-  }
-  const runEnrichments = () => runAutoEnrichments(management, tenants, enrichments)
+  const stores = { rbac, tenants, sources, watches, enrichments }
+  const runDaily = () =>
+    runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'])
+  const runEnrichments = () =>
+    runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false)
 
   // Serialise scheduled platform work. A configurable enrichment timer must
   // never overlap the daily ingest pass and recreate the contention this
@@ -365,7 +451,10 @@ export function startScheduler(
   let stopped = false
   let queue = Promise.resolve()
   const enqueue = (task: () => Promise<void>) => {
-    queue = queue.then(() => stopped ? undefined : task()).catch(() => {})
+    queue = queue.then(() => stopped ? undefined : task()).catch(() => {
+      // Keep the timer usable for its next cadence, without replaying this failed task.
+      console.error('[scheduler] maintenance failed; no automatic retry')
+    })
   }
 
   // First pass shortly after boot (machines may sleep between requests).
@@ -375,7 +464,7 @@ export function startScheduler(
       await runEnrichments()
     }), 90_000)
   const daily = setInterval(() => enqueue(runDaily), 24 * 3600 * 1000)
-  const cadence = autoEnrichmentCadenceMs(Deno.env.get('AUTO_ENRICH_CADENCE_HOURS'))
+  const cadence = autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS)
   const enrichment = setInterval(() => enqueue(runEnrichments), cadence)
   return () => {
     stopped = true

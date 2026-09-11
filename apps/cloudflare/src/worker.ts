@@ -15,7 +15,7 @@ import {
 } from '../../api/src/principal.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from '../../api/src/assignments.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
-import { runAutoEnrichments, runAutoSyncs, runWatches } from '../../api/src/scheduler.ts'
+import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { AragProvider } from '@research-portal/retrieval'
 import {
   type AuthConfig,
@@ -229,9 +229,7 @@ export class PortalDurableObject extends DurableObject<Env> {
   }
 
   async maintenance(): Promise<void> {
-    await runAutoSyncs(this.provider, this.stores.tenants, this.stores.sources)
-    await runWatches(this.provider, this.stores.tenants, this.stores.watches)
-    await runAutoEnrichments(this.provider, this.stores.tenants, this.stores.enrichments)
+    await runSystemMaintenance(this.provider, this.stores, this.bindings.AUDIT_RETENTION_DAYS)
   }
 }
 
@@ -280,9 +278,10 @@ export default {
     ctx.waitUntil(
       env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
         .maintenance()
-        .catch((error: unknown) =>
-          console.error(JSON.stringify({ message: 'maintenance failed', error: String(error) }))
-        ),
+        .catch((error: unknown) => {
+          console.error('Scheduled maintenance failed')
+          throw error
+        }),
     )
   },
 } satisfies ExportedHandler<Env>

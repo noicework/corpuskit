@@ -1,5 +1,8 @@
 import { expect } from '@std/expect'
 import type { AragProvider } from '@research-portal/retrieval'
+import { LocalRbacDatabase } from './rbac-local.ts'
+import { RbacState } from './rbac-state.ts'
+import { createAuditEvent, redactAuditDetail } from './audit.ts'
 
 // ---------------------------------------------------------------------------
 // Wave 1 hardening, finding 2: startScheduler used to construct its own
@@ -34,6 +37,9 @@ const {
   runAutoEnrichments,
   runAutoSyncs,
   runWatches,
+  runSystemMaintenance,
+  runSystemJob,
+  auditRetentionDays,
 } = await import('./scheduler.ts')
 const { SourceStore, WatchStore } = await import('./stores.ts')
 const { EnrichmentStore } = await import('./enrichments.ts')
@@ -142,6 +148,120 @@ Deno.test(
   },
 )
 
+Deno.test('retention parses positive whole days and atomically preserves the exact cutoff', () => {
+  expect(auditRetentionDays(undefined)).toBe(400)
+  expect(auditRetentionDays('7')).toBe(7)
+  for (const invalid of ['', ' ', '0', '-1', '1.5', 'NaN', '1e3', 'Infinity', '9007199254740992']) {
+    expect(() => auditRetentionDays(invalid)).toThrow('AUDIT_RETENTION_DAYS')
+  }
+  const now = Date.UTC(2026, 8, 12)
+  for (const days of [400, 7]) {
+    const db = new LocalRbacDatabase(':memory:')
+    try {
+      const state = new RbacState(db, () => now)
+      state.migrate()
+      const cutoff = now - days * 86400_000
+      for (const at of [cutoff - 1, cutoff, cutoff + 1]) {
+        state.audit.append(
+          createAuditEvent({
+            requestId: 'fixture',
+            actor: { kind: 'system' },
+            action: 'maintenance.run',
+            scope: { kind: 'platform' },
+            target: { kind: 'maintenance' },
+            outcome: 'success',
+          }, () => at),
+        )
+      }
+      expect(state.retainAudit(days)).toEqual({
+        cutoff: new Date(cutoff).toISOString(),
+        deletedCount: 1,
+        retentionDays: days,
+      })
+      expect(state.audit.read({ scope: { kind: 'platform' } })).toHaveLength(3)
+      expect(state.retainAudit(days).deletedCount).toBe(0)
+      const before = state.audit.read({ scope: { kind: 'platform' } })
+      db.exec(
+        "CREATE TRIGGER fail_retention BEFORE INSERT ON audit_events WHEN NEW.action = 'audit.retention' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      )
+      expect(() => state.retainAudit(1)).toThrow()
+      expect(state.audit.read({ scope: { kind: 'platform' } })).toEqual(before)
+    } finally {
+      db.close()
+    }
+  }
+  expect(redactAuditDetail('audit.retention', { cutoff: '2026-09-12T00:00:00.000Z' })).toEqual({
+    cutoff: '2026-09-12T00:00:00.000Z',
+  })
+  for (const cutoff of ['invalid', '2026-09-12', '2026-09-12T00:00:00+00:00', 0]) {
+    expect(() => redactAuditDetail('audit.retention', { cutoff })).toThrow()
+  }
+})
+
+Deno.test('system jobs audit intent and actual outcome without retrying remote work', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const state = new RbacState(db)
+    state.migrate()
+    let calls = 0
+    await expect(runSystemJob(state.audit, 'sync', async () => {
+      calls++
+      throw new Error('remote failure')
+    })).rejects.toThrow('remote failure')
+    expect(calls).toBe(1)
+    const events = state.audit.read({ scope: { kind: 'platform' } })
+    expect(events.map((e) => e.outcome).sort()).toEqual(['failure', 'intent'])
+    expect(events.every((e) => e.actor_kind === 'system' && e.target_id === 'sync')).toBe(true)
+    db.exec(
+      "CREATE TRIGGER fail_complete BEFORE INSERT ON audit_events WHEN NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    await expect(runSystemJob(state.audit, 'watch', async () => {
+      calls++
+    })).rejects.toThrow()
+    expect(calls).toBe(2)
+    expect(
+      state.audit.read({ scope: { kind: 'platform' } }).some((e) =>
+        e.target_id === 'watch' && e.outcome === 'uncertain'
+      ),
+    ).toBe(true)
+    db.exec('DROP TRIGGER fail_complete')
+    db.exec(
+      "CREATE TRIGGER fail_intent BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    await expect(runSystemJob(state.audit, 'enrichment', async () => {
+      calls++
+    })).rejects.toThrow()
+    expect(calls).toBe(2)
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('internal maintenance uses shared stores, audits all jobs and stops on invalid retention', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const tenants = freshTenants()
+    for (const summary of tenants.list()) tenants.setDisabled(summary.slug, true)
+    const sources = new SpySourceStore()
+    const watches = new SpyWatchStore()
+    const enrichments = new SpyEnrichmentStore()
+    const stores = { rbac, tenants, sources, watches, enrichments }
+    await runSystemMaintenance(fakeManagement(), stores, undefined)
+    const events = rbac.audit.read({ scope: { kind: 'platform' } })
+    expect(events.filter((e) => e.action === 'maintenance.run' && e.outcome === 'success'))
+      .toHaveLength(3)
+    expect(events.filter((e) => e.action === 'audit.retention')).toHaveLength(1)
+    await expect(runSystemMaintenance(fakeManagement(), stores, '')).rejects.toThrow(
+      'AUDIT_RETENTION_DAYS',
+    )
+    expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual(events)
+  } finally {
+    db.close()
+  }
+})
+
 class SpyEnrichmentStore extends EnrichmentStore {
   calls: string[] = []
   override get(
@@ -167,6 +287,47 @@ Deno.test(
     expect(enrichments.calls).toContain('get')
   },
 )
+
+Deno.test('provider failures propagate from watches and enrichment into system failure records', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const tenants = freshTenants()
+    const watches = new WatchStore()
+    watches.add('marine', 'fixture-client', 'private query fixture')
+    const stores = {
+      rbac,
+      tenants,
+      watches,
+      sources: new SourceStore(),
+      enrichments: new EnrichmentStore(),
+    }
+    let searches = 0
+    const management = {
+      search: () => {
+        searches++
+        throw new Error('private provider fixture')
+      },
+      listResources: () => {
+        throw new Error('private provider fixture')
+      },
+    } as unknown as AragProvider
+    await expect(runSystemMaintenance(management, stores, '400', ['watch'])).rejects.toThrow()
+    expect(searches).toBe(1)
+    await expect(runSystemMaintenance(management, stores, '400', ['enrichment'])).rejects.toThrow()
+    const events = rbac.audit.read({ scope: { kind: 'platform' } })
+    for (const job of ['watch', 'enrichment']) {
+      expect(events.filter((e) => e.target_id === job).map((e) => e.outcome).sort()).toEqual([
+        'failure',
+        'intent',
+      ])
+    }
+    expect(JSON.stringify(events)).not.toContain('private')
+  } finally {
+    db.close()
+  }
+})
 
 Deno.test('auto-enrichment cadence is daily by default and safely configurable in hours', () => {
   expect(autoEnrichmentCadenceMs(undefined)).toBe(DEFAULT_AUTO_ENRICH_CADENCE_MS)

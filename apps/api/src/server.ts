@@ -81,7 +81,7 @@ const app = buildApp({
   webBuild,
 })
 
-startScheduler(provider, tenants, sources, watches, enrichments)
+startScheduler(provider, tenants, sources, watches, enrichments, rbac, process.env)
 // Off the listen path: the probe is a live retrieval call per portal.
 setTimeout(() => void docsHealth.check(), 3_000)
 

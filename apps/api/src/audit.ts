@@ -78,6 +78,10 @@ const fields = {
   count,
   retentionDays: count,
   deletedCount: count,
+  cutoff: (value: unknown): value is string =>
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value,
   claimAgeSeconds: count,
   lockedUntil: count,
   sessionOid: id,
@@ -97,7 +101,7 @@ const actionFields = {
   'break_glass.used': ['sessionOid', 'sessionTenantId'],
   'break_glass.failed': ['code', 'count', 'sessionOid', 'sessionTenantId'],
   'break_glass.locked': ['code', 'count', 'lockedUntil', 'sessionOid', 'sessionTenantId'],
-  'audit.retention': ['retentionDays', 'deletedCount'],
+  'audit.retention': ['retentionDays', 'deletedCount', 'cutoff'],
   'maintenance.run': ['code', 'count'],
 } as const satisfies Record<string, readonly Field[]>
 export type AuditAction = keyof typeof actionFields

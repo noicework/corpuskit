@@ -15,6 +15,7 @@ import type { PortalDurableObject } from './worker.ts'
 
 type WorkerHandler = {
   fetch(request: Request, env: Env): Promise<Response>
+  scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void>
 }
 
 type WorkerModule = {
@@ -311,7 +312,7 @@ async function principalRequest(
     headers: { 'x-corpuskit-principal': header, 'x-corpuskit-sso-admin': '1' },
   })
 }
-function realHarness() {
+function realHarness(extraEnv: Record<string, string> = {}) {
   const database = new DatabaseSync(':memory:')
   const storage: DurableObjectState['storage'] = {
     sql: {
@@ -355,11 +356,82 @@ function realHarness() {
     ENTRA_TENANT_ID: 'entra-tenant-id',
     ENTRA_CLIENT_SECRET: 'fixture',
     ADMIN_PASSCODE: 'fixture',
+    ...extraEnv,
   })
   const object = new workerModule.PortalDurableObject({ storage }, harness.env)
   harness.env.PORTAL = { getByName: () => object }
   return { ...harness, object, database, state: new DurableState(storage.sql, storage) }
 }
+
+Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling stays non-system', async () => {
+  const h = realHarness()
+  try {
+    h.state.put('tenants', { disabled: ['marine', 'grains'] })
+    for (const method of ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      for (
+        const path of [
+          '/__corpuskit/maintenance',
+          '/__corpuskit/maintenance/',
+          '/%5f%5fcorpuskit/maintenance',
+        ]
+      ) {
+        const response = await h.object.fetch(
+          new Request(`https://corpuskit.test${path}`, {
+            method,
+            headers: { 'x-corpuskit-actor': 'system', 'x-corpuskit-sso-admin': '1' },
+          }),
+        )
+        expect([200, 201, 202, 204]).not.toContain(response.status)
+      }
+    }
+    expect(
+      h.state.rbac.audit.read({ scope: { kind: 'platform' } }).filter((e) =>
+        e.action === 'maintenance.run' || e.action === 'audit.retention'
+      ),
+    ).toHaveLength(0)
+    const pending: Promise<unknown>[] = []
+    await worker.scheduled({ cron: '0 0 * * *', scheduledTime: Date.now() }, h.env, {
+      waitUntil: (promise) => {
+        pending.push(promise)
+      },
+    })
+    await Promise.all(pending)
+    expect(
+      h.state.rbac.audit.read({ scope: { kind: 'platform' } }).some((e) =>
+        e.action === 'audit.retention' && e.actor_kind === 'system'
+      ),
+    ).toBe(true)
+    h.database.exec(
+      "CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    pending.length = 0
+    await worker.scheduled({ cron: '0 0 * * *', scheduledTime: Date.now() }, h.env, {
+      waitUntil: (promise) => {
+        pending.push(promise)
+      },
+    })
+    await expect(Promise.all(pending)).rejects.toThrow()
+  } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('Durable retention rolls back deleted history if its purge event cannot be written', () => {
+  const h = realHarness()
+  try {
+    const before = h.state.rbac.audit.read({ scope: { kind: 'platform' } })
+    h.database.exec("UPDATE audit_events SET at = '2020-01-01T00:00:00.000Z'")
+    h.database.exec(
+      "CREATE TRIGGER fail_purge BEFORE INSERT ON audit_events WHEN NEW.action = 'audit.retention' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect(() => h.state.rbac.retainAudit(400)).toThrow()
+    expect(h.state.rbac.audit.read({ scope: { kind: 'platform' } })).toHaveLength(before.length)
+    h.database.exec('DROP TRIGGER fail_purge')
+    expect(h.state.rbac.retainAudit(400).deletedCount).toBe(before.length)
+  } finally {
+    h.database.close()
+  }
+})
 
 Deno.test('real DO rejects invalid envelope or mismatched method facts without legacy rescue', async () => {
   const h = realHarness()
