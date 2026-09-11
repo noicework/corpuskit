@@ -1,10 +1,13 @@
 import { expect } from '@std/expect'
+import { Hono } from 'hono'
 import { type AuditEvent, type AuditInput, AuditWriteError, redactAuditDetail } from './audit.ts'
 import {
   AUDIT_MAX_RESPONSE_BYTES,
   AUDIT_TIMEOUT_MS,
   executeAudited,
   executeAuditedResponse,
+  materialisedJsonResponse,
+  trackMaterialisedResponses,
 } from './audit-execution.ts'
 
 const input: Omit<AuditInput, 'outcome'> = {
@@ -100,17 +103,99 @@ Deno.test('headers and staged body release only after successful completion audi
   expect(await response.text()).toBe('first')
 })
 
-Deno.test('byte cap accepts exactly 1 MiB and refuses one extra UTF-8 byte', async () => {
+Deno.test('streaming byte cap accepts exactly 1 MiB and refuses one extra UTF-8 byte', async () => {
   expect(AUDIT_MAX_RESPONSE_BYTES).toBe(1024 * 1024)
   for (const extra of [0, 1]) {
     const fixture = harness()
     const body = 'é'.repeat(AUDIT_MAX_RESPONSE_BYTES / 2) + 'x'.repeat(extra)
-    const response = await executeAuditedResponse({ ...fixture, run: () => new Response(body) })
+    const response = await executeAuditedResponse({
+      ...fixture,
+      run: () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(body))
+              controller.close()
+            },
+          }),
+        ),
+    })
     expect(response.status).toBe(extra ? 500 : 200)
     expect(fixture.events.at(-1)?.outcome).toBe(extra ? 'uncertain' : 'success')
     if (extra) expect(await response.json()).toEqual({ error: 'response_too_large' })
     else expect((await response.arrayBuffer()).byteLength).toBe(AUDIT_MAX_RESPONSE_BYTES)
   }
+})
+
+Deno.test('large materialised JSON and strings await completion audit without a byte cap', async () => {
+  const text = 'é'.repeat(AUDIT_MAX_RESPONSE_BYTES)
+  for (const kind of ['json', 'text', 'body', 'newResponse', 'html', 'direct'] as const) {
+    for (const failAt of [0, 2]) {
+      const fixture = harness(failAt)
+      const app = new Hono()
+      app.use('*', async (c, next) => {
+        trackMaterialisedResponses(c)
+        c.res = await executeAuditedResponse({
+          ...fixture,
+          maxBytes: 1,
+          run: async () => {
+            await next()
+            return c.res
+          },
+        })
+      })
+      app.get('/', (c) => {
+        if (kind === 'json') return c.json({ text })
+        if (kind === 'direct') return materialisedJsonResponse({ text })
+        if (kind === 'text') return c.text(text)
+        if (kind === 'body') return c.body(text)
+        if (kind === 'html') return c.html(text)
+        return c.newResponse(text)
+      })
+      const response = await app.request('/')
+      expect(response.status).toBe(failAt ? 500 : 200)
+      expect(fixture.events.map((event) => event.outcome)).toEqual(
+        failAt ? ['intent'] : ['intent', 'success'],
+      )
+      if (failAt) {
+        expect(await response.json()).toEqual({ error: 'audit_write_failed' })
+      } else {
+        const body = await response.text()
+        expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(AUDIT_MAX_RESPONSE_BYTES)
+        expect(body).toBe(kind === 'json' || kind === 'direct' ? JSON.stringify({ text }) : text)
+      }
+    }
+  }
+})
+
+Deno.test('Hono streaming producers retain their cap despite JSON and length headers', async () => {
+  const fixture = harness()
+  const app = new Hono()
+  app.use('*', async (c, next) => {
+    trackMaterialisedResponses(c)
+    c.res = await executeAuditedResponse({
+      ...fixture,
+      run: async () => {
+        await next()
+        return c.res
+      },
+    })
+  })
+  app.get('/', (c) =>
+    c.body(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(AUDIT_MAX_RESPONSE_BYTES + 1))
+          controller.close()
+        },
+      }),
+      200,
+      { 'content-type': 'application/json', 'content-length': '1' },
+    ))
+  const response = await app.request('/')
+  expect(response.status).toBe(500)
+  expect(await response.json()).toEqual({ error: 'response_too_large' })
+  expect(fixture.events.at(-1)?.outcome).toBe('uncertain')
 })
 
 Deno.test('overflow cancels the reader and upstream signal without replay', async () => {

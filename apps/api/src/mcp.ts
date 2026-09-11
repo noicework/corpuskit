@@ -13,7 +13,12 @@ import {
   AuditWriteError,
   createAuditEvent,
 } from './audit.ts'
-import { executeAudited, type LocalMutationScope, stageAuditResponse } from './audit-execution.ts'
+import {
+  executeAudited,
+  type LocalMutationScope,
+  materialisedJsonResponse,
+  stageAuditResponse,
+} from './audit-execution.ts'
 import type { PortalRequestContext } from './app.ts'
 import { type Context, Hono } from 'hono'
 import '@cfworker/json-schema'
@@ -123,7 +128,7 @@ export async function executeMcpTool(
       run: async (signal) => {
         try {
           const result = await invoke()
-          const staged = await stageAuditResponse(Response.json(result), signal)
+          const staged = await stageAuditResponse(materialisedJsonResponse(result), signal)
           return { result, outcome: staged.outcome, error: undefined }
         } catch (error) {
           if (error instanceof AragApiError && (error.status === 401 || error.status === 403)) {

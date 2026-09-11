@@ -942,3 +942,41 @@ Deno.test('DurableRoutingLog appends per decision, trims to its cap and keeps te
   expect(log.summary('grains').total).toBe(1)
   expect(log.recent('opax')).toEqual([])
 })
+
+Deno.test('public investigation reads return all 140 passages without audit staging', async () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const stores = durableStores(state, {})
+    const investigation = stores.investigations.create('marine', 'reader', { name: 'Research' })
+    for (let index = 0; index < 140; index++) {
+      expect(stores.investigations.addEvidence('marine', 'reader', investigation.id, {
+        passage: 'x'.repeat(8000),
+        resourceId: `document-${index}`,
+        resourceTitle: 'Research passage',
+        score: null,
+        question: '',
+        verdict: null,
+        aiRelevance: null,
+        note: '',
+        tags: [],
+      })).not.toBeNull()
+    }
+    const expected = stores.investigations.get('marine', 'reader', investigation.id)
+    const app = buildApp({ ...stores, provider: {} as RetrievalProvider })
+    const response = await app.request(`/api/t/marine/investigations/${investigation.id}`, {
+      headers: { 'x-rp-client': 'reader' },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(expected)
+    expect(stores.audit.read({ scope: { kind: 'platform' } })).toHaveLength(0)
+    const stranger = await app.request(`/api/t/marine/investigations/${investigation.id}`, {
+      headers: { 'x-rp-client': 'stranger' },
+    })
+    expect(stranger.status).toBe(404)
+    await stranger.text()
+  } finally {
+    sql.database.close()
+  }
+})

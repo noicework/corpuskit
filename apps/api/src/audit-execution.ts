@@ -1,3 +1,4 @@
+import type { Context } from 'hono'
 import {
   appendAudit,
   type AuditInput,
@@ -189,13 +190,56 @@ export interface StagedResponse {
   outcome: ResultOutcome
 }
 
+// Track the body rather than response headers, which middleware can replace. Only
+// local constructors with a fully materialised input may bypass the producer cap.
+const materialisedBodies = new WeakSet<ReadableStream<Uint8Array>>()
+
+function markMaterialised<T extends Response>(response: T): T {
+  if (response.body) materialisedBodies.add(response.body)
+  return response
+}
+
+export function materialisedJsonResponse(value: unknown): Response {
+  return markMaterialised(Response.json(value))
+}
+
+/** Preserve Hono's serialisation, status and headers while recording body provenance. */
+export function trackMaterialisedResponses(context: Context): void {
+  context.json = new Proxy(context.json, {
+    apply(target, receiver, args) {
+      const response = Reflect.apply(target as (...args: unknown[]) => Response, receiver, args)
+      return markMaterialised(response)
+    },
+  })
+  const track = <K extends 'text' | 'body' | 'newResponse' | 'html'>(method: K) => {
+    context[method] = new Proxy(context[method], {
+      apply(target, receiver, args) {
+        const response = Reflect.apply(target, receiver, args)
+        const body = args[0]
+        // HTML may be asynchronous and body/newResponse also accept streams.
+        // Unknown producers retain the fixed cap, regardless of their headers.
+        return response instanceof Response &&
+            (body === null || typeof body === 'string' || body instanceof ArrayBuffer ||
+              ArrayBuffer.isView(body) || body instanceof Blob)
+          ? markMaterialised(response)
+          : response
+      },
+    })
+  }
+  for (const method of ['text', 'body', 'newResponse', 'html'] as const) track(method)
+}
+
 /** Consume privileged bytes before a Response can escape the mandatory audit boundary. */
 export async function stageAuditResponse(
   response: Response,
   signal: AbortSignal,
   maxBytes = AUDIT_MAX_RESPONSE_BYTES,
 ): Promise<StagedResponse> {
-  const limit = bound(maxBytes, AUDIT_MAX_RESPONSE_BYTES)
+  // Materialised values are already in memory. Their staging bound is their
+  // actual encoded size; only incremental producers need a fixed byte cap.
+  const limit = response.body && materialisedBodies.has(response.body)
+    ? Infinity
+    : bound(maxBytes, AUDIT_MAX_RESPONSE_BYTES)
   const reader = response.body?.getReader()
   const chunks: Uint8Array<ArrayBuffer>[] = []
   let bytes = 0

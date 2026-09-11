@@ -9,7 +9,9 @@ import {
   AuditExecutionError,
   executeAudited,
   executeAuditedResponse,
+  materialisedJsonResponse,
   stageAuditResponse,
+  trackMaterialisedResponses,
 } from './audit-execution.ts'
 import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -1160,6 +1162,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       await next()
       return
     }
+    trackMaterialisedResponses(c)
     const response = await executeAuditedResponse({
       audit: requiredAudit(),
       localMutations: opts.localMutations,
@@ -1804,7 +1807,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                   { signal, strict: true },
                 )
                 signal.throwIfAborted()
-                await stageAuditResponse(Response.json({ questions }), signal)
+                await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
                 await declaredSubAction(
                   'GET',
                   '/api/t/:slug/resources/:id/questions',

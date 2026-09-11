@@ -6,6 +6,7 @@ import { EnrichmentStore } from './enrichments.ts'
 import { buildApp } from './app.ts'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
 import { createMcpServer, type McpRoutesOptions } from './mcp.ts'
+import { AUDIT_MAX_RESPONSE_BYTES } from './audit-execution.ts'
 import {
   assertRouteInventory,
   assertToolInventory,
@@ -215,6 +216,53 @@ Deno.test('question cancellation detaches one waiter and last-waiter abort preve
     } finally {
       Deno.removeSync(dir, { recursive: true })
     }
+  }
+})
+
+Deno.test('materialised enrichment exports above 1 MiB require successful completion audit', async () => {
+  const directory = Deno.makeTempDirSync()
+  try {
+    const enrichments = new EnrichmentStore(directory)
+    enrichments.put('marine', 'large-record', {
+      schemaId: 'research',
+      generatedAt: '2026-09-12T00:00:00Z',
+      data: { summary: 'é'.repeat(AUDIT_MAX_RESPONSE_BYTES) },
+    })
+    const expected = enrichments.exportRecords('marine')
+    for (const failCompletion of [false, true]) {
+      const events: AuditEvent[] = []
+      const app = buildApp({
+        provider: {} as RetrievalProvider,
+        enrichments,
+        audit: {
+          append: (event) => {
+            if (failCompletion && event.outcome === 'success') throw new Error('private')
+            events.push(event)
+          },
+          read: () => events,
+        },
+        requestContext: () => ({
+          requestId: 'export-request',
+          session: null,
+          coarseAdminEligible: true,
+          effectiveRoles: { platformRole: 'owner', portalRoles: [] },
+          actor: { kind: 'user', id: 'export-user' },
+        }),
+      })
+      const response = await app.request('/api/admin/t/marine/enrichments/export')
+      expect(response.status).toBe(failCompletion ? 500 : 200)
+      expect(events.map((event) => event.outcome)).toEqual(
+        failCompletion ? ['intent'] : ['intent', 'success'],
+      )
+      const body = await response.text()
+      if (failCompletion) expect(JSON.parse(body)).toEqual({ error: 'audit_write_failed' })
+      else {
+        expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(AUDIT_MAX_RESPONSE_BYTES)
+        expect(JSON.parse(body)).toEqual(expected)
+      }
+    }
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
   }
 })
 
