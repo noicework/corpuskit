@@ -1,3 +1,4 @@
+import { declaredRoute, declaredTool } from './permissions.ts'
 import { type Context, Hono } from 'hono'
 import '@cfworker/json-schema'
 import {
@@ -159,7 +160,7 @@ async function safeTool(call: () => Promise<Record<string, unknown>>) {
   }
 }
 
-function createMcpServer(opts: McpRoutesOptions): {
+export function createMcpServer(opts: McpRoutesOptions): {
   transport: WebStandardStreamableHTTPServerTransport
   connected: Promise<void>
 } {
@@ -173,7 +174,7 @@ function createMcpServer(opts: McpRoutesOptions): {
   }
 
   server.registerTool(
-    'search_corpus',
+    declaredTool('search_corpus'),
     {
       title: 'Search the corpus',
       description: 'Find relevant research documents and passages in this portal.',
@@ -199,7 +200,7 @@ function createMcpServer(opts: McpRoutesOptions): {
   )
 
   server.registerTool(
-    'answer_question',
+    declaredTool('answer_question'),
     {
       title: 'Answer from the corpus',
       description:
@@ -247,7 +248,7 @@ function createMcpServer(opts: McpRoutesOptions): {
   )
 
   server.registerTool(
-    'get_document',
+    declaredTool('get_document'),
     {
       title: 'Get one document',
       description: 'Fetch the portal metadata, summary and key facts for one document.',
@@ -265,7 +266,7 @@ function createMcpServer(opts: McpRoutesOptions): {
   )
 
   server.registerTool(
-    'browse_catalogue',
+    declaredTool('browse_catalogue'),
     {
       title: 'Browse the catalogue',
       description: 'Browse or filter the documents available in this portal.',
@@ -333,7 +334,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     (context) => context.req.header('cf-connecting-ip') ?? clientIp(context),
   )
 
-  app.get('/api/t/:slug/mcp/keys', (context) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/mcp/keys'), (context) => {
     const user = trustedAdmin(opts, context)
     if (user instanceof Response) return user
     const config = opts.tenant(context.req.param('slug'))
@@ -342,7 +343,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     return context.json(opts.keys.list(config.slug).map(summary))
   })
 
-  app.post('/api/t/:slug/mcp/keys', async (context) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/mcp/keys'), async (context) => {
     const user = trustedAdmin(opts, context)
     if (user instanceof Response) return user
     const config = opts.tenant(context.req.param('slug'))
@@ -366,7 +367,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     return context.json(issued, 201)
   })
 
-  app.delete('/api/t/:slug/mcp/keys/:id', (context) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/mcp/keys/:id'), (context) => {
     const user = trustedAdmin(opts, context)
     if (user instanceof Response) return user
     const config = opts.tenant(context.req.param('slug'))
@@ -381,7 +382,7 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     return context.json({ ok: true })
   })
 
-  app.all(MCP_ROUTE, authRateLimit, async (context) => {
+  app.all(declaredRoute('ALL', MCP_ROUTE), authRateLimit, async (context) => {
     const slug = context.req.param('slug')
     const credential = await verifyMcpCredential(
       opts.keys,
