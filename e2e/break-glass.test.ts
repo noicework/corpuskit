@@ -138,6 +138,9 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     const base = startTestServer({ emergencyFixture: { directory, state } })
     const requests: { path: string; method: string; emergency: boolean }[] = []
     let migrationComplete = true
+    let malformedResponse: unknown = undefined
+    let migrationMalformed = false
+    let migrationLateError = false
     let renameOk = true
     let syncComplete = true
     let syncMalformed = false
@@ -214,7 +217,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         organisation: 'Example research',
         tagline: 'Research administration',
       },
-      knowledgeBox: { status: 'connected', kbId: 'fixture-box' },
+      knowledgeBox: { slug, status: 'connected', kbId: 'fixture-box' },
       resourceCount: 7,
       custom: true,
       disabled: false,
@@ -236,6 +239,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             headers: status === 429 ? { 'retry-after': '125' } : {},
           })
         }
+        if (malformedResponse !== undefined) return Response.json(malformedResponse)
         if (url.pathname.includes('/labelsets')) {
           taxonomyBodies.push(await request.json())
           return Response.json({ ok: true, id: 'region', agents: [] })
@@ -459,7 +463,10 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             [
               { type: 'start', total: 1 },
               { type: 'item', id: 'one', title: 'Example resource', outcome: 'copied' },
-              { type: 'done', copied: 1, skipped: 0, errors: 0 },
+              migrationMalformed
+                ? { type: 'done' }
+                : { type: 'done', copied: 1, skipped: 0, errors: 0 },
+              ...(migrationLateError ? [{ type: 'error', message: 'Uncertain completion' }] : []),
             ].filter((event) => migrationComplete || event.type !== 'done')
               .map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
             {
@@ -472,9 +479,13 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           return Response.json(renameOk ? { ok: true } : {})
         }
         return Response.json(
-          url.pathname === '/api/admin/overview'
-            ? rows
-            : { ok: true, id: 'region', slug: 'created', resourceCount: 7 },
+          url.pathname === '/api/admin/overview' ? rows : {
+            ok: true,
+            id: 'region',
+            slug: 'created',
+            resourceCount: 7,
+            status: { slug: 'alpha', status: 'connected' },
+          },
         )
       }
       if (url.pathname.endsWith('/labelsets')) {
@@ -1322,6 +1333,16 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           await fill(page!, '#source-url-alpha', 'https://example.invalid/research')
           await oneAction(() => submit('#source-url-alpha'), 'add-source')
           await oneAction(() => clickText(page!, 'Refresh sources'), 'read-sources')
+          malformedResponse = {}
+          await clickText(page!, 'Refresh sources')
+          await confirm()
+          await page!.waitForSelector('[role=dialog] [role=alert]')
+          expect(await page!.evaluate(() => document.body.textContent)).toContain(
+            'https://example.invalid/research',
+          )
+          await capture(`sources-malformed-${palette}-${width}`)
+          await click(page!, '[data-emergency-cancel]')
+          malformedResponse = undefined
           await oneAction(() => clickText(page!, 'Sync now'), 'sync-source')
           for (const malformed of [false, true]) {
             syncComplete = malformed
@@ -1464,6 +1485,29 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
               'legacy-test-value',
             )
             await capture(`${kind}-${palette}-${width}-result`)
+            malformedResponse = kind === 'taxonomy' ? {} : null
+            if (kind === 'taxonomy') {
+              await fill(current, '#taxonomy-name', 'Preserved category')
+              await clickText(current, 'Add category')
+            } else await clickText(current, 'Use emergency access')
+            await confirm()
+            await current.waitForSelector('[role=dialog] [role=alert]')
+            if (kind === 'taxonomy') {
+              expect(
+                await current.evaluate(() =>
+                  document.querySelector<HTMLInputElement>('#taxonomy-name')?.value
+                ),
+              ).toBe('Preserved category')
+            } else {
+              expect(
+                await current.evaluate(() =>
+                  Boolean(document.querySelector('[data-admin-overview]'))
+                ),
+              ).toBe(true)
+            }
+            await capture(`${kind}-malformed-${palette}-${width}`)
+            await click(current, '[data-emergency-cancel]')
+            malformedResponse = undefined
             state.capability = 'disabled'
             await current.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
             await settle(current)
@@ -1513,6 +1557,19 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         .toBe(true)
       await click(page!, '[data-emergency-cancel]')
       state.status = 200
+      for (const malformed of [null, {}, { ok: false }]) {
+        malformedResponse = malformed
+        await clickText(page!, 'Add portal')
+        await confirm()
+        await page!.waitForSelector('[role=dialog] [role=alert]')
+        expect(
+          await page!.evaluate(() =>
+            document.querySelector<HTMLInputElement>('#portal-name')?.value
+          ),
+        ).toBe('Example portal')
+        await click(page!, '[data-emergency-cancel]')
+      }
+      malformedResponse = undefined
       before = requests.length
       await clickText(page!, 'Add portal')
       await confirm()
@@ -1585,6 +1642,26 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             await page!.evaluate(() => {
               globalThis.confirm = () => true
             })
+            malformedResponse = action === 'Run migration' ? undefined : {}
+            migrationMalformed = action === 'Run migration'
+            const failedBefore = requests.length
+            await clickText(page!, action)
+            await confirm()
+            await page!.waitForSelector('[role=dialog] [role=alert]')
+            expect(requests.length).toBe(failedBefore + 1)
+            if (action === 'Verify and connect') {
+              expect(
+                await page!.evaluate(() =>
+                  document.querySelector<HTMLInputElement>('#kb-id-alpha')?.value
+                ),
+              ).toBe('https://example.invalid/api/v1/kb/example')
+            }
+            await capture(
+              `malformed-${action.toLowerCase().replaceAll(' ', '-')}-${palette}-${width}`,
+            )
+            await click(page!, '[data-emergency-cancel]')
+            malformedResponse = undefined
+            migrationMalformed = false
             const before = requests.length
             await clickText(page!, action)
             // Before migration, these controls send session requests instead of opening a prompt.
@@ -1633,6 +1710,16 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
                 'Copied 1, skipped 0, 0 errors.',
               )
               migrationComplete = true
+              await click(page!, '[data-emergency-cancel]')
+              migrationLateError = true
+              await clickText(page!, action)
+              await confirm()
+              await page!.waitForSelector('[role=dialog] [role=alert]')
+              expect(await page!.evaluate(() => document.body.textContent)).not.toContain(
+                'Copied 1, skipped 0, 0 errors.',
+              )
+              await click(page!, '[data-emergency-cancel]')
+              migrationLateError = false
             }
           }
         }

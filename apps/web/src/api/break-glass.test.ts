@@ -97,7 +97,11 @@ Deno.test('JSON, multipart and SSE share the same budget and cancellation', asyn
     calls++
     assertEquals(new Headers(init?.headers).get('x-admin-passcode'), 'test-only-input')
     return Promise.resolve(
-      new Response(calls === 1 ? '{"id":"file"}' : 'data: {"type":"done"}\n\n'),
+      new Response(
+        calls === 1
+          ? '{"id":"file"}'
+          : 'data: {"type":"done","copied":1,"skipped":0,"errors":0}\n\n',
+      ),
     )
   }
   try {
