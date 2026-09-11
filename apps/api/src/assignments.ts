@@ -179,7 +179,7 @@ export function coarseAdminEligibility(roles: unknown): boolean {
  * tenant identity, binding invariants, last-owner protection and mandatory atomic audit writes.
  */
 export class AssignmentService {
-  private readonly reader: RbacState['assignments']
+  private readonly state: RbacState
 
   constructor(
     private readonly database: RbacDatabase,
@@ -189,11 +189,11 @@ export class AssignmentService {
     private readonly audience?: string,
   ) {
     if (!identifier(configuredTenantId)) throw new Error('Configured tenant is required')
-    this.reader = new RbacState(database, now).assignments
+    this.state = new RbacState(database, now)
   }
 
   list(): RoleAssignment[] {
-    return this.reader.list(this.configuredTenantId)
+    return this.state.assignments.list(this.configuredTenantId)
   }
 
   private input(input: AssignmentInput): AssignmentInput | null {
@@ -435,10 +435,8 @@ export class AssignmentService {
         row.subjectId
       ),
     )
-    const groupSupport = this.audience !== undefined && this.database.all<{ status: string }>(
-          'SELECT status FROM rbac_group_capabilities WHERE audience = ?',
-          this.audience,
-        )[0]?.status === 'verified-supported'
+    const groupSupport = this.audience !== undefined &&
+      this.state.groupCapability(this.audience) === 'verified-supported'
     const groups = new Set(
       rows.filter((row) => row.subjectKind === 'group' && row.role === 'owner').map((row) =>
         row.subjectId

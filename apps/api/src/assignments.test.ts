@@ -386,6 +386,56 @@ for (const adapter of ['local', 'durable'] as const) {
     }
   })
 
+  Deno.test(`${adapter} disabled capability dates cannot replace the final effective owner`, async () => {
+    const f = fixture()
+    try {
+      f.service.create(owner('local'), context)
+      f.service.create({ ...owner('group-1'), subjectKind: 'group' }, context)
+      const localId = f.service.list().find((row) => row.subjectKind === 'active-oid')!.id
+      const member = session('member', { groups: ['group-1'] })
+      f.service.observeSession(member)
+      for (const verifiedAt of [start + 3600000, -1, start + 0.5]) {
+        f.database.exec(
+          'INSERT OR REPLACE INTO rbac_group_capabilities VALUES (?,?,?)',
+          'corpuskit',
+          'verified-supported',
+          verifiedAt,
+        )
+        const resolved = await resolveEffectiveRoles(
+          member,
+          {
+            rbac: f.state,
+            tenants: { list: () => [] },
+            audience: 'corpuskit',
+          },
+          'tenant-1',
+          f.now(),
+        )
+        expect(resolved.effectiveRoles).toEqual({ portalRoles: [] })
+        expect(f.state.groupCapability('corpuskit')).toBe('disabled')
+        expect(f.service.remove(localId, context)).toMatchObject({ ok: false, code: 'last_owner' })
+        expect(f.service.change(localId, { role: 'platform-admin' }, context)).toMatchObject({
+          ok: false,
+          code: 'last_owner',
+        })
+        expect(f.service.list().find((row) => row.id === localId)?.role).toBe('owner')
+      }
+      expect(
+        f.state.audit.read({ scope: { kind: 'platform' } }).filter((event) =>
+          event.action === 'assignment.denied' && event.outcome === 'denied'
+        ),
+      ).toHaveLength(6)
+      f.database.exec(
+        'UPDATE rbac_group_capabilities SET verified_at = ? WHERE audience = ?',
+        start,
+        'corpuskit',
+      )
+      expect(f.service.remove(localId, context).ok).toBe(true)
+    } finally {
+      f.close()
+    }
+  })
+
   Deno.test(`${adapter} effective group owners require verified capability and surviving mappings`, () => {
     const f = fixture()
     try {
