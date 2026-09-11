@@ -4,6 +4,8 @@ import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { DurableState, durableStores, type SqlStorageLike } from '../../cloudflare/src/state.ts'
 import { buildApp, type PortalRequestContext } from './app.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from './assignments.ts'
+import type { AuthorityDependencies } from './authorisation.ts'
+import type { BreakGlassPolicy } from './break-glass.ts'
 import { type TrustedSessionFacts, validSessionFacts } from './principal.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import type { SqlValue } from './rbac-state.ts'
@@ -186,6 +188,17 @@ export function createEnforcementFixture() {
     otherTenant,
     creator: persona('portal-admin', 'a'),
     contextFor,
+    authorityDependencies: (
+      policy: BreakGlassPolicy = { environment: 'production' },
+    ): AuthorityDependencies => ({
+      configuredTenantId: tenantId,
+      tenants: stores.tenants,
+      keys: stores.mcpKeys,
+      creatorStores: { rbac: state.rbac, audience },
+      audit: state.rbac.audit,
+      breakGlass: state.rbac.breakGlassService(policy),
+      now,
+    }),
     async requestAs(session: TrustedSessionFacts | null, path: string, init?: RequestInit) {
       const request = new Request(`http://localhost${path}`, init)
       contexts.set(request, await contextFor(session))
