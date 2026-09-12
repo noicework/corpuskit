@@ -471,7 +471,7 @@ function validateEnrichmentRecords(value: unknown): ImportValidationResult {
 const routeBodySchema = z.object({
   query: z.string().min(1).max(2000),
   surface: z.enum(['ask', 'search']).optional(),
-})
+}).strict()
 const extractionProfileSchema = z.object({ resourceId: z.string().min(1) })
 const extractionCompareSchema = z.object({
   resourceId: z.string().min(1),
@@ -491,7 +491,7 @@ const askBodySchema = z.object({
       resourceIds: z.string().array().max(12).optional(),
       /** The passages those citations quoted: context for a follow-up that leans on them (D4-06, D4-07). */
       passages: z.string().max(2000).array().max(12).optional(),
-    })
+    }).strict()
     .array()
     .max(24)
     .optional(),
@@ -505,16 +505,16 @@ const askBodySchema = z.object({
    * `route` event, instead of the caller routing first and passing `intent`.
    */
   route: z.literal('auto').optional(),
-})
+}).strict()
 /** The Help assistant: a question about using the portal, optional prior turns. */
 const docsAskBodySchema = z.object({
   query: z.string().min(1),
   context: z
-    .object({ author: z.enum(['USER', 'AGENT']), text: z.string() })
+    .object({ author: z.enum(['USER', 'AGENT']), text: z.string() }).strict()
     .array()
     .max(24)
     .optional(),
-})
+}).strict()
 const connectBodySchema = z.object({
   url: z.string().min(12),
   token: z.string().min(20),
@@ -529,7 +529,7 @@ const feedbackBodySchema = z.object({
   learningId: z.string().min(8),
   good: z.boolean(),
   text: z.string().max(2000).optional(),
-})
+}).strict()
 const summarizeBodySchema = z.object({
   resourceIds: z.string().min(1).array().min(1).max(20),
   kind: z.enum(['simple', 'extended']).optional(),
@@ -1421,6 +1421,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return false
     }
   }
+  async function* activeAsk(
+    config: TenantConfig,
+    query: string,
+    options: Parameters<RetrievalProvider['ask']>[2],
+    cancelled: () => boolean,
+  ): AsyncIterable<AskEvent> {
+    if (cancelled()) return
+    for await (const event of provider.ask(config, query, options)) {
+      if (cancelled()) return
+      yield event
+    }
+  }
   const adminResource = async (c: Context, config: TenantConfig, id: string) => {
     if (!await scopedResource(config, id)) return false
     const fieldId = c.req.query('fieldId')
@@ -1580,7 +1592,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return
     }
     if (
-      (declaration.permission === 'portal.read' || declaration.permission === 'portal.generate') &&
+      (declaration.permission === 'portal.read' || declaration.permission === 'portal.generate' ||
+        declaration.permission === 'portal.ask') &&
       !declaration.owned &&
       !declaration.path.includes('/mcp')
     ) await authoriseDeclared(c)
@@ -4896,6 +4909,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = askBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    const referencedResources = new Set([
+      ...(parsed.data.resourceId === undefined ? [] : [parsed.data.resourceId]),
+      ...(parsed.data.context ?? []).flatMap((turn) => turn.resourceIds ?? []),
+    ])
+    for (const id of referencedResources) {
+      if (!await scopedResource(config, id)) return adminNotFound(c)
+    }
+    if (!await scopedLabels(config, parsed.data.topicIds ?? [], 'topic')) return adminNotFound(c)
     const intents = config.intents ?? []
     let intentDef = parsed.data.intent
       ? intents.find((i) => i.id === parsed.data.intent)
@@ -4904,6 +4925,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // The finished response declares UTF-8 (the streaming helper sets its own
     // content type); a Latin-1-assuming API client otherwise sees mojibake.
     return withUtf8EventStream(streamSSE(c, async (stream) => {
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      if (cancelled()) return
+      const ask: RetrievalProvider['ask'] = (config, query, options) =>
+        activeAsk(config, query, options, cancelled)
       const { query, route: routeMode, ...askOpts } = parsed.data
       const settings = tenants.promptsFor(config.slug)
       const lexicon = config.entityTerms ?? []
@@ -4916,8 +4943,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // A provider failure is described in the portal's own words; the
       // upstream detail - host, box id, vendor name - stays in the server
       // log (review loop 8 D8-07).
-      const send = (event: unknown) =>
-        stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
+      const send = (event: unknown) => {
+        if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
+        return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
+      }
       // A follow-up that asks for the earlier answers in another shape
       // ("put the three drugs in a table") is answered from the papers and
       // passages those answers cited, with no new topic searched and no
@@ -5362,6 +5391,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const fallbackEvent = (reason: string) =>
         send({ type: 'fallback', from: intentDef?.id, to: null, reason })
       const recordDecline = () => {
+        if (cancelled()) {
+          return
+        }
         try {
           insights.record(config.slug, {
             ts: new Date().toISOString(),
@@ -6078,7 +6110,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 }
               }
               for await (
-                const event of provider.ask(config, group.query, {
+                const event of ask(config, group.query, {
                   ...(blocks.length > 0
                     ? {
                       sourceContext: blocks.map((text) => ({ resourceId: group.resourceId, text })),
@@ -6209,7 +6241,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const priorQuestionList = priorQuestions(askOpts.context ?? [], 2)
         try {
           for await (
-            const event of provider.ask(config, query, {
+            const event of ask(config, query, {
               ...askOpts,
               // THE PIN: the platform's own `resource_filters`, so the
               // paragraph bag holds only the papers the question names.
@@ -6348,6 +6380,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             await send(event)
           }
         } catch (err) {
+          if (cancelled()) return
           record.failed = true
           await send({ type: 'error', message: publicErrorMessage(err) })
         }
@@ -6397,6 +6430,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }
         retry = null
       }
+      if (cancelled()) return
       if (!finished && !record.failed && heldDecline) await finishRefused()
       try {
         insights.record(config.slug, {
@@ -6426,6 +6460,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = docsAskBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
     return streamSSE(c, async (stream) => {
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      if (cancelled()) return
+      const ask: RetrievalProvider['ask'] = (config, query, options) =>
+        activeAsk(config, query, options, cancelled)
       const { query, context } = parsed.data
       // The platform's guardrail sentence and the prompt's "provided context"
       // leak into Help answers as they do into research answers (D2-18): the
@@ -6433,8 +6473,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // an answer that was nothing but the template becomes the decline.
       const sentinels = new DocsSentinelStream()
       // Same rule as Ask: the help assistant never shows an upstream string.
-      const send = (event: unknown) =>
-        stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'docs-ask')) })
+      const send = (event: unknown) => {
+        if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
+        return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'docs-ask')) })
+      }
       // A two-part question is searched part by part, so the page that
       // answers one part is retrieved even when the other part's words
       // dominate; the prompt answers what the documentation holds and
@@ -6448,7 +6490,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           let text = ''
           let refused = false
           let sources: ScoredResource[] = []
-          for await (const event of provider.ask(config, part, { context, docScope: true })) {
+          for await (const event of ask(config, part, { context, docScope: true })) {
             if (event.type === 'done') {
               refused = Boolean(event.refused)
               text = rewriteDocsSentinels(event.text ?? text)
@@ -6465,7 +6507,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
       try {
         for await (
-          const event of provider.ask(config, query, {
+          const event of ask(config, query, {
             context,
             docScope: true,
             ...(parts.length > 0
@@ -6504,6 +6546,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           await send(event)
         }
       } catch (err) {
+        if (cancelled()) return
         await stream.writeSSE({
           data: JSON.stringify({ type: 'error', message: publicErrorMessage(err) }),
         })

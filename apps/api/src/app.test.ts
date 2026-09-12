@@ -2865,7 +2865,12 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
       'The library provides searchable documents for further reading.',
     ]
     const original = sentences.join(' ')
-    for (const surface of ['ask', 'search']) {
+    for (
+      const query of [
+        'Explain the collection and its supporting evidence.',
+        'Describe the collection and its supporting evidence.',
+      ]
+    ) {
       for (const enabled of [false, true]) {
         class GroupedProvider extends StubProvider {
           override async *ask(): AsyncIterable<AskEvent> {
@@ -2895,8 +2900,7 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            query: 'Explain the collection and its supporting evidence.',
-            surface,
+            query,
           }),
         })
         const events = await sseEvents(response)

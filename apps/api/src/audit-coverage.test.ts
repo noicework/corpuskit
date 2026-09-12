@@ -7,10 +7,11 @@ import { buildApp as buildRawApp, type BuildAppOptions } from './app.ts'
 import { afterEach } from '@std/testing/bdd'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
-import { sessionFor } from './enforcement-fixture.ts'
+import { createEnforcementFixture, sessionFor } from './enforcement-fixture.ts'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
 import { createMcpServer, type McpRoutesOptions } from './mcp.ts'
-import { AUDIT_MAX_RESPONSE_BYTES } from './audit-execution.ts'
+import { AUDIT_MAX_RESPONSE_BYTES, AUDIT_TIMEOUT_MS } from './audit-execution.ts'
+import type { AskEvent } from '@research-portal/core'
 import {
   assertRouteInventory,
   assertToolInventory,
@@ -23,6 +24,109 @@ import {
 } from './permissions.ts'
 
 const fixtureDatabases: LocalRbacDatabase[] = []
+
+Deno.test('break-glass ask withholds output until completion and fails closed on audit failure or cancellation', async () => {
+  for (const failure of ['none', 'intent', 'completion', 'cancel', 'timeout']) {
+    const f = createEnforcementFixture()
+    const originalSetTimeout = globalThis.setTimeout
+    let expire: (() => void) | undefined
+    if (failure === 'timeout') {
+      globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+        const [handler, ms, ...rest] = args
+        if (ms === AUDIT_TIMEOUT_MS && typeof handler === 'function') {
+          expire = () => handler(...rest)
+        }
+        return originalSetTimeout(...args)
+      }) as typeof setTimeout
+    }
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => release = resolve)
+    let started!: () => void
+    const start = new Promise<void>((resolve) => started = resolve)
+    let calls = 0
+    let completed = false
+    let closed!: () => void
+    const closure = new Promise<void>((resolve) => closed = resolve)
+    f.provider.ask = async function* (): AsyncIterable<AskEvent> {
+      try {
+        calls++
+        started()
+        yield { type: 'stage', stage: 'retrieval', status: 'started' }
+        await gate
+        yield { type: 'delta', text: 'Protected answer evidence. ' }
+        yield { type: 'done', text: 'Protected answer evidence.' }
+        completed = true
+      } finally {
+        closed()
+      }
+    }
+    const app = buildRawApp({
+      ...f.stores,
+      provider: f.provider,
+      now: f.now,
+      configuredTenantId: f.tenantId,
+      audience: f.audience,
+      breakGlass: f.rbac.breakGlassService({
+        environment: 'development',
+        passcode: 'fixture-passcode',
+      }),
+      requestContext: () => ({
+        requestId: crypto.randomUUID(),
+        session: null,
+        clientIp: '192.0.2.1',
+        coarseAdminEligible: false,
+      }),
+      rateLimitAskPerMin: 0,
+    })
+    try {
+      if (failure === 'intent') f.failAudit()
+      if (failure === 'completion') {
+        f.database.exec(
+          "CREATE TRIGGER fail_ask_completion BEFORE INSERT ON audit_events WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'completion failure'); END",
+        )
+      }
+      const controller = new AbortController()
+      let resolved = false
+      const pending = Promise.resolve(app.request('/api/t/a/docs/ask', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'content-type': 'application/json', 'x-admin-passcode': 'fixture-passcode' },
+        body: JSON.stringify({ query: 'Explain the portal' }),
+      })).then((response) => {
+        resolved = true
+        return response
+      })
+      if (failure !== 'intent') {
+        await start
+        expect(resolved).toBe(false)
+        expect(
+          f.rbac.audit.read({ scope: { kind: 'portal', slug: 'a' } }).some((event) =>
+            event.action === 'request.privileged' && event.outcome === 'intent'
+          ),
+        ).toBe(true)
+        if (failure === 'cancel') controller.abort()
+        if (failure === 'timeout') {
+          expect(expire).toBeDefined()
+          expire!()
+          expect(controller.signal.aborted).toBe(false)
+        }
+      }
+      release()
+      const response = await pending
+      const text = await response.text()
+      expect(response.status).toBe(failure === 'none' ? 200 : 500)
+      expect(calls).toBe(failure === 'intent' ? 0 : 1)
+      if (failure === 'none') expect(text).toContain('Protected answer evidence.')
+      else expect(text).not.toContain('Protected answer evidence.')
+      if (failure !== 'intent') await closure
+      if (failure === 'timeout' || failure === 'cancel') expect(completed).toBe(false)
+    } finally {
+      release()
+      globalThis.setTimeout = originalSetTimeout
+      f.close()
+    }
+  }
+})
 afterEach(() => {
   for (const db of fixtureDatabases.splice(0)) db.close()
 })

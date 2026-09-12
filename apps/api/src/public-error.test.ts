@@ -211,7 +211,7 @@ async function askPayload(mode: 'yield' | 'throw'): Promise<string> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       query: 'What is the twelve-month retention of brivaracetam?',
-      resourceId: '9dd53383',
+      resourceId: resource.id,
     }),
   })
   expect(response.status).toBe(200)

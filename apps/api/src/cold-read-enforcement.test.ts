@@ -230,6 +230,7 @@ Deno.test('GET resource overlays read legacy enrichment without migrating or wri
       resourceContent: () =>
         Promise.resolve({ id: 'res-1', title: 'Document', texts: [], files: [] }),
       relationsGraph: () => Promise.resolve({ nodes: [], edges: [] }),
+      entityGroups: () => Promise.resolve([{ group: 'Research', entities: ['marine'] }]),
       listResources: () => Promise.resolve([]),
     } as unknown as AragProvider,
   })
