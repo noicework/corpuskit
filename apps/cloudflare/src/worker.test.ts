@@ -12,6 +12,8 @@ import {
 } from '../../api/src/principal.ts'
 import type { AuthUser } from './auth.ts'
 import type { PortalDurableObject } from './worker.ts'
+import { AragProvider } from '@research-portal/retrieval'
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 
 type WorkerHandler = {
   fetch(request: Request, env: Env): Promise<Response>
@@ -188,8 +190,8 @@ Deno.test('Worker forwards identity only from a validated session user', async (
     workerHarness().env,
   )
 
-  expect(forwarded.headers.get('x-corpuskit-sso-user-id')).toBe('entra-object-id')
-  expect(forwarded.headers.get('x-corpuskit-sso-admin')).toBe('1')
+  expect(forwarded.headers.get('x-corpuskit-sso-user-id')).toBeNull()
+  expect(forwarded.headers.get('x-corpuskit-sso-admin')).toBeNull()
   expect(
     (await verifyPrincipal(forwarded.headers.get('x-corpuskit-principal'), {
       sessionSecret: secret,
@@ -367,7 +369,7 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
   for (const enabled of [false, true]) {
     const h = realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
     try {
-      const session = facts()
+      const session = { ...facts(), roles: ['CorpusKit.Owner'] }
       const cookie = await sessionCookie(session)
       const invoke = (passcode?: string) =>
         worker.fetch(
@@ -532,6 +534,69 @@ Deno.test('real DO rejects invalid envelope or mismatched method facts without l
   }
 })
 
+Deno.test('real DO principal failures perform zero protected provider calls and require denial audit', async () => {
+  const h = realHarness()
+  const original = AragProvider.prototype.catalog
+  let calls = 0
+  AragProvider.prototype.catalog = (tenant) => {
+    calls++
+    return new DoubleProvider().catalog(tenant)
+  }
+  try {
+    const session = facts()
+    const path = '/api/t/marine/catalog'
+    const allowed = await h.object.handleTrustedRequest(await principalRequest(path, session), {
+      session,
+    })
+    expect(allowed.status).toBe(200)
+    expect((await allowed.json()).items.length).toBeGreaterThan(0)
+    expect(calls).toBe(1)
+    for (
+      const extra of [{ iat: Math.floor(Date.now() / 1000) - 61 }, {
+        iat: Math.floor(Date.now() / 1000) + 31,
+      }, { aud: 'corpuskit-demo' as const }]
+    ) {
+      expect(
+        (await h.object.handleTrustedRequest(await principalRequest(path, session, extra), {
+          session,
+        })).status,
+      ).toBe(401)
+      expect(calls).toBe(1)
+    }
+    for (const header of ['forged', 'x'.repeat(8193)]) {
+      const request = new Request(`https://corpuskit.test${path}`, {
+        headers: {
+          'x-corpuskit-principal': header,
+          'x-corpuskit-sso-admin': '1',
+          'x-corpuskit-sso-user-id': session.oid,
+        },
+      })
+      expect((await h.object.handleTrustedRequest(request, { session })).status).toBe(401)
+      expect(calls).toBe(1)
+    }
+    const ordinary = { ...session, roles: [] }
+    expect(
+      (await h.object.handleTrustedRequest(
+        await principalRequest('/api/admin/overview', ordinary),
+        { session: ordinary },
+      )).status,
+    ).toBe(403)
+    h.database.exec(
+      "CREATE TRIGGER principal_audit_failure BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect(
+      (await h.object.handleTrustedRequest(
+        await principalRequest(path, session, { iat: Math.floor(Date.now() / 1000) - 61 }),
+        { session },
+      )).status,
+    ).toBe(500)
+    expect(calls).toBe(1)
+  } finally {
+    AragProvider.prototype.catalog = original
+    h.database.close()
+  }
+})
+
 Deno.test('real DO auth/me resolves current assignments and preserves original claim age', async () => {
   const h = realHarness()
   try {
@@ -544,16 +609,32 @@ Deno.test('real DO auth/me resolves current assignments and preserves original c
     expect(first.coarseAdminEligible).toBe(false)
     expect(first.claimAgeSeconds).toBeGreaterThanOrEqual(120)
     const service = h.state.rbac.assignmentService(session.tenantId, 'corpuskit')
+    expect(
+      service.create({
+        subjectKind: 'active-oid',
+        subjectId: 'backup-owner',
+        scope: { kind: 'platform' },
+        role: 'owner',
+      }, { requestId: 'seed-backup', actor: { kind: 'system' } }).ok,
+    ).toBe(true)
+    const platformAdmin = { ...session, oid: 'read-only-admin', roles: ['CorpusKit.PlatformAdmin'] }
+    const adminMe = await h.object.handleTrustedRequest(
+      await principalRequest('/auth/me', platformAdmin),
+      {
+        session: platformAdmin,
+      },
+    )
+    expect((await adminMe.json()).effectiveRoles.platformRole).toBe('platform-admin')
     const created = service.create({
       subjectKind: 'active-oid',
       subjectId: session.oid,
       scope: { kind: 'platform' },
-      role: 'platform-admin',
+      role: 'owner',
     }, { requestId: 'test-create', actor: { kind: 'user', id: 'owner' } })
     expect(created.ok).toBe(true)
     const second = await read()
     expect(second.coarseAdminEligible).toBe(true)
-    expect(second.effectiveRoles.platformRole).toBe('platform-admin')
+    expect(second.effectiveRoles.platformRole).toBe('owner')
     expect(second.claimAgeSeconds).toBeGreaterThanOrEqual(first.claimAgeSeconds)
     expect(second.groupMappings).toBe('disabled')
     expect(
@@ -605,7 +686,7 @@ Deno.test('Worker auth/me retains cookie lifetime and original age across fresh 
 Deno.test('Worker signing denials require audit before returning and concurrent DO contexts stay separate', async () => {
   const h = realHarness()
   try {
-    const session = facts()
+    const session = { ...facts(), roles: ['CorpusKit.Owner'] }
     const cookie = await sessionCookie(session)
     Object.assign(h.env, { WORKER_NAME: 'invalid-deployment' })
     const request = () => new Request('https://corpuskit.test/auth/me', { headers: { cookie } })

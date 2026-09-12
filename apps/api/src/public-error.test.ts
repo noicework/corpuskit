@@ -17,7 +17,8 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
+import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
+import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { buildApp } from './app.ts'
 import { tenantsWithNeuro } from './fixtures/neuro-tenant.ts'
 import {
@@ -35,6 +36,30 @@ const RAW = 'Agentic RAG API 422 for https://aws-ap-southeast-2-1.rag.progress.c
   '991906b6-1f55-4916-aa2e-33e566956ce3/ask: {"detail":[{"type":"value_error","loc":["body",' +
   '"resource_filters"],"msg":"Value error, resource id filter \'9dd53383\' should be a valid ' +
   'UUID"}]}'
+
+Deno.test('authorised generation provider failures remain secret-free', async () => {
+  let calls = 0
+  const f = createEnforcementFixture({
+    management: {
+      askStructured: () => {
+        calls++
+        throw new AragApiError(500, 'https://zone.rag.progress.cloud/api/v1/kb/abc/ask', RAW)
+      },
+    } as unknown as AragProvider,
+  })
+  try {
+    const response = await f.requestAs(f.sessionFor('analyst'), '/api/t/a/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'briefing', query: 'Marine evidence' }),
+    })
+    expect(response.status).toBe(502)
+    expect(calls).toBe(1)
+    expect(leaksInternalDetail(await response.text())).toBe(false)
+  } finally {
+    f.close()
+  }
+})
 
 describe('internal detail is recognised wherever it hides (D8-07)', () => {
   it('flags a host, a UUID, an endpoint path and the vendor name', () => {
@@ -180,17 +205,29 @@ class FailingProvider implements RetrievalProvider {
 const freshTenants = () => tenantsWithNeuro()
 
 async function askPayload(mode: 'yield' | 'throw'): Promise<string> {
-  const app = buildApp({ provider: new FailingProvider(mode), tenants: freshTenants() })
-  const response = await app.request('/api/t/neuro/ask', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query: 'What is the twelve-month retention of brivaracetam?',
-      resourceId: '9dd53383',
-    }),
-  })
-  expect(response.status).toBe(200)
-  return await response.text()
+  const fixture = createEnforcementFixture()
+  try {
+    const app = buildApp({
+      ...fixture.stores,
+      configuredTenantId: fixture.tenantId,
+      audience: fixture.audience,
+      breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+      provider: new FailingProvider(mode),
+      tenants: freshTenants(),
+    })
+    const response = await app.request('/api/t/neuro/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: 'What is the twelve-month retention of brivaracetam?',
+        resourceId: resource.id,
+      }),
+    })
+    expect(response.status).toBe(200)
+    return await response.text()
+  } finally {
+    fixture.close()
+  }
 }
 
 describe('no upstream detail reaches the reader payload (D8-07)', () => {

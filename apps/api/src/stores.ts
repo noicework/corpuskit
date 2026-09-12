@@ -1,9 +1,40 @@
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import {
+  appendFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import type { Enrichment } from '@research-portal/core'
 import { EnrichmentStore } from './enrichments.ts'
-import { readJsonSafe, writeJsonAtomic } from './persist.ts'
+import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from './persist.ts'
+import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
+import type { RbacDatabase } from './rbac-state.ts'
+import {
+  decodeLegacyWatches,
+  decodeWatchCollection,
+  encodeResearchOwner,
+  encodeStorageIdentifier,
+  equalResearchOwner,
+  ownedRecord,
+  readOwnedRecord,
+  type ResearchOwner,
+  researchOwnerValue,
+  storageIdentifierPath,
+  watchOwner,
+} from './research-owner.ts'
+import {
+  decodeScopedKeyRecords,
+  KeyPortalSlugSchema,
+  KeyTimeSchema,
+  type LegacyMcpKeyRecord,
+  migrateLegacyKeyRecord,
+  type ScopedKeyRecord,
+  type ScopedKeyStore,
+} from './scoped-key-record.ts'
 
 // ---------------------------------------------------------------------------
 // Volume-backed stores for the portal's own operational data: ask insights
@@ -24,6 +55,96 @@ function writeJson(path: string, value: unknown): void {
 
 function safeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'unknown'
+}
+
+/** An injected caller boundary appends its required audit synchronously after the write. */
+export interface OwnedMutationBoundary {
+  database: Pick<RbacDatabase, 'transactionSync'>
+  complete: () => void
+}
+
+function checkedOwnedPath(path: string): string {
+  // Reserve room below macOS's 1024-byte path limit for the atomic writer's suffix.
+  if (new TextEncoder().encode(resolve(path)).length > 1000) {
+    throw new Error('Owned storage path too long')
+  }
+  return path
+}
+
+function ownedRead(path: string): unknown | undefined {
+  checkedOwnedPath(path)
+  try {
+    return JSON.parse(
+      new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(path)),
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+export function ownedWrite(
+  path: string,
+  value: unknown | undefined,
+  boundary?: OwnedMutationBoundary,
+): void {
+  checkedOwnedPath(path)
+  let before: Uint8Array | undefined
+  try {
+    before = readFileSync(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const work = () => {
+    if (value === undefined) {
+      if (before !== undefined) rmSync(path)
+    } else writeJson(path, value)
+    const completion: unknown = boundary?.complete()
+    if (completion && typeof (completion as PromiseLike<unknown>).then === 'function') {
+      throw new Error('Owned completion must be synchronous')
+    }
+  }
+  try {
+    if (boundary) boundary.database.transactionSync(work)
+    else work()
+  } catch (error) {
+    if (before !== undefined) writeFileSync(path, before)
+    else {
+      try {
+        rmSync(path)
+      } catch (restoreError) {
+        if ((restoreError as NodeJS.ErrnoException).code !== 'ENOENT') throw restoreError
+      }
+    }
+    throw error
+  }
+}
+
+function ownedDirectory(
+  root: string,
+  kind: string,
+  slug: string,
+  owner: ResearchOwner | string,
+): string {
+  return join(
+    root,
+    'research-v2',
+    storageIdentifierPath(encodeStorageIdentifier(slug)),
+    kind,
+    storageIdentifierPath(encodeResearchOwner(owner)),
+  )
+}
+
+function ownedFiles(dir: string): string[] {
+  checkedOwnedPath(dir)
+  try {
+    return readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name === 'record.json')
+      .map((entry) => join(entry.parentPath, entry.name))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
 }
 
 // --- Ask insights -----------------------------------------------------------
@@ -136,41 +257,45 @@ export interface StoredSession {
 }
 
 export class SessionsStore {
-  private dirFor(slug: string, clientId: string): string {
-    return join(DATA_DIR, 'sessions', safeSegment(slug), safeSegment(clientId))
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    private readonly boundary?: OwnedMutationBoundary,
+  ) {}
+  private dirFor(slug: string, owner: ResearchOwner | string): string {
+    return ownedDirectory(this.dataDir, 'sessions', slug, owner)
   }
-
-  list(slug: string, clientId: string): { id: string; title: string; updatedAt: string }[] {
-    try {
-      const dir = this.dirFor(slug, clientId)
-      return readdirSync(dir)
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => readJson<StoredSession | null>(join(dir, f), null))
-        .filter((s): s is StoredSession => s !== null)
-        .map(({ id, title, updatedAt }) => ({ id, title, updatedAt }))
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .slice(0, 100)
-    } catch {
-      return []
-    }
-  }
-
-  get(slug: string, clientId: string, id: string): StoredSession | null {
-    return readJson<StoredSession | null>(
-      join(this.dirFor(slug, clientId), `${safeSegment(id)}.json`),
-      null,
+  private pathFor(slug: string, owner: ResearchOwner | string, id: string): string {
+    return join(
+      this.dirFor(slug, owner),
+      storageIdentifierPath(encodeStorageIdentifier(id)),
+      'record.json',
     )
   }
-
-  put(slug: string, clientId: string, session: StoredSession): void {
-    writeJson(join(this.dirFor(slug, clientId), `${safeSegment(session.id)}.json`), session)
+  list(
+    slug: string,
+    owner: ResearchOwner | string,
+  ): { id: string; title: string; updatedAt: string }[] {
+    return ownedFiles(this.dirFor(slug, owner)).map((path) => {
+      const session = readOwnedRecord<StoredSession>(ownedRead(path), slug, owner)
+      if (path !== this.pathFor(slug, owner, session.id)) throw new Error('Invalid session path')
+      return { id: session.id, title: session.title, updatedAt: session.updatedAt }
+    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 100)
   }
-
-  remove(slug: string, clientId: string, id: string): void {
-    try {
-      rmSync(join(this.dirFor(slug, clientId), `${safeSegment(id)}.json`))
-    } catch {
-      // already gone
+  get(slug: string, owner: ResearchOwner | string, id: string): StoredSession | null {
+    const value = ownedRead(this.pathFor(slug, owner, id))
+    return value === undefined ? null : readOwnedRecord<StoredSession>(value, slug, owner, id)
+  }
+  put(slug: string, owner: ResearchOwner | string, session: StoredSession): void {
+    this.get(slug, owner, session.id)
+    ownedWrite(
+      this.pathFor(slug, owner, session.id),
+      ownedRecord(slug, owner, session),
+      this.boundary,
+    )
+  }
+  remove(slug: string, owner: ResearchOwner | string, id: string): void {
+    if (this.get(slug, owner, id)) {
+      ownedWrite(this.pathFor(slug, owner, id), undefined, this.boundary)
     }
   }
 }
@@ -180,6 +305,7 @@ export class SessionsStore {
 export interface Watch {
   id: string
   clientId: string
+  readonly owner?: ResearchOwner
   query: string
   createdAt: string
   lastRun: string | null
@@ -190,50 +316,87 @@ export interface Watch {
 }
 
 export class WatchStore {
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    private readonly boundary?: OwnedMutationBoundary,
+  ) {}
   private pathFor(slug: string): string {
-    return join(DATA_DIR, 'watches', `${safeSegment(slug)}.json`)
+    return join(
+      this.dataDir,
+      'research-v2',
+      storageIdentifierPath(encodeStorageIdentifier(slug)),
+      'watches.json',
+    )
   }
-
-  list(slug: string, clientId?: string): Watch[] {
-    const all = readJson<Watch[]>(this.pathFor(slug), [])
-    return clientId ? all.filter((w) => w.clientId === clientId) : all
+  private read(slug: string): Watch[] {
+    const value = ownedRead(this.pathFor(slug))
+    if (value !== undefined) return decodeWatchCollection(value, slug)
+    const legacy = ownedRead(join(this.dataDir, 'watches', safeSegment(slug) + '.json'))
+    return decodeLegacyWatches(legacy, slug)
   }
-
-  add(slug: string, clientId: string, query: string): Watch {
-    const all = readJson<Watch[]>(this.pathFor(slug), [])
+  private write(slug: string, entries: Watch[]): void {
+    ownedWrite(this.pathFor(slug), { v: 2, slug, entries }, this.boundary)
+  }
+  /** Ownerless enumeration is reserved for the internal scheduler. */
+  list(slug: string, owner?: ResearchOwner | string): Watch[] {
+    if (owner !== undefined) researchOwnerValue(owner)
+    return this.read(slug).filter((watch) =>
+      owner === undefined || equalResearchOwner(watchOwner(watch), owner)
+    )
+  }
+  add(slug: string, input: ResearchOwner | string, query: string): Watch {
+    const owner = researchOwnerValue(input)
+    const all = this.read(slug)
     const trimmed = query.trim()
-    // One watch per (client, query) - repeat clicks return the existing one.
-    const existing = all.find((w) => w.clientId === clientId && w.query === trimmed)
+    const mine = all.filter((watch) => equalResearchOwner(watchOwner(watch), owner))
+    const existing = mine.find((watch) => watch.query === trimmed)
     if (existing) return existing
     const watch: Watch = {
       id: crypto.randomUUID(),
-      clientId,
+      clientId: owner.kind === 'anonymous' ? owner.clientId : owner.oid,
+      owner,
       query: trimmed,
       createdAt: new Date().toISOString(),
       lastRun: null,
       fingerprint: null,
       changed: false,
     }
-    // Cap per client, never across clients - one browser cannot evict another's.
-    const mine = all.filter((w) => w.clientId === clientId)
-    const keep = mine.length >= 50 ? all.filter((w) => w !== mine[0]) : all
-    writeJson(this.pathFor(slug), [...keep, watch])
+    this.write(slug, [
+      ...(mine.length >= 50 ? all.filter((watch) => watch !== mine[0]) : all),
+      watch,
+    ])
     return watch
   }
-
-  update(slug: string, id: string, patch: Partial<Watch>, clientId?: string): void {
-    const all = readJson<Watch[]>(this.pathFor(slug), [])
-    writeJson(
-      this.pathFor(slug),
-      all.map((w) =>
-        w.id === id && (clientId === undefined || w.clientId === clientId) ? { ...w, ...patch } : w
-      ),
-    )
+  /** Ownerless updates are reserved for the internal scheduler. Identity fields are immutable. */
+  update(slug: string, id: string, patch: Partial<Watch>, owner?: ResearchOwner | string): void {
+    encodeStorageIdentifier(id)
+    if (owner !== undefined) researchOwnerValue(owner)
+    const all = this.read(slug)
+    let changed = false
+    const next = all.map((watch) => {
+      if (
+        watch.id !== id || (owner !== undefined && !equalResearchOwner(watchOwner(watch), owner))
+      ) return watch
+      changed = true
+      return {
+        ...watch,
+        ...patch,
+        id: watch.id,
+        clientId: watch.clientId,
+        owner: watch.owner,
+        createdAt: watch.createdAt,
+      }
+    })
+    if (changed) this.write(slug, next)
   }
-
-  remove(slug: string, clientId: string, id: string): void {
-    const all = readJson<Watch[]>(this.pathFor(slug), [])
-    writeJson(this.pathFor(slug), all.filter((w) => !(w.id === id && w.clientId === clientId)))
+  remove(slug: string, owner: ResearchOwner | string, id: string): void {
+    encodeStorageIdentifier(id)
+    researchOwnerValue(owner)
+    const all = this.read(slug)
+    const next = all.filter((watch) =>
+      !(watch.id === id && equalResearchOwner(watchOwner(watch), owner))
+    )
+    if (next.length !== all.length) this.write(slug, next)
   }
 }
 
@@ -384,48 +547,46 @@ export interface Investigation {
 }
 
 export class InvestigationStore {
-  private dirFor(slug: string, clientId: string): string {
-    return join(DATA_DIR, 'investigations', safeSegment(slug), safeSegment(clientId))
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    private readonly boundary?: OwnedMutationBoundary,
+  ) {}
+  private dirFor(slug: string, owner: ResearchOwner | string): string {
+    return ownedDirectory(this.dataDir, 'investigations', slug, owner)
   }
-
-  private pathFor(slug: string, clientId: string, id: string): string {
-    return join(this.dirFor(slug, clientId), `${safeSegment(id)}.json`)
+  private pathFor(slug: string, owner: ResearchOwner | string, id: string): string {
+    return join(
+      this.dirFor(slug, owner),
+      storageIdentifierPath(encodeStorageIdentifier(id)),
+      'record.json',
+    )
   }
-
-  list(slug: string, clientId: string): {
-    id: string
-    name: string
-    question: string
-    status: 'active' | 'closed'
-    updatedAt: string
-    evidenceCount: number
-  }[] {
-    try {
-      return readdirSync(this.dirFor(slug, clientId))
-        .filter((f) => f.endsWith('.json'))
-        .map((f) => readJson<Investigation | null>(join(this.dirFor(slug, clientId), f), null))
-        .filter((i): i is Investigation => i !== null)
-        .map((i) => ({
-          id: i.id,
-          name: i.name,
-          question: i.question,
-          status: i.status,
-          updatedAt: i.updatedAt,
-          evidenceCount: i.evidence.length,
-        }))
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    } catch {
-      return []
-    }
+  private put(slug: string, owner: ResearchOwner | string, value: Investigation): void {
+    this.get(slug, owner, value.id)
+    ownedWrite(this.pathFor(slug, owner, value.id), ownedRecord(slug, owner, value), this.boundary)
   }
-
-  get(slug: string, clientId: string, id: string): Investigation | null {
-    return readJson<Investigation | null>(this.pathFor(slug, clientId, id), null)
+  list(slug: string, owner: ResearchOwner | string) {
+    return ownedFiles(this.dirFor(slug, owner)).map((path) => {
+      const i = readOwnedRecord<Investigation>(ownedRead(path), slug, owner)
+      if (path !== this.pathFor(slug, owner, i.id)) throw new Error('Invalid investigation path')
+      return {
+        id: i.id,
+        name: i.name,
+        question: i.question,
+        status: i.status,
+        updatedAt: i.updatedAt,
+        evidenceCount: i.evidence.length,
+      }
+    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  }
+  get(slug: string, owner: ResearchOwner | string, id: string): Investigation | null {
+    const value = ownedRead(this.pathFor(slug, owner, id))
+    return value === undefined ? null : readOwnedRecord<Investigation>(value, slug, owner, id)
   }
 
   create(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     input: { name: string; question?: string },
   ): Investigation {
     const now = new Date().toISOString()
@@ -440,34 +601,39 @@ export class InvestigationStore {
       evidence: [],
       artefacts: [],
     }
-    writeJson(this.pathFor(slug, clientId, investigation.id), investigation)
+    this.put(slug, clientId, investigation)
     return investigation
   }
 
   update(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     patch: Partial<Pick<Investigation, 'name' | 'question' | 'notes' | 'status'>>,
   ): Investigation | null {
     const current = this.get(slug, clientId, id)
     if (!current) return null
-    const next = { ...current, ...patch, updatedAt: new Date().toISOString() }
-    writeJson(this.pathFor(slug, clientId, id), next)
+    const next = {
+      ...current,
+      ...(patch.name === undefined ? {} : { name: patch.name }),
+      ...(patch.question === undefined ? {} : { question: patch.question }),
+      ...(patch.notes === undefined ? {} : { notes: patch.notes }),
+      ...(patch.status === undefined ? {} : { status: patch.status }),
+      updatedAt: new Date().toISOString(),
+    }
+    this.put(slug, clientId, next)
     return next
   }
 
-  remove(slug: string, clientId: string, id: string): void {
-    try {
-      rmSync(this.pathFor(slug, clientId, id))
-    } catch {
-      // already gone
+  remove(slug: string, clientId: ResearchOwner | string, id: string): void {
+    if (this.get(slug, clientId, id)) {
+      ownedWrite(this.pathFor(slug, clientId, id), undefined, this.boundary)
     }
   }
 
   addEvidence(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     input: Omit<EvidenceItem, 'id' | 'createdAt'>,
   ): EvidenceItem | null {
@@ -485,13 +651,13 @@ export class InvestigationStore {
     if (duplicate) return duplicate
     current.evidence.push(item)
     current.updatedAt = item.createdAt
-    writeJson(this.pathFor(slug, clientId, id), current)
+    this.put(slug, clientId, current)
     return item
   }
 
   updateEvidence(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     evidenceId: string,
     patch: Partial<Pick<EvidenceItem, 'verdict' | 'note' | 'tags'>>,
@@ -500,23 +666,33 @@ export class InvestigationStore {
     if (!current) return false
     const index = current.evidence.findIndex((e) => e.id === evidenceId)
     if (index < 0) return false
-    current.evidence[index] = { ...current.evidence[index] as EvidenceItem, ...patch }
+    current.evidence[index] = {
+      ...current.evidence[index] as EvidenceItem,
+      ...(patch.verdict === undefined ? {} : { verdict: patch.verdict }),
+      ...(patch.note === undefined ? {} : { note: patch.note }),
+      ...(patch.tags === undefined ? {} : { tags: patch.tags }),
+    }
     current.updatedAt = new Date().toISOString()
-    writeJson(this.pathFor(slug, clientId, id), current)
+    this.put(slug, clientId, current)
     return true
   }
 
-  removeEvidence(slug: string, clientId: string, id: string, evidenceId: string): void {
+  removeEvidence(
+    slug: string,
+    clientId: ResearchOwner | string,
+    id: string,
+    evidenceId: string,
+  ): void {
     const current = this.get(slug, clientId, id)
     if (!current) return
     current.evidence = current.evidence.filter((e) => e.id !== evidenceId)
     current.updatedAt = new Date().toISOString()
-    writeJson(this.pathFor(slug, clientId, id), current)
+    this.put(slug, clientId, current)
   }
 
   addArtefact(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     input: { kind: string; title: string; data: unknown },
   ): InvestigationArtefact | null {
@@ -529,7 +705,7 @@ export class InvestigationStore {
     }
     current.artefacts.push(artefact)
     current.updatedAt = artefact.createdAt
-    writeJson(this.pathFor(slug, clientId, id), current)
+    this.put(slug, clientId, current)
     return artefact
   }
 }
@@ -541,48 +717,106 @@ export class InvestigationStore {
  * `hash` is a SHA-256 digest of the complete credential. The complete value is
  * returned only by the minting response and is never persisted.
  */
-export interface McpKeyRecord {
-  id: string
-  tenant: string
-  issuerUserId: string
-  label: string
-  prefix: string
-  hash: string
-  createdAt: string
-  revokedAt: string | null
+export type McpKeyRecord = LegacyMcpKeyRecord
+
+function readKeyText(path: string): string {
+  // Reject malformed bytes and retain a BOM so parsing cannot silently rewrite original data.
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(path))
 }
 
-export class McpKeyStore {
-  constructor(private readonly dataDir = DATA_DIR) {}
-
-  private pathFor(slug: string): string {
-    return join(this.dataDir, 'mcp-keys', `${safeSegment(slug)}.json`)
+export class McpKeyStore implements ScopedKeyStore {
+  /** Construct at startup. HTTP lookups never rewrite records or assume system authority. */
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    migration?: {
+      database: Pick<RbacDatabase, 'transactionSync'>
+      audit: Pick<AuditStore, 'append'>
+    },
+    private readonly boundary?: OwnedMutationBoundary,
+  ) {
+    let files: string[]
+    try {
+      files = readdirSync(join(dataDir, 'mcp-keys')).filter((name) => name.endsWith('.json')).sort()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    const changes = files.flatMap((name) => {
+      const slug = KeyPortalSlugSchema.parse(name.slice(0, -5))
+      const path = this.pathFor(slug)
+      const original = readKeyText(path)
+      const raw: unknown = JSON.parse(original)
+      const records = decodeScopedKeyRecords(raw, slug)
+      return (raw as { v?: number }[]).some((record) => record.v === undefined)
+        ? [{ slug, path, original, records }]
+        : []
+    })
+    if (!changes.length) return
+    if (!migration) throw new Error('Key migration requires startup audit storage')
+    const written: typeof changes = []
+    try {
+      migration.database.transactionSync(() => {
+        for (const change of changes) {
+          writeJsonAtomic(change.path, change.records)
+          written.push(change)
+          appendAudit(
+            migration.audit,
+            createAuditEvent({
+              requestId: crypto.randomUUID(),
+              actor: { kind: 'system' },
+              action: 'local.mutation',
+              scope: { kind: 'portal', slug: change.slug },
+              target: { kind: 'migration', id: 'scoped-keys-v1' },
+              outcome: 'success',
+              detail: { permission: 'keys.manage', mutation: 'mcpKeys.add' },
+            }),
+          )
+        }
+      })
+    } catch (error) {
+      // JSON and SQLite cannot share crash atomicity. Restore exact bytes on observed failure.
+      for (const change of written.reverse()) writeFileAtomic(change.path, change.original)
+      throw error
+    }
   }
 
-  list(slug: string): McpKeyRecord[] {
-    return readJson<McpKeyRecord[]>(this.pathFor(slug), [])
-      .filter((record) => record.tenant === slug)
+  private pathFor(slug: string): string {
+    return join(this.dataDir, 'mcp-keys', `${KeyPortalSlugSchema.parse(slug)}.json`)
+  }
+
+  list(slug: string): ScopedKeyRecord[] {
+    let raw: string
+    try {
+      raw = readKeyText(this.pathFor(slug))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    return decodeScopedKeyRecords(JSON.parse(raw), slug)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
   }
 
-  findByPrefix(slug: string, prefix: string): McpKeyRecord | undefined {
+  findByHash(slug: string, hash: string): ScopedKeyRecord | undefined {
+    return this.list(slug).find((record) => record.hash === hash)
+  }
+
+  findByPrefix(slug: string, prefix: string): ScopedKeyRecord | undefined {
     return this.list(slug).find((record) => record.prefix === prefix)
   }
 
-  add(record: McpKeyRecord): void {
-    const all = this.list(record.tenant)
-    if (all.some((existing) => existing.id === record.id || existing.prefix === record.prefix)) {
-      throw new Error('MCP credential identifier collision')
-    }
-    writeJson(this.pathFor(record.tenant), [...all, record])
+  add(input: McpKeyRecord | ScopedKeyRecord): void {
+    const record = migrateLegacyKeyRecord(input)
+    const all = decodeScopedKeyRecords([...this.list(record.tenant), record], record.tenant)
+    ownedWrite(this.pathFor(record.tenant), all, this.boundary)
   }
 
   revoke(slug: string, id: string, revokedAt: string): boolean {
+    KeyTimeSchema.parse(revokedAt)
     const all = this.list(slug)
     const found = all.find((record) => record.id === id)
     if (!found) return false
     if (!found.revokedAt) found.revokedAt = revokedAt
-    writeJson(this.pathFor(slug), all)
+    ownedWrite(this.pathFor(slug), all, this.boundary)
     return true
   }
 }
@@ -593,7 +827,7 @@ export type SessionsStoreApi = Pick<SessionsStore, keyof SessionsStore>
 export type WatchStoreApi = Pick<WatchStore, keyof WatchStore>
 export type SourceStoreApi = Pick<SourceStore, keyof SourceStore>
 export type InvestigationStoreApi = Pick<InvestigationStore, keyof InvestigationStore>
-export type McpKeyStoreApi = Pick<McpKeyStore, keyof McpKeyStore>
+export type McpKeyStoreApi = ScopedKeyStore
 export type RoutingLogApi = Pick<RoutingLog, keyof RoutingLog>
 
 // --- Enrichment import/export ----------------------------------------------

@@ -11,6 +11,7 @@ import { AragProvider } from './index.ts'
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'neuro',
   branding: {
     productName: 'Neurology Research Portal',

@@ -4,14 +4,15 @@ import process from 'node:process'
 import { AragProvider, labBindings } from '@research-portal/retrieval'
 import { buildApp } from './app.ts'
 import { BindingStore } from './bindings.ts'
-import { SourceStore, WatchStore } from './stores.ts'
+import { SourceStore } from './stores.ts'
+import { localOwnedStores } from './local-owned-stores.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
-import { TenantStore } from './tenants.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
+import { infrastructureHandler } from './permissions.ts'
 
 loadRootEnv()
 
@@ -19,7 +20,6 @@ const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
 const bindings = new BindingStore()
-const tenants = new TenantStore()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
 const provider = new AragProvider({
@@ -30,9 +30,11 @@ const provider = new AragProvider({
 // the same in-process store, not two separate instances racing to
 // read-modify-write the same file (see the note on startScheduler).
 const sources = new SourceStore()
-const watches = new WatchStore()
 const enrichments = new EnrichmentStore()
-const { rbac } = openLocalRbac(process.env)
+const { database, rbac } = openLocalRbac(process.env)
+const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
+const tenants = owned.tenants!
+const { watches } = owned
 const ingress = new LocalIngress({ rbac, tenants, env: process.env })
 
 // Documentation readiness: probe every bound portal's documentation-scoped
@@ -65,6 +67,10 @@ function webBuildStamp(): { sha: string; builtAt: string } | undefined {
 
 const webBuild = webBuildStamp()
 const app = buildApp({
+  ...owned,
+  rbac,
+  configuredTenantId: process.env.ENTRA_TENANT_ID,
+  audience: process.env.WORKER_NAME ?? 'corpuskit',
   provider,
   tenants,
   management: provider,
@@ -122,16 +128,22 @@ try {
 // handing out the raw (unversioned, cacheable) index.html for the root, and
 // the `*` fallback covers every client-side route. serveStatic in between
 // serves the real asset files (app.js, styles.css, thumbnails).
-app.get('/', (c) => {
-  if (!homeHtml) return c.text('The web build is not available.', 503)
-  c.header('Cache-Control', 'no-cache')
-  return c.html(homeHtml)
-})
-app.use('*', serveStatic({ root: './apps/web/dist' }))
-app.get('*', (c) => {
-  if (!indexHtml) return c.text('The web build is not available.', 503)
-  c.header('Cache-Control', 'no-cache')
-  return c.html(indexHtml)
-})
+app.get(
+  '/',
+  infrastructureHandler(async (c) => {
+    if (!homeHtml) return c.text('The web build is not available.', 503)
+    c.header('Cache-Control', 'no-cache')
+    return c.html(homeHtml)
+  }),
+)
+app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
+app.get(
+  '*',
+  infrastructureHandler(async (c) => {
+    if (!indexHtml) return c.text('The web build is not available.', 503)
+    c.header('Cache-Control', 'no-cache')
+    return c.html(indexHtml)
+  }),
+)
 
 Deno.serve({ port }, (request, info) => ingress.handle(request, (clean) => app.fetch(clean), info))

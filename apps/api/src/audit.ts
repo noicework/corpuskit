@@ -1,8 +1,15 @@
-import { PERMISSIONS, ROLES, type Scope } from '@research-portal/core'
+import {
+  AccessModeSchema,
+  PERMISSIONS,
+  PORTAL_ROLES,
+  ROLES,
+  type Scope,
+  ScopeSchema,
+} from '@research-portal/core'
 import { DECLARATIONS } from './permissions.ts'
 
 export type AuditActor = {
-  kind: 'anonymous' | 'user' | 'break-glass' | 'legacy-key' | 'system'
+  kind: 'anonymous' | 'user' | 'break-glass' | 'key' | 'legacy-key' | 'system'
   id?: string
   label?: string
 }
@@ -28,8 +35,89 @@ export interface AuditEvent {
 export interface AuditReadFilter {
   scope: Scope
   requestId?: string
+  actorKind?: AuditActor['kind']
+  actorId?: string
+  action?: AuditAction
+  outcome?: AuditOutcome
+  from?: string
+  to?: string
+  cursor?: { at: string; id: string }
+  snapshotSequence?: number
   before?: string
   limit?: number
+}
+
+export type AuditQueryFilters = Pick<
+  AuditReadFilter,
+  'requestId' | 'actorKind' | 'actorId' | 'action' | 'outcome' | 'from' | 'to'
+>
+
+export class AuditQueryError extends Error {
+  constructor(
+    readonly code:
+      | 'invalid_audit_query'
+      | 'snapshot_mismatch'
+      | 'snapshot_expired'
+      | 'snapshot_limit',
+  ) {
+    super(code)
+  }
+}
+
+export function canonicalAuditScope(scope: Scope): Scope {
+  const parsed = ScopeSchema.safeParse(scope)
+  if (
+    !parsed.success || Object.keys(scope).sort().join(',') !==
+      (parsed.data.kind === 'platform' ? 'kind' : 'kind,slug')
+  ) throw new AuditQueryError('invalid_audit_query')
+  return parsed.data.kind === 'platform'
+    ? { kind: 'platform' }
+    : { kind: 'portal', slug: parsed.data.slug }
+}
+
+/** Fixed field order makes exact snapshot binding independent of query parameter order. */
+export function canonicalAuditFilters(filters: AuditQueryFilters): AuditQueryFilters {
+  const result: AuditQueryFilters = {}
+  const names = ['actorKind', 'actorId', 'action', 'outcome', 'requestId', 'from', 'to'] as const
+  if (
+    !filters || Object.keys(filters).some((key) => !names.includes(key as typeof names[number]))
+  ) throw new AuditQueryError('invalid_audit_query')
+  for (const name of names) {
+    const value = filters[name]
+    if (value === undefined) continue
+    const valid = name === 'actorKind'
+      ? ['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(value)
+      : name === 'outcome'
+      ? ['intent', 'success', 'denied', 'failure', 'uncertain'].includes(value)
+      : name === 'action'
+      ? Object.hasOwn(actionFields, value)
+      : name === 'from' || name === 'to'
+      ? fields.cutoff(value)
+      : id(value)
+    if (!valid) throw new AuditQueryError('invalid_audit_query')
+    Object.assign(result, { [name]: value })
+  }
+  if (result.from && result.to && result.from > result.to) {
+    throw new AuditQueryError('invalid_audit_query')
+  }
+  return result
+}
+
+export function validateAuditReadFilter(filter: AuditReadFilter): void {
+  canonicalAuditScope(filter.scope)
+  const { scope: _scope, before, cursor, snapshotSequence, limit = 100, ...filters } = filter
+  canonicalAuditFilters(filters)
+  if (
+    !Number.isSafeInteger(limit) || limit < 1 || limit > 1000 ||
+    (before !== undefined && !fields.cutoff(before)) ||
+    (snapshotSequence !== undefined &&
+      (!Number.isSafeInteger(snapshotSequence) || snapshotSequence < 0)) ||
+    (cursor !== undefined &&
+      (!cursor || Object.keys(cursor).sort().join(',') !== 'at,id' || !fields.cutoff(cursor.at) ||
+        !id(cursor.id)))
+  ) {
+    throw new AuditQueryError('invalid_audit_query')
+  }
 }
 
 /** Internal store contract. Authorised services own access; there is no HTTP mutation API. */
@@ -75,6 +163,12 @@ const declaredFields = DECLARATIONS.flatMap((item) =>
   item.subActions?.flatMap((action) => action.fields ?? []) ?? []
 )
 const fields = {
+  previousAccessMode: member(AccessModeSchema.options),
+  accessMode: member(AccessModeSchema.options),
+  keyRole: member(PORTAL_ROLES),
+  creatorOid: id,
+  creatorTenantId: id,
+  keyStatus: member(['active', 'expired', 'revoked', 'unproven_creator', 'creator_no_access']),
   role: member(ROLES),
   previousRole: member(ROLES),
   permission: member(PERMISSIONS),
@@ -115,8 +209,20 @@ const actionFields = {
   'assignment.activate': ['role', 'subjectKind'],
   'assignment.denied': ['code'],
   'migration.admin_emails': ['count'],
-  'request.denied': ['code', 'permission', 'method'],
+  'request.denied': [
+    'code',
+    'permission',
+    'method',
+    'keyRole',
+    'creatorOid',
+    'creatorTenantId',
+    'keyStatus',
+  ],
   'request.privileged': [
+    'keyRole',
+    'creatorOid',
+    'creatorTenantId',
+    'keyStatus',
     'code',
     'permission',
     'method',
@@ -145,6 +251,16 @@ const actionFields = {
     'sessionOid',
     'sessionTenantId',
   ],
+  'tenant.access.update': [
+    'previousAccessMode',
+    'accessMode',
+    'code',
+    'permission',
+    'sessionOid',
+    'sessionTenantId',
+  ],
+  'tenant.domain.attach': ['code', 'permission', 'sessionOid', 'sessionTenantId'],
+  'tenant.domain.detach': ['code', 'permission', 'sessionOid', 'sessionTenantId'],
   'suggestion.graph.write': [
     'code',
     'permission',
@@ -255,7 +371,9 @@ export function validateAuditEvent(event: AuditEvent): void {
       ![event.id, event.request_id, event.target_kind].every(id) ||
       (event.actor_id !== null && !id(event.actor_id)) ||
       (event.target_id !== null && !id(event.target_id)) ||
-      !['anonymous', 'user', 'break-glass', 'legacy-key', 'system'].includes(event.actor_kind) ||
+      !['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(
+        event.actor_kind,
+      ) ||
       !['intent', 'success', 'denied', 'failure', 'uncertain'].includes(event.outcome) ||
       !(event.scope_kind === 'platform'
         ? event.scope_slug === null

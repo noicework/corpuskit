@@ -1,9 +1,12 @@
 import {
-  DECLARATIONS,
   declaredRoute,
   declaredSubAction,
+  infrastructureHandler,
+  isInfrastructurePreflight,
   isPrivileged,
+  matchedDeclaration,
   registerInfrastructure,
+  registerPreflightInfrastructure,
 } from './permissions.ts'
 import {
   AuditExecutionError,
@@ -17,7 +20,6 @@ import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
-import { coarseAdminEligibility } from './assignments.ts'
 import {
   appendAudit,
   type AuditAction,
@@ -27,6 +29,27 @@ import {
   createAuditEvent,
 } from './audit.ts'
 import type { BreakGlassService } from './break-glass.ts'
+import {
+  AuthorisationError,
+  authoriseNewPortalDomain,
+  authoriseOperation,
+  authoriseSubActions as checkSubActions,
+  type AuthorityDependencies,
+  type RequestAuthority,
+  researchOwner as resolveResearchOwner,
+  selectRequestAuthority,
+} from './authorisation.ts'
+import {
+  AccessModeSchema,
+  authorize,
+  normalisePrincipal,
+  type PortalPolicy,
+  PortalPolicySchema,
+  type Scope,
+} from '@research-portal/core'
+import { KeyPortalSlugSchema } from './scoped-key-record.ts'
+import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
+import type { RbacState } from './rbac-state.ts'
 import {
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
@@ -63,7 +86,7 @@ import {
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicErrorMessage, publicSseEvent } from './public-error.ts'
-import { type NewTenantInput, TenantStore, type TenantStoreApi } from './tenants.ts'
+import { type NewTenantInput, TenantStore, type TenantStoreApi, tenantSummary } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
@@ -267,7 +290,9 @@ import {
 } from './suggested-questions.ts'
 import { tenantAliasLocation } from './tenant-aliases.ts'
 import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
-import { registerMcpRoutes, type TrustedPortalUser } from './mcp.ts'
+import { registerMcpRoutes } from './mcp.ts'
+import { registerAccessRoutes } from './access-routes.ts'
+import { registerAuditRoutes } from './audit-routes.ts'
 import {
   createCloudflareDomainProvisioner,
   type PortalDomainProvisioner,
@@ -449,7 +474,7 @@ function validateEnrichmentRecords(value: unknown): ImportValidationResult {
 const routeBodySchema = z.object({
   query: z.string().min(1).max(2000),
   surface: z.enum(['ask', 'search']).optional(),
-})
+}).strict()
 const extractionProfileSchema = z.object({ resourceId: z.string().min(1) })
 const extractionCompareSchema = z.object({
   resourceId: z.string().min(1),
@@ -469,7 +494,7 @@ const askBodySchema = z.object({
       resourceIds: z.string().array().max(12).optional(),
       /** The passages those citations quoted: context for a follow-up that leans on them (D4-06, D4-07). */
       passages: z.string().max(2000).array().max(12).optional(),
-    })
+    }).strict()
     .array()
     .max(24)
     .optional(),
@@ -483,21 +508,21 @@ const askBodySchema = z.object({
    * `route` event, instead of the caller routing first and passing `intent`.
    */
   route: z.literal('auto').optional(),
-})
+}).strict()
 /** The Help assistant: a question about using the portal, optional prior turns. */
 const docsAskBodySchema = z.object({
   query: z.string().min(1),
   context: z
-    .object({ author: z.enum(['USER', 'AGENT']), text: z.string() })
+    .object({ author: z.enum(['USER', 'AGENT']), text: z.string() }).strict()
     .array()
     .max(24)
     .optional(),
-})
+}).strict()
 const connectBodySchema = z.object({
   url: z.string().min(12),
   token: z.string().min(20),
-})
-const createKbBodySchema = z.object({ title: z.string().min(1).max(80).optional() })
+}).strict()
+const createKbBodySchema = z.object({ title: z.string().min(1).max(80).optional() }).strict()
 const linkBodySchema = z.object({
   url: z.string().url(),
   title: z.string().optional(),
@@ -507,20 +532,23 @@ const feedbackBodySchema = z.object({
   learningId: z.string().min(8),
   good: z.boolean(),
   text: z.string().max(2000).optional(),
-})
+}).strict()
 const summarizeBodySchema = z.object({
   resourceIds: z.string().min(1).array().min(1).max(20),
   kind: z.enum(['simple', 'extended']).optional(),
-})
-const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) })
-const estateAskSchema = z.object({ query: z.string().min(1).max(2000) })
+}).strict()
+const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) }).strict()
+const estateAskSchema = z.object({
+  query: z.string().min(1).max(2000),
+  slugs: z.array(KeyPortalSlugSchema).max(100).optional(),
+}).strict()
 const sessionPutSchema = z.object({
   id: z.string().min(1).max(64),
   title: z.string().min(1).max(200),
   updatedAt: z.string(),
   messages: z.unknown().array().max(500),
-})
-const watchBodySchema = z.object({ query: z.string().min(2).max(500) })
+}).strict()
+const watchBodySchema = z.object({ query: z.string().min(2).max(500) }).strict()
 const sourceBodySchema = z.object({
   url: z.string().url(),
   auto: z.boolean().optional(),
@@ -530,20 +558,20 @@ const sourcePatchSchema = z.object({
   auto: z.boolean().optional(),
   maxPages: z.number().int().min(1).max(MAX_SYNC_CAP).optional(),
 })
-const hiddenBodySchema = z.object({ hidden: z.boolean() })
+const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
 // Purge is destructive - default TRUE means "just show me the scope", never
 // "go ahead and delete". An explicit { dryRun: false } is required to delete.
 const purgeFailedBodySchema = z.object({ dryRun: z.boolean().optional() })
 const investigationCreateSchema = z.object({
   name: z.string().min(1).max(160),
   question: z.string().max(500).optional(),
-})
+}).strict()
 const investigationPatchSchema = z.object({
   name: z.string().min(1).max(160).optional(),
   question: z.string().max(500).optional(),
   notes: z.string().max(20000).optional(),
   status: z.enum(['active', 'closed']).optional(),
-})
+}).strict()
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
@@ -555,17 +583,17 @@ const evidenceCreateSchema = z.object({
   aiRelevance: z.string().max(2000).nullable().optional(),
   note: z.string().max(4000).optional(),
   tags: z.string().max(40).array().max(10).optional(),
-})
+}).strict()
 const evidencePatchSchema = z.object({
   verdict: verdictEnum.nullable().optional(),
   note: z.string().max(4000).optional(),
   tags: z.string().max(40).array().max(10).optional(),
-})
+}).strict()
 const artefactCreateSchema = z.object({
   kind: z.string().min(1).max(40),
   title: z.string().min(1).max(200),
   data: z.unknown(),
-})
+}).strict()
 const graphStrategySchema = z.object({
   entityTypes: z.object({
     label: z.string().min(1).max(60),
@@ -607,8 +635,8 @@ const verdictsBodySchema = z.object({
     id: z.string().min(1),
     title: z.string().min(1).max(300),
     passage: z.string().min(1).max(4000),
-  }).array().min(1).max(12),
-})
+  }).strict().array().min(1).max(12),
+}).strict()
 
 const VERDICTS_SCHEMA = {
   name: 'source_verdicts',
@@ -644,8 +672,8 @@ const followUpsBodySchema = z.object({
   passages: z.object({
     title: z.string().min(1).max(300),
     text: z.string().min(1).max(4000),
-  }).array().max(12),
-})
+  }).strict().array().max(12),
+}).strict()
 
 const SUBQUERIES_SCHEMA = {
   name: 'research_subquestions',
@@ -658,7 +686,7 @@ const SUBQUERIES_SCHEMA = {
   },
 }
 const textBodySchema = z.object({ title: z.string().min(1), body: z.string().min(1) })
-const migrateBodySchema = z.object({ from: z.string().min(1), to: z.string().min(1) })
+const migrateBodySchema = z.object({ from: KeyPortalSlugSchema, to: KeyPortalSlugSchema }).strict()
 const generateBodySchema = z.object({
   kind: GenerateKindSchema,
   query: z.string().min(3).max(2000),
@@ -672,7 +700,7 @@ const generateBodySchema = z.object({
    * what is left is trimmed back to it (D6-09).
    */
   count: z.number().int().min(1).max(20).optional(),
-})
+}).strict()
 const hexColour = z.string().regex(/^#[0-9a-fA-F]{6}$/)
 const renameTenantSchema = z.object({
   name: z.string().min(2).max(60).optional(),
@@ -683,14 +711,14 @@ const renameTenantSchema = z.object({
     accent: hexColour,
     heroFrom: hexColour,
     heroTo: hexColour,
-  }).optional(),
+  }).strict().optional(),
   typography: TypographyChoiceSchema.optional(),
   shape: ShapeIdSchema.optional(),
   textScale: TextScaleIdSchema.optional(),
   density: DensityIdSchema.optional(),
   paletteId: PaletteChoiceSchema.optional(),
   searchPlaceholder: z.string().min(3).max(120).optional(),
-})
+}).strict()
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
   includeSummaries: z.boolean().optional(),
@@ -700,7 +728,7 @@ const newTenantSchema = z.object({
   name: z.string().min(2).max(60),
   organisation: z.string().max(120).optional(),
   tagline: z.string().max(160).optional(),
-})
+}).strict()
 const promptsSchema = z.object({
   ask: z.string().max(4000).optional(),
   images: z.boolean().optional(),
@@ -726,6 +754,47 @@ const labelsetUpdateSchema = z.object({
     text: z.string().trim().max(600),
   }).array().min(1).max(60),
 })
+
+const suggestionBase = {
+  id: z.string().min(1),
+  title: z.string().min(1).max(160),
+  detail: z.string().max(500),
+  status: z.enum(['pending', 'implemented', 'ignored']),
+  createdAt: z.string().datetime(),
+}
+const suggestionPayloadSchema = z.discriminatedUnion('kind', [
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('labelset'),
+    labelset: z.object({
+      id: KeyPortalSlugSchema,
+      title: z.string().min(1).max(60),
+      paragraphs: z.boolean(),
+      labels: z.string().min(1).max(60).array().min(1).max(60),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('label-addition'),
+    labels: z.object({
+      labelsetId: KeyPortalSlugSchema,
+      labels: z.string().min(1).max(60).array().min(1).max(60),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('entity-type'),
+    entityType: z.object({
+      label: z.string().min(1).max(60),
+      description: z.string().max(400),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ...suggestionBase,
+    kind: z.literal('graph-example'),
+    example: graphStrategySchema.shape.examples.element.strict(),
+  }).strict(),
+])
 
 /** Strip quotes, whitespace and an accidental "Bearer " prefix from a pasted token. */
 const cleanToken = (raw: string) =>
@@ -775,6 +844,11 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  /** Internally supplied authoritative state, never sourced from a request. */
+  rbac?: RbacState
+  configuredTenantId?: string
+  audience?: string
+  now?: () => number
   localMutations?: import('./audit-execution.ts').LocalMutationScope
   /** Intent-routing decisions log; defaults to the on-disk JSONL store. */
   routing?: RoutingLogApi
@@ -803,13 +877,11 @@ export interface BuildAppOptions {
   audit?: AuditStore
   breakGlass?: BreakGlassService
   requestContext?: (request: Request) => PortalRequestContext | undefined
-  /** Authenticated portal identity forwarded by a trusted platform adapter. */
-  trustedUser?: (request: Request) => TrustedPortalUser | null
   /** Where the built SPA lives; overridable in tests. Defaults to ./apps/web/dist. */
   webDistPath?: string
   /** Runtime adapters that serve assets outside the local filesystem set this explicitly. */
   webAvailable?: boolean
-  /** Documentation readiness probe (docs-health.ts); reported on /api/health as `docs`. */
+  /** Internal documentation readiness probe; never exposed by public health. */
   docsHealth?: Pick<DocsHealth, 'snapshot' | 'ok' | 'checkTenant'>
   buildSha?: string
   /** The web bundle's stamp (commit and build time), from `deno task build:web`. */
@@ -831,6 +903,33 @@ export interface BuildAppOptions {
   rateLimitMcpAuthPerMin?: number
 }
 
+interface RequestAuthorisation {
+  declared(): Promise<RequestAuthority | null>
+  subActions(names: readonly string[]): Promise<RequestAuthority>
+  owner(): Promise<ResearchOwner>
+  aggregateAuthority(): Promise<RequestAuthority>
+  aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
+}
+const authorisationContextKey = 'corpuskit.authorisation'
+function requestAuthorisation(c: Context): RequestAuthorisation {
+  const helpers = c.get(authorisationContextKey) as RequestAuthorisation | undefined
+  if (!helpers) throw new AuthorisationError(403)
+  return helpers
+}
+/** Authorise the actual registered operation through the request-scoped guard. */
+export function authoriseDeclared(c: Context): Promise<RequestAuthority | null> {
+  return requestAuthorisation(c).declared()
+}
+export function authoriseSubActions(
+  c: Context,
+  names: readonly string[],
+): Promise<RequestAuthority> {
+  return requestAuthorisation(c).subActions(names)
+}
+export function researchOwner(c: Context): Promise<ResearchOwner> {
+  return requestAuthorisation(c).owner()
+}
+
 export function buildApp(opts: BuildAppOptions): Hono {
   const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
@@ -848,7 +947,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const domains = opts.domainProvisioner === undefined
     ? createCloudflareDomainProvisioner(process.env)
     : opts.domainProvisioner
-  const clientId = (c: Context): string => c.req.header('x-rp-client') ?? 'anonymous'
   const app = new Hono()
   // Stage-2 routing decisions, remembered per question so repeated routing is
   // deterministic (see the /route handler).
@@ -944,12 +1042,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // Capture trusted adapter facts once. Route handlers never reconstruct identity from headers.
   const requestContexts = new WeakMap<Request, PortalRequestContext>()
+  const safeMetadataRequests = new WeakSet<Request>()
   const ingressContexts = new WeakMap<Request, PortalRequestContext>()
   const requestContext = (request: Request): PortalRequestContext => {
     const existing = requestContexts.get(request)
     if (existing) return existing
     const supplied = opts.requestContext?.(request)
-    const legacyUser = supplied ? null : opts.trustedUser?.(request)
     if (supplied) ingressContexts.set(request, supplied)
     const context = supplied ? { ...supplied } : {
       requestId: crypto.randomUUID(),
@@ -959,9 +1057,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(context.requestId)) {
       context.requestId = crypto.randomUUID()
     }
-    context.actor ??= legacyUser
-      ? { kind: 'user', id: legacyUser.id }
-      : context.session
+    context.actor ??= context.session
       ? { kind: 'user', id: context.session.oid }
       : { kind: 'anonymous' }
     requestContexts.set(request, context)
@@ -973,12 +1069,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (ingress) ingress.denialAudited = true
   }
   const classification = (c: Context) => {
-    const method = c.req.method === 'HEAD' ? 'GET' : c.req.method
-    const declaration = DECLARATIONS.find((d) =>
-      d.kind === 'http' &&
-      (d.method === method || d.method === 'ALL') &&
-      new RegExp(`^${d.path.replace(/:[^/]+/g, '[^/]+').replace(/\*/g, '.*')}$`).test(c.req.path)
-    )
+    let declaration
+    try {
+      declaration = matchedDeclaration(c)
+    } catch { /* Unknown or ambiguous routes have no declared authority. */ }
     const slug = /^\/api\/(?:admin\/)?(?:t|tenants)\/([^/]+)/.exec(c.req.path)?.[1]
     const targetIndex = declaration?.target.param
       ? declaration.path.split('/').indexOf(`:${declaration.target.param}`)
@@ -1001,6 +1095,218 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.audit) throw new AuditWriteError()
     return opts.audit
   }
+  const authorityDependencies: AuthorityDependencies | undefined =
+    opts.rbac && opts.configuredTenantId && opts.audience && opts.audit && opts.breakGlass
+      ? {
+        keys: mcpKeys,
+        creatorStores: { rbac: opts.rbac, audience: opts.audience },
+        configuredTenantId: opts.configuredTenantId,
+        tenants,
+        audit: opts.audit,
+        breakGlass: opts.breakGlass,
+        now: opts.now,
+      }
+      : undefined
+  const requestHelpers = (c: Context): RequestAuthorisation => {
+    const context = requestContext(c.req.raw)
+    let selection: Promise<RequestAuthority> | undefined
+    let failure: Error | undefined
+    const deny = (scope: Scope): never => {
+      if (failure) throw failure
+      try {
+        if (!context.denialAudited) {
+          appendAudit(
+            requiredAudit(),
+            createAuditEvent({
+              requestId: context.requestId,
+              actor: context.session
+                ? { kind: 'user', id: context.session.oid }
+                : { kind: 'anonymous' },
+              action: 'request.denied',
+              scope,
+              target: { kind: 'request' },
+              outcome: 'denied',
+              detail: { code: context.session ? 'forbidden' : 'unauthorised' },
+            }, opts.now),
+          )
+          markDenialAudited(c.req.raw)
+        }
+        failure = new AuthorisationError(context.session ? 403 : 401)
+      } catch {
+        failure = new AuditWriteError()
+      }
+      throw failure
+    }
+    const operation = () => {
+      if (failure) throw failure
+      try {
+        return matchedDeclaration(c)
+      } catch {
+        return deny({ kind: 'platform' })
+      }
+    }
+    const target = () => {
+      const declaration = operation()
+      if (declaration.scope !== 'portal') {
+        return { declaration, scope: { kind: 'platform' } as Scope }
+      }
+      if (declaration.aggregate || declaration.portalTarget !== 'url-slug') {
+        return deny({ kind: 'platform' })
+      }
+      const slugIndex = declaration.path.split('/').indexOf(':slug')
+      const slug = KeyPortalSlugSchema.safeParse(c.req.path.split('/')[slugIndex])
+      if (!slug.success) return deny({ kind: 'platform' })
+      const scope: Scope = { kind: 'portal', slug: slug.data }
+      let policy: PortalPolicy | undefined
+      try {
+        const current = tenants.get(slug.data)
+        const enabling = declaration.method === 'POST' &&
+          declaration.path === '/api/admin/t/:slug/enable'
+        if (
+          !current || current.slug !== slug.data || (!enabling && tenants.isDisabled(slug.data))
+        ) {
+          return deny(scope)
+        }
+        AccessModeSchema.parse(current.accessMode)
+        if (opts.configuredTenantId) {
+          policy = PortalPolicySchema.parse({
+            slug: current.slug,
+            accessMode: current.accessMode,
+            ...(opts.configuredTenantId ? { configuredTenantId: opts.configuredTenantId } : {}),
+          })
+        }
+      } catch {
+        return deny(scope)
+      }
+      return { declaration, scope, policy }
+    }
+    const authority = (scope: Scope) => {
+      if (failure) throw failure
+      if (!authorityDependencies) return deny(scope)
+      selection ??= selectRequestAuthority(c.req.raw, context, authorityDependencies).then(
+        (value) => {
+          context.actor = value.actor
+          return value
+        },
+      ).catch((error) => {
+        if (context.denialAudited) markDenialAudited(c.req.raw)
+        failure = error
+        throw error
+      })
+      return selection
+    }
+    const aggregateAuthority = async () => {
+      const declaration = operation()
+      const scope: Scope = { kind: 'platform' }
+      if (declaration.aggregate !== 'authorised-portals' || declaration.scope !== 'portal') {
+        return deny(scope)
+      }
+      // Selection rejects every aggregate bearer before any portal enumeration, including
+      // a key accompanied by an otherwise privileged ambient session.
+      return await authority(scope)
+    }
+    return {
+      aggregateAuthority,
+      aggregate: async (slugs) => {
+        const selected = await aggregateAuthority()
+        const declaration = operation()
+        const requested = slugs ? new Set(slugs) : undefined
+        const targets: TenantConfig[] = []
+        tenants.list(false, (config) => {
+          const slug = config.slug
+          if (requested && !requested.has(slug)) return false
+          if (!AccessModeSchema.safeParse(config.accessMode).success) return false
+          const policy = {
+            slug,
+            accessMode: config.accessMode,
+            configuredTenantId: opts.configuredTenantId,
+          }
+          // Candidate filtering is pure: a hidden portal must not latch a request denial.
+          const principal = selected.kind === 'break-glass'
+            ? normalisePrincipal({
+              kind: 'user',
+              tenantId: opts.configuredTenantId,
+              oid: 'break-glass',
+            }, { platformRole: 'owner', portalRoles: [] })
+            : normalisePrincipal(
+              selected.kind === 'session'
+                ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
+                : { kind: 'anonymous' },
+              selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
+              policy,
+            )
+          const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
+          if (allowed) targets.push(config)
+          return allowed
+        })
+        if (targets.length === 0) return deny({ kind: 'platform' })
+        // Terminal guards run only after the complete candidate set is filtered.
+        if (selected) {
+          try {
+            for (const config of targets) {
+              authoriseOperation(selected, declaration.permission, {
+                kind: 'portal',
+                slug: config.slug,
+              }, {
+                slug: config.slug,
+                accessMode: config.accessMode,
+                configuredTenantId: opts.configuredTenantId,
+              })
+            }
+          } finally {
+            if (context.denialAudited) markDenialAudited(c.req.raw)
+          }
+        }
+        return targets
+      },
+      declared: async () => {
+        if (operation().aggregate) return aggregateAuthority()
+        const { declaration, scope, policy } = target()
+        if (declaration.scope === 'public') return null
+        const selected = await authority(scope)
+        try {
+          authoriseOperation(selected, declaration.permission, scope, policy)
+        } catch (error) {
+          // D9 is available only after credential and portal validation succeeded.
+          if (!declaration.safeMetadata || !(error instanceof AuthorisationError)) throw error
+          safeMetadataRequests.add(c.req.raw)
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+        return selected
+      },
+      subActions: async (names) => {
+        const { declaration, scope, policy } = target()
+        if (!names.length || new Set(names).size !== names.length) return deny(scope)
+        const actions = names.map((name) =>
+          declaration.subActions?.find((item) => item.action === name)
+        )
+        if (actions.some((item) => !item)) return deny(scope)
+        const selected = await authority(scope)
+        try {
+          checkSubActions(
+            selected,
+            actions as NonNullable<typeof declaration.subActions>,
+            scope,
+            policy,
+          )
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+        return selected
+      },
+      owner: async () => {
+        const { declaration, scope, policy } = target()
+        if (declaration.owned !== 'research') return deny(scope)
+        const selected = await authority(scope)
+        try {
+          return resolveResearchOwner(selected, policy, c.req.header('x-rp-client'))
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+      },
+    }
+  }
   const operationSignals = new WeakMap<Request, AbortSignal>()
   const subAction = <T>(
     c: Context,
@@ -1008,6 +1314,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     action: AuditAction,
     run: () => T | Promise<T>,
     detail = {},
+    scope: Scope = classification(c).scope,
   ) =>
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
@@ -1018,14 +1325,156 @@ export function buildApp(opts: BuildAppOptions): Hono {
           requestId: requestContext(c.req.raw).requestId,
           actor: requestContext(c.req.raw).actor!,
           action,
-          scope: classification(c).scope,
+          scope,
           target: { kind: 'request' },
           detail: { permission: declaration.permission, ...detail },
         },
         run,
       }))
+
+  const adminNotFound = (c: Context) => {
+    const context = requestContext(c.req.raw)
+    if (!context.denialAudited) {
+      appendAudit(
+        requiredAudit(),
+        createAuditEvent({
+          requestId: context.requestId,
+          actor: context.actor!,
+          action: 'request.denied',
+          scope: classification(c).scope,
+          target: classification(c).target,
+          outcome: 'denied',
+          detail: {
+            code: 'forbidden',
+            permission: matchedDeclaration(c).permission,
+            method: c.req.method,
+          },
+        }, opts.now),
+      )
+      markDenialAudited(c.req.raw)
+    }
+    return c.json({ error: 'not_found' }, 404)
+  }
+  // These IDs enter upstream URL paths. Resolve only literal identifiers in the
+  // already authorised portal, before any content or binary dispatch.
+  const resourceIdentifier = (id: string) =>
+    id.length > 0 && id.length <= 256 && id === id.trim() &&
+    !/[\/\\%?#\s]/.test(id) && [...id].every((char) =>
+      char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127
+    ) &&
+    id !== '.' && id !== '..'
+  const scopedResource = async (config: TenantConfig, id: string) => {
+    if (!resourceIdentifier(id)) return null
+    try {
+      const resource = await provider.resource(config, id)
+      return resource?.id === id ? resource : null
+    } catch {
+      return null
+    }
+  }
+  const scopedContent = async (config: TenantConfig, id: string) => {
+    if (!opts.management) return null
+    try {
+      const content = await opts.management.resourceContent(config, id)
+      return content?.id === id ? content : null
+    } catch {
+      return null
+    }
+  }
+  const scopedLabels = async (config: TenantConfig, ids: string[], labelset?: string) => {
+    if (ids.length === 0) return true
+    try {
+      const sets = await provider.labelsets(config)
+      const allowed = labelset
+        ? sets.find((set) => set.id === labelset)?.labels ?? []
+        : sets.map((set) => set.id)
+      // `kind` is derived from this portal's stored records by facets(), even
+      // when the upstream labelset catalogue has no kind definition.
+      return ids.every((id) => (!labelset && id === 'kind') || allowed.includes(id))
+    } catch {
+      return false
+    }
+  }
+  const scopedEntity = async (config: TenantConfig, name: string) => {
+    if (!opts.management) return false
+    try {
+      return (await opts.management.entityGroups(config)).some((group) =>
+        group.entities.includes(name)
+      )
+    } catch {
+      return false
+    }
+  }
+  async function* activeAsk(
+    config: TenantConfig,
+    query: string,
+    options: Parameters<RetrievalProvider['ask']>[2],
+    cancelled: () => boolean,
+  ): AsyncIterable<AskEvent> {
+    if (cancelled()) return
+    for await (const event of provider.ask(config, query, options)) {
+      if (cancelled()) return
+      yield event
+    }
+  }
+  const adminResource = async (c: Context, config: TenantConfig, id: string) => {
+    if (!await scopedResource(config, id)) return false
+    const fieldId = c.req.query('fieldId')
+    if (fieldId !== undefined) {
+      if (!opts.management) return false
+      const content = await scopedContent(config, id)
+      if (
+        !content || content.id !== id || !content.files.some((file) => file.fieldId === fieldId)
+      ) return false
+    }
+    return true
+  }
+  const emptyAdminBody = async (c: Context): Promise<boolean> => {
+    const text = await c.req.text()
+    if (!text) return true
+    try {
+      return z.object({}).strict().safeParse(JSON.parse(text)).success
+    } catch {
+      return false
+    }
+  }
+  const portalSubAction = async (c: Context, name: string, slug: string, future = false) => {
+    const selected = await authoriseDeclared(c)
+    if (!selected) throw new AuthorisationError(403)
+    const declaration = matchedDeclaration(c)
+    const action = declaration.subActions?.find((item) => item.action === name)
+    if (!action || action.scope !== 'portal' || !KeyPortalSlugSchema.safeParse(slug).success) {
+      throw new AuthorisationError(403)
+    }
+    try {
+      if (future) {
+        if (action.permission !== 'domains.write') throw new AuthorisationError(403)
+        authoriseNewPortalDomain(selected, slug)
+      } else {
+        const config = tenants.get(slug)
+        authoriseOperation(
+          selected,
+          action.permission,
+          { kind: 'portal', slug },
+          config &&
+            { slug, accessMode: config.accessMode, configuredTenantId: opts.configuredTenantId },
+        )
+      }
+    } finally {
+      if (requestContext(c.req.raw).denialAudited) markDenialAudited(c.req.raw)
+    }
+  }
+  registerInfrastructure(app, '*', async (c, next) => {
+    await next()
+    // Portal modes and assignments are mutable, even for currently public bytes.
+    if (
+      c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
+      c.req.path === '/api/ask-estate'
+    ) c.header('Cache-Control', 'private, no-store')
+  })
   registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)
+    c.set(authorisationContextKey, requestHelpers(c))
     await next()
     if ((c.res.status === 401 || c.res.status === 403) && !context.denialAudited) {
       const { declaration, scope } = classification(c)
@@ -1066,11 +1515,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const askPerMinPerIp = opts.rateLimitAskPerMinPerIp ??
     Number(process.env.RATE_LIMIT_ASK_PER_MIN_IP ?? askPerMin * 5)
   const expensiveIpLimiter = new SlidingWindowLimiter({ limit: askPerMinPerIp, windowMs: 60_000 })
-  const expensiveRateLimit = rateLimitLayered([
+  const expensiveRateLimit = infrastructureHandler(rateLimitLayered([
     { limiter: expensiveLimiter, keyFn: clientKey },
     { limiter: expensiveIpLimiter, keyFn: clientIp },
-  ])
-  const estateRateLimit = rateLimit(estateLimiter, clientIp)
+  ]))
+  const estateRateLimit = infrastructureHandler(rateLimit(estateLimiter, clientIp))
 
   // Baseline security headers on every response. Deliberately narrow for now:
   // frame-ancestors only, not a full CSP - the app legitimately loads
@@ -1084,16 +1533,31 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.header('Content-Security-Policy', "frame-ancestors 'none'")
   })
 
+  // Every API operation is checked before any route-specific middleware or handler.
+  registerInfrastructure(app, '*', async (c, next) => {
+    if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
+      if (!isInfrastructurePreflight(c)) await authoriseDeclared(c)
+    }
+    await next()
+  })
+
   // The SPA is served same-origin; no cross-origin API access is needed -
   // except reingest, where an admin's browser posts rendered HTML from the
   // source site's own origin (the passcode header still gates it).
-  registerInfrastructure(
+  registerPreflightInfrastructure(
     app,
     '/api/admin/t/*/reingest',
     cors({ origin: (origin) => origin, allowHeaders: ['content-type', 'x-admin-passcode'] }),
   )
 
   app.onError((err, c) => {
+    if (err instanceof AuthorisationError) {
+      if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
+      if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
+        c.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
+      }
+      return c.json({ error: err.code }, err.status)
+    }
     if (err instanceof AuditWriteError) {
       console.error('Required request audit failed')
       return c.json({ error: 'audit_write_failed' }, 500)
@@ -1108,51 +1572,44 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   const tenant = (slug: string): TenantConfig | undefined => tenants.get(slug)
 
-  // Register before every admin handler, including extraction and routing above the old gate.
-  registerInfrastructure(app, '/api/admin/*', async (c, next) => {
-    const context = requestContext(c.req.raw)
-    const requestId = context?.requestId ?? crypto.randomUUID()
-    const deny = (status: 401 | 403, code: 'unauthorised' | 'forbidden') => {
-      if (!opts.audit) throw new AuditWriteError()
-      appendAudit(
-        opts.audit,
-        createAuditEvent({
-          requestId,
-          actor: context?.session
-            ? { kind: 'user', id: context.session.oid }
-            : { kind: 'anonymous' },
-          action: 'request.denied',
-          scope: classification(c).scope,
-          target: { kind: 'request' },
-          outcome: 'denied',
-          detail: { code, method: c.req.method },
-        }),
-      )
-      markDenialAudited(c.req.raw)
-      return c.json({ error: code }, status)
-    }
-    if (c.req.raw.headers.has('x-admin-passcode')) {
-      if (!opts.breakGlass) return deny(403, 'forbidden')
-      const result = await opts.breakGlass.authorise(
-        c.req.raw,
-        context ?? { requestId, session: null },
-      )
-      if (!result.ok) {
-        if (result.retryAfter !== undefined) c.header('Retry-After', String(result.retryAfter))
-        return deny(
-          result.code === 'invalid_passcode' ? 401 : 403,
-          result.code === 'invalid_passcode' ? 'unauthorised' : 'forbidden',
-        )
+  registerInfrastructure(app, '/api/t/*', async (c, next) => {
+    const declaration = matchedDeclaration(c)
+    if (declaration.owned === 'research') {
+      await researchOwner(c)
+      try {
+        const segments = c.req.path.split('/')
+        for (const [index, segment] of declaration.path.split('/').entries()) {
+          if (segment.startsWith(':')) encodeStorageIdentifier(decodeURIComponent(segments[index]!))
+        }
+      } catch {
+        throw new AuthorisationError(403)
       }
-      if (context) context.actor = result.actor
-      await next()
-      return
+      if (
+        !isPrivileged(declaration, requestContext(c.req.raw).actor) && opts.localMutations &&
+        !['GET', 'HEAD'].includes(c.req.method)
+      ) {
+        const { scope, target } = classification(c)
+        const context = requestContext(c.req.raw)
+        await opts.localMutations.run(
+          {
+            requestId: context.requestId,
+            actor: context.actor!,
+            action: declaration.action,
+            scope,
+            target,
+            detail: {
+              permission: declaration.permission,
+              method: c.req.method,
+              operation: `${declaration.method} ${declaration.path}`,
+            },
+          },
+          c.req.raw.signal,
+          next,
+        )
+        return
+      }
     }
-    if (context?.effectiveRoles && coarseAdminEligibility(context.effectiveRoles)) {
-      await next()
-      return
-    }
-    return context?.session ? deny(403, 'forbidden') : deny(401, 'unauthorised')
+    await next()
   })
 
   registerInfrastructure(app, '*', async (c, next) => {
@@ -1193,6 +1650,59 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.res = response
   })
 
+  registerAuditRoutes(app, {
+    authorise: authoriseDeclared,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
+  })
+
+  registerAccessRoutes(app, {
+    tenants,
+    updateMode: async (c, previousAccessMode, accessMode) => {
+      if (!opts.localMutations) throw new AuditWriteError()
+      await declaredSubAction(
+        'PATCH',
+        '/api/admin/t/:slug/access',
+        'tenant.access.update',
+        (declaration) =>
+          opts.localMutations!.run(
+            {
+              requestId: requestContext(c.req.raw).requestId,
+              actor: requestContext(c.req.raw).actor!,
+              action: 'tenant.access.update',
+              scope: { kind: 'portal', slug: c.req.param('slug')! },
+              target: { kind: 'tenant', id: c.req.param('slug')! },
+              detail: { permission: declaration.permission, previousAccessMode, accessMode },
+            },
+            operationSignals.get(c.req.raw) ?? c.req.raw.signal,
+            () => {
+              tenants.patch(c.req.param('slug')!, { accessMode })
+            },
+          ),
+      )
+    },
+    authorise: authoriseDeclared,
+    context: (c) => {
+      const context = requestContext(c.req.raw)
+      if (!context.actor) throw new AuthorisationError(403)
+      return { requestId: context.requestId, actor: context.actor }
+    },
+    assignments: () => {
+      if (!opts.rbac || !opts.configuredTenantId || !opts.audience) {
+        throw new AuthorisationError(403)
+      }
+      return opts.rbac.assignmentService(opts.configuredTenantId, opts.audience)
+    },
+    groupCapability: () =>
+      opts.rbac && opts.audience &&
+        opts.rbac.groupCapability(opts.audience) === 'verified-supported'
+        ? 'enabled'
+        : 'disabled',
+    notFound: adminNotFound,
+  })
+
   registerMcpRoutes(app, {
     localMutations: opts.localMutations,
     provider,
@@ -1200,17 +1710,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     keys: mcpKeys,
     audit: opts.audit,
     requestContext,
-    trustedUser: opts.requestContext
-      ? (request) => {
-        const context = requestContext(request)
-        return context?.session
-          ? {
-            id: context.session.oid,
-            effectiveRoles: context.effectiveRoles ?? { portalRoles: [] },
-          }
-          : null
-      }
-      : opts.trustedUser,
+    authorityDependencies,
+    authorise: authoriseDeclared,
     rateLimitPerMin: opts.rateLimitMcpAuthPerMin,
   })
 
@@ -1273,27 +1774,28 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const webDistPath = opts.webDistPath ?? './apps/web/dist'
   app.get(declaredRoute('GET', '/api/health'), (c) => {
     const web = opts.webAvailable ?? existsSync(`${webDistPath}/index.html`)
-    // Documentation readiness (see docs-health.ts): a portal whose in-app
-    // documentation was never ingested answers every route fine while Help
-    // returns nothing. It is reported here, per portal, so a deploy without
-    // docs is visible - but it never fails liveness, so a missing help
-    // section cannot take a serving portal out of rotation.
-    const docs = opts.docsHealth?.snapshot()
-    const docsOk = opts.docsHealth?.ok() ?? true
+    // Explicit scalar projection keeps portal readiness and extra build metadata private.
+    const stamp = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value.slice(0, 160) : undefined
+    const builtAt = stamp(opts.webBuild?.builtAt)
+    const buildSha = stamp(opts.webBuild?.sha)
     return c.json(
       {
         ok: web,
         web,
-        version: opts.buildSha ?? process.env.BUILD_SHA ?? 'dev',
+        version: stamp(opts.buildSha ?? process.env.BUILD_SHA) ?? 'dev',
         // The bundle actually served, so a stale build is visible (D1-21).
-        ...(opts.webBuild ? { build: opts.webBuild } : {}),
-        ...(docs ? { docs, docsOk } : {}),
+        ...(builtAt ? { builtAt } : {}),
+        ...(buildSha ? { buildSha } : {}),
       },
       web ? 200 : 503,
     )
   })
 
-  app.get(declaredRoute('GET', '/api/tenants'), (c) => c.json(tenants.list()))
+  app.get(declaredRoute('GET', '/api/tenants'), async (c) => {
+    const targets = await requestAuthorisation(c).aggregate()
+    return c.json(targets.map(tenantSummary))
+  })
 
   const brandingDir = opts.brandingPath ?? process.env.BRANDING_PATH ?? './data/branding'
   const BRANDING_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg'] as const
@@ -1339,6 +1841,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/config'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (safeMetadataRequests.has(c.req.raw)) {
+      const { productName, organisation, colours, paletteId } = config.branding
+      return c.json({
+        slug: config.slug,
+        branding: {
+          productName,
+          organisation,
+          logoUrl: brandingUrl(config.slug, 'logo') ?? config.branding.logoUrl ?? null,
+          colours,
+          paletteId: paletteId ?? null,
+        },
+        accessMode: config.accessMode,
+      })
+    }
     return c.json(withBrandingUrls(config))
   })
 
@@ -1351,7 +1867,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const stored = opts.branding?.get(config.slug, kind)
     if (stored) {
       return new Response(stored.bytes, {
-        headers: { 'content-type': stored.contentType, 'cache-control': 'public, max-age=300' },
+        headers: { 'content-type': stored.contentType, 'cache-control': 'private, no-store' },
       })
     }
     const path = brandingFile(config.slug, kind)
@@ -1365,14 +1881,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? `font/${ext}`
       : `image/${ext === 'jpg' ? 'jpeg' : ext}`
     return new Response(readFileSync(path), {
-      headers: { 'content-type': type, 'cache-control': 'public, max-age=300' },
+      headers: { 'content-type': type, 'cache-control': 'private, no-store' },
     })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/thumbnail'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'not_found' }, 404)
+    if (!await scopedResource(config, c.req.param('id'))) return adminNotFound(c)
+    if (!opts.management) return adminNotFound(c)
     const upstream = await opts.management.thumbnailResponse(config, c.req.param('id'))
     if (!upstream) return c.json({ error: 'not_found' }, 404)
     const headers = new Headers()
@@ -1380,9 +1897,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const value = upstream.headers.get(name)
       if (value) headers.set(name, value)
     }
-    // A processed resource's thumbnail is stable, but not strictly immutable:
-    // keep it fresh for a day, then allow a stale image while caches revalidate.
-    headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800')
+    headers.set('cache-control', 'private, no-store')
     return new Response(upstream.body, { status: 200, headers })
   })
 
@@ -1661,6 +2176,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/topics/:topicId/resources'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!await scopedLabels(config, [c.req.param('topicId')], 'topic')) return adminNotFound(c)
     const limit = Math.min(Math.max(1, Math.floor(Number(c.req.query('limit') ?? 12) || 12)), 24)
     const items = await provider.topicResources(config, c.req.param('topicId'), limit)
     return c.json(merchandiseSummaries(enrichments, config.slug, items))
@@ -1715,6 +2231,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // facets every rail shows come back together.
     const requested = c.req.query('labelsets') ?? c.req.query('ls') ?? 'topic,kind,format'
     const labelsets = [...new Set(requested.split(',').filter(Boolean))]
+    if (!await scopedLabels(config, labelsets)) return adminNotFound(c)
     return c.json(await facetsFor(config, labelsets))
   })
 
@@ -1742,8 +2259,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const resource = await provider.resource(config, c.req.param('id'))
-    if (!resource) return c.json({ error: 'unknown_resource' }, 404)
+    const resource = await scopedResource(config, c.req.param('id'))
+    if (!resource) return adminNotFound(c)
     return c.json(merchandiseSummary(enrichments, config.slug, resource))
   })
 
@@ -1753,90 +2270,118 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const id = c.req.param('id')
-
+    const resource = await scopedResource(config, id)
+    if (!resource) return adminNotFound(c)
     const key = `${config.slug}/${id}`
+    // An in-flight cache is not committed evidence, even if persistence has begun.
+    if (!questionsInFlight.has(key)) {
+      const cached = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)?.data
+        ?.questions
+      if (Array.isArray(cached)) return c.json({ questions: cached })
+    }
+    await authoriseSubActions(c, ['resource.questions.generate', 'resource.questions.cache'])
+    if (!opts.management) return c.json({ questions: [] })
     let job = questionsInFlight.get(key)
+    const joined = !!job
     if (!job) {
       const cachedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)?.data
         ?.questions
       if (Array.isArray(cachedQuestions)) return c.json({ questions: cachedQuestions })
-      if (!opts.management) return c.json({ questions: [] })
-      const resource = await provider.resource(config, id).catch(() => null)
-      job = questionsInFlight.get(key)
-      if (!job) {
-        const completedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)
-          ?.data?.questions
-        if (Array.isArray(completedQuestions)) return c.json({ questions: completedQuestions })
-        if (!resource) return c.json({ error: 'unknown_resource' }, 404)
-        const context = requestContext(c.req.raw)
-        const actor = { ...context.actor! }
-        const controller = new AbortController()
-        const input = {
-          requestId: context.requestId,
-          actor,
-          scope: { kind: 'portal' as const, slug: config.slug },
-          target: { kind: 'resource', id },
-          detail: {
-            ...(actor.kind === 'break-glass' && context.session
-              ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
-              : {}),
-          },
-        }
-        const merchandised = merchandiseSummary(enrichments, config.slug, resource)
-        const promise = declaredSubAction(
+      const context = requestContext(c.req.raw)
+      const actor = { ...context.actor! }
+      const controller = new AbortController()
+      const input = {
+        requestId: context.requestId,
+        actor,
+        scope: { kind: 'portal' as const, slug: config.slug },
+        target: { kind: 'resource', id },
+        detail: {
+          ...(actor.kind === 'break-glass' && context.session
+            ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
+            : {}),
+        },
+      }
+      const merchandised = merchandiseSummary(enrichments, config.slug, resource)
+      const promise = declaredSubAction(
+        'GET',
+        '/api/t/:slug/resources/:id/questions',
+        'resource.questions.generate',
+        (declaration) =>
+          executeAudited({
+            audit: requiredAudit(),
+            localMutations: opts.localMutations,
+            signal: controller.signal,
+            input: {
+              ...input,
+              action: 'resource.questions.generate',
+              detail: { ...input.detail, permission: declaration.permission },
+            },
+            run: async (signal) => {
+              const questions = await generateSuggestedQuestions(
+                opts.management!,
+                config,
+                id,
+                merchandised.title,
+                merchandised.summary,
+                { signal, strict: true },
+              )
+              signal.throwIfAborted()
+              await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
+              return questions
+            },
+          }),
+      ).then(async (questions) => {
+        controller.signal.throwIfAborted()
+        await declaredSubAction(
           'GET',
           '/api/t/:slug/resources/:id/questions',
-          'resource.questions.generate',
-          (declaration) =>
-            executeAudited({
-              audit: requiredAudit(),
-              localMutations: opts.localMutations,
-              signal: controller.signal,
-              input: {
-                ...input,
-                action: 'resource.questions.generate',
-                detail: { ...input.detail, permission: declaration.permission },
-              },
-              run: async (signal) => {
-                const questions = await generateSuggestedQuestions(
-                  opts.management!,
-                  config,
-                  id,
-                  merchandised.title,
-                  merchandised.summary,
-                  { signal, strict: true },
-                )
-                signal.throwIfAborted()
-                await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
-                await declaredSubAction(
-                  'GET',
-                  '/api/t/:slug/resources/:id/questions',
-                  'resource.questions.cache',
-                  (cache) =>
-                    executeAudited({
-                      audit: requiredAudit(),
-                      localMutations: opts.localMutations,
-                      signal,
-                      input: {
-                        ...input,
-                        action: 'resource.questions.cache',
-                        detail: { ...input.detail, permission: cache.permission },
-                      },
-                      run: () =>
-                        enrichments.put(config.slug, id, {
-                          schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
-                          generatedAt: new Date().toISOString(),
-                          data: { questions },
-                        }),
-                    }),
-                )
-                return questions
-              },
-            }),
-        ).finally(() => questionsInFlight.delete(key))
-        job = { promise, controller, waiters: 0 }
-        questionsInFlight.set(key, job)
-      }
+          'resource.questions.cache',
+          (cache) => {
+            const cacheInput = {
+              ...input,
+              action: 'resource.questions.cache' as const,
+              detail: { ...input.detail, permission: cache.permission },
+            }
+            const commit = () =>
+              executeAudited({
+                // The success append is the cache commit boundary, not a
+                // second append after an already-visible mutation.
+                audit: {
+                  append: (event) => {
+                    if (event.outcome !== 'success') {
+                      appendAudit(requiredAudit(), event)
+                      return
+                    }
+                    controller.signal.throwIfAborted()
+                    let completed = false
+                    enrichments.put(config.slug, id, {
+                      schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
+                      generatedAt: new Date().toISOString(),
+                      data: { questions },
+                    }, () => {
+                      if (completed) throw new AuditWriteError()
+                      appendAudit(requiredAudit(), event)
+                      completed = true
+                    })
+                    if (!completed) throw new AuditWriteError()
+                  },
+                },
+                localMutations: opts.localMutations,
+                signal: controller.signal,
+                input: cacheInput,
+                run: () => questions,
+              })
+            // Keep the adapter's local mutation scope open through the synchronous
+            // completion append, so its existing local audit shares the transaction.
+            return opts.localMutations
+              ? opts.localMutations.run(cacheInput, controller.signal, commit)
+              : commit()
+          },
+        )
+        return questions
+      }).finally(() => questionsInFlight.delete(key))
+      job = { promise, controller, waiters: 0 }
+      questionsInFlight.set(key, job)
     }
     const shared = job
     shared.waiters++
@@ -1848,8 +2393,39 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
     try {
       const result = Promise.race([shared.promise, aborted])
+      // A joiner's intent append can fail before it observes the shared result.
+      void result.catch(() => {})
       if (c.req.raw.signal.aborted) onAbort()
-      return c.json({ questions: await result })
+      const context = requestContext(c.req.raw)
+      const questions = joined
+        ? await declaredSubAction(
+          'GET',
+          '/api/t/:slug/resources/:id/questions',
+          'resource.questions.generate',
+          (declaration) =>
+            executeAudited({
+              audit: requiredAudit(),
+              signal: c.req.raw.signal,
+              input: {
+                requestId: context.requestId,
+                actor: context.actor!,
+                action: 'request.privileged',
+                scope: { kind: 'portal', slug: config.slug },
+                target: { kind: 'resource', id },
+                detail: {
+                  permission: declaration.permission,
+                  operation: 'GET /api/t/:slug/resources/:id/questions',
+                },
+              },
+              run: async (signal) => {
+                const questions = await result
+                await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
+                return questions
+              },
+            }),
+        )
+        : await result
+      return c.json({ questions })
     } finally {
       c.req.raw.signal.removeEventListener('abort', onAbort)
       if (--shared.waiters === 0) shared.controller.abort()
@@ -1859,16 +2435,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/content'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
-    const content = await opts.management.resourceContent(config, c.req.param('id'))
-    if (!content) return c.json({ error: 'unknown_resource' }, 404)
+    if (!await scopedResource(config, c.req.param('id'))) return adminNotFound(c)
+    const content = await scopedContent(config, c.req.param('id'))
+    if (!content) return adminNotFound(c)
     return c.json(merchandiseContent(enrichments, config.slug, content))
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/file/:fieldId'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
+    const id = c.req.param('id')
+    const fieldId = c.req.param('fieldId')
+    if (!resourceIdentifier(fieldId) || !await scopedResource(config, id)) return adminNotFound(c)
+    const content = await scopedContent(config, id)
+    if (
+      !content || !opts.management ||
+      !(content.files?.some((file) => file.fieldId === fieldId) ||
+        content.preview?.fieldId === fieldId)
+    ) return adminNotFound(c)
     const upstream = await opts.management.fileStream(
       config,
       c.req.param('id'),
@@ -1906,6 +2490,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ nodes: [], edges: [] })
     const entity = c.req.query('entity')?.trim()
+    if (entity && !await scopedEntity(config, entity)) return adminNotFound(c)
     const includeBuiltin = ['true', '1'].includes(
       (c.req.query('includeBuiltin') ?? '').trim().toLowerCase(),
     )
@@ -1959,6 +2544,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const primary = c.req.query('primary') ?? 'topic'
     const secondary = c.req.query('secondary') ?? 'kind'
+    if (!await scopedLabels(config, [primary, secondary])) return adminNotFound(c)
     return c.json(await opts.management.graphData(config, primary, secondary))
   })
 
@@ -1968,6 +2554,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const parsed = generateBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (!await scopedLabels(config, parsed.data.topics ?? [], 'topic')) return adminNotFound(c)
     const schema = GENERATE_SCHEMAS[parsed.data.kind]
     try {
       // Grounding gate: the structured-artefact equivalent of /ask's honest
@@ -2003,10 +2590,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         : undefined
       const brief = [guidance, overask].filter((part): part is string => Boolean(part)).join(' ')
       const instructions = brief ? `${base ?? ''}${base ? ' ' : ''}${brief}` : base
-      // Only the portal's own topics can scope retrieval; anything else is ignored.
-      const topicIds = (parsed.data.topics ?? []).filter((id) =>
-        config.topics.some((topic) => topic.id === id)
-      )
+      const topicIds = parsed.data.topics ?? []
       // A briefing grounds on the papers' own results (D2-06): one
       // retrieval per named drug or study plus one for the topic chooses the
       // papers, each paper's Abstract, Results, Methods and Conclusion
@@ -2413,6 +2997,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const parsed = summarizeBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    for (const id of parsed.data.resourceIds) {
+      if (!await adminResource(c, config, id)) return adminNotFound(c)
+    }
     try {
       const summary = await opts.management.summarize(
         config,
@@ -2457,6 +3044,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const name = c.req.query('name')?.trim()
     if (!name) return c.json({ error: 'invalid_request' }, 400)
+    if (!await scopedEntity(config, name)) return adminNotFound(c)
     // Relations scoped to the entity itself (the platform's path filter), not
     // filtered out of the corpus-wide slice - a gene outside the top 120 used
     // to read as "no connections" while the map showed it.
@@ -2499,20 +3087,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Research-trail sessions, synced server-side per anonymous client ----
 
-  app.get(declaredRoute('GET', '/api/t/:slug/sessions'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/sessions'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(sessions.list(config.slug, clientId(c)))
+    return c.json(sessions.list(config.slug, owner))
   })
 
-  app.get(declaredRoute('GET', '/api/t/:slug/sessions/:id'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/sessions/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const session = sessions.get(config.slug, clientId(c), c.req.param('id'))
-    return session ? c.json(session) : c.json({ error: 'not_found' }, 404)
+    const session = sessions.get(config.slug, owner, c.req.param('id'))
+    return session ? c.json(session) : adminNotFound(c)
   })
 
   app.put(declaredRoute('PUT', '/api/t/:slug/sessions/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = sessionPutSchema.safeParse(await c.req.json().catch(() => null))
@@ -2522,48 +3116,68 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (JSON.stringify(parsed.data).length > 2 * 1024 * 1024) {
       return c.json({ error: 'session_too_large' }, 413)
     }
-    const existing = sessions.list(config.slug, clientId(c))
+    const existing = sessions.list(config.slug, owner)
     if (existing.length >= 200 && !existing.some((s) => s.id === parsed.data.id)) {
       return c.json({ error: 'too_many_sessions' }, 429)
     }
-    sessions.put(config.slug, clientId(c), parsed.data)
+    sessions.put(config.slug, owner, parsed.data)
     return c.json({ ok: true })
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/sessions/:id'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/sessions/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    sessions.remove(config.slug, clientId(c), c.req.param('id'))
+    if (!sessions.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    sessions.remove(config.slug, owner, c.req.param('id'))
     return c.json({ ok: true })
   })
 
   // --- Saved searches / watches --------------------------------------------
 
-  app.get(declaredRoute('GET', '/api/t/:slug/watches'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/watches'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(watches.list(config.slug, clientId(c)))
+    return c.json(watches.list(config.slug, owner))
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/watches'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = watchBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    return c.json(watches.add(config.slug, clientId(c), parsed.data.query))
+    return c.json(watches.add(config.slug, owner, parsed.data.query))
   })
 
-  app.post(declaredRoute('POST', '/api/t/:slug/watches/:id/seen'), (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/watches/:id/seen'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    watches.update(config.slug, c.req.param('id'), { changed: false }, clientId(c))
+    if (!watches.list(config.slug, owner).some((w) => w.id === c.req.param('id'))) {
+      return adminNotFound(c)
+    }
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    watches.update(config.slug, c.req.param('id'), { changed: false }, owner)
     return c.json({ ok: true })
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/watches/:id'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/watches/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    watches.remove(config.slug, clientId(c), c.req.param('id'))
+    if (!watches.list(config.slug, owner).some((w) => w.id === c.req.param('id'))) {
+      return adminNotFound(c)
+    }
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    watches.remove(config.slug, owner, c.req.param('id'))
     return c.json({ ok: true })
   })
 
@@ -2571,9 +3185,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
-    const targets = tenants.list().map((t) => tenants.get(t.slug)).filter(
-      (t): t is TenantConfig => t !== undefined,
-    )
+    const targets = await requestAuthorisation(c).aggregate(parsed.data.slugs)
     return streamSSE(c, async (stream) => {
       let chain: Promise<void> = Promise.resolve()
       const write = (slug: string, event: unknown) => {
@@ -2585,9 +3197,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return chain
       }
       await Promise.all(targets.map(async (config) => {
+        if (stream.aborted || c.req.raw.signal.aborted) return
         const record = { citations: 0, groundedness: null as number | null, failed: false }
         try {
           for await (const event of provider.ask(config, parsed.data.query, {})) {
+            if (stream.aborted || c.req.raw.signal.aborted) return
             if (event.type === 'citation') record.citations += 1
             if (event.type === 'quality') record.groundedness = event.groundedness
             if (event.type === 'error') record.failed = true
@@ -2599,6 +3213,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             }
           }
         } catch (err) {
+          if (stream.aborted || c.req.raw.signal.aborted) return
           record.failed = true
           await write(config.slug, {
             type: 'error',
@@ -2622,6 +3237,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }
       }))
       await chain
+      if (stream.aborted || c.req.raw.signal.aborted) return
       await stream.writeSSE({
         data: JSON.stringify({ slug: null, event: { type: 'estate-done' } }),
       })
@@ -2630,52 +3246,69 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Investigations: the research workspace, per anonymous client --------
 
-  app.get(declaredRoute('GET', '/api/t/:slug/investigations'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/investigations'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(investigations.list(config.slug, clientId(c)))
+    return c.json(investigations.list(config.slug, owner))
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/investigations'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = investigationCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    if (investigations.list(config.slug, clientId(c)).length >= 100) {
+    if (investigations.list(config.slug, owner).length >= 100) {
       return c.json({ error: 'too_many_investigations' }, 429)
     }
-    return c.json(investigations.create(config.slug, clientId(c), parsed.data))
+    return c.json(investigations.create(config.slug, owner, parsed.data))
   })
 
-  app.get(declaredRoute('GET', '/api/t/:slug/investigations/:id'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/investigations/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
-    return investigation ? c.json(investigation) : c.json({ error: 'not_found' }, 404)
+    const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+    return investigation ? c.json(investigation) : adminNotFound(c)
   })
 
   app.patch(declaredRoute('PATCH', '/api/t/:slug/investigations/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!investigations.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
     const parsed = investigationPatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    const updated = investigations.update(config.slug, clientId(c), c.req.param('id'), parsed.data)
-    return updated ? c.json(updated) : c.json({ error: 'not_found' }, 404)
+    const updated = investigations.update(config.slug, owner, c.req.param('id'), parsed.data)
+    return updated ? c.json(updated) : adminNotFound(c)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    investigations.remove(config.slug, clientId(c), c.req.param('id'))
+    if (!investigations.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    investigations.remove(config.slug, owner, c.req.param('id'))
     return c.json({ ok: true })
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/investigations/:id/evidence'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!investigations.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
     const parsed = evidenceCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    const item = investigations.addEvidence(config.slug, clientId(c), c.req.param('id'), {
+    if (!await adminResource(c, config, parsed.data.resourceId)) return adminNotFound(c)
+    const item = investigations.addEvidence(config.slug, owner, c.req.param('id'), {
       passage: parsed.data.passage,
       resourceId: parsed.data.resourceId,
       resourceTitle: parsed.data.resourceTitle,
@@ -2686,45 +3319,101 @@ export function buildApp(opts: BuildAppOptions): Hono {
       note: parsed.data.note ?? '',
       tags: parsed.data.tags ?? [],
     })
-    return item ? c.json(item) : c.json({ error: 'not_found' }, 404)
+    return item ? c.json(item) : adminNotFound(c)
   })
 
   app.patch(declaredRoute('PATCH', '/api/t/:slug/investigations/:id/evidence/:eid'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+    const evidence = investigation?.evidence.find((item) => item.id === c.req.param('eid'))
+    if (!evidence) return adminNotFound(c)
     const parsed = evidencePatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
     const ok = investigations.updateEvidence(
       config.slug,
-      clientId(c),
+      owner,
       c.req.param('id'),
       c.req.param('eid'),
       parsed.data,
     )
-    return ok ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
+    return ok ? c.json({ ok: true }) : adminNotFound(c)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id/evidence/:eid'), (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    investigations.removeEvidence(config.slug, clientId(c), c.req.param('id'), c.req.param('eid'))
-    return c.json({ ok: true })
-  })
+  app.delete(
+    declaredRoute('DELETE', '/api/t/:slug/investigations/:id/evidence/:eid'),
+    async (c) => {
+      await authoriseDeclared(c)
+      const owner = await researchOwner(c)
+      const config = tenant(c.req.param('slug'))
+      if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+      const evidence = investigation?.evidence.find((item) => item.id === c.req.param('eid'))
+      if (!evidence) return adminNotFound(c)
+      if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+      if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
+      investigations.removeEvidence(config.slug, owner, c.req.param('id'), c.req.param('eid'))
+      return c.json({ ok: true })
+    },
+  )
 
   app.post(declaredRoute('POST', '/api/t/:slug/investigations/:id/artefacts'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+    if (!investigation) return adminNotFound(c)
     const parsed = artefactCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     if (JSON.stringify(parsed.data).length > 512 * 1024) {
       return c.json({ error: 'artefact_too_large' }, 413)
     }
-    const artefact = investigations.addArtefact(config.slug, clientId(c), c.req.param('id'), {
+    // Structured references are claims about this workspace, never authority to another one.
+    const values: unknown[] = [parsed.data.data]
+    const resources = new Set<string>()
+    while (values.length) {
+      const value = values.pop()
+      if (!value || typeof value !== 'object') continue
+      for (const [key, child] of Object.entries(value)) {
+        if (
+          [
+            'resourceId',
+            'resourceIds',
+            'evidenceId',
+            'evidenceIds',
+            'artefactId',
+            'artefactIds',
+            'investigationId',
+          ].includes(key)
+        ) {
+          const ids = key.endsWith('Ids') ? child : [child]
+          if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+            return adminNotFound(c)
+          }
+          for (const id of ids as string[]) {
+            if (key.startsWith('resource')) resources.add(id)
+            else if (key.startsWith('evidence')) {
+              const evidence = investigation.evidence.find((item) => item.id === id)
+              if (!evidence) return adminNotFound(c)
+              resources.add(evidence.resourceId)
+            } else if (key.startsWith('artefact')) {
+              if (!investigation.artefacts.some((item) => item.id === id)) return adminNotFound(c)
+            } else if (id !== investigation.id) return adminNotFound(c)
+          }
+        } else values.push(child)
+      }
+    }
+    for (const id of resources) if (!await adminResource(c, config, id)) return adminNotFound(c)
+    const artefact = investigations.addArtefact(config.slug, owner, c.req.param('id'), {
       kind: parsed.data.kind,
       title: parsed.data.title,
       data: parsed.data.data,
     })
-    return artefact ? c.json(artefact) : c.json({ error: 'not_found' }, 404)
+    return artefact ? c.json(artefact) : adminNotFound(c)
   })
 
   // Synthesis from an investigation's own evidence - no fresh retrieval, so
@@ -2733,11 +3422,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     declaredRoute('POST', '/api/t/:slug/investigations/:id/synthesise'),
     expensiveRateLimit,
     async (c) => {
+      await authoriseDeclared(c)
+      const owner = await researchOwner(c)
       const config = tenant(c.req.param('slug'))
       if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+      if (!investigation) return adminNotFound(c)
+      if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
       if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
-      const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
-      if (!investigation) return c.json({ error: 'not_found' }, 404)
       if (investigation.evidence.length === 0) {
         return c.json({
           error: 'no_evidence',
@@ -2755,6 +3447,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           error: 'no_evidence',
           message: 'Every saved passage is marked not relevant - judge or add evidence first.',
         }, 400)
+      }
+      for (const id of new Set(kept.map((item) => item.resourceId))) {
+        if (!await adminResource(c, config, id)) return adminNotFound(c)
       }
       const numbered = kept.map((item, index) => {
         const head = [
@@ -2830,7 +3525,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }))
         // Every reference is cited or listed as not used (D2-16).
         const notUsed = unusedReferences(brief, kept.length)
-        const artefact = investigations.addArtefact(config.slug, clientId(c), investigation.id, {
+        ;(operationSignals.get(c.req.raw) ?? c.req.raw.signal).throwIfAborted()
+        const artefact = investigations.addArtefact(config.slug, owner, investigation.id, {
           kind: 'synthesis',
           title: `Synthesis - ${tenantToday(config.timezone)}`,
           data: { ...brief, references, notUsed },
@@ -2854,6 +3550,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = verdictsBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const { question, sources } = parsed.data
+    for (const source of sources) {
+      if (!await adminResource(c, config, source.id)) return adminNotFound(c)
+    }
     const prompt = [
       `Research question: ${question}`,
       '',
@@ -2925,9 +3624,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(rows)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/knowledge-box'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/knowledge-box'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     bindings.remove(config.slug)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug) })
@@ -2941,8 +3641,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/tenants'), async (c) => {
     const parsed = newTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    const base = parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    let newSlug = base
+    for (let index = 2; tenants.get(newSlug); index++) newSlug = `${base}-${index}`
+    if (!KeyPortalSlugSchema.safeParse(newSlug).success) {
+      return c.json({ error: 'invalid_request' }, 400)
+    }
+    const newHostname = portalHostnameForSlug(newSlug)
+    if (newHostname && domains) {
+      await portalSubAction(c, 'tenant.domain.attach', newSlug, true)
+      await portalSubAction(c, 'tenant.domain.detach', newSlug, true)
+    }
+    // Allocation is rechecked after authority awaits and immediately before the synchronous add.
+    if (tenants.get(newSlug)) return c.json({ error: 'portal_conflict' }, 409)
     try {
       const config = tenants.add(parsed.data as NewTenantInput)
+      if (config.slug !== newSlug) throw new AuthorisationError(403)
       if (config.hostname) {
         return c.json({
           ok: true,
@@ -2967,12 +3681,36 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
 
+      let remoteFailure: unknown
       try {
-        const attached = await domains.attach(hostname)
+        const attached = await subAction(
+          c,
+          '/api/admin/tenants',
+          'tenant.domain.attach',
+          async () => {
+            try {
+              return await domains.attach(hostname)
+            } catch (error) {
+              remoteFailure = error
+              throw error
+            }
+          },
+          {},
+          { kind: 'portal', slug: config.slug },
+        )
         try {
           tenants.patch(config.slug, { hostname: attached.hostname })
         } catch (error) {
-          if (attached.created) await domains.detach(attached.hostname).catch(() => {})
+          if (attached.created) {
+            await subAction(
+              c,
+              '/api/admin/tenants',
+              'tenant.domain.detach',
+              () => domains.detach(attached.hostname),
+              {},
+              { kind: 'portal', slug: config.slug },
+            )
+          }
           throw error
         }
         return c.json({
@@ -2981,7 +3719,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
           domain: { status: 'active', ...attached },
         })
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'domain provisioning failed'
+        if (
+          !(error instanceof AuditExecutionError && error.code === 'operation_failed' &&
+            remoteFailure)
+        ) throw error
+        const message = remoteFailure instanceof Error
+          ? remoteFailure.message
+          : 'domain provisioning failed'
         return c.json({
           ok: true,
           slug: config.slug,
@@ -2989,6 +3733,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
     } catch (err) {
+      if (
+        err instanceof AuditWriteError || err instanceof AuditExecutionError ||
+        err instanceof AuthorisationError
+      ) throw err
       const message = err instanceof Error ? err.message : 'could not add the portal'
       return c.json({ error: 'invalid_request', message }, 400)
     }
@@ -2996,19 +3744,42 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   app.delete(declaredRoute('DELETE', '/api/admin/tenants/:slug'), async (c) => {
     const slug = c.req.param('slug')
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
     const config = tenants.get(slug)
     if (config?.hostname) {
+      await portalSubAction(c, 'tenant.domain.detach', slug)
       if (!domains) {
         return c.json({
           error: 'domain_removal_unavailable',
           message: 'Domain removal is not configured. The portal has not been removed.',
         }, 503)
       }
+      let remoteFailure: unknown
       try {
-        await domains.detach(config.hostname)
+        await subAction(
+          c,
+          '/api/admin/tenants/:slug',
+          'tenant.domain.detach',
+          async () => {
+            try {
+              return await domains.detach(config.hostname!)
+            } catch (error) {
+              remoteFailure = error
+              throw error
+            }
+          },
+          {},
+          { kind: 'portal', slug },
+        )
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'domain removal failed'
+        if (
+          !(error instanceof AuditExecutionError && error.code === 'operation_failed' &&
+            remoteFailure)
+        ) throw error
+        const message = remoteFailure instanceof Error
+          ? remoteFailure.message
+          : 'domain removal failed'
         return c.json({ error: 'domain_removal_failed', message }, 502)
       }
     }
@@ -3203,16 +3974,39 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = renameTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    const fields = Object.keys(parsed.data)
+    const actions = matchedDeclaration(c).subActions?.filter((action) =>
+      action.fields?.some((field) =>
+        fields.includes(field)
+      )
+    ).map((action) => action.action) ?? []
+    if (fields.length) await authoriseSubActions(c, actions)
+    const appearanceFields = fields.filter((field) => field !== 'searchPlaceholder')
+    if (parsed.data.searchPlaceholder && appearanceFields.length) {
+      const { name, searchPlaceholder, ...branding } = parsed.data
+      await subAction(c, '/api/admin/tenants/:slug', 'tenant.appearance.update', () =>
+        subAction(c, '/api/admin/tenants/:slug', 'tenant.behaviour.update', () =>
+          tenants.patch(config.slug, {
+            searchPlaceholder,
+            branding: { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
+          }), { changedFields: 'searchPlaceholder' }), {
+        changedFields: appearanceFields.join(','),
+      })
+      return c.json({ ok: true })
+    }
     if (parsed.data.searchPlaceholder) {
       await subAction(
         c,
         '/api/admin/tenants/:slug',
         'tenant.behaviour.update',
-        () => tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
+        () =>
+          tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
         { changedFields: 'searchPlaceholder' },
       )
     }
-    const changedFields = Object.keys(parsed.data).filter((field) => field !== 'searchPlaceholder')
+    const changedFields = Object.keys(parsed.data).filter((field) =>
+      field !== 'searchPlaceholder'
+    )
     if (changedFields.length) {
       await subAction(
         c,
@@ -3302,15 +4096,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
-    const suggestion = suggestions.list(config.slug).find((s) => s.id === c.req.param('id'))
-    if (!suggestion) return c.json({ error: 'not_found' }, 404)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    const parsed = suggestionPayloadSchema.safeParse(
+      suggestions.list(config.slug).find((s) => s.id === c.req.param('id')),
+    )
+    if (!parsed.success) return adminNotFound(c)
+    const suggestion = parsed.data
     if (suggestion.status !== 'pending') {
       return c.json({ error: 'already_decided' }, 409)
     }
+    const action = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
+      ? 'suggestion.taxonomy.write'
+      : 'suggestion.graph.write'
+    await authoriseSubActions(c, [action])
+    if (
+      suggestion.kind === 'label-addition' &&
+      !(await provider.labelsets(config)).some((labelset) =>
+        labelset.id === suggestion.labels.labelsetId
+      )
+    ) return adminNotFound(c)
     try {
-      const action = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
-        ? 'suggestion.taxonomy.write'
-        : 'suggestion.graph.write'
       const summary = await subAction(
         c,
         '/api/admin/t/:slug/suggestions/:id/implement',
@@ -3332,6 +4137,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/suggestions/:id/ignore'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!suggestions.list(config.slug).some((suggestion) => suggestion.id === c.req.param('id'))) {
+      return adminNotFound(c)
+    }
     const updated = suggestions.setStatus(config.slug, c.req.param('id'), 'ignored')
     return updated ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
@@ -3380,7 +4188,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableAd = requireManagement(c)
     if (unavailableAd) return unavailableAd
-    await management!.deleteAgent(config, c.req.param('taskId'))
+    const taskId = c.req.param('taskId')
+    if (!(await management!.listAgents(config)).some((agent) => agent.id === taskId)) {
+      return adminNotFound(c)
+    }
+    await management!.deleteAgent(config, taskId)
     return c.json({ ok: true })
   })
 
@@ -3546,6 +4358,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const unavailableOne = requireManagement(c)
     if (unavailableOne) return unavailableOne
     const id = c.req.param('id')
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    if (!await adminResource(c, config, id)) return adminNotFound(c)
     try {
       const agentId = new URL(c.req.url).searchParams.get('agentId')
       const agent = ENRICHMENT_AGENTS.find((a) => a.id === agentId) ?? DEFAULT_RESEARCH_ENRICHMENT
@@ -3667,7 +4481,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     try {
       const configs = await management!.ensureSearchConfigs(config).catch(() => [] as string[])
       const result = await management!.ingestDocumentation(config)
-      // Refresh the readiness signal so /api/health reflects the ingestion
+      // Refresh the internal documentation readiness signal after ingestion
       // (best effort: a freshly ingested page can take a minute to index).
       void opts.docsHealth?.checkTenant(config).catch(() => {})
       return c.json({ ok: true, searchConfigs: configs, ...result })
@@ -3741,7 +4555,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     const id = c.req.param('id')
     const existing = await provider.labelsets(config).catch(() => [])
-    if (!existing.some((ls) => ls.id === id)) return c.json({ error: 'unknown_labelset' }, 404)
+    if (!existing.some((ls) => ls.id === id)) return adminNotFound(c)
     try {
       const result = await applyLabelsetUpdate(management!, config, { id, ...parsed.data })
       return c.json({ ok: true, ...result })
@@ -3855,6 +4669,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailable) return unavailable
     const parsed = hiddenBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (!await adminResource(c, config, c.req.param('id'))) return adminNotFound(c)
     try {
       await management!.setResourceHidden(config, c.req.param('id'), parsed.data.hidden)
     } catch (err) {
@@ -3934,7 +4749,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = sourcePatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const id = c.req.param('id')
-    if (!sources.find(config.slug, id)) return c.json({ error: 'not_found' }, 404)
+    if (!sources.find(config.slug, id)) return adminNotFound(c)
     sources.update(config.slug, id, parsed.data)
     const updated = sources.summaries(config.slug).find((s) => s.id === id)
     return c.json(updated ?? { error: 'not_found' })
@@ -3943,6 +4758,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/sources/:id'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!sources.find(config.slug, c.req.param('id'))) return adminNotFound(c)
     sources.remove(config.slug, c.req.param('id'))
     return c.json({ ok: true })
   })
@@ -3951,7 +4767,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const source = sources.find(config.slug, c.req.param('id'))
-    if (!source) return c.json({ error: 'not_found' }, 404)
+    if (!source) return adminNotFound(c)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const management = opts.management
     return streamSSE(c, async (stream) => {
@@ -3985,6 +4801,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const from = tenant(parsed.data.from)
     const to = tenant(parsed.data.to)
     if (!from || !to || from.slug === to.slug) return c.json({ error: 'invalid_tenants' }, 400)
+    await portalSubAction(c, 'migration.source', from.slug)
+    await portalSubAction(c, 'migration.destination', to.slug)
     return streamSSE(c, async (stream) => {
       const send = (event: MigrationEvent) => stream.writeSSE({ data: JSON.stringify(event) })
       try {
@@ -4060,7 +4878,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       | null
     const parsed = connectBodySchema.safeParse(
       raw && typeof raw.url === 'string' && typeof raw.token === 'string'
-        ? { url: raw.url.trim(), token: cleanToken(raw.token) }
+        ? { ...raw, url: raw.url.trim(), token: cleanToken(raw.token) }
         : raw,
     )
     if (!parsed.success) return c.json({ error: 'invalid_binding' }, 400)
@@ -4101,6 +4919,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = askBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    const referencedResources = new Set([
+      ...(parsed.data.resourceId === undefined ? [] : [parsed.data.resourceId]),
+      ...(parsed.data.context ?? []).flatMap((turn) => turn.resourceIds ?? []),
+    ])
+    for (const id of referencedResources) {
+      if (!await scopedResource(config, id)) return adminNotFound(c)
+    }
+    if (!await scopedLabels(config, parsed.data.topicIds ?? [], 'topic')) return adminNotFound(c)
     const intents = config.intents ?? []
     let intentDef = parsed.data.intent
       ? intents.find((i) => i.id === parsed.data.intent)
@@ -4109,6 +4935,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // The finished response declares UTF-8 (the streaming helper sets its own
     // content type); a Latin-1-assuming API client otherwise sees mojibake.
     return withUtf8EventStream(streamSSE(c, async (stream) => {
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      if (cancelled()) return
+      const ask: RetrievalProvider['ask'] = (config, query, options) =>
+        activeAsk(config, query, options, cancelled)
       const { query, route: routeMode, ...askOpts } = parsed.data
       const settings = tenants.promptsFor(config.slug)
       const lexicon = config.entityTerms ?? []
@@ -4121,8 +4953,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // A provider failure is described in the portal's own words; the
       // upstream detail - host, box id, vendor name - stays in the server
       // log (review loop 8 D8-07).
-      const send = (event: unknown) =>
-        stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
+      const send = (event: unknown) => {
+        if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
+        return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
+      }
       // A follow-up that asks for the earlier answers in another shape
       // ("put the three drugs in a table") is answered from the papers and
       // passages those answers cited, with no new topic searched and no
@@ -4567,6 +5401,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const fallbackEvent = (reason: string) =>
         send({ type: 'fallback', from: intentDef?.id, to: null, reason })
       const recordDecline = () => {
+        if (cancelled()) {
+          return
+        }
         try {
           insights.record(config.slug, {
             ts: new Date().toISOString(),
@@ -5283,7 +6120,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 }
               }
               for await (
-                const event of provider.ask(config, group.query, {
+                const event of ask(config, group.query, {
                   ...(blocks.length > 0
                     ? {
                       sourceContext: blocks.map((text) => ({ resourceId: group.resourceId, text })),
@@ -5414,7 +6251,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const priorQuestionList = priorQuestions(askOpts.context ?? [], 2)
         try {
           for await (
-            const event of provider.ask(config, query, {
+            const event of ask(config, query, {
               ...askOpts,
               // THE PIN: the platform's own `resource_filters`, so the
               // paragraph bag holds only the papers the question names.
@@ -5553,6 +6390,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             await send(event)
           }
         } catch (err) {
+          if (cancelled()) return
           record.failed = true
           await send({ type: 'error', message: publicErrorMessage(err) })
         }
@@ -5602,6 +6440,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }
         retry = null
       }
+      if (cancelled()) return
       if (!finished && !record.failed && heldDecline) await finishRefused()
       try {
         insights.record(config.slug, {
@@ -5631,6 +6470,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = docsAskBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
     return streamSSE(c, async (stream) => {
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      if (cancelled()) return
+      const ask: RetrievalProvider['ask'] = (config, query, options) =>
+        activeAsk(config, query, options, cancelled)
       const { query, context } = parsed.data
       // The platform's guardrail sentence and the prompt's "provided context"
       // leak into Help answers as they do into research answers (D2-18): the
@@ -5638,8 +6483,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // an answer that was nothing but the template becomes the decline.
       const sentinels = new DocsSentinelStream()
       // Same rule as Ask: the help assistant never shows an upstream string.
-      const send = (event: unknown) =>
-        stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'docs-ask')) })
+      const send = (event: unknown) => {
+        if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
+        return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'docs-ask')) })
+      }
       // A two-part question is searched part by part, so the page that
       // answers one part is retrieved even when the other part's words
       // dominate; the prompt answers what the documentation holds and
@@ -5653,7 +6500,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           let text = ''
           let refused = false
           let sources: ScoredResource[] = []
-          for await (const event of provider.ask(config, part, { context, docScope: true })) {
+          for await (const event of ask(config, part, { context, docScope: true })) {
             if (event.type === 'done') {
               refused = Boolean(event.refused)
               text = rewriteDocsSentinels(event.text ?? text)
@@ -5670,7 +6517,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
       try {
         for await (
-          const event of provider.ask(config, query, {
+          const event of ask(config, query, {
             context,
             docScope: true,
             ...(parts.length > 0
@@ -5709,6 +6556,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           await send(event)
         }
       } catch (err) {
+        if (cancelled()) return
         await stream.writeSSE({
           data: JSON.stringify({ type: 'error', message: publicErrorMessage(err) }),
         })

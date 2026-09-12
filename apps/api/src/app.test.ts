@@ -10,8 +10,10 @@ import {
   type FacetCounts,
   FacetCountsSchema,
   type Labelset,
+  type Permission,
   type Question,
   type ResourceSummary,
+  type Role,
   type SearchResults,
   SearchResultsSchema,
   type TenantConfig,
@@ -21,6 +23,142 @@ import { AragApiError, type AragProvider, type RetrievalProvider } from '@resear
 import { buildApp as buildRawApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
+import {
+  ACCESS_ROUTE_CASES,
+  AUDIT_ROUTE_CASES,
+  createEnforcementFixture,
+  sessionFor,
+} from './enforcement-fixture.ts'
+import { assertExpectedPermission } from './enforcement-fixture.ts'
+import { issueScopedKey } from './scoped-keys.ts'
+
+const generationCases = [
+  ['generate', { kind: 'briefing', query: 'Marine evidence' }],
+  ['summarize', { resourceIds: ['res-1'] }],
+  ['subqueries', { query: 'Marine evidence' }],
+  ['verdicts', {
+    question: 'Marine evidence?',
+    sources: [{ id: 'res-1', title: 'Evidence', passage: 'Evidence passage' }],
+  }],
+  ['followups', {
+    question: 'Marine evidence?',
+    answer: 'Evidence answer',
+    passages: [{
+      title: 'Evidence',
+      text: 'Marine stocks declined across southern waters. '.repeat(8),
+    }],
+  }],
+] as const
+
+Deno.test('generation routes require same-portal analyst authority before protected dispatch', async () => {
+  let calls = 0
+  const management = {
+    summarize: () => {
+      calls++
+      return Promise.resolve('A grounded summary')
+    },
+    askStructured: () => {
+      calls++
+      return Promise.resolve({
+        object: { questions: [], verdicts: [] },
+        sources: [],
+        insufficientGrounding: true,
+      })
+    },
+  } as unknown as AragProvider
+  const f = createEnforcementFixture({ management })
+  try {
+    const key = await issueScopedKey(
+      {
+        slug: 'a',
+        label: 'Expired',
+        role: 'analyst',
+        expiresAt: new Date(f.now() + 1000).toISOString(),
+      },
+      f.creator,
+      f.authorityDependencies(),
+    )
+    key.commit()
+    f.advance(2000)
+    for (const [route, body] of generationCases) {
+      const init = {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+      for (
+        const [session, slug] of [[null, 'public-a'], [
+          f.sessionFor('viewer', 'public-a'),
+          'public-a',
+        ], [f.sessionFor('analyst', 'b'), 'a']] as const
+      ) {
+        calls = 0
+        const before = f.providerCalls.length
+        const response = await f.requestAs(session, `/api/t/${slug}/${route}`, init)
+        expect(response.status).toBe(session ? 403 : 401)
+        expect(calls).toBe(0)
+        f.assertNoProtectedDispatch(before)
+      }
+      calls = 0
+      const expired = await f.requestAs(f.sessionFor('owner'), `/api/t/a/${route}`, {
+        ...init,
+        headers: { ...init.headers, authorization: `Bearer ${key.key}` },
+      })
+      expect(expired.status).toBe(403)
+      expect(calls).toBe(0)
+      const analyst = f.sessionFor('analyst')
+      calls = 0
+      const allowed = await f.requestAs(analyst, `/api/t/a/${route}`, init)
+      expect(allowed.status).toBe(200)
+      expect(calls).toBeGreaterThan(0)
+      expect(await allowed.json()).toBeDefined()
+      for (
+        const injected of [{ actor: 'system' }, { scope: { kind: 'platform' } }, {
+          grants: ['owner'],
+        }]
+      ) {
+        calls = 0
+        expect(
+          (await f.requestAs(analyst, `/api/t/a/${route}`, {
+            ...init,
+            body: JSON.stringify({ ...body, ...injected }),
+          })).status,
+        ).toBe(400)
+        expect(calls).toBe(0)
+      }
+      f.failAudit()
+      calls = 0
+      expect((await f.requestAs(analyst, `/api/t/a/${route}`, init)).status).toBe(500)
+      expect(calls).toBe(0)
+      f.recoverAudit()
+      f.database.exec(
+        "CREATE TRIGGER fixture_fail_completion BEFORE INSERT ON audit_events WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'fixture completion failure'); END",
+      )
+      calls = 0
+      const completion = await f.requestAs(analyst, `/api/t/a/${route}`, init)
+      expect(completion.status).toBe(500)
+      expect(await completion.json()).toEqual({ error: 'audit_write_failed' })
+      expect(calls).toBeGreaterThan(0)
+      f.database.exec('DROP TRIGGER fixture_fail_completion')
+      if (route === 'summarize' || route === 'verdicts') {
+        calls = 0
+        const missing = route === 'summarize' ? { resourceIds: ['other-portal-only'] } : {
+          question: 'Marine evidence?',
+          sources: [{ id: 'other-portal-only', title: 'Foreign', passage: 'Foreign passage' }],
+        }
+        expect(
+          (await f.requestAs(analyst, `/api/t/a/${route}`, {
+            ...init,
+            body: JSON.stringify(missing),
+          })).status,
+        ).toBe(404)
+        expect(calls).toBe(0)
+      }
+    }
+  } finally {
+    f.close()
+  }
+})
 
 const fixtureDatabases: LocalRbacDatabase[] = []
 afterEach(() => {
@@ -33,6 +171,9 @@ function buildApp(options: BuildAppOptions & { adminPasscode?: string }) {
   rbac.migrate()
   return buildRawApp({
     ...options,
+    rbac,
+    configuredTenantId: 'tenant-1',
+    audience: 'corpuskit',
     audit: rbac.audit,
     breakGlass: rbac.breakGlassService({ passcode: options.adminPasscode }),
     requestContext: options.requestContext ?? (() => ({
@@ -146,7 +287,15 @@ class StubProvider implements RetrievalProvider {
   }
 
   async labelsets(_tenant: TenantConfig): Promise<Labelset[]> {
-    return [{ id: 'topic', title: 'Topic', multiple: false, labels: ['stock-assessment'] }]
+    return [
+      { id: 'topic', title: 'Topic', multiple: false, labels: ['stock-assessment'] },
+      ...['format', 'chunk-labels'].map((id) => ({
+        id,
+        title: id,
+        multiple: true,
+        labels: [],
+      })),
+    ]
   }
 
   async suggest(_tenant: TenantConfig): Promise<Question[]> {
@@ -173,7 +322,477 @@ function makeApp(enrichments?: EnrichmentStore) {
   return buildApp({ provider: new StubProvider(), tenants: freshTenants(), enrichments })
 }
 
-describe('explicit coarse admin gate', () => {
+describe('independent admin route permission matrix', () => {
+  const example = {
+    text: 'Abalone populations inhabit southern waters.',
+    entities: [{ name: 'Abalone', label: 'Species' }, { name: 'southern waters', label: 'Region' }],
+    relations: [{ source: 'Abalone', target: 'southern waters', label: 'inhabits' }],
+  }
+  const proposal = {
+    rationale: 'Describe the research corpus.',
+    entityTypes: [{ label: 'Species', description: 'Animal' }, {
+      label: 'Region',
+      description: 'Place',
+    }],
+    resourceLabels: [{ label: 'Research', description: 'Research' }],
+    chunkLabels: [{ label: 'Finding', description: 'Finding' }],
+    examples: Array.from({ length: 6 }, () => example),
+  }
+  const html = `<html><title>Research</title><main><p>${
+    'Abalone research in southern waters. '.repeat(90)
+  }</p><a href="https://example.test/article">Article</a></main></html>`
+  // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
+  const rows: [string, string, Permission, unknown?][] = [
+    ['GET', 'extraction/methods', 'content.write'],
+    ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
+    ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
+    ['PUT', 'extraction/rules', 'behaviour.write', { default: 'default', rules: [] }],
+    ['GET', 'routing', 'behaviour.write'],
+    ['GET', '/api/admin/overview', 'platform.settings.write'],
+    ['DELETE', 'knowledge-box', 'bindings.write'],
+    ['POST', '/api/admin/tenants', 'portal.create', { name: 'New portal' }],
+    ['DELETE', '/api/admin/tenants/:slug', 'portal.delete'],
+    ['POST', 'knowledge-box/create', 'bindings.write', { title: 'Research' }],
+    ['GET', 'counters', 'content.write'],
+    ['GET', 'recent', 'content.write'],
+    ['POST', 'resources/link', 'content.write', { url: 'https://example.test/article' }],
+    ['POST', 'resources/text', 'content.write', { title: 'Research', body: 'Evidence' }],
+    ['POST', 'resources/upload', 'content.write', 'evidence bytes'],
+    ['POST', 'disable', 'behaviour.write'],
+    ['POST', 'enable', 'behaviour.write'],
+    ['POST', 'analyse', 'behaviour.write', {}],
+    ['PATCH', '/api/admin/tenants/:slug', 'appearance.write', { name: 'Renamed portal' }],
+    ['POST', 'kg/propose', 'graph.write', {}],
+    ['POST', 'kg/implement', 'graph.write', { applyExisting: false }],
+    ['GET', 'suggestions', 'behaviour.write'],
+    ['POST', 'interrogate', 'behaviour.write', {}],
+    ['POST', 'suggestions/:id/implement', 'behaviour.write', {}],
+    ['POST', 'suggestions/:id/ignore', 'behaviour.write', {}],
+    ['GET', 'kg/strategy', 'graph.write'],
+    ['PUT', 'kg/strategy', 'graph.write', {
+      entityTypes: proposal.entityTypes,
+      examples: proposal.examples,
+      applyExisting: false,
+    }],
+    ['GET', 'agents', 'graph.write'],
+    ['DELETE', 'agents/:taskId', 'graph.write'],
+    ['GET', 'enrichments/export', 'portal.export'],
+    ['POST', 'enrichments/import', 'enrichments.write', {
+      research: {
+        'res-1': {
+          schemaId: 'research',
+          generatedAt: '2026-09-12T00:00:00Z',
+          data: { title: 'Research' },
+        },
+      },
+    }],
+    ['GET', 'enrichments', 'enrichments.write'],
+    ['POST', 'enrichments/run', 'enrichments.write', { limit: 1 }],
+    ['POST', 'questions/run', 'enrichments.write', { limit: 1 }],
+    ['POST', 'resources/:id/enrich', 'enrichments.write', {}],
+    ['POST', 'branding/:kind', 'appearance.write', 'image bytes'],
+    ['GET', 'prompts', 'behaviour.write'],
+    ['PUT', 'prompts', 'behaviour.write', { ask: 'Research evidence only.' }],
+    ['GET', 'search-configs', 'behaviour.write'],
+    ['POST', 'search-configs/ensure', 'behaviour.write', {}],
+    ['POST', 'docs/ingest', 'content.write', {}],
+    ['GET', 'crawl', 'content.write'],
+    ['POST', 'labelsets', 'taxonomy.write', {
+      title: 'Species',
+      labels: ['Abalone'],
+      multiple: true,
+    }],
+    ['PUT', 'labelsets/:id', 'taxonomy.write', {
+      title: 'Topic',
+      labels: [{ title: 'Research', text: 'Research evidence' }],
+      multiple: true,
+    }],
+    ['POST', 'reingest', 'content.write', { resourceId: 'res-1', html }],
+    ['GET', 'corpus-health', 'content.write'],
+    ['POST', 'purge-failed', 'content.write', { dryRun: false }],
+    ['GET', 'insights', 'content.write'],
+    ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
+    ['GET', 'sources', 'content.write'],
+    ['POST', 'sources', 'content.write', { url: 'https://example.test/new' }],
+    ['PATCH', 'sources/:id', 'content.write', { auto: false }],
+    ['DELETE', 'sources/:id', 'content.write'],
+    ['POST', 'sources/:id/sync', 'content.write', {}],
+    ['POST', '/api/admin/migrate', 'platform.settings.write', { from: 'a', to: 'b' }],
+    ['POST', 'knowledge-box', 'bindings.write', {
+      url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
+      token: 'fixture-service-account-token',
+    }],
+  ]
+  const curatorPermissions = new Set<Permission>([
+    'content.write',
+    'taxonomy.write',
+    'enrichments.write',
+    'graph.write',
+    'portal.export',
+  ])
+  const expectedDispatch: Record<string, string> = {
+    'extraction/methods': 'listExtractionMethods',
+    'extraction/profile': 'fileStream',
+    'extraction/compare': 'uploadFile',
+    'knowledge-box/create': 'fetch',
+    counters: 'counters',
+    recent: 'recentResources',
+    'resources/link': 'createText',
+    'resources/text': 'createText',
+    'resources/upload': 'uploadFile',
+    analyse: 'askStructured',
+    'kg/propose': 'askStructured',
+    'kg/implement': 'startAgent',
+    interrogate: 'askStructured',
+    'suggestions/:id/implement': 'createLabelset',
+    'GET kg/strategy': 'graphStrategy',
+    'PUT kg/strategy': 'startAgent',
+    agents: 'listAgents',
+    'agents/:taskId': 'deleteAgent',
+    enrichments: 'listResources',
+    'enrichments/run': 'listResources',
+    'questions/run': 'listResources',
+    'resources/:id/enrich': 'resourceContent',
+    'search-configs': 'listSearchConfigs',
+    'search-configs/ensure': 'ensureSearchConfigs',
+    'docs/ingest': 'ingestDocumentation',
+    crawl: 'fetch',
+    labelsets: 'createLabelset',
+    'labelsets/:id': 'updateLabelset',
+    reingest: 'deleteResource',
+    'corpus-health': 'corpusHealth',
+    'purge-failed': 'purgeFailedResources',
+    'resources/:id/hidden': 'setResourceHidden',
+    sources: 'fetch',
+    'sources/:id/sync': 'fetch',
+    '/api/admin/migrate': 'createText',
+    'POST knowledge-box': 'fetch',
+  }
+  it('covers every admin registration independently', () => {
+    const fixture = createEnforcementFixture()
+    try {
+      const actual = fixture.app.routes.filter((route) =>
+        route.method !== 'ALL' && route.path.startsWith('/api/admin/')
+      ).map((route) => `${route.method} ${route.path}`).sort()
+      const expected = [
+        ...rows.map(([method, suffix]) =>
+          `${method} ${suffix.startsWith('/') ? suffix : `/api/admin/t/:slug/${suffix}`}`
+        ),
+        ...ACCESS_ROUTE_CASES.map(({ method, path }) => `${method} ${path}`),
+        ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
+        'PATCH /api/admin/t/:slug/access',
+      ].sort()
+      expect(actual).toEqual(expected)
+    } finally {
+      fixture.close()
+    }
+  })
+  it('denies keys, conflicting credentials and corrupt scope before provider or mutation; failed audit returns 500', async () => {
+    const fixture = createEnforcementFixture()
+    try {
+      const owner = fixture.sessionFor('owner')
+      for (
+        const headers of [
+          { authorization: `Bearer ck_${'A'.repeat(43)}` },
+          { authorization: `Bearer ck_${'A'.repeat(43)}`, 'x-admin-passcode': 'bad' },
+        ] as Record<string, string>[]
+      ) {
+        const response = await fixture.requestAs(owner, '/api/admin/overview', { headers })
+        expect(response.status).toBe(403)
+        fixture.assertNoProtectedDispatch()
+      }
+      for (const slug of ['corrupt', 'missing', 'disabled']) {
+        expect((await fixture.requestAs(owner, `/api/admin/t/${slug}/sources`)).status).toBe(403)
+        fixture.assertNoProtectedDispatch()
+      }
+      const before = fixture.stores.tenants.get('a')
+      fixture.failAudit()
+      expect(
+        (await fixture.requestAs(owner, '/api/admin/tenants/a', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'Denied name' }),
+        })).status,
+      ).toBe(500)
+      expect(fixture.stores.tenants.get('a')).toEqual(before)
+      fixture.assertNoProtectedDispatch()
+    } finally {
+      fixture.close()
+    }
+  })
+  for (const [method, suffix, permission, body] of rows) {
+    it(`${method} ${suffix} requires ${permission} before dispatch`, async () => {
+      const template = suffix.startsWith('/') ? suffix : `/api/admin/t/:slug/${suffix}`
+      const platform = ['portal.create', 'portal.delete', 'platform.settings.write'].includes(
+        permission,
+      )
+      assertExpectedPermission(method, template, permission, platform ? 'platform' : 'portal')
+      for (
+        const role of [
+          'owner',
+          'platform-admin',
+          'portal-admin',
+          'curator',
+          'analyst',
+          'wrong-portal',
+        ] as const
+      ) {
+        const calls: string[] = []
+        const content = {
+          id: 'res-1',
+          title: 'Research',
+          text: 'Evidence on abalone populations. '.repeat(40),
+          pageSummary: 'Abalone populations in southern waters respond to marine heatwaves.',
+          files: [{ fieldId: 'file', contentType: 'application/pdf' }],
+        }
+        const values: Record<string, (...args: unknown[]) => unknown> = {
+          listResources: () => [resourceOne],
+          labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
+          counters: () => ({ resources: 1 }),
+          recentResources: () => [resourceOne],
+          createText: () => ({ id: 'created' }),
+          createLink: () => ({ id: 'created' }),
+          uploadFile: () => ({ id: 'created' }),
+          createLabelset: () => undefined,
+          updateLabelset: () => undefined,
+          agentConfigs: () => [],
+          listAgents: () => [{ id: 'task-a', title: 'Existing labeller', task: 'labeler' }],
+          deleteAgent: () => undefined,
+          startAgent: () => undefined,
+          graphStrategy: () => ({ entityDefs: proposal.entityTypes, examples: [example] }),
+          augmentationModel: () => 'fixture-model',
+          resourceContent: () => content,
+          resourceExtraction: () => ({
+            status: 'PROCESSED',
+            text: content.text,
+            chars: 1200,
+            paragraphs: 1,
+            tableRows: 0,
+          }),
+          fileStream: () => new Response('fixture document'),
+          listExtractionMethods: () => [{ id: 'default', name: 'default', kind: 'default' }, {
+            id: 'table',
+            name: 'table-aware',
+            kind: 'tables',
+          }, { id: 'visual', name: 'visual-transcribe', kind: 'visual' }],
+          patchResourceMeta: () => undefined,
+          deleteResource: () => undefined,
+          patchResourceClassifications: () => undefined,
+          setResourceHidden: () => undefined,
+          invalidate: () => undefined,
+          listSearchConfigs: () => ['portal-search'],
+          ensureSearchConfigs: () => ['portal-search'],
+          ingestDocumentation: () => ({ created: 1 }),
+          corpusHealth: () => ({ total: 1, failed: 0 }),
+          purgeFailedResources: () => ({ deleted: 1 }),
+          resourceFull: () => ({
+            id: 'res-1',
+            title: 'Research',
+            slug: 'research',
+            kind: 'text',
+            originUrl: 'https://example.test/article',
+            texts: [{ body: content.text }],
+            topicIds: [],
+          }),
+          hasSlug: () => false,
+          askStructured: (_config, schema) => ({
+            object: (schema as { name: string }).name === 'knowledge_graph_strategy'
+              ? proposal
+              : (schema as { name: string }).name === 'portal_configuration'
+              ? {
+                topics: [{ id: 'research', label: 'Research', description: 'Evidence' }],
+                kinds: [],
+                assignments: [],
+                suggestedQuestions: [],
+              }
+              : { suggestions: [], score: 5, reason: 'Readable', questions: [] },
+          }),
+        }
+        const management = new Proxy({}, {
+          get: (_target, key) => {
+            if (key === 'ask') {
+              return async function* () {
+                calls.push('ask')
+                yield { type: 'delta', text: 'Research evidence' }
+                yield { type: 'done' }
+              }
+            }
+            return (...args: unknown[]) => {
+              calls.push(String(key))
+              if (!values[String(key)]) throw new Error(`Missing fixture method ${String(key)}`)
+              return Promise.resolve(values[String(key)]!(...args))
+            }
+          },
+        }) as AragProvider
+        const fixture = createEnforcementFixture({
+          management,
+          domainProvisioner: {
+            attach: (hostname) => {
+              calls.push('attach')
+              return Promise.resolve({ hostname, created: true })
+            },
+            detach: (hostname) => {
+              calls.push('detach')
+              return Promise.resolve({ hostname, removed: true })
+            },
+          },
+        })
+        const originalFetch = globalThis.fetch
+        const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
+        try {
+          const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
+          fixture.stores.enrichments.put('a', 'seeded-record', {
+            schemaId: 'research',
+            generatedAt: '2026-09-12T00:00:00Z',
+            data: { title: 'Seeded research' },
+          })
+          fixture.stores.bindings.set('a', {
+            baseUrl: 'https://example.test/kb/a',
+            token: 'fixture-token',
+            kbId: 'a',
+          })
+          fixture.stores.suggestions.replacePending('a', [{
+            id: 'suggestion-a',
+            kind: 'labelset',
+            title: 'Species',
+            detail: 'Research taxonomy',
+            status: 'pending',
+            createdAt: new Date(fixture.now()).toISOString(),
+            labelset: { id: 'species', title: 'Species', paragraphs: false, labels: ['Abalone'] },
+          }])
+          fixture.stores.kgProposals.set('a', proposal)
+          if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
+          const snapshot = () =>
+            ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
+              fixture.database.all(`SELECT * FROM ${table}`)
+            )
+          const baseline = snapshot()
+          globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+            calls.push('fetch')
+            const url = String(input)
+            if (url.includes('rag.progress.cloud')) {
+              return Promise.resolve(Response.json(
+                url.endsWith('/keys')
+                  ? { token: 'fixture-service-token' }
+                  : init?.method === 'POST'
+                  ? { id: 'fixture-knowledge-box' }
+                  : url.endsWith('/counters')
+                  ? { resources: 1 }
+                  : [],
+              ))
+            }
+            return Promise.resolve(new Response(html, { headers: { 'content-type': 'text/html' } }))
+          }) as typeof fetch
+          Deno.env.set('ARAG_NUA_KEY', 'fixture-key')
+          Deno.env.set('ARAG_ACCOUNT', 'fixture-account')
+          const path =
+            template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
+              .replace(
+                ':id',
+                suffix.startsWith('sources')
+                  ? source.id
+                  : suffix.includes('suggestions')
+                  ? 'suggestion-a'
+                  : suffix.includes('labelsets')
+                  ? 'topic'
+                  : 'res-1',
+              ) + (suffix === 'crawl' ? '?url=https://example.test/news' : '')
+          const session = fixture.sessionFor(
+            role === 'wrong-portal' ? 'portal-admin' : role as Role,
+            role === 'wrong-portal' ? 'b' : 'a',
+          )
+          const allowed = role === 'owner' ||
+            (role === 'platform-admin' && permission !== 'portal.delete' &&
+              permission !== 'platform.settings.write') ||
+            (!platform &&
+              (role === 'portal-admin' ||
+                role === 'curator' && curatorPermissions.has(permission) ||
+                role === 'analyst' && permission === 'portal.export'))
+          const response = await fixture.requestAs(session, path, {
+            method,
+            ...(body === undefined ? {} : {
+              headers: {
+                'content-type': suffix.startsWith('branding') ? 'image/png' : 'application/json',
+              },
+              body: typeof body === 'string' ? body : JSON.stringify(body),
+            }),
+          })
+          const result = await response.text()
+          expect(response.status, `${role} ${template}: ${result}`).toBe(allowed ? 200 : 403)
+          if (allowed) {
+            expect(result).not.toContain('"type":"error"')
+            expect(result).not.toContain('"error":')
+            const dispatch = expectedDispatch[`${method} ${suffix}`] ?? expectedDispatch[suffix]
+            if (
+              dispatch && !(method === 'GET' && suffix === 'sources') &&
+              !(method === 'DELETE' && suffix === 'knowledge-box')
+            ) {
+              expect(calls, `${template} must dispatch ${dispatch}`).toContain(dispatch)
+            } else if (suffix === '/api/admin/overview') {
+              expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(
+                true,
+              )
+              expect(
+                JSON.parse(result).some((row: { tenant: { slug: string } }) =>
+                  row.tenant.slug === 'a'
+                ),
+              ).toBe(true)
+            } else if (method === 'GET') {
+              if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+              else if (suffix === 'suggestions') {
+                expect(JSON.parse(result)[0].id).toBe('suggestion-a')
+              } else if (suffix === 'enrichments/export') {
+                expect(result).toContain('Seeded research')
+              } else if (suffix === 'prompts') {
+                expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
+              } else if (suffix === 'insights') {
+                expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
+              } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
+              else throw new Error(`Missing positive assertion for ${template}`)
+            } else {
+              expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
+              if (suffix === 'disable' || suffix === 'enable') {
+                expect(fixture.stores.tenants.isDisabled('a')).toBe(suffix === 'disable')
+              }
+              if (suffix === '/api/admin/tenants') {
+                expect(fixture.stores.tenants.get('new-portal')?.branding.productName).toBe(
+                  'New portal',
+                )
+              }
+              if (suffix === '/api/admin/tenants/:slug') {
+                expect(fixture.stores.tenants.get('a')?.branding.productName).toBe(
+                  method === 'DELETE' ? undefined : 'Renamed portal',
+                )
+              }
+              if (suffix === 'knowledge-box') {
+                expect(fixture.stores.bindings.get('a')).toBeUndefined()
+              }
+            }
+            const events = fixture.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 })
+            expect(
+              events.some((event) =>
+                event.action === 'request.privileged' && event.outcome === 'success'
+              ),
+            ).toBe(true)
+          } else {
+            expect(calls).toEqual([])
+            fixture.assertNoProtectedDispatch()
+            expect(snapshot()).toEqual(baseline)
+          }
+        } finally {
+          globalThis.fetch = originalFetch
+          for (const [key, value] of env) {
+            if (value === undefined) Deno.env.delete(key)
+            else Deno.env.set(key, value)
+          }
+          fixture.close()
+        }
+      }
+    })
+  }
+})
+
+describe('exact admin gate', () => {
   function fixture(platformRole?: 'owner' | 'platform-admin') {
     const db = new LocalRbacDatabase(':memory:')
     fixtureDatabases.push(db)
@@ -181,18 +800,21 @@ describe('explicit coarse admin gate', () => {
     rbac.migrate()
     const context: PortalRequestContext = {
       requestId: 'gate-request',
-      session: null,
+      session: platformRole ? sessionFor(platformRole, 'a', Date.now()) : null,
       clientIp: '127.0.0.1',
       // The gate must inspect the resolved platform role, not trust this compatibility flag.
       coarseAdminEligible: true,
       effectiveRoles: { platformRole, portalRoles: [{ slug: 'marine', role: 'portal-admin' }] },
     }
     const app = buildRawApp({
+      rbac,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
       provider: new StubProvider(),
       tenants: freshTenants(),
       audit: rbac.audit,
       breakGlass: rbac.breakGlassService({ passcode: 'gate-fixture' }),
-      requestContext: () => context,
+      requestContext: () => ({ ...context, denialAudited: false }),
     })
     return { db, rbac, context, app }
   }
@@ -216,7 +838,7 @@ describe('explicit coarse admin gate', () => {
     for (const role of ['owner', 'platform-admin'] as const) {
       const { app } = fixture(role)
       expect((await app.request('/api/admin/t/marine/extraction/methods')).status).toBe(503)
-      expect((await app.request('/api/admin/overview')).status).toBe(200)
+      expect((await app.request('/api/admin/overview')).status).toBe(role === 'owner' ? 200 : 403)
       expect(
         (await app.request('/api/admin/overview', { headers: { 'x-admin-passcode': 'wrong' } }))
           .status,
@@ -298,12 +920,12 @@ describe('GET /api/t/:slug/config', () => {
     TenantConfigSchema.parse(await response.json())
   })
 
-  it('returns 404 for an unknown tenant', async () => {
+  it('denies an unknown tenant before returning configuration', async () => {
     const app = makeApp()
     const response = await app.request('/api/t/nope/config')
 
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'unknown_tenant' })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
   })
 })
 
@@ -465,7 +1087,7 @@ describe('portal domain lifecycle', () => {
 })
 
 describe('GET /api/t/:slug/resources/:id/thumbnail', () => {
-  it('keeps stable thumbnails warm and forwards validators from the platform', async () => {
+  it('prevents thumbnail caching and forwards validators from the platform', async () => {
     const management = {
       thumbnailResponse: () =>
         Promise.resolve(
@@ -489,7 +1111,7 @@ describe('GET /api/t/:slug/resources/:id/thumbnail', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe(
-      'public, max-age=86400, stale-while-revalidate=604800',
+      'private, no-store',
     )
     expect(response.headers.get('content-type')).toBe('image/webp')
     expect(response.headers.get('content-length')).toBe('3')
@@ -698,6 +1320,7 @@ describe('GET /api/t/:slug/suggest', () => {
 describe('GET /api/t/:slug/entity', () => {
   const management = (edges: { source: string; target: string; label: string }[]) =>
     ({
+      entityGroups: () => Promise.resolve([{ group: 'Gene', entities: ['SCN1A'] }]),
       relationsGraph: (_tenant: TenantConfig, opts?: { entity?: string }) =>
         Promise.resolve({
           nodes: opts?.entity
@@ -725,7 +1348,7 @@ describe('GET /api/t/:slug/entity', () => {
     expect(body.resources.length).toBeGreaterThan(0)
   })
 
-  it('returns 404 unknown_entity when nothing is known about the name', async () => {
+  it('returns a generic denial before relations dispatch for an unknown entity', async () => {
     class EmptySearch extends StubProvider {
       override async search(_tenant: TenantConfig, query: string): Promise<SearchResults> {
         return { query, resources: [], relatedQuestions: [] }
@@ -738,16 +1361,12 @@ describe('GET /api/t/:slug/entity', () => {
     })
     const response = await app.request('/api/t/marine/entity?name=ZZZZNOTAGENE')
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({
-      error: 'unknown_entity',
-      name: 'ZZZZNOTAGENE',
-      unknown: true,
-    })
+    expect(await response.json()).toEqual({ error: 'not_found' })
   })
 })
 
 describe('GET /api/t/:slug/resources/:id/questions', () => {
-  it('serves precomputed openers from the store and never generates on the page path', async () => {
+  it('serves precomputed openers and lets an authorised curator fill a cold cache', async () => {
     const enrichments = new EnrichmentStore(Deno.makeTempDirSync())
     enrichments.put('marine', 'res-1', {
       schemaId: 'suggested-questions',
@@ -766,6 +1385,12 @@ describe('GET /api/t/:slug/resources/:id/questions', () => {
       tenants: freshTenants(),
       enrichments,
       management,
+      requestContext: () => ({
+        requestId: crypto.randomUUID(),
+        session: sessionFor('curator', 'marine', Date.now()),
+        effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
+        coarseAdminEligible: false,
+      }),
     })
     const cached = await app.request('/api/t/marine/resources/res-1/questions')
     expect(await cached.json()).toEqual({ questions: ['What drove the decline?'] })
@@ -836,6 +1461,9 @@ describe('GET /api/t/:slug/facets', () => {
 
   it('serves the three rail facets by default with a real untagged count', async () => {
     const provider = new FacetProvider()
+    expect((await provider.labelsets({} as TenantConfig)).some((set) => set.id === 'kind')).toBe(
+      false,
+    )
     const app = buildApp({ provider, tenants: freshTenants() })
     const response = await app.request('/api/t/marine/facets')
     expect(response.status).toBe(200)
@@ -998,23 +1626,19 @@ describe('admin', () => {
     for (const row of rows) AdminTenantOverviewSchema.parse(row)
   })
 
-  it('accepts a platform-authenticated administrator without a fallback passcode', async () => {
-    const app = buildApp({
-      provider: new StubProvider(),
-      tenants: freshTenants(),
-      requestContext: () => ({
-        requestId: 'test-context',
-        session: null,
-        coarseAdminEligible: true,
-        effectiveRoles: { platformRole: 'platform-admin', portalRoles: [] },
-      }),
+  for (const role of ['platform-admin', 'owner'] as const) {
+    it(`requires owner for overview: ${role}`, async () => {
+      const fixture = createEnforcementFixture()
+      try {
+        const response = await fixture.requestAs(fixture.sessionFor(role), '/api/admin/overview')
+        expect(response.status).toBe(role === 'owner' ? 200 : 403)
+        if (role === 'platform-admin') fixture.assertNoProtectedDispatch()
+        else expect((await response.json()).length).toBeGreaterThan(0)
+      } finally {
+        fixture.close()
+      }
     })
-    const response = await app.request('/api/admin/overview', {
-      headers: { 'x-corpuskit-sso-admin': '1' },
-    })
-
-    expect(response.status).toBe(200)
-  })
+  }
 
   it('reverting a connected binding falls back to the demo box', async () => {
     const dir = Deno.makeTempDirSync()
@@ -1092,8 +1716,8 @@ describe('admin enrichment import and export', () => {
       body: '{}',
     })
 
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'unknown_tenant' })
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
   })
 
   it('rejects a malformed archive without writing its valid records', async () => {
@@ -1271,30 +1895,106 @@ describe('GET /api/health', () => {
     expect(body.web).toBe(false)
   })
 
-  it('reports documentation readiness per portal without failing liveness (P7-08)', async () => {
+  it('never reads or exposes restricted portal readiness on anonymous health', async () => {
     const dir = Deno.makeTempDirSync()
-    Deno.writeTextFileSync(`${dir}/index.html`, '<!doctype html>')
+    const slug = 'private-readiness-canary'
     const status = {
-      neuro: { documents: 0, ok: false, checkedAt: '2026-09-04T00:00:00.000Z' },
+      [slug]: {
+        documents: 987654321,
+        ok: false,
+        checkedAt: '2026-09-04T00:00:00.000Z',
+        error: 'private-provider-error-canary',
+      },
     }
+    const calls: string[] = []
+    try {
+      const config = { ...freshTenants().get('marine')!, slug, accessMode: 'restricted' }
+      Deno.writeTextFileSync(`${dir}/tenants.json`, JSON.stringify({ custom: { [slug]: config } }))
+      const tenants = new TenantStore({ TENANTS_PATH: `${dir}/tenants.json` })
+      expect(tenants.get(slug)?.accessMode).toBe('restricted')
+      const provider = new Proxy(new StubProvider(), {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver)
+          return typeof value === 'function'
+            ? () => {
+              calls.push(String(property))
+              throw new Error('Health must not call the provider')
+            }
+            : value
+        },
+      })
+      for (const webAvailable of [true, false]) {
+        const app = buildApp({
+          provider,
+          tenants,
+          webAvailable,
+          buildSha: 'api-commit',
+          webBuild: { sha: 'web-commit', builtAt: '2026-09-12T00:00:00Z' },
+          docsHealth: {
+            snapshot: () => {
+              calls.push('snapshot')
+              return status
+            },
+            ok: () => {
+              calls.push('ok')
+              return false
+            },
+            checkTenant: () => {
+              calls.push('checkTenant')
+              return Promise.resolve(status[slug]!)
+            },
+          },
+        })
+        const response = await app.request('/api/health')
+        expect(response.status).toBe(webAvailable ? 200 : 503)
+        const body = await response.json()
+        expect(body).toEqual({
+          ok: webAvailable,
+          web: webAvailable,
+          version: 'api-commit',
+          buildSha: 'web-commit',
+          builtAt: '2026-09-12T00:00:00Z',
+        })
+        for (
+          const secret of [
+            slug,
+            '987654321',
+            status[slug]!.error,
+            'documents',
+            'docs',
+            'docsOk',
+            'error',
+            'checkedAt',
+          ]
+        ) {
+          expect(JSON.stringify(body)).not.toContain(secret)
+        }
+        expect(calls).toEqual([])
+      }
+    } finally {
+      Deno.removeSync(dir, { recursive: true })
+    }
+  })
+
+  it('bounds and flattens build stamps without serialising extra build properties', async () => {
     const app = buildApp({
       provider: new StubProvider(),
-      tenants: freshTenants(),
-      webDistPath: dir,
-      docsHealth: {
-        snapshot: () => status,
-        ok: () => false,
-        checkTenant: () => Promise.resolve(status.neuro),
-      },
+      webAvailable: true,
+      buildSha: 'a'.repeat(300),
+      webBuild: {
+        sha: 'b'.repeat(300),
+        builtAt: 'c'.repeat(300),
+        private: 'hidden',
+      } as BuildAppOptions['webBuild'],
     })
-
-    const response = await app.request('/api/health')
-
-    expect(response.status).toBe(200)
-    const body = await response.json()
-    expect(body.ok).toBe(true)
-    expect(body.docsOk).toBe(false)
-    expect(body.docs.neuro.documents).toBe(0)
+    const body = await (await app.request('/api/health')).json()
+    expect(body).toEqual({
+      ok: true,
+      web: true,
+      version: 'a'.repeat(160),
+      buildSha: 'b'.repeat(160),
+      builtAt: 'c'.repeat(160),
+    })
   })
 
   it('requires no authentication', async () => {
@@ -1428,7 +2128,8 @@ describe('GET /api/admin-prefill', () => {
   it('no longer exists - the passcode-prefill endpoint has been removed', async () => {
     const app = makeApp()
     const response = await app.request('/api/admin-prefill')
-    expect(response.status).toBe(404)
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
   })
 })
 
@@ -1695,7 +2396,7 @@ describe('PUT /api/admin/t/:slug/labelsets/:id', () => {
     })
     const response = await put(app, 'region', body)
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'unknown_labelset' })
+    expect(await response.json()).toEqual({ error: 'not_found' })
     expect(calls).toEqual([])
   })
 
@@ -2175,7 +2876,12 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
       'The library provides searchable documents for further reading.',
     ]
     const original = sentences.join(' ')
-    for (const surface of ['ask', 'search']) {
+    for (
+      const query of [
+        'Explain the collection and its supporting evidence.',
+        'Describe the collection and its supporting evidence.',
+      ]
+    ) {
       for (const enabled of [false, true]) {
         class GroupedProvider extends StubProvider {
           override async *ask(): AsyncIterable<AskEvent> {
@@ -2205,8 +2911,7 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            query: 'Explain the collection and its supporting evidence.',
-            surface,
+            query,
           }),
         })
         const events = await sseEvents(response)

@@ -86,3 +86,32 @@ Deno.test('mandatory append converts storage errors without leaking their detail
     expect((error as Error).cause).toBeUndefined()
   }
 })
+
+Deno.test('key actors and named mode/key details are validated without retaining secrets', () => {
+  for (const kind of ['key', 'legacy-key'] as const) {
+    expect(createAuditEvent({ ...auditInput(), actor: { kind } }).actor_kind).toBe(kind)
+  }
+  expect(redactAuditDetail('tenant.access.update', {
+    previousAccessMode: 'public',
+    accessMode: 'restricted',
+    token: 'secret',
+  })).toEqual({ previousAccessMode: 'public', accessMode: 'restricted' })
+  const detail = {
+    keyRole: 'curator',
+    creatorOid: 'creator',
+    creatorTenantId: 'tenant',
+    keyStatus: 'active',
+  }
+  expect(redactAuditDetail('request.privileged', { ...detail, keyHash: 'secret', body: 'secret' }))
+    .toEqual(detail)
+  for (
+    const invalid of [{ keyRole: 'owner' }, { creatorOid: 'x'.repeat(161) }, {
+      keyStatus: 'unknown',
+    }]
+  ) {
+    expect(() => redactAuditDetail('request.privileged', invalid)).toThrow(AuditWriteError)
+  }
+  expect(() => redactAuditDetail('tenant.access.update', { accessMode: 'private' })).toThrow(
+    AuditWriteError,
+  )
+})

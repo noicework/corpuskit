@@ -15,6 +15,7 @@ import { AragApiError } from './client.ts'
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'marine',
   branding: {
     productName: 'Southern Waters Research Portal',

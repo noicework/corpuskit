@@ -6,6 +6,7 @@ import { AragProvider } from './index.ts'
 import { CITATION_MODE, type CitationMode, FOOTNOTE_PROMPT } from './citation-mode.ts'
 
 const tenant: TenantConfig = {
+  accessMode: 'public',
   slug: 'test',
   branding: {
     productName: 'Portal',

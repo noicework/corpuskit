@@ -30,6 +30,13 @@ import { createAuditEvent, redactAuditDetail } from './audit.ts'
 const dir = await Deno.makeTempDir()
 Deno.env.set('DATA_DIR', dir)
 
+const { sessionFor } = await import('./enforcement-fixture.ts')
+const watchContext = () => ({
+  requestId: crypto.randomUUID(),
+  session: sessionFor('analyst', 'marine', Date.now()),
+  coarseAdminEligible: false,
+  effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'analyst' as const }] },
+})
 const { buildApp } = await import('./app.ts')
 const {
   autoEnrichmentCadenceMs,
@@ -190,7 +197,15 @@ function fakeManagement(): AragProvider {
 
 Deno.test('buildApp routes HTTP watch writes through the exact WatchStore instance it was given', async () => {
   const watches = new SpyWatchStore()
+  const db = new LocalRbacDatabase(':memory:')
+  const rbac = new RbacState(db)
+  rbac.migrate()
   const app = buildApp({
+    rbac,
+    configuredTenantId: 'tenant-1',
+    audience: 'corpuskit',
+    breakGlass: rbac.breakGlassService({ environment: 'production' }),
+    requestContext: watchContext,
     audit: { append: () => {}, read: () => [] },
     provider: stubProvider as never,
     tenants: freshTenants(),
@@ -207,6 +222,7 @@ Deno.test('buildApp routes HTTP watch writes through the exact WatchStore instan
   // If buildApp had ignored opts.watches and constructed its own store
   // internally (the pre-fix shape), this spy would never be touched.
   expect(watches.calls).toContain('add')
+  db.close()
 })
 
 Deno.test(
@@ -214,7 +230,15 @@ Deno.test(
   async () => {
     const tenants = freshTenants()
     const watches = new SpyWatchStore()
+    const db = new LocalRbacDatabase(':memory:')
+    const rbac = new RbacState(db)
+    rbac.migrate()
     const app = buildApp({
+      rbac,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
+      breakGlass: rbac.breakGlassService({ environment: 'production' }),
+      requestContext: watchContext,
       audit: { append: () => {}, read: () => [] },
       provider: stubProvider as never,
       tenants,
@@ -251,6 +275,7 @@ Deno.test(
     // hold watches from elsewhere too - match on ours specifically.)
     expect(ours).toBeDefined()
     expect(ours!.lastRun).not.toBeNull()
+    db.close()
   },
 )
 

@@ -9,6 +9,7 @@ import { AuditWriteError } from './audit.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import { DurableState, type SqlStorageLike } from '../../cloudflare/src/state.ts'
+import { resolveCreatorAuthority } from './creator-authority.ts'
 
 const context = { requestId: 'request-1', actor: { kind: 'user' as const, id: 'operator' } }
 const owner = (subjectId: string) => ({
@@ -253,6 +254,48 @@ for (const adapter of ['local', 'durable'] as const) {
     }
   }
 
+  Deno.test(`${adapter} persisted creator evidence retains original times and only current local grants after expiry`, async () => {
+    const f = fixture()
+    try {
+      const observed = session('creator', { roles: ['CorpusKit.Admin'], expiresAt: start + 1000 })
+      expect(f.service.observeSession(observed)).toBe(true)
+      const evidence = f.state.creatorEvidence('tenant-1', 'creator')!
+      expect(evidence).toMatchObject({
+        tenantId: 'tenant-1',
+        oid: 'creator',
+        claimIssuedAt: start,
+        expiresAt: start + 1000,
+        observedAt: start,
+      })
+      evidence.roles.push('CorpusKit.Owner')
+      expect(f.state.creatorEvidence('tenant-1', 'creator')!.roles).toEqual(['CorpusKit.Admin'])
+      f.advance(1000)
+      const resolve = () =>
+        resolveCreatorAuthority(
+          { tenantId: 'tenant-1', oid: 'creator', slug: 'marine' },
+          { rbac: f.state, audience: 'corpuskit' },
+          'tenant-1',
+          f.now(),
+        )
+      expect(await resolve()).toEqual({ proven: true, role: null, reason: 'creator_no_access' })
+      const assigned = f.service.create({ ...owner('creator'), role: 'platform-admin' }, context)
+      expect(assigned.ok).toBe(true)
+      expect(await resolve()).toEqual({ proven: true, role: 'portal-admin', reason: 'active' })
+      expect(
+        (await resolveEffectiveRoles(
+          observed,
+          { rbac: f.state, audience: 'corpuskit', tenants: { list: () => [] } },
+          'tenant-1',
+          f.now(),
+        )).effectiveRoles,
+      ).toEqual({ portalRoles: [] })
+      if (assigned.ok) expect(f.service.remove(assigned.value.id, context).ok).toBe(true)
+      expect((await resolve()).role).toBeNull()
+    } finally {
+      f.close()
+    }
+  })
+
   Deno.test(`${adapter} assignment bootstrap activates once and survives removal and reopen`, () => {
     const dir = Deno.makeTempDirSync({ prefix: 'rbac-assignments-' })
     const path = `${dir}/state.sqlite`
@@ -325,6 +368,25 @@ for (const adapter of ['local', 'durable'] as const) {
       const active = f.service.list().find((row) => row.subjectKind === 'active-oid')!
       expect(f.service.change(active.id, { subjectId: 'other-oid' }, context).ok).toBe(false)
       expect(f.service.list().find((row) => row.id === active.id)!.subjectId).toBe('oid-1')
+    } finally {
+      f.close()
+    }
+  })
+
+  Deno.test(`${adapter} inactive owner group deletion does not protect nonexistent authority`, () => {
+    const f = fixture()
+    try {
+      for (const supported of [false, true]) {
+        if (supported) {
+          f.database.exec(
+            "INSERT OR REPLACE INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',?)",
+            start,
+          )
+        }
+        const row = f.service.create({ ...owner('inactive'), subjectKind: 'group' }, context)
+        if (!row.ok) throw new Error('seed failed')
+        expect(f.service.remove(row.value.id, context).ok).toBe(true)
+      }
     } finally {
       f.close()
     }
@@ -455,7 +517,14 @@ for (const adapter of ['local', 'durable'] as const) {
       expect(f.service.remove(groupId, context)).toMatchObject({ ok: false, code: 'last_owner' })
       expect(f.service.change(groupId, { subjectId: 'empty-group' }, context).ok).toBe(false)
       f.service.observeSession(session('member', { groups: ['group-1'], groupStatus: 'overage' }))
-      expect(f.service.remove(groupId, context).ok).toBe(false)
+      // Overage invalidates the only active group owner; deleting the inert mapping is allowed.
+      f.database.exec(
+        "CREATE TRIGGER fail_inactive BEFORE INSERT ON audit_events WHEN NEW.action = 'assignment.delete' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      )
+      expect(() => f.service.remove(groupId, context)).toThrow(AuditWriteError)
+      expect(f.service.list().some((row) => row.id === groupId)).toBe(true)
+      f.database.exec('DROP TRIGGER fail_inactive')
+      expect(f.service.remove(groupId, context).ok).toBe(true)
     } finally {
       f.close()
     }

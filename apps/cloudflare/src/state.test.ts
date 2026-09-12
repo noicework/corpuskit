@@ -18,35 +18,506 @@ import type { AuditInput } from '../../api/src/audit.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { executeMcpTool } from '../../api/src/mcp.ts'
 import { SUGGESTED_QUESTIONS_SCHEMA_ID } from '../../api/src/suggested-questions.ts'
+import { tenantConfig, type TenantPatch } from '../../api/src/tenants.ts'
+import { checkAuditSnapshots, checkAuditUpgrade } from '../../api/src/rbac-state.test.ts'
+import { migrateLegacyKeyRecord } from '../../api/src/scoped-key-record.ts'
+import { fixtureSession } from '../../api/src/rbac-integration-fixture.ts'
+import {
+  checkOwnedStores,
+  ownedMutationCases,
+  seedOwned,
+} from '../../api/src/owned-store-fixture.ts'
+
+Deno.test('Durable owned mutations roll back authoritative append and real SQL commit failures', async () => {
+  for (const failure of ['append', 'commit']) {
+    const sql = new TestSqlStorage()
+    try {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      const stores = durableStores(state, {})
+      const { watch, investigation, evidence } = seedOwned(stores)
+      const snapshot = () => sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
+      const before = snapshot()
+      if (failure === 'commit') {
+        sql.database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE owner_parent (id INTEGER PRIMARY KEY); CREATE TABLE owner_child (id INTEGER REFERENCES owner_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_owned AFTER INSERT ON audit_events BEGIN INSERT INTO owner_child VALUES (1); END',
+        )
+      }
+      if (failure === 'append') {
+        sql.database.exec(
+          "CREATE TRIGGER fail_owned BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'Authoritative append failed'); END",
+        )
+      }
+      const input: Omit<AuditInput, 'outcome'> = {
+        requestId: 'owned-test',
+        actor: { kind: 'user', id: 'same' },
+        action: 'request.privileged',
+        scope: { kind: 'portal', slug: 'marine' },
+        target: { kind: 'sessions' },
+        detail: {},
+      }
+      for (const mutate of ownedMutationCases(stores, watch.id, investigation.id, evidence.id)) {
+        await expect(state.localMutations.run(input, new AbortController().signal, mutate)).rejects
+          .toThrow()
+        expect(snapshot()).toEqual(before)
+        expect(state.rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+      }
+      expect(
+        durableStores(new DurableState(sql, sql), {}).sessions.get('marine', {
+          kind: 'user',
+          tenantId: 'one',
+          oid: 'same',
+        }, 's')?.title,
+      ).toBe('original')
+    } finally {
+      sql.database.close()
+    }
+  }
+})
+
+Deno.test('Durable legacy owner and portal provenance is exact, read-only and anonymous across restarts', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const seed = new DurableState(sql, sql)
+    seed.migrate()
+    seed.put('session:marine:ab:s', { id: 's', title: 'legacy', messages: [] })
+    seed.put('investigation:marine:ab:i', { id: 'i', name: 'legacy' })
+    const watch = {
+      id: 'unproven',
+      clientId: 'a/b',
+      query: 'legacy',
+      createdAt: 'then',
+      lastRun: null,
+      fingerprint: null,
+      changed: false,
+    }
+    seed.put('watches:marine', [watch, { ...watch, id: 'proven', slug: 'marine' }])
+    const before = sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      const stores = durableStores(state, {})
+      expect(stores.sessions.get('marine', 'ab', 's')).toBeNull()
+      expect(stores.investigations.get('marine', 'ab', 'i')).toBeNull()
+      expect(stores.watches.list('marine', 'a/b').map((w) => w.id)).toEqual(['proven'])
+      expect(stores.watches.list('marine', 'ab')).toEqual([])
+      expect(stores.watches.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual(
+        [],
+      )
+      expect(stores.watches.list('mar/ine', 'a/b')).toEqual([])
+      expect(sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()).toEqual(before)
+    }
+    durableStores(seed, {}).watches.update('marine', 'proven', { changed: true }, 'a/b')
+    const fresh = durableStores(new DurableState(sql, sql), {})
+    expect(fresh.watches.list('marine', 'a/b')[0]?.changed).toBe(true)
+    fresh.watches.remove('marine', 'a/b', 'proven')
+    expect(durableStores(new DurableState(sql, sql), {}).watches.list('marine', 'a/b')).toEqual([])
+    for (const row of before) {
+      expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get(row.key!)?.value)
+        .toBe(row.value)
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable corrupt owned metadata and malformed JSON remain untouched and inaccessible', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const stores = durableStores(state, {})
+    seedOwned(stores)
+    const owner = { kind: 'user' as const, tenantId: 'one', oid: 'same' }
+    const rows = sql.database.prepare("SELECT key,value FROM state WHERE key LIKE 'research-v2:%'")
+      .all()
+    for (const row of rows) {
+      const value = JSON.parse(row.value as string)
+      const watches = (row.key as string).endsWith(':watches')
+      for (
+        const raw of [
+          '{broken',
+          JSON.stringify(
+            watches
+              ? {
+                ...value,
+                entries: value.entries.map((w: Record<string, unknown>) => ({
+                  ...w,
+                  owner: 'same',
+                })),
+              }
+              : { ...value, owner: { kind: 'anonymous', clientId: 'same' } },
+          ),
+        ]
+      ) {
+        sql.database.prepare('UPDATE state SET value=? WHERE key=?').run(raw, row.key!)
+        if (watches) {
+          expect(() => stores.watches.list('marine', owner)).toThrow()
+          expect(() => stores.watches.add('marine', owner, 'new')).toThrow()
+        } else if ((row.key as string).includes(':sessions:')) {
+          expect(() => stores.sessions.get('marine', owner, 's')).toThrow()
+          expect(() => stores.sessions.remove('marine', owner, 's')).toThrow()
+          expect(() => stores.sessions.list('marine', owner)).toThrow()
+        } else expect(() => stores.investigations.list('marine', owner)).toThrow()
+        expect(sql.database.prepare('SELECT value FROM state WHERE key=?').get(row.key!)?.value)
+          .toBe(raw)
+      }
+      sql.database.prepare('UPDATE state SET value=? WHERE key=?').run(row.value!, row.key!)
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable owned stores isolate exact typed owners across all operations', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    checkOwnedStores(durableStores(state, {}))
+  } finally {
+    sql.database.close()
+  }
+})
+
+const legacyScopedKey: McpKeyRecord = {
+  id: 'legacy-key',
+  tenant: 'marine',
+  issuerUserId: 'unproven-user',
+  label: 'Original label',
+  prefix: 'ck_mcp_abcdefghijkl',
+  hash: 'd'.repeat(64),
+  createdAt: '2026-09-01T00:00:00.000Z',
+  revokedAt: '2026-09-02T00:00:00.000Z',
+}
+const verifiedScopedKey = {
+  ...migrateLegacyKeyRecord(legacyScopedKey),
+  id: 'new-key',
+  prefix: 'new-prefix',
+  hash: 'e'.repeat(64),
+  creator: { tenantId: 'entra-tenant', oid: 'creator' },
+  provenance: 'verified-session' as const,
+  role: 'curator' as const,
+  expiresAt: '2027-01-01T00:00:00.000Z',
+  revokedAt: null,
+}
+
+Deno.test('Durable key startup migrates mixed metadata once with system audit and read-only lookup', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const seed = new DurableState(sql, sql)
+    seed.migrate()
+    seed.put('mcp-keys:marine', [legacyScopedKey, verifiedScopedKey])
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      const keys = durableStores(state, {}).mcpKeys
+      expect(keys.findByHash('marine', legacyScopedKey.hash)).toEqual(
+        migrateLegacyKeyRecord(legacyScopedKey),
+      )
+      expect(keys.findByHash('marine', verifiedScopedKey.hash)).toEqual(verifiedScopedKey)
+      expect(keys.findByHash('grains', verifiedScopedKey.hash)).toBeUndefined()
+      expect(state.get('mcp-keys:marine', [])).toEqual([
+        migrateLegacyKeyRecord(legacyScopedKey),
+        verifiedScopedKey,
+      ])
+      const events = state.rbac.audit.read({ scope: { kind: 'platform' } })
+      expect(events).toHaveLength(1)
+      expect(events[0]?.actor_kind).toBe('system')
+      expect(JSON.stringify(events)).not.toContain(legacyScopedKey.hash)
+    }
+    seed.put('mcp-keys:marine', [legacyScopedKey])
+    expect(new DurableMcpKeyStore(seed).list('marine')).toEqual([
+      migrateLegacyKeyRecord(legacyScopedKey),
+    ])
+    expect(seed.get('mcp-keys:marine', [])).toEqual([legacyScopedKey])
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable key corruption survives migration, reads and rejected writes', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const keys = new DurableMcpKeyStore(state)
+    for (
+      const value of [
+        '{broken',
+        'null',
+        '{}',
+        JSON.stringify([legacyScopedKey, {}]),
+        JSON.stringify([legacyScopedKey, legacyScopedKey]),
+        JSON.stringify([{ ...legacyScopedKey, tenant: 'grains' }]),
+      ]
+    ) {
+      sql.database.prepare('INSERT OR REPLACE INTO state VALUES (?,?,?)').run(
+        'mcp-keys:marine',
+        value,
+        1,
+      )
+      expect(() => new DurableState(sql, sql).migrate()).toThrow()
+      expect(() => keys.list('marine')).toThrow()
+      expect(() => keys.add(verifiedScopedKey)).toThrow()
+      expect(() => keys.revoke('marine', legacyScopedKey.id, legacyScopedKey.createdAt)).toThrow()
+      expect(
+        sql.database.prepare('SELECT value FROM state WHERE key = ?').get('mcp-keys:marine')?.value,
+      ).toBe(value)
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable key migration rolls back rewrite, audit append and commit failures', () => {
+  for (const failure of ['write', 'append', 'commit']) {
+    const sql = new TestSqlStorage()
+    try {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      state.put('mcp-keys:marine', [legacyScopedKey])
+      const original = sql.database.prepare('SELECT * FROM state WHERE key = ?').get(
+        'mcp-keys:marine',
+      )
+      if (failure === 'write') {
+        sql.database.exec(
+          "CREATE TRIGGER fail_keys BEFORE UPDATE ON state WHEN NEW.key = 'mcp-keys:marine' BEGIN SELECT RAISE(ABORT, 'write failed'); END",
+        )
+      }
+      if (failure === 'append') {
+        sql.database.exec(
+          "CREATE TRIGGER fail_keys BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'append failed'); END",
+        )
+      }
+      if (failure === 'commit') {
+        sql.database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE parent_key (id INTEGER PRIMARY KEY); CREATE TABLE child_key (id INTEGER REFERENCES parent_key(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_keys AFTER UPDATE ON state BEGIN INSERT INTO child_key VALUES (1); END',
+        )
+      }
+      expect(() => new DurableState(sql, sql).migrate()).toThrow()
+      expect(sql.database.prepare('SELECT * FROM state WHERE key = ?').get('mcp-keys:marine'))
+        .toEqual(original)
+      expect(state.rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+      sql.database.exec('DROP TRIGGER fail_keys')
+      new DurableState(sql, sql).migrate()
+      expect(new DurableMcpKeyStore(state).findByHash('marine', legacyScopedKey.hash)).toEqual(
+        migrateLegacyKeyRecord(legacyScopedKey),
+      )
+    } finally {
+      sql.database.close()
+    }
+  }
+})
+
+Deno.test('Durable key ordinary writes retain caller audit and roll back failed append', async () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const keys = durableStores(state, {}).mcpKeys
+    const input = {
+      requestId: 'key-test',
+      actor: { kind: 'user' as const, id: 'creator' },
+      action: 'request.privileged' as const,
+      scope: { kind: 'portal' as const, slug: 'marine' },
+      target: { kind: 'key', id: verifiedScopedKey.id },
+    }
+    const signal = new AbortController().signal
+    sql.database.exec(
+      "CREATE TRIGGER fail_keys BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'append failed'); END",
+    )
+    await expect(state.localMutations.run(input, signal, () => keys.add(verifiedScopedKey))).rejects
+      .toThrow()
+    expect(keys.list('marine')).toEqual([])
+    sql.database.exec('DROP TRIGGER fail_keys')
+    await state.localMutations.run(input, signal, () => keys.add(verifiedScopedKey))
+    for (
+      const patch of [{ id: 'other', prefix: 'other' }, { id: 'other', hash: 'f'.repeat(64) }, {
+        prefix: 'other',
+        hash: 'f'.repeat(64),
+      }, { token: 'ck_secret' }]
+    ) {
+      expect(() => keys.add({ ...verifiedScopedKey, ...patch })).toThrow()
+    }
+    expect(() => keys.revoke('marine', verifiedScopedKey.id, 'bad')).toThrow()
+    expect(() => keys.list('../marine')).toThrow()
+    sql.database.exec(
+      "CREATE TRIGGER fail_keys BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'append failed'); END",
+    )
+    await expect(
+      state.localMutations.run(
+        input,
+        signal,
+        () => keys.revoke('marine', verifiedScopedKey.id, legacyScopedKey.createdAt),
+      ),
+    ).rejects.toThrow()
+    expect(keys.findByHash('marine', verifiedScopedKey.hash)?.revokedAt).toBeNull()
+    sql.database.exec('DROP TRIGGER fail_keys')
+    await state.localMutations.run(
+      input,
+      signal,
+      () => keys.revoke('marine', verifiedScopedKey.id, legacyScopedKey.createdAt),
+    )
+    expect(keys.findByHash('marine', verifiedScopedKey.hash)?.revokedAt).toBe(
+      legacyScopedKey.createdAt,
+    )
+    expect(
+      state.rbac.audit.read({ scope: { kind: 'platform' } }).every((event) =>
+        event.actor_kind === 'user'
+      ),
+    ).toBe(true)
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable audit upgrade preserves history and rolls back copy, marker, append and commit failures', () => {
+  const sql = new TestSqlStorage()
+  try {
+    checkAuditUpgrade(new DurableState(sql, sql).rbacDatabase)
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable insertion snapshots exclude later events and bound durable metadata', () => {
+  const sql = new TestSqlStorage()
+  try {
+    checkAuditSnapshots(new DurableState(sql, sql).rbacDatabase)
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable portal policy survives reload and repeated migration for seed and custom portals', () => {
+  const sql = new TestSqlStorage()
+  try {
+    let state = new DurableState(sql, sql)
+    state.migrate()
+    let store = new DurableTenantStore(state)
+    state.put('tenants', {
+      custom: { legacy: { ...tenantConfig('marine'), slug: 'legacy', accessMode: undefined } },
+      overrides: { marine: { searchPlaceholder: 'Legacy seed' } },
+    })
+    expect(store.get('legacy')?.accessMode).toBe('public')
+    expect(store.get('marine')?.accessMode).toBe('public')
+    expect(store.get('marine')?.searchPlaceholder).toBe('Legacy seed')
+    store.add({ name: 'Custom' })
+    expect(store.get('custom')?.accessMode).toBe('public')
+    for (const slug of ['marine', 'custom']) {
+      for (const accessMode of ['public', 'authenticated', 'restricted'] as const) {
+        store.patch(slug, { accessMode })
+        store.setDisabled(slug, true)
+        const branding = store.get(slug)?.branding
+        for (let repeat = 0; repeat < 2; repeat++) {
+          state = new DurableState(sql, sql)
+          state.migrate()
+          store = new DurableTenantStore(state)
+          expect(store.get(slug)?.accessMode).toBe(accessMode)
+          expect(store.get(slug)?.branding).toEqual(branding)
+          expect(store.isDisabled(slug)).toBe(true)
+          expect(store.list().some((item) => item.slug === slug)).toBe(false)
+          expect(store.list(true).some((item) => item.slug === slug)).toBe(true)
+        }
+      }
+    }
+    for (const patch of [{ accessMode: null }, { accessMode: 'private' }, null, []]) {
+      expect(() => store.patch('marine', patch as unknown as TenantPatch)).toThrow()
+      expect(store.get('marine')?.accessMode).toBe('restricted')
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable corrupt policy never exposes seed fallback and survives unrelated writes', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    for (const value of [null, 'private', false, {}, []]) {
+      for (
+        const raw of [
+          { custom: { marine: { ...tenantConfig('marine'), accessMode: value } }, overrides: {} },
+          { custom: {}, overrides: { marine: { accessMode: value } } },
+          ...(value && typeof value === 'object' && !Array.isArray(value)
+            ? []
+            : [{ custom: {}, overrides: { marine: value } }]),
+        ]
+      ) {
+        state.put('tenants', raw)
+        for (let repeat = 0; repeat < 2; repeat++) {
+          const restart = new DurableState(sql, sql)
+          restart.migrate()
+          const store = new DurableTenantStore(restart)
+          expect(() => store.get('marine')).toThrow()
+          expect(store.list(true).some((item) => item.slug === 'marine')).toBe(false)
+          expect(store.get('grains')?.accessMode).toBe('public')
+          store.patch('grains', { searchPlaceholder: 'Still available' })
+        }
+      }
+    }
+    for (const raw of [null, [], { custom: null }, { custom: {}, overrides: [] }]) {
+      state.put('tenants', raw)
+      expect(() => new DurableTenantStore(state).get('marine')).toThrow()
+      expect(() => new DurableTenantStore(state).list()).toThrow()
+    }
+    sql.database.prepare('UPDATE state SET value = ? WHERE key = ?').run('{broken', 'tenants')
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const restarted = new DurableState(sql, sql)
+      restarted.migrate()
+      expect(() => new DurableTenantStore(restarted).get('marine')).toThrow()
+    }
+  } finally {
+    sql.database.close()
+  }
+})
 
 function mutationFixture(management?: AragProvider) {
   const sql = new TestSqlStorage()
   const state = new DurableState(sql, sql)
   state.migrate()
   const stores = durableStores(state, {})
+  const session = fixtureSession({ oid: 'writer', tenantId: 'directory' })
+  const assignments = state.rbac.assignmentService('directory', 'corpuskit')
+  expect(assignments.observeSession(session)).toBe(true)
+  expect(
+    assignments.create({
+      subjectKind: 'active-oid',
+      subjectId: session.oid,
+      scope: { kind: 'platform' },
+      role: 'owner',
+    }, { requestId: 'seed-writer', actor: { kind: 'system' } }).ok,
+  ).toBe(true)
   const app = buildApp({
     ...stores,
+    configuredTenantId: 'directory',
+    audience: 'corpuskit',
+    breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
     provider: {
-      resource: async () => ({ id: 'doc', title: 'Research', summary: '' }),
+      resource: async (config: { slug: string }, id: string) =>
+        config.slug === 'marine' && ['doc', 'doc2'].includes(id)
+          ? { id, title: 'Research', summary: '' }
+          : null,
     } as unknown as RetrievalProvider,
     management,
-    requestContext: () => ({
-      requestId: crypto.randomUUID(),
-      session: {
-        verified: true,
-        oid: 'writer',
-        tenantId: 'directory',
-        roles: [],
-        groups: [],
-        groupStatus: 'complete',
-        claimIssuedAt: Date.now(),
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 10000,
-      },
-      coarseAdminEligible: true,
-      effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-      actor: { kind: 'user', id: 'writer' },
-    }),
+    requestContext: () => {
+      const grant = assignments.list().find((row) =>
+        row.subjectKind === 'active-oid' && row.subjectId === session.oid &&
+        row.scope.kind === 'platform'
+      )
+      const platformRole = grant?.role === 'owner' || grant?.role === 'platform-admin'
+        ? grant.role
+        : undefined
+      return {
+        requestId: crypto.randomUUID(),
+        session,
+        coarseAdminEligible: platformRole !== undefined,
+        effectiveRoles: { platformRole, portalRoles: [] },
+        actor: { kind: 'user', id: 'writer' },
+      }
+    },
   })
   return {
     sql,
@@ -81,28 +552,42 @@ Deno.test('Durable HTTP prompts, keys, watches and research writes roll back on 
   const fixture = mutationFixture()
   const { stores, request, fail, recover, snapshot, sql } = fixture
   try {
-    const watch = stores.watches.add('marine', 'client', 'Research')
-    const investigation = stores.investigations.create('marine', 'client', { name: 'Original' })
-    const evidence = stores.investigations.addEvidence('marine', 'client', investigation.id, {
-      passage: 'Original passage',
-      resourceId: 'doc',
-      resourceTitle: 'Research',
-      score: null,
-      question: '',
-      verdict: null,
-      aiRelevance: null,
-      note: '',
-      tags: [],
-    })!
+    const watch = stores.watches.add('marine', {
+      kind: 'user',
+      tenantId: 'directory',
+      oid: 'writer',
+    }, 'Research')
+    const investigation = stores.investigations.create('marine', {
+      kind: 'user',
+      tenantId: 'directory',
+      oid: 'writer',
+    }, { name: 'Original' })
+    const evidence = stores.investigations.addEvidence(
+      'marine',
+      { kind: 'user', tenantId: 'directory', oid: 'writer' },
+      investigation.id,
+      {
+        passage: 'Original passage',
+        resourceId: 'doc',
+        resourceTitle: 'Research',
+        score: null,
+        question: '',
+        verdict: null,
+        aiRelevance: null,
+        note: '',
+        tags: [],
+      },
+    )!
     const issuedResponse = await request('/api/t/marine/mcp/keys', 'POST', {
       label: 'Existing key',
+      role: 'viewer',
     })
     expect(issuedResponse.status).toBe(201)
     const issued = await issuedResponse.json()
     const research = `/api/t/marine/investigations/${investigation.id}`
     const cases: [string, string, unknown?][] = [
       ['/api/admin/t/marine/prompts', 'PUT', { ask: 'Override' }],
-      ['/api/t/marine/mcp/keys', 'POST', { label: 'New key' }],
+      ['/api/t/marine/mcp/keys', 'POST', { label: 'New key', role: 'viewer' }],
       [`/api/t/marine/mcp/keys/${issued.credential.id}`, 'DELETE'],
       ['/api/t/marine/watches', 'POST', { query: 'New research' }],
       [`/api/t/marine/watches/${watch.id}/seen`, 'POST'],
@@ -189,17 +674,28 @@ Deno.test('Durable HTTP local writes commit their intended changes and one match
     const watch = await change('watches.add', '/api/t/marine/watches', 'POST', {
       query: 'Research',
     })
-    expect(stores.watches.list('marine', 'client')[0]!.id).toBe(watch.id)
+    expect(
+      stores.watches.list('marine', { kind: 'user', tenantId: 'directory', oid: 'writer' })[0]!.id,
+    ).toBe(watch.id)
     stores.watches.update('marine', watch.id, { changed: true })
     await change('watches.update', `/api/t/marine/watches/${watch.id}/seen`, 'POST')
-    expect(stores.watches.list('marine', 'client')[0]!.changed).toBe(false)
+    expect(
+      stores.watches.list('marine', { kind: 'user', tenantId: 'directory', oid: 'writer' })[0]!
+        .changed,
+    ).toBe(false)
     await change('watches.remove', `/api/t/marine/watches/${watch.id}`, 'DELETE')
-    expect(stores.watches.list('marine', 'client')).toEqual([])
+    expect(stores.watches.list('marine', { kind: 'user', tenantId: 'directory', oid: 'writer' }))
+      .toEqual([])
     const research = await change('investigations.create', '/api/t/marine/investigations', 'POST', {
       name: 'Original',
     })
     const path = `/api/t/marine/investigations/${research.id}`
-    const get = () => stores.investigations.get('marine', 'client', research.id)
+    const get = () =>
+      stores.investigations.get(
+        'marine',
+        { kind: 'user', tenantId: 'directory', oid: 'writer' },
+        research.id,
+      )
     expect(get()!.name).toBe('Original')
     await change('investigations.update', path, 'PATCH', { name: 'Updated' })
     expect(get()!.name).toBe('Updated')
@@ -231,7 +727,7 @@ Deno.test('Durable HTTP local writes commit their intended changes and one match
   }
 })
 
-Deno.test('Durable cold question cache is atomic while later overall failure retains its audited local step', async (t) => {
+Deno.test('Durable cold question cache and audit remain unchanged on generation or local audit failure', async (t) => {
   for (const later of [false, true]) {
     await t.step(later ? 'overall result failure' : 'local audit failure', async () => {
       let remoteCalls = 0
@@ -256,17 +752,20 @@ Deno.test('Durable cold question cache is atomic while later overall failure ret
           'doc',
           SUGGESTED_QUESTIONS_SCHEMA_ID,
         )
-        expect(Boolean(cached)).toBe(later)
+        expect(cached).toBeUndefined()
         const local = fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
           .filter((e) => e.action === 'local.mutation')
-        expect(local).toHaveLength(later ? 1 : 0)
-        if (later) {
-          expect(local[0]!.target_id).toBe('doc')
-          expect((await fixture.app.request('/api/t/marine/resources/doc/questions')).status).toBe(
-            200,
-          )
-          expect(remoteCalls).toBe(1)
-        }
+        expect(local).toHaveLength(0)
+        fixture.recover()
+        expect((await fixture.app.request('/api/t/marine/resources/doc/questions')).status).toBe(
+          200,
+        )
+        expect(remoteCalls).toBe(2)
+        expect(
+          fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } }).filter((e) =>
+            e.action === 'local.mutation'
+          ),
+        ).toHaveLength(1)
       } finally {
         fixture.sql.database.close()
       }
@@ -284,7 +783,11 @@ Deno.test('Durable scheduled watch update rolls back after remote search and pre
     },
   } as unknown as AragProvider
   try {
-    fixture.stores.watches.add('marine', 'client', 'Research')
+    fixture.stores.watches.add(
+      'marine',
+      { kind: 'user', tenantId: 'directory', oid: 'writer' },
+      'Research',
+    )
     const before = fixture.snapshot()
     fixture.fail()
     await expect(runSystemMaintenance(management, fixture.stores, undefined, ['watch'], false))
@@ -340,20 +843,29 @@ Deno.test('Durable synthesis returns 500 when its caught local audit fails after
     },
   } as unknown as AragProvider)
   try {
-    const investigation = fixture.stores.investigations.create('marine', 'client', {
+    const investigation = fixture.stores.investigations.create('marine', {
+      kind: 'user',
+      tenantId: 'directory',
+      oid: 'writer',
+    }, {
       name: 'Research',
     })
-    fixture.stores.investigations.addEvidence('marine', 'client', investigation.id, {
-      passage: 'Original passage',
-      resourceId: 'doc',
-      resourceTitle: 'Research',
-      score: null,
-      question: '',
-      verdict: null,
-      aiRelevance: null,
-      note: '',
-      tags: [],
-    })
+    fixture.stores.investigations.addEvidence(
+      'marine',
+      { kind: 'user', tenantId: 'directory', oid: 'writer' },
+      investigation.id,
+      {
+        passage: 'Original passage',
+        resourceId: 'doc',
+        resourceTitle: 'Research',
+        score: null,
+        question: '',
+        verdict: null,
+        aiRelevance: null,
+        note: '',
+        tags: [],
+      },
+    )
     const before = fixture.snapshot()
     fixture.fail()
     const response = await fixture.request(
@@ -452,6 +964,14 @@ Deno.test('Durable nested legacy cache migration and writes roll back together a
               [DEFAULT_RESEARCH_ENRICHMENT.id]: { new: enrichment('New') },
             }, 'skip')
         fixture.fail()
+        if (method === 'get') {
+          expect(await executeAudited({ ...fixture.stores, input: mutationInput, run })).toEqual(
+            enrichment('Old'),
+          )
+          expect(fixture.state.get('enrichments:marine', null)).toEqual(legacy)
+          expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(0)
+          return
+        }
         await expect(executeAudited({ ...fixture.stores, input: mutationInput, run })).rejects
           .toThrow()
         expect(fixture.state.get('enrichments:marine', null)).toEqual(legacy)
@@ -461,7 +981,7 @@ Deno.test('Durable nested legacy cache migration and writes roll back together a
         expect(fixture.state.get('enrichments:marine', null)).toBeNull()
         expect(fixture.stores.enrichments.get('marine', 'old')).toEqual(enrichment('Old'))
         expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(
-          method === 'get' ? 1 : 2,
+          2,
         )
         expect(
           fixture.stores.audit.read({ scope: mutationInput.scope }).filter((e) =>
@@ -640,22 +1160,8 @@ Deno.test('Durable detached nested scope cannot write after its parent completes
 })
 
 Deno.test('actual Durable HTTP local mutation rolls back when its authoritative audit fails', async () => {
-  const sql = new TestSqlStorage()
+  const { sql, stores, app } = mutationFixture()
   try {
-    const state = new DurableState(sql, sql)
-    state.migrate()
-    const stores = durableStores(state, {})
-    const app = buildApp({
-      ...stores,
-      provider: {} as RetrievalProvider,
-      requestContext: () => ({
-        requestId: 'local-write',
-        session: null,
-        coarseAdminEligible: true,
-        effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-        actor: { kind: 'user', id: 'writer' },
-      }),
-    })
     sql.database.exec(
       "CREATE TRIGGER fail_local BEFORE INSERT ON audit_events WHEN NEW.action = 'local.mutation' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
     )
@@ -729,7 +1235,7 @@ Deno.test('Durable RBAC migrates additively and rolls back rows with failed audi
     expect(stores.assignments.list('tenant-1')).toEqual([])
     expect(stores.locks.lockedUntil('ip')).toBeNull()
     expect(state.get('tenant:existing', null)).toEqual({ slug: 'existing' })
-    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 1 }])
+    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 3 }])
     expect(() =>
       state.rbacDatabase.transactionSync(() => {
         state.rbacDatabase.exec('INSERT INTO break_glass_locks VALUES (?,?)', 'ip', 2000)
@@ -828,7 +1334,7 @@ Deno.test('DurableEnrichmentStore imports per-record rows and honours collision 
   expect(store.exportRecords('other')).toEqual({})
 })
 
-Deno.test('DurableEnrichmentStore migrates the previous tenant-wide state row', () => {
+Deno.test('DurableEnrichmentStore reads legacy rows without migration and migrates on write', () => {
   const { state, store } = durableStore()
   const legacy = {
     [DEFAULT_RESEARCH_ENRICHMENT.id]: {
@@ -838,10 +1344,13 @@ Deno.test('DurableEnrichmentStore migrates the previous tenant-wide state row', 
   state.put('enrichments:other', legacy)
 
   expect(store.exportRecords('other')).toEqual(legacy)
-  expect(state.get('enrichments:other', null)).toBeNull()
+  expect(state.get('enrichments:other', null)).toEqual(legacy)
   expect(store.get('other', 'legacy-resource')).toEqual(
     legacy[DEFAULT_RESEARCH_ENRICHMENT.id]!['legacy-resource'],
   )
+  store.put('other', 'new-resource', enrichment('New title'))
+  expect(state.get('enrichments:other', null)).toBeNull()
+  expect(store.count('other')).toBe(2)
 })
 
 Deno.test('DurableEnrichmentStore writes a production-sized 3.8 MB archive in SQL batches', () => {
@@ -949,9 +1458,10 @@ Deno.test('public investigation reads return all 140 passages without audit stag
     const state = new DurableState(sql, sql)
     state.migrate()
     const stores = durableStores(state, {})
-    const investigation = stores.investigations.create('marine', 'reader', { name: 'Research' })
+    const reader = { kind: 'anonymous' as const, clientId: 'reader' }
+    const investigation = stores.investigations.create('marine', reader, { name: 'Research' })
     for (let index = 0; index < 140; index++) {
-      expect(stores.investigations.addEvidence('marine', 'reader', investigation.id, {
+      expect(stores.investigations.addEvidence('marine', reader, investigation.id, {
         passage: 'x'.repeat(8000),
         resourceId: `document-${index}`,
         resourceTitle: 'Research passage',
@@ -963,8 +1473,14 @@ Deno.test('public investigation reads return all 140 passages without audit stag
         tags: [],
       })).not.toBeNull()
     }
-    const expected = stores.investigations.get('marine', 'reader', investigation.id)
-    const app = buildApp({ ...stores, provider: {} as RetrievalProvider })
+    const expected = stores.investigations.get('marine', reader, investigation.id)
+    const app = buildApp({
+      ...stores,
+      configuredTenantId: 'directory',
+      audience: 'corpuskit',
+      breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
+      provider: {} as RetrievalProvider,
+    })
     const response = await app.request(`/api/t/marine/investigations/${investigation.id}`, {
       headers: { 'x-rp-client': 'reader' },
     })

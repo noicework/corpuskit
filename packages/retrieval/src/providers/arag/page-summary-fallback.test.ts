@@ -13,6 +13,7 @@ import { AragProvider } from './index.ts'
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'demo',
   branding: {
     productName: 'Demo Portal',
