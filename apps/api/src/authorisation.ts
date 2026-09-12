@@ -20,7 +20,7 @@ import {
 import type { BreakGlassService } from './break-glass.ts'
 import type { SubAction } from './permissions.ts'
 import { type TrustedSessionFacts, validSessionFacts } from './principal.ts'
-import type { ResearchOwner } from './research-owner.ts'
+import { type ResearchOwner, researchOwnerValue } from './research-owner.ts'
 import {
   type ScopedKeyDependencies,
   type VerifiedScopedKey,
@@ -349,11 +349,21 @@ export function researchOwner(
   if (authority.kind === 'key') refuse(state, authority.actor, scope)
   const session = authority.provenanceSession
   if (session?.tenantId === state.deps.configuredTenantId) {
-    return { kind: 'user', tenantId: session.tenantId, oid: session.oid }
+    try {
+      return researchOwnerValue({ kind: 'user', tenantId: session.tenantId, oid: session.oid })
+    } catch {
+      return refuse(state, authority.actor, scope)
+    }
   }
   if (
     authority.kind === 'anonymous' && policy.accessMode === 'public' && identifier(clientId) &&
     clientId !== 'anonymous'
-  ) return { kind: 'anonymous', clientId }
+  ) {
+    try {
+      return researchOwnerValue({ kind: 'anonymous', clientId })
+    } catch {
+      return refuse(state, authority.actor, scope)
+    }
+  }
   return refuse(state, authority.actor, scope)
 }

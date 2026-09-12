@@ -4,7 +4,8 @@ import process from 'node:process'
 import { AragProvider, labBindings } from '@research-portal/retrieval'
 import { buildApp } from './app.ts'
 import { BindingStore } from './bindings.ts'
-import { McpKeyStore, SourceStore, WatchStore } from './stores.ts'
+import { McpKeyStore, SourceStore } from './stores.ts'
+import { localOwnedStores } from './local-owned-stores.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
 import { TenantStore } from './tenants.ts'
@@ -31,9 +32,10 @@ const provider = new AragProvider({
 // the same in-process store, not two separate instances racing to
 // read-modify-write the same file (see the note on startScheduler).
 const sources = new SourceStore()
-const watches = new WatchStore()
 const enrichments = new EnrichmentStore()
 const { database, rbac } = openLocalRbac(process.env)
+const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit)
+const { watches } = owned
 const mcpKeys = new McpKeyStore(process.env.DATA_DIR ?? './data', { database, audit: rbac.audit })
 const ingress = new LocalIngress({ rbac, tenants, env: process.env })
 
@@ -67,6 +69,7 @@ function webBuildStamp(): { sha: string; builtAt: string } | undefined {
 
 const webBuild = webBuildStamp()
 const app = buildApp({
+  ...owned,
   rbac,
   configuredTenantId: process.env.ENTRA_TENANT_ID,
   audience: process.env.WORKER_NAME ?? 'corpuskit',

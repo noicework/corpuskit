@@ -11,6 +11,7 @@ import { LocalRbacDatabase } from './rbac-local.ts'
 import type { SqlValue } from './rbac-state.ts'
 import { tenantConfig } from './tenants.ts'
 import { type Declaration, declarationFor } from './permissions.ts'
+import { localOwnedStores } from './local-owned-stores.ts'
 
 /** Expectations are supplied independently by each activated route family's fixtures. */
 export function assertExpectedPermission(
@@ -72,6 +73,7 @@ export function sessionFor(
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
 export function createEnforcementFixture(
   options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> = {},
+  ownedAdapter: 'durable' | 'local' = 'durable',
 ) {
   const directory = Deno.makeTempDirSync({ prefix: 'enforcement-' })
   const database = new LocalRbacDatabase(`${directory}/state.sqlite`)
@@ -100,7 +102,12 @@ export function createEnforcementFixture(
   }
   const state = new DurableState(sql, database, now)
   state.migrate()
-  const stores = durableStores(state, {})
+  const stores = {
+    ...durableStores(state, {}),
+    ...(ownedAdapter === 'local'
+      ? localOwnedStores(directory, state.rbacDatabase, state.rbac.audit)
+      : {}),
+  }
   const tenantId = 'tenant-1'
   const audience = 'corpuskit'
   for (const accessMode of ['public', 'authenticated', 'restricted'] as const) {

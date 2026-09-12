@@ -47,7 +47,7 @@ import {
   type Scope,
 } from '@research-portal/core'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
-import type { ResearchOwner } from './research-owner.ts'
+import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
 import type { RbacState } from './rbac-state.ts'
 import {
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -544,8 +544,8 @@ const sessionPutSchema = z.object({
   title: z.string().min(1).max(200),
   updatedAt: z.string(),
   messages: z.unknown().array().max(500),
-})
-const watchBodySchema = z.object({ query: z.string().min(2).max(500) })
+}).strict()
+const watchBodySchema = z.object({ query: z.string().min(2).max(500) }).strict()
 const sourceBodySchema = z.object({
   url: z.string().url(),
   auto: z.boolean().optional(),
@@ -1536,6 +1536,42 @@ export function buildApp(opts: BuildAppOptions): Hono {
       !declaration.owned &&
       !declaration.path.includes('/mcp')
     ) await authoriseDeclared(c)
+    if (declaration.owned === 'research' && /\/(sessions|watches)(\/|$)/.test(declaration.path)) {
+      await authoriseDeclared(c)
+      await researchOwner(c)
+      try {
+        const segments = c.req.path.split('/')
+        for (const [index, segment] of declaration.path.split('/').entries()) {
+          if (segment.startsWith(':')) encodeStorageIdentifier(decodeURIComponent(segments[index]!))
+        }
+      } catch {
+        throw new AuthorisationError(403)
+      }
+      if (
+        !isPrivileged(declaration, requestContext(c.req.raw).actor) && opts.localMutations &&
+        !['GET', 'HEAD'].includes(c.req.method)
+      ) {
+        const { scope, target } = classification(c)
+        const context = requestContext(c.req.raw)
+        await opts.localMutations.run(
+          {
+            requestId: context.requestId,
+            actor: context.actor!,
+            action: declaration.action,
+            scope,
+            target,
+            detail: {
+              permission: declaration.permission,
+              method: c.req.method,
+              operation: `${declaration.method} ${declaration.path}`,
+            },
+          },
+          c.req.raw.signal,
+          next,
+        )
+        return
+      }
+    }
     await next()
   })
 
@@ -2965,20 +3001,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Research-trail sessions, synced server-side per anonymous client ----
 
-  app.get(declaredRoute('GET', '/api/t/:slug/sessions'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/sessions'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(sessions.list(config.slug, clientId(c)))
+    return c.json(sessions.list(config.slug, owner))
   })
 
-  app.get(declaredRoute('GET', '/api/t/:slug/sessions/:id'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/sessions/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const session = sessions.get(config.slug, clientId(c), c.req.param('id'))
-    return session ? c.json(session) : c.json({ error: 'not_found' }, 404)
+    const session = sessions.get(config.slug, owner, c.req.param('id'))
+    return session ? c.json(session) : adminNotFound(c)
   })
 
   app.put(declaredRoute('PUT', '/api/t/:slug/sessions/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = sessionPutSchema.safeParse(await c.req.json().catch(() => null))
@@ -2988,48 +3030,68 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (JSON.stringify(parsed.data).length > 2 * 1024 * 1024) {
       return c.json({ error: 'session_too_large' }, 413)
     }
-    const existing = sessions.list(config.slug, clientId(c))
+    const existing = sessions.list(config.slug, owner)
     if (existing.length >= 200 && !existing.some((s) => s.id === parsed.data.id)) {
       return c.json({ error: 'too_many_sessions' }, 429)
     }
-    sessions.put(config.slug, clientId(c), parsed.data)
+    sessions.put(config.slug, owner, parsed.data)
     return c.json({ ok: true })
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/sessions/:id'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/sessions/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    sessions.remove(config.slug, clientId(c), c.req.param('id'))
+    if (!sessions.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    sessions.remove(config.slug, owner, c.req.param('id'))
     return c.json({ ok: true })
   })
 
   // --- Saved searches / watches --------------------------------------------
 
-  app.get(declaredRoute('GET', '/api/t/:slug/watches'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/watches'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(watches.list(config.slug, clientId(c)))
+    return c.json(watches.list(config.slug, owner))
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/watches'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = watchBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    return c.json(watches.add(config.slug, clientId(c), parsed.data.query))
+    return c.json(watches.add(config.slug, owner, parsed.data.query))
   })
 
-  app.post(declaredRoute('POST', '/api/t/:slug/watches/:id/seen'), (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/watches/:id/seen'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    watches.update(config.slug, c.req.param('id'), { changed: false }, clientId(c))
+    if (!watches.list(config.slug, owner).some((w) => w.id === c.req.param('id'))) {
+      return adminNotFound(c)
+    }
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    watches.update(config.slug, c.req.param('id'), { changed: false }, owner)
     return c.json({ ok: true })
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/watches/:id'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/watches/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    watches.remove(config.slug, clientId(c), c.req.param('id'))
+    if (!watches.list(config.slug, owner).some((w) => w.id === c.req.param('id'))) {
+      return adminNotFound(c)
+    }
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    watches.remove(config.slug, owner, c.req.param('id'))
     return c.json({ ok: true })
   })
 

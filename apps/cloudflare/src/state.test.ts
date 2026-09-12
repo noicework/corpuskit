@@ -540,7 +540,11 @@ Deno.test('Durable HTTP prompts, keys, watches and research writes roll back on 
   const fixture = mutationFixture()
   const { stores, request, fail, recover, snapshot, sql } = fixture
   try {
-    const watch = stores.watches.add('marine', 'client', 'Research')
+    const watch = stores.watches.add('marine', {
+      kind: 'user',
+      tenantId: 'directory',
+      oid: 'writer',
+    }, 'Research')
     const investigation = stores.investigations.create('marine', 'client', { name: 'Original' })
     const evidence = stores.investigations.addEvidence('marine', 'client', investigation.id, {
       passage: 'Original passage',
@@ -648,12 +652,18 @@ Deno.test('Durable HTTP local writes commit their intended changes and one match
     const watch = await change('watches.add', '/api/t/marine/watches', 'POST', {
       query: 'Research',
     })
-    expect(stores.watches.list('marine', 'client')[0]!.id).toBe(watch.id)
+    expect(
+      stores.watches.list('marine', { kind: 'user', tenantId: 'directory', oid: 'writer' })[0]!.id,
+    ).toBe(watch.id)
     stores.watches.update('marine', watch.id, { changed: true })
     await change('watches.update', `/api/t/marine/watches/${watch.id}/seen`, 'POST')
-    expect(stores.watches.list('marine', 'client')[0]!.changed).toBe(false)
+    expect(
+      stores.watches.list('marine', { kind: 'user', tenantId: 'directory', oid: 'writer' })[0]!
+        .changed,
+    ).toBe(false)
     await change('watches.remove', `/api/t/marine/watches/${watch.id}`, 'DELETE')
-    expect(stores.watches.list('marine', 'client')).toEqual([])
+    expect(stores.watches.list('marine', { kind: 'user', tenantId: 'directory', oid: 'writer' }))
+      .toEqual([])
     const research = await change('investigations.create', '/api/t/marine/investigations', 'POST', {
       name: 'Original',
     })
@@ -746,7 +756,11 @@ Deno.test('Durable scheduled watch update rolls back after remote search and pre
     },
   } as unknown as AragProvider
   try {
-    fixture.stores.watches.add('marine', 'client', 'Research')
+    fixture.stores.watches.add(
+      'marine',
+      { kind: 'user', tenantId: 'directory', oid: 'writer' },
+      'Research',
+    )
     const before = fixture.snapshot()
     fixture.fail()
     await expect(runSystemMaintenance(management, fixture.stores, undefined, ['watch'], false))
