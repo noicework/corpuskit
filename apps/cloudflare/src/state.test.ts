@@ -533,7 +533,7 @@ Deno.test('Durable HTTP local writes commit their intended changes and one match
   }
 })
 
-Deno.test('Durable cold question cache is atomic while later overall failure retains its audited local step', async (t) => {
+Deno.test('Durable cold question cache and audit remain unchanged on generation or local audit failure', async (t) => {
   for (const later of [false, true]) {
     await t.step(later ? 'overall result failure' : 'local audit failure', async () => {
       let remoteCalls = 0
@@ -558,17 +558,20 @@ Deno.test('Durable cold question cache is atomic while later overall failure ret
           'doc',
           SUGGESTED_QUESTIONS_SCHEMA_ID,
         )
-        expect(Boolean(cached)).toBe(later)
+        expect(cached).toBeUndefined()
         const local = fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
           .filter((e) => e.action === 'local.mutation')
-        expect(local).toHaveLength(later ? 1 : 0)
-        if (later) {
-          expect(local[0]!.target_id).toBe('doc')
-          expect((await fixture.app.request('/api/t/marine/resources/doc/questions')).status).toBe(
-            200,
-          )
-          expect(remoteCalls).toBe(1)
-        }
+        expect(local).toHaveLength(0)
+        fixture.recover()
+        expect((await fixture.app.request('/api/t/marine/resources/doc/questions')).status).toBe(
+          200,
+        )
+        expect(remoteCalls).toBe(2)
+        expect(
+          fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } }).filter((e) =>
+            e.action === 'local.mutation'
+          ),
+        ).toHaveLength(1)
       } finally {
         fixture.sql.database.close()
       }
@@ -754,6 +757,14 @@ Deno.test('Durable nested legacy cache migration and writes roll back together a
               [DEFAULT_RESEARCH_ENRICHMENT.id]: { new: enrichment('New') },
             }, 'skip')
         fixture.fail()
+        if (method === 'get') {
+          expect(await executeAudited({ ...fixture.stores, input: mutationInput, run })).toEqual(
+            enrichment('Old'),
+          )
+          expect(fixture.state.get('enrichments:marine', null)).toEqual(legacy)
+          expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(0)
+          return
+        }
         await expect(executeAudited({ ...fixture.stores, input: mutationInput, run })).rejects
           .toThrow()
         expect(fixture.state.get('enrichments:marine', null)).toEqual(legacy)
@@ -763,7 +774,7 @@ Deno.test('Durable nested legacy cache migration and writes roll back together a
         expect(fixture.state.get('enrichments:marine', null)).toBeNull()
         expect(fixture.stores.enrichments.get('marine', 'old')).toEqual(enrichment('Old'))
         expect(fixture.state.enrichmentCount('marine', DEFAULT_RESEARCH_ENRICHMENT.id)).toBe(
-          method === 'get' ? 1 : 2,
+          2,
         )
         expect(
           fixture.stores.audit.read({ scope: mutationInput.scope }).filter((e) =>
@@ -1116,7 +1127,7 @@ Deno.test('DurableEnrichmentStore imports per-record rows and honours collision 
   expect(store.exportRecords('other')).toEqual({})
 })
 
-Deno.test('DurableEnrichmentStore migrates the previous tenant-wide state row', () => {
+Deno.test('DurableEnrichmentStore reads legacy rows without migration and migrates on write', () => {
   const { state, store } = durableStore()
   const legacy = {
     [DEFAULT_RESEARCH_ENRICHMENT.id]: {
@@ -1126,10 +1137,13 @@ Deno.test('DurableEnrichmentStore migrates the previous tenant-wide state row', 
   state.put('enrichments:other', legacy)
 
   expect(store.exportRecords('other')).toEqual(legacy)
-  expect(state.get('enrichments:other', null)).toBeNull()
+  expect(state.get('enrichments:other', null)).toEqual(legacy)
   expect(store.get('other', 'legacy-resource')).toEqual(
     legacy[DEFAULT_RESEARCH_ENRICHMENT.id]!['legacy-resource'],
   )
+  store.put('other', 'new-resource', enrichment('New title'))
+  expect(state.get('enrichments:other', null)).toBeNull()
+  expect(store.count('other')).toBe(2)
 })
 
 Deno.test('DurableEnrichmentStore writes a production-sized 3.8 MB archive in SQL batches', () => {

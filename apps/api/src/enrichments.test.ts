@@ -255,6 +255,7 @@ function management(
 
 const config = {
   slug: 'marine',
+  accessMode: 'public',
   branding: {
     productName: 'P',
     organisation: 'O',

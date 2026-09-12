@@ -33,6 +33,8 @@ function buildApp(options: BuildAppOptions) {
   rbac.migrate()
   return buildRawApp({
     ...options,
+    tenants: options.tenants ??
+      new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` }),
     rbac,
     configuredTenantId: 'tenant-1',
     audience: 'corpuskit',
@@ -40,12 +42,36 @@ function buildApp(options: BuildAppOptions) {
   })
 }
 
+const curatorContext: NonNullable<BuildAppOptions['requestContext']> = () => ({
+  requestId: crypto.randomUUID(),
+  session: sessionFor('curator', 'marine', Date.now()),
+  effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
+  coarseAdminEligible: false,
+})
+
 Deno.test('cold question jobs deduplicate attribution and require every completion append for all waiters', async () => {
-  for (const failAt of [0, 1, 2, 3, 4]) {
+  for (
+    const failAt of [
+      'none',
+      'generate-intent',
+      'generate-success',
+      'cache-intent',
+      'cache-success',
+      'join-intent',
+      'join-success',
+    ]
+  ) {
     const directory = Deno.makeTempDirSync()
     try {
       const events: AuditEvent[] = []
-      const enrichments = new EnrichmentStore(directory)
+      let puts = 0
+      class CountedEnrichments extends EnrichmentStore {
+        override put(...args: Parameters<EnrichmentStore['put']>) {
+          puts++
+          return super.put(...args)
+        }
+      }
+      const enrichments = new CountedEnrichments(directory)
       let release!: () => void
       const held = new Promise<void>((resolve) => {
         release = resolve
@@ -55,7 +81,6 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         started = resolve
       })
       let calls = 0
-      let appends = 0
       const app = buildApp({
         provider: {
           resource: () =>
@@ -79,7 +104,11 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         enrichments,
         audit: {
           append: (event) => {
-            if (++appends === failAt) throw new Error('private')
+            const [operation, outcome] = failAt.split('-')
+            const action = operation === 'join'
+              ? 'request.privileged'
+              : `resource.questions.${operation}`
+            if (event.action === action && event.outcome === outcome) throw new Error('private')
             events.push(event)
           },
           read: () => events,
@@ -98,7 +127,7 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
       const first = app.request('/api/t/marine/resources/doc/questions', {
         headers: { 'x-test-request': 'first' },
       })
-      if (failAt === 1) {
+      if (failAt === 'generate-intent') {
         expect((await first).status).toBe(500)
         expect(calls).toBe(0)
         continue
@@ -112,24 +141,34 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         return response
       })
       await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(returned).toBe(false)
+      expect(returned).toBe(failAt === 'join-intent')
       release()
-      for (const response of await Promise.all([first, second])) {
-        expect(response.status).toBe(failAt ? 500 : 200)
+      const responses = await Promise.all([first, second])
+      for (const [index, response] of responses.entries()) {
+        const failed = failAt !== 'none' && (index === 1 || !failAt.startsWith('join-'))
+        expect(response.status).toBe(failed ? 500 : 200)
         expect(await response.json()).toEqual(
-          failAt ? { error: 'audit_write_failed' } : { questions: [] },
+          failed ? { error: 'audit_write_failed' } : { questions: [] },
         )
       }
       expect(calls).toBe(1)
-      expect(events.every((event) => event.request_id === 'first' && event.actor_id === 'first'))
+      expect(puts).toBe(failAt.startsWith('generate-') || failAt === 'cache-intent' ? 0 : 1)
+      expect(
+        events.every((event) => event.actor_kind === 'user' && event.request_id === event.actor_id),
+      )
         .toBe(true)
-      if (!failAt) {
-        expect(events.map((e) => `${e.action}:${e.outcome}`)).toEqual([
+      if (failAt === 'none') {
+        expect(
+          events.filter((e) => e.request_id === 'first').map((e) => `${e.action}:${e.outcome}`),
+        ).toEqual([
           'resource.questions.generate:intent',
+          'resource.questions.generate:success',
           'resource.questions.cache:intent',
           'resource.questions.cache:success',
-          'resource.questions.generate:success',
         ])
+        expect(
+          events.filter((e) => e.request_id === 'second').map((e) => `${e.action}:${e.outcome}`),
+        ).toEqual(['request.privileged:intent', 'request.privileged:success'])
         const count = events.length
         expect(
           (await app.request('/api/t/marine/resources/doc/questions', {
@@ -151,11 +190,12 @@ Deno.test('question waiter arriving during cache write joins mandatory completio
     let late!: Response | Promise<Response>
     class JoiningStore extends EnrichmentStore {
       override put(...args: Parameters<EnrichmentStore['put']>) {
+        late ??= app.request('/api/t/marine/resources/doc/questions?wait=1')
         super.put(...args)
-        late = app.request('/api/t/marine/resources/doc/questions?wait=1')
       }
     }
     const app = buildApp({
+      requestContext: curatorContext,
       provider: {
         resource: () =>
           Promise.resolve({
@@ -172,7 +212,7 @@ Deno.test('question waiter arriving during cache write joins mandatory completio
       audit: {
         append: (event) => {
           if (
-            event.action === 'resource.questions.generate' && event.outcome === 'success'
+            event.action === 'resource.questions.cache' && event.outcome === 'success'
           ) throw new Error('fixture')
         },
         read: () => [],
@@ -200,6 +240,7 @@ Deno.test('question cancellation detaches one waiter and last-waiter abort preve
       const events: AuditEvent[] = []
       const enrichments = new EnrichmentStore(dir)
       const app = buildApp({
+        requestContext: curatorContext,
         provider: {
           resource: () =>
             Promise.resolve({
@@ -384,7 +425,6 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
       const events: AuditEvent[] = []
       const app = buildApp({
         provider: {} as RetrievalProvider,
-        tenants: new TenantStore({}),
         audit: {
           append: (event) => {
             events.push(event)

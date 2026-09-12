@@ -1351,7 +1351,7 @@ describe('GET /api/t/:slug/entity', () => {
 })
 
 describe('GET /api/t/:slug/resources/:id/questions', () => {
-  it('serves precomputed openers from the store and never generates on the page path', async () => {
+  it('serves precomputed openers and lets an authorised curator fill a cold cache', async () => {
     const enrichments = new EnrichmentStore(Deno.makeTempDirSync())
     enrichments.put('marine', 'res-1', {
       schemaId: 'suggested-questions',
@@ -1370,6 +1370,12 @@ describe('GET /api/t/:slug/resources/:id/questions', () => {
       tenants: freshTenants(),
       enrichments,
       management,
+      requestContext: () => ({
+        requestId: crypto.randomUUID(),
+        session: sessionFor('curator', 'marine', Date.now()),
+        effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
+        coarseAdminEligible: false,
+      }),
     })
     const cached = await app.request('/api/t/marine/resources/res-1/questions')
     expect(await cached.json()).toEqual({ questions: ['What drove the decline?'] })

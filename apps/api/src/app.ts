@@ -2157,90 +2157,118 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const id = c.req.param('id')
-
+    const resource = await provider.resource(config, id)
+    if (!resource || resource.id !== id) return adminNotFound(c)
     const key = `${config.slug}/${id}`
+    // An in-flight cache is not committed evidence, even if persistence has begun.
+    if (!questionsInFlight.has(key)) {
+      const cached = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)?.data
+        ?.questions
+      if (Array.isArray(cached)) return c.json({ questions: cached })
+    }
+    await authoriseSubActions(c, ['resource.questions.generate', 'resource.questions.cache'])
+    if (!opts.management) return c.json({ questions: [] })
     let job = questionsInFlight.get(key)
+    const joined = !!job
     if (!job) {
       const cachedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)?.data
         ?.questions
       if (Array.isArray(cachedQuestions)) return c.json({ questions: cachedQuestions })
-      if (!opts.management) return c.json({ questions: [] })
-      const resource = await provider.resource(config, id).catch(() => null)
-      job = questionsInFlight.get(key)
-      if (!job) {
-        const completedQuestions = enrichments.get(config.slug, id, SUGGESTED_QUESTIONS_SCHEMA_ID)
-          ?.data?.questions
-        if (Array.isArray(completedQuestions)) return c.json({ questions: completedQuestions })
-        if (!resource) return c.json({ error: 'unknown_resource' }, 404)
-        const context = requestContext(c.req.raw)
-        const actor = { ...context.actor! }
-        const controller = new AbortController()
-        const input = {
-          requestId: context.requestId,
-          actor,
-          scope: { kind: 'portal' as const, slug: config.slug },
-          target: { kind: 'resource', id },
-          detail: {
-            ...(actor.kind === 'break-glass' && context.session
-              ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
-              : {}),
-          },
-        }
-        const merchandised = merchandiseSummary(enrichments, config.slug, resource)
-        const promise = declaredSubAction(
+      const context = requestContext(c.req.raw)
+      const actor = { ...context.actor! }
+      const controller = new AbortController()
+      const input = {
+        requestId: context.requestId,
+        actor,
+        scope: { kind: 'portal' as const, slug: config.slug },
+        target: { kind: 'resource', id },
+        detail: {
+          ...(actor.kind === 'break-glass' && context.session
+            ? { sessionOid: context.session.oid, sessionTenantId: context.session.tenantId }
+            : {}),
+        },
+      }
+      const merchandised = merchandiseSummary(enrichments, config.slug, resource)
+      const promise = declaredSubAction(
+        'GET',
+        '/api/t/:slug/resources/:id/questions',
+        'resource.questions.generate',
+        (declaration) =>
+          executeAudited({
+            audit: requiredAudit(),
+            localMutations: opts.localMutations,
+            signal: controller.signal,
+            input: {
+              ...input,
+              action: 'resource.questions.generate',
+              detail: { ...input.detail, permission: declaration.permission },
+            },
+            run: async (signal) => {
+              const questions = await generateSuggestedQuestions(
+                opts.management!,
+                config,
+                id,
+                merchandised.title,
+                merchandised.summary,
+                { signal, strict: true },
+              )
+              signal.throwIfAborted()
+              await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
+              return questions
+            },
+          }),
+      ).then(async (questions) => {
+        controller.signal.throwIfAborted()
+        await declaredSubAction(
           'GET',
           '/api/t/:slug/resources/:id/questions',
-          'resource.questions.generate',
-          (declaration) =>
-            executeAudited({
-              audit: requiredAudit(),
-              localMutations: opts.localMutations,
-              signal: controller.signal,
-              input: {
-                ...input,
-                action: 'resource.questions.generate',
-                detail: { ...input.detail, permission: declaration.permission },
-              },
-              run: async (signal) => {
-                const questions = await generateSuggestedQuestions(
-                  opts.management!,
-                  config,
-                  id,
-                  merchandised.title,
-                  merchandised.summary,
-                  { signal, strict: true },
-                )
-                signal.throwIfAborted()
-                await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
-                await declaredSubAction(
-                  'GET',
-                  '/api/t/:slug/resources/:id/questions',
-                  'resource.questions.cache',
-                  (cache) =>
-                    executeAudited({
-                      audit: requiredAudit(),
-                      localMutations: opts.localMutations,
-                      signal,
-                      input: {
-                        ...input,
-                        action: 'resource.questions.cache',
-                        detail: { ...input.detail, permission: cache.permission },
-                      },
-                      run: () =>
-                        enrichments.put(config.slug, id, {
-                          schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
-                          generatedAt: new Date().toISOString(),
-                          data: { questions },
-                        }),
-                    }),
-                )
-                return questions
-              },
-            }),
-        ).finally(() => questionsInFlight.delete(key))
-        job = { promise, controller, waiters: 0 }
-        questionsInFlight.set(key, job)
-      }
+          'resource.questions.cache',
+          (cache) => {
+            const cacheInput = {
+              ...input,
+              action: 'resource.questions.cache' as const,
+              detail: { ...input.detail, permission: cache.permission },
+            }
+            const commit = () =>
+              executeAudited({
+                // The success append is the cache commit boundary, not a
+                // second append after an already-visible mutation.
+                audit: {
+                  append: (event) => {
+                    if (event.outcome !== 'success') {
+                      appendAudit(requiredAudit(), event)
+                      return
+                    }
+                    controller.signal.throwIfAborted()
+                    let completed = false
+                    enrichments.put(config.slug, id, {
+                      schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
+                      generatedAt: new Date().toISOString(),
+                      data: { questions },
+                    }, () => {
+                      if (completed) throw new AuditWriteError()
+                      appendAudit(requiredAudit(), event)
+                      completed = true
+                    })
+                    if (!completed) throw new AuditWriteError()
+                  },
+                },
+                localMutations: opts.localMutations,
+                signal: controller.signal,
+                input: cacheInput,
+                run: () => questions,
+              })
+            // Keep the adapter's local mutation scope open through the synchronous
+            // completion append, so its existing local audit shares the transaction.
+            return opts.localMutations
+              ? opts.localMutations.run(cacheInput, controller.signal, commit)
+              : commit()
+          },
+        )
+        return questions
+      }).finally(() => questionsInFlight.delete(key))
+      job = { promise, controller, waiters: 0 }
+      questionsInFlight.set(key, job)
     }
     const shared = job
     shared.waiters++
@@ -2252,8 +2280,39 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
     try {
       const result = Promise.race([shared.promise, aborted])
+      // A joiner's intent append can fail before it observes the shared result.
+      void result.catch(() => {})
       if (c.req.raw.signal.aborted) onAbort()
-      return c.json({ questions: await result })
+      const context = requestContext(c.req.raw)
+      const questions = joined
+        ? await declaredSubAction(
+          'GET',
+          '/api/t/:slug/resources/:id/questions',
+          'resource.questions.generate',
+          (declaration) =>
+            executeAudited({
+              audit: requiredAudit(),
+              signal: c.req.raw.signal,
+              input: {
+                requestId: context.requestId,
+                actor: context.actor!,
+                action: 'request.privileged',
+                scope: { kind: 'portal', slug: config.slug },
+                target: { kind: 'resource', id },
+                detail: {
+                  permission: declaration.permission,
+                  operation: 'GET /api/t/:slug/resources/:id/questions',
+                },
+              },
+              run: async (signal) => {
+                const questions = await result
+                await stageAuditResponse(materialisedJsonResponse({ questions }), signal)
+                return questions
+              },
+            }),
+        )
+        : await result
+      return c.json({ questions })
     } finally {
       c.req.raw.signal.removeEventListener('abort', onAbort)
       if (--shared.waiters === 0) shared.controller.abort()

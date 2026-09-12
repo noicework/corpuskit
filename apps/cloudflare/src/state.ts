@@ -205,6 +205,12 @@ export class DurableState {
     }
   }
 
+  /** Join an existing synchronous mutation, or atomically commit cache and completion. */
+  completeEnrichmentMutation(work: () => void): void {
+    if (this.mutating) work()
+    else this.rbacDatabase.transactionSync(work)
+  }
+
   /** Fail closed if a new store method bypasses the declared synchronous boundary. */
   private guardLocalWrite(): void {
     const context = this.localContext.getStore()
@@ -1239,28 +1245,39 @@ export class DurableEnrichmentStore implements EnrichmentStoreApi {
     resourceId: string,
     schemaId = DEFAULT_RESEARCH_ENRICHMENT.id,
   ): Enrichment | undefined {
-    this.migrateLegacy(slug)
-    return this.state.enrichment(slug, schemaId, resourceId)
+    return this.state.enrichment(slug, schemaId, resourceId) ??
+      this.state.get<EnrichmentRecords>(key('enrichments', slug), {})[schemaId]?.[resourceId]
   }
 
   forAgent(slug: string, schemaId = DEFAULT_RESEARCH_ENRICHMENT.id): Record<string, Enrichment> {
-    this.migrateLegacy(slug)
-    return this.state.enrichmentsForAgent(slug, schemaId)
+    return {
+      ...this.state.get<EnrichmentRecords>(key('enrichments', slug), {})[schemaId],
+      ...this.state.enrichmentsForAgent(slug, schemaId),
+    }
   }
 
-  put(slug: string, resourceId: string, enrichment: Enrichment): void {
-    this.migrateLegacy(slug)
-    this.state.putEnrichment(slug, resourceId, enrichment)
+  put(slug: string, resourceId: string, enrichment: Enrichment, complete?: () => void): void {
+    const write = () => {
+      this.migrateLegacy(slug)
+      this.state.putEnrichment(slug, resourceId, enrichment)
+      complete?.()
+    }
+    if (complete) this.state.completeEnrichmentMutation(write)
+    else write()
   }
 
   count(slug: string, schemaId = DEFAULT_RESEARCH_ENRICHMENT.id): number {
-    this.migrateLegacy(slug)
-    return this.state.enrichmentCount(slug, schemaId)
+    return Object.keys(this.forAgent(slug, schemaId)).length
   }
 
   exportRecords(slug: string): EnrichmentRecords {
-    this.migrateLegacy(slug)
-    return this.state.enrichmentRecords(slug)
+    const legacy = this.state.get<EnrichmentRecords>(key('enrichments', slug), {})
+    const current = this.state.enrichmentRecords(slug)
+    const records: EnrichmentRecords = {}
+    for (const schemaId of new Set([...Object.keys(legacy), ...Object.keys(current)])) {
+      records[schemaId] = { ...legacy[schemaId], ...current[schemaId] }
+    }
+    return records
   }
 
   importRecords(
