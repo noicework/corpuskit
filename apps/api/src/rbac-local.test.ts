@@ -32,7 +32,6 @@ Deno.test('local RBAC reopens audit, assignments, lockouts, evidence and durable
         'rbac_group_capabilities',
         'rbac_unknown_roles',
         'audit_events',
-        'rbac_migrations',
       ]
     ) {
       expect(db.all(`SELECT count(*) AS n FROM ${table}`)).toEqual([{ n: 1 }])
@@ -41,7 +40,11 @@ Deno.test('local RBAC reopens audit, assignments, lockouts, evidence and durable
       status: 'disabled',
       verified_at: null,
     }])
-    expect(db.all('SELECT completed_at FROM rbac_migrations')).toEqual([{ completed_at: 10 }])
+    expect(db.all('SELECT name, completed_at FROM rbac_migrations ORDER BY name')).toEqual([
+      { name: 'rbac-audit-actors-v2', completed_at: 10 },
+      { name: 'rbac-audit-order-v1', completed_at: 10 },
+      { name: 'rbac-schema-v1', completed_at: 10 },
+    ])
   } finally {
     db.close()
     Deno.removeSync(dir, { recursive: true })
