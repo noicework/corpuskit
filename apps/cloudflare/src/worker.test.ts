@@ -12,6 +12,8 @@ import {
 } from '../../api/src/principal.ts'
 import type { AuthUser } from './auth.ts'
 import type { PortalDurableObject } from './worker.ts'
+import { AragProvider } from '@research-portal/retrieval'
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 
 type WorkerHandler = {
   fetch(request: Request, env: Env): Promise<Response>
@@ -188,8 +190,8 @@ Deno.test('Worker forwards identity only from a validated session user', async (
     workerHarness().env,
   )
 
-  expect(forwarded.headers.get('x-corpuskit-sso-user-id')).toBe('entra-object-id')
-  expect(forwarded.headers.get('x-corpuskit-sso-admin')).toBe('1')
+  expect(forwarded.headers.get('x-corpuskit-sso-user-id')).toBeNull()
+  expect(forwarded.headers.get('x-corpuskit-sso-admin')).toBeNull()
   expect(
     (await verifyPrincipal(forwarded.headers.get('x-corpuskit-principal'), {
       sessionSecret: secret,
@@ -528,6 +530,69 @@ Deno.test('real DO rejects invalid envelope or mismatched method facts without l
       ).length,
     ).toBeGreaterThanOrEqual(7)
   } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('real DO principal failures perform zero protected provider calls and require denial audit', async () => {
+  const h = realHarness()
+  const original = AragProvider.prototype.catalog
+  let calls = 0
+  AragProvider.prototype.catalog = (tenant) => {
+    calls++
+    return new DoubleProvider().catalog(tenant)
+  }
+  try {
+    const session = facts()
+    const path = '/api/t/marine/catalog'
+    const allowed = await h.object.handleTrustedRequest(await principalRequest(path, session), {
+      session,
+    })
+    expect(allowed.status).toBe(200)
+    expect((await allowed.json()).items.length).toBeGreaterThan(0)
+    expect(calls).toBe(1)
+    for (
+      const extra of [{ iat: Math.floor(Date.now() / 1000) - 61 }, {
+        iat: Math.floor(Date.now() / 1000) + 31,
+      }, { aud: 'corpuskit-demo' as const }]
+    ) {
+      expect(
+        (await h.object.handleTrustedRequest(await principalRequest(path, session, extra), {
+          session,
+        })).status,
+      ).toBe(401)
+      expect(calls).toBe(1)
+    }
+    for (const header of ['forged', 'x'.repeat(8193)]) {
+      const request = new Request(`https://corpuskit.test${path}`, {
+        headers: {
+          'x-corpuskit-principal': header,
+          'x-corpuskit-sso-admin': '1',
+          'x-corpuskit-sso-user-id': session.oid,
+        },
+      })
+      expect((await h.object.handleTrustedRequest(request, { session })).status).toBe(401)
+      expect(calls).toBe(1)
+    }
+    const ordinary = { ...session, roles: [] }
+    expect(
+      (await h.object.handleTrustedRequest(
+        await principalRequest('/api/admin/overview', ordinary),
+        { session: ordinary },
+      )).status,
+    ).toBe(403)
+    h.database.exec(
+      "CREATE TRIGGER principal_audit_failure BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect(
+      (await h.object.handleTrustedRequest(
+        await principalRequest(path, session, { iat: Math.floor(Date.now() / 1000) - 61 }),
+        { session },
+      )).status,
+    ).toBe(500)
+    expect(calls).toBe(1)
+  } finally {
+    AragProvider.prototype.catalog = original
     h.database.close()
   }
 })

@@ -1,11 +1,12 @@
 import {
-  DECLARATIONS,
   declaredRoute,
   declaredSubAction,
   infrastructureHandler,
+  isInfrastructurePreflight,
   isPrivileged,
   matchedDeclaration,
   registerInfrastructure,
+  registerPreflightInfrastructure,
 } from './permissions.ts'
 import {
   AuditExecutionError,
@@ -876,7 +877,6 @@ export interface BuildAppOptions {
   audit?: AuditStore
   breakGlass?: BreakGlassService
   requestContext?: (request: Request) => PortalRequestContext | undefined
-  /** Authenticated portal identity forwarded by a trusted platform adapter. */
   /** Where the built SPA lives; overridable in tests. Defaults to ./apps/web/dist. */
   webDistPath?: string
   /** Runtime adapters that serve assets outside the local filesystem set this explicitly. */
@@ -907,7 +907,7 @@ interface RequestAuthorisation {
   declared(): Promise<RequestAuthority | null>
   subActions(names: readonly string[]): Promise<RequestAuthority>
   owner(): Promise<ResearchOwner>
-  aggregateAuthority(): Promise<RequestAuthority | null>
+  aggregateAuthority(): Promise<RequestAuthority>
   aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
 }
 const authorisationContextKey = 'corpuskit.authorisation'
@@ -916,7 +916,7 @@ function requestAuthorisation(c: Context): RequestAuthorisation {
   if (!helpers) throw new AuthorisationError(403)
   return helpers
 }
-/** Dormant until a route family explicitly invokes its declared operation guard. */
+/** Authorise the actual registered operation through the request-scoped guard. */
 export function authoriseDeclared(c: Context): Promise<RequestAuthority | null> {
   return requestAuthorisation(c).declared()
 }
@@ -1069,12 +1069,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (ingress) ingress.denialAudited = true
   }
   const classification = (c: Context) => {
-    const method = c.req.method === 'HEAD' ? 'GET' : c.req.method
-    const declaration = DECLARATIONS.find((d) =>
-      d.kind === 'http' &&
-      (d.method === method || d.method === 'ALL') &&
-      new RegExp(`^${d.path.replace(/:[^/]+/g, '[^/]+').replace(/\*/g, '.*')}$`).test(c.req.path)
-    )
+    let declaration
+    try {
+      declaration = matchedDeclaration(c)
+    } catch { /* Unknown or ambiguous routes have no declared authority. */ }
     const slug = /^\/api\/(?:admin\/)?(?:t|tenants)\/([^/]+)/.exec(c.req.path)?.[1]
     const targetIndex = declaration?.target.param
       ? declaration.path.split('/').indexOf(`:${declaration.target.param}`)
@@ -1160,7 +1158,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (!slug.success) return deny({ kind: 'platform' })
       const scope: Scope = { kind: 'portal', slug: slug.data }
       let policy: PortalPolicy | undefined
-      let publicPortal = false
       try {
         const current = tenants.get(slug.data)
         const enabling = declaration.method === 'POST' &&
@@ -1170,8 +1167,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ) {
           return deny(scope)
         }
-        const mode = AccessModeSchema.parse(current.accessMode)
-        publicPortal = mode === 'public'
+        AccessModeSchema.parse(current.accessMode)
         if (opts.configuredTenantId) {
           policy = PortalPolicySchema.parse({
             slug: current.slug,
@@ -1182,7 +1178,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       } catch {
         return deny(scope)
       }
-      return { declaration, scope, policy, publicPortal }
+      return { declaration, scope, policy }
     }
     const authority = (scope: Scope) => {
       if (failure) throw failure
@@ -1205,10 +1201,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (declaration.aggregate !== 'authorised-portals' || declaration.scope !== 'portal') {
         return deny(scope)
       }
-      if (
-        !authorityDependencies && !context.session &&
-        !c.req.raw.headers.has('authorization') && !c.req.raw.headers.has('x-admin-passcode')
-      ) return null
       // Selection rejects every aggregate bearer before any portal enumeration, including
       // a key accompanied by an otherwise privileged ambient session.
       return await authority(scope)
@@ -1230,22 +1222,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
             configuredTenantId: opts.configuredTenantId,
           }
           // Candidate filtering is pure: a hidden portal must not latch a request denial.
-          const principal = selected?.kind === 'break-glass'
+          const principal = selected.kind === 'break-glass'
             ? normalisePrincipal({
               kind: 'user',
               tenantId: opts.configuredTenantId,
               oid: 'break-glass',
             }, { platformRole: 'owner', portalRoles: [] })
             : normalisePrincipal(
-              selected?.kind === 'session'
+              selected.kind === 'session'
                 ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
                 : { kind: 'anonymous' },
-              selected?.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
+              selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
               policy,
             )
-          const allowed = selected
-            ? authorize(principal, declaration.permission, { kind: 'portal', slug })
-            : config.accessMode === 'public' && !isPrivileged(declaration)
+          const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
           if (allowed) targets.push(config)
           return allowed
         })
@@ -1270,13 +1260,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return targets
       },
       declared: async () => {
-        const { declaration, scope, policy, publicPortal } = target()
+        if (operation().aggregate) return aggregateAuthority()
+        const { declaration, scope, policy } = target()
         if (declaration.scope === 'public') return null
-        if (
-          !authorityDependencies && !context.session &&
-          !c.req.raw.headers.has('authorization') && !c.req.raw.headers.has('x-admin-passcode') &&
-          publicPortal && !isPrivileged(declaration)
-        ) return null
         const selected = await authority(scope)
         try {
           authoriseOperation(selected, declaration.permission, scope, policy)
@@ -1547,10 +1533,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.header('Content-Security-Policy', "frame-ancestors 'none'")
   })
 
+  // Every API operation is checked before any route-specific middleware or handler.
+  registerInfrastructure(app, '*', async (c, next) => {
+    if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
+      if (!isInfrastructurePreflight(c)) await authoriseDeclared(c)
+    }
+    await next()
+  })
+
   // The SPA is served same-origin; no cross-origin API access is needed -
   // except reingest, where an admin's browser posts rendered HTML from the
   // source site's own origin (the passcode header still gates it).
-  registerInfrastructure(
+  registerPreflightInfrastructure(
     app,
     '/api/admin/t/*/reingest',
     cors({ origin: (origin) => origin, allowHeaders: ['content-type', 'x-admin-passcode'] }),
@@ -1559,6 +1553,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.onError((err, c) => {
     if (err instanceof AuthorisationError) {
       if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
+      if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
+        c.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
+      }
       return c.json({ error: err.code }, err.status)
     }
     if (err instanceof AuditWriteError) {
@@ -1575,34 +1572,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   const tenant = (slug: string): TenantConfig | undefined => tenants.get(slug)
 
-  // Register before every admin handler, including extraction and routing above the old gate.
-  registerInfrastructure(app, '/api/admin/*', async (c, next) => {
-    await authoriseDeclared(c)
-    await next()
-  })
-
   registerInfrastructure(app, '/api/t/*', async (c, next) => {
-    let declaration
-    try {
-      declaration = matchedDeclaration(c)
-    } catch {
-      await authoriseDeclared(c)
-      return
-    }
-    if (
-      declaration.permission === 'keys.manage'
-    ) await authoriseDeclared(c)
-    if (
-      (declaration.permission === 'portal.read' || declaration.permission === 'portal.generate' ||
-        declaration.permission === 'portal.ask') &&
-      !declaration.owned &&
-      !declaration.path.includes('/mcp')
-    ) await authoriseDeclared(c)
-    if (
-      declaration.owned === 'research' &&
-      /\/(sessions|watches|investigations)(\/|$)/.test(declaration.path)
-    ) {
-      await authoriseDeclared(c)
+    const declaration = matchedDeclaration(c)
+    if (declaration.owned === 'research') {
       await researchOwner(c)
       try {
         const segments = c.req.path.split('/')
@@ -1639,13 +1611,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     await next()
   })
-
-  for (const path of ['/api/tenants', '/api/ask-estate']) {
-    registerInfrastructure(app, path, async (c, next) => {
-      await requestAuthorisation(c).aggregateAuthority()
-      await next()
-    })
-  }
 
   registerInfrastructure(app, '*', async (c, next) => {
     const context = requestContext(c.req.raw)

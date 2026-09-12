@@ -65,7 +65,7 @@ function entry(
   })
 }
 
-/** D11's sole route/tool catalogue. Labels classify audit only in Phase 2. */
+/** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
     subActions: [{
@@ -425,6 +425,21 @@ export function isPrivileged(declaration: Declaration, actor?: AuditActor): bool
 
 /** Only these registered handler identities are infrastructure, never an application prefix. */
 const middleware = new WeakSet<MiddlewareHandler>()
+const preflight = new WeakSet<MiddlewareHandler>()
+/** Only a registered CORS handler may finish OPTIONS without a protected operation. */
+export function registerPreflightInfrastructure(
+  app: Hono,
+  path: string,
+  handler: MiddlewareHandler,
+): void {
+  preflight.add(handler)
+  registerInfrastructure(app, path, handler)
+}
+export function isInfrastructurePreflight(c: Context): boolean {
+  const routes = matchedRoutes(c)
+  return c.req.method === 'OPTIONS' && routes.some((route) => preflight.has(route.handler)) &&
+    routes.every((route) => middleware.has(route.handler))
+}
 export function infrastructureHandler<T extends MiddlewareHandler>(handler: T): T {
   middleware.add(handler)
   return handler

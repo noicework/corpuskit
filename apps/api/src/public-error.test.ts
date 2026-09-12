@@ -205,17 +205,29 @@ class FailingProvider implements RetrievalProvider {
 const freshTenants = () => tenantsWithNeuro()
 
 async function askPayload(mode: 'yield' | 'throw'): Promise<string> {
-  const app = buildApp({ provider: new FailingProvider(mode), tenants: freshTenants() })
-  const response = await app.request('/api/t/neuro/ask', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query: 'What is the twelve-month retention of brivaracetam?',
-      resourceId: resource.id,
-    }),
-  })
-  expect(response.status).toBe(200)
-  return await response.text()
+  const fixture = createEnforcementFixture()
+  try {
+    const app = buildApp({
+      ...fixture.stores,
+      configuredTenantId: fixture.tenantId,
+      audience: fixture.audience,
+      breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+      provider: new FailingProvider(mode),
+      tenants: freshTenants(),
+    })
+    const response = await app.request('/api/t/neuro/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: 'What is the twelve-month retention of brivaracetam?',
+        resourceId: resource.id,
+      }),
+    })
+    expect(response.status).toBe(200)
+    return await response.text()
+  } finally {
+    fixture.close()
+  }
 }
 
 describe('no upstream detail reaches the reader payload (D8-07)', () => {

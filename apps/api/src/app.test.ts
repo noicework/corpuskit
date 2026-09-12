@@ -480,6 +480,7 @@ describe('independent admin route permission matrix', () => {
         ),
         ...ACCESS_ROUTE_CASES.map(({ method, path }) => `${method} ${path}`),
         ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
+        'PATCH /api/admin/t/:slug/access',
       ].sort()
       expect(actual).toEqual(expected)
     } finally {
@@ -2127,7 +2128,8 @@ describe('GET /api/admin-prefill', () => {
   it('no longer exists - the passcode-prefill endpoint has been removed', async () => {
     const app = makeApp()
     const response = await app.request('/api/admin-prefill')
-    expect(response.status).toBe(404)
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
   })
 })
 

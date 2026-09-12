@@ -149,7 +149,7 @@ Deno.test('local dormant helpers use the endpoint key store and current creator 
   }
 })
 
-Deno.test('missing authority configuration permits public browse only and audits protected refusal', async () => {
+Deno.test('missing authority configuration refuses even public browse with an audited zero-dispatch denial', async () => {
   const directory = Deno.makeTempDirSync({ prefix: 'missing-authority-' })
   const database = new LocalRbacDatabase(`${directory}/state.sqlite`)
   const rbac = new RbacState(database)
@@ -168,8 +168,8 @@ Deno.test('missing authority configuration permits public browse only and audits
       },
     )
     const publicResponse = await app.request('/api/t/marine/catalog')
-    expect(publicResponse.status).toBe(200)
-    expect((await publicResponse.json()).items.length).toBeGreaterThan(0)
+    expect(publicResponse.status).toBe(401)
+    expect(dispatched).toBe(0)
     const before = dispatched
     expect(
       (await app.request('/api/t/marine/catalog', {
@@ -186,7 +186,7 @@ Deno.test('missing authority configuration permits public browse only and audits
     expect(
       rbac.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
         .filter((event) => event.action === 'request.denied'),
-    ).toHaveLength(2)
+    ).toHaveLength(3)
     database.exec(
       "CREATE TRIGGER fail_missing_authority BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
     )

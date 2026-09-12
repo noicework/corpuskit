@@ -10,7 +10,98 @@ import {
   matchedDeclaration,
   registerInfrastructure,
 } from './permissions.ts'
-import { assertExpectedPermission } from './enforcement-fixture.ts'
+import { assertExpectedPermission, createEnforcementFixture } from './enforcement-fixture.ts'
+
+Deno.test('global gate blocks injected routes without a startup inventory and audits refusal', async () => {
+  for (const method of ['GET', 'HEAD', 'OPTIONS', 'POST']) {
+    const f = createEnforcementFixture()
+    try {
+      let calls = 0
+      f.app.all('/api/future', (c) => {
+        calls++
+        return c.json({ secret: true })
+      })
+      const response = await f.requestAs(f.sessionFor('owner'), '/api/future', { method })
+      expect(response.status).toBe(403)
+      expect(calls).toBe(0)
+      expect(
+        f.rbac.audit.read({ scope: { kind: 'platform' } }).some((event) =>
+          event.request_id === response.headers.get('x-request-id') && event.outcome === 'denied'
+        ),
+      ).toBe(true)
+      f.failAudit()
+      expect((await f.requestAs(null, '/api/future', { method })).status).toBe(500)
+      expect(calls).toBe(0)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('global gate has no legacy, coarse context, missing state or OPTIONS authority', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const forged = {
+      'x-corpuskit-sso-admin': '1',
+      'x-corpuskit-sso-user-id': 'owner',
+      'x-corpuskit-sso-extra': 'owner',
+      'x-sso-admin': '1',
+    }
+    for (const method of ['GET', 'HEAD', 'OPTIONS']) {
+      for (
+        const path of [
+          '/api/admin/overview',
+          '/api/admin/unknown',
+          '/api/t/a/catalog',
+          '/api/t/a/mcp',
+          '/api/t/a/unknown',
+        ]
+      ) {
+        const response = await f.requestAs(null, path, { method, headers: forged })
+        expect(response.status).toBe(401)
+        f.assertNoProtectedDispatch()
+      }
+    }
+    const preflight = await f.requestAs(null, '/api/admin/t/a/reingest', {
+      method: 'OPTIONS',
+      headers: { origin: 'https://source.test', 'access-control-request-method': 'POST' },
+    })
+    expect(preflight.status).toBe(204)
+    f.assertNoProtectedDispatch()
+    const allowed = await f.requestAs(f.sessionFor('viewer'), '/api/t/a/catalog', {
+      headers: forged,
+    })
+    expect(allowed.status).toBe(200)
+    expect(f.providerCalls.some((call) => call.method === 'catalog')).toBe(true)
+    expect((await allowed.json()).items.length).toBeGreaterThan(0)
+    const before = f.providerCalls.length
+    expect(
+      (await f.requestAs(f.sessionFor('viewer'), '/api/admin/overview', { headers: forged }))
+        .status,
+    ).toBe(403)
+    f.assertNoProtectedDispatch(before)
+    const missing = buildApp({
+      provider: f.provider,
+      tenants: f.stores.tenants,
+      audit: f.rbac.audit,
+      requestContext: () => ({
+        requestId: crypto.randomUUID(),
+        session: null,
+        coarseAdminEligible: true,
+      }),
+    })
+    for (const path of ['/api/t/public-a/catalog', '/api/tenants', '/api/admin/overview']) {
+      expect((await missing.request(path, { headers: forged })).status).toBe(401)
+      f.assertNoProtectedDispatch(before)
+    }
+    expect((await missing.request('/api/health')).status).toBe(200)
+    f.failAudit()
+    expect((await missing.request('/api/t/public-a/catalog')).status).toBe(500)
+    f.assertNoProtectedDispatch(before)
+  } finally {
+    f.close()
+  }
+})
 
 Deno.test('declarations explicitly distinguish aggregate, safe metadata and research ownership', () => {
   for (
