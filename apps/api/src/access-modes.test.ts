@@ -547,7 +547,7 @@ Deno.test('shared caches cannot replay bytes across revocation or mutable portal
   }
 })
 
-Deno.test('invalid explicit config credentials and failed denial audit cannot return safe metadata', async () => {
+Deno.test('invalid explicit config credentials cannot return safe metadata; the projection needs no audit', async () => {
   const f = readFixture()
   try {
     for (
@@ -561,12 +561,15 @@ Deno.test('invalid explicit config credentials and failed denial audit cannot re
       expect(await response.text()).not.toContain('branding')
     }
     f.failAudit()
-    for (const path of ['config', 'resources']) {
-      const response = await f.requestAs(null, `/api/t/a/${path}`)
-      expect(response.status).toBe(500)
-      expect(response.headers.get('cache-control')).toBe('private, no-store')
-      expect(await response.text()).not.toContain('branding')
-    }
+    // D13: the safe projection is not a denial, so a failed audit store cannot block it.
+    const safe = await f.requestAs(null, '/api/t/a/config')
+    expect(safe.status).toBe(200)
+    expect(safe.headers.get('cache-control')).toBe('private, no-store')
+    expect(Object.keys(await safe.json()).sort()).toEqual(['accessMode', 'branding', 'slug'])
+    const denied = await f.requestAs(null, '/api/t/a/resources')
+    expect(denied.status).toBe(500)
+    expect(denied.headers.get('cache-control')).toBe('private, no-store')
+    expect(await denied.text()).not.toContain('branding')
     f.assertNoProtectedDispatch()
   } finally {
     f.close()
@@ -775,6 +778,46 @@ Deno.test('malformed persisted root never becomes public defaults on restart', (
     Deno.writeTextFileSync(f.path, '{broken')
     expect(() => f.open()).toThrow()
     expect(() => f.open()).toThrow()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('safe pre-auth metadata is a successful response and writes no denial audit', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const denied = () =>
+      f.database.all("SELECT id FROM audit_events WHERE action='request.denied'").length
+    const rows = () => f.database.all('SELECT id FROM audit_events').length
+    const before = { denied: denied(), rows: rows() }
+    for (const slug of ['a', 'authenticated-a']) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await f.requestAs(null, `/api/t/${slug}/config`)
+        expect(response.status).toBe(200)
+        expect(response.headers.get('cache-control')).toBe('private, no-store')
+        expect(Object.keys(await response.json()).sort()).toEqual([
+          'accessMode',
+          'branding',
+          'slug',
+        ])
+      }
+    }
+    // A foreign-tenant session on a restricted portal is served the projection the same way.
+    const foreign = await f.requestAs(f.otherTenant, '/api/t/a/config')
+    expect(foreign.status).toBe(200)
+    expect(Object.keys(await foreign.json()).sort()).toEqual(['accessMode', 'branding', 'slug'])
+    expect(denied()).toBe(before.denied)
+    expect(rows()).toBe(before.rows)
+    // A real denial on the same portal still audits exactly once.
+    const counters = await f.requestAs(null, '/api/t/a/counters')
+    expect(counters.status).toBe(401)
+    expect(denied()).toBe(before.denied + 1)
+    f.assertNoProtectedDispatch()
+    // Full config for an authorised reader is unchanged and still unaudited.
+    const full = await f.requestAs(f.sessionFor('viewer'), '/api/t/a/config')
+    expect(full.status).toBe(200)
+    expect(Object.keys(await full.json())).toContain('topics')
+    expect(denied()).toBe(before.denied + 1)
   } finally {
     f.close()
   }

@@ -35,6 +35,7 @@ import {
   authoriseOperation,
   authoriseSubActions as checkSubActions,
   type AuthorityDependencies,
+  evaluateOperation,
   type RequestAuthority,
   researchOwner as resolveResearchOwner,
   selectRequestAuthority,
@@ -1265,11 +1266,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
         if (declaration.scope === 'public') return null
         const selected = await authority(scope)
         try {
-          authoriseOperation(selected, declaration.permission, scope, policy)
-        } catch (error) {
-          // D9 is available only after credential and portal validation succeeded.
-          if (!declaration.safeMetadata || !(error instanceof AuthorisationError)) throw error
-          safeMetadataRequests.add(c.req.raw)
+          // D9 is available only after credential and portal validation succeeded, and D13
+          // makes the safe projection a successful response: it is evaluated without audit.
+          if (
+            declaration.safeMetadata &&
+            !evaluateOperation(selected, declaration.permission, scope, policy)
+          ) safeMetadataRequests.add(c.req.raw)
+          else authoriseOperation(selected, declaration.permission, scope, policy)
         } finally {
           if (context.denialAudited) markDenialAudited(c.req.raw)
         }

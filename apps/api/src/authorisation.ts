@@ -240,6 +240,19 @@ function stateFor(authority: RequestAuthority): AuthorityState {
   if (state.failure) throw state.failure
   return state
 }
+/** The current registry must still agree with the supplied policy. No audit is written here. */
+function currentPolicy(state: AuthorityState, policy: PortalPolicy): boolean {
+  try {
+    const current = state.deps.tenants.get(policy.slug)
+    const enabling = state.request.method === 'POST' &&
+      new URL(state.request.url).pathname === `/api/admin/t/${policy.slug}/enable`
+    return !!current && current.slug === policy.slug && current.accessMode === policy.accessMode &&
+      (enabling || !state.deps.tenants.isDisabled(policy.slug))
+  } catch (error) {
+    if (error instanceof AuditWriteError || error instanceof AuthorisationError) throw error
+    return false
+  }
+}
 function policyFor(authority: RequestAuthority, input: unknown): PortalPolicy {
   const state = stateFor(authority)
   const parsed = PortalPolicySchema.safeParse(input)
@@ -247,19 +260,70 @@ function policyFor(authority: RequestAuthority, input: unknown): PortalPolicy {
     refuse(state, authority.actor, { kind: 'platform' })
   }
   const policy = parsed.data
-  try {
-    const current = state.deps.tenants.get(policy.slug)
-    const enabling = state.request.method === 'POST' &&
-      new URL(state.request.url).pathname === `/api/admin/t/${policy.slug}/enable`
-    if (
-      !current || current.slug !== policy.slug || current.accessMode !== policy.accessMode ||
-      (!enabling && state.deps.tenants.isDisabled(policy.slug))
-    ) refuse(state, authority.actor, { kind: 'portal', slug: policy.slug })
-  } catch (error) {
-    if (error instanceof AuditWriteError || error instanceof AuthorisationError) throw error
+  if (!currentPolicy(state, policy)) {
     refuse(state, authority.actor, { kind: 'portal', slug: policy.slug })
   }
   return policy
+}
+/** Non-auditing counterpart of policyFor for candidate evaluation. */
+function validPolicy(state: AuthorityState, input: unknown): PortalPolicy | null {
+  const parsed = PortalPolicySchema.safeParse(input)
+  if (!parsed.success || parsed.data.configuredTenantId !== state.deps.configuredTenantId) {
+    return null
+  }
+  return currentPolicy(state, parsed.data) ? parsed.data : null
+}
+
+/** The core principal for an already selected authority; null when the key scope is wrong. */
+function principalFor(
+  authority: RequestAuthority,
+  state: AuthorityState,
+  scope: Scope,
+  policy: PortalPolicy | undefined,
+) {
+  if (authority.kind === 'key') {
+    if (scope.kind !== 'portal' || scope.slug !== authority.slug) return null
+    return normalisePrincipal({
+      kind: 'user',
+      tenantId: state.deps.configuredTenantId,
+      oid: authority.id,
+    }, { portalRoles: [{ slug: authority.slug, role: authority.role }] })
+  }
+  if (authority.kind === 'break-glass') {
+    return normalisePrincipal({
+      kind: 'user',
+      tenantId: state.deps.configuredTenantId,
+      oid: 'break-glass',
+    }, { platformRole: 'owner', portalRoles: [] })
+  }
+  return normalisePrincipal(
+    authority.kind === 'session'
+      ? { kind: 'user', tenantId: authority.session.tenantId, oid: authority.session.oid }
+      : { kind: 'anonymous' },
+    authority.kind === 'session' ? authority.effectiveRoles : { portalRoles: [] },
+    policy,
+  )
+}
+
+/**
+ * Pure evaluation of the same decision authoriseOperation enforces, with no audit and no
+ * latched refusal. D9 uses it to serve the safe pre-auth projection as a successful response.
+ */
+export function evaluateOperation(
+  authority: RequestAuthority,
+  permission: unknown,
+  scopeInput: unknown,
+  policyInput?: unknown,
+): boolean {
+  const state = stateFor(authority)
+  const parsed = ScopeSchema.safeParse(scopeInput)
+  if (!parsed.success) return false
+  const scope = parsed.data
+  const policy = scope.kind === 'portal' ? validPolicy(state, policyInput) : undefined
+  if (policy === null || (scope.kind === 'portal' && policy?.slug !== scope.slug)) return false
+  const principal = principalFor(authority, state, scope, policy)
+  return principal !== null && keyPermits(authority, permission) &&
+    authorize(principal, permission, scope)
 }
 
 /** Throw before dispatch on refusal; successful privileged completion remains caller-owned. */
@@ -277,34 +341,11 @@ export function authoriseOperation(
   if (scope.kind === 'portal' && policy?.slug !== scope.slug) {
     refuse(state, authority.actor, scope, permission)
   }
-  let principal
-  if (authority.kind === 'key') {
-    if (scope.kind !== 'portal' || scope.slug !== authority.slug) {
-      refuse(state, authority.actor, scope, permission)
-    }
-    principal = normalisePrincipal({
-      kind: 'user',
-      tenantId: state.deps.configuredTenantId,
-      oid: authority.id,
-    }, { portalRoles: [{ slug: authority.slug, role: authority.role }] })
-  } else if (authority.kind === 'break-glass') {
-    principal = normalisePrincipal({
-      kind: 'user',
-      tenantId: state.deps.configuredTenantId,
-      oid: 'break-glass',
-    }, { platformRole: 'owner', portalRoles: [] })
-  } else {
-    principal = normalisePrincipal(
-      authority.kind === 'session'
-        ? { kind: 'user', tenantId: authority.session.tenantId, oid: authority.session.oid }
-        : { kind: 'anonymous' },
-      authority.kind === 'session' ? authority.effectiveRoles : { portalRoles: [] },
-      policy,
-    )
-  }
-  if (!keyPermits(authority, permission) || !authorize(principal, permission, scope)) {
-    refuse(state, authority.actor, scope, permission)
-  }
+  const principal = principalFor(authority, state, scope, policy)
+  if (
+    principal === null || !keyPermits(authority, permission) ||
+    !authorize(principal, permission, scope)
+  ) refuse(state, authority.actor, scope, permission)
   return true
 }
 
