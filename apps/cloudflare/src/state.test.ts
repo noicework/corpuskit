@@ -75,15 +75,30 @@ Deno.test('Durable owned mutations roll back authoritative append and real SQL c
   }
 })
 
-Deno.test('Durable legacy owner and portal provenance is exact, read-only and anonymous across restarts', () => {
+Deno.test('Durable pre-phase records belong to the anonymous client the old mapping preserved', () => {
   const sql = new TestSqlStorage()
   try {
     const seed = new DurableState(sql, sql)
     seed.migrate()
-    seed.put('session:marine:ab:s', { id: 's', title: 'legacy', messages: [] })
-    seed.put('investigation:marine:ab:i', { id: 'i', name: 'legacy' })
+    const session = { id: 's', title: 'legacy', updatedAt: 'then', messages: [] }
+    const investigation = {
+      id: 'i',
+      name: 'legacy',
+      question: '',
+      notes: '',
+      status: 'active',
+      createdAt: 'then',
+      updatedAt: 'then',
+      evidence: [],
+      artefacts: [],
+    }
+    seed.put('session:marine:ab:s', session)
+    seed.put('session:marine:ab:broken', { id: 'other' })
+    seed.put('session:marine:unknown:u', { ...session, id: 'u' })
+    seed.put('investigation:marine:ab:i', investigation)
+    seed.put('investigation:marine:ab:partial', { id: 'partial', name: 'legacy' })
     const watch = {
-      id: 'unproven',
+      id: 'w',
       clientId: 'a/b',
       query: 'legacy',
       createdAt: 'then',
@@ -91,28 +106,71 @@ Deno.test('Durable legacy owner and portal provenance is exact, read-only and an
       fingerprint: null,
       changed: false,
     }
-    seed.put('watches:marine', [watch, { ...watch, id: 'proven', slug: 'marine' }])
-    const before = sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
+    seed.put('watches:marine', [watch, { ...watch, id: 'proven', slug: 'marine' }, {
+      ...watch,
+      id: 'foreign',
+      slug: 'grains',
+    }])
+    const rows = () => sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
+    const before = rows()
+    const signed = { kind: 'user' as const, tenantId: 'one', oid: 'ab' }
     for (let repeat = 0; repeat < 2; repeat++) {
       const state = new DurableState(sql, sql)
       state.migrate()
       const stores = durableStores(state, {})
-      expect(stores.sessions.get('marine', 'ab', 's')).toBeNull()
-      expect(stores.investigations.get('marine', 'ab', 'i')).toBeNull()
-      expect(stores.watches.list('marine', 'a/b').map((w) => w.id)).toEqual(['proven'])
+      // D13: the sanitised segment is the identity for 'ab', never for 'a/b' or 'unknown'.
+      expect(stores.sessions.get('marine', 'ab', 's')).toEqual(session)
+      expect(stores.sessions.list('marine', 'ab')).toEqual([
+        { id: 's', title: 'legacy', updatedAt: 'then' },
+      ])
+      expect(stores.sessions.get('marine', 'a/b', 's')).toBeNull()
+      expect(stores.sessions.get('marine', 'unknown', 'u')).toBeNull()
+      expect(stores.sessions.get('marine', signed, 's')).toBeNull()
+      expect(stores.sessions.list('marine', signed)).toEqual([])
+      expect(stores.sessions.get('mar/ine', 'ab', 's')).toBeNull()
+      expect(stores.investigations.get('marine', 'ab', 'i')).toEqual(investigation)
+      expect(stores.investigations.list('marine', 'ab').map((row) => row.id)).toEqual(['i'])
+      expect(stores.investigations.get('marine', 'ab', 'partial')).toBeNull()
+      expect(stores.investigations.get('marine', signed, 'i')).toBeNull()
+      expect(stores.watches.list('marine', 'a/b').map((w) => w.id).sort()).toEqual(['proven', 'w'])
       expect(stores.watches.list('marine', 'ab')).toEqual([])
       expect(stores.watches.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual(
         [],
       )
       expect(stores.watches.list('mar/ine', 'a/b')).toEqual([])
-      expect(sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()).toEqual(before)
+      expect(rows()).toEqual(before)
     }
-    durableStores(seed, {}).watches.update('marine', 'proven', { changed: true }, 'a/b')
+    // Updates write the new namespace and shadow the legacy record without rewriting it.
+    durableStores(seed, {}).sessions.put('marine', 'ab', { ...session, title: 'renamed' })
     const fresh = durableStores(new DurableState(sql, sql), {})
-    expect(fresh.watches.list('marine', 'a/b')[0]?.changed).toBe(true)
-    fresh.watches.remove('marine', 'a/b', 'proven')
-    expect(durableStores(new DurableState(sql, sql), {}).watches.list('marine', 'a/b')).toEqual([])
+    expect(fresh.sessions.get('marine', 'ab', 's')?.title).toBe('renamed')
+    expect(fresh.sessions.list('marine', 'ab').map((row) => row.title)).toEqual(['renamed'])
+    expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get('session:marine:ab:s'))
+      .toEqual({ value: JSON.stringify(session) })
+    fresh.watches.update('marine', 'proven', { changed: true }, 'a/b')
+    const migrated = durableStores(new DurableState(sql, sql), {})
+    expect(migrated.watches.list('marine', 'a/b').find((w) => w.id === 'proven')?.changed).toBe(
+      true,
+    )
+    expect(migrated.watches.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual(
+      [],
+    )
+    migrated.watches.remove('marine', 'a/b', 'proven')
+    expect(
+      durableStores(new DurableState(sql, sql), {}).watches.list('marine', 'a/b').map((w) => w.id),
+    ).toEqual(['w'])
+    // Deleting removes the record in both namespaces so it cannot reappear.
+    migrated.sessions.remove('marine', 'ab', 's')
+    expect(durableStores(new DurableState(sql, sql), {}).sessions.get('marine', 'ab', 's'))
+      .toBeNull()
+    migrated.investigations.remove('marine', 'ab', 'i')
+    expect(durableStores(new DurableState(sql, sql), {}).investigations.get('marine', 'ab', 'i'))
+      .toBeNull()
+    for (const key of ['session:marine:ab:s', 'investigation:marine:ab:i']) {
+      expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get(key)).toBeUndefined()
+    }
     for (const row of before) {
+      if (row.key === 'session:marine:ab:s' || row.key === 'investigation:marine:ab:i') continue
       expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get(row.key!)?.value)
         .toBe(row.value)
     }

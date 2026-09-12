@@ -19,7 +19,11 @@ import {
   encodeResearchOwner,
   encodeStorageIdentifier,
   equalResearchOwner,
+  legacyAnonymousSegment,
+  legacySegment,
   ownedRecord,
+  readLegacyInvestigation,
+  readLegacySession,
   readOwnedRecord,
   type ResearchOwner,
   researchOwnerValue,
@@ -83,22 +87,39 @@ function ownedRead(path: string): unknown | undefined {
   }
 }
 
-export function ownedWrite(
-  path: string,
-  value: unknown | undefined,
-  boundary?: OwnedMutationBoundary,
-): void {
-  checkedOwnedPath(path)
-  let before: Uint8Array | undefined
+export interface OwnedChange {
+  path: string
+  /** undefined removes the file. */
+  value: unknown | undefined
+}
+
+function removeIfPresent(path: string): void {
   try {
-    before = readFileSync(path)
+    rmSync(path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
+}
+
+/** Apply every change and the boundary completion together; restore exact bytes on failure. */
+export function ownedMutation(
+  changes: readonly OwnedChange[],
+  boundary?: OwnedMutationBoundary,
+): void {
+  const originals = changes.map(({ path }) => {
+    checkedOwnedPath(path)
+    try {
+      return readFileSync(path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return undefined
+    }
+  })
   const work = () => {
-    if (value === undefined) {
-      if (before !== undefined) rmSync(path)
-    } else writeJson(path, value)
+    for (const { path, value } of changes) {
+      if (value === undefined) removeIfPresent(path)
+      else writeJson(path, value)
+    }
     const completion: unknown = boundary?.complete()
     if (completion && typeof (completion as PromiseLike<unknown>).then === 'function') {
       throw new Error('Owned completion must be synchronous')
@@ -108,16 +129,55 @@ export function ownedWrite(
     if (boundary) boundary.database.transactionSync(work)
     else work()
   } catch (error) {
-    if (before !== undefined) writeFileSync(path, before)
-    else {
-      try {
-        rmSync(path)
-      } catch (restoreError) {
-        if ((restoreError as NodeJS.ErrnoException).code !== 'ENOENT') throw restoreError
-      }
+    for (const [index, { path }] of [...changes.entries()].reverse()) {
+      const before = originals[index]
+      if (before !== undefined) writeFileSync(path, before)
+      else removeIfPresent(path)
     }
     throw error
   }
+}
+
+export function ownedWrite(
+  path: string,
+  value: unknown | undefined,
+  boundary?: OwnedMutationBoundary,
+): void {
+  ownedMutation([{ path, value }], boundary)
+}
+
+/** Legacy bytes are compatibility data, never authority: a malformed file reads as absent. */
+function legacyRead(path: string): unknown | undefined {
+  try {
+    return ownedRead(path)
+  } catch {
+    return undefined
+  }
+}
+
+function legacyIds(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((name) => name.endsWith('.json')).map((name) =>
+      name.slice(0, -5)
+    )
+  } catch {
+    return []
+  }
+}
+
+/**
+ * D13: the pre-phase directory for an anonymous owner, derivable only when the portal and raw
+ * client id survived the old sanitisation unchanged.
+ */
+function legacyDirectory(
+  root: string,
+  kind: string,
+  slug: string,
+  owner: ResearchOwner | string,
+): string | undefined {
+  const portal = legacySegment(slug)
+  const client = legacyAnonymousSegment(owner)
+  return portal && client ? join(root, kind, portal, client) : undefined
 }
 
 function ownedDirectory(
@@ -271,19 +331,51 @@ export class SessionsStore {
       'record.json',
     )
   }
+  private legacyPath(slug: string, owner: ResearchOwner | string, id: string): string | undefined {
+    const dir = legacyDirectory(this.dataDir, 'sessions', slug, owner)
+    const segment = legacySegment(id)
+    return dir && segment ? join(dir, `${segment}.json`) : undefined
+  }
+  /** D13: a pre-phase record is this anonymous owner's when its raw ids survived the old mapping. */
+  private legacyGet(
+    slug: string,
+    owner: ResearchOwner | string,
+    id: string,
+  ): StoredSession | undefined {
+    const path = this.legacyPath(slug, owner, id)
+    return path ? readLegacySession(legacyRead(path), id) : undefined
+  }
+  private legacyList(slug: string, owner: ResearchOwner | string): StoredSession[] {
+    const dir = legacyDirectory(this.dataDir, 'sessions', slug, owner)
+    if (!dir) return []
+    return legacyIds(dir).flatMap((id) => {
+      const session = this.legacyGet(slug, owner, id)
+      return session ? [session] : []
+    })
+  }
   list(
     slug: string,
     owner: ResearchOwner | string,
   ): { id: string; title: string; updatedAt: string }[] {
-    return ownedFiles(this.dirFor(slug, owner)).map((path) => {
+    const current = ownedFiles(this.dirFor(slug, owner)).map((path) => {
       const session = readOwnedRecord<StoredSession>(ownedRead(path), slug, owner)
       if (path !== this.pathFor(slug, owner, session.id)) throw new Error('Invalid session path')
       return { id: session.id, title: session.title, updatedAt: session.updatedAt }
-    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 100)
+    })
+    // New writes shadow a legacy record of the same id; legacy bytes are never rewritten.
+    const seen = new Set(current.map((session) => session.id))
+    const legacy = this.legacyList(slug, owner).filter((session) => !seen.has(session.id)).map((
+      { id, title, updatedAt },
+    ) => ({ id, title, updatedAt }))
+    return [...current, ...legacy].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(
+      0,
+      100,
+    )
   }
   get(slug: string, owner: ResearchOwner | string, id: string): StoredSession | null {
     const value = ownedRead(this.pathFor(slug, owner, id))
-    return value === undefined ? null : readOwnedRecord<StoredSession>(value, slug, owner, id)
+    if (value !== undefined) return readOwnedRecord<StoredSession>(value, slug, owner, id)
+    return this.legacyGet(slug, owner, id) ?? null
   }
   put(slug: string, owner: ResearchOwner | string, session: StoredSession): void {
     this.get(slug, owner, session.id)
@@ -294,9 +386,15 @@ export class SessionsStore {
     )
   }
   remove(slug: string, owner: ResearchOwner | string, id: string): void {
-    if (this.get(slug, owner, id)) {
-      ownedWrite(this.pathFor(slug, owner, id), undefined, this.boundary)
-    }
+    const path = this.pathFor(slug, owner, id)
+    const current = ownedRead(path)
+    if (current !== undefined) readOwnedRecord<StoredSession>(current, slug, owner, id)
+    const legacy = this.legacyPath(slug, owner, id)
+    const changes: OwnedChange[] = [
+      ...(current !== undefined ? [{ path, value: undefined }] : []),
+      ...(legacy && this.legacyGet(slug, owner, id) ? [{ path: legacy, value: undefined }] : []),
+    ]
+    if (changes.length) ownedMutation(changes, this.boundary)
   }
 }
 
@@ -331,8 +429,10 @@ export class WatchStore {
   private read(slug: string): Watch[] {
     const value = ownedRead(this.pathFor(slug))
     if (value !== undefined) return decodeWatchCollection(value, slug)
-    const legacy = ownedRead(join(this.dataDir, 'watches', safeSegment(slug) + '.json'))
-    return decodeLegacyWatches(legacy, slug)
+    // D13: the pre-phase collection is this portal's only when the slug survived sanitisation.
+    const portal = legacySegment(slug)
+    if (!portal) return []
+    return decodeLegacyWatches(ownedRead(join(this.dataDir, 'watches', `${portal}.json`)), slug)
   }
   private write(slug: string, entries: Watch[]): void {
     ownedWrite(this.pathFor(slug), { v: 2, slug, entries }, this.boundary)
@@ -565,23 +665,50 @@ export class InvestigationStore {
     this.get(slug, owner, value.id)
     ownedWrite(this.pathFor(slug, owner, value.id), ownedRecord(slug, owner, value), this.boundary)
   }
+  private legacyPath(slug: string, owner: ResearchOwner | string, id: string): string | undefined {
+    const dir = legacyDirectory(this.dataDir, 'investigations', slug, owner)
+    const segment = legacySegment(id)
+    return dir && segment ? join(dir, `${segment}.json`) : undefined
+  }
+  /** D13: a pre-phase record is this anonymous owner's when its raw ids survived the old mapping. */
+  private legacyGet(
+    slug: string,
+    owner: ResearchOwner | string,
+    id: string,
+  ): Investigation | undefined {
+    const path = this.legacyPath(slug, owner, id)
+    return path ? readLegacyInvestigation(legacyRead(path), id) : undefined
+  }
+  private legacyList(slug: string, owner: ResearchOwner | string): Investigation[] {
+    const dir = legacyDirectory(this.dataDir, 'investigations', slug, owner)
+    if (!dir) return []
+    return legacyIds(dir).flatMap((id) => {
+      const investigation = this.legacyGet(slug, owner, id)
+      return investigation ? [investigation] : []
+    })
+  }
   list(slug: string, owner: ResearchOwner | string) {
-    return ownedFiles(this.dirFor(slug, owner)).map((path) => {
+    const summary = (i: Investigation) => ({
+      id: i.id,
+      name: i.name,
+      question: i.question,
+      status: i.status,
+      updatedAt: i.updatedAt,
+      evidenceCount: i.evidence.length,
+    })
+    const current = ownedFiles(this.dirFor(slug, owner)).map((path) => {
       const i = readOwnedRecord<Investigation>(ownedRead(path), slug, owner)
       if (path !== this.pathFor(slug, owner, i.id)) throw new Error('Invalid investigation path')
-      return {
-        id: i.id,
-        name: i.name,
-        question: i.question,
-        status: i.status,
-        updatedAt: i.updatedAt,
-        evidenceCount: i.evidence.length,
-      }
-    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      return summary(i)
+    })
+    const seen = new Set(current.map((i) => i.id))
+    const legacy = this.legacyList(slug, owner).filter((i) => !seen.has(i.id)).map(summary)
+    return [...current, ...legacy].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
   get(slug: string, owner: ResearchOwner | string, id: string): Investigation | null {
     const value = ownedRead(this.pathFor(slug, owner, id))
-    return value === undefined ? null : readOwnedRecord<Investigation>(value, slug, owner, id)
+    if (value !== undefined) return readOwnedRecord<Investigation>(value, slug, owner, id)
+    return this.legacyGet(slug, owner, id) ?? null
   }
 
   create(
@@ -626,9 +753,15 @@ export class InvestigationStore {
   }
 
   remove(slug: string, clientId: ResearchOwner | string, id: string): void {
-    if (this.get(slug, clientId, id)) {
-      ownedWrite(this.pathFor(slug, clientId, id), undefined, this.boundary)
-    }
+    const path = this.pathFor(slug, clientId, id)
+    const current = ownedRead(path)
+    if (current !== undefined) readOwnedRecord<Investigation>(current, slug, clientId, id)
+    const legacy = this.legacyPath(slug, clientId, id)
+    const changes: OwnedChange[] = [
+      ...(current !== undefined ? [{ path, value: undefined }] : []),
+      ...(legacy && this.legacyGet(slug, clientId, id) ? [{ path: legacy, value: undefined }] : []),
+    ]
+    if (changes.length) ownedMutation(changes, this.boundary)
   }
 
   addEvidence(

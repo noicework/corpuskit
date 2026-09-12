@@ -75,9 +75,20 @@ Deno.test('local owned mutations restore exact files after authoritative append 
   }
 })
 
-Deno.test('local history requires actual raw identity and portal evidence and never adopts signed ownership', () => {
+Deno.test('local pre-phase records belong to the anonymous client the old mapping preserved', () => {
   const dataDir = Deno.makeTempDirSync()
   const session = { id: 's', title: 'legacy', updatedAt: 'then', messages: [] }
+  const investigation = {
+    id: 'i',
+    name: 'legacy',
+    question: '',
+    notes: '',
+    status: 'active',
+    createdAt: 'then',
+    updatedAt: 'then',
+    evidence: [],
+    artefacts: [],
+  }
   const legacy = {
     id: 'w',
     clientId: 'a/b',
@@ -88,40 +99,77 @@ Deno.test('local history requires actual raw identity and portal evidence and ne
     changed: false,
   }
   writeJsonAtomic(join(dataDir, 'sessions', 'marine', 'ab', 's.json'), session)
-  writeJsonAtomic(join(dataDir, 'investigations', 'marine', 'ab', 'i.json'), {
-    id: 'i',
+  writeJsonAtomic(join(dataDir, 'sessions', 'marine', 'ab', 'broken.json'), { id: 'other' })
+  writeJsonAtomic(join(dataDir, 'sessions', 'marine', 'unknown', 'u.json'), { ...session, id: 'u' })
+  writeJsonAtomic(join(dataDir, 'investigations', 'marine', 'ab', 'i.json'), investigation)
+  writeJsonAtomic(join(dataDir, 'investigations', 'marine', 'ab', 'partial.json'), {
+    id: 'partial',
     name: 'legacy',
   })
   writeJsonAtomic(join(dataDir, 'watches', 'marine.json'), [legacy, {
     ...legacy,
     id: 'proven',
     slug: 'marine',
-  }])
+  }, { ...legacy, id: 'foreign', slug: 'grains' }])
   const original = fileSnapshot(dataDir)
+  const signed = { kind: 'user' as const, tenantId: 'one', oid: 'ab' }
   try {
     for (let repeat = 0; repeat < 2; repeat++) {
       const sessions = new SessionsStore(dataDir),
         investigations = new InvestigationStore(dataDir),
         watches = new WatchStore(dataDir)
+      // D13: the sanitised segment is the identity for 'ab', never for 'a/b' or 'unknown'.
+      expect(sessions.get('marine', 'ab', 's')).toEqual(session)
+      expect(sessions.list('marine', 'ab')).toEqual([{
+        id: 's',
+        title: 'legacy',
+        updatedAt: 'then',
+      }])
       expect(sessions.get('marine', 'a/b', 's')).toBeNull()
-      expect(sessions.get('marine', 'ab', 's')).toBeNull()
-      expect(investigations.get('marine', 'ab', 'i')).toBeNull()
-      expect(watches.list('marine', 'a/b').map((w) => w.id)).toEqual(['proven'])
+      expect(sessions.get('marine', 'unknown', 'u')).toBeNull()
+      expect(sessions.get('marine', signed, 's')).toBeNull()
+      expect(sessions.list('marine', signed)).toEqual([])
+      expect(sessions.get('mar/ine', 'ab', 's')).toBeNull()
+      expect(investigations.get('marine', 'ab', 'i')).toEqual(investigation)
+      expect(investigations.list('marine', 'ab').map((row) => row.id)).toEqual(['i'])
+      expect(investigations.get('marine', 'ab', 'partial')).toBeNull()
+      expect(investigations.get('marine', signed, 'i')).toBeNull()
+      // Watch rows recorded their raw client id; the file names the portal, so 'a/b' matches.
+      expect(watches.list('marine', 'a/b').map((w) => w.id).sort()).toEqual(['proven', 'w'])
       expect(watches.list('marine', 'ab')).toEqual([])
       expect(watches.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual([])
       expect(watches.list('mar/ine', 'a/b')).toEqual([])
       expect(fileSnapshot(dataDir)).toEqual(original)
     }
+    // Updates write the new namespace and shadow the legacy record without rewriting it.
+    new SessionsStore(dataDir).put('marine', 'ab', { ...session, title: 'renamed' })
+    expect(new SessionsStore(dataDir).get('marine', 'ab', 's')?.title).toBe('renamed')
+    expect(new SessionsStore(dataDir).list('marine', 'ab').map((row) => row.title)).toEqual([
+      'renamed',
+    ])
+    expect(Array.from(readFileSync(join(dataDir, 'sessions', 'marine', 'ab', 's.json'))).join(','))
+      .toBe(original['/sessions/marine/ab/s.json'])
     new WatchStore(dataDir).update('marine', 'proven', { changed: true }, 'a/b')
     const migrated = new WatchStore(dataDir)
-    expect(migrated.list('marine', 'a/b')[0]?.changed).toBe(true)
+    expect(migrated.list('marine', 'a/b').find((w) => w.id === 'proven')?.changed).toBe(true)
     expect(migrated.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual([])
     migrated.remove('marine', 'a/b', 'proven')
-    expect(new WatchStore(dataDir).list('marine', 'a/b')).toEqual([])
+    expect(new WatchStore(dataDir).list('marine', 'a/b').map((w) => w.id)).toEqual(['w'])
     expect(readFileSync(join(dataDir, 'watches', 'marine.json'), 'utf8')).toContain('legacy')
-    for (const [path, bytes] of Object.entries(original)) {
-      expect(Array.from(readFileSync(dataDir + path)).join(',')).toBe(bytes)
-    }
+    // Deleting removes the record in both namespaces so it cannot reappear.
+    new SessionsStore(dataDir).remove('marine', 'ab', 's')
+    expect(new SessionsStore(dataDir).get('marine', 'ab', 's')).toBeNull()
+    expect(existsSync(join(dataDir, 'sessions', 'marine', 'ab', 's.json'))).toBe(false)
+    new InvestigationStore(dataDir).remove('marine', 'ab', 'i')
+    expect(new InvestigationStore(dataDir).get('marine', 'ab', 'i')).toBeNull()
+    expect(existsSync(join(dataDir, 'investigations', 'marine', 'ab', 'i.json'))).toBe(false)
+    for (
+      const path of [
+        '/sessions/marine/ab/broken.json',
+        '/sessions/marine/unknown/u.json',
+        '/investigations/marine/ab/partial.json',
+      ]
+    ) expect(Array.from(readFileSync(dataDir + path)).join(',')).toBe(original[path])
   } finally {
     Deno.removeSync(dataDir, { recursive: true })
   }

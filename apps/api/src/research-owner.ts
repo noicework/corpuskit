@@ -1,4 +1,10 @@
-import type { Watch } from './stores.ts'
+import type {
+  EvidenceItem,
+  Investigation,
+  InvestigationArtefact,
+  StoredSession,
+  Watch,
+} from './stores.ts'
 
 /** Exact identifiers with explicit provenance. Storage must not coerce this to a shared string. */
 export type ResearchOwner =
@@ -114,11 +120,75 @@ export const LEGACY_OWNER_DIAGNOSTIC = {
   unresolved: 'missing-raw-owner-or-portal-evidence',
 } as const
 
-/** Legacy rows need independent raw portal evidence as well as their recorded client ID. */
+/**
+ * Pre-phase stores keyed every path segment through this sanitisation. It is the identity for
+ * these values (the web app's 32-hex client ids among them), so the old key is derivable without
+ * guessing. 'unknown' was the shared fallback for every unrepresentable value and names nobody.
+ */
+const LEGACY_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/
+export function legacySegment(value: unknown): string | undefined {
+  return typeof value === 'string' && LEGACY_SEGMENT.test(value) && value !== 'unknown'
+    ? value
+    : undefined
+}
+
+/**
+ * D13: a pre-phase record is addressable only by an anonymous owner whose raw client id the old
+ * mapping preserved. Signed owners never reach the legacy namespace, so a client id equal to a
+ * signed oid cannot select signed records and a signed user never inherits anonymous ones.
+ */
+export function legacyAnonymousSegment(owner: ResearchOwner | string): string | undefined {
+  const value = researchOwnerValue(owner)
+  return value.kind === 'anonymous' ? legacySegment(value.clientId) : undefined
+}
+
+const isString = (value: unknown): value is string => typeof value === 'string'
+
+/** Legacy bytes are compatibility data, never authority: a malformed record reads as absent. */
+export function readLegacySession(value: unknown, id?: string): StoredSession | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  const recordId = legacySegment(row.id)
+  if (
+    !recordId || (id !== undefined && recordId !== id) || !isString(row.title) ||
+    !isString(row.updatedAt) || !Array.isArray(row.messages)
+  ) return undefined
+  return { id: recordId, title: row.title, updatedAt: row.updatedAt, messages: row.messages }
+}
+
+export function readLegacyInvestigation(value: unknown, id?: string): Investigation | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  const recordId = legacySegment(row.id)
+  if (
+    !recordId || (id !== undefined && recordId !== id) || !isString(row.name) ||
+    !isString(row.question) || !isString(row.notes) ||
+    (row.status !== 'active' && row.status !== 'closed') || !isString(row.createdAt) ||
+    !isString(row.updatedAt) || !Array.isArray(row.evidence) || !Array.isArray(row.artefacts)
+  ) return undefined
+  return {
+    id: recordId,
+    name: row.name,
+    question: row.question,
+    notes: row.notes,
+    status: row.status,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    evidence: row.evidence as EvidenceItem[],
+    artefacts: row.artefacts as InvestigationArtefact[],
+  }
+}
+
+/**
+ * Legacy watch rows recorded the raw client id but no portal: the collection they sit in is the
+ * route's portal (D13). A row that does carry a slug must still name that portal.
+ */
 export function legacyWatchOwner(value: unknown, slug: string): ResearchOwner | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const row = value as Record<string, unknown>
-  if (row.slug !== slug || 'owner' in row || typeof row.clientId !== 'string') return undefined
+  if (
+    ('slug' in row && row.slug !== slug) || 'owner' in row || typeof row.clientId !== 'string'
+  ) return undefined
   try {
     return researchOwnerValue(row.clientId)
   } catch {

@@ -72,7 +72,11 @@ import {
   encodeResearchOwner,
   encodeStorageIdentifier,
   equalResearchOwner,
+  legacyAnonymousSegment,
+  legacySegment,
   ownedRecord,
+  readLegacyInvestigation,
+  readLegacySession,
   readOwnedRecord,
   type ResearchOwner,
   researchOwnerValue,
@@ -941,6 +945,20 @@ export class DurableInsightsStore implements InsightsStoreApi {
   }
 }
 
+/**
+ * D13: the pre-phase key prefix for an anonymous owner, derivable only when the portal and raw
+ * client id survived the old segment sanitisation unchanged.
+ */
+function legacyPrefix(
+  kind: 'session' | 'investigation',
+  slug: string,
+  owner: ResearchOwner | string,
+): string | undefined {
+  const portal = legacySegment(slug)
+  const client = legacyAnonymousSegment(owner)
+  return portal && client ? `${kind}:${portal}:${client}:` : undefined
+}
+
 export class DurableSessionsStore implements SessionsStoreApi {
   constructor(private readonly state: DurableState) {}
 
@@ -948,18 +966,52 @@ export class DurableSessionsStore implements SessionsStoreApi {
     return 'research-v2:' + encodeStorageIdentifier(slug) + ':sessions:' +
       encodeResearchOwner(clientId) + ':'
   }
+  private legacyKey(
+    slug: string,
+    clientId: ResearchOwner | string,
+    id: string,
+  ): string | undefined {
+    const prefix = legacyPrefix('session', slug, clientId)
+    const segment = legacySegment(id)
+    return prefix && segment ? prefix + segment : undefined
+  }
+  /** A pre-phase record is this anonymous owner's when its raw ids survived the old mapping. */
+  private legacyGet(
+    slug: string,
+    clientId: ResearchOwner | string,
+    id: string,
+  ): StoredSession | undefined {
+    const key = this.legacyKey(slug, clientId, id)
+    return key ? readLegacySession(this.state.get<unknown>(key, undefined), id) : undefined
+  }
+  private legacyList(slug: string, clientId: ResearchOwner | string): StoredSession[] {
+    const prefix = legacyPrefix('session', slug, clientId)
+    if (!prefix) return []
+    return this.state.list<unknown>(prefix).flatMap(({ key, value }) => {
+      const session = readLegacySession(value)
+      return session && key === prefix + session.id ? [session] : []
+    })
+  }
 
   list(
     slug: string,
     clientId: ResearchOwner | string,
   ): { id: string; title: string; updatedAt: string }[] {
-    return this.state.list<unknown>(this.prefix(slug, clientId)).map(({ key, value }) => {
+    const current = this.state.list<unknown>(this.prefix(slug, clientId)).map(({ key, value }) => {
       const session = readOwnedRecord<StoredSession>(value, slug, clientId)
       if (key !== this.prefix(slug, clientId) + encodeStorageIdentifier(session.id)) {
         throw new Error('Invalid session key')
       }
       return { id: session.id, title: session.title, updatedAt: session.updatedAt }
-    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 100)
+    })
+    // New writes shadow a legacy record of the same id; legacy rows are never rewritten.
+    const seen = new Set(current.map((session) => session.id))
+    const legacy = this.legacyList(slug, clientId).filter((session) => !seen.has(session.id))
+      .map(({ id, title, updatedAt }) => ({ id, title, updatedAt }))
+    return [...current, ...legacy].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(
+      0,
+      100,
+    )
   }
 
   get(slug: string, clientId: ResearchOwner | string, id: string): StoredSession | null {
@@ -967,7 +1019,8 @@ export class DurableSessionsStore implements SessionsStoreApi {
       this.prefix(slug, clientId) + encodeStorageIdentifier(id),
       undefined,
     )
-    return value === undefined ? null : readOwnedRecord<StoredSession>(value, slug, clientId, id)
+    if (value !== undefined) return readOwnedRecord<StoredSession>(value, slug, clientId, id)
+    return this.legacyGet(slug, clientId, id) ?? null
   }
 
   put(slug: string, clientId: ResearchOwner | string, session: StoredSession): void {
@@ -979,8 +1032,14 @@ export class DurableSessionsStore implements SessionsStoreApi {
   }
 
   remove(slug: string, clientId: ResearchOwner | string, id: string): void {
-    if (!this.get(slug, clientId, id)) return
-    this.state.delete(this.prefix(slug, clientId) + encodeStorageIdentifier(id))
+    const key = this.prefix(slug, clientId) + encodeStorageIdentifier(id)
+    const current = this.state.get<unknown>(key, undefined)
+    if (current !== undefined) {
+      readOwnedRecord<StoredSession>(current, slug, clientId, id)
+      this.state.delete(key)
+    }
+    const legacy = this.legacyKey(slug, clientId, id)
+    if (legacy && this.legacyGet(slug, clientId, id)) this.state.delete(legacy)
   }
 }
 
@@ -992,7 +1051,10 @@ export class DurableWatchStore implements WatchStoreApi {
   private read(slug: string): Watch[] {
     const value = this.state.get<unknown>(this.storageKey(slug), undefined)
     if (value !== undefined) return decodeWatchCollection(value, slug)
-    return decodeLegacyWatches(this.state.get(key('watches', slug), undefined), slug)
+    // D13: the pre-phase collection is this portal's only when the slug survived sanitisation.
+    const portal = legacySegment(slug)
+    if (!portal) return []
+    return decodeLegacyWatches(this.state.get(`watches:${portal}`, undefined), slug)
   }
   private write(slug: string, entries: Watch[]): void {
     this.state.put(this.storageKey(slug), { v: 2, slug, entries })
@@ -1139,26 +1201,57 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
   private storageKey(slug: string, clientId: ResearchOwner | string, id: string): string {
     return this.prefix(slug, clientId) + encodeStorageIdentifier(id)
   }
+  private legacyKey(
+    slug: string,
+    clientId: ResearchOwner | string,
+    id: string,
+  ): string | undefined {
+    const prefix = legacyPrefix('investigation', slug, clientId)
+    const segment = legacySegment(id)
+    return prefix && segment ? prefix + segment : undefined
+  }
+  /** A pre-phase record is this anonymous owner's when its raw ids survived the old mapping. */
+  private legacyGet(
+    slug: string,
+    clientId: ResearchOwner | string,
+    id: string,
+  ): Investigation | undefined {
+    const key = this.legacyKey(slug, clientId, id)
+    return key ? readLegacyInvestigation(this.state.get<unknown>(key, undefined), id) : undefined
+  }
+  private legacyList(slug: string, clientId: ResearchOwner | string): Investigation[] {
+    const prefix = legacyPrefix('investigation', slug, clientId)
+    if (!prefix) return []
+    return this.state.list<unknown>(prefix).flatMap(({ key, value }) => {
+      const investigation = readLegacyInvestigation(value)
+      return investigation && key === prefix + investigation.id ? [investigation] : []
+    })
+  }
 
   list(slug: string, clientId: ResearchOwner | string) {
-    return this.state.list<unknown>(this.prefix(slug, clientId)).map(({ key, value }) => {
+    const summary = (i: Investigation) => ({
+      id: i.id,
+      name: i.name,
+      question: i.question,
+      status: i.status,
+      updatedAt: i.updatedAt,
+      evidenceCount: i.evidence.length,
+    })
+    const current = this.state.list<unknown>(this.prefix(slug, clientId)).map(({ key, value }) => {
       const i = readOwnedRecord<Investigation>(value, slug, clientId)
       if (key !== this.storageKey(slug, clientId, i.id)) {
         throw new Error('Invalid investigation key')
       }
-      return {
-        id: i.id,
-        name: i.name,
-        question: i.question,
-        status: i.status,
-        updatedAt: i.updatedAt,
-        evidenceCount: i.evidence.length,
-      }
-    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      return summary(i)
+    })
+    const seen = new Set(current.map((i) => i.id))
+    const legacy = this.legacyList(slug, clientId).filter((i) => !seen.has(i.id)).map(summary)
+    return [...current, ...legacy].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
   get(slug: string, clientId: ResearchOwner | string, id: string): Investigation | null {
     const value = this.state.get<unknown>(this.storageKey(slug, clientId, id), undefined)
-    return value === undefined ? null : readOwnedRecord<Investigation>(value, slug, clientId, id)
+    if (value !== undefined) return readOwnedRecord<Investigation>(value, slug, clientId, id)
+    return this.legacyGet(slug, clientId, id) ?? null
   }
   private put(slug: string, owner: ResearchOwner | string, value: Investigation): void {
     this.get(slug, owner, value.id)
@@ -1207,8 +1300,14 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
   }
 
   remove(slug: string, clientId: ResearchOwner | string, id: string): void {
-    if (!this.get(slug, clientId, id)) return
-    this.state.delete(this.storageKey(slug, clientId, id))
+    const key = this.storageKey(slug, clientId, id)
+    const current = this.state.get<unknown>(key, undefined)
+    if (current !== undefined) {
+      readOwnedRecord<Investigation>(current, slug, clientId, id)
+      this.state.delete(key)
+    }
+    const legacy = this.legacyKey(slug, clientId, id)
+    if (legacy && this.legacyGet(slug, clientId, id)) this.state.delete(legacy)
   }
 
   addEvidence(
