@@ -1,5 +1,13 @@
 import { expect } from '@std/expect'
 import type { AssignmentInput } from './assignments.ts'
+import { openLocalRbac } from './rbac-local.ts'
+import { localOwnedStores } from './local-owned-stores.ts'
+import { LocalIngress } from './local-ingress.ts'
+import { TenantStore } from './tenants.ts'
+import { buildApp } from './app.ts'
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
+import { sessionFor } from './enforcement-fixture.ts'
+import { issueScopedKey } from './scoped-keys.ts'
 import {
   ACCESS_ROUTE_CASES,
   assertExpectedPermission,
@@ -10,6 +18,233 @@ const json = (method: string, body: unknown) => ({
   method,
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
+})
+
+Deno.test('real local access changes restore file and memory after append and actual COMMIT failures', async () => {
+  const directory = Deno.makeTempDirSync({ prefix: 'access-ingress-' })
+  const env = {
+    DATA_DIR: directory,
+    TENANTS_PATH: `${directory}/tenants.json`,
+    ENTRA_TENANT_ID: 'tenant-1',
+    ENVIRONMENT: 'development',
+  }
+  const { database, rbac } = openLocalRbac(env)
+  try {
+    let failure: 'named' | 'local' | 'commit' | undefined
+    let observed = 0
+    const owned = localOwnedStores(directory, database, {
+      append(event) {
+        if (event.action === 'tenant.access.update' || event.action === 'local.mutation') {
+          expect(JSON.parse(Deno.readTextFileSync(env.TENANTS_PATH)).overrides.marine.accessMode)
+            .toBe('restricted')
+          if (
+            (failure === 'named' && event.action === 'tenant.access.update') ||
+            (failure === 'local' && event.action === 'local.mutation')
+          ) {
+            observed++
+            throw new Error('fixture append')
+          }
+        }
+        rbac.audit.append(event)
+        if (failure === 'commit' && event.action === 'tenant.access.update') {
+          observed++
+          database.exec('INSERT INTO access_child VALUES (1)')
+        }
+      },
+    }, env)
+    const tenants = owned.tenants!
+    tenants.patch('marine', { accessMode: 'public' })
+    const before = Deno.readFileSync(env.TENANTS_PATH)
+    database.exec(
+      'PRAGMA foreign_keys=ON; CREATE TABLE access_parent(id INTEGER PRIMARY KEY); CREATE TABLE access_child(id INTEGER REFERENCES access_parent(id) DEFERRABLE INITIALLY DEFERRED)',
+    )
+    const ingress = new LocalIngress({ env, rbac, tenants })
+    const app = buildApp({
+      ...owned,
+      tenants,
+      rbac,
+      audit: rbac.audit,
+      configuredTenantId: env.ENTRA_TENANT_ID,
+      audience: 'corpuskit',
+      provider: new DoubleProvider(),
+      breakGlass: ingress.breakGlass,
+      requestContext: ingress.requestContext,
+    })
+    const invoke = () =>
+      ingress.handle(
+        new Request(
+          'http://localhost/api/admin/t/marine/access',
+          json('PATCH', { accessMode: 'restricted' }),
+        ),
+        (request) => app.fetch(request),
+        { remoteAddr: { transport: 'tcp', hostname: '127.0.0.1', port: 8791 } },
+        sessionFor('owner', 'marine', Date.now()),
+      )
+    for (const mode of ['named', 'local', 'commit'] as const) {
+      failure = mode
+      expect((await invoke()).status).toBe(500)
+      expect(Deno.readFileSync(env.TENANTS_PATH)).toEqual(before)
+      expect(tenants.get('marine')!.accessMode).toBe('public')
+      expect(new TenantStore(env).get('marine')!.accessMode).toBe('public')
+      expect(database.all('SELECT * FROM access_child')).toEqual([])
+      expect(
+        rbac.audit.read({ scope: { kind: 'platform' } }).filter((event) =>
+          event.action === 'tenant.access.update'
+        ),
+      ).toEqual([])
+    }
+    expect(observed).toBe(3)
+    failure = undefined
+    expect((await invoke()).status).toBe(200)
+    expect(new TenantStore(env).get('marine')!.accessMode).toBe('restricted')
+    expect(tenants.get('marine')!.accessMode).toBe('restricted')
+  } finally {
+    database.close()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('access mode strict input, admin key refusal, durable rollback and completion semantics', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const admin = f.sessionFor('portal-admin')
+    const invoke = (body: unknown) =>
+      f.requestAs(admin, '/api/admin/t/a/access', json('PATCH', body))
+    for (
+      const body of [
+        null,
+        {},
+        [],
+        { accessMode: null },
+        { accessMode: 'invalid' },
+        { accessMode: 'public', scope: {} },
+        { accessMode: 'public', actor: {} },
+        { accessMode: 'public', subjectId: 'other' },
+        { accessMode: 'public', unknown: true },
+      ]
+    ) expect((await invoke(body)).status).toBe(400)
+    expect(
+      (await f.requestAs(admin, '/api/admin/t/a/access', { method: 'PATCH', body: '{' })).status,
+    ).toBe(400)
+    const prepared = await issueScopedKey(
+      { slug: 'a', label: 'admin', role: 'portal-admin' },
+      admin,
+      f.authorityDependencies(),
+    )
+    prepared.commit()
+    expect(
+      (await f.requestAs(admin, '/api/admin/t/a/access', {
+        ...json('PATCH', { accessMode: 'public' }),
+        headers: { authorization: `Bearer ${prepared.key}` },
+      })).status,
+    ).toBe(403)
+    for (const mode of ['named', 'local', 'commit']) {
+      if (mode === 'commit') {
+        f.database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE access_parent(id INTEGER PRIMARY KEY); CREATE TABLE access_child(id INTEGER REFERENCES access_parent(id) DEFERRABLE INITIALLY DEFERRED)',
+        )
+      }
+      f.database.exec(
+        mode === 'commit'
+          ? `CREATE TRIGGER access_failure AFTER INSERT ON audit_events WHEN NEW.action = 'tenant.access.update' BEGIN INSERT INTO access_child VALUES (1); END`
+          : `CREATE TRIGGER access_failure BEFORE INSERT ON audit_events WHEN NEW.action = '${
+            mode === 'named' ? 'tenant.access.update' : 'local.mutation'
+          }' BEGIN SELECT RAISE(ABORT, 'fixture'); END`,
+      )
+      expect((await invoke({ accessMode: 'public' })).status).toBe(500)
+      expect(f.stores.tenants.get('a')!.accessMode).toBe('restricted')
+      expect(
+        f.rbac.audit.read({ scope: { kind: 'platform' } }).some((event) =>
+          event.action === 'tenant.access.update'
+        ),
+      ).toBe(false)
+      f.database.exec('DROP TRIGGER access_failure')
+    }
+    f.database.exec(
+      `CREATE TRIGGER completion_failure BEFORE INSERT ON audit_events WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'fixture'); END`,
+    )
+    expect((await invoke({ accessMode: 'public' })).status).toBe(500)
+    expect(f.stores.tenants.get('a')!.accessMode).toBe('public')
+    expect(
+      f.rbac.audit.read({ scope: { kind: 'platform' } }).some((event) =>
+        event.action === 'tenant.access.update' && event.outcome === 'success'
+      ),
+    ).toBe(true)
+    f.database.exec('DROP TRIGGER completion_failure')
+    expect((await invoke({ accessMode: 'public' })).status).toBe(200)
+    expect(
+      f.rbac.audit.read({ scope: { kind: 'platform' } }).filter((event) =>
+        event.action === 'tenant.access.update' && event.outcome === 'success'
+      ),
+    ).toHaveLength(2)
+    for (const slug of ['missing', 'corrupt']) {
+      expect(
+        (await f.requestAs(
+          f.sessionFor('owner'),
+          `/api/admin/t/${slug}/access`,
+          json('PATCH', { accessMode: 'public' }),
+        )).status,
+      ).toBe(403)
+    }
+    f.assertNoProtectedDispatch()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('access mode requires behaviour authority and records the exact transition', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (const session of [f.sessionFor('curator'), f.sessionFor('portal-admin', 'b'), null]) {
+      const response = await f.requestAs(
+        session,
+        '/api/admin/t/a/access',
+        json('PATCH', { accessMode: 'public' }),
+      )
+      expect(response.status).toBe(session ? 403 : 401)
+      expect(f.stores.tenants.get('a')!.accessMode).toBe('restricted')
+      f.assertNoProtectedDispatch()
+    }
+    const response = await f.requestAs(
+      f.sessionFor('portal-admin'),
+      '/api/admin/t/a/access',
+      json('PATCH', { accessMode: 'public' }),
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ slug: 'a', accessMode: 'public' })
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(f.stores.tenants.get('a')!.accessMode).toBe('public')
+    expect(
+      f.rbac.audit.read({ scope: { kind: 'portal', slug: 'a' } }).filter((event) =>
+        event.action === 'tenant.access.update' && event.outcome === 'success'
+      ).map((event) => JSON.parse(event.detail_json)),
+    ).toContainEqual({
+      permission: 'behaviour.write',
+      previousAccessMode: 'restricted',
+      accessMode: 'public',
+    })
+    for (
+      const [accessMode, anonymousStatus, signedStatus] of [['public', 200, 200], [
+        'authenticated',
+        401,
+        200,
+      ], ['restricted', 401, 403]] as const
+    ) {
+      expect(
+        (await f.requestAs(
+          f.sessionFor('portal-admin'),
+          '/api/admin/t/a/access',
+          json('PATCH', { accessMode }),
+        )).status,
+      ).toBe(200)
+      expect((await f.requestAs(null, '/api/t/a/search?q=Abalone')).status).toBe(anonymousStatus)
+      expect((await f.requestAs(f.unassigned, '/api/t/a/search?q=Abalone')).status).toBe(
+        signedStatus,
+      )
+    }
+  } finally {
+    f.close()
+  }
 })
 
 const seed = (f: ReturnType<typeof createEnforcementFixture>, input: AssignmentInput) => {

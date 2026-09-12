@@ -193,6 +193,9 @@ export class DurableState {
             },
           }),
         )
+        if (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') {
+          appendAudit(this.rbac.audit, createAuditEvent({ ...context.input, outcome: 'success' }))
+        }
         return result
       })
     } catch (error) {

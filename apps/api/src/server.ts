@@ -8,7 +8,6 @@ import { SourceStore } from './stores.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
-import { TenantStore } from './tenants.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
 import { LocalIngress } from './local-ingress.ts'
@@ -21,7 +20,6 @@ const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
 const bindings = new BindingStore()
-const tenants = new TenantStore()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
 const provider = new AragProvider({
@@ -34,7 +32,8 @@ const provider = new AragProvider({
 const sources = new SourceStore()
 const enrichments = new EnrichmentStore()
 const { database, rbac } = openLocalRbac(process.env)
-const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit)
+const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
+const tenants = owned.tenants!
 const { watches } = owned
 const ingress = new LocalIngress({ rbac, tenants, env: process.env })
 

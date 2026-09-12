@@ -10,6 +10,7 @@ import type { LocalMutationScope } from './audit-execution.ts'
 import { DECLARATIONS } from './permissions.ts'
 import type { RbacDatabase } from './rbac-state.ts'
 import { InvestigationStore, McpKeyStore, SessionsStore, WatchStore } from './stores.ts'
+import { TenantStore } from './tenants.ts'
 
 interface RequestMutation {
   input: Omit<AuditInput, 'outcome'>
@@ -24,6 +25,7 @@ export function localOwnedStores(
   dataDir: string,
   database: Pick<RbacDatabase, 'transactionSync'>,
   audit: Pick<AuditStore, 'append'>,
+  tenantEnv?: Record<string, string | undefined>,
 ) {
   const requests = new AsyncLocalStorage<RequestMutation>()
   const operations = new AsyncLocalStorage<{ name: string; args: unknown[] }>()
@@ -94,6 +96,9 @@ export function localOwnedStores(
           },
         }),
       )
+      if (operation.name === 'tenants.patch' && context.input.action === 'tenant.access.update') {
+        appendAudit(audit, createAuditEvent({ ...context.input, outcome: 'success' }))
+      }
     },
   }
   const wrap = <T extends object>(name: string, store: T): T =>
@@ -121,6 +126,7 @@ export function localOwnedStores(
     })
   return {
     localMutations,
+    ...(tenantEnv ? { tenants: wrap('tenants', new TenantStore(tenantEnv, boundary)) } : {}),
     sessions: wrap('sessions', new SessionsStore(dataDir, boundary)),
     watches: wrap('watches', new WatchStore(dataDir, boundary)),
     investigations: wrap('investigations', new InvestigationStore(dataDir, boundary)),

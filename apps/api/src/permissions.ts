@@ -67,6 +67,13 @@ function entry(
 
 /** D11's sole route/tool catalogue. Labels classify audit only in Phase 2. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
+    subActions: [{
+      action: 'tenant.access.update',
+      permission: 'behaviour.write',
+      scope: 'portal',
+    }],
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),

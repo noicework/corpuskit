@@ -7,7 +7,7 @@ import {
   TenantConfigSchema,
   type TenantSummary,
 } from '@research-portal/core'
-import { writeJsonAtomic } from './persist.ts'
+import { type OwnedMutationBoundary, ownedWrite } from './stores.ts'
 
 // ---------------------------------------------------------------------------
 // Seed tenant configs - the single source of truth for tenant-driven theming
@@ -235,7 +235,16 @@ export class TenantStore {
   private disabled = new Set<string>()
   private readonly path: string
 
-  constructor(env: Record<string, string | undefined> = process.env) {
+  private committed!: {
+    custom: Record<string, unknown>
+    overrides: Record<string, unknown>
+    disabled: string[]
+  }
+
+  constructor(
+    env: Record<string, string | undefined> = process.env,
+    private readonly boundary?: OwnedMutationBoundary,
+  ) {
     this.path = env.TENANTS_PATH ?? './data/tenants.json'
     let raw: Record<string, unknown>
     try {
@@ -250,6 +259,7 @@ export class TenantStore {
     if (Array.isArray(raw.disabled)) {
       this.disabled = new Set(raw.disabled.filter((s): s is string => typeof s === 'string'))
     }
+    this.committed = structuredClone(this.snapshot())
   }
 
   get(slug: string): TenantConfig | undefined {
@@ -390,11 +400,24 @@ export class TenantStore {
   }
 
   private persist(): void {
-    writeJsonAtomic(this.path, {
+    try {
+      ownedWrite(this.path, this.snapshot(), this.boundary)
+      this.committed = structuredClone(this.snapshot())
+    } catch (error) {
+      const before = structuredClone(this.committed)
+      this.custom = before.custom
+      this.overrides = before.overrides
+      this.disabled = new Set(before.disabled)
+      throw error
+    }
+  }
+
+  private snapshot() {
+    return {
       custom: this.custom,
       overrides: this.overrides,
       disabled: [...this.disabled],
-    })
+    }
   }
 }
 

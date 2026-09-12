@@ -1694,6 +1694,30 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   registerAccessRoutes(app, {
+    tenants,
+    updateMode: async (c, previousAccessMode, accessMode) => {
+      if (!opts.localMutations) throw new AuditWriteError()
+      await declaredSubAction(
+        'PATCH',
+        '/api/admin/t/:slug/access',
+        'tenant.access.update',
+        (declaration) =>
+          opts.localMutations!.run(
+            {
+              requestId: requestContext(c.req.raw).requestId,
+              actor: requestContext(c.req.raw).actor!,
+              action: 'tenant.access.update',
+              scope: { kind: 'portal', slug: c.req.param('slug')! },
+              target: { kind: 'tenant', id: c.req.param('slug')! },
+              detail: { permission: declaration.permission, previousAccessMode, accessMode },
+            },
+            operationSignals.get(c.req.raw) ?? c.req.raw.signal,
+            () => {
+              tenants.patch(c.req.param('slug')!, { accessMode })
+            },
+          ),
+      )
+    },
     authorise: authoriseDeclared,
     context: (c) => {
       const context = requestContext(c.req.raw)

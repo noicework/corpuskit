@@ -5,6 +5,7 @@ import type { AssignmentContext, AssignmentResult, AssignmentService } from './a
 import { AuthorisationError } from './authorisation.ts'
 import { declaredRoute } from './permissions.ts'
 import type { RoleAssignment } from './rbac-state.ts'
+import type { TenantStoreApi } from './tenants.ts'
 
 export interface AccessRouteServices {
   authorise(c: Context): Promise<unknown>
@@ -12,10 +13,28 @@ export interface AccessRouteServices {
   assignments(): AssignmentService
   groupCapability(): 'enabled' | 'disabled'
   notFound(c: Context): Response
+  tenants: TenantStoreApi
+  updateMode(
+    c: Context,
+    previousAccessMode: 'public' | 'authenticated' | 'restricted',
+    accessMode: 'public' | 'authenticated' | 'restricted',
+  ): Promise<void>
 }
 
 /** Registration consumes the catalogue; permission and actor selection stay in the app guard. */
 export function registerAccessRoutes(app: Hono, services: AccessRouteServices): void {
+  app.patch(declaredRoute('PATCH', '/api/admin/t/:slug/access'), async (c) => {
+    await services.authorise(c)
+    c.header('Cache-Control', 'private, no-store')
+    const parsed = z.object({ accessMode: z.enum(['public', 'authenticated', 'restricted']) })
+      .strict().safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_input' }, 400)
+    const slug = c.req.param('slug')
+    const current = services.tenants.get(slug)
+    if (!current) return services.notFound(c)
+    await services.updateMode(c, current.accessMode, parsed.data.accessMode)
+    return c.json({ slug, accessMode: parsed.data.accessMode })
+  })
   for (
     const [domain, family] of [
       ['portal', 'members'],

@@ -470,7 +470,17 @@ Deno.test('shared caches cannot replay bytes across revocation or mutable portal
       const allowed = await cache.fetch(url, () => f.requestAs(null, url))
       expect(allowed.status).toBe(200)
       await allowed.text()
-      f.stores.tenants.patch('public-a', { accessMode: 'restricted' })
+      expect(
+        (await f.requestAs(
+          f.sessionFor('portal-admin', 'public-a'),
+          '/api/admin/t/public-a/access',
+          {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ accessMode: 'restricted' }),
+          },
+        )).status,
+      ).toBe(200)
       for (const method of ['GET', 'HEAD']) {
         f.providerCalls.length = 0
         f.calls.length = 0
@@ -492,7 +502,17 @@ Deno.test('shared caches cannot replay bytes across revocation or mutable portal
         expect(f.calls).toEqual([])
         await denied.text()
       }
-      f.stores.tenants.patch('public-a', { accessMode: 'public' })
+      expect(
+        (await f.requestAs(
+          f.sessionFor('portal-admin', 'public-a'),
+          '/api/admin/t/public-a/access',
+          {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ accessMode: 'public' }),
+          },
+        )).status,
+      ).toBe(200)
     }
     const prepared = await issueScopedKey(
       { slug: 'a', label: 'Read', role: 'viewer' },

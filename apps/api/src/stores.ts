@@ -83,7 +83,7 @@ function ownedRead(path: string): unknown | undefined {
   }
 }
 
-function ownedWrite(
+export function ownedWrite(
   path: string,
   value: unknown | undefined,
   boundary?: OwnedMutationBoundary,

@@ -104,11 +104,13 @@ export function createEnforcementFixture(
   }
   const state = new DurableState(sql, database, now)
   state.migrate()
+  const durable = durableStores(state, {})
   const stores = {
-    ...durableStores(state, {}),
+    ...durable,
     ...(ownedAdapter === 'local'
       ? localOwnedStores(directory, state.rbacDatabase, state.rbac.audit)
       : {}),
+    tenants: durable.tenants,
   }
   const tenantId = 'tenant-1'
   const audience = 'corpuskit'
