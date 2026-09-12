@@ -414,3 +414,77 @@ Deno.test('break-glass evaluates with ambient session and required denial audit 
     f.close()
   }
 })
+
+Deno.test('key authorities are data-plane only whatever role they carry', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const deps = dependencies(f)
+    const key = await issueScopedKey(
+      { slug: 'a', label: 'Admin client', role: 'portal-admin' },
+      f.creator,
+      deps,
+    )
+    key.commit()
+    const authorityFor = async () =>
+      await selectRequestAuthority(
+        new Request('http://local/api/t/a/mcp', {
+          headers: { authorization: `Bearer ${key.key}` },
+        }),
+        await f.contextFor(null),
+        deps,
+      )
+    const dataPlane = [
+      'portal.read',
+      'portal.ask',
+      'portal.generate',
+      'portal.investigate',
+      'portal.export',
+      'portal.watch',
+      'content.write',
+      'taxonomy.write',
+      'enrichments.write',
+      'graph.write',
+    ]
+    const authority = await authorityFor()
+    for (const permission of dataPlane) {
+      expect(authoriseOperation(authority, permission, scope, policy()), permission).toBe(true)
+    }
+    const management = [
+      'keys.manage',
+      'members.manage',
+      'behaviour.write',
+      'appearance.write',
+      'bindings.write',
+      'domains.write',
+      'audit.read',
+      'audit.export',
+      'portal.create',
+      'portal.delete',
+      'platform.members.manage',
+      'platform.settings.write',
+    ]
+    // Refusals latch per request, so each management permission gets its own authority.
+    for (const permission of management) {
+      for (const target of [scope, { kind: 'platform' as const }]) {
+        const before = f.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 }).length
+        const fresh = await authorityFor()
+        expect(
+          () =>
+            authoriseOperation(
+              fresh,
+              permission,
+              target,
+              target.kind === 'portal' ? policy() : undefined,
+            ),
+          `${permission} ${target.kind}`,
+        ).toThrow()
+        expect(f.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 }).length).toBe(
+          before + 1,
+        )
+      }
+    }
+    f.assertNoProtectedDispatch()
+  } finally {
+    f.close()
+  }
+})

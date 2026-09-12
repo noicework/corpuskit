@@ -23,6 +23,7 @@ import { sessionFor } from './enforcement-fixture.ts'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { selectRequestAuthority } from './authorisation.ts'
+import { issueScopedKey } from './scoped-keys.ts'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import { signPrincipal } from './principal.ts'
 
@@ -1219,5 +1220,79 @@ Deno.test('real local key HTTP commits restore exact bytes on append and SQL COM
   } finally {
     database.close()
     Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('a portal-admin key uses data-plane tools but never key or portal management', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const key = await issueScopedKey(
+      { slug: 'a', label: 'Admin client', role: 'portal-admin' },
+      f.creator,
+      f.authorityDependencies(),
+    )
+    key.commit()
+    const bearer = { authorization: `Bearer ${key.key}` }
+    const listed = await f.requestAs(
+      null,
+      '/api/t/a/mcp',
+      rpcInit({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, bearer),
+    )
+    expect(listed.status).toBe(200)
+    expect(await listed.text()).toContain('search_corpus')
+    for (const [name, args] of toolsToCall) {
+      const response = await f.requestAs(null, '/api/t/a/mcp', rpcInit(rpcBody(name, args), bearer))
+      expect(response.status, name).toBe(200)
+      expect((await response.json()).result.isError).not.toBe(true)
+    }
+    expect((await f.requestAs(null, '/api/t/a/search?q=abalone', { headers: bearer })).status)
+      .toBe(200)
+    const denials = () =>
+      f.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 }).filter((e) =>
+        e.action === 'request.denied'
+      ).length
+    const state = () => f.database.all('SELECT * FROM state ORDER BY key')
+    const baseline = state()
+    for (const session of [null, f.sessionFor('owner')]) {
+      for (
+        const [method, path, body] of [
+          ['GET', '/api/t/a/mcp/keys'],
+          ['POST', '/api/t/a/mcp/keys', { label: 'Minted by key', role: 'viewer' }],
+          ['DELETE', `/api/t/a/mcp/keys/${key.credential.id}`],
+          ['PATCH', '/api/admin/t/a/access', { accessMode: 'public' }],
+          ['PATCH', '/api/admin/tenants/a', { name: 'Renamed portal' }],
+          ['DELETE', '/api/admin/t/a/knowledge-box'],
+          ['POST', '/api/admin/tenants', { name: 'New portal' }],
+          ['GET', '/api/admin/t/a/audit'],
+          ['GET', '/api/admin/t/a/audit/export'],
+          ['GET', '/api/admin/t/a/members'],
+        ] as const
+      ) {
+        const before = denials()
+        const response = await f.requestAs(session, path, {
+          method,
+          headers: { 'content-type': 'application/json', ...bearer },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        })
+        // D6 refuses every bearer on /api/admin/* before selection (401 without a session);
+        // on /api/t/:slug/mcp/keys the key is selected and then refused as data-plane only.
+        const status = path.startsWith('/api/admin/') && !session ? 401 : 403
+        expect(response.status, `${method} ${path}`).toBe(status)
+        expect(await response.json()).toEqual({
+          error: status === 401 ? 'unauthorised' : 'forbidden',
+        })
+        expect(denials()).toBe(before + 1)
+      }
+    }
+    expect(state()).toEqual(baseline)
+    expect(f.stores.mcpKeys.list('a')).toHaveLength(1)
+    expect(f.stores.mcpKeys.list('a')[0]?.revokedAt).toBeNull()
+    expect(f.stores.tenants.get('a')?.accessMode).toBe('restricted')
+    // The management surface still works for a real portal-admin session.
+    const listing = await f.requestAs(f.creator, '/api/t/a/mcp/keys')
+    expect(listing.status).toBe(200)
+    expect((await listing.json())[0]?.id).toBe(key.credential.id)
+  } finally {
+    f.close()
   }
 })

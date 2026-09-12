@@ -3,6 +3,7 @@ import {
   type EffectiveRoles,
   EffectiveRolesSchema,
   normalisePrincipal,
+  type Permission,
   PermissionSchema,
   type PortalPolicy,
   PortalPolicySchema,
@@ -66,6 +67,29 @@ const states = new WeakMap<RequestAuthority, AuthorityState>()
 const selections = new WeakMap<Request, Promise<RequestAuthority>>()
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
+
+/**
+ * D13: a key is a data-plane authority. Whatever role it carries, it never satisfies a
+ * management permission; key, member, behaviour, appearance, binding, domain, audit and
+ * platform operations need a session.
+ */
+const KEY_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.export',
+  'portal.watch',
+  'content.write',
+  'taxonomy.write',
+  'enrichments.write',
+  'graph.write',
+])
+function keyPermits(authority: RequestAuthority, permission: unknown): boolean {
+  if (authority.kind !== 'key') return true
+  const parsed = PermissionSchema.safeParse(permission)
+  return parsed.success && KEY_PERMISSIONS.has(parsed.data)
+}
 
 function refuse(
   state: AuthorityState,
@@ -278,7 +302,9 @@ export function authoriseOperation(
       policy,
     )
   }
-  if (!authorize(principal, permission, scope)) refuse(state, authority.actor, scope, permission)
+  if (!keyPermits(authority, permission) || !authorize(principal, permission, scope)) {
+    refuse(state, authority.actor, scope, permission)
+  }
   return true
 }
 
