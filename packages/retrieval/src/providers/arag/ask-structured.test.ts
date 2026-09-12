@@ -13,6 +13,7 @@ import { AragProvider, MIN_GENERATE_GROUNDING } from './index.ts'
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'test-tenant',
   branding: {
     productName: 'Test Portal',

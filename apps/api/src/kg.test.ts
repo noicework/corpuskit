@@ -5,6 +5,7 @@ import type { AragProvider } from '@research-portal/retrieval'
 import { implementKgStrategy, proposeKgStrategy, replaceGraphStrategy } from './kg.ts'
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'marine',
   branding: {
     productName: 'Southern Waters Research Portal',
