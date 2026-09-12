@@ -348,7 +348,7 @@ describe('independent admin route permission matrix', () => {
     ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
     ['PUT', 'extraction/rules', 'behaviour.write', { default: 'default', rules: [] }],
     ['GET', 'routing', 'behaviour.write'],
-    ['GET', '/api/admin/overview', 'platform.settings.write'],
+    ['GET', '/api/admin/overview', 'portal.create'],
     ['DELETE', 'knowledge-box', 'bindings.write'],
     ['POST', '/api/admin/tenants', 'portal.create', { name: 'New portal' }],
     ['DELETE', '/api/admin/tenants/:slug', 'portal.delete'],
@@ -376,7 +376,7 @@ describe('independent admin route permission matrix', () => {
     }],
     ['GET', 'agents', 'graph.write'],
     ['DELETE', 'agents/:taskId', 'graph.write'],
-    ['GET', 'enrichments/export', 'portal.export'],
+    ['GET', 'enrichments/export', 'enrichments.write'],
     ['POST', 'enrichments/import', 'enrichments.write', {
       research: {
         'res-1': {
@@ -838,7 +838,8 @@ describe('exact admin gate', () => {
     for (const role of ['owner', 'platform-admin'] as const) {
       const { app } = fixture(role)
       expect((await app.request('/api/admin/t/marine/extraction/methods')).status).toBe(503)
-      expect((await app.request('/api/admin/overview')).status).toBe(role === 'owner' ? 200 : 403)
+      // D13: the overview is portal.create at platform scope, so both platform roles may read it.
+      expect((await app.request('/api/admin/overview')).status).toBe(200)
       expect(
         (await app.request('/api/admin/overview', { headers: { 'x-admin-passcode': 'wrong' } }))
           .status,
@@ -1627,18 +1628,31 @@ describe('admin', () => {
   })
 
   for (const role of ['platform-admin', 'owner'] as const) {
-    it(`requires owner for overview: ${role}`, async () => {
+    it(`allows both platform roles to read the overview: ${role}`, async () => {
       const fixture = createEnforcementFixture()
       try {
         const response = await fixture.requestAs(fixture.sessionFor(role), '/api/admin/overview')
-        expect(response.status).toBe(role === 'owner' ? 200 : 403)
-        if (role === 'platform-admin') fixture.assertNoProtectedDispatch()
-        else expect((await response.json()).length).toBeGreaterThan(0)
+        expect(response.status).toBe(200)
+        expect((await response.json()).length).toBeGreaterThan(0)
       } finally {
         fixture.close()
       }
     })
   }
+
+  it('refuses the overview to portal-admin sessions and keeps its platform scope', async () => {
+    const fixture = createEnforcementFixture()
+    try {
+      const response = await fixture.requestAs(
+        fixture.sessionFor('portal-admin'),
+        '/api/admin/overview',
+      )
+      expect(response.status).toBe(403)
+      fixture.assertNoProtectedDispatch()
+    } finally {
+      fixture.close()
+    }
+  })
 
   it('reverting a connected binding falls back to the demo box', async () => {
     const dir = Deno.makeTempDirSync()

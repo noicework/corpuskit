@@ -728,7 +728,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
   ['PUT', 'extraction/rules', 'behaviour.write', { default: 'default', rules: [] }],
   ['GET', 'routing', 'behaviour.write'],
-  ['GET', '/api/admin/overview', 'platform.settings.write'],
+  ['GET', '/api/admin/overview', 'portal.create'],
   ['DELETE', 'knowledge-box', 'bindings.write'],
   ['POST', '/api/admin/tenants', 'portal.create', { name: 'New portal' }],
   ['DELETE', '/api/admin/tenants/:slug', 'portal.delete'],
@@ -756,7 +756,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   }],
   ['GET', 'agents', 'graph.write'],
   ['DELETE', 'agents/:taskId', 'graph.write'],
-  ['GET', 'enrichments/export', 'portal.export'],
+  ['GET', 'enrichments/export', 'enrichments.write'],
   ['POST', 'enrichments/import', 'enrichments.write', {
     research: {
       'res-1': {

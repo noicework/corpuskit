@@ -260,7 +260,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   ),
   entry('http', 'POST', '/api/t/:slug/verdicts', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/followups', 'portal.generate', 'portal'),
-  entry('http', 'GET', '/api/admin/overview', 'platform.settings.write', 'platform'),
+  // D13: the estate overview is a platform-admin read, not an owner-only settings write.
+  entry('http', 'GET', '/api/admin/overview', 'portal.create', 'platform'),
   entry('http', 'DELETE', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
   entry('http', 'POST', '/api/admin/tenants', 'portal.create', 'platform', {
     subActions: [
@@ -330,7 +331,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'PUT', '/api/admin/t/:slug/kg/strategy', 'graph.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/agents', 'graph.write', 'portal'),
   entry('http', 'DELETE', '/api/admin/t/:slug/agents/:taskId', 'graph.write', 'portal'),
-  entry('http', 'GET', '/api/admin/t/:slug/enrichments/export', 'portal.export', 'portal'),
+  // D13: the enrichment archive is curator material, matching its import counterpart.
+  entry('http', 'GET', '/api/admin/t/:slug/enrichments/export', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/enrichments/import', 'enrichments.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/enrichments', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/enrichments/run', 'enrichments.write', 'portal'),
