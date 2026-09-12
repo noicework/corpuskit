@@ -8,6 +8,7 @@ import {
 } from './permissions.ts'
 import {
   AuthorisationError,
+  authoriseOperation,
   type AuthorityDependencies,
   type RequestAuthority,
 } from './authorisation.ts'
@@ -39,24 +40,19 @@ import {
   WebStandardStreamableHTTPServerTransport,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
-import type { EffectiveRoles, TenantConfig } from '@research-portal/core'
+import { PORTAL_ROLES, type TenantConfig } from '@research-portal/core'
 import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
-import { type McpKeyRecord, type McpKeyStoreApi } from './stores.ts'
+import { type McpKeyStoreApi } from './stores.ts'
 import { clientIp, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
 
 const MCP_ROUTE = '/api/t/:slug/mcp'
-const KEY_ID_BYTES = 9
-const KEY_SECRET_BYTES = 32
-const DUMMY_HASH = '0'.repeat(64)
-const KEY_PATTERN = /^(ck_mcp_[A-Za-z0-9_-]{12})_[A-Za-z0-9_-]{43}$/
-
 const keyLabelSchema = z.object({
   label: z.string().trim().min(1).max(80).refine((value) =>
     [...value].every((character) =>
       character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127
     )
   ),
-  role: z.enum(['viewer', 'analyst', 'curator', 'portal-admin']),
+  role: z.enum(PORTAL_ROLES),
   expiresAt: z.string().optional(),
 }).strict()
 
@@ -65,19 +61,6 @@ const READ_ONLY_TOOL = {
   destructiveHint: false,
   openWorldHint: false,
 } as const
-
-export interface McpKeySummary {
-  id: string
-  label: string
-  prefix: string
-  createdAt: string
-  revokedAt: string | null
-}
-
-export interface TrustedPortalUser {
-  id: string
-  effectiveRoles: EffectiveRoles
-}
 
 export interface McpRoutesOptions {
   localMutations?: LocalMutationScope
@@ -104,7 +87,7 @@ export async function executeMcpTool(
   declaration: Declaration,
   context: McpAuditContext,
   audit: AuditStore | undefined,
-  call: () => Promise<Record<string, unknown>>,
+  call: (signal?: AbortSignal) => Promise<Record<string, unknown>>,
   localMutations?: LocalMutationScope,
 ): Promise<Record<string, unknown>> {
   const input = {
@@ -112,13 +95,22 @@ export async function executeMcpTool(
     actor: context.actor,
     scope: { kind: 'portal' as const, slug: context.slug },
     target: { kind: 'tool', id: declaration.path },
-    detail: { permission: declaration.permission, operation: `MCP ${declaration.path}` },
+    detail: {
+      ...(declaration.permission ? { permission: declaration.permission } : {}),
+      operation: `MCP ${declaration.path}`,
+    },
   }
-  const invoke = async () => {
+  const invoke = async (signal = context.signal) => {
     try {
-      return await call()
+      signal?.throwIfAborted()
+      const result = await call(signal)
+      signal?.throwIfAborted()
+      return result
     } catch (error) {
-      if (error instanceof AragApiError && (error.status === 401 || error.status === 403)) {
+      if (
+        error instanceof AuthorisationError ||
+        (error instanceof AragApiError && (error.status === 401 || error.status === 403))
+      ) {
         if (!audit) throw new AuditWriteError()
         appendAudit(
           audit,
@@ -127,7 +119,7 @@ export async function executeMcpTool(
             action: 'request.denied',
             outcome: 'denied',
             detail: {
-              permission: declaration.permission,
+              ...(declaration.permission ? { permission: declaration.permission } : {}),
               code: error.status === 401 ? 'unauthorised' : 'forbidden',
             },
           }),
@@ -146,11 +138,14 @@ export async function executeMcpTool(
       input: { ...input, action: 'request.privileged' },
       run: async (signal) => {
         try {
-          const result = await invoke()
+          const result = await invoke(signal)
           const staged = await stageAuditResponse(materialisedJsonResponse(result), signal)
           return { result, outcome: staged.outcome, error: undefined }
         } catch (error) {
-          if (error instanceof AragApiError && (error.status === 401 || error.status === 403)) {
+          if (
+            error instanceof AuthorisationError ||
+            (error instanceof AragApiError && (error.status === 401 || error.status === 403))
+          ) {
             return { result: undefined, outcome: 'denied' as const, error }
           }
           throw error
@@ -164,23 +159,6 @@ export async function executeMcpTool(
     if (error instanceof AuditWriteError) context.mandatoryFailure = error
     throw error
   }
-}
-
-function base64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function randomToken(bytes: number): string {
-  return base64Url(crypto.getRandomValues(new Uint8Array(bytes)))
-}
-
-async function credentialHash(value: string): Promise<string> {
-  const digest = new Uint8Array(
-    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)),
-  )
-  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function hashBytes(value: string): Uint8Array {
@@ -199,60 +177,6 @@ export function constantTimeHashEqual(left: string, right: string): boolean {
   let difference = 0
   for (let index = 0; index < a.length; index += 1) difference |= a[index]! ^ b[index]!
   return difference === 0 && /^[0-9a-f]{64}$/.test(left) && /^[0-9a-f]{64}$/.test(right)
-}
-
-function summary(record: McpKeyRecord): McpKeySummary {
-  return {
-    id: record.id,
-    label: record.label,
-    prefix: record.prefix,
-    createdAt: record.createdAt,
-    revokedAt: record.revokedAt,
-  }
-}
-
-/** Mint a 256-bit CorpusKit credential and persist only its SHA-256 digest. */
-export async function issueMcpCredential(
-  keys: McpKeyStoreApi,
-  tenant: string,
-  issuerUserId: string,
-  label: string,
-  now = new Date().toISOString(),
-): Promise<{ key: string; credential: McpKeySummary }> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const prefix = `ck_mcp_${randomToken(KEY_ID_BYTES)}`
-    if (keys.findByPrefix(tenant, prefix)) continue
-    const key = `${prefix}_${randomToken(KEY_SECRET_BYTES)}`
-    const record: McpKeyRecord = {
-      id: crypto.randomUUID(),
-      tenant,
-      issuerUserId,
-      label: label.trim(),
-      prefix,
-      hash: await credentialHash(key),
-      createdAt: now,
-      revokedAt: null,
-    }
-    keys.add(record)
-    return { key, credential: summary(record) }
-  }
-  throw new Error('Could not allocate an MCP credential identifier')
-}
-
-/** Authenticate one tenant-scoped credential. Every failure is indistinguishable to callers. */
-export async function verifyMcpCredential(
-  keys: McpKeyStoreApi,
-  tenant: string,
-  authorization: string | undefined,
-): Promise<McpKeyRecord | null> {
-  const bearer = /^Bearer\s+([^\s]+)$/i.exec(authorization ?? '')?.[1]
-  const match = bearer ? KEY_PATTERN.exec(bearer) : null
-  if (!bearer || !match) return null
-
-  const record = keys.findByPrefix(tenant, match[1]!)
-  const suppliedHash = await credentialHash(bearer)
-  const matches = constantTimeHashEqual(record?.hash ?? DUMMY_HASH, suppliedHash)
-  return record && !record.revokedAt && matches ? record : null
 }
 
 function jsonResult(value: Record<string, unknown>) {
@@ -287,18 +211,43 @@ export function createMcpServer(opts: McpRoutesOptions): {
   const auditedTool = (
     name: string,
     context: ServerContext,
-    call: () => Promise<Record<string, unknown>>,
+    call: (signal?: AbortSignal) => Promise<Record<string, unknown>>,
   ) => {
     const declaration = DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === name)
     const auditContext = context.http?.authInfo?.extra?.auditContext as McpAuditContext | undefined
-    if (!declaration || !auditContext) throw new AuditWriteError()
-    return safeTool(() =>
-      executeMcpTool(declaration, auditContext, opts.audit, call, opts.localMutations)
-    )
+    return safeTool(async () => {
+      try {
+        const authority = context.http?.authInfo?.extra?.authority as RequestAuthority | undefined
+        const slug = context.http?.authInfo?.extra?.slug
+        if (
+          !declaration || !auditContext || !authority || typeof slug !== 'string' ||
+          slug !== auditContext.slug || !opts.authorityDependencies ||
+          declaration.scope !== 'portal'
+        ) {
+          throw new AuditWriteError()
+        }
+        const config = opts.tenant(slug)
+        authoriseOperation(authority, declaration.permission, { kind: 'portal', slug }, {
+          slug,
+          accessMode: config?.accessMode,
+          configuredTenantId: opts.authorityDependencies.configuredTenantId,
+        })
+        return await executeMcpTool(
+          declaration,
+          auditContext,
+          opts.audit,
+          call,
+          opts.localMutations,
+        )
+      } catch (error) {
+        if (auditContext && error instanceof AuditWriteError) auditContext.mandatoryFailure = error
+        throw error
+      }
+    })
   }
 
   const tenantFor = (context: ServerContext): TenantConfig => {
-    const slug = context.http?.authInfo?.extra?.tenant
+    const slug = context.http?.authInfo?.extra?.slug
     const config = typeof slug === 'string' ? opts.tenant(slug) : undefined
     if (!config) throw new Error('Unknown tenant')
     return config
@@ -313,7 +262,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
         query: z.string().trim().min(1).max(2000),
         mode: z.enum(['hybrid', 'semantic', 'keyword']).optional(),
         limit: z.number().int().min(1).max(20).default(10),
-      }),
+      }).strict(),
       annotations: { ...READ_ONLY_TOOL, idempotentHint: true },
     },
     ({ query, mode, limit }, context) =>
@@ -336,11 +285,11 @@ export function createMcpServer(opts: McpRoutesOptions): {
       title: 'Answer from the corpus',
       description:
         'Answer a research question from this portal and return the verified citations with it.',
-      inputSchema: z.object({ question: z.string().trim().min(1).max(4000) }),
+      inputSchema: z.object({ question: z.string().trim().min(1).max(4000) }).strict(),
       annotations: { ...READ_ONLY_TOOL, idempotentHint: false },
     },
     ({ question }, context) =>
-      auditedTool('answer_question', context, async () => {
+      auditedTool('answer_question', context, async (signal) => {
         let answer = ''
         let refused = false
         let sources: unknown[] = []
@@ -348,6 +297,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
         let quality: Record<string, number | null> | undefined
 
         for await (const event of opts.provider.ask(tenantFor(context), question)) {
+          signal?.throwIfAborted()
           if (event.type === 'delta') answer += event.text
           else if (event.type === 'sources') sources = event.resources
           else if (event.type === 'citation') citations.push(event.citation)
@@ -385,13 +335,13 @@ export function createMcpServer(opts: McpRoutesOptions): {
       description: 'Fetch the portal metadata, summary and key facts for one document.',
       inputSchema: z.object({
         id: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
-      }),
+      }).strict(),
       annotations: { ...READ_ONLY_TOOL, idempotentHint: true },
     },
     ({ id }, context) =>
       auditedTool('get_document', context, async () => {
         const document = await opts.provider.resource(tenantFor(context), id)
-        if (!document) throw new Error('Unknown document')
+        if (!document || document.id !== id) throw new AuthorisationError(403)
         return { document }
       }),
   )
@@ -407,7 +357,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
         query: z.string().trim().min(1).max(500).optional(),
         sort: z.enum(['created', 'modified', 'title']).default('created'),
         order: z.enum(['asc', 'desc']).default('desc'),
-      }),
+      }).strict(),
       annotations: { ...READ_ONLY_TOOL, idempotentHint: true },
     },
     ({ page, pageSize, query, sort, order }, context) =>
@@ -455,7 +405,6 @@ function withNoStore(response: Response): Response {
 
 /** Register role-gated key management and the authenticated Streamable HTTP endpoint. */
 export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
-  const { transport, connected } = createMcpServer(opts)
   const limiter = new SlidingWindowLimiter({
     limit: opts.rateLimitPerMin ?? 60,
     windowMs: 60_000,
@@ -537,6 +486,9 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
       }
       if (!opts.tenant(slug)) return context.json({ error: 'unknown_tenant' }, 404)
 
+      // The pinned SDK indexes pending streams by JSON-RPC id. Isolate stateless
+      // requests so different callers may safely reuse the same client-chosen id.
+      const { transport, connected } = createMcpServer(opts)
       await connected
       const auditContext: McpAuditContext = {
         requestId: request?.requestId ?? crypto.randomUUID(),
@@ -544,17 +496,21 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
         slug,
         signal: context.req.raw.signal,
       }
-      const response = await transport.handleRequest(context.req.raw, {
-        authInfo: {
-          token: 'credential-verified',
-          clientId: selected.kind === 'key' ? selected.id : selected.actor.id ?? 'anonymous',
-          scopes: ['corpus:read'],
-          extra: { tenant: slug, slug, authority: selected, auditContext },
-        },
-      })
-      // The SDK converts callback exceptions into protocol errors; mandatory audit errors remain HTTP failures.
-      if (auditContext.mandatoryFailure) throw auditContext.mandatoryFailure
-      return withNoStore(response)
+      try {
+        const response = await transport.handleRequest(context.req.raw, {
+          authInfo: {
+            token: 'credential-verified',
+            clientId: selected.kind === 'key' ? selected.id : selected.actor.id ?? 'anonymous',
+            scopes: [],
+            extra: { slug, authority: selected, auditContext },
+          },
+        })
+        // The SDK converts callback exceptions into protocol errors; required audit errors remain HTTP failures.
+        if (auditContext.mandatoryFailure) throw auditContext.mandatoryFailure
+        return withNoStore(response)
+      } finally {
+        await transport.close()
+      }
     },
   )
 }

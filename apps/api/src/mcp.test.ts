@@ -13,8 +13,8 @@ import type {
 import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
 import { buildApp, type BuildAppOptions } from './app.ts'
 import { type AuditEvent, AuditWriteError } from './audit.ts'
-import { constantTimeHashEqual, executeMcpTool } from './mcp.ts'
-import { DECLARATIONS } from './permissions.ts'
+import { constantTimeHashEqual, createMcpServer, executeMcpTool } from './mcp.ts'
+import { assertToolInventory, DECLARATIONS } from './permissions.ts'
 import { McpKeyStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
 import { openLocalRbac } from './rbac-local.ts'
@@ -22,6 +22,9 @@ import { localOwnedStores } from './local-owned-stores.ts'
 import { sessionFor } from './enforcement-fixture.ts'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { LocalIngress } from './local-ingress.ts'
+import { selectRequestAuthority } from './authorisation.ts'
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
+import { signPrincipal } from './principal.ts'
 
 const cleanups: (() => void)[] = []
 afterEach(() => {
@@ -563,6 +566,482 @@ Deno.test('key management strictly binds role, creator, expiry and URL portal', 
     f.assertNoProtectedDispatch()
   } finally {
     f.close()
+  }
+})
+
+const toolsToCall = [
+  ['search_corpus', { query: 'Research' }, 'portal.read'],
+  ['get_document', { id: 'res-1' }, 'portal.read'],
+  ['browse_catalogue', {}, 'portal.read'],
+  ['answer_question', { question: 'Explain the evidence' }, 'portal.ask'],
+] as const
+const rpcBody = (name: string, args: unknown, id: string | number = 1) => ({
+  jsonrpc: '2.0',
+  id,
+  method: 'tools/call',
+  params: { name, arguments: args },
+})
+const rpcInit = (body: unknown, headers: Record<string, string> = {}): RequestInit => ({
+  method: 'POST',
+  headers: {
+    accept: 'application/json, text/event-stream',
+    'content-type': 'application/json',
+    ...headers,
+  },
+  body: JSON.stringify(body),
+})
+
+Deno.test('every actual MCP callback independently enforces its declared permission and audit failure', async () => {
+  const f = createEnforcementFixture()
+  try {
+    f.stores.tenants.patch('a', { accessMode: 'restricted' })
+    for (const fail of [false, true]) {
+      for (const [name, args, permission] of toolsToCall) {
+        expect(DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === name)?.permission).toBe(
+          permission,
+        )
+        const request = new Request('http://localhost/api/t/a/mcp', rpcInit(rpcBody(name, args)))
+        const context = await f.contextFor(f.unassigned)
+        const authority = await selectRequestAuthority(request, context, f.authorityDependencies())
+        const auditContext = {
+          requestId: context.requestId,
+          actor: authority.actor,
+          slug: 'a',
+          mandatoryFailure: undefined as AuditWriteError | undefined,
+        }
+        const server = createMcpServer({
+          provider: f.provider,
+          keys: f.stores.mcpKeys,
+          tenant: (slug) => f.stores.tenants.get(slug),
+          audit: f.rbac.audit,
+          authorityDependencies: f.authorityDependencies(),
+        })
+        await server.connected
+        if (fail) f.failAudit()
+        try {
+          const response = await server.transport.handleRequest(request, {
+            authInfo: {
+              token: 'verified',
+              clientId: 'unassigned',
+              scopes: [],
+              extra: { authority, slug: 'a', tenant: 'a', auditContext },
+            },
+          })
+          const result = await response.json()
+          expect(result.result?.isError === true || !!result.error).toBe(true)
+          f.assertNoProtectedDispatch()
+          if (fail) expect(auditContext.mandatoryFailure).toBeInstanceOf(AuditWriteError)
+          else {expect(
+              f.rbac.audit.read({
+                scope: { kind: 'portal', slug: 'a' },
+                requestId: context.requestId,
+              }),
+            ).toHaveLength(1)}
+        } finally {
+          if (fail) f.recoverAudit()
+          await server.transport.close()
+        }
+      }
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('real MCP tools reject unknown arguments, scope overrides and unresolved document identities', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (const [name, args] of toolsToCall) {
+      for (
+        const patch of [
+          { slug: 'b' },
+          { resourceId: 'foreign' },
+          { fieldId: 'foreign' },
+          { owner: f.creator.oid },
+          { sessionId: 'session' },
+          { clientId: f.creator.oid },
+          { authority: { kind: 'system' } },
+        ]
+      ) {
+        const before = f.providerCalls.length
+        const response = await f.requestAs(
+          f.creator,
+          '/api/t/a/mcp',
+          rpcInit(rpcBody(name, { ...args, ...patch })),
+        )
+        const result = await response.json()
+        expect(result.result?.isError === true || !!result.error).toBe(true)
+        f.assertNoProtectedDispatch(before)
+      }
+    }
+    const unknown = await f.requestAs(
+      f.creator,
+      '/api/t/a/mcp',
+      rpcInit(rpcBody('future_tool', {})),
+    )
+    expect((await unknown.json()).error).toBeDefined()
+    f.provider.resource = async () => ({
+      ...RESOURCE,
+      id: 'foreign',
+      summary: 'Hidden foreign material',
+    })
+    for (const fail of [false, true]) {
+      if (fail) f.failAudit()
+      const response = await f.requestAs(
+        f.creator,
+        '/api/t/a/mcp',
+        rpcInit(rpcBody('get_document', { id: 'res-1' })),
+      )
+      expect(response.status).toBe(fail ? 500 : 200)
+      const text = await response.text()
+      expect(text).not.toContain('Hidden foreign material')
+      if (!fail) expect(JSON.parse(text).result.isError).toBe(true)
+      if (fail) f.recoverAudit()
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('concurrent MCP principals with identical RPC ids receive only their own portal result', async () => {
+  const f = createEnforcementFixture()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => release = resolve)
+  let started!: () => void
+  const start = new Promise<void>((resolve) => started = resolve)
+  let count = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('Concurrent MCP requests did not complete independently')),
+      1000,
+    )
+  })
+  try {
+    f.provider.search = async (config, query) => {
+      if (++count === 2) started()
+      await gate
+      return { query: `${config.slug}:${query}`, resources: [], relatedQuestions: [] }
+    }
+    const a = f.requestAs(
+      f.creator,
+      '/api/t/a/mcp',
+      rpcInit(rpcBody('search_corpus', { query: 'First' }, 7)),
+    )
+    const b = f.requestAs(
+      f.sessionFor('viewer', 'b'),
+      '/api/t/b/mcp',
+      rpcInit(rpcBody('search_corpus', { query: 'Second' }, 7)),
+    )
+    await Promise.race([start, timeout])
+    release()
+    const responses = await Promise.race([Promise.all([a, b]), timeout])
+    expect(responses.map((response) => response.status)).toEqual([200, 200])
+    expect(
+      await Promise.all(
+        responses.map(async (response) => (await response.json()).result.structuredContent.query),
+      ),
+    )
+      .toEqual(['a:First', 'b:Second'])
+  } finally {
+    clearTimeout(timer)
+    release()
+    f.close()
+  }
+})
+
+Deno.test('real MCP inventory and tool calls use session, key and public anonymous authority', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const issuedResponse = await f.requestAs(f.creator, '/api/t/a/mcp/keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Client', role: 'viewer' }),
+    })
+    expect(issuedResponse.status).toBe(201)
+    const issued = await issuedResponse.json()
+    for (
+      const [session, slug, headers] of [
+        [f.sessionFor('viewer'), 'a', {}],
+        [null, 'a', { authorization: `Bearer ${issued.key}` }],
+        [null, 'public-a', {}],
+        [f.unassigned, 'authenticated-a', {}],
+      ] as const
+    ) {
+      const list = await f.requestAs(
+        session,
+        `/api/t/${slug}/mcp`,
+        rpcInit({ jsonrpc: '2.0', id: 0, method: 'tools/list' }, headers),
+      )
+      expect(list.status).toBe(200)
+      assertToolInventory(
+        (await list.json()).result.tools.map((tool: { name: string }) => tool.name),
+      )
+      for (const [name, args] of toolsToCall) {
+        const result = await f.requestAs(
+          session,
+          `/api/t/${slug}/mcp`,
+          rpcInit(rpcBody(name, args), headers),
+        )
+        expect(result.status).toBe(200)
+        const called = (await result.json()).result
+        expect(called.isError).not.toBe(true)
+        expect(called.structuredContent).toBeDefined()
+      }
+    }
+    for (
+      const [session, slug, headers] of [
+        [null, 'a', {}],
+        [f.unassigned, 'a', {}],
+        [f.otherTenant, 'authenticated-a', {}],
+        [f.sessionFor('owner'), 'b', { authorization: `Bearer ${issued.key}` }],
+        [f.creator, 'a', { authorization: `Bearer ${issued.key}, Bearer ${issued.key}` }],
+        [f.creator, 'a', { authorization: `Bearer ${issued.key}`, 'x-admin-passcode': 'fixture' }],
+      ] as const
+    ) {
+      const before = f.providerCalls.length
+      const response = await f.requestAs(
+        session,
+        `/api/t/${slug}/mcp`,
+        rpcInit(rpcBody('search_corpus', { query: 'Hidden' }), headers),
+      )
+      expect([401, 403]).toContain(response.status)
+      f.assertNoProtectedDispatch(before)
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('MCP rechecks key expiry, revocation and creator authority on every request without session augmentation', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const mintKey = async (expiresAt?: string) => {
+      const response = await f.requestAs(f.creator, '/api/t/a/mcp/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          label: 'Live authority',
+          role: 'curator',
+          ...(expiresAt ? { expiresAt } : {}),
+        }),
+      })
+      expect(response.status).toBe(201)
+      return await response.json()
+    }
+    const issued = await mintKey()
+    const expiring = await mintKey(new Date(f.now() + 1000).toISOString())
+    const revoked = await mintKey()
+    const invoke = (key: string) =>
+      f.requestAs(
+        f.sessionFor('owner'),
+        '/api/t/a/mcp',
+        rpcInit(rpcBody('search_corpus', { query: 'Research' }), {
+          authorization: `Bearer ${key}`,
+        }),
+      )
+    expect((await invoke(issued.key)).status).toBe(200)
+    const service = f.rbac.assignmentService(f.tenantId, f.audience)
+    const assignment = service.list().find((row) => row.subjectId === f.creator.oid)!
+    const context = { requestId: 'change-creator', actor: { kind: 'system' as const } }
+    expect(service.change(assignment.id, { role: 'viewer' }, context).ok).toBe(true)
+    const downgraded = await invoke(issued.key)
+    expect(downgraded.status).toBe(200)
+    expect((await downgraded.json()).result.structuredContent.resources.length).toBeGreaterThan(0)
+    const listing = await f.requestAs(f.sessionFor('owner'), '/api/t/a/mcp/keys')
+    expect(
+      (await listing.json()).every((key: { effectiveRole: string }) =>
+        key.effectiveRole === 'viewer'
+      ),
+    ).toBe(true)
+    f.stores.mcpKeys.revoke('a', revoked.credential.id, new Date(f.now()).toISOString())
+    f.advance(1000)
+    for (const key of [revoked.key, expiring.key]) {
+      const before = f.providerCalls.length
+      expect((await invoke(key)).status).toBe(403)
+      f.assertNoProtectedDispatch(before)
+    }
+    expect(service.remove(assignment.id, context).ok).toBe(true)
+    const before = f.providerCalls.length
+    expect((await invoke(issued.key)).status).toBe(403)
+    f.assertNoProtectedDispatch(before)
+    f.failAudit()
+    expect((await invoke(issued.key)).status).toBe(500)
+    f.assertNoProtectedDispatch(before)
+    f.recoverAudit()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('MCP never uses a key creator or supplied owner to adopt stored research', async () => {
+  for (const adapter of ['local', 'durable'] as const) {
+    const f = createEnforcementFixture({}, adapter)
+    try {
+      const user = { kind: 'user' as const, tenantId: f.tenantId, oid: f.creator.oid }
+      const anonymous = { kind: 'anonymous' as const, clientId: f.creator.oid }
+      const record = { id: 'session', title: 'Private', updatedAt: '2026-09-12', messages: [] }
+      f.stores.sessions.put('a', user, record)
+      f.stores.sessions.put('a', anonymous, { ...record, title: 'Browser' })
+      const before = [
+        f.stores.sessions.get('a', user, 'session'),
+        f.stores.sessions.get('a', anonymous, 'session'),
+      ]
+      const mintResponse = await f.requestAs(f.creator, '/api/t/a/mcp/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'Research', role: 'viewer' }),
+      })
+      const issued = await mintResponse.json()
+      for (
+        const patch of [{ sessionId: 'session' }, { owner: f.creator.oid }, {
+          clientId: f.creator.oid,
+        }, { history: [{ resourceIds: ['foreign'] }] }]
+      ) {
+        const count = f.providerCalls.length
+        const response = await f.requestAs(
+          f.creator,
+          '/api/t/a/mcp',
+          rpcInit(rpcBody('answer_question', { question: 'Continue', ...patch }), {
+            authorization: `Bearer ${issued.key}`,
+          }),
+        )
+        const result = await response.json()
+        expect(result.result?.isError === true || !!result.error).toBe(true)
+        f.assertNoProtectedDispatch(count)
+      }
+      const response = await f.requestAs(
+        f.creator,
+        '/api/t/a/mcp',
+        rpcInit(rpcBody('answer_question', { question: 'Research' }), {
+          authorization: `Bearer ${issued.key}`,
+        }),
+      )
+      expect((await response.json()).result.isError).not.toBe(true)
+      expect([
+        f.stores.sessions.get('a', user, 'session'),
+        f.stores.sessions.get('a', anonymous, 'session'),
+      ]).toEqual(before)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('MCP request transports close on success, protocol error, audit failure and client abort', async () => {
+  const f = createEnforcementFixture()
+  const original = WebStandardStreamableHTTPServerTransport.prototype.close
+  let closed = 0
+  WebStandardStreamableHTTPServerTransport.prototype.close = async function () {
+    closed++
+    await original.call(this)
+  }
+  let release = () => {}
+  try {
+    for (const mode of ['success', 'protocol', 'audit', 'abort']) {
+      let started!: () => void
+      const start = new Promise<void>((resolve) => started = resolve)
+      const gate = new Promise<void>((resolve) => release = resolve)
+      f.provider.search = async () => {
+        started()
+        if (mode === 'abort') await gate
+        if (mode === 'audit') throw new AragApiError(403, 'private', 'private')
+        return { query: 'Protected result', resources: [], relatedQuestions: [] }
+      }
+      const controller = new AbortController()
+      const before = closed
+      if (mode === 'audit') f.failAudit()
+      const pending = f.requestAs(f.creator, '/api/t/a/mcp', {
+        ...rpcInit(
+          mode === 'protocol'
+            ? rpcBody('missing', {})
+            : rpcBody('search_corpus', { query: 'Research' }),
+        ),
+        signal: controller.signal,
+      })
+      if (mode === 'abort') {
+        await start
+        controller.abort()
+        release()
+      }
+      const response = await pending
+      const text = await response.text()
+      expect(closed).toBe(before + 1)
+      expect(response.status).toBe(mode === 'audit' ? 500 : 200)
+      if (mode === 'success') expect(text).toContain('Protected result')
+      else expect(text).not.toContain('Protected result')
+      if (mode === 'audit') f.recoverAudit()
+    }
+  } finally {
+    release()
+    WebStandardStreamableHTTPServerTransport.prototype.close = original
+    f.close()
+  }
+})
+
+Deno.test('real local MCP ingress strips forged and foreign-audience principal headers', async () => {
+  const directory = Deno.makeTempDirSync({ prefix: 'mcp-principal-' })
+  const env = {
+    DATA_DIR: directory,
+    ENTRA_TENANT_ID: 'tenant-1',
+    SESSION_SECRET: 'fixture-secret-only-not-a-real-secret-32',
+  }
+  const { database, rbac } = openLocalRbac(env)
+  try {
+    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    tenants.patch('marine', { accessMode: 'restricted' })
+    const ingress = new LocalIngress({ env, rbac, tenants })
+    let calls = 0
+    const provider = new McpStubProvider()
+    provider.search = () => {
+      calls++
+      return Promise.resolve({ query: 'Hidden', resources: [], relatedQuestions: [] })
+    }
+    const app = buildApp({
+      ...localOwnedStores(directory, database, rbac.audit),
+      rbac,
+      audit: rbac.audit,
+      tenants,
+      provider,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
+      breakGlass: ingress.breakGlass,
+      requestContext: ingress.requestContext,
+    })
+    const foreign = await signPrincipal({
+      v: 1,
+      aud: 'corpuskit-demos',
+      tid: 'tenant-1',
+      oid: 'owner',
+      email: '',
+      name: '',
+      roles: ['CorpusKit.Owner'],
+      groups: [],
+      iat: Math.floor(Date.now() / 1000),
+    }, env.SESSION_SECRET)
+    for (const token of ['forged', foreign]) {
+      const response = await ingress.handle(
+        new Request(
+          'http://localhost/api/t/marine/mcp',
+          rpcInit(rpcBody('search_corpus', { query: 'Hidden' }), {
+            'x-corpuskit-principal': token,
+            'x-corpuskit-sso-admin': '1',
+            'x-corpuskit-sso-user-id': 'owner',
+          }),
+        ),
+        (request) => app.fetch(request),
+      )
+      expect(response.status).toBe(401)
+      expect(calls).toBe(0)
+    }
+    expect(
+      rbac.audit.read({ scope: { kind: 'platform' } }).filter((event) =>
+        event.action === 'request.denied'
+      ),
+    ).toHaveLength(2)
+  } finally {
+    database.close()
+    Deno.removeSync(directory, { recursive: true })
   }
 })
 

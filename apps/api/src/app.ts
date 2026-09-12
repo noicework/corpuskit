@@ -289,7 +289,7 @@ import {
 } from './suggested-questions.ts'
 import { tenantAliasLocation } from './tenant-aliases.ts'
 import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
-import { registerMcpRoutes, type TrustedPortalUser } from './mcp.ts'
+import { registerMcpRoutes } from './mcp.ts'
 import {
   createCloudflareDomainProvisioner,
   type PortalDomainProvisioner,
@@ -875,7 +875,6 @@ export interface BuildAppOptions {
   breakGlass?: BreakGlassService
   requestContext?: (request: Request) => PortalRequestContext | undefined
   /** Authenticated portal identity forwarded by a trusted platform adapter. */
-  trustedUser?: (request: Request) => TrustedPortalUser | null
   /** Where the built SPA lives; overridable in tests. Defaults to ./apps/web/dist. */
   webDistPath?: string
   /** Runtime adapters that serve assets outside the local filesystem set this explicitly. */
@@ -1047,7 +1046,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const existing = requestContexts.get(request)
     if (existing) return existing
     const supplied = opts.requestContext?.(request)
-    const legacyUser = supplied ? null : opts.trustedUser?.(request)
     if (supplied) ingressContexts.set(request, supplied)
     const context = supplied ? { ...supplied } : {
       requestId: crypto.randomUUID(),
@@ -1057,9 +1055,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(context.requestId)) {
       context.requestId = crypto.randomUUID()
     }
-    context.actor ??= legacyUser
-      ? { kind: 'user', id: legacyUser.id }
-      : context.session
+    context.actor ??= context.session
       ? { kind: 'user', id: context.session.oid }
       : { kind: 'anonymous' }
     requestContexts.set(request, context)

@@ -9,7 +9,6 @@ import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import { createEnforcementFixture, sessionFor } from './enforcement-fixture.ts'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
-import { createMcpServer, type McpRoutesOptions } from './mcp.ts'
 import { AUDIT_MAX_RESPONSE_BYTES, AUDIT_TIMEOUT_MS } from './audit-execution.ts'
 import type { AskEvent } from '@research-portal/core'
 import {
@@ -630,23 +629,17 @@ Deno.test('actual routes equal the sole declaration inventory in both directions
 })
 
 Deno.test('actual MCP tools/list equals declarations in both directions', async () => {
-  const server = createMcpServer({
-    provider: {} as RetrievalProvider,
-    tenant: () => undefined,
-    keys: {} as McpRoutesOptions['keys'],
-  })
-  await server.connected
+  const f = createEnforcementFixture()
   try {
-    const response = await server.transport.handleRequest(
-      new Request('https://local.test/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-      }),
-    )
+    const response = await f.requestAs(f.sessionFor('viewer'), '/api/t/a/mcp', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(response.status).toBe(200)
     const names = (await response.json()).result.tools.map((tool: { name: string }) => tool.name)
     assertToolInventory(names)
     expect(() => assertToolInventory([...names, 'future_tool'])).toThrow()
@@ -654,7 +647,7 @@ Deno.test('actual MCP tools/list equals declarations in both directions', async 
     expect(DECLARATIONS.filter((item) => item.kind === 'mcp').every((item) => !isPrivileged(item)))
       .toBe(true)
   } finally {
-    await server.transport.close()
+    f.close()
   }
 })
 

@@ -1,7 +1,6 @@
 import { expect } from '@std/expect'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { inspectScopedKeys, issueScopedKey, verifyScopedKey } from './scoped-keys.ts'
-import { issueMcpCredential } from './mcp.ts'
 
 Deno.test('scoped keys prepare hash-only storage and verify exact bounded authority', async () => {
   const f = createEnforcementFixture()
@@ -75,14 +74,21 @@ Deno.test('scoped keys reject malformed digests and inert legacy creators withou
       configuredTenantId: f.tenantId,
       now: f.now,
     }
-    const legacy = await issueMcpCredential(
-      f.stores.mcpKeys,
-      'a',
-      f.creator.oid,
-      'Legacy',
-      new Date(f.now()).toISOString(),
-    )
-    expect(await verifyScopedKey(legacy.key, 'a', deps)).toBeNull()
+    const legacy = 'ck_mcp_abcdefghijkl_' + 'x'.repeat(43)
+    const hash = [
+      ...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(legacy))),
+    ].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    f.stores.mcpKeys.add({
+      id: 'legacy',
+      tenant: 'a',
+      issuerUserId: f.creator.oid,
+      label: 'Legacy',
+      prefix: 'ck_mcp_abcdefghijkl',
+      hash,
+      createdAt: new Date(f.now()).toISOString(),
+      revokedAt: null,
+    })
+    expect(await verifyScopedKey(legacy, 'a', deps)).toBeNull()
     expect((await inspectScopedKeys('a', deps))[0]?.status).toBe('unproven_creator')
     const prepared = await issueScopedKey(
       { slug: 'a', label: 'Research', role: 'viewer' },
