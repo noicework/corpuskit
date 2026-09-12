@@ -291,6 +291,7 @@ import { tenantAliasLocation } from './tenant-aliases.ts'
 import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
 import { registerMcpRoutes } from './mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
+import { registerAuditRoutes } from './audit-routes.ts'
 import {
   createCloudflareDomainProvisioner,
   type PortalDomainProvisioner,
@@ -1682,6 +1683,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
     // Hono records caught errors in c.error; c.res holds the onError response and real status.
     c.res = response
+  })
+
+  registerAuditRoutes(app, {
+    authorise: authoriseDeclared,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
   })
 
   registerAccessRoutes(app, {

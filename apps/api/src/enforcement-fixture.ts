@@ -256,6 +256,14 @@ export function createEnforcementFixture(
 
 export type EnforcementFixture = ReturnType<typeof createEnforcementFixture>
 
+/** Independent audit expectations, exercised by audit-routes.test.ts. */
+export const AUDIT_ROUTE_CASES = [
+  ['/api/admin/t/:slug/audit', 'audit.read', 'portal'],
+  ['/api/admin/t/:slug/audit/export', 'audit.export', 'portal'],
+  ['/api/admin/audit', 'audit.read', 'platform'],
+  ['/api/admin/audit/export', 'audit.export', 'platform'],
+] as const
+
 /** Independent access endpoint fixtures, exercised by access-routes.test.ts. */
 export const ACCESS_ROUTE_CASES = [
   { method: 'GET', path: '/api/admin/people' },

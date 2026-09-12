@@ -67,6 +67,10 @@ function entry(
 
 /** D11's sole route/tool catalogue. Labels classify audit only in Phase 2. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
+  entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
+  entry('http', 'GET', '/api/admin/audit/export', 'audit.export', 'platform'),
   ...['people', 'groups'].flatMap((family) => [
     ...['GET', 'POST'].map((method) =>
       entry('http', method, `/api/admin/${family}`, 'platform.members.manage', 'platform')

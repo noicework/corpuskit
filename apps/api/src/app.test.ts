@@ -23,7 +23,12 @@ import { AragApiError, type AragProvider, type RetrievalProvider } from '@resear
 import { buildApp as buildRawApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
-import { ACCESS_ROUTE_CASES, createEnforcementFixture, sessionFor } from './enforcement-fixture.ts'
+import {
+  ACCESS_ROUTE_CASES,
+  AUDIT_ROUTE_CASES,
+  createEnforcementFixture,
+  sessionFor,
+} from './enforcement-fixture.ts'
 import { assertExpectedPermission } from './enforcement-fixture.ts'
 import { issueScopedKey } from './scoped-keys.ts'
 
@@ -474,6 +479,7 @@ describe('independent admin route permission matrix', () => {
           `${method} ${suffix.startsWith('/') ? suffix : `/api/admin/t/:slug/${suffix}`}`
         ),
         ...ACCESS_ROUTE_CASES.map(({ method, path }) => `${method} ${path}`),
+        ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
       ].sort()
       expect(actual).toEqual(expected)
     } finally {
