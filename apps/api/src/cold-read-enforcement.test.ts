@@ -112,7 +112,64 @@ for (const adapter of ['local', 'durable'] as const) {
   })
 }
 
-Deno.test('cold question permissions precede generation and shared work; cached viewers retain access', async () => {
+Deno.test('cold questions on a public portal generate for anonymous readers without a denial', async () => {
+  let generated = 0
+  const management = {
+    resourceContent: () => Promise.resolve({ id: 'res-1', texts: [{ text: evidence }], files: [] }),
+    askStructured: () => {
+      generated++
+      return Promise.resolve({ object: { questions: [{ question, evidence }] } })
+    },
+  } as unknown as AragProvider
+  const f = createEnforcementFixture({ management })
+  try {
+    const denials = () =>
+      f.database.all("SELECT id FROM audit_events WHERE action='request.denied'").length
+    const before = denials()
+    const client = { headers: { 'x-rp-client': 'browser' } }
+    const cold = await f.requestAs(null, '/api/t/public-a/resources/res-1/questions', client)
+    expect(cold.status).toBe(200)
+    expect(cold.headers.get('cache-control')).toBe('private, no-store')
+    expect(await cold.json()).toEqual({ questions: [question] })
+    expect(generated).toBe(1)
+    expect(f.stores.enrichments.get('public-a', 'res-1', cached.schemaId)?.data).toEqual({
+      questions: [question],
+    })
+    expect(denials()).toBe(before)
+    // The side effect keeps the phase 2 audit trail, attributed to the anonymous request.
+    const events = f.rbac.audit.read({
+      scope: { kind: 'portal', slug: 'public-a' },
+      requestId: cold.headers.get('x-request-id')!,
+    })
+    expect(
+      events.filter((e) => e.action.startsWith('resource.questions.')).map((e) =>
+        `${e.action}:${e.outcome}`
+      ).sort(),
+    ).toEqual([
+      'resource.questions.cache:intent',
+      'resource.questions.cache:success',
+      'resource.questions.generate:intent',
+      'resource.questions.generate:success',
+    ])
+    expect(events.some((e) => e.action === 'local.mutation' && e.outcome === 'success')).toBe(
+      true,
+    )
+    expect(events.every((e) => e.actor_kind === 'anonymous')).toBe(true)
+    // Warm reads never regenerate, and the portal access mode still applies.
+    const warm = await f.requestAs(null, '/api/t/public-a/resources/res-1/questions', client)
+    expect(warm.status).toBe(200)
+    expect(await warm.json()).toEqual({ questions: [question] })
+    expect(generated).toBe(1)
+    expect(denials()).toBe(before)
+    expect((await f.requestAs(null, '/api/t/a/resources/res-1/questions', client)).status).toBe(401)
+    expect(generated).toBe(1)
+    expect(denials()).toBe(before + 1)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('cold questions follow the portal access mode and share one generation across waiters', async () => {
   let calls = 0
   let release!: () => void
   let started!: () => void
@@ -133,25 +190,30 @@ Deno.test('cold question permissions precede generation and shared work; cached 
     } as unknown as AragProvider,
   })
   try {
+    const denials = () =>
+      f.database.all("SELECT id FROM audit_events WHERE action='request.denied'").length
     f.stores.enrichments.put('b', 'res-1', cached)
-    const anonymous = await f.requestAs(null, path.replace('/a/', '/public-a/'))
+    const anonymous = await f.requestAs(null, path)
     expect(anonymous.status).toBe(401)
+    expect((await f.requestAs(f.sessionFor('curator', 'b'), path)).status).toBe(403)
     expect(calls).toBe(0)
-    for (const role of ['viewer', 'analyst'] as const) {
-      expect((await f.requestAs(f.sessionFor(role), path)).status).toBe(403)
-      expect(calls).toBe(0)
-      expect(f.stores.enrichments.get('a', 'res-1', cached.schemaId)).toBeUndefined()
-    }
-    const curator = f.requestAs(f.sessionFor('curator'), path)
+    expect(denials()).toBe(2)
+    expect(f.stores.enrichments.get('a', 'res-1', cached.schemaId)).toBeUndefined()
+    // D13: any reader may trigger the cold generation; a viewer starts it and an analyst joins.
+    const viewer = f.requestAs(f.sessionFor('viewer'), path)
     await ready
-    expect((await f.requestAs(f.sessionFor('viewer'), path)).status).toBe(403)
-    expect((await f.requestAs(f.sessionFor('analyst'), path)).status).toBe(403)
+    const analyst = f.requestAs(f.sessionFor('analyst'), path)
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(calls).toBe(1)
     release()
-    const response = await curator
-    expect(response.status).toBe(200)
-    expect(response.headers.get('cache-control')).toBe('private, no-store')
-    expect(await response.json()).toEqual({ questions: [] })
+    for (const pending of [viewer, analyst]) {
+      const response = await pending
+      expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('private, no-store')
+      expect(await response.json()).toEqual({ questions: [] })
+    }
+    expect(calls).toBe(1)
+    expect(denials()).toBe(2)
     const warm = await f.requestAs(f.sessionFor('viewer'), path)
     expect(warm.status).toBe(200)
     expect(await warm.json()).toEqual({ questions: [] })
@@ -159,7 +221,6 @@ Deno.test('cold question permissions precede generation and shared work; cached 
     f.stores.enrichments.put('a', 'missing', cached)
     expect((await f.requestAs(f.sessionFor('viewer'), path.replace('res-1', 'missing'))).status)
       .toBe(404)
-    expect((await f.requestAs(f.sessionFor('curator', 'b'), path)).status).toBe(403)
   } finally {
     release()
     f.close()
@@ -184,7 +245,7 @@ Deno.test('local corrupt enrichment reads preserve original bytes without quaran
   }
 })
 
-Deno.test('question keys retain their own actor and analyst keys cannot borrow curator sessions', async () => {
+Deno.test('question keys retain their own actor and never borrow the ambient session', async () => {
   let calls = 0
   const f = createEnforcementFixture({
     management: {
@@ -195,7 +256,7 @@ Deno.test('question keys retain their own actor and analyst keys cannot borrow c
     } as unknown as AragProvider,
   })
   try {
-    for (const role of ['analyst', 'curator'] as const) {
+    for (const role of ['viewer', 'analyst'] as const) {
       const key = await issueScopedKey(
         { slug: 'a', label: role, role },
         f.creator,
@@ -205,19 +266,18 @@ Deno.test('question keys retain their own actor and analyst keys cannot borrow c
       const response = await f.requestAs(f.sessionFor('curator'), path, {
         headers: { authorization: `Bearer ${key.key}` },
       })
-      expect(response.status).toBe(role === 'analyst' ? 403 : 200)
-      expect(calls).toBe(role === 'analyst' ? 0 : 1)
-      if (role === 'curator') {
-        const events = f.rbac.audit.read({
-          scope: { kind: 'portal', slug: 'a' },
-          requestId: response.headers.get('x-request-id')!,
-        })
-        expect(
-          events.filter((e) => e.action.startsWith('resource.questions.')).every((e) =>
-            e.actor_kind === 'key' && e.actor_id === key.credential.id
-          ),
-        ).toBe(true)
-      }
+      expect(response.status).toBe(200)
+      // The viewer key runs the cold generation; the analyst key then reads the warm cache.
+      expect(calls).toBe(1)
+      const events = f.rbac.audit.read({
+        scope: { kind: 'portal', slug: 'a' },
+        requestId: response.headers.get('x-request-id')!,
+      })
+      const generation = events.filter((e) => e.action.startsWith('resource.questions.'))
+      expect(generation.length).toBe(role === 'viewer' ? 4 : 0)
+      expect(generation.every((e) => e.actor_kind === 'key' && e.actor_id === key.credential.id))
+        .toBe(true)
+      expect(events.some((e) => e.actor_kind === 'user')).toBe(false)
     }
   } finally {
     f.close()

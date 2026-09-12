@@ -2284,7 +2284,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ?.questions
       if (Array.isArray(cached)) return c.json({ questions: cached })
     }
-    await authoriseSubActions(c, ['resource.questions.generate', 'resource.questions.cache'])
+    // D13: a cold cache is filled as a side effect for any caller allowed to read this route,
+    // exactly as before phase 3. The declared sub-actions name the audited work below; they
+    // are not a permission the reader must hold, so no denial is written here.
     if (!opts.management) return c.json({ questions: [] })
     let job = questionsInFlight.get(key)
     const joined = !!job
