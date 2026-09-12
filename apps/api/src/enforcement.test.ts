@@ -5,12 +5,116 @@ import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import {
   assertDeclarationInventory,
   assertRouteInventory,
+  assertToolInventory,
   declarationFor,
   DECLARATIONS,
   matchedDeclaration,
   registerInfrastructure,
 } from './permissions.ts'
 import { assertExpectedPermission, createEnforcementFixture } from './enforcement-fixture.ts'
+import {
+  ADMIN_MATRIX_ROWS,
+  assertCompleteHttpInventory,
+  PORTAL_MATRIX_ROWS,
+  runAdminMatrixRow,
+  runPortalMatrixRow,
+} from './enforcement-fixture.ts'
+import { runAccessMatrix, runAuditMatrix } from './enforcement-fixture.ts'
+import './cold-read-enforcement.test.ts'
+
+Deno.test('complete HTTP matrix: members and groups', runAccessMatrix)
+Deno.test('complete HTTP matrix: audit and exports', runAuditMatrix)
+
+Deno.test('independent expected role mutation is rejected by the behavioural runner', async () => {
+  const row = PORTAL_MATRIX_ROWS.find((r) => r[1] === '/api/t/:slug/summarize')!
+  await expect(runPortalMatrixRow([row[0], row[1], row[2], 'viewer', row[4]])).rejects.toThrow()
+})
+
+Deno.test('real MCP list and every call equal independent inventory and reject unknown tools', async () => {
+  const cases = [
+    ['search_corpus', { query: 'Abalone' }, 'portal.read', 'search'],
+    ['get_document', { id: 'res-1' }, 'portal.read', 'resource'],
+    ['browse_catalogue', {}, 'portal.read', 'catalog'],
+    ['answer_question', { question: 'Abalone evidence?' }, 'portal.ask', 'ask'],
+  ] as const
+  const f = createEnforcementFixture()
+  const rpc = (method: string, params?: unknown): RequestInit => ({
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  })
+  try {
+    const list = await f.requestAs(f.sessionFor('viewer'), '/api/t/a/mcp', rpc('tools/list'))
+    expect(list.status).toBe(200)
+    const names = (await list.json()).result.tools.map((tool: { name: string }) => tool.name)
+    expect(names.sort()).toEqual(cases.map(([name]) => name).sort())
+    assertToolInventory(names)
+    for (const invalid of [names.slice(1), [...names, 'undeclared_tool'], [...names, names[0]]]) {
+      expect(() => assertToolInventory(invalid)).toThrow()
+    }
+    for (const [name, args, permission, dispatch] of cases) {
+      expect(DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === name)?.permission).toBe(
+        permission,
+      )
+      for (const denied of [null, f.unassigned, f.sessionFor('viewer', 'b')]) {
+        const before = f.providerCalls.length
+        expect(
+          (await f.requestAs(denied, '/api/t/a/mcp', rpc('tools/call', { name, arguments: args })))
+            .status,
+        ).toBe(denied ? 403 : 401)
+        f.assertNoProtectedDispatch(before)
+      }
+      const before = f.providerCalls.length
+      const response = await f.requestAs(
+        f.sessionFor('viewer'),
+        '/api/t/a/mcp',
+        rpc('tools/call', { name, arguments: args }),
+      )
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.result.isError).not.toBe(true)
+      expect(JSON.stringify(body.result)).toContain('res-1')
+      expect(f.providerCalls.slice(before).map((c) => c.method)).toContain(dispatch)
+    }
+    const before = f.providerCalls.length
+    const unknown = await f.requestAs(
+      f.sessionFor('viewer'),
+      '/api/t/a/mcp',
+      rpc('tools/call', { name: 'undeclared_tool', arguments: {} }),
+    )
+    const result = await unknown.json()
+    expect(Boolean(result.error || result.result?.isError)).toBe(true)
+    f.assertNoProtectedDispatch(before)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('complete inventory detects removed, added, duplicate and changed independent policy', () => {
+  const app = buildApp({ provider: new DoubleProvider() })
+  const target = declarationFor('GET', '/api/t/:slug/catalog')
+  for (
+    const declarations of [
+      DECLARATIONS.filter((d) => d !== target),
+      [...DECLARATIONS, { ...target, path: '/api/future' }],
+      [...DECLARATIONS, target],
+      DECLARATIONS.map((d) => d === target ? { ...d, permission: 'portal.generate' as const } : d),
+    ]
+  ) expect(() => assertCompleteHttpInventory(app, declarations)).toThrow()
+  app.get('/api/future', (c) => c.text('undeclared'))
+  expect(() => assertCompleteHttpInventory(app)).toThrow()
+})
+
+for (const row of ADMIN_MATRIX_ROWS) {
+  Deno.test(`complete HTTP matrix: ${row[0]} ${row[1]}`, () => runAdminMatrixRow(row))
+}
+
+for (const row of PORTAL_MATRIX_ROWS) {
+  Deno.test(`complete HTTP matrix: ${row[0]} ${row[1]}`, () => runPortalMatrixRow(row))
+}
+Deno.test('independent fixture registry equals actual registrations and declarations', () => {
+  assertCompleteHttpInventory(buildApp({ provider: new DoubleProvider() }))
+})
 
 Deno.test('global gate blocks injected routes without a startup inventory and audits refusal', async () => {
   for (const method of ['GET', 'HEAD', 'OPTIONS', 'POST']) {

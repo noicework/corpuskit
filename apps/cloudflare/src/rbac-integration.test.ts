@@ -2,18 +2,15 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState, type DurableStores } from './state.ts'
-import { expect } from '@std/expect'
-import { Hono } from 'hono'
-import { authoriseDeclared } from '../../api/src/app.ts'
-import { AuthorisationError } from '../../api/src/authorisation.ts'
-import { issueScopedKey } from '../../api/src/scoped-keys.ts'
 import type { TrustedSessionFacts } from '../../api/src/principal.ts'
 import type { AuthUser } from './auth.ts'
 import type { PortalDurableObject } from './worker.ts'
 import {
+  assertEnforcementJourney,
   assertIdentityJourney,
+  type EnforcementJourney,
   fixtureSecret,
-  fixtureSession,
+  trackJourneyProvider,
 } from '../../api/src/rbac-integration-fixture.ts'
 type WorkerHandler = {
   fetch(request: Request, env: Env): Promise<Response>
@@ -70,6 +67,7 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
   let database: DatabaseSync
   let object: PortalDurableObject
   let state: DurableState
+  const calls: string[] = []
   const env = {
     WORKER_NAME: 'corpuskit',
     SESSION_SECRET: fixtureSecret,
@@ -79,6 +77,8 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
     ENVIRONMENT: 'production',
     ADMIN_BREAK_GLASS: 'true',
     ADMIN_PASSCODE: 'fixture',
+    RATE_LIMIT_ASK_PER_MIN: '0',
+    RATE_LIMIT_ESTATE_PER_MIN: '0',
     CF_VERSION_METADATA: { id: 'fixture', tag: 'fixture' },
     ASSETS: { fetch: () => Promise.resolve(new Response('fixture')) },
     PORTAL: { getByName: () => object },
@@ -125,10 +125,21 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
 
     object = new workerModule.PortalDurableObject({ storage }, env)
     state = new DurableState(storage.sql, storage)
+    trackJourneyProvider((object as unknown as { provider: object }).provider, calls)
   }
   try {
     start()
-    await assertIdentityJourney({
+    const journey: EnforcementJourney = {
+      get stores() {
+        return (object as unknown as { stores: DurableStores }).stores
+      },
+      calls,
+      boundary: (header) =>
+        object.fetch(
+          new Request('https://corpuskit.test/api/t/marine/catalog', {
+            headers: { 'x-corpuskit-principal': header },
+          }),
+        ),
       get rbac() {
         return state.rbac
       },
@@ -145,99 +156,17 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
         if (session) headers.set('cookie', await sessionCookie(session))
         if (peer) headers.set('cf-connecting-ip', '192.0.2.1')
         headers.set('x-corpuskit-sso-admin', '1')
-        headers.set('x-corpuskit-principal', 'caller-forgery')
+        if (!headers.has('x-corpuskit-principal')) {
+          headers.set('x-corpuskit-principal', 'caller-forgery')
+        }
         return workerModule.default.fetch(
           new Request(`https://corpuskit.test${path}`, { ...init, headers }),
           env,
         )
       },
-    })
-    // Activate one real handler only in this test. Runtime routes remain dormant until their cutover.
-    const runtime = object! as unknown as { app: Hono; stores: DurableStores }
-    const guarded = new Hono()
-    let dispatched = 0
-    for (const route of runtime.app.routes) {
-      const handler = route.handler
-      guarded.on(
-        route.method,
-        route.path,
-        route.method === 'GET' && route.path === '/api/t/:slug/catalog'
-          ? async (c, next) => {
-            const authority = await authoriseDeclared(c)
-            expect(await authoriseDeclared(c)).toBe(authority)
-            dispatched++
-            return handler(c, next)
-          }
-          : handler,
-      )
     }
-    guarded.onError((error, c) =>
-      error instanceof AuthorisationError
-        ? c.json({ error: error.code }, error.status)
-        : c.json({ error: 'failed' }, 500)
-    )
-    runtime.app = guarded
-    const session = fixtureSession({ oid: 'key-creator' })
-    const invoke = async (token?: string, facts = session) =>
-      workerModule.default.fetch(
-        new Request('https://corpuskit.test/api/t/marine/catalog', {
-          headers: {
-            cookie: await sessionCookie(facts),
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
-          },
-        }),
-        env,
-      )
-    expect((await invoke()).status).toBe(200)
-    const context = { requestId: 'key-seed', actor: { kind: 'system' as const } }
-    const service = runtime.stores.rbac.assignmentService('tenant-1', 'corpuskit')
-    const assignment = service.create({
-      subjectKind: 'active-oid',
-      subjectId: session.oid,
-      scope: { kind: 'portal', slug: 'marine' },
-      role: 'curator',
-    }, context)
-    if (!assignment.ok) throw new Error('Fixture assignment failed')
-    const prepared = await issueScopedKey(
-      { slug: 'marine', label: 'Fixture', role: 'viewer' },
-      session,
-      {
-        keys: runtime.stores.mcpKeys,
-        creatorStores: { rbac: runtime.stores.rbac, audience: 'corpuskit' },
-        configuredTenantId: 'tenant-1',
-      },
-    )
-    // The real Durable mutation boundary owns persistence and its required audit.
-    await runtime.stores.localMutations.run(
-      {
-        requestId: 'key-seed',
-        actor: context.actor,
-        action: 'request.privileged',
-        target: { kind: 'request' },
-        scope: { kind: 'portal', slug: 'marine' },
-      },
-      new AbortController().signal,
-      async () => {
-        prepared.commit()
-      },
-    )
-    const allowed = await invoke(prepared.key)
-    expect(allowed.status).toBe(200)
-    expect((await allowed.json()).items.length).toBeGreaterThan(0)
-    expect(service.remove(assignment.value.id, context).ok).toBe(true)
-    const before = dispatched
-    expect(
-      (await invoke(
-        prepared.key,
-        fixtureSession({ oid: 'ambient-owner', roles: ['CorpusKit.Owner'] }),
-      )).status,
-    ).toBe(403)
-    expect(dispatched).toBe(before)
-    database!.exec(
-      "CREATE TRIGGER fail_authority BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
-    )
-    expect((await invoke(prepared.key)).status).toBe(500)
-    expect(dispatched).toBe(before)
+    await assertIdentityJourney(journey)
+    await assertEnforcementJourney(journey)
   } finally {
     database!.close()
     Date.now = originalNow
@@ -258,6 +187,7 @@ async function loadWorker(): Promise<WorkerModule> {
         new URL('../../../e2e/support/double-provider.ts', import.meta.url).href
       }'; class AragProvider extends DoubleProvider {
         invalidate() {}
+        summarize() { return Promise.resolve('Abalone evidence summary') }
         rephrase(_config, query) { return Promise.resolve(query) }
         async resourceExtraction(config, id) {
           const results = await this.search(config, 'abalone')
