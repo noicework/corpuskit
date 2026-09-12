@@ -487,7 +487,10 @@ function mutationFixture(management?: AragProvider) {
     audience: 'corpuskit',
     breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
     provider: {
-      resource: async () => ({ id: 'doc', title: 'Research', summary: '' }),
+      resource: async (config: { slug: string }, id: string) =>
+        config.slug === 'marine' && ['doc', 'doc2'].includes(id)
+          ? { id, title: 'Research', summary: '' }
+          : null,
     } as unknown as RetrievalProvider,
     management,
     requestContext: () => {
@@ -545,18 +548,27 @@ Deno.test('Durable HTTP prompts, keys, watches and research writes roll back on 
       tenantId: 'directory',
       oid: 'writer',
     }, 'Research')
-    const investigation = stores.investigations.create('marine', 'client', { name: 'Original' })
-    const evidence = stores.investigations.addEvidence('marine', 'client', investigation.id, {
-      passage: 'Original passage',
-      resourceId: 'doc',
-      resourceTitle: 'Research',
-      score: null,
-      question: '',
-      verdict: null,
-      aiRelevance: null,
-      note: '',
-      tags: [],
-    })!
+    const investigation = stores.investigations.create('marine', {
+      kind: 'user',
+      tenantId: 'directory',
+      oid: 'writer',
+    }, { name: 'Original' })
+    const evidence = stores.investigations.addEvidence(
+      'marine',
+      { kind: 'user', tenantId: 'directory', oid: 'writer' },
+      investigation.id,
+      {
+        passage: 'Original passage',
+        resourceId: 'doc',
+        resourceTitle: 'Research',
+        score: null,
+        question: '',
+        verdict: null,
+        aiRelevance: null,
+        note: '',
+        tags: [],
+      },
+    )!
     const issuedResponse = await request('/api/t/marine/mcp/keys', 'POST', {
       label: 'Existing key',
     })
@@ -668,7 +680,12 @@ Deno.test('Durable HTTP local writes commit their intended changes and one match
       name: 'Original',
     })
     const path = `/api/t/marine/investigations/${research.id}`
-    const get = () => stores.investigations.get('marine', 'client', research.id)
+    const get = () =>
+      stores.investigations.get(
+        'marine',
+        { kind: 'user', tenantId: 'directory', oid: 'writer' },
+        research.id,
+      )
     expect(get()!.name).toBe('Original')
     await change('investigations.update', path, 'PATCH', { name: 'Updated' })
     expect(get()!.name).toBe('Updated')
@@ -816,20 +833,29 @@ Deno.test('Durable synthesis returns 500 when its caught local audit fails after
     },
   } as unknown as AragProvider)
   try {
-    const investigation = fixture.stores.investigations.create('marine', 'client', {
+    const investigation = fixture.stores.investigations.create('marine', {
+      kind: 'user',
+      tenantId: 'directory',
+      oid: 'writer',
+    }, {
       name: 'Research',
     })
-    fixture.stores.investigations.addEvidence('marine', 'client', investigation.id, {
-      passage: 'Original passage',
-      resourceId: 'doc',
-      resourceTitle: 'Research',
-      score: null,
-      question: '',
-      verdict: null,
-      aiRelevance: null,
-      note: '',
-      tags: [],
-    })
+    fixture.stores.investigations.addEvidence(
+      'marine',
+      { kind: 'user', tenantId: 'directory', oid: 'writer' },
+      investigation.id,
+      {
+        passage: 'Original passage',
+        resourceId: 'doc',
+        resourceTitle: 'Research',
+        score: null,
+        question: '',
+        verdict: null,
+        aiRelevance: null,
+        note: '',
+        tags: [],
+      },
+    )
     const before = fixture.snapshot()
     fixture.fail()
     const response = await fixture.request(
@@ -1422,9 +1448,10 @@ Deno.test('public investigation reads return all 140 passages without audit stag
     const state = new DurableState(sql, sql)
     state.migrate()
     const stores = durableStores(state, {})
-    const investigation = stores.investigations.create('marine', 'reader', { name: 'Research' })
+    const reader = { kind: 'anonymous' as const, clientId: 'reader' }
+    const investigation = stores.investigations.create('marine', reader, { name: 'Research' })
     for (let index = 0; index < 140; index++) {
-      expect(stores.investigations.addEvidence('marine', 'reader', investigation.id, {
+      expect(stores.investigations.addEvidence('marine', reader, investigation.id, {
         passage: 'x'.repeat(8000),
         resourceId: `document-${index}`,
         resourceTitle: 'Research passage',
@@ -1436,8 +1463,14 @@ Deno.test('public investigation reads return all 140 passages without audit stag
         tags: [],
       })).not.toBeNull()
     }
-    const expected = stores.investigations.get('marine', 'reader', investigation.id)
-    const app = buildApp({ ...stores, provider: {} as RetrievalProvider })
+    const expected = stores.investigations.get('marine', reader, investigation.id)
+    const app = buildApp({
+      ...stores,
+      configuredTenantId: 'directory',
+      audience: 'corpuskit',
+      breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
+      provider: {} as RetrievalProvider,
+    })
     const response = await app.request(`/api/t/marine/investigations/${investigation.id}`, {
       headers: { 'x-rp-client': 'reader' },
     })

@@ -562,13 +562,13 @@ const purgeFailedBodySchema = z.object({ dryRun: z.boolean().optional() })
 const investigationCreateSchema = z.object({
   name: z.string().min(1).max(160),
   question: z.string().max(500).optional(),
-})
+}).strict()
 const investigationPatchSchema = z.object({
   name: z.string().min(1).max(160).optional(),
   question: z.string().max(500).optional(),
   notes: z.string().max(20000).optional(),
   status: z.enum(['active', 'closed']).optional(),
-})
+}).strict()
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
@@ -580,17 +580,17 @@ const evidenceCreateSchema = z.object({
   aiRelevance: z.string().max(2000).nullable().optional(),
   note: z.string().max(4000).optional(),
   tags: z.string().max(40).array().max(10).optional(),
-})
+}).strict()
 const evidencePatchSchema = z.object({
   verdict: verdictEnum.nullable().optional(),
   note: z.string().max(4000).optional(),
   tags: z.string().max(40).array().max(10).optional(),
-})
+}).strict()
 const artefactCreateSchema = z.object({
   kind: z.string().min(1).max(40),
   title: z.string().min(1).max(200),
   data: z.unknown(),
-})
+}).strict()
 const graphStrategySchema = z.object({
   entityTypes: z.object({
     label: z.string().min(1).max(60),
@@ -946,7 +946,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const domains = opts.domainProvisioner === undefined
     ? createCloudflareDomainProvisioner(process.env)
     : opts.domainProvisioner
-  const clientId = (c: Context): string => c.req.header('x-rp-client') ?? 'anonymous'
   const app = new Hono()
   // Stage-2 routing decisions, remembered per question so repeated routing is
   // deterministic (see the /route handler).
@@ -1536,7 +1535,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       !declaration.owned &&
       !declaration.path.includes('/mcp')
     ) await authoriseDeclared(c)
-    if (declaration.owned === 'research' && /\/(sessions|watches)(\/|$)/.test(declaration.path)) {
+    if (
+      declaration.owned === 'research' &&
+      /\/(sessions|watches|investigations)(\/|$)/.test(declaration.path)
+    ) {
       await authoriseDeclared(c)
       await researchOwner(c)
       try {
@@ -3160,52 +3162,69 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   // --- Investigations: the research workspace, per anonymous client --------
 
-  app.get(declaredRoute('GET', '/api/t/:slug/investigations'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/investigations'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(investigations.list(config.slug, clientId(c)))
+    return c.json(investigations.list(config.slug, owner))
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/investigations'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = investigationCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    if (investigations.list(config.slug, clientId(c)).length >= 100) {
+    if (investigations.list(config.slug, owner).length >= 100) {
       return c.json({ error: 'too_many_investigations' }, 429)
     }
-    return c.json(investigations.create(config.slug, clientId(c), parsed.data))
+    return c.json(investigations.create(config.slug, owner, parsed.data))
   })
 
-  app.get(declaredRoute('GET', '/api/t/:slug/investigations/:id'), (c) => {
+  app.get(declaredRoute('GET', '/api/t/:slug/investigations/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
-    return investigation ? c.json(investigation) : c.json({ error: 'not_found' }, 404)
+    const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+    return investigation ? c.json(investigation) : adminNotFound(c)
   })
 
   app.patch(declaredRoute('PATCH', '/api/t/:slug/investigations/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!investigations.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
     const parsed = investigationPatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    const updated = investigations.update(config.slug, clientId(c), c.req.param('id'), parsed.data)
-    return updated ? c.json(updated) : c.json({ error: 'not_found' }, 404)
+    const updated = investigations.update(config.slug, owner, c.req.param('id'), parsed.data)
+    return updated ? c.json(updated) : adminNotFound(c)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id'), (c) => {
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    investigations.remove(config.slug, clientId(c), c.req.param('id'))
+    if (!investigations.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    investigations.remove(config.slug, owner, c.req.param('id'))
     return c.json({ ok: true })
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/investigations/:id/evidence'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!investigations.get(config.slug, owner, c.req.param('id'))) return adminNotFound(c)
     const parsed = evidenceCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    const item = investigations.addEvidence(config.slug, clientId(c), c.req.param('id'), {
+    if (!await adminResource(c, config, parsed.data.resourceId)) return adminNotFound(c)
+    const item = investigations.addEvidence(config.slug, owner, c.req.param('id'), {
       passage: parsed.data.passage,
       resourceId: parsed.data.resourceId,
       resourceTitle: parsed.data.resourceTitle,
@@ -3216,45 +3235,101 @@ export function buildApp(opts: BuildAppOptions): Hono {
       note: parsed.data.note ?? '',
       tags: parsed.data.tags ?? [],
     })
-    return item ? c.json(item) : c.json({ error: 'not_found' }, 404)
+    return item ? c.json(item) : adminNotFound(c)
   })
 
   app.patch(declaredRoute('PATCH', '/api/t/:slug/investigations/:id/evidence/:eid'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+    const evidence = investigation?.evidence.find((item) => item.id === c.req.param('eid'))
+    if (!evidence) return adminNotFound(c)
     const parsed = evidencePatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
     const ok = investigations.updateEvidence(
       config.slug,
-      clientId(c),
+      owner,
       c.req.param('id'),
       c.req.param('eid'),
       parsed.data,
     )
-    return ok ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
+    return ok ? c.json({ ok: true }) : adminNotFound(c)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/investigations/:id/evidence/:eid'), (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    investigations.removeEvidence(config.slug, clientId(c), c.req.param('id'), c.req.param('eid'))
-    return c.json({ ok: true })
-  })
+  app.delete(
+    declaredRoute('DELETE', '/api/t/:slug/investigations/:id/evidence/:eid'),
+    async (c) => {
+      await authoriseDeclared(c)
+      const owner = await researchOwner(c)
+      const config = tenant(c.req.param('slug'))
+      if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+      const evidence = investigation?.evidence.find((item) => item.id === c.req.param('eid'))
+      if (!evidence) return adminNotFound(c)
+      if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+      if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
+      investigations.removeEvidence(config.slug, owner, c.req.param('id'), c.req.param('eid'))
+      return c.json({ ok: true })
+    },
+  )
 
   app.post(declaredRoute('POST', '/api/t/:slug/investigations/:id/artefacts'), async (c) => {
+    await authoriseDeclared(c)
+    const owner = await researchOwner(c)
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+    if (!investigation) return adminNotFound(c)
     const parsed = artefactCreateSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     if (JSON.stringify(parsed.data).length > 512 * 1024) {
       return c.json({ error: 'artefact_too_large' }, 413)
     }
-    const artefact = investigations.addArtefact(config.slug, clientId(c), c.req.param('id'), {
+    // Structured references are claims about this workspace, never authority to another one.
+    const values: unknown[] = [parsed.data.data]
+    const resources = new Set<string>()
+    while (values.length) {
+      const value = values.pop()
+      if (!value || typeof value !== 'object') continue
+      for (const [key, child] of Object.entries(value)) {
+        if (
+          [
+            'resourceId',
+            'resourceIds',
+            'evidenceId',
+            'evidenceIds',
+            'artefactId',
+            'artefactIds',
+            'investigationId',
+          ].includes(key)
+        ) {
+          const ids = key.endsWith('Ids') ? child : [child]
+          if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+            return adminNotFound(c)
+          }
+          for (const id of ids as string[]) {
+            if (key.startsWith('resource')) resources.add(id)
+            else if (key.startsWith('evidence')) {
+              const evidence = investigation.evidence.find((item) => item.id === id)
+              if (!evidence) return adminNotFound(c)
+              resources.add(evidence.resourceId)
+            } else if (key.startsWith('artefact')) {
+              if (!investigation.artefacts.some((item) => item.id === id)) return adminNotFound(c)
+            } else if (id !== investigation.id) return adminNotFound(c)
+          }
+        } else values.push(child)
+      }
+    }
+    for (const id of resources) if (!await adminResource(c, config, id)) return adminNotFound(c)
+    const artefact = investigations.addArtefact(config.slug, owner, c.req.param('id'), {
       kind: parsed.data.kind,
       title: parsed.data.title,
       data: parsed.data.data,
     })
-    return artefact ? c.json(artefact) : c.json({ error: 'not_found' }, 404)
+    return artefact ? c.json(artefact) : adminNotFound(c)
   })
 
   // Synthesis from an investigation's own evidence - no fresh retrieval, so
@@ -3263,11 +3338,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     declaredRoute('POST', '/api/t/:slug/investigations/:id/synthesise'),
     expensiveRateLimit,
     async (c) => {
+      await authoriseDeclared(c)
+      const owner = await researchOwner(c)
       const config = tenant(c.req.param('slug'))
       if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      const investigation = investigations.get(config.slug, owner, c.req.param('id'))
+      if (!investigation) return adminNotFound(c)
+      if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
       if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
-      const investigation = investigations.get(config.slug, clientId(c), c.req.param('id'))
-      if (!investigation) return c.json({ error: 'not_found' }, 404)
       if (investigation.evidence.length === 0) {
         return c.json({
           error: 'no_evidence',
@@ -3285,6 +3363,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           error: 'no_evidence',
           message: 'Every saved passage is marked not relevant - judge or add evidence first.',
         }, 400)
+      }
+      for (const id of new Set(kept.map((item) => item.resourceId))) {
+        if (!await adminResource(c, config, id)) return adminNotFound(c)
       }
       const numbered = kept.map((item, index) => {
         const head = [
@@ -3360,7 +3441,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }))
         // Every reference is cited or listed as not used (D2-16).
         const notUsed = unusedReferences(brief, kept.length)
-        const artefact = investigations.addArtefact(config.slug, clientId(c), investigation.id, {
+        ;(operationSignals.get(c.req.raw) ?? c.req.raw.signal).throwIfAborted()
+        const artefact = investigations.addArtefact(config.slug, owner, investigation.id, {
           kind: 'synthesis',
           title: `Synthesis - ${tenantToday(config.timezone)}`,
           data: { ...brief, references, notUsed },
