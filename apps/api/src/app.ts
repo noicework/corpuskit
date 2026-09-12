@@ -290,6 +290,7 @@ import {
 import { tenantAliasLocation } from './tenant-aliases.ts'
 import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
 import { registerMcpRoutes } from './mcp.ts'
+import { registerAccessRoutes } from './access-routes.ts'
 import {
   createCloudflareDomainProvisioner,
   type PortalDomainProvisioner,
@@ -1681,6 +1682,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
     // Hono records caught errors in c.error; c.res holds the onError response and real status.
     c.res = response
+  })
+
+  registerAccessRoutes(app, {
+    authorise: authoriseDeclared,
+    context: (c) => {
+      const context = requestContext(c.req.raw)
+      if (!context.actor) throw new AuthorisationError(403)
+      return { requestId: context.requestId, actor: context.actor }
+    },
+    assignments: () => {
+      if (!opts.rbac || !opts.configuredTenantId || !opts.audience) {
+        throw new AuthorisationError(403)
+      }
+      return opts.rbac.assignmentService(opts.configuredTenantId, opts.audience)
+    },
+    groupCapability: () =>
+      opts.rbac && opts.audience &&
+        opts.rbac.groupCapability(opts.audience) === 'verified-supported'
+        ? 'enabled'
+        : 'disabled',
+    notFound: adminNotFound,
   })
 
   registerMcpRoutes(app, {

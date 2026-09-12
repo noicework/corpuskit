@@ -251,3 +251,23 @@ export function createEnforcementFixture(
 }
 
 export type EnforcementFixture = ReturnType<typeof createEnforcementFixture>
+
+/** Independent access endpoint fixtures, exercised by access-routes.test.ts. */
+export const ACCESS_ROUTE_CASES = [
+  { method: 'GET', path: '/api/admin/t/:slug/members' },
+  {
+    method: 'POST',
+    path: '/api/admin/t/:slug/members',
+    body: { subjectKind: 'active-oid', subjectId: 'access-target', role: 'viewer' },
+  },
+  { method: 'PATCH', path: '/api/admin/t/:slug/members/:id', body: { role: 'curator' } },
+  { method: 'DELETE', path: '/api/admin/t/:slug/members/:id' },
+  { method: 'GET', path: '/api/admin/t/:slug/groups' },
+  {
+    method: 'POST',
+    path: '/api/admin/t/:slug/groups',
+    body: { subjectId: 'access-target', role: 'viewer' },
+  },
+  { method: 'PATCH', path: '/api/admin/t/:slug/groups/:id', body: { role: 'curator' } },
+  { method: 'DELETE', path: '/api/admin/t/:slug/groups/:id' },
+] as const

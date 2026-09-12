@@ -67,6 +67,14 @@ function entry(
 
 /** D11's sole route/tool catalogue. Labels classify audit only in Phase 2. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  ...['members', 'groups'].flatMap((family) => [
+    ...['GET', 'POST'].map((method) =>
+      entry('http', method, `/api/admin/t/:slug/${family}`, 'members.manage', 'portal')
+    ),
+    ...['PATCH', 'DELETE'].map((method) =>
+      entry('http', method, `/api/admin/t/:slug/${family}/:id`, 'members.manage', 'portal')
+    ),
+  ]),
   ...([
     ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
