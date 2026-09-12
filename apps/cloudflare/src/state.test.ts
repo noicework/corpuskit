@@ -22,6 +22,163 @@ import { tenantConfig, type TenantPatch } from '../../api/src/tenants.ts'
 import { checkAuditUpgrade } from '../../api/src/rbac-state.test.ts'
 import { migrateLegacyKeyRecord } from '../../api/src/scoped-key-record.ts'
 import { fixtureSession } from '../../api/src/rbac-integration-fixture.ts'
+import {
+  checkOwnedStores,
+  ownedMutationCases,
+  seedOwned,
+} from '../../api/src/owned-store-fixture.ts'
+
+Deno.test('Durable owned mutations roll back authoritative append and real SQL commit failures', async () => {
+  for (const failure of ['append', 'commit']) {
+    const sql = new TestSqlStorage()
+    try {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      const stores = durableStores(state, {})
+      const { watch, investigation, evidence } = seedOwned(stores)
+      const snapshot = () => sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
+      const before = snapshot()
+      if (failure === 'commit') {
+        sql.database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE owner_parent (id INTEGER PRIMARY KEY); CREATE TABLE owner_child (id INTEGER REFERENCES owner_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_owned AFTER INSERT ON audit_events BEGIN INSERT INTO owner_child VALUES (1); END',
+        )
+      }
+      if (failure === 'append') {
+        sql.database.exec(
+          "CREATE TRIGGER fail_owned BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'Authoritative append failed'); END",
+        )
+      }
+      const input: Omit<AuditInput, 'outcome'> = {
+        requestId: 'owned-test',
+        actor: { kind: 'user', id: 'same' },
+        action: 'request.privileged',
+        scope: { kind: 'portal', slug: 'marine' },
+        target: { kind: 'sessions' },
+        detail: {},
+      }
+      for (const mutate of ownedMutationCases(stores, watch.id, investigation.id, evidence.id)) {
+        await expect(state.localMutations.run(input, new AbortController().signal, mutate)).rejects
+          .toThrow()
+        expect(snapshot()).toEqual(before)
+        expect(state.rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+      }
+      expect(
+        durableStores(new DurableState(sql, sql), {}).sessions.get('marine', {
+          kind: 'user',
+          tenantId: 'one',
+          oid: 'same',
+        }, 's')?.title,
+      ).toBe('original')
+    } finally {
+      sql.database.close()
+    }
+  }
+})
+
+Deno.test('Durable legacy owner and portal provenance is exact, read-only and anonymous across restarts', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const seed = new DurableState(sql, sql)
+    seed.migrate()
+    seed.put('session:marine:ab:s', { id: 's', title: 'legacy', messages: [] })
+    seed.put('investigation:marine:ab:i', { id: 'i', name: 'legacy' })
+    const watch = {
+      id: 'unproven',
+      clientId: 'a/b',
+      query: 'legacy',
+      createdAt: 'then',
+      lastRun: null,
+      fingerprint: null,
+      changed: false,
+    }
+    seed.put('watches:marine', [watch, { ...watch, id: 'proven', slug: 'marine' }])
+    const before = sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const state = new DurableState(sql, sql)
+      state.migrate()
+      const stores = durableStores(state, {})
+      expect(stores.sessions.get('marine', 'ab', 's')).toBeNull()
+      expect(stores.investigations.get('marine', 'ab', 'i')).toBeNull()
+      expect(stores.watches.list('marine', 'a/b').map((w) => w.id)).toEqual(['proven'])
+      expect(stores.watches.list('marine', 'ab')).toEqual([])
+      expect(stores.watches.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual(
+        [],
+      )
+      expect(stores.watches.list('mar/ine', 'a/b')).toEqual([])
+      expect(sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()).toEqual(before)
+    }
+    durableStores(seed, {}).watches.update('marine', 'proven', { changed: true }, 'a/b')
+    const fresh = durableStores(new DurableState(sql, sql), {})
+    expect(fresh.watches.list('marine', 'a/b')[0]?.changed).toBe(true)
+    fresh.watches.remove('marine', 'a/b', 'proven')
+    expect(durableStores(new DurableState(sql, sql), {}).watches.list('marine', 'a/b')).toEqual([])
+    for (const row of before) {
+      expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get(row.key!)?.value)
+        .toBe(row.value)
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable corrupt owned metadata and malformed JSON remain untouched and inaccessible', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const stores = durableStores(state, {})
+    seedOwned(stores)
+    const owner = { kind: 'user' as const, tenantId: 'one', oid: 'same' }
+    const rows = sql.database.prepare("SELECT key,value FROM state WHERE key LIKE 'research-v2:%'")
+      .all()
+    for (const row of rows) {
+      const value = JSON.parse(row.value as string)
+      const watches = (row.key as string).endsWith(':watches')
+      for (
+        const raw of [
+          '{broken',
+          JSON.stringify(
+            watches
+              ? {
+                ...value,
+                entries: value.entries.map((w: Record<string, unknown>) => ({
+                  ...w,
+                  owner: 'same',
+                })),
+              }
+              : { ...value, owner: { kind: 'anonymous', clientId: 'same' } },
+          ),
+        ]
+      ) {
+        sql.database.prepare('UPDATE state SET value=? WHERE key=?').run(raw, row.key!)
+        if (watches) {
+          expect(() => stores.watches.list('marine', owner)).toThrow()
+          expect(() => stores.watches.add('marine', owner, 'new')).toThrow()
+        } else if ((row.key as string).includes(':sessions:')) {
+          expect(() => stores.sessions.get('marine', owner, 's')).toThrow()
+          expect(() => stores.sessions.remove('marine', owner, 's')).toThrow()
+          expect(() => stores.sessions.list('marine', owner)).toThrow()
+        } else expect(() => stores.investigations.list('marine', owner)).toThrow()
+        expect(sql.database.prepare('SELECT value FROM state WHERE key=?').get(row.key!)?.value)
+          .toBe(raw)
+      }
+      sql.database.prepare('UPDATE state SET value=? WHERE key=?').run(row.value!, row.key!)
+    }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable owned stores isolate exact typed owners across all operations', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    checkOwnedStores(durableStores(state, {}))
+  } finally {
+    sql.database.close()
+  }
+})
 
 const legacyScopedKey: McpKeyRecord = {
   id: 'legacy-key',

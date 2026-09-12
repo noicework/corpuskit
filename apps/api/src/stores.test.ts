@@ -1,9 +1,204 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { checkOwnedStores, ownedMutationCases, seedOwned } from './owned-store-fixture.ts'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect } from '@std/expect'
 import { migrateLegacyKeyRecord } from './scoped-key-record.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import type { McpKeyRecord } from './stores.ts'
+import { createAuditEvent } from './audit.ts'
+
+function fileSnapshot(root: string): Record<string, string> {
+  if (!existsSync(root)) return {}
+  return Object.fromEntries(
+    readdirSync(root, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile()).map((entry) => {
+        const path = join(entry.parentPath, entry.name)
+        return [path.slice(root.length), Array.from(readFileSync(path)).join(',')]
+      }),
+  )
+}
+
+Deno.test('local owned mutations restore exact files after authoritative append and SQL commit failures', () => {
+  for (const failure of ['append', 'commit']) {
+    const dataDir = Deno.makeTempDirSync()
+    const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+    const plain = {
+      sessions: new SessionsStore(dataDir),
+      watches: new WatchStore(dataDir),
+      investigations: new InvestigationStore(dataDir),
+    }
+    const { watch, investigation, evidence } = seedOwned(plain)
+    const before = fileSnapshot(join(dataDir, 'research-v2'))
+    try {
+      if (failure === 'commit') {
+        database.exec(
+          'PRAGMA foreign_keys=ON; CREATE TABLE owner_parent (id INTEGER PRIMARY KEY); CREATE TABLE owner_child (id INTEGER REFERENCES owner_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_owned AFTER INSERT ON audit_events BEGIN INSERT INTO owner_child VALUES (1); END',
+        )
+      }
+      const boundary = {
+        database,
+        complete: () => {
+          rbac.audit.append(
+            createAuditEvent({
+              requestId: 'owned-test',
+              actor: { kind: 'user', id: 'same' },
+              action: 'local.mutation',
+              scope: { kind: 'portal', slug: 'marine' },
+              target: { kind: 'sessions' },
+              outcome: 'success',
+              detail: {},
+            }),
+          )
+          if (failure === 'append') throw new Error('Authoritative append failed')
+        },
+      }
+      const protectedStores = {
+        sessions: new SessionsStore(dataDir, boundary),
+        watches: new WatchStore(dataDir, boundary),
+        investigations: new InvestigationStore(dataDir, boundary),
+      }
+      for (
+        const mutate of ownedMutationCases(protectedStores, watch.id, investigation.id, evidence.id)
+      ) {
+        expect(mutate).toThrow()
+        expect(fileSnapshot(join(dataDir, 'research-v2'))).toEqual(before)
+        expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
+      }
+      const fresh = new SessionsStore(dataDir)
+      expect(fresh.get('marine', { kind: 'user', tenantId: 'one', oid: 'same' }, 's')?.title).toBe(
+        'original',
+      )
+    } finally {
+      database.close()
+      Deno.removeSync(dataDir, { recursive: true })
+    }
+  }
+})
+
+Deno.test('local history requires actual raw identity and portal evidence and never adopts signed ownership', () => {
+  const dataDir = Deno.makeTempDirSync()
+  const session = { id: 's', title: 'legacy', updatedAt: 'then', messages: [] }
+  const legacy = {
+    id: 'w',
+    clientId: 'a/b',
+    query: 'legacy',
+    createdAt: 'then',
+    lastRun: null,
+    fingerprint: null,
+    changed: false,
+  }
+  writeJsonAtomic(join(dataDir, 'sessions', 'marine', 'ab', 's.json'), session)
+  writeJsonAtomic(join(dataDir, 'investigations', 'marine', 'ab', 'i.json'), {
+    id: 'i',
+    name: 'legacy',
+  })
+  writeJsonAtomic(join(dataDir, 'watches', 'marine.json'), [legacy, {
+    ...legacy,
+    id: 'proven',
+    slug: 'marine',
+  }])
+  const original = fileSnapshot(dataDir)
+  try {
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const sessions = new SessionsStore(dataDir),
+        investigations = new InvestigationStore(dataDir),
+        watches = new WatchStore(dataDir)
+      expect(sessions.get('marine', 'a/b', 's')).toBeNull()
+      expect(sessions.get('marine', 'ab', 's')).toBeNull()
+      expect(investigations.get('marine', 'ab', 'i')).toBeNull()
+      expect(watches.list('marine', 'a/b').map((w) => w.id)).toEqual(['proven'])
+      expect(watches.list('marine', 'ab')).toEqual([])
+      expect(watches.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual([])
+      expect(watches.list('mar/ine', 'a/b')).toEqual([])
+      expect(fileSnapshot(dataDir)).toEqual(original)
+    }
+    new WatchStore(dataDir).update('marine', 'proven', { changed: true }, 'a/b')
+    const migrated = new WatchStore(dataDir)
+    expect(migrated.list('marine', 'a/b')[0]?.changed).toBe(true)
+    expect(migrated.list('marine', { kind: 'user', tenantId: 'one', oid: 'a/b' })).toEqual([])
+    migrated.remove('marine', 'a/b', 'proven')
+    expect(new WatchStore(dataDir).list('marine', 'a/b')).toEqual([])
+    expect(readFileSync(join(dataDir, 'watches', 'marine.json'), 'utf8')).toContain('legacy')
+    for (const [path, bytes] of Object.entries(original)) {
+      expect(Array.from(readFileSync(dataDir + path)).join(',')).toBe(bytes)
+    }
+  } finally {
+    Deno.removeSync(dataDir, { recursive: true })
+  }
+})
+
+Deno.test('local corrupt owned metadata and JSON fail closed without quarantine or overwrite', () => {
+  const dataDir = Deno.makeTempDirSync()
+  const owner = { kind: 'user' as const, tenantId: 'one', oid: 'same' }
+  try {
+    const stores = {
+      sessions: new SessionsStore(dataDir),
+      watches: new WatchStore(dataDir),
+      investigations: new InvestigationStore(dataDir),
+    }
+    seedOwned(stores)
+    const root = join(dataDir, 'research-v2')
+    const files = readdirSync(root, { recursive: true, withFileTypes: true }).filter((f) =>
+      f.isFile()
+    )
+    for (const file of files) {
+      const path = join(file.parentPath, file.name)
+      const original = readFileSync(path, 'utf8')
+      const value = JSON.parse(original)
+      for (
+        const raw of [
+          '{broken',
+          JSON.stringify(
+            file.name === 'watches.json'
+              ? {
+                ...value,
+                entries: value.entries.map((w: Record<string, unknown>) => ({
+                  ...w,
+                  owner: 'same',
+                })),
+              }
+              : { ...value, owner: { kind: 'anonymous', clientId: 'same' } },
+          ),
+        ]
+      ) {
+        writeFileSync(path, raw)
+        if (file.name === 'watches.json') {
+          expect(() => stores.watches.list('marine', owner)).toThrow()
+          expect(() => stores.watches.add('marine', owner, 'other')).toThrow()
+        } else if (path.includes('/sessions/')) {
+          expect(() => stores.sessions.get('marine', owner, 's')).toThrow()
+          expect(() => stores.sessions.remove('marine', owner, 's')).toThrow()
+        } else expect(() => stores.investigations.list('marine', owner)).toThrow()
+        expect(readFileSync(path, 'utf8')).toBe(raw)
+      }
+      writeFileSync(path, original)
+    }
+    for (const max of ['x'.repeat(128), '"'.repeat(64), '\\'.repeat(64)]) {
+      stores.sessions.put(max, { kind: 'user', tenantId: max, oid: max }, {
+        id: max,
+        title: 'long',
+        updatedAt: 'now',
+        messages: [],
+      })
+      expect(
+        new SessionsStore(dataDir).get(max, { kind: 'user', tenantId: max, oid: max }, max)?.title,
+      ).toBe('long')
+    }
+    expect(() => new SessionsStore('/' + 'a'.repeat(1000)).get('marine', owner, 's')).toThrow(
+      'Owned storage path too long',
+    )
+  } finally {
+    Deno.removeSync(dataDir, { recursive: true })
+  }
+})
+
+Deno.test('local owned stores isolate exact typed owners across all operations', () => {
+  checkOwnedStores({
+    sessions: new SessionsStore(),
+    watches: new WatchStore(),
+    investigations: new InvestigationStore(),
+  })
+})
 
 const oldKey: McpKeyRecord = {
   id: 'legacy-key',
@@ -206,9 +401,10 @@ Deno.test('local key migration restores earlier portal files when a later write 
 // DATA_DIR is read at module load, so point it at a temp dir before importing.
 const dir = await Deno.makeTempDir()
 Deno.env.set('DATA_DIR', dir)
-const { InsightsStore, McpKeyStore, SessionsStore, SourceStore, WatchStore } = await import(
-  './stores.ts'
-)
+const { InsightsStore, InvestigationStore, McpKeyStore, SessionsStore, SourceStore, WatchStore } =
+  await import(
+    './stores.ts'
+  )
 const { readJsonSafe, writeFileAtomic, writeJsonAtomic } = await import('./persist.ts')
 const { BindingStore } = await import('./bindings.ts')
 

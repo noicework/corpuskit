@@ -19,8 +19,8 @@ Deno.test('owner encoding preserves kind, raw identity and tenant without collis
     'é',
     'é',
     '😀',
-    'x'.repeat(200) + 'a',
-    'x'.repeat(200) + 'b',
+    'x'.repeat(100) + 'a',
+    'x'.repeat(100) + 'b',
   ]
   const keys = values.flatMap((value) => [
     encodeResearchOwner({ kind: 'anonymous', clientId: value }),
@@ -39,7 +39,7 @@ Deno.test('owner encoding preserves kind, raw identity and tenant without collis
 })
 
 Deno.test('identifiers reject malformed Unicode, empty values, oversize and malformed owners', () => {
-  for (const value of ['', '\ud800', '\udfff', 'a\ud800b', 'x'.repeat(513), '😀'.repeat(129)]) {
+  for (const value of ['', '\ud800', '\udfff', 'a\ud800b', 'x'.repeat(129), '😀'.repeat(33)]) {
     expect(() => encodeStorageIdentifier(value)).toThrow()
     expect(() => encodeResearchOwner(value)).toThrow()
   }
@@ -52,11 +52,15 @@ Deno.test('identifiers reject malformed Unicode, empty values, oversize and malf
   ) {
     expect(() => researchOwnerValue(value)).toThrow()
   }
-  expect(encodeStorageIdentifier('😀'.repeat(128))).toBeTruthy()
+  expect(encodeStorageIdentifier('😀'.repeat(32))).toBeTruthy()
+  expect(encodeStorageIdentifier('"'.repeat(64))).toBeTruthy()
+  expect(encodeStorageIdentifier('\\'.repeat(64))).toBeTruthy()
+  expect(() => encodeStorageIdentifier('"'.repeat(65))).toThrow()
+  expect(() => encodeStorageIdentifier('\u0000'.repeat(22))).toThrow()
 })
 
 Deno.test('long encoded paths are reversible with bounded components and terminal markers', () => {
-  const values = ['../a', 'a', 'a/b', 'ab', 'x'.repeat(511) + 'a', 'x'.repeat(511) + 'b']
+  const values = ['../a', 'a', 'a/b', 'ab', 'x'.repeat(127) + 'a', 'x'.repeat(127) + 'b']
   const paths = values.map((value) => storageIdentifierPath(encodeStorageIdentifier(value)))
   expect(new Set(paths).size).toBe(values.length)
   paths.forEach((path, index) => {

@@ -66,6 +66,19 @@ import {
   type ScopedKeyRecord,
 } from '../../api/src/scoped-key-record.ts'
 
+import {
+  decodeLegacyWatches,
+  decodeWatchCollection,
+  encodeResearchOwner,
+  encodeStorageIdentifier,
+  equalResearchOwner,
+  ownedRecord,
+  readOwnedRecord,
+  type ResearchOwner,
+  researchOwnerValue,
+  watchOwner,
+} from '../../api/src/research-owner.ts'
+
 type SqlValue = ArrayBuffer | string | number | null
 type SqlRow = Record<string, SqlValue>
 
@@ -353,6 +366,7 @@ export class DurableState {
     try {
       return JSON.parse(row.value) as T
     } catch (error) {
+      if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
       if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
       if (key === 'tenants') throw new Error('Invalid persisted portal configuration')
@@ -384,6 +398,7 @@ export class DurableState {
       try {
         return [{ key: row.key, value: JSON.parse(row.value) as T }]
       } catch (error) {
+        if (prefix.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
         console.error(
           JSON.stringify({ message: 'invalid durable JSON', key: row.key, error: String(error) }),
         )
@@ -926,75 +941,119 @@ export class DurableInsightsStore implements InsightsStoreApi {
 export class DurableSessionsStore implements SessionsStoreApi {
   constructor(private readonly state: DurableState) {}
 
-  private prefix(slug: string, clientId: string): string {
-    return key('session', slug, clientId) + ':'
+  private prefix(slug: string, clientId: ResearchOwner | string): string {
+    return 'research-v2:' + encodeStorageIdentifier(slug) + ':sessions:' +
+      encodeResearchOwner(clientId) + ':'
   }
 
-  list(slug: string, clientId: string): { id: string; title: string; updatedAt: string }[] {
-    return this.state.list<StoredSession>(this.prefix(slug, clientId)).map(({ value }) => ({
-      id: value.id,
-      title: value.title,
-      updatedAt: value.updatedAt,
-    })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 100)
+  list(
+    slug: string,
+    clientId: ResearchOwner | string,
+  ): { id: string; title: string; updatedAt: string }[] {
+    return this.state.list<unknown>(this.prefix(slug, clientId)).map(({ key, value }) => {
+      const session = readOwnedRecord<StoredSession>(value, slug, clientId)
+      if (key !== this.prefix(slug, clientId) + encodeStorageIdentifier(session.id)) {
+        throw new Error('Invalid session key')
+      }
+      return { id: session.id, title: session.title, updatedAt: session.updatedAt }
+    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 100)
   }
 
-  get(slug: string, clientId: string, id: string): StoredSession | null {
-    return this.state.get(this.prefix(slug, clientId) + segment(id), null)
+  get(slug: string, clientId: ResearchOwner | string, id: string): StoredSession | null {
+    const value = this.state.get<unknown>(
+      this.prefix(slug, clientId) + encodeStorageIdentifier(id),
+      undefined,
+    )
+    return value === undefined ? null : readOwnedRecord<StoredSession>(value, slug, clientId, id)
   }
 
-  put(slug: string, clientId: string, session: StoredSession): void {
-    this.state.put(this.prefix(slug, clientId) + segment(session.id), session)
+  put(slug: string, clientId: ResearchOwner | string, session: StoredSession): void {
+    this.get(slug, clientId, session.id)
+    this.state.put(
+      this.prefix(slug, clientId) + encodeStorageIdentifier(session.id),
+      ownedRecord(slug, clientId, session),
+    )
   }
 
-  remove(slug: string, clientId: string, id: string): void {
-    this.state.delete(this.prefix(slug, clientId) + segment(id))
+  remove(slug: string, clientId: ResearchOwner | string, id: string): void {
+    if (!this.get(slug, clientId, id)) return
+    this.state.delete(this.prefix(slug, clientId) + encodeStorageIdentifier(id))
   }
 }
 
 export class DurableWatchStore implements WatchStoreApi {
   constructor(private readonly state: DurableState) {}
-
-  list(slug: string, clientId?: string): Watch[] {
-    const all = this.state.get<Watch[]>(key('watches', slug), [])
-    return clientId ? all.filter((watch) => watch.clientId === clientId) : all
+  private storageKey(slug: string): string {
+    return 'research-v2:' + encodeStorageIdentifier(slug) + ':watches'
   }
-
-  add(slug: string, clientId: string, query: string): Watch {
-    const all = this.list(slug)
+  private read(slug: string): Watch[] {
+    const value = this.state.get<unknown>(this.storageKey(slug), undefined)
+    if (value !== undefined) return decodeWatchCollection(value, slug)
+    return decodeLegacyWatches(this.state.get(key('watches', slug), undefined), slug)
+  }
+  private write(slug: string, entries: Watch[]): void {
+    this.state.put(this.storageKey(slug), { v: 2, slug, entries })
+  }
+  /** Ownerless enumeration is reserved for the internal scheduler. */
+  list(slug: string, owner?: ResearchOwner | string): Watch[] {
+    if (owner !== undefined) researchOwnerValue(owner)
+    return this.read(slug).filter((watch) =>
+      owner === undefined || equalResearchOwner(watchOwner(watch), owner)
+    )
+  }
+  add(slug: string, input: ResearchOwner | string, query: string): Watch {
+    const owner = researchOwnerValue(input)
+    const all = this.read(slug)
     const trimmed = query.trim()
-    const existing = all.find((watch) => watch.clientId === clientId && watch.query === trimmed)
+    const mine = all.filter((watch) => equalResearchOwner(watchOwner(watch), owner))
+    const existing = mine.find((watch) => watch.query === trimmed)
     if (existing) return existing
     const watch: Watch = {
       id: crypto.randomUUID(),
-      clientId,
+      clientId: owner.kind === 'anonymous' ? owner.clientId : owner.oid,
+      owner,
       query: trimmed,
       createdAt: new Date().toISOString(),
       lastRun: null,
       fingerprint: null,
       changed: false,
     }
-    const mine = all.filter((item) => item.clientId === clientId)
-    const keep = mine.length >= 50 ? all.filter((item) => item !== mine[0]) : all
-    this.state.put(key('watches', slug), [...keep, watch])
+    this.write(slug, [
+      ...(mine.length >= 50 ? all.filter((watch) => watch !== mine[0]) : all),
+      watch,
+    ])
     return watch
   }
-
-  update(slug: string, id: string, patch: Partial<Watch>, clientId?: string): void {
-    this.state.put(
-      key('watches', slug),
-      this.list(slug).map((watch) =>
-        watch.id === id && (clientId === undefined || watch.clientId === clientId)
-          ? { ...watch, ...patch }
-          : watch
-      ),
-    )
+  /** Ownerless updates are reserved for the internal scheduler. Identity fields are immutable. */
+  update(slug: string, id: string, patch: Partial<Watch>, owner?: ResearchOwner | string): void {
+    encodeStorageIdentifier(id)
+    if (owner !== undefined) researchOwnerValue(owner)
+    const all = this.read(slug)
+    let changed = false
+    const next = all.map((watch) => {
+      if (
+        watch.id !== id || (owner !== undefined && !equalResearchOwner(watchOwner(watch), owner))
+      ) return watch
+      changed = true
+      return {
+        ...watch,
+        ...patch,
+        id: watch.id,
+        clientId: watch.clientId,
+        owner: watch.owner,
+        createdAt: watch.createdAt,
+      }
+    })
+    if (changed) this.write(slug, next)
   }
-
-  remove(slug: string, clientId: string, id: string): void {
-    this.state.put(
-      key('watches', slug),
-      this.list(slug).filter((watch) => !(watch.id === id && watch.clientId === clientId)),
+  remove(slug: string, owner: ResearchOwner | string, id: string): void {
+    encodeStorageIdentifier(id)
+    researchOwnerValue(owner)
+    const all = this.read(slug)
+    const next = all.filter((watch) =>
+      !(watch.id === id && equalResearchOwner(watchOwner(watch), owner))
     )
+    if (next.length !== all.length) this.write(slug, next)
   }
 }
 
@@ -1069,32 +1128,43 @@ export class DurableSourceStore implements SourceStoreApi {
 export class DurableInvestigationStore implements InvestigationStoreApi {
   constructor(private readonly state: DurableState) {}
 
-  private prefix(slug: string, clientId: string): string {
-    return key('investigation', slug, clientId) + ':'
+  private prefix(slug: string, clientId: ResearchOwner | string): string {
+    return 'research-v2:' + encodeStorageIdentifier(slug) + ':investigations:' +
+      encodeResearchOwner(clientId) + ':'
   }
 
-  private storageKey(slug: string, clientId: string, id: string): string {
-    return this.prefix(slug, clientId) + segment(id)
+  private storageKey(slug: string, clientId: ResearchOwner | string, id: string): string {
+    return this.prefix(slug, clientId) + encodeStorageIdentifier(id)
   }
 
-  list(slug: string, clientId: string) {
-    return this.state.list<Investigation>(this.prefix(slug, clientId)).map(({ value }) => ({
-      id: value.id,
-      name: value.name,
-      question: value.question,
-      status: value.status,
-      updatedAt: value.updatedAt,
-      evidenceCount: value.evidence.length,
-    })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  list(slug: string, clientId: ResearchOwner | string) {
+    return this.state.list<unknown>(this.prefix(slug, clientId)).map(({ key, value }) => {
+      const i = readOwnedRecord<Investigation>(value, slug, clientId)
+      if (key !== this.storageKey(slug, clientId, i.id)) {
+        throw new Error('Invalid investigation key')
+      }
+      return {
+        id: i.id,
+        name: i.name,
+        question: i.question,
+        status: i.status,
+        updatedAt: i.updatedAt,
+        evidenceCount: i.evidence.length,
+      }
+    }).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
-
-  get(slug: string, clientId: string, id: string): Investigation | null {
-    return this.state.get(this.storageKey(slug, clientId, id), null)
+  get(slug: string, clientId: ResearchOwner | string, id: string): Investigation | null {
+    const value = this.state.get<unknown>(this.storageKey(slug, clientId, id), undefined)
+    return value === undefined ? null : readOwnedRecord<Investigation>(value, slug, clientId, id)
+  }
+  private put(slug: string, owner: ResearchOwner | string, value: Investigation): void {
+    this.get(slug, owner, value.id)
+    this.state.put(this.storageKey(slug, owner, value.id), ownedRecord(slug, owner, value))
   }
 
   create(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     input: { name: string; question?: string },
   ): Investigation {
     const now = new Date().toISOString()
@@ -1109,30 +1179,38 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
       evidence: [],
       artefacts: [],
     }
-    this.state.put(this.storageKey(slug, clientId, investigation.id), investigation)
+    this.put(slug, clientId, investigation)
     return investigation
   }
 
   update(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     patch: Partial<Pick<Investigation, 'name' | 'question' | 'notes' | 'status'>>,
   ): Investigation | null {
     const current = this.get(slug, clientId, id)
     if (!current) return null
-    const next = { ...current, ...patch, updatedAt: new Date().toISOString() }
-    this.state.put(this.storageKey(slug, clientId, id), next)
+    const next = {
+      ...current,
+      ...(patch.name === undefined ? {} : { name: patch.name }),
+      ...(patch.question === undefined ? {} : { question: patch.question }),
+      ...(patch.notes === undefined ? {} : { notes: patch.notes }),
+      ...(patch.status === undefined ? {} : { status: patch.status }),
+      updatedAt: new Date().toISOString(),
+    }
+    this.put(slug, clientId, next)
     return next
   }
 
-  remove(slug: string, clientId: string, id: string): void {
+  remove(slug: string, clientId: ResearchOwner | string, id: string): void {
+    if (!this.get(slug, clientId, id)) return
     this.state.delete(this.storageKey(slug, clientId, id))
   }
 
   addEvidence(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     input: Omit<EvidenceItem, 'id' | 'createdAt'>,
   ): EvidenceItem | null {
@@ -1149,13 +1227,13 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
     }
     current.evidence.push(item)
     current.updatedAt = item.createdAt
-    this.state.put(this.storageKey(slug, clientId, id), current)
+    this.put(slug, clientId, current)
     return item
   }
 
   updateEvidence(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     evidenceId: string,
     patch: Partial<Pick<EvidenceItem, 'verdict' | 'note' | 'tags'>>,
@@ -1164,23 +1242,33 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
     if (!current) return false
     const index = current.evidence.findIndex((item) => item.id === evidenceId)
     if (index < 0) return false
-    current.evidence[index] = { ...current.evidence[index]!, ...patch }
+    current.evidence[index] = {
+      ...current.evidence[index]!,
+      ...(patch.verdict === undefined ? {} : { verdict: patch.verdict }),
+      ...(patch.note === undefined ? {} : { note: patch.note }),
+      ...(patch.tags === undefined ? {} : { tags: patch.tags }),
+    }
     current.updatedAt = new Date().toISOString()
-    this.state.put(this.storageKey(slug, clientId, id), current)
+    this.put(slug, clientId, current)
     return true
   }
 
-  removeEvidence(slug: string, clientId: string, id: string, evidenceId: string): void {
+  removeEvidence(
+    slug: string,
+    clientId: ResearchOwner | string,
+    id: string,
+    evidenceId: string,
+  ): void {
     const current = this.get(slug, clientId, id)
     if (!current) return
     current.evidence = current.evidence.filter((item) => item.id !== evidenceId)
     current.updatedAt = new Date().toISOString()
-    this.state.put(this.storageKey(slug, clientId, id), current)
+    this.put(slug, clientId, current)
   }
 
   addArtefact(
     slug: string,
-    clientId: string,
+    clientId: ResearchOwner | string,
     id: string,
     input: { kind: string; title: string; data: unknown },
   ): InvestigationArtefact | null {
@@ -1193,7 +1281,7 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
     }
     current.artefacts.push(artefact)
     current.updatedAt = artefact.createdAt
-    this.state.put(this.storageKey(slug, clientId, id), current)
+    this.put(slug, clientId, current)
     return artefact
   }
 }
