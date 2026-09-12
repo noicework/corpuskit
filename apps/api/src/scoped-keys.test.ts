@@ -65,7 +65,7 @@ Deno.test('scoped key preparations recheck limits and authority before mutation'
   }
 })
 
-Deno.test('scoped keys reject malformed digests and inert legacy creators without caller substitution', async () => {
+Deno.test('scoped keys reject malformed digests and keep legacy keys at a fixed viewer role', async () => {
   const f = createEnforcementFixture()
   try {
     const deps = {
@@ -88,8 +88,43 @@ Deno.test('scoped keys reject malformed digests and inert legacy creators withou
       createdAt: new Date(f.now()).toISOString(),
       revokedAt: null,
     })
+    // D13: a migrated legacy key is a fixed viewer key on its portal with no creator cap.
+    expect(await verifyScopedKey(legacy, 'a', deps)).toMatchObject({
+      kind: 'key',
+      id: 'legacy',
+      slug: 'a',
+      role: 'viewer',
+      actor: { kind: 'key', id: 'legacy' },
+    })
+    expect(await verifyScopedKey(legacy, 'b', deps)).toBeNull()
+    const legacySummary = (await inspectScopedKeys('a', deps))[0]
+    expect(legacySummary).toMatchObject({
+      status: 'active',
+      role: 'viewer',
+      effectiveRole: 'viewer',
+      legacy: true,
+      upgradeable: false,
+      expiresAt: null,
+      provenance: 'legacy-unproven',
+    })
+    const service = f.rbac.assignmentService(f.tenantId, f.audience)
+    const assignment = service.list().find((row) => row.subjectId === f.creator.oid)!
+    service.remove(assignment.id, { requestId: 'remove', actor: { kind: 'system' } })
+    expect((await verifyScopedKey(legacy, 'a', deps))?.role).toBe('viewer')
+    f.stores.mcpKeys.revoke('a', 'legacy', new Date(f.now()).toISOString())
     expect(await verifyScopedKey(legacy, 'a', deps)).toBeNull()
-    expect((await inspectScopedKeys('a', deps))[0]?.status).toBe('unproven_creator')
+    expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({
+      status: 'revoked',
+      effectiveRole: null,
+      legacy: true,
+      upgradeable: false,
+    })
+    service.create({
+      subjectKind: 'active-oid',
+      subjectId: f.creator.oid,
+      scope: { kind: 'portal', slug: 'a' },
+      role: 'portal-admin',
+    }, { requestId: 'restore', actor: { kind: 'system' } })
     const prepared = await issueScopedKey(
       { slug: 'a', label: 'Research', role: 'viewer' },
       f.creator,
@@ -105,7 +140,8 @@ Deno.test('scoped keys reject malformed digests and inert legacy creators withou
         'ck_' + 'x'.repeat(43),
       ]
     ) expect(await verifyScopedKey(token, 'a', deps)).toBeNull()
-    const row = f.stores.mcpKeys.list('a')[1]!
+    expect(prepared.credential).toMatchObject({ legacy: false, upgradeable: true })
+    const row = f.stores.mcpKeys.list('a').find((record) => record.id !== 'legacy')!
     expect(
       await verifyScopedKey(prepared.key, 'a', {
         ...deps,

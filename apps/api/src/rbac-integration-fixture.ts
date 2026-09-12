@@ -153,7 +153,7 @@ export async function assertEnforcementJourney(h: EnforcementJourney): Promise<v
   )
   expect(revoke.status).toBe(200)
   await denied('/api/t/marine/catalog', owner(), keyed())
-  // A migrated viewer record without verified creator provenance must remain inert.
+  // D13: a migrated legacy record works as a fixed viewer key without a creator cap.
   const legacy = h.stores.mcpKeys.list('marine').find((r) => r.id === expiring.credential.id)!
   const legacyToken = `ck_mcp_${'L'.repeat(12)}_${'M'.repeat(43)}`
   const digest = new Uint8Array(
@@ -169,7 +169,15 @@ export async function assertEnforcementJourney(h: EnforcementJourney): Promise<v
     provenance: 'legacy-unproven',
     role: 'viewer',
   })
-  await denied('/api/t/marine/catalog', owner(), keyed(legacyToken))
+  expect((await h.invoke('/api/t/marine/catalog', undefined, keyed(legacyToken))).status).toBe(
+    200,
+  )
+  await denied('/api/t/grains/catalog', owner(), keyed(legacyToken))
+  await denied(
+    '/api/t/marine/summarize',
+    owner(),
+    keyed(legacyToken, 'POST', { resourceIds: ['res-1'] }),
+  )
 
   // Nested IDs never cross signed owners, portals or the anonymous namespace.
   const writer = owner()

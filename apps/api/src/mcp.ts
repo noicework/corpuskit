@@ -393,6 +393,8 @@ function keySummary(record: ScopedKeySummary) {
     expiresAt: record.expiresAt,
     status: record.status,
     effectiveRole: record.effectiveRole,
+    legacy: record.legacy,
+    upgradeable: record.upgradeable,
   }
 }
 

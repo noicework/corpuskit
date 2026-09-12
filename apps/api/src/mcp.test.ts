@@ -1334,3 +1334,91 @@ Deno.test('a portal-admin key uses data-plane tools but never key or portal mana
     f.close()
   }
 })
+
+Deno.test('a migrated legacy key is a fixed viewer key on its portal until revoked', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const legacyToken = 'ck_mcp_abcdefghijkl_' + 'x'.repeat(43)
+    const digest = new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(legacyToken)),
+    )
+    f.stores.mcpKeys.add({
+      id: 'legacy',
+      tenant: 'a',
+      issuerUserId: 'unproven-user',
+      label: 'Legacy client',
+      prefix: legacyToken.slice(0, 15),
+      hash: [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+      createdAt: '2026-09-01T00:00:00.000Z',
+      revokedAt: null,
+    })
+    const bearer = { authorization: `Bearer ${legacyToken}` }
+    const listed = await f.requestAs(
+      null,
+      '/api/t/a/mcp',
+      rpcInit({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, bearer),
+    )
+    expect(listed.status).toBe(200)
+    expect(await listed.text()).toContain('search_corpus')
+    for (const [name, args] of toolsToCall) {
+      const response = await f.requestAs(null, '/api/t/a/mcp', rpcInit(rpcBody(name, args), bearer))
+      expect(response.status, name).toBe(200)
+      expect((await response.json()).result.isError).not.toBe(true)
+    }
+    expect((await f.requestAs(null, '/api/t/a/search?q=abalone', { headers: bearer })).status)
+      .toBe(200)
+    // Nothing above viewer: analyst generation, curator writes and key management all refuse.
+    const before = f.providerCalls.length
+    for (
+      const [method, path, body] of [
+        ['POST', '/api/t/a/summarize', { resourceIds: ['res-1'] }],
+        ['POST', '/api/t/a/generate', { kind: 'comparison', query: 'Abalone evidence' }],
+        ['POST', '/api/t/a/watches', { query: 'Abalone' }],
+        ['GET', '/api/t/a/mcp/keys'],
+        ['DELETE', '/api/t/a/mcp/keys/legacy'],
+      ] as const
+    ) {
+      const response = await f.requestAs(null, path, {
+        method,
+        headers: { 'content-type': 'application/json', ...bearer },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+      expect(response.status, `${method} ${path}`).toBe(403)
+    }
+    f.assertNoProtectedDispatch(before)
+    // Wrong portal is denied, and the key list marks the record legacy and non-upgradeable.
+    expect(
+      (await f.requestAs(null, '/api/t/b/mcp', rpcInit(rpcBody('browse_catalogue', {}), bearer)))
+        .status,
+    ).toBe(401)
+    const listing = await f.requestAs(f.creator, '/api/t/a/mcp/keys')
+    expect(listing.status).toBe(200)
+    const [summary] = await listing.json()
+    expect(summary).toMatchObject({
+      id: 'legacy',
+      role: 'viewer',
+      effectiveRole: 'viewer',
+      status: 'active',
+      expiresAt: null,
+      legacy: true,
+      upgradeable: false,
+    })
+    expect(JSON.stringify(summary)).not.toContain('hash')
+    expect(JSON.stringify(summary)).not.toContain('issuerUserId')
+    // Revocation behaves as for any key.
+    expect(
+      (await f.requestAs(f.creator, '/api/t/a/mcp/keys/legacy', { method: 'DELETE' })).status,
+    ).toBe(200)
+    expect(
+      (await f.requestAs(null, '/api/t/a/mcp', rpcInit(rpcBody('browse_catalogue', {}), bearer)))
+        .status,
+    ).toBe(401)
+    expect((await (await f.requestAs(f.creator, '/api/t/a/mcp/keys')).json())[0]).toMatchObject({
+      status: 'revoked',
+      effectiveRole: null,
+      legacy: true,
+    })
+  } finally {
+    f.close()
+  }
+})

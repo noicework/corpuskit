@@ -33,6 +33,10 @@ export type ScopedKeyStatus =
 export type ScopedKeySummary = Omit<ScopedKeyRecord, 'hash'> & {
   status: ScopedKeyStatus
   effectiveRole: PortalRole | null
+  /** Migrated before phase 3 with no proven creator: a fixed viewer key (D13). */
+  legacy: boolean
+  /** False when no creator can ever vouch for a higher role; mint a replacement instead. */
+  upgradeable: boolean
 }
 export class ScopedKeyError extends Error {
   constructor(
@@ -67,6 +71,11 @@ async function status(
   if (record.revokedAt) return { status: 'revoked', effectiveRole: null }
   if (record.expiresAt && Date.parse(record.expiresAt) <= clock(deps)) {
     return { status: 'expired', effectiveRole: null }
+  }
+  // D13: a legacy key keeps working as a fixed viewer key on its bound portal. Its creator is
+  // unproven, so no creator cap applies and the schema pins the stored role to viewer.
+  if (record.provenance === 'legacy-unproven' && record.role === 'viewer') {
+    return { status: 'active', effectiveRole: 'viewer' }
   }
   if (!record.creator || record.provenance !== 'verified-session') {
     return { status: 'unproven_creator', effectiveRole: null }
@@ -154,7 +163,13 @@ export async function issueScopedKey(
     let committed = false
     return {
       key,
-      credential: { ...metadata, status: 'active' as const, effectiveRole: role },
+      credential: {
+        ...metadata,
+        status: 'active' as const,
+        effectiveRole: role,
+        legacy: false,
+        upgradeable: true,
+      },
       commit: () => {
         if (committed) throw new ScopedKeyError('already_committed')
         checkLimit()
@@ -213,7 +228,8 @@ export async function inspectScopedKeys(
       const record = ScopedKeyRecordSchema.parse(raw)
       if (record.tenant !== slug) throw new ScopedKeyError('forbidden')
       const { hash: _hash, ...metadata } = record
-      return { ...metadata, ...await status(record, deps) }
+      const legacy = record.provenance === 'legacy-unproven'
+      return { ...metadata, ...await status(record, deps), legacy, upgradeable: !legacy }
     }),
   )
 }
