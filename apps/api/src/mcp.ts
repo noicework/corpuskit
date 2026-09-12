@@ -6,7 +6,17 @@ import {
   infrastructureHandler,
   isPrivileged,
 } from './permissions.ts'
-import { coarseAdminEligibility } from './assignments.ts'
+import {
+  AuthorisationError,
+  type AuthorityDependencies,
+  type RequestAuthority,
+} from './authorisation.ts'
+import {
+  inspectScopedKeys,
+  issueScopedKey,
+  ScopedKeyError,
+  type ScopedKeySummary,
+} from './scoped-keys.ts'
 import {
   appendAudit,
   type AuditActor,
@@ -37,11 +47,18 @@ import { clientIp, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
 const MCP_ROUTE = '/api/t/:slug/mcp'
 const KEY_ID_BYTES = 9
 const KEY_SECRET_BYTES = 32
-const ACTIVE_KEY_LIMIT = 20
 const DUMMY_HASH = '0'.repeat(64)
 const KEY_PATTERN = /^(ck_mcp_[A-Za-z0-9_-]{12})_[A-Za-z0-9_-]{43}$/
 
-const keyLabelSchema = z.object({ label: z.string().trim().min(1).max(80) })
+const keyLabelSchema = z.object({
+  label: z.string().trim().min(1).max(80).refine((value) =>
+    [...value].every((character) =>
+      character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127
+    )
+  ),
+  role: z.enum(['viewer', 'analyst', 'curator', 'portal-admin']),
+  expiresAt: z.string().optional(),
+}).strict()
 
 const READ_ONLY_TOOL = {
   readOnlyHint: true,
@@ -67,7 +84,8 @@ export interface McpRoutesOptions {
   provider: RetrievalProvider
   tenant: (slug: string) => TenantConfig | undefined
   keys: McpKeyStoreApi
-  trustedUser?: (request: Request) => TrustedPortalUser | null
+  authorityDependencies?: AuthorityDependencies
+  authorise?: (context: Context) => Promise<RequestAuthority | null>
   rateLimitPerMin?: number
   audit?: AuditStore
   requestContext?: (request: Request) => PortalRequestContext
@@ -411,23 +429,23 @@ export function createMcpServer(opts: McpRoutesOptions): {
   return { transport, connected: server.connect(transport) }
 }
 
-function coarseKeyManager(
-  opts: McpRoutesOptions,
-  context: Context,
-): TrustedPortalUser | Response {
-  const user = opts.trustedUser?.(context.req.raw) ?? null
-  if (!user) {
-    return context.json({ error: 'unauthenticated', message: 'Sign in to manage MCP keys.' }, 401)
+function keySummary(record: ScopedKeySummary) {
+  return {
+    id: record.id,
+    label: record.label,
+    prefix: record.prefix,
+    createdAt: record.createdAt,
+    revokedAt: record.revokedAt,
+    role: record.role,
+    expiresAt: record.expiresAt,
+    status: record.status,
+    effectiveRole: record.effectiveRole,
   }
-  if (!coarseAdminEligibility(user.effectiveRoles)) {
-    return context.json({ error: 'forbidden', message: 'Administrator access is required.' }, 403)
-  }
-  return user
 }
 
 function withNoStore(response: Response): Response {
   const headers = new Headers(response.headers)
-  headers.set('cache-control', 'no-store')
+  headers.set('cache-control', 'private, no-store')
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -447,51 +465,59 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     (context) => context.req.header('cf-connecting-ip') ?? clientIp(context),
   )
 
-  app.get(declaredRoute('GET', '/api/t/:slug/mcp/keys'), (context) => {
-    const user = coarseKeyManager(opts, context)
-    if (user instanceof Response) return user
+  const authority = async (context: Context) => {
+    if (!opts.authorise || !opts.authorityDependencies) throw new AuthorisationError(403)
+    const selected = await opts.authorise(context)
+    if (!selected) throw new AuthorisationError(403)
+    return selected
+  }
+
+  app.get(declaredRoute('GET', '/api/t/:slug/mcp/keys'), async (context) => {
+    await authority(context)
     const config = opts.tenant(context.req.param('slug'))
     if (!config) return context.json({ error: 'unknown_tenant' }, 404)
-    context.header('cache-control', 'no-store')
-    return context.json(opts.keys.list(config.slug).map(summary))
+    return context.json(
+      (await inspectScopedKeys(config.slug, opts.authorityDependencies!)).map(keySummary),
+    )
   })
 
   app.post(declaredRoute('POST', '/api/t/:slug/mcp/keys'), async (context) => {
-    const user = coarseKeyManager(opts, context)
-    if (user instanceof Response) return user
+    const selected = await authority(context)
+    if (selected.kind === 'key' || !selected.provenanceSession) throw new AuthorisationError(403)
     const config = opts.tenant(context.req.param('slug'))
     if (!config) return context.json({ error: 'unknown_tenant' }, 404)
     const parsed = keyLabelSchema.safeParse(await context.req.json().catch(() => null))
     if (!parsed.success) return context.json({ error: 'invalid_request' }, 400)
-    const active = opts.keys.list(config.slug).filter((record) => !record.revokedAt).length
-    if (active >= ACTIVE_KEY_LIMIT) {
-      return context.json({
-        error: 'key_limit_reached',
-        message: 'Revoke an unused MCP key before creating another.',
-      }, 409)
+    try {
+      const issued = await issueScopedKey(
+        { slug: config.slug, ...parsed.data },
+        selected.provenanceSession,
+        opts.authorityDependencies!,
+      )
+      issued.commit()
+      return context.json({ key: issued.key, credential: keySummary(issued.credential) }, 201)
+    } catch (error) {
+      if (!(error instanceof ScopedKeyError)) throw error
+      if (error.code === 'forbidden') throw new AuthorisationError(403)
+      if (error.code === 'invalid_input') return context.json({ error: 'invalid_request' }, 400)
+      if (error.code === 'key_limit') return context.json({ error: 'key_limit_reached' }, 409)
+      throw error
     }
-    const issued = await issueMcpCredential(
-      opts.keys,
-      config.slug,
-      user.id,
-      parsed.data.label,
-    )
-    context.header('cache-control', 'no-store')
-    return context.json(issued, 201)
   })
 
-  app.delete(declaredRoute('DELETE', '/api/t/:slug/mcp/keys/:id'), (context) => {
-    const user = coarseKeyManager(opts, context)
-    if (user instanceof Response) return user
+  app.delete(declaredRoute('DELETE', '/api/t/:slug/mcp/keys/:id'), async (context) => {
+    await authority(context)
     const config = opts.tenant(context.req.param('slug'))
     if (!config) return context.json({ error: 'unknown_tenant' }, 404)
+    const existing = opts.keys.list(config.slug).find((key) => key.id === context.req.param('id'))
+    if (!existing) return context.json({ error: 'unknown_key' }, 404)
+    if (existing.revokedAt) return context.json({ ok: true })
     const revoked = opts.keys.revoke(
       config.slug,
       context.req.param('id'),
-      new Date().toISOString(),
+      new Date((opts.authorityDependencies!.now ?? Date.now)()).toISOString(),
     )
     if (!revoked) return context.json({ error: 'unknown_key' }, 404)
-    context.header('cache-control', 'no-store')
     return context.json({ ok: true })
   })
 
@@ -501,22 +527,12 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     async (context) => {
       const slug = context.req.param('slug')
       const request = opts.requestContext?.(context.req.raw)
-      if (request && context.req.header('authorization')) request.actor = { kind: 'legacy-key' }
-      const credential = await verifyMcpCredential(
-        opts.keys,
-        slug,
-        context.req.header('authorization'),
-      )
-      if (!credential) {
-        context.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
-        context.header('cache-control', 'no-store')
-        return context.json({ error: 'unauthorised' }, 401)
-      }
-      const actor: AuditActor = { kind: 'legacy-key', id: credential.id }
+      context.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
+      const selected = await authority(context)
+      const actor = selected.actor
       if (request) request.actor = actor
       if (context.req.method !== 'POST') {
         context.header('allow', 'POST')
-        context.header('cache-control', 'no-store')
         return context.json({ error: 'method_not_allowed' }, 405)
       }
       if (!opts.tenant(slug)) return context.json({ error: 'unknown_tenant' }, 404)
@@ -531,9 +547,9 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
       const response = await transport.handleRequest(context.req.raw, {
         authInfo: {
           token: 'credential-verified',
-          clientId: credential.issuerUserId,
+          clientId: selected.kind === 'key' ? selected.id : selected.actor.id ?? 'anonymous',
           scopes: ['corpus:read'],
-          extra: { tenant: slug, auditContext },
+          extra: { tenant: slug, slug, authority: selected, auditContext },
         },
       })
       // The SDK converts callback exceptions into protocol errors; mandatory audit errors remain HTTP failures.

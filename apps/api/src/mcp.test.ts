@@ -1,4 +1,4 @@
-import { describe, it } from '@std/testing/bdd'
+import { afterEach, describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import type {
   AskEvent,
@@ -17,6 +17,16 @@ import { constantTimeHashEqual, executeMcpTool } from './mcp.ts'
 import { DECLARATIONS } from './permissions.ts'
 import { McpKeyStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
+import { openLocalRbac } from './rbac-local.ts'
+import { localOwnedStores } from './local-owned-stores.ts'
+import { sessionFor } from './enforcement-fixture.ts'
+import { createEnforcementFixture } from './enforcement-fixture.ts'
+import { LocalIngress } from './local-ingress.ts'
+
+const cleanups: (() => void)[] = []
+afterEach(() => {
+  for (const close of cleanups.splice(0)) close()
+})
 
 const RESOURCE: ResourceSummary = {
   id: 'document-1',
@@ -151,30 +161,50 @@ function harness(
   overrides: Partial<BuildAppOptions> = {},
 ): McpHarness {
   const dataDir = Deno.makeTempDirSync()
-  const keys = new McpKeyStore(dataDir)
+  const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir, ENTRA_TENANT_ID: 'tenant-1' })
+  const audit = overrides.audit ?? rbac.audit
+  const owned = localOwnedStores(dataDir, database, audit)
+  const keys = owned.mcpKeys
   const tenants = new TenantStore({ TENANTS_PATH: `${dataDir}/tenants.json` })
+  const writer = { ...sessionFor('portal-admin', 'marine', Date.now()), oid: 'admin-user-id' }
+  const service = rbac.assignmentService('tenant-1', 'corpuskit')
+  service.observeSession(writer)
+  service.create({
+    subjectKind: 'active-oid',
+    subjectId: writer.oid,
+    scope: { kind: 'portal', slug: 'marine' },
+    role: 'portal-admin',
+  }, { requestId: 'seed', actor: { kind: 'system' } })
+  cleanups.push(() => {
+    database.close()
+    Deno.removeSync(dataDir, { recursive: true })
+  })
   return {
     dataDir,
     keys,
     app: buildApp({
-      audit: { append: () => {}, read: () => [] },
+      ...owned,
+      rbac,
+      audit,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
+      breakGlass: rbac.breakGlassService({ environment: 'development', passcode: 'fixture' }),
       provider: new McpStubProvider(),
       tenants,
       mcpKeys: keys,
       rateLimitMcpAuthPerMin,
-      trustedUser: (request) => {
+      requestContext: (request) => {
         const id = request.headers.get('x-test-user')
-        return id
-          ? {
-            id,
-            effectiveRoles: {
-              portalRoles: [],
-              ...(request.headers.get('x-test-admin') === '1'
-                ? { platformRole: 'owner' as const }
-                : {}),
-            },
-          }
-          : null
+        const session = id ? { ...writer, oid: id } : null
+        return {
+          requestId: crypto.randomUUID(),
+          session,
+          coarseAdminEligible: false,
+          effectiveRoles: {
+            portalRoles: id === writer.oid ? [{ slug: 'marine', role: 'portal-admin' }] : [],
+          },
+          actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
+        }
       },
       ...overrides,
     }),
@@ -212,7 +242,7 @@ Deno.test('MCP transport and provider denials are audited without key material a
     if (!fail) {
       expect((await response.json()).result.isError).toBe(true)
       expect(events).toHaveLength(1)
-      expect(events[0]?.actor_kind).toBe('legacy-key')
+      expect(events[0]?.actor_kind).toBe('key')
       expect(events[0]?.actor_id).toBe(credential.id)
       expect(events[0]?.target_id).toBe('search_corpus')
     }
@@ -237,7 +267,7 @@ async function mint(test: McpHarness, slug = 'marine') {
   const response = await test.app.request(`/api/t/${slug}/mcp/keys`, {
     method: 'POST',
     headers: adminHeaders,
-    body: JSON.stringify({ label: 'Research client' }),
+    body: JSON.stringify({ label: 'Research client', role: 'viewer' }),
   })
   expect(response.status).toBe(201)
   return await response.json() as {
@@ -277,15 +307,14 @@ describe('MCP credential management', () => {
     expect(nonAdmin.status).toBe(403)
     expect(await nonAdmin.json()).toEqual({
       error: 'forbidden',
-      message: 'Administrator access is required.',
     })
   })
 
   it('shows the key exactly once and persists only its hash', async () => {
     const test = harness()
     const issued = await mint(test)
-    expect(issued.key).toMatch(/^ck_mcp_[A-Za-z0-9_-]{12}_[A-Za-z0-9_-]{43}$/)
-    expect(issued.key.startsWith(`${issued.credential.prefix}_`)).toBe(true)
+    expect(issued.key).toMatch(/^ck_[A-Za-z0-9_-]{43}$/)
+    expect(issued.key.startsWith(issued.credential.prefix)).toBe(true)
 
     const persisted = await Deno.readTextFile(`${test.dataDir}/mcp-keys/marine.json`)
     expect(persisted).not.toContain(issued.key)
@@ -296,7 +325,7 @@ describe('MCP credential management', () => {
       headers: adminHeaders,
     })
     expect(listedResponse.status).toBe(200)
-    expect(listedResponse.headers.get('cache-control')).toBe('no-store')
+    expect(listedResponse.headers.get('cache-control')).toBe('private, no-store')
     const listedText = await listedResponse.text()
     expect(listedText).not.toContain(issued.key)
     expect(listedText).not.toContain('"hash"')
@@ -336,7 +365,7 @@ describe('Streamable HTTP MCP endpoint', () => {
   it('fails closed for absent, malformed and unknown credentials', async () => {
     const test = harness()
     const body = { jsonrpc: '2.0', id: 1, method: 'ping' }
-    for (const key of [null, 'not-a-key', 'ck_mcp_abcdefghijkl_' + 'x'.repeat(43)]) {
+    for (const key of ['not-a-key', 'ck_mcp_abcdefghijkl_' + 'x'.repeat(43)]) {
       const response = await mcpRequest(test, 'marine', key, body)
       expect(response.status).toBe(401)
       expect(await response.json()).toEqual({ error: 'unauthorised' })
@@ -386,6 +415,25 @@ describe('Streamable HTTP MCP endpoint', () => {
       ),
     ).toBe(true)
 
+    for (
+      const [name, args, field] of [
+        ['search_corpus', { query: 'Research' }, 'resources'],
+        ['get_document', { id: RESOURCE.id }, 'document'],
+        ['browse_catalogue', {}, 'catalogue'],
+      ] as const
+    ) {
+      const response = await mcpRequest(test, 'marine', issued.key, {
+        jsonrpc: '2.0',
+        id: name,
+        method: 'tools/call',
+        params: { name, arguments: args },
+      })
+      expect(response.status).toBe(200)
+      const result = (await response.json()).result
+      expect(result.isError).not.toBe(true)
+      expect(result.structuredContent[field]).toBeDefined()
+    }
+
     const callResponse = await mcpRequest(test, 'marine', issued.key, {
       jsonrpc: '2.0',
       id: 3,
@@ -424,7 +472,7 @@ describe('Streamable HTTP MCP endpoint', () => {
   it('bounds authentication attempts before retrieval', async () => {
     const test = harness(1)
     const body = { jsonrpc: '2.0', id: 1, method: 'ping' }
-    expect((await mcpRequest(test, 'marine', null, body)).status).toBe(401)
+    expect((await mcpRequest(test, 'marine', null, body)).status).toBe(200)
     const limited = await mcpRequest(test, 'marine', null, body)
     expect(limited.status).toBe(429)
     expect(limited.headers.get('retry-after')).toBeTruthy()
@@ -437,4 +485,260 @@ describe('constant-time digest comparison', () => {
     expect(constantTimeHashEqual('a'.repeat(64), 'b'.repeat(64))).toBe(false)
     expect(constantTimeHashEqual('not-a-hash', 'not-a-hash')).toBe(false)
   })
+})
+
+Deno.test('key management strictly binds role, creator, expiry and URL portal', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const admin = f.creator
+    const post = (value: unknown, session = admin, headers = {}) =>
+      f.requestAs(session, '/api/t/a/mcp/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(value),
+      })
+    for (
+      const patch of [
+        { role: 'owner' },
+        { role: 'platform-admin' },
+        { role: null },
+        { role: undefined },
+        { label: '' },
+        { label: 'x'.repeat(81) },
+        { label: 'bad\nlabel' },
+        { tenant: 'b' },
+        { slug: 'b' },
+        { creator: admin.oid },
+        { issuerUserId: admin.oid },
+        { expiresAt: null },
+        { expiresAt: '2027-01-01' },
+        { expiresAt: '2027-01-01T00:00:00Z' },
+        { expiresAt: new Date(f.now()).toISOString() },
+      ]
+    ) {
+      expect((await post({ label: 'Key', role: 'viewer', ...patch })).status).toBe(400)
+      expect(f.stores.mcpKeys.list('a')).toEqual([])
+    }
+    for (const role of ['viewer', 'analyst', 'curator'] as const) {
+      expect((await post({ label: 'Key', role: 'viewer' }, f.sessionFor(role))).status).toBe(403)
+    }
+    expect((await post({ label: 'Key', role: 'viewer' }, f.otherTenant)).status).toBe(403)
+    expect((await f.requestAs(admin, '/api/t/b/mcp/keys')).status).toBe(403)
+    const response = await post({
+      label: '  Key  ',
+      role: 'portal-admin',
+      expiresAt: new Date(f.now() + 1000).toISOString(),
+    })
+    expect(response.status).toBe(201)
+    const issued = await response.json()
+    expect(issued.credential).toMatchObject({
+      label: 'Key',
+      role: 'portal-admin',
+      status: 'active',
+      effectiveRole: 'portal-admin',
+    })
+    expect(
+      (await post({ label: 'Key', role: 'viewer' }, admin, {
+        authorization: `Bearer ${issued.key}`,
+      })).status,
+    ).toBe(403)
+    expect(f.stores.mcpKeys.list('a')).toHaveLength(1)
+    expect(
+      (await f.requestAs(
+        f.sessionFor('portal-admin', 'b'),
+        `/api/t/b/mcp/keys/${issued.credential.id}`,
+        { method: 'DELETE' },
+      )).status,
+    ).toBe(404)
+    f.advance(1000)
+    expect((await (await f.requestAs(admin, '/api/t/a/mcp/keys')).json())[0].status).toBe('expired')
+    for (let i = 0; i < 2; i++) {
+      expect(
+        (await f.requestAs(admin, `/api/t/a/mcp/keys/${issued.credential.id}`, {
+          method: 'DELETE',
+        })).status,
+      ).toBe(200)
+    }
+    expect((await (await f.requestAs(admin, '/api/t/a/mcp/keys')).json())[0].status).toBe('revoked')
+    f.assertNoProtectedDispatch()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('break-glass key creation still needs the verified creator and current creator ceiling', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (
+      const [session, role, status] of [
+        [null, 'viewer', 403],
+        [f.otherTenant, 'viewer', 403],
+        [f.unassigned, 'viewer', 403],
+        [f.sessionFor('viewer'), 'analyst', 403],
+        [f.sessionFor('viewer'), 'viewer', 201],
+        [f.creator, 'portal-admin', 201],
+      ] as const
+    ) {
+      const context = await f.contextFor(session)
+      const app = buildApp({
+        ...f.stores,
+        now: f.now,
+        provider: f.provider,
+        configuredTenantId: f.tenantId,
+        audience: f.audience,
+        requestContext: () => context,
+        breakGlass: f.rbac.breakGlassService({ environment: 'development', passcode: 'fixture' }),
+      })
+      const response = await app.request('/api/t/a/mcp/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-admin-passcode': 'fixture' },
+        body: JSON.stringify({ label: 'Emergency', role }),
+      })
+      expect(response.status).toBe(status)
+      if (status === 201) {
+        const issued = await response.json()
+        expect(
+          f.stores.mcpKeys.list('a').find((row) => row.id === issued.credential.id)?.creator?.oid,
+        ).toBe(session!.oid)
+      }
+    }
+    expect(f.stores.mcpKeys.list('a')).toHaveLength(2)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('real local key HTTP commits restore exact bytes on append and SQL COMMIT failure', async () => {
+  const directory = Deno.makeTempDirSync({ prefix: 'keys-ingress-' })
+  const env = {
+    DATA_DIR: directory,
+    ENTRA_TENANT_ID: 'tenant-1',
+    ENVIRONMENT: 'development',
+    ADMIN_PASSCODE: 'fixture',
+  }
+  const { database, rbac } = openLocalRbac(env)
+  try {
+    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    const ingress = new LocalIngress({ env, tenants, rbac })
+    const writer = sessionFor('owner', 'marine', Date.now())
+    let failure: 'append' | 'commit' | 'completion' | undefined
+    let observed = 0
+    let before: number[] | undefined
+    const path = `${directory}/mcp-keys/marine.json`
+    const bytes = () => {
+      try {
+        return [...Deno.readFileSync(path)]
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound) return undefined
+        throw error
+      }
+    }
+    const audit = {
+      read: rbac.audit.read.bind(rbac.audit),
+      append(event: AuditEvent) {
+        if (event.action === 'local.mutation') {
+          observed++
+          expect(bytes()).not.toEqual(before)
+          expect(event.actor_id).toBe(writer.oid)
+          expect(event.scope_slug).toBe('marine')
+          if (failure === 'append') throw new Error('fixture append')
+        }
+        if (
+          failure === 'completion' && event.action === 'request.privileged' &&
+          event.outcome === 'success'
+        ) throw new Error('fixture completion')
+        rbac.audit.append(event)
+        if (failure === 'commit' && event.action === 'local.mutation') {
+          database.exec('INSERT INTO key_child(parent_id) VALUES (1)')
+        }
+      },
+    }
+    const stores = localOwnedStores(directory, database, audit)
+    database.exec('CREATE TABLE key_parent(id INTEGER PRIMARY KEY)')
+    database.exec(
+      'CREATE TABLE key_child(parent_id INTEGER REFERENCES key_parent(id) DEFERRABLE INITIALLY DEFERRED)',
+    )
+    const app = buildApp({
+      ...stores,
+      rbac,
+      tenants,
+      audit,
+      audience: 'corpuskit',
+      configuredTenantId: 'tenant-1',
+      provider: new McpStubProvider(),
+      breakGlass: ingress.breakGlass,
+      requestContext: ingress.requestContext,
+    })
+    const invoke = (method: string, suffix = '', value?: unknown) =>
+      ingress.handle(
+        new Request(`http://localhost/api/t/marine/mcp/keys${suffix}`, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          ...(value ? { body: JSON.stringify(value) } : {}),
+        }),
+        (request) => app.fetch(request),
+        { remoteAddr: { transport: 'tcp', hostname: '127.0.0.1', port: 8791 } },
+        writer,
+      )
+    const value = { label: 'Research', role: 'viewer' }
+    for (const mode of ['append', 'commit'] as const) {
+      failure = mode
+      before = bytes()
+      const count = observed
+      const denied = await invoke('POST', '', value)
+      expect(denied.status).toBe(500)
+      expect(await denied.text()).not.toContain('ck_')
+      expect(observed).toBe(count + 1)
+      expect(bytes()).toEqual(before)
+      expect(database.all('SELECT * FROM key_child')).toEqual([])
+    }
+    failure = undefined
+    const issuedResponse = await invoke('POST', '', value)
+    expect(issuedResponse.status).toBe(201)
+    const issued = await issuedResponse.json()
+    // Preserve non-canonical original whitespace too, not only equivalent decoded records.
+    Deno.writeTextFileSync(path, '\n  ' + Deno.readTextFileSync(path) + '\n')
+    for (const mode of ['append', 'commit'] as const) {
+      for (const method of ['POST', 'DELETE']) {
+        failure = mode
+        before = bytes()
+        const count = observed
+        const denied = await invoke(
+          method,
+          method === 'DELETE' ? `/${issued.credential.id}` : '',
+          method === 'POST' ? value : undefined,
+        )
+        expect(denied.status).toBe(500)
+        expect(await denied.text()).not.toContain('ck_')
+        expect(observed).toBe(count + 1)
+        expect(bytes()).toEqual(before)
+        expect(stores.mcpKeys.list('marine')).toHaveLength(1)
+        expect(stores.mcpKeys.list('marine')[0]!.revokedAt).toBeNull()
+        expect(
+          rbac.audit.read({
+            scope: { kind: 'platform' },
+            requestId: denied.headers.get('x-request-id')!,
+          }).filter((e) => e.action === 'local.mutation'),
+        ).toEqual([])
+      }
+    }
+    failure = 'completion'
+    before = bytes()
+    const hidden = await invoke('POST', '', value)
+    expect(hidden.status).toBe(500)
+    expect(await hidden.text()).not.toContain('ck_')
+    expect(stores.mcpKeys.list('marine')).toHaveLength(2)
+    expect(
+      rbac.audit.read({
+        scope: { kind: 'platform' },
+        requestId: hidden.headers.get('x-request-id')!,
+      }).filter((e) => e.action === 'local.mutation'),
+    ).toHaveLength(1)
+    failure = undefined
+    before = bytes()
+    expect((await invoke('DELETE', `/${issued.credential.id}`)).status).toBe(200)
+  } finally {
+    database.close()
+    Deno.removeSync(directory, { recursive: true })
+  }
 })

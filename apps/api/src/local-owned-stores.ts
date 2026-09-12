@@ -9,7 +9,7 @@ import {
 import type { LocalMutationScope } from './audit-execution.ts'
 import { DECLARATIONS } from './permissions.ts'
 import type { RbacDatabase } from './rbac-state.ts'
-import { InvestigationStore, SessionsStore, WatchStore } from './stores.ts'
+import { InvestigationStore, McpKeyStore, SessionsStore, WatchStore } from './stores.ts'
 
 interface RequestMutation {
   input: Omit<AuditInput, 'outcome'>
@@ -66,7 +66,9 @@ export function localOwnedStores(
       if (!operation || !declaration) throw new AuditWriteError()
       const [store, method] = operation.name.split('.')
       const args = operation.args
-      const id = store === 'sessions'
+      const id = store === 'mcpKeys'
+        ? (method === 'add' ? (args[0] as { id: string }).id : args[1])
+        : store === 'sessions'
         ? (method === 'put' ? (args[2] as { id: string }).id : args[2])
         : store === 'watches'
         ? (method === 'remove' ? args[2] : method === 'update' ? args[1] : undefined)
@@ -122,5 +124,6 @@ export function localOwnedStores(
     sessions: wrap('sessions', new SessionsStore(dataDir, boundary)),
     watches: wrap('watches', new WatchStore(dataDir, boundary)),
     investigations: wrap('investigations', new InvestigationStore(dataDir, boundary)),
+    mcpKeys: wrap('mcpKeys', new McpKeyStore(dataDir, { database, audit }, boundary)),
   }
 }

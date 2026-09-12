@@ -1592,6 +1592,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return
     }
     if (
+      declaration.permission === 'keys.manage'
+    ) await authoriseDeclared(c)
+    if (
       (declaration.permission === 'portal.read' || declaration.permission === 'portal.generate' ||
         declaration.permission === 'portal.ask') &&
       !declaration.owned &&
@@ -1691,17 +1694,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     keys: mcpKeys,
     audit: opts.audit,
     requestContext,
-    trustedUser: opts.requestContext
-      ? (request) => {
-        const context = requestContext(request)
-        return context?.session
-          ? {
-            id: context.session.oid,
-            effectiveRoles: context.effectiveRoles ?? { portalRoles: [] },
-          }
-          : null
-      }
-      : opts.trustedUser,
+    authorityDependencies,
+    authorise: authoriseDeclared,
     rateLimitPerMin: opts.rateLimitMcpAuthPerMin,
   })
 

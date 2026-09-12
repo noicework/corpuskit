@@ -4,7 +4,7 @@ import process from 'node:process'
 import { AragProvider, labBindings } from '@research-portal/retrieval'
 import { buildApp } from './app.ts'
 import { BindingStore } from './bindings.ts'
-import { McpKeyStore, SourceStore } from './stores.ts'
+import { SourceStore } from './stores.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
@@ -36,7 +36,6 @@ const enrichments = new EnrichmentStore()
 const { database, rbac } = openLocalRbac(process.env)
 const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit)
 const { watches } = owned
-const mcpKeys = new McpKeyStore(process.env.DATA_DIR ?? './data', { database, audit: rbac.audit })
 const ingress = new LocalIngress({ rbac, tenants, env: process.env })
 
 // Documentation readiness: probe every bound portal's documentation-scoped
@@ -80,7 +79,6 @@ const app = buildApp({
   sources,
   watches,
   enrichments,
-  mcpKeys,
   zone,
   audit: rbac.audit,
   breakGlass: ingress.breakGlass,

@@ -728,7 +728,11 @@ export class McpKeyStore implements ScopedKeyStore {
   /** Construct at startup. HTTP lookups never rewrite records or assume system authority. */
   constructor(
     private readonly dataDir = DATA_DIR,
-    migration?: { database: RbacDatabase; audit: AuditStore },
+    migration?: {
+      database: Pick<RbacDatabase, 'transactionSync'>
+      audit: Pick<AuditStore, 'append'>
+    },
+    private readonly boundary?: OwnedMutationBoundary,
   ) {
     let files: string[]
     try {
@@ -803,7 +807,7 @@ export class McpKeyStore implements ScopedKeyStore {
   add(input: McpKeyRecord | ScopedKeyRecord): void {
     const record = migrateLegacyKeyRecord(input)
     const all = decodeScopedKeyRecords([...this.list(record.tenant), record], record.tenant)
-    writeJson(this.pathFor(record.tenant), all)
+    ownedWrite(this.pathFor(record.tenant), all, this.boundary)
   }
 
   revoke(slug: string, id: string, revokedAt: string): boolean {
@@ -812,7 +816,7 @@ export class McpKeyStore implements ScopedKeyStore {
     const found = all.find((record) => record.id === id)
     if (!found) return false
     if (!found.revokedAt) found.revokedAt = revokedAt
-    writeJson(this.pathFor(slug), all)
+    ownedWrite(this.pathFor(slug), all, this.boundary)
     return true
   }
 }

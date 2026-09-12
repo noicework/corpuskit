@@ -571,13 +571,14 @@ Deno.test('Durable HTTP prompts, keys, watches and research writes roll back on 
     )!
     const issuedResponse = await request('/api/t/marine/mcp/keys', 'POST', {
       label: 'Existing key',
+      role: 'viewer',
     })
     expect(issuedResponse.status).toBe(201)
     const issued = await issuedResponse.json()
     const research = `/api/t/marine/investigations/${investigation.id}`
     const cases: [string, string, unknown?][] = [
       ['/api/admin/t/marine/prompts', 'PUT', { ask: 'Override' }],
-      ['/api/t/marine/mcp/keys', 'POST', { label: 'New key' }],
+      ['/api/t/marine/mcp/keys', 'POST', { label: 'New key', role: 'viewer' }],
       [`/api/t/marine/mcp/keys/${issued.credential.id}`, 'DELETE'],
       ['/api/t/marine/watches', 'POST', { query: 'New research' }],
       [`/api/t/marine/watches/${watch.id}/seen`, 'POST'],
