@@ -72,7 +72,9 @@ export function sessionFor(
 
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
 export function createEnforcementFixture(
-  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> = {},
+  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> & {
+    breakGlassPolicy?: BreakGlassPolicy
+  } = {},
   ownedAdapter: 'durable' | 'local' = 'durable',
 ) {
   const directory = Deno.makeTempDirSync({ prefix: 'enforcement-' })
@@ -188,7 +190,9 @@ export function createEnforcementFixture(
     now,
     provider,
     requestContext: (request) => contexts.get(request),
-    breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
+    breakGlass: state.rbac.breakGlassService(
+      options.breakGlassPolicy ?? { environment: 'production' },
+    ),
     brandingPath: `${directory}/branding`,
     rateLimitAskPerMin: 0,
     rateLimitEstatePerMin: 0,
@@ -254,6 +258,22 @@ export type EnforcementFixture = ReturnType<typeof createEnforcementFixture>
 
 /** Independent access endpoint fixtures, exercised by access-routes.test.ts. */
 export const ACCESS_ROUTE_CASES = [
+  { method: 'GET', path: '/api/admin/people' },
+  {
+    method: 'POST',
+    path: '/api/admin/people',
+    body: { subjectKind: 'active-oid', subjectId: 'access-target', role: 'platform-admin' },
+  },
+  { method: 'PATCH', path: '/api/admin/people/:id', body: { role: 'owner' } },
+  { method: 'DELETE', path: '/api/admin/people/:id' },
+  { method: 'GET', path: '/api/admin/groups' },
+  {
+    method: 'POST',
+    path: '/api/admin/groups',
+    body: { subjectId: 'access-target', role: 'platform-admin' },
+  },
+  { method: 'PATCH', path: '/api/admin/groups/:id', body: { role: 'owner' } },
+  { method: 'DELETE', path: '/api/admin/groups/:id' },
   { method: 'GET', path: '/api/admin/t/:slug/members' },
   {
     method: 'POST',

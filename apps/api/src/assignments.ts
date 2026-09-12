@@ -369,6 +369,8 @@ export class AssignmentService {
       if (next) remaining.push(next)
       if (
         previous.role === 'owner' && previous.subjectKind !== 'pending-email' &&
+        // An inactive mapping cannot remove the final active owner when none exists.
+        this.owners(rows).size > 0 &&
         this.owners(remaining).size === 0
       ) {
         return this.denied(context, 'last_owner', previous)

@@ -1,4 +1,5 @@
 import { expect } from '@std/expect'
+import type { AssignmentInput } from './assignments.ts'
 import {
   ACCESS_ROUTE_CASES,
   assertExpectedPermission,
@@ -11,9 +12,388 @@ const json = (method: string, body: unknown) => ({
   body: JSON.stringify(body),
 })
 
+const seed = (f: ReturnType<typeof createEnforcementFixture>, input: AssignmentInput) => {
+  const outcome = f.rbac.assignmentService(f.tenantId, f.audience).create(input, {
+    requestId: 'seed',
+    actor: { kind: 'system' },
+  })
+  if (!outcome.ok) throw new Error('seed failed')
+  return outcome.value
+}
+const localOwner = (f: ReturnType<typeof createEnforcementFixture>, subjectId = f.unassigned.oid) =>
+  seed(f, { subjectId, subjectKind: 'active-oid', role: 'owner', scope: { kind: 'platform' } })
+
+Deno.test('platform final-owner refusals and successful changes retain transactional audit', async () => {
+  for (const method of ['PATCH', 'DELETE']) {
+    const f = createEnforcementFixture()
+    try {
+      f.database.exec('DELETE FROM rbac_owner_evidence')
+      const owner = localOwner(f)
+      const service = f.rbac.assignmentService(f.tenantId, f.audience)
+      const path = `/api/admin/people/${owner.id}`
+      const init = json(method, method === 'PATCH' ? { role: 'platform-admin' } : {})
+      seed(f, {
+        subjectKind: 'pending-email',
+        subjectId: 'pending@example.test',
+        role: 'owner',
+        scope: { kind: 'platform' },
+      })
+      let response = await f.requestAs(f.unassigned, path, init)
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({ error: 'last_owner' })
+      const refusal = f.rbac.audit.read({
+        scope: { kind: 'platform' },
+        requestId: response.headers.get('x-request-id')!,
+      }).find((event) => event.action === 'assignment.denied')
+      expect(refusal).toMatchObject({
+        actor_kind: 'user',
+        actor_id: f.unassigned.oid,
+        outcome: 'denied',
+        target_id: owner.id,
+      })
+      expect(JSON.parse(refusal!.detail_json)).toEqual({ code: 'last_owner' })
+      const before = service.list()
+      f.database.exec(
+        "CREATE TRIGGER fail_refusal BEFORE INSERT ON audit_events WHEN NEW.action = 'assignment.denied' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      )
+      expect((await f.requestAs(f.unassigned, path, init)).status).toBe(500)
+      expect(service.list()).toEqual(before)
+      f.database.exec('DROP TRIGGER fail_refusal')
+      localOwner(f, 'second-owner')
+      const two = service.list()
+      f.database.exec(
+        "CREATE TRIGGER fail_success BEFORE INSERT ON audit_events WHEN NEW.action IN ('assignment.update','assignment.delete') BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      )
+      expect((await f.requestAs(f.unassigned, path, init)).status).toBe(500)
+      expect(service.list()).toEqual(two)
+      f.database.exec('DROP TRIGGER fail_success')
+      response = await f.requestAs(f.unassigned, path, init)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        id: owner.id,
+        role: method === 'PATCH' ? 'platform-admin' : 'owner',
+      })
+      expect((await f.requestAs(f.unassigned, '/api/admin/people')).status).toBe(403)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('platform owner evidence expires, concurrent removals serialise and pending email needs activation', async () => {
+  const f = createEnforcementFixture()
+  try {
+    f.database.exec('DELETE FROM rbac_owner_evidence')
+    const service = f.rbac.assignmentService(f.tenantId, f.audience)
+    let owner = localOwner(f)
+    const appOwner = {
+      ...f.unassigned,
+      oid: 'app-owner',
+      roles: ['CorpusKit.Owner'],
+      expiresAt: f.now() + 100,
+    }
+    expect(service.observeSession(appOwner)).toBe(true)
+    expect(
+      (await f.requestAs(f.unassigned, `/api/admin/people/${owner.id}`, { method: 'DELETE' }))
+        .status,
+    ).toBe(200)
+    owner = localOwner(f)
+    f.advance(101)
+    expect(
+      (await f.requestAs(f.unassigned, `/api/admin/people/${owner.id}`, { method: 'DELETE' }))
+        .status,
+    ).toBe(409)
+    const pending = await f.requestAs(
+      f.unassigned,
+      '/api/admin/people',
+      json('POST', {
+        subjectKind: 'pending-email',
+        subjectId: ' New@Example.test ',
+        role: 'owner',
+      }),
+    )
+    expect(pending.status).toBe(201)
+    expect((await pending.json()).subjectId).toBe('new@example.test')
+    expect(
+      (await f.requestAs(f.unassigned, `/api/admin/people/${owner.id}`, { method: 'DELETE' }))
+        .status,
+    ).toBe(409)
+    const newSession = { ...f.unassigned, oid: 'new-owner', email: 'NEW@example.test' }
+    expect(
+      service.activate(newSession, {
+        requestId: 'verified-activation',
+        actor: { kind: 'user', id: newSession.oid },
+      }).ok,
+    ).toBe(true)
+    const activated = service.list().find((row) => row.subjectId === newSession.oid)!
+    const results = await Promise.all(
+      [owner, activated].map((row) =>
+        f.requestAs(f.unassigned, `/api/admin/people/${row.id}`, { method: 'DELETE' })
+      ),
+    )
+    expect(results.map((response) => response.status).sort()).toEqual([200, 409])
+    expect(service.list().filter((row) => row.role === 'owner' && row.subjectKind === 'active-oid'))
+      .toHaveLength(1)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('every access route withholds output on required audit failure and rolls back assignment writes', async () => {
+  for (const route of ACCESS_ROUTE_CASES) {
+    const f = createEnforcementFixture()
+    try {
+      f.database.exec(
+        "INSERT OR REPLACE INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',0)",
+      )
+      const platform = !route.path.includes(':slug')
+      const row = seed(f, {
+        subjectKind: route.path.includes('/groups') ? 'group' : 'active-oid',
+        subjectId: 'existing',
+        role: platform ? 'platform-admin' : 'viewer',
+        scope: platform ? { kind: 'platform' } : { kind: 'portal', slug: 'a' },
+      })
+      const before = f.rbac.assignments.list(f.tenantId)
+      f.database.exec(
+        "CREATE TRIGGER fail_access BEFORE INSERT ON audit_events WHEN NEW.action LIKE 'assignment.%' OR (NEW.action = 'request.privileged' AND NEW.outcome = 'success') BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      )
+      const response = await f.requestAs(
+        f.sessionFor('owner'),
+        route.path.replace(':slug', 'a').replace(':id', row.id),
+        'body' in route ? json(route.method, route.body) : { method: route.method },
+      )
+      expect(response.status, `${route.method} ${route.path}`).toBe(500)
+      expect(await response.json()).toEqual({ error: 'audit_write_failed' })
+      expect(f.rbac.assignments.list(f.tenantId)).toEqual(before)
+      f.assertNoProtectedDispatch()
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('access response completion failure hides output while retaining a committed assignment event', async () => {
+  const f = createEnforcementFixture()
+  try {
+    f.database.exec(
+      "CREATE TRIGGER fail_completion BEFORE INSERT ON audit_events WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    const response = await f.requestAs(
+      f.sessionFor('owner'),
+      '/api/admin/people',
+      json('POST', { subjectKind: 'active-oid', subjectId: 'committed', role: 'platform-admin' }),
+    )
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'audit_write_failed' })
+    expect(f.rbac.assignments.list(f.tenantId).some((row) => row.subjectId === 'committed')).toBe(
+      true,
+    )
+    expect(
+      f.rbac.audit.read({
+        scope: { kind: 'platform' },
+        requestId: response.headers.get('x-request-id')!,
+      }).some((event) => event.action === 'assignment.create' && event.outcome === 'success'),
+    ).toBe(true)
+  } finally {
+    f.close()
+  }
+})
+Deno.test('platform group activity and explicit break-glass cannot bypass final owner protection', async () => {
+  const f = createEnforcementFixture({
+    breakGlassPolicy: { environment: 'test', passcode: 'fixture' },
+  })
+  try {
+    f.database.exec('DELETE FROM rbac_owner_evidence')
+    const service = f.rbac.assignmentService(f.tenantId, f.audience)
+    const invoke = (path: string, method: string, body?: unknown) =>
+      f.requestAs(null, path, {
+        ...(body === undefined ? { method } : json(method, body)),
+        headers: { 'x-admin-passcode': 'fixture', 'content-type': 'application/json' },
+      })
+    const group = seed(f, {
+      subjectKind: 'group',
+      subjectId: 'owners',
+      role: 'owner',
+      scope: { kind: 'platform' },
+    })
+    expect((await invoke(`/api/admin/groups/${group.id}`, 'DELETE')).status).toBe(200)
+    expect(
+      (await invoke('/api/admin/groups', 'POST', { subjectId: 'owners', role: 'owner' })).status,
+    ).toBe(403)
+    f.database.exec(
+      "INSERT OR REPLACE INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',0)",
+    )
+    const created = await invoke('/api/admin/groups', 'POST', {
+      subjectId: 'owners',
+      role: 'owner',
+    })
+    expect(created.status).toBe(201)
+    const active = await created.json()
+    service.observeSession({ ...f.unassigned, groups: ['owners'], groupStatus: 'complete' })
+    for (const method of ['PATCH', 'DELETE']) {
+      expect(
+        (await invoke(
+          `/api/admin/groups/${active.id}`,
+          method,
+          method === 'PATCH' ? { role: 'platform-admin' } : {},
+        )).status,
+      ).toBe(409)
+    }
+    f.database.exec("UPDATE rbac_group_capabilities SET status = 'disabled'")
+    expect(
+      (await invoke(`/api/admin/groups/${active.id}`, 'PATCH', { role: 'platform-admin' })).status,
+    ).toBe(403)
+    expect((await invoke(`/api/admin/groups/${active.id}`, 'DELETE')).status).toBe(200)
+    const only = localOwner(f)
+    expect((await invoke(`/api/admin/people/${only.id}`, 'DELETE')).status).toBe(409)
+    localOwner(f, 'backup')
+    const response = await invoke(`/api/admin/people/${only.id}`, 'DELETE')
+    expect(response.status).toBe(200)
+    expect(
+      f.rbac.audit.read({
+        scope: { kind: 'platform' },
+        requestId: response.headers.get('x-request-id')!,
+      }).filter((event) => event.action === 'assignment.delete'),
+    ).toMatchObject([{ actor_kind: 'break-glass' }])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('platform lists and IDs stay tenant scoped and separate from portal and group families', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const admin = f.sessionFor('owner')
+    const service = f.rbac.assignmentService(f.tenantId, f.audience)
+    const rows = [
+      seed(f, {
+        subjectKind: 'active-oid',
+        subjectId: 'platform-person',
+        role: 'platform-admin',
+        scope: { kind: 'platform' },
+      }),
+      seed(f, {
+        subjectKind: 'group',
+        subjectId: 'platform-group',
+        role: 'platform-admin',
+        scope: { kind: 'platform' },
+      }),
+      seed(f, {
+        subjectKind: 'active-oid',
+        subjectId: 'portal-person',
+        role: 'viewer',
+        scope: { kind: 'portal', slug: 'a' },
+      }),
+    ]
+    const foreign = f.rbac.assignmentService('foreign-tenant', f.audience).create({
+      subjectKind: 'active-oid',
+      subjectId: 'foreign',
+      role: 'platform-admin',
+      scope: { kind: 'platform' },
+    }, { requestId: 'seed', actor: { kind: 'system' } })
+    if (!foreign.ok) throw new Error('seed failed')
+    expect(await (await f.requestAs(admin, '/api/admin/people')).json()).toEqual({
+      items: [rows[0]],
+    })
+    expect(await (await f.requestAs(admin, '/api/admin/groups')).json()).toEqual({
+      items: [rows[1]],
+      capability: 'disabled',
+    })
+    const before = service.list()
+    for (
+      const [family, row] of [['people', rows[1]], ['people', rows[2]], ['groups', rows[0]], [
+        'people',
+        foreign.value,
+      ]] as const
+    ) {
+      for (const method of ['PATCH', 'DELETE']) {
+        expect(
+          (await f.requestAs(
+            admin,
+            `/api/admin/${family}/${row!.id}`,
+            json(method, method === 'PATCH' ? { role: 'owner' } : {}),
+          )).status,
+        ).toBe(404)
+      }
+    }
+    for (
+      const field of [
+        'scope',
+        'tenantId',
+        'subjectId',
+        'subjectKind',
+        'actor',
+        'effectiveRoles',
+        'unknown',
+      ]
+    ) {
+      expect(
+        (await f.requestAs(
+          admin,
+          `/api/admin/people/${rows[0]!.id}`,
+          json('PATCH', { role: 'owner', [field]: 'override' }),
+        )).status,
+      ).toBe(400)
+    }
+    for (const role of ['viewer', 'analyst', 'curator', 'portal-admin', 'system']) {
+      expect(
+        (await f.requestAs(
+          admin,
+          '/api/admin/people',
+          json('POST', { subjectKind: 'active-oid', subjectId: 'invalid', role }),
+        )).status,
+      ).toBe(400)
+    }
+    expect(service.list()).toEqual(before)
+    const email = seed(f, {
+      subjectKind: 'pending-email',
+      subjectId: 'bound@example.test',
+      role: 'platform-admin',
+      scope: { kind: 'platform' },
+    })
+    const verified = { ...f.unassigned, oid: 'bound-person', email: 'bound@example.test' }
+    expect(
+      service.activate(verified, {
+        requestId: 'activation',
+        actor: { kind: 'user', id: verified.oid },
+      }).ok,
+    ).toBe(true)
+    expect(
+      (await f.requestAs(
+        admin,
+        '/api/admin/people',
+        json('POST', {
+          subjectKind: 'pending-email',
+          subjectId: 'bound@example.test',
+          role: 'owner',
+        }),
+      )).status,
+    ).toBe(201)
+    expect(
+      service.activate({ ...verified, oid: 'different-person' }, {
+        requestId: 'conflict',
+        actor: { kind: 'user', id: 'different-person' },
+      }),
+    ).toMatchObject({ ok: false, code: 'email_conflict' })
+    expect(service.list().find((row) => row.id === email.id)).toMatchObject({
+      subjectId: 'bound-person',
+      role: 'platform-admin',
+    })
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('every access registration has a real allow body and independent denial matrix', async () => {
   for (const route of ACCESS_ROUTE_CASES) {
-    assertExpectedPermission(route.method, route.path, 'members.manage', 'portal')
+    const platform = !route.path.includes(':slug')
+    const scope = platform ? { kind: 'platform' as const } : { kind: 'portal' as const, slug: 'a' }
+    assertExpectedPermission(
+      route.method,
+      route.path,
+      platform ? 'platform.members.manage' : 'members.manage',
+      platform ? 'platform' : 'portal',
+    )
     for (
       const role of [
         'owner',
@@ -37,8 +417,8 @@ Deno.test('every access registration has a real allow body and independent denia
         const seeded = service.create({
           subjectKind: group ? 'group' : 'active-oid',
           subjectId: 'existing-target',
-          scope: { kind: 'portal', slug: 'a' },
-          role: 'viewer',
+          scope,
+          role: platform ? 'platform-admin' : 'viewer',
         }, { requestId: 'seed', actor: { kind: 'system' } })
         if (!seeded.ok) throw new Error('seed failed')
         const before = service.list()
@@ -55,7 +435,8 @@ Deno.test('every access registration has a real allow body and independent denia
           path,
           'body' in route ? json(route.method, route.body) : { method: route.method },
         )
-        const allowed = ['owner', 'platform-admin', 'portal-admin'].includes(role)
+        const allowed = (platform ? ['owner'] : ['owner', 'platform-admin', 'portal-admin'])
+          .includes(role)
         expect(response.status, `${role} ${route.method} ${path}`).toBe(
           allowed ? route.method === 'POST' ? 201 : 200 : role === 'anonymous' ? 401 : 403,
         )
@@ -64,8 +445,12 @@ Deno.test('every access registration has a real allow body and independent denia
           if (route.method === 'GET') expect(body.items).toContainEqual(seeded.value)
           else {expect(body).toMatchObject({
               subjectKind: group ? 'group' : 'active-oid',
-              scope: { kind: 'portal', slug: 'a' },
-              role: route.method === 'PATCH' ? 'curator' : 'viewer',
+              scope,
+              role: platform
+                ? route.method === 'PATCH' ? 'owner' : 'platform-admin'
+                : route.method === 'PATCH'
+                ? 'curator'
+                : 'viewer',
             })}
         } else {
           expect(service.list()).toEqual(before)

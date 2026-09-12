@@ -373,6 +373,25 @@ for (const adapter of ['local', 'durable'] as const) {
     }
   })
 
+  Deno.test(`${adapter} inactive owner group deletion does not protect nonexistent authority`, () => {
+    const f = fixture()
+    try {
+      for (const supported of [false, true]) {
+        if (supported) {
+          f.database.exec(
+            "INSERT OR REPLACE INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',?)",
+            start,
+          )
+        }
+        const row = f.service.create({ ...owner('inactive'), subjectKind: 'group' }, context)
+        if (!row.ok) throw new Error('seed failed')
+        expect(f.service.remove(row.value.id, context).ok).toBe(true)
+      }
+    } finally {
+      f.close()
+    }
+  })
+
   Deno.test(`${adapter} final owner changes retain denial audit and rollback on audit failure`, () => {
     const f = fixture()
     try {
@@ -498,7 +517,14 @@ for (const adapter of ['local', 'durable'] as const) {
       expect(f.service.remove(groupId, context)).toMatchObject({ ok: false, code: 'last_owner' })
       expect(f.service.change(groupId, { subjectId: 'empty-group' }, context).ok).toBe(false)
       f.service.observeSession(session('member', { groups: ['group-1'], groupStatus: 'overage' }))
-      expect(f.service.remove(groupId, context).ok).toBe(false)
+      // Overage invalidates the only active group owner; deleting the inert mapping is allowed.
+      f.database.exec(
+        "CREATE TRIGGER fail_inactive BEFORE INSERT ON audit_events WHEN NEW.action = 'assignment.delete' BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      )
+      expect(() => f.service.remove(groupId, context)).toThrow(AuditWriteError)
+      expect(f.service.list().some((row) => row.id === groupId)).toBe(true)
+      f.database.exec('DROP TRIGGER fail_inactive')
+      expect(f.service.remove(groupId, context).ok).toBe(true)
     } finally {
       f.close()
     }

@@ -1,4 +1,4 @@
-import { PORTAL_ROLES, type Scope } from '@research-portal/core'
+import { PLATFORM_ROLES, PORTAL_ROLES, type Scope } from '@research-portal/core'
 import type { Context, Hono } from 'hono'
 import { z } from 'zod'
 import type { AssignmentContext, AssignmentResult, AssignmentService } from './assignments.ts'
@@ -16,9 +16,16 @@ export interface AccessRouteServices {
 
 /** Registration consumes the catalogue; permission and actor selection stay in the app guard. */
 export function registerAccessRoutes(app: Hono, services: AccessRouteServices): void {
-  for (const family of ['members', 'groups'] as const) {
-    const base = `/api/admin/t/:slug/${family}`
-    const role = z.enum(PORTAL_ROLES)
+  for (
+    const [domain, family] of [
+      ['portal', 'members'],
+      ['portal', 'groups'],
+      ['platform', 'people'],
+      ['platform', 'groups'],
+    ] as const
+  ) {
+    const base = domain === 'portal' ? `/api/admin/t/:slug/${family}` : `/api/admin/${family}`
+    const role = domain === 'portal' ? z.enum(PORTAL_ROLES) : z.enum(PLATFORM_ROLES)
     const createSchema = family === 'groups'
       ? z.object({ subjectId: z.string(), role }).strict().transform((data) => ({
         ...data,
@@ -30,7 +37,8 @@ export function registerAccessRoutes(app: Hono, services: AccessRouteServices): 
         role,
       }).strict()
     const patchSchema = z.object({ role }).strict()
-    const scopeFor = (c: Context): Scope => ({ kind: 'portal', slug: c.req.param('slug')! })
+    const scopeFor = (c: Context): Scope =>
+      domain === 'portal' ? { kind: 'portal', slug: c.req.param('slug')! } : { kind: 'platform' }
     const belongs = (row: RoleAssignment, scope: Scope) =>
       row.scope.kind === scope.kind &&
       (scope.kind === 'platform' ||
