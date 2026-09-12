@@ -1,18 +1,17 @@
-import {
-  PLATFORM_ROLES,
-  PORTAL_ROLES,
-  type Role,
-  type Scope,
-  ScopeSchema,
-} from '@research-portal/core'
+import { PLATFORM_ROLES, PORTAL_ROLES, type Role, type Scope } from '@research-portal/core'
 import {
   appendAudit,
   type AuditEvent,
+  AuditQueryError,
+  type AuditQueryFilters,
   type AuditReadFilter,
   type AuditStore,
   AuditWriteError,
+  canonicalAuditFilters,
+  canonicalAuditScope,
   createAuditEvent,
   validateAuditEvent,
+  validateAuditReadFilter,
 } from './audit.ts'
 import { AssignmentService, type GrantClaims } from './assignments.ts'
 import { type BreakGlassPolicy, BreakGlassService } from './break-glass.ts'
@@ -127,11 +126,78 @@ const schema = [
     BEGIN SELECT RAISE(IGNORE); END`,
 ]
 
+export interface AuditSnapshot {
+  id: string
+  watermark: number
+  expiresAt: string
+}
+
+interface SnapshotRow {
+  id: string
+  watermark: number
+  scope_json: string
+  filters_json: string
+  created_at: number
+  expires_at: number
+}
+
 /** Internal persistence foundation. Guarded services receive the database at construction. */
 export class RbacState {
   readonly audit: AuditStore
   readonly assignments: AssignmentReader
   readonly locks: RbacStores['locks']
+
+  /** Internal bookkeeping under an already-authorised request, never a system HTTP actor. */
+  createAuditSnapshot(scope: Scope, filters: AuditQueryFilters): AuditSnapshot {
+    const scopeJson = JSON.stringify(canonicalAuditScope(scope))
+    const filtersJson = JSON.stringify(canonicalAuditFilters(filters))
+    return this.database.transactionSync(() => {
+      const now = this.now()
+      this.database.exec('DELETE FROM audit_query_snapshots WHERE expires_at <= ?', now)
+      const count =
+        this.database.all<{ n: number }>('SELECT count(*) AS n FROM audit_query_snapshots')[0]!.n
+      if (count >= 128) throw new AuditQueryError('snapshot_limit')
+      // sqlite_sequence retains the committed high watermark even after all events are purged.
+      const watermark = this.database.all<{ seq: number }>(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'audit_event_order'",
+      )[0]?.seq ?? 0
+      const id = crypto.randomUUID()
+      const expires = now + 15 * 60_000
+      this.database.exec(
+        'INSERT INTO audit_query_snapshots (id,watermark,scope_json,filters_json,created_at,expires_at) VALUES (?,?,?,?,?,?)',
+        id,
+        watermark,
+        scopeJson,
+        filtersJson,
+        now,
+        expires,
+      )
+      return { id, watermark, expiresAt: new Date(expires).toISOString() }
+    })
+  }
+
+  loadAuditSnapshot(id: string, scope: Scope, filters: AuditQueryFilters): AuditSnapshot {
+    const scopeJson = JSON.stringify(canonicalAuditScope(scope))
+    const filtersJson = JSON.stringify(canonicalAuditFilters(filters))
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) {
+      throw new AuditQueryError('invalid_audit_query')
+    }
+    const row =
+      this.database.all<SnapshotRow>('SELECT * FROM audit_query_snapshots WHERE id = ?', id)[0]
+    if (!row || row.expires_at <= this.now()) throw new AuditQueryError('snapshot_expired')
+    if (row.scope_json !== scopeJson || row.filters_json !== filtersJson) {
+      throw new AuditQueryError('snapshot_mismatch')
+    }
+    if (
+      !Number.isSafeInteger(row.watermark) || row.watermark < 0 ||
+      !Number.isSafeInteger(row.created_at) || row.expires_at !== row.created_at + 15 * 60_000
+    ) throw new AuditQueryError('invalid_audit_query')
+    return {
+      id: row.id,
+      watermark: row.watermark,
+      expiresAt: new Date(row.expires_at).toISOString(),
+    }
+  }
 
   /** Internal read only. No HTTP fields or assignment row can create verified provenance. */
   creatorEvidence(tenantId: string, oid: string): CreatorEvidence | null {
@@ -203,6 +269,10 @@ export class RbacState {
         cutoff,
       )[0]!.count
       this.database.exec('DELETE FROM audit_events WHERE at < ?', cutoff)
+      this.database.exec(
+        'DELETE FROM audit_event_order WHERE NOT EXISTS (SELECT 1 FROM audit_events WHERE audit_events.id = audit_event_order.event_id)',
+      )
+      this.database.exec('DELETE FROM audit_query_snapshots WHERE expires_at <= ?', now)
       const detail = { cutoff, deletedCount, retentionDays }
       appendAudit(
         this.audit,
@@ -314,11 +384,9 @@ export class RbacState {
         }
       },
       read: (filter: AuditReadFilter): AuditEvent[] => {
-        const scope = ScopeSchema.parse(filter.scope)
+        validateAuditReadFilter(filter)
+        const scope = filter.scope
         const limit = filter.limit ?? 100
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
-          throw new Error('Invalid audit limit')
-        }
         const clauses: string[] = []
         const bindings: SqlValue[] = []
         if (scope.kind === 'portal') {
@@ -330,14 +398,40 @@ export class RbacState {
           bindings.push(filter.requestId)
         }
         if (filter.before !== undefined) {
-          if (new Date(filter.before).toISOString() !== filter.before) {
-            throw new Error('Invalid audit time')
-          }
           clauses.push('at < ?')
           bindings.push(filter.before)
         }
+        for (
+          const [field, column] of [['actorKind', 'actor_kind'], ['actorId', 'actor_id'], [
+            'action',
+            'action',
+          ], ['outcome', 'outcome']] as const
+        ) {
+          if (filter[field] !== undefined) {
+            clauses.push(`${column} = ?`)
+            bindings.push(filter[field])
+          }
+        }
+        if (filter.from !== undefined) {
+          clauses.push('at >= ?')
+          bindings.push(filter.from)
+        }
+        if (filter.to !== undefined) {
+          clauses.push('at <= ?')
+          bindings.push(filter.to)
+        }
+        if (filter.snapshotSequence !== undefined) {
+          clauses.push('sequence <= ?')
+          bindings.push(filter.snapshotSequence)
+        }
+        if (filter.cursor !== undefined) {
+          clauses.push('(at < ? OR (at = ? AND id < ?))')
+          bindings.push(filter.cursor.at, filter.cursor.at, filter.cursor.id)
+        }
         return database.all<AuditEvent>(
-          `SELECT * FROM audit_events ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+          `SELECT audit_events.* FROM audit_events JOIN audit_event_order ON event_id = audit_events.id ${
+            clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+          }
             ORDER BY at DESC,id DESC LIMIT ?`,
           ...bindings,
           limit,
@@ -363,6 +457,31 @@ export class RbacState {
         this.database.exec(
           'INSERT INTO rbac_migrations (name,completed_at) VALUES (?,?)',
           marker,
+          this.now(),
+        )
+      }
+      this.database.exec(
+        'CREATE TABLE IF NOT EXISTS audit_event_order (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE)',
+      )
+      this.database.exec(
+        'CREATE TABLE IF NOT EXISTS audit_query_snapshots (id TEXT PRIMARY KEY NOT NULL, watermark INTEGER NOT NULL, scope_json TEXT NOT NULL, filters_json TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)',
+      )
+      this.database.exec(
+        'CREATE INDEX IF NOT EXISTS audit_snapshots_by_expiry ON audit_query_snapshots(expires_at)',
+      )
+      this.database.exec(
+        'CREATE TRIGGER IF NOT EXISTS audit_event_insert_order AFTER INSERT ON audit_events BEGIN INSERT INTO audit_event_order (event_id) VALUES (NEW.id); END',
+      )
+      const orderMarker = 'rbac-audit-order-v1'
+      if (
+        !this.database.all('SELECT name FROM rbac_migrations WHERE name = ?', orderMarker).length
+      ) {
+        this.database.exec(
+          'INSERT INTO audit_event_order (event_id) SELECT id FROM audit_events WHERE NOT EXISTS (SELECT 1 FROM audit_event_order WHERE event_id = audit_events.id) ORDER BY at,id',
+        )
+        this.database.exec(
+          'INSERT INTO rbac_migrations (name,completed_at) VALUES (?,?)',
+          orderMarker,
           this.now(),
         )
       }
