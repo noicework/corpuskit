@@ -297,7 +297,14 @@ function readFixture() {
     },
     resourceContent: () => {
       calls.push('content')
-      return Promise.resolve({ id: 'res-1', title: 'Abalone', texts: [], files: [], links: [] })
+      return Promise.resolve({
+        id: 'res-1',
+        title: 'Abalone',
+        kind: 'pdf',
+        texts: [],
+        transcript: [],
+        files: [{ group: 'files', fieldId: 'file' }],
+      })
     },
     typeahead: () => {
       calls.push('typeahead')
@@ -316,7 +323,7 @@ function readFixture() {
     },
     entityGroups: () => {
       calls.push('entities')
-      return Promise.resolve([{ name: 'species', entities: ['Abalone'] }])
+      return Promise.resolve([{ group: 'species', entities: ['Abalone'] }])
     },
     counters: () => {
       calls.push('counters')
@@ -328,6 +335,11 @@ function readFixture() {
     },
   } as unknown as AragProvider
   const f = createEnforcementFixture({ management })
+  f.provider.labelsets = () =>
+    Promise.resolve([
+      { id: 'topic', title: 'Topic', multiple: true, labels: ['stock-assessment'] },
+      { id: 'format', title: 'Format', multiple: false, labels: ['article'] },
+    ])
   for (const slug of ['a', 'public-a', 'authenticated-a']) {
     f.stores.bindings.set(slug, { baseUrl: 'https://example.test/kb/research', token: 'fixture' })
     for (const kind of ['logo', 'hero', 'font-heading', 'font-body'] as const) {

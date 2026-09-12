@@ -282,7 +282,15 @@ class StubProvider implements RetrievalProvider {
   }
 
   async labelsets(_tenant: TenantConfig): Promise<Labelset[]> {
-    return [{ id: 'topic', title: 'Topic', multiple: false, labels: ['stock-assessment'] }]
+    return [
+      { id: 'topic', title: 'Topic', multiple: false, labels: ['stock-assessment'] },
+      ...['format', 'chunk-labels'].map((id) => ({
+        id,
+        title: id,
+        multiple: true,
+        labels: [],
+      })),
+    ]
   }
 
   async suggest(_tenant: TenantConfig): Promise<Question[]> {
@@ -1302,6 +1310,7 @@ describe('GET /api/t/:slug/suggest', () => {
 describe('GET /api/t/:slug/entity', () => {
   const management = (edges: { source: string; target: string; label: string }[]) =>
     ({
+      entityGroups: () => Promise.resolve([{ group: 'Gene', entities: ['SCN1A'] }]),
       relationsGraph: (_tenant: TenantConfig, opts?: { entity?: string }) =>
         Promise.resolve({
           nodes: opts?.entity
@@ -1329,7 +1338,7 @@ describe('GET /api/t/:slug/entity', () => {
     expect(body.resources.length).toBeGreaterThan(0)
   })
 
-  it('returns 404 unknown_entity when nothing is known about the name', async () => {
+  it('returns a generic denial before relations dispatch for an unknown entity', async () => {
     class EmptySearch extends StubProvider {
       override async search(_tenant: TenantConfig, query: string): Promise<SearchResults> {
         return { query, resources: [], relatedQuestions: [] }
@@ -1342,11 +1351,7 @@ describe('GET /api/t/:slug/entity', () => {
     })
     const response = await app.request('/api/t/marine/entity?name=ZZZZNOTAGENE')
     expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({
-      error: 'unknown_entity',
-      name: 'ZZZZNOTAGENE',
-      unknown: true,
-    })
+    expect(await response.json()).toEqual({ error: 'not_found' })
   })
 })
 
@@ -1446,6 +1451,9 @@ describe('GET /api/t/:slug/facets', () => {
 
   it('serves the three rail facets by default with a real untagged count', async () => {
     const provider = new FacetProvider()
+    expect((await provider.labelsets({} as TenantConfig)).some((set) => set.id === 'kind')).toBe(
+      false,
+    )
     const app = buildApp({ provider, tenants: freshTenants() })
     const response = await app.request('/api/t/marine/facets')
     expect(response.status).toBe(200)

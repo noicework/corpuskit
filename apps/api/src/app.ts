@@ -1371,13 +1371,62 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     return c.json({ error: 'not_found' }, 404)
   }
+  // These IDs enter upstream URL paths. Resolve only literal identifiers in the
+  // already authorised portal, before any content or binary dispatch.
+  const resourceIdentifier = (id: string) =>
+    id.length > 0 && id.length <= 256 && id === id.trim() &&
+    !/[\/\\%?#\s]/.test(id) && [...id].every((char) =>
+      char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127
+    ) &&
+    id !== '.' && id !== '..'
+  const scopedResource = async (config: TenantConfig, id: string) => {
+    if (!resourceIdentifier(id)) return null
+    try {
+      const resource = await provider.resource(config, id)
+      return resource?.id === id ? resource : null
+    } catch {
+      return null
+    }
+  }
+  const scopedContent = async (config: TenantConfig, id: string) => {
+    if (!opts.management) return null
+    try {
+      const content = await opts.management.resourceContent(config, id)
+      return content?.id === id ? content : null
+    } catch {
+      return null
+    }
+  }
+  const scopedLabels = async (config: TenantConfig, ids: string[], labelset?: string) => {
+    if (ids.length === 0) return true
+    try {
+      const sets = await provider.labelsets(config)
+      const allowed = labelset
+        ? sets.find((set) => set.id === labelset)?.labels ?? []
+        : sets.map((set) => set.id)
+      // `kind` is derived from this portal's stored records by facets(), even
+      // when the upstream labelset catalogue has no kind definition.
+      return ids.every((id) => (!labelset && id === 'kind') || allowed.includes(id))
+    } catch {
+      return false
+    }
+  }
+  const scopedEntity = async (config: TenantConfig, name: string) => {
+    if (!opts.management) return false
+    try {
+      return (await opts.management.entityGroups(config)).some((group) =>
+        group.entities.includes(name)
+      )
+    } catch {
+      return false
+    }
+  }
   const adminResource = async (c: Context, config: TenantConfig, id: string) => {
-    const resource = await provider.resource(config, id).catch(() => null)
-    if (!resource || resource.id !== id) return false
+    if (!await scopedResource(config, id)) return false
     const fieldId = c.req.query('fieldId')
     if (fieldId !== undefined) {
       if (!opts.management) return false
-      const content = await opts.management.resourceContent(config, id).catch(() => null)
+      const content = await scopedContent(config, id)
       if (
         !content || content.id !== id || !content.files.some((file) => file.fieldId === fieldId)
       ) return false
@@ -1816,7 +1865,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/thumbnail'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'not_found' }, 404)
+    if (!await scopedResource(config, c.req.param('id'))) return adminNotFound(c)
+    if (!opts.management) return adminNotFound(c)
     const upstream = await opts.management.thumbnailResponse(config, c.req.param('id'))
     if (!upstream) return c.json({ error: 'not_found' }, 404)
     const headers = new Headers()
@@ -2103,6 +2153,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/topics/:topicId/resources'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!await scopedLabels(config, [c.req.param('topicId')], 'topic')) return adminNotFound(c)
     const limit = Math.min(Math.max(1, Math.floor(Number(c.req.query('limit') ?? 12) || 12)), 24)
     const items = await provider.topicResources(config, c.req.param('topicId'), limit)
     return c.json(merchandiseSummaries(enrichments, config.slug, items))
@@ -2157,6 +2208,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // facets every rail shows come back together.
     const requested = c.req.query('labelsets') ?? c.req.query('ls') ?? 'topic,kind,format'
     const labelsets = [...new Set(requested.split(',').filter(Boolean))]
+    if (!await scopedLabels(config, labelsets)) return adminNotFound(c)
     return c.json(await facetsFor(config, labelsets))
   })
 
@@ -2184,8 +2236,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const resource = await provider.resource(config, c.req.param('id'))
-    if (!resource) return c.json({ error: 'unknown_resource' }, 404)
+    const resource = await scopedResource(config, c.req.param('id'))
+    if (!resource) return adminNotFound(c)
     return c.json(merchandiseSummary(enrichments, config.slug, resource))
   })
 
@@ -2195,8 +2247,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const id = c.req.param('id')
-    const resource = await provider.resource(config, id)
-    if (!resource || resource.id !== id) return adminNotFound(c)
+    const resource = await scopedResource(config, id)
+    if (!resource) return adminNotFound(c)
     const key = `${config.slug}/${id}`
     // An in-flight cache is not committed evidence, even if persistence has begun.
     if (!questionsInFlight.has(key)) {
@@ -2360,16 +2412,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/content'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
-    const content = await opts.management.resourceContent(config, c.req.param('id'))
-    if (!content) return c.json({ error: 'unknown_resource' }, 404)
+    if (!await scopedResource(config, c.req.param('id'))) return adminNotFound(c)
+    const content = await scopedContent(config, c.req.param('id'))
+    if (!content) return adminNotFound(c)
     return c.json(merchandiseContent(enrichments, config.slug, content))
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/file/:fieldId'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
+    const id = c.req.param('id')
+    const fieldId = c.req.param('fieldId')
+    if (!resourceIdentifier(fieldId) || !await scopedResource(config, id)) return adminNotFound(c)
+    const content = await scopedContent(config, id)
+    if (
+      !content || !opts.management ||
+      !(content.files?.some((file) => file.fieldId === fieldId) ||
+        content.preview?.fieldId === fieldId)
+    ) return adminNotFound(c)
     const upstream = await opts.management.fileStream(
       config,
       c.req.param('id'),
@@ -2407,6 +2467,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ nodes: [], edges: [] })
     const entity = c.req.query('entity')?.trim()
+    if (entity && !await scopedEntity(config, entity)) return adminNotFound(c)
     const includeBuiltin = ['true', '1'].includes(
       (c.req.query('includeBuiltin') ?? '').trim().toLowerCase(),
     )
@@ -2460,6 +2521,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const primary = c.req.query('primary') ?? 'topic'
     const secondary = c.req.query('secondary') ?? 'kind'
+    if (!await scopedLabels(config, [primary, secondary])) return adminNotFound(c)
     return c.json(await opts.management.graphData(config, primary, secondary))
   })
 
@@ -2469,6 +2531,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const parsed = generateBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (!await scopedLabels(config, parsed.data.topics ?? [], 'topic')) return adminNotFound(c)
     const schema = GENERATE_SCHEMAS[parsed.data.kind]
     try {
       // Grounding gate: the structured-artefact equivalent of /ask's honest
@@ -2504,10 +2567,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         : undefined
       const brief = [guidance, overask].filter((part): part is string => Boolean(part)).join(' ')
       const instructions = brief ? `${base ?? ''}${base ? ' ' : ''}${brief}` : base
-      // Only the portal's own topics can scope retrieval; anything else is ignored.
-      const topicIds = (parsed.data.topics ?? []).filter((id) =>
-        config.topics.some((topic) => topic.id === id)
-      )
+      const topicIds = parsed.data.topics ?? []
       // A briefing grounds on the papers' own results (D2-06): one
       // retrieval per named drug or study plus one for the topic chooses the
       // papers, each paper's Abstract, Results, Methods and Conclusion
@@ -2961,6 +3021,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
     const name = c.req.query('name')?.trim()
     if (!name) return c.json({ error: 'invalid_request' }, 400)
+    if (!await scopedEntity(config, name)) return adminNotFound(c)
     // Relations scoped to the entity itself (the platform's path filter), not
     // filtered out of the corpus-wide slice - a gene outside the top 120 used
     // to read as "no connections" while the map showed it.
