@@ -158,6 +158,7 @@ interface McpHarness {
   app: ReturnType<typeof buildApp>
   keys: McpKeyStore
   dataDir: string
+  rbac: ReturnType<typeof openLocalRbac>['rbac']
 }
 
 function harness(
@@ -186,6 +187,7 @@ function harness(
   return {
     dataDir,
     keys,
+    rbac,
     app: buildApp({
       ...owned,
       rbac,
@@ -480,6 +482,42 @@ describe('Streamable HTTP MCP endpoint', () => {
     const limited = await mcpRequest(test, 'marine', null, body)
     expect(limited.status).toBe(429)
     expect(limited.headers.get('retry-after')).toBeTruthy()
+  })
+
+  it('counts failed bearers against the auth limiter before key verification', async () => {
+    const test = harness(2)
+    const body = { jsonrpc: '2.0', id: 1, method: 'ping' }
+    const denials = () =>
+      test.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 }).filter((e) =>
+        e.action === 'request.denied'
+      ).length
+    const bad = 'ck_' + 'x'.repeat(43)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = denials()
+      const response = await mcpRequest(test, 'marine', bad, body)
+      expect(response.status).toBe(401)
+      expect(response.headers.get('www-authenticate')).toContain('Bearer')
+      expect(denials()).toBe(before + 1)
+    }
+    const before = denials()
+    const limited = await mcpRequest(test, 'marine', bad, body)
+    expect(limited.status).toBe(429)
+    expect(limited.headers.get('retry-after')).toBeTruthy()
+    expect(await limited.json()).toEqual({ error: 'rate_limited' })
+    // A limited attempt never reaches verification, so it writes no audit row.
+    expect(denials()).toBe(before)
+    // The limit is keyed by caller address, so the limiter itself keeps counting new callers.
+    const other = await test.app.request('/api/t/marine/mcp', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        authorization: `Bearer ${bad}`,
+        'fly-client-ip': '198.51.100.7',
+      },
+      body: JSON.stringify(body),
+    })
+    expect(other.status).toBe(401)
   })
 })
 

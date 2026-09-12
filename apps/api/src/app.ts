@@ -291,7 +291,7 @@ import {
 } from './suggested-questions.ts'
 import { tenantAliasLocation } from './tenant-aliases.ts'
 import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
-import { registerMcpRoutes } from './mcp.ts'
+import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
 import {
@@ -1536,6 +1536,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.header('Content-Security-Policy', "frame-ancestors 'none'")
   })
 
+  // MCP credential failures are rate limited before the guard verifies any bearer (D13).
+  registerMcpAuthRateLimit(app, { rateLimitPerMin: opts.rateLimitMcpAuthPerMin })
+
   // Every API operation is checked before any route-specific middleware or handler.
   registerInfrastructure(app, '*', async (c, next) => {
     if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
@@ -1715,7 +1718,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
     requestContext,
     authorityDependencies,
     authorise: authoriseDeclared,
-    rateLimitPerMin: opts.rateLimitMcpAuthPerMin,
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to

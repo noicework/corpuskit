@@ -3,8 +3,8 @@ import {
   DECLARATIONS,
   declaredRoute,
   declaredTool,
-  infrastructureHandler,
   isPrivileged,
+  registerInfrastructure,
 } from './permissions.ts'
 import {
   AuthorisationError,
@@ -69,9 +69,12 @@ export interface McpRoutesOptions {
   keys: McpKeyStoreApi
   authorityDependencies?: AuthorityDependencies
   authorise?: (context: Context) => Promise<RequestAuthority | null>
-  rateLimitPerMin?: number
   audit?: AuditStore
   requestContext?: (request: Request) => PortalRequestContext
+}
+export interface McpAuthRateLimitOptions {
+  /** Authentication attempts per minute per address. Defaults to 60; 0 disables. */
+  rateLimitPerMin?: number
 }
 
 interface McpAuditContext {
@@ -403,17 +406,25 @@ function withNoStore(response: Response): Response {
   })
 }
 
-/** Register role-gated key management and the authenticated Streamable HTTP endpoint. */
-export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
+/**
+ * D13: the MCP auth limiter runs as infrastructure ahead of the global request guard, so a
+ * failed bearer is counted before key verification and cannot write unbounded audit rows.
+ * Register this before the guard; registerMcpRoutes deliberately adds no limiter of its own.
+ */
+export function registerMcpAuthRateLimit(app: Hono, opts: McpAuthRateLimitOptions): void {
   const limiter = new SlidingWindowLimiter({
     limit: opts.rateLimitPerMin ?? 60,
     windowMs: 60_000,
   })
-  const authRateLimit = rateLimit(
-    limiter,
-    (context) => context.req.header('cf-connecting-ip') ?? clientIp(context),
+  registerInfrastructure(
+    app,
+    MCP_ROUTE,
+    rateLimit(limiter, (context) => context.req.header('cf-connecting-ip') ?? clientIp(context)),
   )
+}
 
+/** Register role-gated key management and the authenticated Streamable HTTP endpoint. */
+export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
   const authority = async (context: Context) => {
     if (!opts.authorise || !opts.authorityDependencies) throw new AuthorisationError(403)
     const selected = await opts.authorise(context)
@@ -472,7 +483,6 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
 
   app.all(
     declaredRoute('ALL', MCP_ROUTE),
-    infrastructureHandler(authRateLimit),
     async (context) => {
       const slug = context.req.param('slug')
       const request = opts.requestContext?.(context.req.raw)
