@@ -300,8 +300,7 @@ function DocBlockView(
 // How much extracted text the reader renders at a time. Long documents carry
 // hundreds of thousands of characters; parsing all of it through the inline
 // renderer in one go locks the main thread for seconds, so the reader shows
-// the blocks that fit this budget and grows it on request. (Pattern ported
-// from the vccmhw-ksp reader.)
+// the blocks that fit this budget and grows it on request.
 const READER_CHUNK_CHARS = 40_000
 const READER_STEP_CHARS = 120_000
 

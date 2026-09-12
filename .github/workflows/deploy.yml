@@ -1,6 +1,6 @@
 name: Gate and deploy CorpusKit
 
-# Production follows the KSP pattern: repository changes pass the complete gate,
+# Production release pattern: repository changes pass the complete gate,
 # then a pinned Wrangler deploy publishes the Worker and static assets. Runtime
 # ARAG and Entra secrets remain attached to the Cloudflare Worker and are never
 # copied through GitHub Actions.

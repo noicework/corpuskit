@@ -1,6 +1,6 @@
 # LLM footnotes
 
-Ported from the VCCMHW KSP portal's Progress ARAG integration.
+Footnote-style citations come from the Progress Agentic RAG integration and are bound to the retrieved passages on the server.
 
 ## Switching modes
 
@@ -35,8 +35,8 @@ Progress does not support citations with `answer_json_schema`.
   long blocks and ambiguous locations retain sentence-level display. Standard mode
   does not opt in. The final answer and exports consume the same corrected text.
 - Keep CorpusKit's existing resource-level numbering and evidence-card contract.
-  Different passages in one resource share its number. This port does not introduce
-  the KSP portal's separate passage-numbering UI or PDF locator components.
+  Different passages in one resource share its number. There is no separate
+  passage-numbering UI or PDF locator component.
 - Preserve the existing post-generation evidence audit. It can still remove or
   rebind claims that fail its checks; LLM footnotes are attribution, not proof that
   every claim is correct.
@@ -49,20 +49,21 @@ Progress does not support citations with `answer_json_schema`.
   citable source material. Unknown anonymous aliases still fail. Capability retries retain
   the selected mode; they never downgrade footnotes to standard attribution.
 
-The port does not change stored retrieval filters or expansion strategies, and
-does not copy tenant-specific KSP source restrictions. It also does not change
+Footnote mode does not change stored retrieval filters or expansion strategies,
+and carries no tenant-specific source restrictions. It also does not change
 CorpusKit's existing fallback passage selection for resource-level citations.
 
 Footnote prose requests default explicitly to a 4,096-token generation budget:
 the trailing definitions need room after the answer. Explicit caller limits are
 respected; standard and structured-JSON requests keep their existing defaults.
-A live KSP-box probe at 1,200 tokens truncated the definition table, whereas the
+A live probe against a production knowledge box at 1,200 tokens truncated the
+definition table, whereas the
 same question without that artificial cap completed. This establishes a token
 budget failure mode, not the cause of the earlier OPAX deployment failure.
 Incomplete definitions still fail validation; there is no automatic retry or
 silent downgrade to standard citations.
 
-Read-only live probes against the KSP knowledge box on 9 September 2026 passed
+Read-only live probes against a production knowledge box on 9 September 2026 passed
 for corpus-wide and document-scoped questions. A lean reformatting probe supplied
 an original-source excerpt using `sourceContext`; Progress returned
 `USER_CONTEXT_0` alongside five native paragraph mappings, all six definitions
@@ -73,7 +74,7 @@ integration, not an OPAX deployment or its tenant-specific configuration.
 ## Demo-scoped restoration
 
 The September 2026 restoration retains the demo-only functional release gates.
-The code flag remains server-wide; it is not a per-tenant switch. No OPAX or KSP
+The code flag remains server-wide; it is not a per-tenant switch. No tenant
 configuration is changed or tested as part of this restoration.
 
 The subsequent OPAX release failure was diagnosed as `generated_context`: Progress
