@@ -18,6 +18,41 @@ import {
 } from './break-glass.ts'
 import { getAdminOverview, migrateKb, uploadAdminFile } from './client.ts'
 import { AuthSessionError, getAuthSession } from './auth.ts'
+import { AuthorityController, registerAuthorityController } from './access-lifecycle.ts'
+
+Deno.test('explicit emergency denial clears authority once and does not retry', async () => {
+  const original = globalThis.fetch
+  const authority = new AuthorityController()
+  authority.setSession({
+    authenticated: false,
+    user: null,
+    effectiveRoles: { portalRoles: [] },
+    provenance: [],
+    claimAgeSeconds: null,
+    groupMappings: 'disabled',
+    platformPermissions: [],
+    portalAccess: null,
+    breakGlassEnabled: true,
+  })
+  const unregister = registerAuthorityController(authority)
+  let calls = 0
+  globalThis.fetch = () => {
+    calls++
+    return Promise.resolve(new Response('{}', { status: 403 }))
+  }
+  try {
+    const error = await assertRejects(() =>
+      runWithEmergencyAccess('fixture', (access) => adminFetch(access, '/api/admin/overview'))
+    )
+    expect(error).toBeInstanceOf(AdminAccessError)
+    expect(error).toMatchObject({ status: 403 })
+    expect(authority.status).toBe('unavailable')
+    expect(calls).toBe(1)
+  } finally {
+    unregister()
+    globalThis.fetch = original
+  }
+})
 
 Deno.test('one confirmation dispatches once and cannot retain access', async () => {
   const original = globalThis.fetch

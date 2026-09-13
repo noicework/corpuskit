@@ -40,6 +40,22 @@ Deno.test('auth snapshots reject malformed identity, grants, scope and unavailab
       { ...good, authenticated: false },
       { ...good, user: null },
       { ...good, platformPermissions: ['made.up'] },
+      { ...good, platformPermissions: ['portal.read'] },
+      {
+        ...good,
+        portalAccess: {
+          ...good.portalAccess,
+          permissions: ['portal.read', 'platform.settings.write'],
+        },
+      },
+      {
+        ...sessionFixture('marine', null),
+        portalAccess: { ...good.portalAccess, permissions: ['portal.read', 'members.manage'] },
+      },
+      {
+        ...good,
+        provenance: [{ source: 'local', role: 'owner', scope: { kind: 'portal', slug: 'marine' } }],
+      },
       { ...good, effectiveRoles: { platformRole: 'superuser', portalRoles: [] } },
       { ...good, provenance: [{ source: 'local', role: 'viewer', scope: { kind: 'wrong' } }] },
       { ...good, portalAccess: { ...good.portalAccess, slug: 'other' } },

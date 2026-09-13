@@ -1,6 +1,9 @@
 import {
+  authorize,
   EffectiveRolesSchema,
+  normalisePrincipal,
   PermissionSchema,
+  PlatformRoleSchema,
   PortalRoleSchema,
   RoleSchema,
   ScopeSchema,
@@ -45,6 +48,7 @@ const snapshotSchema = z.object({
     'overage',
     'unverified',
   ]).catch('disabled'),
+  groupStatus: z.enum(['complete', 'absent', 'malformed', 'overage', 'unverified']).optional(),
   coarseAdminEligible: enabledCapability,
   breakGlassEnabled: enabledCapability,
   platformPermissions: z.array(PermissionSchema),
@@ -57,7 +61,41 @@ const snapshotSchema = z.object({
   }).nullable(),
 }).superRefine((session, context) => {
   const portal = session.portalAccess
+  const identity = session.user
+    ? { kind: 'user', tenantId: session.user.tenantId, oid: session.user.id }
+    : { kind: 'anonymous' }
+  // A validation ceiling only. Public policy adds at most the implicit viewer floor;
+  // the returned permission lists remain the sole source of displayed authority.
+  const principal = normalisePrincipal(
+    identity,
+    session.effectiveRoles,
+    portal
+      ? {
+        slug: portal.slug,
+        accessMode: 'public',
+        configuredTenantId: session.user?.tenantId ?? 'anonymous',
+      }
+      : undefined,
+  )
+  const inconsistentPermissions = session.platformPermissions.some((permission) =>
+    !authorize(principal, permission, { kind: 'platform' })
+  ) ||
+    portal?.permissions.some((permission) =>
+      !authorize(principal, permission, { kind: 'portal', slug: portal.slug })
+    )
+  const inconsistentProvenance = session.provenance.some((entry) =>
+    !(entry.scope.kind === 'platform' ? PlatformRoleSchema : PortalRoleSchema).safeParse(entry.role)
+      .success
+  )
   if (
+    portal?.canEnable &&
+    (portal.available ||
+      !authorize(principal, 'behaviour.write', { kind: 'portal', slug: portal.slug }))
+  ) {
+    portal.canEnable = false
+  }
+  if (
+    inconsistentPermissions || inconsistentProvenance ||
     session.authenticated !== (session.user !== null) ||
     (!session.authenticated &&
       (session.platformPermissions.length > 0 || session.effectiveRoles.platformRole ||
@@ -67,7 +105,9 @@ const snapshotSchema = z.object({
       (portal.permissions.length > 0 || portal.effectiveRole !== null)) ||
     (portal?.available &&
       (!portal.permissions.includes('portal.read') || portal.effectiveRole === null))
-  ) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Inconsistent access snapshot' })
+  ) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Inconsistent access snapshot' })
+  }
 })
 
 export type AuthSession = z.infer<typeof snapshotSchema> & { status: 'ready' }
