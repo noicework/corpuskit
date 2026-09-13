@@ -306,13 +306,21 @@ function Editor(
                 value={role}
                 onChange={(e) => setRole(e.target.value as Role)}
                 aria-invalid={!!error}
-                aria-describedby={error ? `${id}-error` : undefined}
+                aria-describedby={[
+                  scope.kind === 'platform' ? `${id}-role-help` : '',
+                  error ? `${id}-error` : '',
+                ].filter(Boolean).join(' ') || undefined}
               >
                 {allowed.map((value) => (
                   <option key={value} value={value}>{assignmentRoleLabel[value]}</option>
                 ))}
               </select>
             </label>
+            {scope.kind === 'platform' && (
+              <p id={`${id}-role-help`} data-platform-role-help className='text-sm text-ink-2'>
+                {assignmentRoleLabel[role]} access applies to all present and future portals.
+              </p>
+            )}
             {error && !confirmation && (
               <p id={`${id}-error`} role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
                 {error}
