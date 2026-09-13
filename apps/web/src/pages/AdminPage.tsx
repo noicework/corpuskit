@@ -120,6 +120,7 @@ export function AdminPage() {
 }
 
 function AdminContent() {
+  const authority = useAccess()
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null)
   const overview = useAdminOverview('platform')
   const { data, isLoading } = overview
@@ -169,7 +170,8 @@ function AdminContent() {
               ))}
             </div>
 
-            <MigratePanel rows={data} />
+            {(authority.can('platform.settings.write', { kind: 'platform' }) ||
+              !overview.sessionAllowed) && <MigratePanel rows={data} />}
           </div>
         )}
       </div>

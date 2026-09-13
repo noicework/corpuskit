@@ -62,6 +62,7 @@ export function startTestServer(options: {
   sources?: BuildAppOptions['sources']
   insights?: BuildAppOptions['insights']
   domainProvisioner?: BuildAppOptions['domainProvisioner']
+  breakGlass?: boolean
   identity?: { role: Role; slug?: string }
   emergencyFixture?: { directory: string; state: EmergencyFixtureState }
   componentFixture?: { directory: string }
@@ -79,6 +80,7 @@ export function startTestServer(options: {
     ENTRA_TENANT_ID: 'tenant-1',
     WORKER_NAME: 'corpuskit',
     ENVIRONMENT: 'test',
+    ...(options.breakGlass ? { ADMIN_PASSCODE: 'fixture-emergency-only' } : {}),
   }
   const { database, rbac } = openLocalRbac(env)
   try {
