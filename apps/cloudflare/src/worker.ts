@@ -280,6 +280,20 @@ export default {
       return forwardTrusted(request, env, auth)
     }
 
+    // The shared asset bundle is also bound to tenant hosts. Keep the marketing
+    // About document (including its raw asset alias) on the platform apex only.
+    if (
+      ['/about', '/about/', '/about.html'].includes(url.pathname) &&
+      url.hostname !== PLATFORM_DOMAIN
+    ) {
+      return secureAssetResponse(
+        new Response('Not found', {
+          status: 404,
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        }),
+      )
+    }
+
     return secureAssetResponse(await env.ASSETS.fetch(marketingHomeRequest(request)))
   },
 
@@ -295,16 +309,25 @@ export default {
   },
 } satisfies ExportedHandler<Env>
 
-/** Serve the dedicated marketing document at the apex without changing its canonical URL. */
+/** Select marketing documents without leaking the Assets pretty-URL redirects. */
 export function marketingHomeRequest(request: Request): Request {
   const url = new URL(request.url)
-  if ((request.method !== 'GET' && request.method !== 'HEAD') || url.pathname !== '/') {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
     return request
   }
 
-  // Ask Assets for its extensionless route. Requesting `home.html` directly
-  // invokes pretty-URL handling and would leak a `/home` redirect to visitors.
-  url.pathname = '/home'
+  if (
+    url.hostname === PLATFORM_DOMAIN &&
+    ['/about', '/about/', '/about.html'].includes(url.pathname)
+  ) {
+    url.pathname = '/about'
+  } else if (url.pathname === '/') {
+    // Ask Assets for its extensionless route. Requesting `home.html` directly
+    // invokes pretty-URL handling and would leak a `/home` redirect to visitors.
+    url.pathname = '/home'
+  } else {
+    return request
+  }
   return new Request(url, {
     method: request.method,
     headers: request.headers,

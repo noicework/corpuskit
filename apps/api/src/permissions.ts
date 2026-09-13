@@ -382,7 +382,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     reason: 'Authentication bootstrap and safe account session metadata.',
   }),
   entry('boundary', 'ALL', 'static-assets', 'portal.read', 'public', {
-    reason: 'Application shell assets served outside the API router.',
+    reason:
+      'Application shell and public marketing documents, including /about, served outside the API router; no research data is returned.',
   }),
 ])
 
