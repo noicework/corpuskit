@@ -174,8 +174,15 @@ export function getResource(slug: string, id: string): Promise<ResourceSummary> 
   )
 }
 
-export function getKnowledgeBoxStatus(slug: string): Promise<KnowledgeBoxStatus> {
-  return request<KnowledgeBoxStatus>(`/api/t/${encodeURIComponent(slug)}/knowledge-box`)
+export function getKnowledgeBoxStatus(
+  slug: string,
+  context?: RequestContext,
+): Promise<KnowledgeBoxStatus> {
+  return request<KnowledgeBoxStatus>(
+    `/api/t/${encodeURIComponent(slug)}/knowledge-box`,
+    undefined,
+    context,
+  )
 }
 
 export function searchTenantFull(

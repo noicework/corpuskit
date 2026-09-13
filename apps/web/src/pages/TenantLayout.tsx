@@ -137,28 +137,10 @@ export function TenantLayout() {
   const scope = { kind: 'portal' as const, slug: slug ?? '' }
   const navigation = NAV_ITEMS.filter((item) => access.can(item.permission, scope))
   const section = location.pathname.split('/')[3] ?? ''
-  const tab = new URLSearchParams(location.search).get('tab')
-  const managePermissions: Record<string, Permission> = {
-    overview: 'content.write',
-    insights: 'content.write',
-    content: 'content.write',
-    extraction: 'content.write',
-    enrichments: 'enrichments.write',
-    taxonomy: 'taxonomy.write',
-    graph: 'graph.write',
-    appearance: 'appearance.write',
-    details: 'appearance.write',
-    behaviour: 'behaviour.write',
-    audit: 'audit.read',
-  }
+  // Manage owns exact section permission checks and the first-allowed fallback.
+  // The outer route gate must not reject a stale or forbidden tab before that runs.
   const routeAllowed = section === 'manage'
-    ? tab === 'access'
-      ? ['members.manage', 'keys.manage', 'behaviour.write'].some((permission) =>
-        access.can(permission as Permission, scope)
-      )
-      : tab
-      ? !!managePermissions[tab] && access.can(managePermissions[tab]!, scope)
-      : MANAGEMENT_PERMISSIONS.some((permission) => access.can(permission, scope))
+    ? MANAGEMENT_PERMISSIONS.some((permission) => access.can(permission, scope))
     : access.can(
       section === 'ask'
         ? 'portal.ask'

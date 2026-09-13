@@ -1,18 +1,14 @@
-import { type FormEvent, useState } from 'react'
+import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import type { AdminTenantOverview } from '@research-portal/core'
-import {
-  connectKnowledgeBox,
-  removePortal,
-  revertKnowledgeBox,
-  setPortalDisabled,
-} from '../../api/client.ts'
+import { removePortal, setPortalDisabled } from '../../api/client.ts'
 import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { PortalConnections } from './PortalConnections.tsx'
 import { CreateKbBox } from './CreateKbBox.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { RenamePortal } from './RenamePortal.tsx'
-import { errorMessage, type Message } from './shared.ts'
+import { type Message } from './shared.ts'
 
 type Status = AdminTenantOverview['knowledgeBox']['status']
 
@@ -55,42 +51,11 @@ export function PortalRow({
 }) {
   const { runExplicit } = useAdminAccess()
   const queryClient = useQueryClient()
-  const [url, setUrl] = useState('')
-  const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [renaming, setRenaming] = useState(false)
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['admin-overview'] })
-
-  const onConnect = async (event: FormEvent) => {
-    event.preventDefault()
-    setBusy(true)
-    setMessage(null)
-    try {
-      const outcome = await runExplicit(
-        `Connect the knowledge box for ${row.tenant.productName}`,
-        (access) => connectKnowledgeBox(row.tenant.slug, { url, token }, access),
-      )
-      if (outcome === undefined) return
-      setUrl('')
-      setToken('')
-      setMessage({
-        tone: 'ok',
-        text: `Connected - the knowledge box responded with ${outcome.resourceCount} ${
-          outcome.resourceCount === 1 ? 'resource' : 'resources'
-        }.`,
-      })
-      await refresh()
-    } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: err instanceof Error ? err.message : 'Connection failed - please try again.',
-      })
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const onToggleDisabled = async () => {
     setBusy(true)
@@ -143,27 +108,6 @@ export function PortalRow({
       setMessage({
         tone: 'error',
         text: err instanceof Error ? err.message : 'Could not remove the portal.',
-      })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onRevert = async () => {
-    setBusy(true)
-    setMessage(null)
-    try {
-      const result = await runExplicit(
-        `Revert ${row.tenant.productName} to its demo knowledge box`,
-        (access) => revertKnowledgeBox(row.tenant.slug, access),
-      )
-      if (result === undefined) return
-      setMessage({ tone: 'ok', text: 'Reverted to the demo knowledge box.' })
-      await refresh()
-    } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not revert - please try again.'),
       })
     } finally {
       setBusy(false)
@@ -261,80 +205,14 @@ export function PortalRow({
           </div>
 
           <div className='px-6 pb-6'>
-            <h4 className='text-sm font-semibold text-ink'>Connection</h4>
-            <dl className='mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2'>
-              <div className='rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-                <dt className='rp-eyebrow text-ink-3'>Knowledge box</dt>
-                <dd className='mt-1 font-mono text-ink'>{row.knowledgeBox.kbId ?? 'none'}</dd>
-              </div>
-              <div className='rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-                <dt className='rp-eyebrow text-ink-3'>Documents</dt>
-                <dd className='mt-1 text-ink'>
-                  {row.resourceCount === null ? 'unreachable' : row.resourceCount}
-                </dd>
-              </div>
-            </dl>
-
             <CreateKbBox row={row} onCreated={refresh} />
-
-            <form onSubmit={onConnect} className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
-              <div>
-                <label
-                  htmlFor={`kb-id-${row.tenant.slug}`}
-                  className='mb-1.5 block text-sm font-medium text-ink'
-                >
-                  {row.knowledgeBox.status === 'connected'
-                    ? 'Replace with knowledge box endpoint'
-                    : 'Knowledge box API endpoint'}
-                </label>
-                <input
-                  id={`kb-id-${row.tenant.slug}`}
-                  className='rp-input'
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder='https://<region>.rag.progress.cloud/api/v1/kb/<box-id>'
-                  autoComplete='off'
-                  required
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor={`kb-token-${row.tenant.slug}`}
-                  className='mb-1.5 block text-sm font-medium text-ink'
-                >
-                  Service account API key
-                </label>
-                <input
-                  id={`kb-token-${row.tenant.slug}`}
-                  type='password'
-                  className='rp-input'
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder='Paste the service account key'
-                  autoComplete='off'
-                  required
-                />
-              </div>
-              <div className='flex flex-wrap items-center gap-3 sm:col-span-2'>
-                <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-                  {busy ? 'Working…' : 'Verify and connect'}
-                </button>
-                {row.knowledgeBox.status === 'connected' && (
-                  <button
-                    type='button'
-                    disabled={busy}
-                    onClick={() => void onRevert()}
-                    className='rp-btn rp-btn-outline'
-                  >
-                    Revert to demo box
-                  </button>
-                )}
-              </div>
-            </form>
-            <p className='mt-2 text-xs text-ink-3'>
-              The connection is verified against the live platform before it is saved. Tokens are
-              stored server-side only.
-            </p>
+            <PortalConnections
+              slug={row.tenant.slug}
+              name={row.tenant.productName}
+              knowledgeBox={row.knowledgeBox}
+              resourceCount={row.resourceCount}
+              onChanged={refresh}
+            />
 
             <div className='mt-4 flex flex-wrap items-center gap-4 border-t border-line pt-3'>
               <button

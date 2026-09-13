@@ -7,7 +7,7 @@
 // code path. Used only by the browser E2E persona journeys in e2e/*.test.ts.
 // ---------------------------------------------------------------------------
 import { serveStatic } from 'hono/deno'
-import { buildApp } from '../../apps/api/src/app.ts'
+import { buildApp, type BuildAppOptions } from '../../apps/api/src/app.ts'
 import { TenantStore } from '../../apps/api/src/tenants.ts'
 import { DoubleProvider } from './double-provider.ts'
 import type { AccessMode, Role, Scope } from '@research-portal/core'
@@ -52,6 +52,7 @@ export interface EmergencyFixtureState {
 
 export function startTestServer(options: {
   apiOnly?: boolean
+  management?: BuildAppOptions['management']
   identity?: { role: Role; slug?: string }
   emergencyFixture?: { directory: string; state: EmergencyFixtureState }
   componentFixture?: { directory: string }
@@ -159,6 +160,7 @@ export function startTestServer(options: {
     const app = buildApp({
       ...stores,
       provider,
+      management: options.management,
       tenants,
       rbac,
       audit: rbac.audit,
