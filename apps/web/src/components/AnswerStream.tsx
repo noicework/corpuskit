@@ -1,3 +1,4 @@
+import { useAccess } from './AccessProvider.tsx'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AskEvent, AskStage, Citation, ScoredResource } from '@research-portal/core'
@@ -320,7 +321,21 @@ export interface ContextJourneyProps {
  * Search, Ask and the agentic pipeline all offer the same
  * experience from the same one-line call.
  */
-export function ContextJourney({ slug, sources, query = '', onOpen }: ContextJourneyProps) {
+export function ContextJourney(props: ContextJourneyProps) {
+  const access = useAccess()
+  return access.can('portal.ask', { kind: 'portal', slug: props.slug })
+    ? (
+      <PermittedContextJourney
+        key={`${access.generation}:${props.slug}:${props.query}`}
+        {...props}
+      />
+    )
+    : null
+}
+
+function PermittedContextJourney({ slug, sources, query = '', onOpen }: ContextJourneyProps) {
+  const access = useAccess()
+  const context = access.controller.context
   const [isOpen, setIsOpen] = useState(false)
 
   const citedIds = useMemo(
@@ -335,6 +350,10 @@ export function ContextJourney({ slug, sources, query = '', onOpen }: ContextJou
       <button
         type='button'
         onClick={() => {
+          if (
+            access.controller.context !== context ||
+            !access.controller.can('portal.ask', { kind: 'portal', slug })
+          ) return
           onOpen?.()
           setIsOpen(true)
         }}
@@ -386,10 +405,27 @@ export function ContextJourney({ slug, sources, query = '', onOpen }: ContextJou
  * than navigating. Both are off by default, so a whole-corpus caller gets
  * exactly what it got before.
  */
-export function AnswerStream(
+export function AnswerStream(props: AnswerStreamProps) {
+  const access = useAccess()
+  return access.can('portal.ask', { kind: 'portal', slug: props.slug })
+    ? (
+      <PermittedAnswerStream
+        key={`${access.generation}:${props.slug}:${JSON.stringify(props.request)}`}
+        {...props}
+      />
+    )
+    : null
+}
+
+function PermittedAnswerStream(
   { slug, request, onSources, onRetry, scopedToResource = false, onCitationJump }:
     AnswerStreamProps,
 ) {
+  const access = useAccess()
+  const context = access.controller.context
+  const canAsk = () =>
+    access.controller.context === context &&
+    access.controller.can('portal.ask', { kind: 'portal', slug })
   const [status, setStatus] = useState<Status>('idle')
   const [text, setText] = useState('')
   const [sources, setSources] = useState<ScoredResource[]>([])
@@ -411,6 +447,7 @@ export function AnswerStream(
   }|${retryToken}`
 
   function retry() {
+    if (!canAsk()) return
     setActiveStage(null)
     setSeenStages(new Set())
     setRetryToken((prev) => prev + 1)
@@ -428,6 +465,7 @@ export function AnswerStream(
 
   useEffect(() => {
     abortRef.current?.abort()
+    if (!canAsk()) return
 
     if (request.query.trim().length === 0) {
       setStatus('idle')
@@ -455,6 +493,7 @@ export function AnswerStream(
     setRefused(false)
 
     streamAsk(slug, request, (event: AskEvent) => {
+      if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       switch (event.type) {
         case 'sources':
           setSources(event.resources)
@@ -502,7 +541,7 @@ export function AnswerStream(
           break
       }
     }, controller.signal).catch((err: unknown) => {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       // The portal's own words, never the browser's or an upstream one
       // (review loop 8 D8-07). The detail stays in
       // the console, where a developer can read it.
@@ -528,7 +567,7 @@ export function AnswerStream(
   )
 
   useEffect(() => {
-    if (citedSources.length === 0) return
+    if (citedSources.length === 0 || !canAsk() || abortRef.current?.signal.aborted) return
     onSources?.(citedSources)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [citedSources])

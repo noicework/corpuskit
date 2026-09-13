@@ -1,3 +1,4 @@
+import { useAccess } from '../components/AccessProvider.tsx'
 import {
   type CSSProperties,
   type FormEvent,
@@ -1210,13 +1211,20 @@ function DocumentChat(
     onCitationJump?: (citation: Citation, passage: string | undefined) => boolean
   },
 ) {
+  const access = useAccess()
+  const context = access.controller.context
+  const canAsk = () =>
+    access.controller.context === context &&
+    access.controller.can('portal.ask', { kind: 'portal', slug })
+  const [requestVersion, setRequestVersion] = useState(0)
   const [draft, setDraft] = useState('')
   const [query, setQuery] = useState('')
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const trimmed = draft.trim()
-    if (trimmed.length === 0) return
+    if (trimmed.length === 0 || !canAsk()) return
+    setRequestVersion((value) => value + 1)
     setQuery(trimmed)
     // The question moves into the answer above; leaving it in the field reads
     // as if it had not been sent.
@@ -1224,6 +1232,8 @@ function DocumentChat(
   }
 
   function askStarter(text: string) {
+    if (!canAsk()) return
+    setRequestVersion((value) => value + 1)
     setDraft(text)
     setQuery(text)
   }
@@ -1248,6 +1258,17 @@ function DocumentChat(
   const starters = generated && generated.questions.length > 0
     ? generated.questions
     : GENERIC_STARTERS
+
+  if (!canAsk()) {
+    return (
+      <section className='rp-card p-5 sm:p-6' aria-label='Questions about this document'>
+        <h2 className='text-base font-semibold text-ink'>Questions about this document</h2>
+        <ul className='mt-3 space-y-2 text-sm text-ink-2'>
+          {starters.map((text) => <li key={text}>{text}</li>)}
+        </ul>
+      </section>
+    )
+  }
 
   return (
     <section className='rp-card p-5 sm:p-6' aria-labelledby='chat-heading'>
@@ -1297,6 +1318,7 @@ function DocumentChat(
         ? (
           <div className='mt-4'>
             <AnswerStream
+              key={requestVersion}
               slug={slug}
               request={{ query, resourceId: resource.id }}
               onRetry={() => setQuery(query)}
@@ -1529,6 +1551,7 @@ function ViewerSkeleton() {
 }
 
 export function ResourceDetailPage() {
+  const access = useAccess()
   const { config } = useOutletContext<TenantOutletContext>()
   const splitRef = useRef<HTMLDivElement | null>(null)
   const rail = useResizableRail(splitRef)
@@ -1786,6 +1809,7 @@ export function ResourceDetailPage() {
                     onJump={jumpToBlock}
                   />
                   <DocumentChat
+                    key={`${access.generation}:${config.slug}:${resource.id}`}
                     slug={config.slug}
                     resource={resource}
                     onFocus={revealRail}

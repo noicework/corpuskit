@@ -1,4 +1,5 @@
-import { type FormEvent, type ReactNode, useMemo, useRef, useState } from 'react'
+import { useAccess } from '../components/AccessProvider.tsx'
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useOutletContext, useParams } from 'react-router-dom'
 import {
   type AskEvent,
@@ -212,12 +213,26 @@ type AnswerState = {
 }
 
 function DocsAssistant({ slug }: { slug: string }) {
+  const access = useAccess()
+  const context = access.controller.context
+  const canAsk = () =>
+    access.controller.context === context &&
+    access.controller.can('portal.ask', { kind: 'portal', slug })
   const [draft, setDraft] = useState('')
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState<AnswerState | null>(null)
   const [stage, setStage] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => abortRef.current?.abort(), [])
+  const stop = () => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setStreaming(false)
+    setStage(null)
+    setQuestion('')
+    setAnswer(null)
+  }
 
   // Map a citation to the help page whose title matches, so a source chip in an
   // answer links straight to the relevant documentation page.
@@ -251,10 +266,11 @@ function DocsAssistant({ slug }: { slug: string }) {
 
   async function run(query: string) {
     const trimmed = query.trim()
-    if (trimmed.length === 0 || streaming) return
+    if (trimmed.length === 0 || streaming || !canAsk()) return
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    const current = () => !controller.signal.aborted && abortRef.current === controller && canAsk()
     setQuestion(trimmed)
     setDraft('')
     setStreaming(true)
@@ -262,11 +278,13 @@ function DocsAssistant({ slug }: { slug: string }) {
     let state: AnswerState = { text: '', citations: [], pending: true, refused: false }
     setAnswer(state)
     const update = (patch: Partial<AnswerState>) => {
+      if (!current()) return
       state = { ...state, ...patch }
       setAnswer(state)
     }
     try {
       await streamDocsAsk(slug, { query: trimmed }, (event: AskEvent) => {
+        if (!current()) return
         switch (event.type) {
           case 'stage':
             setStage(event.status === 'started' ? STAGE_LABELS[event.stage] ?? null : null)
@@ -301,17 +319,19 @@ function DocsAssistant({ slug }: { slug: string }) {
         }
       }, controller.signal)
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (current()) {
         update({
           pending: false,
           error: err instanceof Error ? err.message : 'The help assistant could not answer.',
         })
       }
     } finally {
-      setStreaming(false)
-      setStage(null)
-      abortRef.current = null
-      update({ pending: false })
+      if (current()) {
+        setStreaming(false)
+        setStage(null)
+        update({ pending: false })
+        abortRef.current = null
+      }
     }
   }
 
@@ -346,7 +366,7 @@ function DocsAssistant({ slug }: { slug: string }) {
             ? (
               <button
                 type='button'
-                onClick={() => abortRef.current?.abort()}
+                onClick={stop}
                 className='rp-btn rp-btn-outline h-11 shrink-0'
               >
                 Stop
@@ -587,6 +607,7 @@ function BuildStamp() {
 // ---------------------------------------------------------------------------
 
 export function DocsPage() {
+  const access = useAccess()
   const { config } = useOutletContext<TenantOutletContext>()
   const { pageId } = useParams<{ pageId: string }>()
   const slug = config.slug
@@ -627,9 +648,11 @@ export function DocsPage() {
         </p>
       </div>
 
-      <div className='mb-8'>
-        <DocsAssistant slug={slug} />
-      </div>
+      {access.can('portal.ask', { kind: 'portal', slug }) && (
+        <div className='mb-8'>
+          <DocsAssistant key={`${access.generation}:${slug}:${pageId}`} slug={slug} />
+        </div>
+      )}
 
       {/* Mobile: collapsible table of contents. */}
       <div className='mb-4 lg:hidden'>

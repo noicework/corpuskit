@@ -1,3 +1,4 @@
+import { useAccess } from './AccessProvider.tsx'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AskEvent, AskStage, Citation, ScoredResource } from '@research-portal/core'
@@ -177,7 +178,19 @@ function DeferredNotice({ onRun }: { onRun: () => void }) {
   )
 }
 
-export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
+export function SearchAnswer(props: SearchAnswerProps) {
+  const access = useAccess()
+  return access.can('portal.ask', { kind: 'portal', slug: props.slug })
+    ? <PermittedSearchAnswer key={`${access.generation}:${props.slug}:${props.query}`} {...props} />
+    : null
+}
+
+function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
+  const access = useAccess()
+  const context = access.controller.context
+  const canAsk = () =>
+    access.controller.context === context &&
+    access.controller.can('portal.ask', { kind: 'portal', slug })
   const [status, setStatus] = useState<Status>('idle')
   const [text, setText] = useState('')
   const [sources, setSources] = useState<ScoredResource[]>([])
@@ -200,6 +213,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   // query and unmount, since the effect cleanup runs the same abort.
   useEffect(() => {
     abortRef.current?.abort()
+    if (!canAsk()) return
 
     if (trimmed.length === 0) {
       setStatus('idle')
@@ -236,6 +250,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     setStatus('streaming')
 
     streamAsk(slug, { query: trimmed }, (event: AskEvent) => {
+      if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       switch (event.type) {
         case 'stage':
           setStageLabel(event.status === 'started' ? STAGE_LABELS[event.stage] ?? null : null)
@@ -280,7 +295,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
           break
       }
     }, controller.signal).catch((err: unknown) => {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       setStageLabel(null)
       setErrorMessage(
         err instanceof ApiError && err.status === 429
@@ -299,7 +314,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   }, [key])
 
   useEffect(() => {
-    onResult?.({ citations, sources })
+    if (canAsk() && !abortRef.current?.signal.aborted) onResult?.({ citations, sources })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [citations, sources])
 
@@ -310,6 +325,7 @@ export function SearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   if (status === 'idle') return null
 
   function retry() {
+    if (!canAsk()) return
     setRetryToken((prev) => prev + 1)
   }
 
