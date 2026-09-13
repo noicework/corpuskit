@@ -1,3 +1,4 @@
+import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import {
   createResearchStorageContext,
@@ -874,18 +875,26 @@ function CopyAnswer({ text }: { text: string }) {
  * "changed" badge in Search when new results turn up for it later. Purely
  * local UI state - a page reload simply lets the user watch it again.
  */
-function WatchControl({ question, slug }: { question: string; slug: string }) {
+function WatchControl(
+  { question, slug, lifetime }: { question: string; slug: string; lifetime: AbortSignal },
+) {
+  const access = useAccess()
+  const context = access.controller.context
+  const current = () =>
+    !lifetime.aborted && access.controller.context === context &&
+    access.controller.can('portal.watch', { kind: 'portal', slug })
   const [status, setStatus] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
 
-  if (question.trim().length === 0) return null
+  if (!current() || question.trim().length === 0) return null
 
   async function handleWatch() {
+    if (!current()) return
     setStatus('busy')
     try {
-      await addWatch(slug, question)
-      setStatus('done')
+      await addWatch(slug, question, lifetime)
+      if (current()) setStatus('done')
     } catch {
-      setStatus('error')
+      if (current()) setStatus('error')
     }
   }
 
@@ -1209,7 +1218,7 @@ function AnswerCard({
           className='rp-answer-tail mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3'
           style={tailStyle(TAIL_ACTIONS)}
         >
-          <WatchControl question={question} slug={slug} />
+          <WatchControl question={question} slug={slug} lifetime={lifetime} />
         </div>
 
         {subqueries.length > 0
@@ -1429,7 +1438,7 @@ function AnswerCard({
                   />
                 )
                 : null}
-              <WatchControl question={question} slug={slug} />
+              <WatchControl question={question} slug={slug} lifetime={lifetime} />
             </div>
           </div>
         )
@@ -1758,11 +1767,14 @@ export function AskPage() {
     config.slug,
   ])
 
-  const permits = (permission: 'portal.ask' | 'portal.generate' | 'behaviour.write') =>
+  const permits = (
+    permission: 'portal.ask' | 'portal.generate' | 'portal.export' | 'behaviour.write',
+  ) =>
     researchStorageCurrent(storage) &&
     access.controller.can(permission, { kind: 'portal', slug: config.slug })
   const canAsk = permits('portal.ask')
   const canGenerate = permits('portal.generate')
+  const canExport = permits('portal.export')
   const canInspectDiagnostics = permits('behaviour.write')
   // Monotonic selection lifetime also rejects A-to-B-to-A callbacks.
   const sessionLifetime = useRef(new AbortController())
@@ -2743,28 +2755,36 @@ export function AskPage() {
 
   /** Downloads the current research trail as a Word-compatible .doc. */
   const { notice: exportNotice, announce: announceExport } = useExportNotice()
-  function exportSession() {
-    // Mid-stream the trail holds only the question: the button is disabled
-    // while streaming, and this guard keeps a keyboard-triggered export honest.
-    if (isStreaming) return
+  const exportNoticeLifetime = useRef<AbortSignal | null>(null)
+  async function exportSession() {
+    if (!permits('portal.export') || isStreaming || !hasAnsweredTurn(messages)) return
+    const authority = researchExportAuthority(access.controller, config.slug)
+    const lifetime = sessionLifetime.current.signal
     const title = currentSessionTitle()
-    const html = sessionToWordHtml(
-      config.branding.productName,
-      title,
-      messages,
-      (resourceId) =>
-        `${globalThis.location.origin}/t/${config.slug}/library/${encodeURIComponent(resourceId)}`,
-    )
-    const blob = new Blob(['﻿', html], { type: 'application/msword' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${slugOrDate(title)}.doc`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-    announceExport(savedFileNotice(link.download, 'Word document'))
+    try {
+      const filename = await exportResearchFile({ ...authority, signal: lifetime }, () => ({
+        parts: [
+          '\uFEFF',
+          sessionToWordHtml(
+            config.branding.productName,
+            title,
+            messages,
+            (resourceId) =>
+              `${globalThis.location.origin}/t/${config.slug}/library/${
+                encodeURIComponent(resourceId)
+              }`,
+          ),
+        ],
+        type: 'application/msword',
+        filename: `${slugOrDate(title)}.doc`,
+      }))
+      if (!lifetime.aborted && permits('portal.export')) {
+        exportNoticeLifetime.current = lifetime
+        announceExport(savedFileNotice(filename, 'Word document'))
+      }
+    } catch {
+      // An obsolete or incomplete export has no file or success notice.
+    }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2909,35 +2929,44 @@ export function AskPage() {
                 style={isCompact && subHeaderHidden
                   ? { transform: 'translateY(-100%)' }
                   : undefined}
-                className='sticky top-0 z-20 mb-6 flex shrink-0 items-center justify-between gap-4 bg-[var(--rp-app)] pb-2 transition-transform duration-300 ease-out motion-reduce:transition-none lg:static lg:bg-transparent lg:pb-0'
+                className='sticky top-0 z-20 mb-6 flex shrink-0 flex-wrap items-center gap-3 bg-[var(--rp-app)] pb-2 transition-transform duration-300 ease-out motion-reduce:transition-none lg:static lg:bg-transparent lg:pb-0'
               >
-                <h1 className='rp-display min-w-0 truncate text-xl text-ink sm:text-2xl'>
+                <h1 className='rp-display min-w-0 basis-full break-words text-xl text-ink sm:text-2xl'>
                   {currentSessionTitle()}
                 </h1>
-                <button
-                  type='button'
-                  onClick={exportSession}
-                  disabled={isStreaming}
-                  title={isStreaming
-                    ? 'Export is available once the answer has finished'
-                    : 'Save this research trail as a Word document with a numbered reference list'}
-                  className='rp-btn rp-btn-outline shrink-0 gap-2 disabled:cursor-not-allowed'
-                >
-                  <svg
-                    viewBox='0 0 24 24'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeWidth='1.7'
-                    strokeLinecap='round'
-                    strokeLinejoin='round'
-                    className='h-4 w-4'
-                    aria-hidden='true'
-                  >
-                    <path d='M12 4v11m0 0l-4-4m4 4l4-4M5 19h14' />
-                  </svg>
-                  Export
-                </button>
-                <ExportNotice notice={exportNotice} />
+                {canExport
+                  ? (
+                    <button
+                      type='button'
+                      onClick={exportSession}
+                      disabled={isStreaming || !hasAnsweredTurn(messages)}
+                      title={isStreaming
+                        ? 'Export is available once the answer has finished'
+                        : 'Save this research trail as a Word document with a numbered reference list'}
+                      className='rp-btn rp-btn-outline shrink-0 gap-2 disabled:cursor-not-allowed'
+                    >
+                      <svg
+                        viewBox='0 0 24 24'
+                        fill='none'
+                        stroke='currentColor'
+                        strokeWidth='1.7'
+                        strokeLinecap='round'
+                        strokeLinejoin='round'
+                        className='h-4 w-4'
+                        aria-hidden='true'
+                      >
+                        <path d='M12 4v11m0 0l-4-4m4 4l4-4M5 19h14' />
+                      </svg>
+                      Export
+                    </button>
+                  )
+                  : null}
+                <ExportNotice
+                  notice={canExport &&
+                      exportNoticeLifetime.current === sessionLifetime.current.signal
+                    ? exportNotice
+                    : null}
+                />
               </div>
             )
             : null}

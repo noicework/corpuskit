@@ -207,7 +207,7 @@ for (const role of ['anonymous', 'viewer', 'analyst'] as const) {
         for (const width of [1440, 390]) {
           await captureBoundary(
             page,
-            '.planning/logs/04-10-01',
+            '.planning/logs/04-10-02/ask',
             `${role}-${scheme}-${width}`,
             width,
           )

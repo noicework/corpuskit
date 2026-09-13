@@ -1150,8 +1150,10 @@ export function summarizeResources(
   slug: string,
   resourceIds: string[],
   kind: 'simple' | 'extended' = 'simple',
+  signal?: AbortSignal,
 ): Promise<{ summary: string }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/summarize`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ resourceIds, kind }),
@@ -1243,8 +1245,9 @@ export function listWatches(slug: string): Promise<SavedWatch[]> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/watches`)
 }
 
-export function addWatch(slug: string, query: string): Promise<SavedWatch> {
+export function addWatch(slug: string, query: string, signal?: AbortSignal): Promise<SavedWatch> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/watches`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query }),
