@@ -18,6 +18,10 @@ import { LocalIngress } from '../../apps/api/src/local-ingress.ts'
 import { localOwnedStores } from '../../apps/api/src/local-owned-stores.ts'
 import { infrastructureHandler } from '../../apps/api/src/permissions.ts'
 import { fixtureSession } from '../../apps/api/src/rbac-integration-fixture.ts'
+import { InsightsStore, RoutingLog, SourceStore } from '../../apps/api/src/stores.ts'
+import { SuggestionStore } from '../../apps/api/src/interrogate.ts'
+import { KgProposalStore } from '../../apps/api/src/kg.ts'
+import { EnrichmentStore } from '../../apps/api/src/enrichments.ts'
 
 const WEB_DIST = './apps/web/dist'
 
@@ -60,6 +64,12 @@ export function startTestServer(options: {
   componentFixture?: { directory: string }
 } = {}): TestServer {
   const directory = Deno.makeTempDirSync({ prefix: 'rbac-e2e-' })
+  // Legacy JSON stores capture DATA_DIR at module load. Override only their
+  // file resolver in this fixture, keeping the actual store operations intact.
+  const isolatedStore = <T extends object>(store: T, name: string, extension: string): T =>
+    Object.assign(store, {
+      pathFor: (slug: string) => `${directory}/${name}/${encodeURIComponent(slug)}.${extension}`,
+    })
   const env = {
     DATA_DIR: directory,
     TENANTS_PATH: `${directory}/tenants.json`,
@@ -163,8 +173,13 @@ export function startTestServer(options: {
       ...stores,
       provider,
       management: options.management,
-      sources: options.sources,
-      insights: options.insights,
+      sources: options.sources ?? isolatedStore(new SourceStore(), 'sources', 'json'),
+      insights: options.insights ?? isolatedStore(new InsightsStore(), 'insights', 'jsonl'),
+      routing: isolatedStore(new RoutingLog(), 'routing', 'jsonl'),
+      suggestions: isolatedStore(new SuggestionStore(), 'suggestions', 'json'),
+      kgProposals: new KgProposalStore({ KG_PROPOSALS_PATH: `${directory}/kg-proposals.json` }),
+      enrichments: new EnrichmentStore(directory),
+      brandingPath: `${directory}/branding`,
       tenants,
       rbac,
       audit: rbac.audit,
