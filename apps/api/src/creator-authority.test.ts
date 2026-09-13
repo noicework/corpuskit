@@ -3,6 +3,7 @@ import { resolveCreatorAuthority } from './creator-authority.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import type { VerifiedAssignmentSession } from './assignments.ts'
+import { resolveRoleGrants } from './assignments.ts'
 
 const start = Date.UTC(2026, 8, 12)
 const creator = { tenantId: 'tenant-1', oid: 'creator', slug: 'marine' }
@@ -38,8 +39,25 @@ function fixture() {
       state.migrate()
     },
     advance: (ms: number) => at += ms,
-    resolve: (input = creator) =>
-      resolveCreatorAuthority(input, { rbac: state, audience: 'corpuskit' }, creator.tenantId, at),
+    resolve: async (input = creator) => {
+      const stores = { rbac: state, audience: 'corpuskit' }
+      const result = await resolveCreatorAuthority(input, stores, creator.tenantId, at)
+      // Compare every fixture resolution with the original authorisation outcome.
+      const evidence = state.creatorEvidence(input.tenantId, input.oid)
+      let role = null
+      const proven = input.tenantId === creator.tenantId && !!evidence &&
+        evidence.observedAt <= at && evidence.claimIssuedAt <= at + 30_000
+      if (proven && evidence) {
+        const fresh = Math.min(evidence.expiresAt, evidence.claimIssuedAt + 28_800_000) > at
+        const grants = await resolveRoleGrants(evidence, fresh ? evidence : null, stores)
+        role = grants.effectiveRoles.platformRole
+          ? 'portal-admin'
+          : grants.effectiveRoles.portalRoles.find((grant) => grant.slug === input.slug)?.role ??
+            null
+      }
+      expect({ proven: result.proven, role: result.role }).toEqual({ proven, role })
+      return result
+    },
     close: () => database.close(),
   }
 }
@@ -63,10 +81,14 @@ Deno.test('creator local authority survives claim expiry and restart but removal
     expect(await f.resolve({ ...creator, slug: 'grains' })).toEqual({
       proven: true,
       role: null,
-      reason: 'creator_no_access',
+      reason: 'creator_claims_expired',
     })
     if (local.ok) expect(f.service.remove(local.value.id, context).ok).toBe(true)
-    expect(await f.resolve()).toEqual({ proven: true, role: null, reason: 'creator_no_access' })
+    expect(await f.resolve()).toEqual({
+      proven: true,
+      role: null,
+      reason: 'creator_claims_expired',
+    })
   } finally {
     f.close()
   }
@@ -120,6 +142,109 @@ Deno.test('creator claims preserve equal-time intersection and ignore older conc
     f.service.observeSession(f.session())
     expect((await f.resolve()).role).toBe('portal-admin')
     expect(f.state.creatorEvidence(creator.tenantId, creator.oid)?.claimIssuedAt).toBe(start + 1)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('creator app roles expire exactly at eight hours and only fresh sign-in restores claims', async () => {
+  for (const appRole of ['CorpusKit.Owner', 'CorpusKit.PlatformAdmin', 'CorpusKit.Admin']) {
+    const f = fixture()
+    try {
+      f.service.observeSession(f.session({ roles: [appRole] }))
+      f.advance(28_799_999)
+      expect(await f.resolve()).toEqual({ proven: true, role: 'portal-admin', reason: 'active' })
+      f.advance(1)
+      expect(await f.resolve()).toEqual({
+        proven: true,
+        role: null,
+        reason: 'creator_claims_expired',
+      })
+      f.service.observeSession(f.session({ roles: [appRole] }))
+      expect((await f.resolve()).reason).toBe('creator_claims_expired')
+      f.service.observeSession(f.session({
+        roles: [appRole],
+        claimIssuedAt: f.now(),
+        expiresAt: f.now() + 28_800_000,
+      }))
+      expect(await f.resolve()).toEqual({ proven: true, role: 'portal-admin', reason: 'active' })
+      f.advance(1)
+      f.service.observeSession(
+        f.session({ claimIssuedAt: f.now(), expiresAt: f.now() + 28_800_000 }),
+      )
+      f.service.observeSession(f.session({ roles: [appRole] }))
+      expect((await f.resolve()).reason).toBe('creator_no_access')
+      f.advance(28_800_000)
+      expect((await f.resolve()).reason).toBe('creator_no_access')
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('expired group explanation uses current mapping, scope and capability without reviving access', async () => {
+  const f = fixture()
+  try {
+    f.database.exec(
+      "INSERT INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',?)",
+      start,
+    )
+    const group = f.service.create({
+      subjectKind: 'group',
+      subjectId: 'group-1',
+      scope: { kind: 'portal', slug: 'marine' },
+      role: 'analyst',
+    }, context)
+    expect(group.ok).toBe(true)
+    f.service.observeSession(f.session({ groups: ['group-1'] }))
+    f.advance(28_799_999)
+    expect((await f.resolve()).role).toBe('analyst')
+    f.advance(1)
+    expect(await f.resolve()).toEqual({
+      proven: true,
+      role: null,
+      reason: 'creator_claims_expired',
+    })
+    expect((await f.resolve({ ...creator, slug: 'grains' })).reason).toBe('creator_no_access')
+    f.database.exec("UPDATE rbac_group_capabilities SET status = 'disabled'")
+    expect((await f.resolve()).reason).toBe('creator_no_access')
+    f.database.exec("UPDATE rbac_group_capabilities SET status = 'verified-supported'")
+    if (group.ok) expect(f.service.remove(group.value.id, context).ok).toBe(true)
+    expect((await f.resolve()).reason).toBe('creator_no_access')
+    f.service.create({
+      subjectKind: 'group',
+      subjectId: 'group-1',
+      scope: { kind: 'portal', slug: 'marine' },
+      role: 'viewer',
+    }, context)
+    expect((await f.resolve()).reason).toBe('creator_claims_expired')
+    f.service.observeSession(
+      f.session({ groups: ['group-1'], claimIssuedAt: f.now(), expiresAt: f.now() + 28_800_000 }),
+    )
+    expect((await f.resolve()).role).toBe('viewer')
+    f.advance(1)
+    f.service.observeSession(f.session({ claimIssuedAt: f.now(), expiresAt: f.now() + 28_800_000 }))
+    f.service.observeSession(f.session({ groups: ['group-1'] }))
+    f.advance(28_800_000)
+    expect((await f.resolve()).reason).toBe('creator_no_access')
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('unknown expired app claims do not imply access or add role observations', async () => {
+  const f = fixture()
+  try {
+    f.service.observeSession(f.session({ roles: ['Unknown.Role'] }))
+    f.advance(28_800_000)
+    let observations = 0
+    const original = f.state.observeUnknownRole.bind(f.state)
+    f.state.observeUnknownRole = (id) => {
+      observations++
+      return original(id)
+    }
+    expect((await f.resolve()).reason).toBe('creator_no_access')
+    expect(observations).toBe(0)
   } finally {
     f.close()
   }

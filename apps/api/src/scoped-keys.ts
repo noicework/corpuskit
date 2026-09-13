@@ -87,7 +87,7 @@ async function status(
     clock(deps),
   )
   return {
-    status: authority.reason,
+    status: authority.reason === 'creator_claims_expired' ? 'creator_no_access' : authority.reason,
     effectiveRole: authority.role ? boundedRole(record.role, authority.role) : null,
   }
 }
