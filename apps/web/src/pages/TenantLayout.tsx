@@ -2,7 +2,7 @@ import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { TenantConfig } from '@research-portal/core'
-import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
+import { getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import {
   tenantThemeVars,
   useBodyTheme,
@@ -18,7 +18,8 @@ import { pageTitle } from '../lib/page-title.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
-import { getAuthSession } from '../api/auth.ts'
+import { useAccess } from '../components/AccessProvider.tsx'
+import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
 
 export type TenantOutletContext = {
   config: TenantConfig
@@ -124,14 +125,10 @@ export function TenantLayout() {
   const [logoFailed, setLogoFailed] = useState(false)
   const [headerQuery, setHeaderQuery] = useState('')
   const [signInOpen, setSignInOpen] = useState(false)
-  const { data: auth } = useQuery({
-    queryKey: ['auth-session'],
-    queryFn: getAuthSession,
-    staleTime: 60_000,
-    retry: false,
-  })
+  const access = useAccess()
+  const auth = access.state.session
   const accountLabel = auth?.user?.name || ACCOUNT_LABEL
-  const accountIsAdmin = auth?.user?.isAdmin === true
+  const accountIsAdmin = !!slug && access.can('behaviour.write', { kind: 'portal', slug })
   const headerRef = useRef<HTMLElement | null>(null)
   const navPanelRef = useRef<HTMLElement | null>(null)
   const navTriggerRef = useRef<HTMLButtonElement | null>(null)
@@ -252,7 +249,6 @@ export function TenantLayout() {
     data: config,
     isLoading,
     isError,
-    error,
   } = useQuery({
     queryKey: ['tenant-config', slug],
     queryFn: () => getTenantConfig(slug ?? ''),
@@ -322,27 +318,7 @@ export function TenantLayout() {
     return <FullPageSpinner />
   }
 
-  if (isError || !config) {
-    const notFound = error instanceof ApiError && error.status === 404
-
-    return (
-      <main className='flex min-h-screen flex-col items-center justify-center bg-app px-6 text-center'>
-        <h1 className='rp-display text-3xl text-ink'>
-          {notFound ? 'This portal does not exist' : 'Something went wrong'}
-        </h1>
-        <p className='mt-3 max-w-sm text-sm leading-relaxed text-ink-2'>
-          {notFound
-            ? 'Check the address, or head back and choose a portal from the list.'
-            : error instanceof Error
-            ? error.message
-            : 'We could not load this portal right now.'}
-        </p>
-        <Link to='/' className='rp-btn rp-btn-primary mt-6'>
-          Back to portals
-        </Link>
-      </main>
-    )
-  }
+  if (isError || !config) return <AccessUnavailable failedRead />
 
   // Links sit on the solid brand band, so the active state is white type over
   // an accent underline (see .rp-navlink in styles.css) rather than the accent
