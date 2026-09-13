@@ -187,3 +187,35 @@ export function removeAssignment(
     id,
   )
 }
+
+export async function changeAccessMode(
+  slug: string,
+  accessMode: 'public' | 'authenticated' | 'restricted',
+  context: RequestContext = {},
+) {
+  const scope = ScopeSchema.parse({ kind: 'portal', slug })
+  const mode = z.enum(['public', 'authenticated', 'restricted']).parse(accessMode)
+  const authority = context.authority ?? currentAuthority()
+  if (context.context) authority?.assertCurrent(context.context)
+  if (authority && !authority.can('behaviour.write', scope)) throw new AssignmentError(403)
+  const response = await authorityFetch(`/api/admin/t/${encodeURIComponent(slug)}/access`, {
+    method: 'PATCH',
+    cache: 'no-store',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accessMode: mode }),
+  }, context)
+  try {
+    const value: unknown = await response.json()
+    assertResponseCurrent(response)
+    if (!response.ok) throw new AssignmentError(response.status)
+    const parsed = z.object({ slug: z.literal(slug), accessMode: z.literal(mode) }).strict()
+      .safeParse(value)
+    if (!parsed.success) throw new AssignmentError(response.status)
+    return parsed.data
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new AssignmentError(response.status)
+    throw error
+  } finally {
+    finishResponse(response)
+  }
+}

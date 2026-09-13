@@ -68,6 +68,8 @@ async function rowAction(page: Page, subject: string, action: string) {
     button.click()
   }, { args: [subject, action] })
 }
+const memberLogs = Deno.env.get('RBAC_MEMBERS_LOG_ROOT') ?? '.planning/logs/04-12'
+
 async function capture(
   page: Page,
   directory: string,
@@ -169,7 +171,7 @@ Deno.test('member component uses signed assignment CRUD, conflict feedback and a
       await page.bringToFront()
       await page.waitForSelector('[data-assignment-editor]')
       for (const width of [1440, 390]) {
-        await capture(page, '.planning/logs/04-12-01', `members-${scheme}-${width}`, width, 'h2')
+        await capture(page, `${memberLogs}-01`, `members-${scheme}-${width}`, width, 'h2')
       }
       await click(page, 'Add member')
       await input(
@@ -178,7 +180,7 @@ Deno.test('member component uses signed assignment CRUD, conflict feedback and a
         'a-long-pending-person-with-research-responsibilities@organisation.example.test',
       )
       for (const width of [1440, 390]) {
-        await capture(page, '.planning/logs/04-12-01', `form-${scheme}-${width}`, width, 'form h3')
+        await capture(page, `${memberLogs}-01`, `form-${scheme}-${width}`, width, 'form h3')
       }
       await click(page, 'Close member form')
       await rowAction(page, 'new@example.test', 'Remove member')
@@ -193,7 +195,7 @@ Deno.test('member component uses signed assignment CRUD, conflict feedback and a
       for (const width of [1440, 390]) {
         await capture(
           page,
-          '.planning/logs/04-12-01',
+          `${memberLogs}-01`,
           `confirm-${scheme}-${width}`,
           width,
           'dialog h2',
@@ -301,7 +303,7 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
       for (const width of [1440, 390]) {
         await capture(
           page,
-          '.planning/logs/04-12-02',
+          `${memberLogs}-02`,
           `access-${scheme}-${width}`,
           width,
           '[data-access-panel] h2',
@@ -325,7 +327,7 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
       for (const width of [1440, 390]) {
         await capture(
           page,
-          '.planning/logs/04-12-02',
+          `${memberLogs}-02`,
           `long-id-${scheme}-${width}`,
           width,
           '[data-fixture-long-identity] p',
@@ -333,7 +335,7 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
       }
       await rowAction(page, 'portal-pending@example.test', 'Edit role')
       for (const width of [1440, 390]) {
-        await capture(page, '.planning/logs/04-12-02', `edit-${scheme}-${width}`, width, 'form h3')
+        await capture(page, `${memberLogs}-02`, `edit-${scheme}-${width}`, width, 'form h3')
       }
       await input(page, '[data-assignment-role]', 'analyst')
       await click(page, 'Save role')
@@ -345,7 +347,7 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
       for (const width of [1440, 390]) {
         await capture(
           page,
-          '.planning/logs/04-12-02',
+          `${memberLogs}-02`,
           `remove-${scheme}-${width}`,
           width,
           'dialog h2',
@@ -382,11 +384,15 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
     expect(await page.evaluate(() => document.body.textContent)).not.toContain(
       'researcher-with-a-very-long',
     )
-    expect(server.requests.some((r) => r.path.includes('/groups') || r.path.includes('/mcp/keys')))
-      .toBe(false)
+    expect(
+      server.requests.filter((r) => r.path.includes('/groups')).every((r) =>
+        r.method === 'GET' && r.status === 200
+      ),
+    ).toBe(true)
+    expect(server.requests.some((r) => r.path.includes('/mcp/keys'))).toBe(false)
   } catch (error) {
     await Deno.writeTextFile(
-      '.planning/logs/04-12-02/failure.json',
+      `${memberLogs}-02/failure.json`,
       JSON.stringify(
         {
           requests: server.requests,
@@ -396,7 +402,7 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
         2,
       ),
     )
-    await Deno.writeFile('.planning/logs/04-12-02/failure.png', await page.screenshot())
+    await Deno.writeFile(`${memberLogs}-02/failure.png`, await page.screenshot())
     throw error
   } finally {
     await page.close()
@@ -437,11 +443,12 @@ Deno.test('Access has independent section permissions and no forbidden member re
         expect(server.requests.slice(before).filter((r) => r.path.includes('/members')))
           .toHaveLength(0)
       }
-      expect(
-        server.requests.slice(before).some((r) =>
-          r.path.includes('/groups') || r.path.includes('/mcp/keys')
-        ),
-      ).toBe(false)
+      const groupRequests = server.requests.slice(before).filter((r) => r.path.includes('/groups'))
+      if (permission === 'members.manage') {
+        await page.waitForSelector('[data-assignment-section=groups] [data-assignment-editor]')
+        expect(groupRequests.every((r) => r.method === 'GET' && r.status === 200)).toBe(true)
+      } else expect(groupRequests).toHaveLength(0)
+      expect(server.requests.slice(before).some((r) => r.path.includes('/mcp/keys'))).toBe(false)
     }
     for (const role of ['viewer', 'curator']) {
       server.setIdentity(fixtureSession({ oid: `fixture-${role}` }))

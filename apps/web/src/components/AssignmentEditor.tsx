@@ -164,7 +164,9 @@ function Editor(
           <h3 className='rp-display text-xl'>{group ? 'No group mappings' : 'No local members'}</h3>
           <p className='mt-2 text-base text-ink-2'>
             {group
-              ? 'Map a supported Entra group to a role for this scope.'
+              ? canEdit
+                ? 'Map a supported Entra group to a role for this scope.'
+                : 'Individual assignments remain available.'
               : 'Add a person by object ID or email. Entra access may still apply.'}
           </p>
         </div>
@@ -185,7 +187,7 @@ function Editor(
                 {row.subjectKind === 'pending-email'
                   ? 'Pending sign-in'
                   : row.subjectKind === 'group'
-                  ? 'Group object ID'
+                  ? canEdit ? 'Group object ID' : 'Inactive group mapping'
                   : 'Active object ID'}
               </p>
               {row.subjectKind === 'pending-email' && (
@@ -329,7 +331,9 @@ function Editor(
                 className='rp-btn rp-btn-outline min-h-[44px]'
                 onClick={clearForm}
               >
-                {form === 'new' ? 'Close member form' : 'Keep current role'}
+                {form === 'new'
+                  ? group ? 'Keep mapping' : 'Close member form'
+                  : 'Keep current role'}
               </button>
             </div>
           </fieldset>

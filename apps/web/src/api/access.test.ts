@@ -1,6 +1,7 @@
 import { expect } from '@std/expect'
 import {
   AssignmentError,
+  changeAccessMode,
   changeAssignment,
   createAssignment,
   listAssignments,
@@ -20,6 +21,44 @@ const row = {
   createdAt: 1,
   updatedAt: 2,
 }
+
+Deno.test('access mode transport sends only the mode and validates the saved scope and value', async () => {
+  const original = globalThis.fetch
+  const calls: { path: string; method: string | undefined; body: unknown }[] = []
+  globalThis.fetch = (input, init) => {
+    calls.push({ path: String(input), method: init?.method, body: init?.body })
+    return Promise.resolve(Response.json({ slug: 'marine', accessMode: 'restricted' }))
+  }
+  try {
+    expect(await changeAccessMode('marine', 'restricted')).toEqual({
+      slug: 'marine',
+      accessMode: 'restricted',
+    })
+    expect(calls).toEqual([{
+      path: '/api/admin/t/marine/access',
+      method: 'PATCH',
+      body: '{"accessMode":"restricted"}',
+    }])
+    for (
+      const value of [{ slug: 'other', accessMode: 'restricted' }, {
+        slug: 'marine',
+        accessMode: 'public',
+      }, { slug: 'marine', accessMode: 'unknown' }]
+    ) {
+      globalThis.fetch = () => Promise.resolve(Response.json(value))
+      await expect(changeAccessMode('marine', 'restricted')).rejects.toThrow(AssignmentError)
+    }
+    globalThis.fetch = () =>
+      Promise.resolve(Response.json({ error: 'audit_write_failed' }, { status: 500 }))
+    await expect(changeAccessMode('marine', 'restricted')).rejects.toThrow('could not be confirmed')
+    const authority = new AuthorityController(() => 'test')
+    await expect(changeAccessMode('marine', 'restricted', { authority })).rejects.toThrow(
+      AssignmentError,
+    )
+  } finally {
+    globalThis.fetch = original
+  }
+})
 
 Deno.test('assignment transport uses exact family paths and strict mutation bodies', async () => {
   const original = globalThis.fetch

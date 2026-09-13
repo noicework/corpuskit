@@ -1,31 +1,34 @@
-import { useLayoutEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { type Permission, PORTAL_ROLES } from '@research-portal/core'
+import { useId, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import { type AccessMode, type Permission } from '@research-portal/core'
 import { useAccess } from '../../components/AccessProvider.tsx'
-import { AssignmentEditor } from '../../components/AssignmentEditor.tsx'
 import {
-  AssignmentError,
-  changeAssignment,
-  createAssignment,
-  listAssignments,
-  removeAssignment,
-} from '../../api/access.ts'
-import type { AuthorityController } from '../../api/access-lifecycle.ts'
+  AssignmentSection,
+  unconfirmedMessage,
+  useAccessMutation,
+} from '../../components/AssignmentSection.tsx'
+import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
+import { AssignmentError, changeAccessMode } from '../../api/access.ts'
+import type { TenantOutletContext } from '../TenantLayout.tsx'
 
 export const ACCESS_SECTION_PERMISSIONS: readonly Permission[] = [
   'members.manage',
   'behaviour.write',
   'keys.manage',
 ]
-const unconfirmedMessage =
-  'The change could not be confirmed. Refresh this view before trying again.'
-// Generic feedback survives only the single refresh that discarded the originating form.
-// Never retain assignment rows, input values or target labels across authority generations.
-const notices = new WeakMap<
-  AuthorityController,
-  { identity: string | null; slug: string; generation: number }
->()
-
+const modes: { value: AccessMode; label: string; help: string }[] = [
+  { value: 'public', label: 'Public', help: 'Anyone can browse, search and ask questions.' },
+  {
+    value: 'authenticated',
+    label: 'Organisation sign-in',
+    help: 'People signed in to this organisation can browse, search and ask questions.',
+  },
+  {
+    value: 'restricted',
+    label: 'Restricted',
+    help: 'Only people with assigned access can open this portal.',
+  },
+]
 export function AccessPanel({ slug, name }: { slug: string; name: string }) {
   const access = useAccess()
   const scope = { kind: 'portal' as const, slug }
@@ -34,115 +37,112 @@ export function AccessPanel({ slug, name }: { slug: string; name: string }) {
     <section className='rp-card min-w-0 p-6' data-access-panel>
       <h2 className='rp-display break-words text-xl [overflow-wrap:anywhere]'>Access to {name}</h2>
       <p className='mt-2 text-sm text-ink-2 [overflow-wrap:anywhere]'>Portal: {slug}</p>
-      {access.can('members.manage', scope)
-        ? <Members key={`${slug}:${access.generation}`} slug={slug} name={name} />
-        : (
-          <p className='mt-6 text-base text-ink-2'>
-            No access settings are available in this view.
-          </p>
-        )}
+      <AssignmentSection scope={scope} name={name} family='members' />
+      <AssignmentSection scope={scope} name={name} family='groups' />
+      {access.can('behaviour.write', scope) && (
+        <AccessModeSection key={`${slug}:${access.generation}`} slug={slug} name={name} />
+      )}
     </section>
   )
 }
-
-function Members({ slug, name }: { slug: string; name: string }) {
-  const access = useAccess()
-  const { controller } = access
-  const context = controller.context
-  const scope = { kind: 'portal' as const, slug }
-  const options = { authority: controller, context }
-  const lifetime = useRef<object | null>(null)
-  const [notice, setNotice] = useState(() => {
-    const item = notices.get(controller)
-    return item?.identity === context.identityKey && item.slug === slug &&
-      item.generation === context.generation
-  })
-  useLayoutEffect(() => {
-    notices.delete(controller)
-    lifetime.current = {}
-    const cleanup = controller.registerCleanup(() => {
-      lifetime.current = null
-      setNotice(false)
-    })
-    return () => {
-      lifetime.current = null
-      cleanup()
-    }
-  }, [controller])
-  const rows = useQuery({
-    queryKey: ['access-members', slug, access.identityKey, access.generation],
-    queryFn: ({ signal }) => listAssignments(scope, 'members', { ...options, signal }),
-    enabled: access.can('members.manage', scope),
-    retry: false,
-  })
-  const mutate = async (operation: () => Promise<unknown>) => {
-    const token = lifetime.current
-    if (!token) return
-    controller.assertCurrent(context)
-    if (!controller.can('members.manage', scope)) return
-    let failure: unknown
+function AccessModeSection({ slug, name }: { slug: string; name: string }) {
+  const { config } = useOutletContext<TenantOutletContext>()
+  const current = config.slug === slug
+    ? modes.find((mode) => mode.value === config.accessMode)
+    : undefined
+  const [selected, setSelected] = useState<AccessMode | undefined>(current?.value)
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const id = useId()
+  const { mutate, notice, options } = useAccessMutation(
+    { kind: 'portal', slug },
+    'behaviour.write',
+    'mode',
+  )
+  const chosen = modes.find((mode) => mode.value === selected)
+  const save = async () => {
+    if (busy || !current || !chosen || chosen === current) return
+    setBusy(true)
+    setError(null)
     try {
-      await operation()
-    } catch (error) {
-      if (error instanceof AssignmentError && error.correctable) throw error
-      failure = error
+      await mutate(() => changeAccessMode(slug, chosen.value, options))
+    } catch (failure) {
+      if (options.authority.context === options.context) {
+        setError(failure instanceof AssignmentError ? failure.message : unconfirmedMessage)
+      }
+    } finally {
+      if (options.authority.context === options.context) setBusy(false)
     }
-    if (controller.context !== context) return
-    // Leaving this tab discards its UI, but a completed mutation still changes
-    // the authority used by other tabs in this same current portal.
-    if (failure && lifetime.current === token) {
-      notices.set(controller, {
-        identity: context.identityKey,
-        slug,
-        generation: context.generation + 2,
-      })
-    }
-    try {
-      await controller.refresh(slug)
-      const refreshed = controller.context
-      requestAnimationFrame(() => {
-        if (controller.context !== refreshed || document.activeElement !== document.body) return
-        const heading = document.querySelector<HTMLElement>('main h1')
-        if (heading) {
-          heading.tabIndex = -1
-          heading.focus({ preventScroll: true })
-        }
-      })
-    } catch {
-      notices.delete(controller)
-    }
-    if (failure) throw failure
   }
   return (
-    <section className='mt-6 min-w-0' aria-labelledby='access-members-heading'>
-      <h3 id='access-members-heading' className='rp-display mb-4 text-xl'>Members</h3>
+    <section
+      className='mt-8 min-w-0 border-t border-[var(--rp-line)] pt-6'
+      data-access-mode
+      aria-labelledby={id}
+    >
+      <h3 id={id} className='rp-display text-xl'>Access mode</h3>
       {notice && (
-        <p role='alert' className='mb-4 text-sm text-[var(--rp-bad-ink)]'>{unconfirmedMessage}</p>
+        <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>{unconfirmedMessage}</p>
       )}
-      {rows.isLoading && <p role='status' className='text-base text-ink-2'>Loading members...</p>}
-      {rows.isError && (
-        <div role='alert'>
-          <p className='text-base text-ink-2'>Could not load members. Try again.</p>
-          <button
-            type='button'
-            className='rp-btn rp-btn-outline mt-4 min-h-[44px]'
-            onClick={() => void rows.refetch()}
-          >
-            Try again
-          </button>
-        </div>
-      )}
-      {rows.data && (
-        <AssignmentEditor
-          scope={scope}
-          scopeName={name}
-          family='members'
-          roles={PORTAL_ROLES}
-          items={rows.data.items}
-          onCreate={(input) => mutate(() => createAssignment(scope, 'members', input, options))}
-          onChange={(id, role) =>
-            mutate(() => changeAssignment(scope, 'members', id, role, options))}
-          onRemove={(id) => mutate(() => removeAssignment(scope, 'members', id, options))}
+      {!current
+        ? (
+          <p className='mt-4 text-base text-ink-2'>
+            The current access mode could not be checked. Refresh this view.
+          </p>
+        )
+        : (
+          <>
+            <p className='mt-4 text-base' data-current-access-mode>Current mode: {current.label}</p>
+            <fieldset className='mt-4 min-w-0 space-y-4' disabled={busy}>
+              <legend className='sr-only'>Access mode for {name}</legend>
+              {modes.map((mode) => (
+                <label
+                  key={mode.value}
+                  className='flex min-h-[44px] min-w-0 cursor-pointer items-start gap-3'
+                >
+                  <input
+                    className='mt-1 shrink-0'
+                    type='radio'
+                    name={id}
+                    value={mode.value}
+                    checked={selected === mode.value}
+                    onChange={() => setSelected(mode.value)}
+                  />
+                  <span className='min-w-0 text-base'>
+                    {mode.label}
+                    <span className='mt-1 block text-sm text-ink-2'>{mode.help}</span>
+                  </span>
+                </label>
+              ))}
+              <button
+                type='button'
+                className='rp-btn rp-btn-primary min-h-[44px]'
+                disabled={!chosen || chosen === current}
+                onClick={() => setConfirm(true)}
+              >
+                Save access mode
+              </button>
+            </fieldset>
+          </>
+        )}
+      {confirm && chosen && (
+        <ConfirmActionDialog
+          title='Change access mode'
+          description={`Change ${name} to ${chosen.label}? ${
+            chosen.value === 'public'
+              ? 'Portal content will be accessible without sign-in.'
+              : chosen.help
+          }`}
+          confirmLabel='Change access mode'
+          cancelLabel='Keep current mode'
+          busy={busy}
+          error={error}
+          onCancel={() => {
+            setConfirm(false)
+            setError(null)
+          }}
+          onConfirm={() => void save()}
         />
       )}
     </section>
