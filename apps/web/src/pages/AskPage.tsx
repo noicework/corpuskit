@@ -1045,7 +1045,10 @@ function AnswerCard({
   onVerdicts,
   intents,
   onReroute,
-  isAdmin = false,
+  canInspectDiagnostics = false,
+  canGenerate,
+  canAsk,
+  lifetime,
 }: {
   message: ChatMessage
   slug: string
@@ -1062,8 +1065,16 @@ function AnswerCard({
   /** Re-ask this answer's question under another intent. */
   onReroute: (intentId: string) => void
   /** Developer-facing widgets (pipeline, tokens) show only to administrators. */
-  isAdmin?: boolean
+  canInspectDiagnostics?: boolean
+  canGenerate: boolean
+  canAsk: boolean
+  lifetime: AbortSignal
 }) {
+  const access = useAccess()
+  const authority = access.controller.context
+  const current = () => !lifetime.aborted && access.controller.context === authority
+  const verdictAbort = useRef<AbortController | null>(null)
+  useEffect(() => () => verdictAbort.current?.abort(), [lifetime])
   const [showPipeline, setShowPipeline] = useState(false)
   const [compare, setCompare] = useState<[string, string] | null>(null)
   // The sources/evidence block is collapsed by default and this state is
@@ -1078,7 +1089,11 @@ function AnswerCard({
   const [judging, setJudging] = useState(false)
 
   async function requestVerdicts() {
-    if (judging) return
+    if (
+      judging || !current() || !access.controller.can('portal.generate', { kind: 'portal', slug })
+    ) return
+    const abort = new AbortController()
+    verdictAbort.current = abort
     if (message.verdicts && Object.keys(message.verdicts).length > 0) return
     const candidates = message.sources
       .filter((source) => (source.matchedPassage ?? '').trim().length > 0)
@@ -1094,7 +1109,9 @@ function AnswerCard({
           title: source.title,
           passage: (source.matchedPassage ?? '').trim(),
         })),
+        AbortSignal.any([abort.signal, lifetime]),
       )
+      if (abort.signal.aborted || !current()) return
       const next: Record<string, EvidenceVerdictInfo> = {}
       for (const item of result.verdicts) {
         next[item.id] = { verdict: item.verdict, relevance: item.relevance }
@@ -1103,7 +1120,7 @@ function AnswerCard({
     } catch {
       // Judging is advisory - a failure just leaves the table without verdicts.
     } finally {
-      setJudging(false)
+      if (!abort.signal.aborted && current()) setJudging(false)
     }
   }
 
@@ -1129,7 +1146,8 @@ function AnswerCard({
   // while streaming, not once dismissed, and not on an answer that was already
   // deep (nothing deeper to escalate to).
   const groundedness = message.quality?.groundedness
-  const offerDeepReanswer = !message.pending && !message.healDismissed && !message.wasDeep &&
+  const offerDeepReanswer = canGenerate && !message.pending && !message.healDismissed &&
+    !message.wasDeep &&
     !message.deepBadge && isThinlyGrounded(message.quality, message.audit)
   const isSparselyGrounded = !message.pending && groundedness !== null &&
     groundedness !== undefined &&
@@ -1230,7 +1248,7 @@ function AnswerCard({
           </div>
         )
         : null}
-      {intents.length > 0 && (message.route || message.pending)
+      {canInspectDiagnostics && intents.length > 0 && (message.route || message.pending)
         ? (
           <div className='mb-2 flex flex-wrap items-center gap-2'>
             <RouteChip
@@ -1372,9 +1390,10 @@ function AnswerCard({
             className='rp-answer-tail mt-3 flex flex-wrap items-center justify-between gap-3'
             style={tailStyle(TAIL_ACTIONS)}
           >
-            <FeedbackControl message={message} onFeedback={onFeedback} />
+            {canAsk ? <FeedbackControl message={message} onFeedback={onFeedback} /> : null}
             <div className='ml-auto flex flex-wrap items-center justify-end gap-0.5'>
-              {intents.filter((i) => i.answer.surfaces.includes('ask')).length > 1 &&
+              {canAsk && canInspectDiagnostics &&
+                  intents.filter((i) => i.answer.surfaces.includes('ask')).length > 1 &&
                   question.trim().length > 0
                 ? (
                   <button
@@ -1426,7 +1445,7 @@ function AnswerCard({
           panel stays navigable - and the evidence table opens with it rather
           than asking for a second click on the same evidence. */
       }
-      {compare
+      {canAsk && canInspectDiagnostics && compare
         ? (
           <CompareConfigurations
             slug={slug}
@@ -1556,7 +1575,7 @@ function AnswerCard({
                   )
                   : null}
 
-                {isAdmin && (message.sources.length > 0 || message.usage)
+                {canInspectDiagnostics && (message.sources.length > 0 || message.usage)
                   ? (
                     <div className='flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-3'>
                       {message.sources.length > 0
@@ -1608,7 +1627,7 @@ function AnswerCard({
                   : null}
 
                 <div id={`${message.id}-pipeline`} hidden={!showPipeline}>
-                  {showPipeline
+                  {canInspectDiagnostics && showPipeline
                     ? (
                       <PipelinePanel
                         sources={message.sources}
@@ -1730,7 +1749,7 @@ ${turnsHtml}
 // ---------------------------------------------------------------------------
 
 export function AskPage() {
-  const { config, isAdmin = false } = useOutletContext<TenantOutletContext>()
+  const { config } = useOutletContext<TenantOutletContext>()
   const [searchParams, setSearchParams] = useSearchParams()
   const access = useAccess()
   const storage = useMemo(() => createResearchStorageContext(access.controller, config.slug), [
@@ -1738,6 +1757,21 @@ export function AskPage() {
     access.generation,
     config.slug,
   ])
+
+  const permits = (permission: 'portal.ask' | 'portal.generate' | 'behaviour.write') =>
+    researchStorageCurrent(storage) &&
+    access.controller.can(permission, { kind: 'portal', slug: config.slug })
+  const canAsk = permits('portal.ask')
+  const canGenerate = permits('portal.generate')
+  const canInspectDiagnostics = permits('behaviour.write')
+  // Monotonic selection lifetime also rejects A-to-B-to-A callbacks.
+  const sessionLifetime = useRef(new AbortController())
+  const retireSession = () => {
+    sessionLifetime.current.abort()
+    sessionLifetime.current = new AbortController()
+    abortRef.current?.abort()
+    followUpAbortRef.current?.abort()
+  }
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions(storage))
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
@@ -1787,6 +1821,7 @@ export function AskPage() {
   const syncTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   useLayoutEffect(() => {
     const clear = () => {
+      retireSession()
       abortRef.current?.abort()
       followUpAbortRef.current?.abort()
       for (const timer of syncTimersRef.current.values()) clearTimeout(timer)
@@ -1962,13 +1997,13 @@ export function AskPage() {
    * memory when server sync fails; it is never copied into browser storage.
    */
   function scheduleServerSync(session: ChatSession) {
-    if (!researchStorageCurrent(storage)) return
+    if (!permits('portal.ask')) return
     const timers = syncTimersRef.current
     const existing = timers.get(session.id)
     if (existing) clearTimeout(existing)
     const timer = setTimeout(() => {
       timers.delete(session.id)
-      if (!researchStorageCurrent(storage)) return
+      if (!permits('portal.ask')) return
       void putServerSession(config.slug, {
         id: session.id,
         title: sessionTitle(session),
@@ -1998,6 +2033,7 @@ export function AskPage() {
   // newer on the server) - background, silent-fail so offline use is
   // unaffected.
   useEffect(() => {
+    if (!canAsk) return
     const localSessions = loadSessions(storage)
     setSessions(localSessions)
     setActiveSessionId(null)
@@ -2054,7 +2090,7 @@ export function AskPage() {
     return () => {
       cancelled = true
     }
-  }, [config.slug, storage])
+  }, [config.slug, storage, canAsk])
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -2066,7 +2102,10 @@ export function AskPage() {
   // the next isStreaming change since the ref isn't set until it succeeds.
   useEffect(() => {
     const ask = searchParams.get('ask')
-    if (!ask || ask.trim().length === 0 || askHandledRef.current || isStreaming) return
+    if (
+      !permits('portal.ask') || !ask || ask.trim().length === 0 || askHandledRef.current ||
+      isStreaming
+    ) return
     askHandledRef.current = true
     setSearchParams(
       (prev) => {
@@ -2124,6 +2163,7 @@ export function AskPage() {
 
   function startNewSession() {
     if (isStreaming) return
+    retireSession()
     setActiveSessionId(null)
     setMessages([])
     setFollowUps(null)
@@ -2131,7 +2171,7 @@ export function AskPage() {
   }
 
   function deleteSession(id: string) {
-    if (!researchStorageCurrent(storage)) return
+    if (!permits('portal.ask')) return
     if (isStreaming) return
     deletedIdsRef.current.add(id)
     setSessions((prev) => {
@@ -2149,6 +2189,7 @@ export function AskPage() {
       // Offline or server sync unavailable - it's already gone locally.
     })
     if (activeSessionId === id) {
+      retireSession()
       setActiveSessionId(null)
       setMessages([])
       setFollowUps(null)
@@ -2159,6 +2200,7 @@ export function AskPage() {
     if (isStreaming) return
     const session = sessions.find((item) => item.id === id)
     if (!session) return
+    retireSession()
     setActiveSessionId(id)
     setMessages(session.messages.map((message) => ({ ...message, pending: false })))
     // Follow-ups belong to the answer they were generated from, and a restored
@@ -2169,6 +2211,7 @@ export function AskPage() {
 
   /** Sets a custom session name, overriding the auto-title, and syncs it to the server. */
   function renameSession(id: string, title: string) {
+    if (!permits('portal.ask')) return
     setSessions((prev) => {
       if (!researchStorageCurrent(storage)) return []
       const next = prev.map((session) => session.id === id ? { ...session, title } : session)
@@ -2187,6 +2230,8 @@ export function AskPage() {
    * heading - because a follow-up that is not ready is simply not offered.
    */
   async function requestFollowUps(answer: ChatMessage | undefined, question: string) {
+    if (!permits('portal.generate')) return
+    const lifetime = sessionLifetime.current.signal
     if (!answer || answer.pending || answer.error || answer.refused) return
     if (answer.text.trim().length === 0 || question.trim().length === 0) return
     // The retrieved passages are the only thing a follow-up may be built from,
@@ -2203,9 +2248,9 @@ export function AskPage() {
       const result = await getFollowUpQuestions(
         config.slug,
         { question, answer: answer.text, passages },
-        controller.signal,
+        AbortSignal.any([controller.signal, lifetime]),
       )
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || lifetime.aborted || !permits('portal.generate')) return
       const questions = Array.isArray(result.questions) ? result.questions : []
       if (questions.length > 0) setFollowUps({ messageId: answer.id, questions })
     } catch {
@@ -2227,6 +2272,8 @@ export function AskPage() {
       route?: RouteDecision
     },
   ) {
+    if (!permits('portal.ask') || (options?.depth === 'deep' && !permits('portal.generate'))) return
+    const lifetime = sessionLifetime.current.signal
     // A new answer retires the last answer's follow-ups the moment it starts,
     // and closes the previous stream if its trailing quality scores are
     // still arriving (the composer is released on `done`, not at close).
@@ -2280,7 +2327,11 @@ export function AskPage() {
     const controller = new AbortController()
     abortRef.current = controller
 
+    const current = () =>
+      !lifetime.aborted && abortRef.current === controller && permits('portal.ask')
+
     function update(mutate: (message: ChatMessage) => ChatMessage) {
+      if (!current()) return
       working = working.map((message) => message.id === answerId ? mutate(message) : message)
       setMessages(working)
     }
@@ -2306,6 +2357,7 @@ export function AskPage() {
           ...(autoRoute ? { route: 'auto' as const } : {}),
         },
         (event: AskEvent) => {
+          if (!current()) return
           switch (event.type) {
             case 'route':
               update((message) => ({ ...message, route: event.decision }))
@@ -2455,6 +2507,7 @@ export function AskPage() {
         controller.signal,
       )
     } catch (thrown) {
+      if (!current()) return
       if (controller.signal.aborted) {
         update((existing) =>
           existing.text.length > 0
@@ -2477,26 +2530,29 @@ export function AskPage() {
         update((existing) => ({ ...existing, pending: false, error: message }))
       }
     } finally {
-      setIsStreaming(false)
-      setActiveStage(null)
-      setSeenStages(new Set())
-      abortRef.current = null
-      // A trail entry is an answer, not a failed transport: a session whose
-      // only assistant turns are errors is not saved (and is dropped again
-      // if an earlier save of the pending turn already wrote it).
-      if (hasAnsweredTurn(working)) persist(working, sessionId)
-      else forgetSession(sessionId)
-      // After the answer, never during it - and never after a Stop, which is
-      // the reader saying they have finished with this question.
-      if (!controller.signal.aborted) {
-        void requestFollowUps(working.find((message) => message.id === answerId), query)
+      if (current()) {
+        setIsStreaming(false)
+        setActiveStage(null)
+        setSeenStages(new Set())
+        abortRef.current = null
+        // A trail entry is an answer, not a failed transport: a session whose
+        // only assistant turns are errors is not saved (and is dropped again
+        // if an earlier save of the pending turn already wrote it).
+        if (hasAnsweredTurn(working)) persist(working, sessionId)
+        else forgetSession(sessionId)
+        // After the answer, never during it - and never after a Stop, which is
+        // the reader saying they have finished with this question.
+        if (!controller.signal.aborted) {
+          void requestFollowUps(working.find((message) => message.id === answerId), query)
+        }
       }
     }
   }
 
   async function send(query: string) {
     const trimmed = query.trim()
-    if (trimmed.length === 0 || isStreaming) return
+    if (!permits('portal.ask') || trimmed.length === 0 || isStreaming) return
+    const lifetime = sessionLifetime.current.signal
 
     const sessionId = activeSessionId ?? makeId()
     if (!activeSessionId) setActiveSessionId(sessionId)
@@ -2512,7 +2568,7 @@ export function AskPage() {
     setMessages(baseMessages)
     setDraft('')
 
-    if (deepResearch) {
+    if (deepResearch && permits('portal.generate')) {
       // Map the research space first: a few seconds of structured generation
       // that returns the sub-questions to research alongside the main one.
       // An empty result or a failed call just falls through to a normal deep
@@ -2525,11 +2581,16 @@ export function AskPage() {
       abortRef.current = mappingController
       let subqueries: string[] = []
       try {
-        const result = await getSubqueries(config.slug, trimmed)
+        const result = await getSubqueries(
+          config.slug,
+          trimmed,
+          AbortSignal.any([mappingController.signal, lifetime]),
+        )
         subqueries = Array.isArray(result.questions) ? result.questions : []
       } catch {
         subqueries = []
       }
+      if (lifetime.aborted || !permits('portal.generate')) return
       if (mappingController.signal.aborted) {
         setIsStreaming(false)
         setActiveStage(null)
@@ -2549,6 +2610,7 @@ export function AskPage() {
   }
 
   function retry(forMessageId: string) {
+    if (!permits('portal.ask')) return
     // Find the user message immediately preceding the failed answer message.
     const index = messages.findIndex((message) => message.id === forMessageId)
     if (index <= 0) return
@@ -2567,6 +2629,7 @@ export function AskPage() {
    * the thinly-grounded original so its suggestion bar doesn't offer again.
    */
   function reanswerDeeply(question: string, forMessageId: string) {
+    if (!permits('portal.ask') || !permits('portal.generate')) return
     if (isStreaming) return
     const marked = messages.map((message) =>
       message.id === forMessageId ? { ...message, healDismissed: true } : message
@@ -2587,7 +2650,7 @@ export function AskPage() {
 
   /** Re-ask the same question under another intent, chosen from the route chip. */
   function reroute(question: string, forMessageId: string, intentId: string) {
-    if (isStreaming || !question.trim()) return
+    if (!permits('portal.ask') || isStreaming || !question.trim()) return
     const intent = (config.intents ?? []).find((i) => i.id === intentId)
     if (!intent) return
     const isDefault = intentId === config.defaultIntent
@@ -2620,12 +2683,20 @@ export function AskPage() {
    * unobtrusive error text on failure without crashing anything.
    */
   async function sendFeedback(messageId: string, good: boolean, text?: string): Promise<boolean> {
+    if (!permits('portal.ask')) return false
+    const lifetime = sessionLifetime.current.signal
     const message = messages.find((item) => item.id === messageId)
     const sessionId = activeSessionId
     if (!message?.learningId || !sessionId) return false
     try {
-      await sendAnswerFeedback(config.slug, { learningId: message.learningId, good, text })
+      await sendAnswerFeedback(
+        config.slug,
+        { learningId: message.learningId, good, text },
+        lifetime,
+      )
+      if (lifetime.aborted || !permits('portal.ask')) return false
       setMessages((prev) => {
+        if (lifetime.aborted || !permits('portal.ask')) return prev
         const next = prev.map((item) =>
           item.id === messageId ? { ...item, feedbackGood: good, feedbackSubmitted: true } : item
         )
@@ -2644,8 +2715,10 @@ export function AskPage() {
    */
   function saveVerdicts(messageId: string, verdicts: Record<string, EvidenceVerdictInfo>) {
     const sessionId = activeSessionId
-    if (!sessionId) return
+    if (!sessionId || !permits('portal.generate')) return
+    const lifetime = sessionLifetime.current.signal
     setMessages((prev) => {
+      if (lifetime.aborted || !permits('portal.generate')) return prev
       const next = prev.map((item) => item.id === messageId ? { ...item, verdicts } : item)
       persist(next, sessionId)
       return next
@@ -2958,7 +3031,10 @@ export function AskPage() {
                             )}
                           onAskSubquery={(subquery) => void send(subquery)}
                           intents={config.intents ?? []}
-                          isAdmin={isAdmin}
+                          canInspectDiagnostics={canInspectDiagnostics}
+                          canGenerate={canGenerate}
+                          canAsk={canAsk}
+                          lifetime={sessionLifetime.current.signal}
                           onReroute={(intentId) =>
                             reroute(
                               messages[index - 1]?.author === 'USER'
@@ -2984,7 +3060,8 @@ export function AskPage() {
               * margin still clears the pinned bar on a phone with these
               * present. */
                   }
-                  {followUps && followUps.messageId === lastMessage?.id && !isStreaming
+                  {canGenerate && followUps && followUps.messageId === lastMessage?.id &&
+                      !isStreaming
                     ? (
                       <div
                         className='pt-1'
@@ -3085,36 +3162,42 @@ export function AskPage() {
                   </button>
                 )
                 : null}
-              <button
-                type='button'
-                onClick={() => setDeepResearch((prev) => !prev)}
-                disabled={isStreaming}
-                aria-pressed={deepResearch}
-                className={`rp-chip h-9 sm:h-7 ${deepResearch ? 'rp-chip-active' : ''}`}
-              >
-                <svg
-                  viewBox='0 0 24 24'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth={1.8}
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  className='h-4 w-4'
-                  aria-hidden='true'
-                >
-                  <circle cx='10.5' cy='11' r='5.8' />
-                  <path d='M14.8 15.2L20 20.4' />
-                  <path d='M18.6 2.6v3.6M16.8 4.4h3.6' />
-                </svg>
-                Deep research
-              </button>
+              {canGenerate
+                ? (
+                  <button
+                    type='button'
+                    onClick={() => {
+                      if (permits('portal.generate')) setDeepResearch((prev) => !prev)
+                    }}
+                    disabled={isStreaming}
+                    aria-pressed={deepResearch}
+                    className={`rp-chip h-9 sm:h-7 ${deepResearch ? 'rp-chip-active' : ''}`}
+                  >
+                    <svg
+                      viewBox='0 0 24 24'
+                      fill='none'
+                      stroke='currentColor'
+                      strokeWidth={1.8}
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      className='h-4 w-4'
+                      aria-hidden='true'
+                    >
+                      <circle cx='10.5' cy='11' r='5.8' />
+                      <path d='M14.8 15.2L20 20.4' />
+                      <path d='M18.6 2.6v3.6M16.8 4.4h3.6' />
+                    </svg>
+                    Deep research
+                  </button>
+                )
+                : null}
               {
                 /* One-off explanation, and it wraps onto a line of its own at
                 * 390px - a row the pinned bar would then charge to the thread
                 * every time deep research is on. The chip's active state says
                 * the same thing on a phone. */
               }
-              {deepResearch
+              {canGenerate && deepResearch
                 ? (
                   <span className='hidden text-xs text-ink-3 lg:inline'>
                     Maps sub-questions before answering - slower, more thorough.
@@ -3151,7 +3234,7 @@ export function AskPage() {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isStreaming}
+                disabled={!canAsk || isStreaming}
                 rows={1}
                 placeholder={isCompact ? undefined : 'Ask a question about this research'}
                 className='max-h-40 min-w-0 flex-1 resize-none rounded-[var(--rp-radius)] border-0 bg-transparent px-2 py-2 text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none disabled:opacity-60 lg:px-3'
@@ -3169,7 +3252,7 @@ export function AskPage() {
                 : (
                   <button
                     type='submit'
-                    disabled={draft.trim().length === 0}
+                    disabled={!canAsk || draft.trim().length === 0}
                     className='rp-btn rp-btn-primary shrink-0'
                   >
                     Send

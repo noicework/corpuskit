@@ -28,8 +28,6 @@ import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
 
 export type TenantOutletContext = {
   config: TenantConfig
-  /** @deprecated Consumers migrate to useAccess; never conveys authority. */
-  isAdmin?: false
 }
 
 function FullPageSpinner() {

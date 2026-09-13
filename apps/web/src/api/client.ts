@@ -1134,8 +1134,10 @@ export async function clientRequest<T>(
 export function sendAnswerFeedback(
   slug: string,
   input: { learningId: string; good: boolean; text?: string },
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/feedback`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
@@ -1158,8 +1160,13 @@ export function summarizeResources(
 
 // --- Deep research: decompose a question into sub-questions ------------------
 
-export function getSubqueries(slug: string, query: string): Promise<{ questions: string[] }> {
+export function getSubqueries(
+  slug: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<{ questions: string[] }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/subqueries`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query }),
@@ -1663,8 +1670,10 @@ export function getSourceVerdicts(
   slug: string,
   question: string,
   sources: { id: string; title: string; passage: string }[],
+  signal?: AbortSignal,
 ): Promise<{ verdicts: SourceVerdict[] }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/verdicts`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ question, sources: sources.slice(0, 12) }),
