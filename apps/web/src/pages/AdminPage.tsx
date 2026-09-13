@@ -1,81 +1,48 @@
-import { type ReactNode, useEffect, useLayoutEffect, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { getAdminOverview } from '../api/client.ts'
+import { useAccess } from '../components/AccessProvider.tsx'
 import { Skeleton } from '../components/ui.tsx'
 import { AddPortal } from './admin/AddPortal.tsx'
 import { MigratePanel } from './admin/MigratePanel.tsx'
 import { PortalRow } from './admin/PortalRow.tsx'
-import { type AuthSession, getAuthSession, microsoftLoginUrl } from '../api/auth.ts'
-import { EmergencyAccessProvider, useAdminAccess } from '../components/EmergencyAccess.tsx'
-
-/** A capability or identity change remounts forms and discards protected query results. */
-function AdminScope(
-  { session, children }: { session: AuthSession | undefined; children: ReactNode },
-) {
-  const client = useQueryClient()
-  useLayoutEffect(() => () => {
-    const filters = {
-      predicate: (query: { queryKey: readonly unknown[] }) => {
-        const key = String(query.queryKey[0])
-        return key.startsWith('admin-') ||
-          [
-            'kb-agents',
-            'kg-strategy',
-            'suggestions',
-            'extraction-methods',
-            'lab-pick',
-            'lab-pick-id',
-            'enrichment-agents',
-          ].includes(key)
-      },
-    }
-    void client.cancelQueries(filters)
-    client.removeQueries(filters)
-  }, [client])
-  return <EmergencyAccessProvider session={session}>{children}</EmergencyAccessProvider>
-}
+import { microsoftLoginUrl } from '../api/auth.ts'
+import {
+  EmergencyAccessProvider,
+  usePermissionAdminAccess,
+} from '../components/EmergencyAccess.tsx'
 
 export function AdminPageAccess({ children }: { children: ReactNode }) {
-  const { data: auth } = useQuery({
-    queryKey: ['auth-session'],
-    queryFn: getAuthSession,
-    staleTime: 60_000,
-    retry: false,
-  })
+  const { state, generation } = useAccess()
   useEffect(() => {
     sessionStorage.removeItem('rp-admin-passcode')
   }, [])
-  const identity = JSON.stringify([
-    auth?.user?.tenantId,
-    auth?.user?.id,
-    auth?.coarseAdminEligible === true,
-    auth?.breakGlassEnabled === true,
-  ])
-  return <AdminScope key={identity} session={auth}>{children}</AdminScope>
+  return (
+    <EmergencyAccessProvider key={generation} session={state.session}>
+      {children}
+    </EmergencyAccessProvider>
+  )
 }
 
 /** Session reads can refetch. An emergency result is a snapshot, never a session unlock. */
 export function useAdminOverview(scope: string) {
-  const { data: auth } = useQuery({
-    queryKey: ['auth-session'],
-    queryFn: getAuthSession,
-    staleTime: 60_000,
-    retry: false,
-  })
-  const { sessionAccess, runExplicit, coarseAdminEligible, breakGlassEnabled, pending } =
-    useAdminAccess()
+  const { state, identityKey, generation, controller } = useAccess()
+  const auth = state.session
+  const { sessionAccess, runExplicit, sessionAllowed, breakGlassEnabled, pending } =
+    usePermissionAdminAccess('portal.create', { kind: 'platform' })
   const query = useQuery({
-    queryKey: ['admin-overview', auth?.user?.tenantId ?? null, auth?.user?.id ?? null, scope],
+    queryKey: ['admin-overview', identityKey, generation, scope],
     queryFn: () => getAdminOverview(sessionAccess),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getAdminOverview>>>()
   const [operationError, setOperationError] = useState<string>()
   const refresh = async () => {
+    const context = controller.context
     setOperationError(undefined)
-    if (coarseAdminEligible) {
+    if (sessionAllowed) {
       await query.refetch()
       return
     }
@@ -84,18 +51,19 @@ export function useAdminOverview(scope: string) {
         'Read the knowledge box overview',
         (access) => getAdminOverview(access),
       )
+      controller.assertCurrent(context)
       if (result !== undefined) setSnapshot(result)
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : 'Could not load the overview.')
     }
   }
   return {
-    data: coarseAdminEligible ? query.data : snapshot,
+    data: sessionAllowed ? query.data : snapshot,
     isLoading: query.isLoading,
     error: operationError ?? (query.error instanceof Error ? query.error.message : undefined),
     refresh,
     pending,
-    coarseAdminEligible,
+    sessionAllowed,
     breakGlassEnabled,
     auth,
   }
@@ -106,7 +74,7 @@ export function OverviewAccess(
 ) {
   return (
     <div className='mt-5 space-y-4' data-admin-unavailable={!overview.data ? true : undefined}>
-      {!overview.coarseAdminEligible && (
+      {!overview.sessionAllowed && (
         <>
           <p className='text-sm text-ink-2'>
             {overview.data
@@ -116,19 +84,19 @@ export function OverviewAccess(
         </>
       )}
       <div className='flex flex-wrap gap-3'>
-        {!overview.coarseAdminEligible && (
+        {!overview.sessionAllowed && (
           <a href={microsoftLoginUrl(returnTo)} className='rp-btn rp-btn-primary'>
             Sign in with Microsoft
           </a>
         )}
-        {(overview.coarseAdminEligible || overview.breakGlassEnabled) && (
+        {(overview.sessionAllowed || overview.breakGlassEnabled) && (
           <button
             type='button'
             disabled={overview.pending}
             onClick={() => void overview.refresh()}
             className='rp-btn rp-btn-outline'
           >
-            {overview.coarseAdminEligible ? 'Refresh overview' : 'Use emergency access'}
+            {overview.sessionAllowed ? 'Refresh overview' : 'Use emergency access'}
           </button>
         )}
       </div>

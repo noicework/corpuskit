@@ -100,6 +100,13 @@ Deno.test('session access sends no credentials and all legacy strings fail befor
   }
 })
 
+Deno.test('administration overview uses the exact platform permission', async () => {
+  const source = await Deno.readTextFile(new URL('../pages/AdminPage.tsx', import.meta.url))
+  expect(source).toContain("usePermissionAdminAccess('portal.create', { kind: 'platform' })")
+  expect(source).not.toContain('coarseAdminEligible')
+  expect(source).not.toContain('function AdminScope')
+})
+
 Deno.test('browser source inventory contains no credential bridge, persistence or query leases', async () => {
   async function inspect(directory: URL): Promise<void> {
     for await (const entry of Deno.readDir(directory)) {

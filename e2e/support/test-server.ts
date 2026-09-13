@@ -11,6 +11,7 @@ import { buildApp } from '../../apps/api/src/app.ts'
 import { TenantStore } from '../../apps/api/src/tenants.ts'
 import { DoubleProvider } from './double-provider.ts'
 import type { AccessMode, Role, Scope } from '@research-portal/core'
+import { authorize, normalisePrincipal, PERMISSIONS } from '@research-portal/core'
 import type { TrustedSessionFacts } from '../../apps/api/src/principal.ts'
 import { openLocalRbac } from '../../apps/api/src/rbac-local.ts'
 import { LocalIngress } from '../../apps/api/src/local-ingress.ts'
@@ -228,6 +229,12 @@ export function startTestServer(options: {
             return Response.json({})
           }
           const signedIn = fixture.state.capability === 'session'
+          const slug = new URL(request.url).searchParams.get('portal')
+          const available = signedIn && !!slug && ['alpha', 'beta', 'marine'].includes(slug)
+          const principal = normalisePrincipal(
+            { kind: 'user', tenantId: 'fixture', oid: 'fixture' },
+            { platformRole: 'owner', portalRoles: [] },
+          )
           return Response.json({
             authenticated: signedIn,
             user: signedIn
@@ -242,12 +249,24 @@ export function startTestServer(options: {
               : null,
             coarseAdminEligible: signedIn,
             breakGlassEnabled: fixture.state.capability === 'enabled',
-            effectiveRoles: { platformRole: signedIn ? 'owner' : null, portalRoles: [] },
+            effectiveRoles: { ...(signedIn ? { platformRole: 'owner' } : {}), portalRoles: [] },
             provenance: [],
             claimAgeSeconds: signedIn ? 0 : null,
             groupMappings: 'disabled',
-            platformPermissions: [],
-            portalAccess: null,
+            platformPermissions: signedIn ? ['portal.create'] : [],
+            portalAccess: slug
+              ? {
+                slug,
+                available,
+                permissions: available
+                  ? PERMISSIONS.filter((permission) =>
+                    authorize(principal, permission, { kind: 'portal', slug })
+                  )
+                  : [],
+                effectiveRole: available ? 'portal-admin' : null,
+                canEnable: false,
+              }
+              : null,
           })
         }
         if (path === '/api/admin/__test/emergency-action') {

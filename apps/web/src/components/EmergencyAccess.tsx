@@ -10,6 +10,9 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { AuthSession } from '../api/auth.ts'
+import type { Permission, Scope } from '@research-portal/core'
+import { useAccess, useScopeAccess } from './AccessProvider.tsx'
+import { currentAuthority } from '../api/access-lifecycle.ts'
 import {
   AdminAccessError,
   type AdminRequestAccess,
@@ -19,11 +22,16 @@ import {
 
 export interface AdminAccess {
   breakGlassEnabled: boolean
-  coarseAdminEligible: boolean
+  /** Compatibility for unmigrated consumers, never grants automatic reads. */
+  coarseAdminEligible: false
   pending: boolean
   sessionAccess: AdminRequestAccess
   /** Invoke from a user event with one concrete operation, never from a query or effect. */
   runExplicit<T>(
+    label: string,
+    action: (access: AdminRequestAccess) => Promise<T>,
+  ): Promise<T | undefined>
+  runEmergency<T>(
     label: string,
     action: (access: AdminRequestAccess) => Promise<T>,
   ): Promise<T | undefined>
@@ -44,12 +52,41 @@ export function useAdminAccess(): AdminAccess {
   return access
 }
 
+/** Normal authority is always the requested server permission in the exact scope. */
+export function usePermissionAdminAccess(permission: Permission, scope: Scope) {
+  const authority = useAccess()
+  const emergency = useAdminAccess()
+  const context = authority.controller.context
+  const separateScope = scope.kind === 'portal' && authority.slug !== scope.slug
+  const leaf = useScopeAccess(separateScope ? scope.slug : null)
+  const allowed = () => separateScope ? leaf.can(permission) : authority.can(permission, scope)
+  const sessionAllowed = allowed()
+  const permittedAccess: AdminRequestAccess = {
+    request(input, init) {
+      authority.controller.assertCurrent(context)
+      if (!allowed()) return Promise.reject(new AdminAccessError())
+      return sessionAccess.request(input, init)
+    },
+  }
+  return {
+    sessionAllowed,
+    sessionAccess: permittedAccess,
+    pending: emergency.pending,
+    breakGlassEnabled: emergency.breakGlassEnabled,
+    runExplicit<T>(label: string, action: (access: AdminRequestAccess) => Promise<T>) {
+      authority.controller.assertCurrent(context)
+      if (allowed()) return action(permittedAccess)
+      return emergency.runEmergency(label, action)
+    },
+  }
+}
+
 export function EmergencyAccessProvider({ session, children }: {
   session: AuthSession | null | undefined
   children: ReactNode
 }) {
   const enabled = session?.breakGlassEnabled === true
-  const eligible = session?.coarseAdminEligible === true
+
   const [pending, setPending] = useState<PendingOperation | null>(null)
   const pendingRef = useRef<PendingOperation | null>(null)
   const [sending, setSending] = useState(false)
@@ -94,6 +131,17 @@ export function EmergencyAccessProvider({ session, children }: {
       } else cancel()
     }
   }, [enabled, cancel, clearInput])
+
+  useEffect(() =>
+    currentAuthority()?.registerCleanup(() => {
+      clearInput()
+      const operation = pendingRef.current
+      pendingRef.current = null
+      setPending(null)
+      setError(null)
+      if (sendingRef.current) operation?.reject(new AdminAccessError())
+      else operation?.resolve(undefined)
+    }), [clearInput])
 
   useEffect(() => {
     mountedRef.current = true
@@ -175,14 +223,13 @@ export function EmergencyAccessProvider({ session, children }: {
     }
   }, [open, cancel, clearInput])
 
-  const runExplicit = useCallback(<T,>(
+  const runEmergency = useCallback(<T,>(
     label: string,
     action: (access: AdminRequestAccess) => Promise<T>,
   ): Promise<T | undefined> => {
     if (!label.trim() || pendingRef.current || sendingRef.current) {
       return Promise.reject(new Error('An action is already pending or unnamed.'))
     }
-    if (eligible) return action(sessionAccess)
     if (!enabled) return Promise.reject(new Error('Emergency access is unavailable.'))
     return new Promise<T | undefined>((resolve, reject) => {
       const operation: PendingOperation = {
@@ -195,7 +242,11 @@ export function EmergencyAccessProvider({ session, children }: {
       setError(null)
       setPending(operation)
     })
-  }, [eligible, enabled])
+  }, [enabled])
+
+  // Compatibility is operation-only. Untouched consumers gain no automatic query authority.
+  const runExplicit: AdminAccess['runExplicit'] = (label, action) =>
+    session?.authenticated ? action(sessionAccess) : runEmergency(label, action)
 
   async function confirm() {
     const operation = pendingRef.current
@@ -237,10 +288,11 @@ export function EmergencyAccessProvider({ session, children }: {
     <AdminAccessContext.Provider
       value={{
         breakGlassEnabled: enabled,
-        coarseAdminEligible: eligible,
+        coarseAdminEligible: false,
         pending: pending !== null,
         sessionAccess,
         runExplicit,
+        runEmergency,
       }}
     >
       {children}
