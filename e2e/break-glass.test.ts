@@ -1051,7 +1051,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await click(page!, '[data-behaviour-read=prompts]')
       await page!.waitForSelector('[data-behaviour-prompt]:not(:disabled)')
       const sessionBehaviourStart = requests.length
-      console.log('Checking unmigrated behaviour polling remains disabled')
+      console.log('Checking authorised behaviour polling remains permission scoped')
       await new Promise((resolve) => setTimeout(resolve, 31_000))
       await page!.bringToFront()
       await page!.evaluate(() => {
@@ -1059,7 +1059,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       })
       await settle(page!)
       expect(requests.slice(sessionBehaviourStart).some((r) => r.path.endsWith('/routing'))).toBe(
-        false,
+        true,
       )
       await click(page!, '[data-behaviour-read=routing]')
       expect(requests.slice(sessionBehaviourStart).every((r) => !r.emergency)).toBe(true)

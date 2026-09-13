@@ -1,4 +1,5 @@
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -12,8 +13,14 @@ import { errorMessage, type Message } from './shared.ts'
  * topic taxonomy, the graph dimensions and the suggested questions, and
  * applies all of it - live progress below.
  */
-export function AnalysePanel({ slug }: { slug: string }) {
-  const { runExplicit, coarseAdminEligible } = useAdminAccess()
+function AnalysePanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAllowed } = usePermissionAdminAccess('behaviour.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState<AnalyseEvent[]>([])
@@ -28,6 +35,7 @@ export function AnalysePanel({ slug }: { slug: string }) {
         let completed = false
         let failed = false
         await analysePortal(slug, access, (event) => {
+          assertCurrent()
           setLog((prev) => [...prev, event])
           if (event.type === 'error') failed = true
           if (event.type === 'done') {
@@ -46,12 +54,14 @@ export function AnalysePanel({ slug }: { slug: string }) {
         if (!completed || failed) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) await queryClient.invalidateQueries()
+      if (sessionAllowed) await queryClient.invalidateQueries()
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Analysis failed - please retry.') })
     } finally {
-      setRunning(false)
+      if (context === authority.controller.context) setRunning(false)
     }
   }
 
@@ -102,4 +112,17 @@ export function AnalysePanel({ slug }: { slug: string }) {
       {message && <MessagePanel message={message} className='mt-3' />}
     </div>
   )
+}
+
+export function AnalysePanel(props: { slug: string }) {
+  const authority = useAccess()
+  const permission = usePermissionAdminAccess('behaviour.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (
+    authority.state.status !== 'ready' ||
+    (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <AnalysePanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

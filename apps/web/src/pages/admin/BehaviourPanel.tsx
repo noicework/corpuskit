@@ -1,3 +1,4 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -11,7 +12,7 @@ import {
 import { intentSummary } from '../../components/RouteChip.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 
 type Prompts = Awaited<ReturnType<typeof getPrompts>>
@@ -48,7 +49,13 @@ function validRouting(value: Routing): Routing {
  * librarian override it, and saves straight back through the admin API.
  */
 function AskPromptEditor({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
+    'behaviour.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [value, setValue] = useState('')
   const [images, setImages] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -58,7 +65,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
   const { data, isError } = useQuery({
     queryKey: ['admin-prompts', slug],
     queryFn: async () => validPrompts(await getPrompts(slug, sessionAccess)),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
 
@@ -78,14 +85,16 @@ function AskPromptEditor({ slug }: { slug: string }) {
         'Load the current ask prompt',
         async (access) => validPrompts(await getPrompts(slug, access)),
       )
+      assertCurrent()
       if (result === undefined) return
       setValue(result.ask ?? '')
       setImages(result.images ?? false)
       setLoaded(true)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load the prompt.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -98,12 +107,14 @@ function AskPromptEditor({ slug }: { slug: string }) {
         if (saved?.ok !== true) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (result === undefined) return
       setMessage({ tone: 'ok', text: 'Saved - the new prompt applies to the next answer.' })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the prompt.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -170,7 +181,13 @@ function AskPromptEditor({ slug }: { slug: string }) {
 
 /** Search configurations block: create the platform defaults and inspect what's there. */
 function SearchConfigsBlock({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
+    'behaviour.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<string[] | null>(null)
@@ -180,10 +197,10 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
   const { data: sessionData, refetch, isLoading, isError } = useQuery({
     queryKey: ['admin-search-configs', slug],
     queryFn: async () => validConfigs(await getSearchConfigs(slug, sessionAccess)),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
-  const data = coarseAdminEligible ? sessionData : snapshot
+  const data = sessionAllowed ? sessionData : snapshot
 
   const onLoad = async () => {
     setBusy(true)
@@ -193,16 +210,18 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
         'Load search configurations',
         async (access) => validConfigs(await getSearchConfigs(slug, access)),
       )
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['admin-search-configs', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['admin-search-configs', slug], result)
       else setSnapshot(result)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Could not load search configurations.'),
       })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -218,6 +237,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
         ) throw new AdminAccessError()
         return saved
       })
+      assertCurrent()
       if (result === undefined) return
       setCreated(result.created)
       setMessage({
@@ -228,14 +248,15 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
           }.`
           : 'All default configurations already exist.',
       })
-      if (coarseAdminEligible) await refetch()
+      if (sessionAllowed) await refetch()
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Could not create the default configurations.'),
       })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -310,7 +331,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
  * Behaviour: the portal's grounded-answer system prompt and its search
  * configurations. Both are platform-facing settings, not content.
  */
-export function BehaviourPanel({ slug }: { slug: string }) {
+function BehaviourPanelContent({ slug }: { slug: string }) {
   return (
     <div className='space-y-4'>
       <AskPromptEditor slug={slug} />
@@ -333,7 +354,13 @@ function IntentsTable(
     error: boolean
   },
 ) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
+    'behaviour.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [snapshot, setSnapshot] = useState<Routing | null>(null)
   const [busy, setBusy] = useState(false)
@@ -345,11 +372,11 @@ function IntentsTable(
   const { data: sessionRouting } = useQuery({
     queryKey: ['admin-routing', slug],
     queryFn: async () => validRouting(await getRouting(slug, sessionAccess)),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
-    refetchInterval: coarseAdminEligible ? 30_000 : false,
+    refetchInterval: sessionAllowed ? 30_000 : false,
   })
-  const routing = coarseAdminEligible ? sessionRouting : snapshot
+  const routing = sessionAllowed ? sessionRouting : snapshot
   const onLoad = async () => {
     setBusy(true)
     setMessage(null)
@@ -358,13 +385,15 @@ function IntentsTable(
         'Load routing activity',
         async (access) => validRouting(await getRouting(slug, access)),
       )
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['admin-routing', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['admin-routing', slug], result)
       else setSnapshot(result)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load routing activity.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
   const intents = config?.intents ?? []
@@ -467,4 +496,17 @@ function IntentsTable(
       </div>
     </div>
   )
+}
+
+export function BehaviourPanel(props: { slug: string }) {
+  const authority = useAccess()
+  const permission = usePermissionAdminAccess('behaviour.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (
+    authority.state.status !== 'ready' ||
+    (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <BehaviourPanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }
