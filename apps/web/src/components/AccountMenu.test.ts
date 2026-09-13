@@ -1,17 +1,44 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import { accountTriggerAttributes, nextAccountMenuIndex } from './account-menu-behaviour.ts'
+import {
+  accountEntries,
+  accountTriggerAttributes,
+  nextAccountMenuIndex,
+  roleLabel,
+} from './account-menu-behaviour.ts'
 
 const tenantLayoutSource = await Deno.readTextFile(
   new URL('../pages/TenantLayout.tsx', import.meta.url),
 )
 
 describe('AccountMenu', () => {
-  it('gates both desktop and mobile integrations on the authenticated administrator signal', () => {
-    expect(tenantLayoutSource).toContain(
-      'const accountIsAdmin = auth?.user?.isAdmin === true',
+  it('supplies explicit entries to both desktop and mobile controls', () => {
+    expect(tenantLayoutSource.match(/entries=\{menuEntries\}/g)?.length).toBe(2)
+    expect(tenantLayoutSource).not.toContain('accountIsAdmin')
+  })
+
+  it('uses permissions at their exact scope, never display roles or emergency availability', () => {
+    expect(accountEntries('marine', () => false)).toEqual([])
+    const portal = accountEntries(
+      'marine',
+      (permission, scope) =>
+        scope.kind === 'portal' && scope.slug === 'marine' && permission === 'members.manage',
     )
-    expect(tenantLayoutSource.match(/isAdmin=\{accountIsAdmin\}/g)?.length).toBe(2)
+    expect(portal).toEqual([{ label: 'Manage', href: '/t/marine/manage' }])
+    const platform = accountEntries(
+      'marine',
+      (permission, scope) => scope.kind === 'platform' && permission === 'portal.create',
+    )
+    expect(platform).toEqual([{ label: 'Connections', href: '/admin' }])
+    expect(
+      accountEntries(
+        'marine',
+        (permission, scope) =>
+          scope.kind === 'platform' && permission === 'platform.members.manage',
+      ),
+    ).toEqual([{ label: 'People', href: '/admin/people' }])
+    expect(roleLabel('portal-admin')).toBe('Portal administrator')
+    expect(roleLabel(null)).toBe(null)
   })
 
   it('keeps non-admin and anonymous controls as dialog buttons without disclosure state', () => {

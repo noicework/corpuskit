@@ -12,6 +12,7 @@ import {
 } from '../lib/theme.ts'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
+import { accountEntries, roleLabel } from '../components/account-menu-behaviour.ts'
 import { HelpItemIcon, HelpMenu } from '../components/HelpMenu.tsx'
 import { helpMenuItems } from '../components/help-menu-items.ts'
 import { pageTitle } from '../lib/page-title.ts'
@@ -23,8 +24,8 @@ import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
 
 export type TenantOutletContext = {
   config: TenantConfig
-  /** True for a signed-in administrator; developer-facing widgets show only then. */
-  isAdmin?: boolean
+  /** @deprecated Consumers migrate to useAccess; never conveys authority. */
+  isAdmin?: false
 }
 
 function FullPageSpinner() {
@@ -128,7 +129,9 @@ export function TenantLayout() {
   const access = useAccess()
   const auth = access.state.session
   const accountLabel = auth?.user?.name || ACCOUNT_LABEL
-  const accountIsAdmin = !!slug && access.can('behaviour.write', { kind: 'portal', slug })
+  const menuEntries = slug ? accountEntries(slug, access.can) : []
+  const portalRole = auth?.user ? roleLabel(auth.portalAccess?.effectiveRole) : null
+  const platformRole = auth?.user ? roleLabel(auth.effectiveRoles.platformRole) : null
   const headerRef = useRef<HTMLElement | null>(null)
   const navPanelRef = useRef<HTMLElement | null>(null)
   const navTriggerRef = useRef<HTMLButtonElement | null>(null)
@@ -488,9 +491,11 @@ export function TenantLayout() {
               </span>
               <span className='hidden sm:inline-flex'>
                 <AccountMenu
-                  isAdmin={accountIsAdmin}
+                  entries={menuEntries}
+                  portalRole={portalRole}
+                  platformRole={platformRole}
+                  portalName={config.branding.productName}
                   label={accountLabel}
-                  manageHref='/admin'
                   onProfile={() => setSignInOpen(true)}
                 />
               </span>
@@ -640,9 +645,11 @@ export function TenantLayout() {
                 </NavLink>
               ))}
               <AccountMenu
-                isAdmin={accountIsAdmin}
+                entries={menuEntries}
+                portalRole={portalRole}
+                platformRole={platformRole}
+                portalName={config.branding.productName}
                 label={accountLabel}
-                manageHref='/admin'
                 variant='mobile'
                 onProfile={() => {
                   navRestoreFocus.current = false
@@ -667,7 +674,7 @@ export function TenantLayout() {
 
       {/* Keyed on the path so each route change replays the entrance. */}
       <div key={location.pathname} className='rp-page-enter'>
-        <Outlet context={{ config, isAdmin: accountIsAdmin } satisfies TenantOutletContext} />
+        <Outlet context={{ config } satisfies TenantOutletContext} />
       </div>
 
       {
