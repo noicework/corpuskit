@@ -277,7 +277,11 @@ for (const adapter of ['local', 'durable'] as const) {
           'tenant-1',
           f.now(),
         )
-      expect(await resolve()).toEqual({ proven: true, role: null, reason: 'creator_no_access' })
+      expect(await resolve()).toEqual({
+        proven: true,
+        role: null,
+        reason: 'creator_claims_expired',
+      })
       const assigned = f.service.create({ ...owner('creator'), role: 'platform-admin' }, context)
       expect(assigned.ok).toBe(true)
       expect(await resolve()).toEqual({ proven: true, role: 'portal-admin', reason: 'active' })
@@ -290,7 +294,11 @@ for (const adapter of ['local', 'durable'] as const) {
         )).effectiveRoles,
       ).toEqual({ portalRoles: [] })
       if (assigned.ok) expect(f.service.remove(assigned.value.id, context).ok).toBe(true)
-      expect((await resolve()).role).toBeNull()
+      expect(await resolve()).toEqual({
+        proven: true,
+        role: null,
+        reason: 'creator_claims_expired',
+      })
     } finally {
       f.close()
     }
