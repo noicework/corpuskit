@@ -17,7 +17,7 @@ import {
   sessionAccess,
 } from './break-glass.ts'
 import { getAdminOverview, migrateKb, uploadAdminFile } from './client.ts'
-import { getAuthSession } from './auth.ts'
+import { AuthSessionError, getAuthSession } from './auth.ts'
 
 Deno.test('one confirmation dispatches once and cannot retain access', async () => {
   const original = globalThis.fetch
@@ -154,11 +154,18 @@ Deno.test('failed and malformed capability responses fail closed', async () => {
   try {
     for (const value of [null, {}, { authenticated: false, breakGlassEnabled: 'true' }]) {
       globalThis.fetch = () => Promise.resolve(Response.json(value))
-      assertEquals((await getAuthSession()).breakGlassEnabled, false)
-      assertEquals((await getAuthSession()).coarseAdminEligible, false)
+      const error = await assertRejects(() => getAuthSession())
+      expect(error).toBeInstanceOf(AuthSessionError)
+      expect(error).toMatchObject({
+        status: 'unavailable',
+        platformPermissions: [],
+        portalAccess: null,
+        breakGlassEnabled: false,
+        coarseAdminEligible: false,
+      })
     }
     globalThis.fetch = () => Promise.reject(new Error('network'))
-    assertEquals((await getAuthSession()).breakGlassEnabled, false)
+    expect(await assertRejects(() => getAuthSession())).toBeInstanceOf(AuthSessionError)
   } finally {
     globalThis.fetch = original
   }
