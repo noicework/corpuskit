@@ -472,6 +472,8 @@ export function sessionFor(
 export function createEnforcementFixture(
   options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> & {
     breakGlassPolicy?: BreakGlassPolicy
+    /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
+    identityConfigured?: boolean
   } = {},
   ownedAdapter: 'durable' | 'local' = 'durable',
 ) {
@@ -582,10 +584,11 @@ export function createEnforcementFixture(
       actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
     }
   }
+  const { identityConfigured: _identityConfigured, ...appOptions } = options
   const app = buildApp({
     ...stores,
-    ...options,
-    configuredTenantId: tenantId,
+    ...appOptions,
+    configuredTenantId: options.identityConfigured === false ? undefined : tenantId,
     audience,
     now,
     provider,

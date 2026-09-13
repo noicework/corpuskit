@@ -39,6 +39,7 @@ import {
   type RequestAuthority,
   researchOwner as resolveResearchOwner,
   selectRequestAuthority,
+  UNCONFIGURED_TENANT_ID,
 } from './authorisation.ts'
 import {
   AccessModeSchema,
@@ -1096,12 +1097,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!opts.audit) throw new AuditWriteError()
     return opts.audit
   }
+  // Without ENTRA_TENANT_ID the deployment has no sign-in; anonymous public access must still
+  // work, so the authority stack is built against a tenant no real session can match.
+  const configuredTenantId = opts.configuredTenantId || UNCONFIGURED_TENANT_ID
   const authorityDependencies: AuthorityDependencies | undefined =
-    opts.rbac && opts.configuredTenantId && opts.audience && opts.audit && opts.breakGlass
+    opts.rbac && opts.audience && opts.audit && opts.breakGlass
       ? {
         keys: mcpKeys,
         creatorStores: { rbac: opts.rbac, audience: opts.audience },
-        configuredTenantId: opts.configuredTenantId,
+        configuredTenantId,
         tenants,
         audit: opts.audit,
         breakGlass: opts.breakGlass,
@@ -1169,13 +1173,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
           return deny(scope)
         }
         AccessModeSchema.parse(current.accessMode)
-        if (opts.configuredTenantId) {
-          policy = PortalPolicySchema.parse({
-            slug: current.slug,
-            accessMode: current.accessMode,
-            ...(opts.configuredTenantId ? { configuredTenantId: opts.configuredTenantId } : {}),
-          })
-        }
+        policy = PortalPolicySchema.parse({
+          slug: current.slug,
+          accessMode: current.accessMode,
+          configuredTenantId,
+        })
       } catch {
         return deny(scope)
       }
@@ -1220,13 +1222,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
           const policy = {
             slug,
             accessMode: config.accessMode,
-            configuredTenantId: opts.configuredTenantId,
+            configuredTenantId: configuredTenantId,
           }
           // Candidate filtering is pure: a hidden portal must not latch a request denial.
           const principal = selected.kind === 'break-glass'
             ? normalisePrincipal({
               kind: 'user',
-              tenantId: opts.configuredTenantId,
+              tenantId: configuredTenantId,
               oid: 'break-glass',
             }, { platformRole: 'owner', portalRoles: [] })
             : normalisePrincipal(
@@ -1251,7 +1253,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
               }, {
                 slug: config.slug,
                 accessMode: config.accessMode,
-                configuredTenantId: opts.configuredTenantId,
+                configuredTenantId: configuredTenantId,
               })
             }
           } finally {
@@ -1460,7 +1462,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           action.permission,
           { kind: 'portal', slug },
           config &&
-            { slug, accessMode: config.accessMode, configuredTenantId: opts.configuredTenantId },
+            { slug, accessMode: config.accessMode, configuredTenantId: configuredTenantId },
         )
       }
     } finally {
@@ -1696,10 +1698,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return { requestId: context.requestId, actor: context.actor }
     },
     assignments: () => {
-      if (!opts.rbac || !opts.configuredTenantId || !opts.audience) {
+      if (!opts.rbac || !opts.audience) {
         throw new AuthorisationError(403)
       }
-      return opts.rbac.assignmentService(opts.configuredTenantId, opts.audience)
+      return opts.rbac.assignmentService(configuredTenantId, opts.audience)
     },
     groupCapability: () =>
       opts.rbac && opts.audience &&
