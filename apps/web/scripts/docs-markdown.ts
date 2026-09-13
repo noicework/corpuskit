@@ -66,7 +66,7 @@ function validateSource(source: string): void {
       continue
     }
     if (fenced) continue
-    if (/^\s*(?:```|~~~|>|\||#{7}|[-*_](?:\s*[-*_]){2,}\s*$)|^ {4}\S|\t| {2}$/.test(line)) {
+    if (/^\s*(?:```|~~~|>|\||#{7}|=+\s*$|[-*_](?:\s*[-*_]){2,}\s*$)|^ {4}\S|\t| {2}$/.test(line)) {
       throw new Error(`Unrecognised block syntax: ${line}`)
     }
     const bullet = /^( *)([-*+]|\d+[.)])\s+(.*)$/.exec(line)

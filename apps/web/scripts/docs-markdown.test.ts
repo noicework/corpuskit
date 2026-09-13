@@ -34,6 +34,7 @@ Deno.test('documentation renders headings, paragraphs, emphasis, code, lists and
 Deno.test('new or malformed Markdown fails loudly rather than shipping raw or lost syntax', () => {
   for (
     const source of [
+      'A setext heading\n===',
       '**Unclosed',
       '`unclosed',
       '~~strike~~',

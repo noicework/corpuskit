@@ -50,6 +50,7 @@
   .docs-mobile-nav[open] nav { padding: 1rem; border: 1px solid var(--rule); border-top: 0; }
 }
 @media (max-width: 680px) {
+  .docs-main h1 { font-size: clamp(2rem, 8vw, 2.5rem); }
   .docs-pagination { grid-template-columns: minmax(0, 1fr); }
   .docs-main .intro { padding-block: 3rem 2rem; }
   .docs-prose :is(h2, h3, h4, h5, h6) { scroll-margin-top: 1rem; }
