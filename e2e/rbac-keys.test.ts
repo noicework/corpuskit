@@ -10,6 +10,130 @@ import {
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 
 const logs = Deno.env.get('RBAC_KEYS_LOG_ROOT') ?? '.planning/logs/04-15-01'
+
+Deno.test('reader Tools supports public keyless MCP and exact permission links without key reads', async () => {
+  const server = startTestServer()
+  const browser = await launch(), page = await browser.newPage(`${server.url}/t/marine/tools`)
+  try {
+    await page.bringToFront()
+    await page.waitForSelector('[data-tools-page]')
+    await assertCurrentBuild(page)
+    expect(await page.$('[data-manage-keys-link]')).toBeNull()
+    expect(await page.$('#extraction-lab-heading')).toBeNull()
+    expect(
+      await page.evaluate(() => document.querySelector('[data-mcp-configuration]')!.textContent),
+    ).not.toContain('Authorization')
+    const mcp = await page.evaluate(async () => {
+      const response = await fetch('/api/t/marine/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      })
+      const body = await response.json()
+      return { status: response.status, tools: body.result?.tools?.length }
+    })
+    expect(mcp.status).toBe(200)
+    expect(mcp.tools).toBeGreaterThan(0)
+    for (const scheme of ['light', 'dark']) {
+      server.tenants.patchBranding('marine', {
+        paletteId: scheme === 'dark' ? 'observatory' : 'default',
+        shape: scheme === 'dark' ? 'soft' : 'square',
+        density: 'spacious',
+        typography: 'lexend-zilla',
+      })
+      await page.evaluate((scheme) => localStorage.setItem('rp-scheme', scheme), { args: [scheme] })
+      await page.goto(`${server.url}/t/marine/tools`)
+      await page.waitForSelector('[data-tools-page]')
+      for (const width of [1440, 390]) {
+        await capture(page, `tools-reader-${scheme}-${width}`, width, '#connector-heading')
+      }
+      await page.evaluate(() =>
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: { writeText: () => Promise.resolve() },
+        })
+      )
+      await click(page, 'Copy connection details')
+      await page.waitForFunction(() =>
+        document.querySelector('[data-tools-page] [role=status]')?.textContent ===
+          'Connection details copied.'
+      )
+    }
+    expect(server.requests.some((r) => r.path.includes('/mcp/keys'))).toBe(false)
+    server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
+    await page.goto(`${server.url}/t/marine/tools`)
+    await page.waitForSelector('[data-tools-page]')
+    await page.evaluate(() => {
+      const original = globalThis.fetch
+      globalThis.fetch = async (input, init) => {
+        const response = await original(input, init)
+        if (!String(input).startsWith('/auth/me')) return response
+        const snapshot = await response.json()
+        snapshot.user.isAdmin = true
+        snapshot.coarseAdminEligible = true
+        return Response.json(snapshot)
+      }
+      dispatchEvent(new Event('focus'))
+    })
+    await page.waitForSelector('[data-tools-page]')
+    expect(await page.$('[data-manage-keys-link]')).toBeNull()
+    expect(await page.$('#extraction-lab-heading')).toBeNull()
+    server.setIdentity(fixtureSession({ oid: 'fixture-curator' }))
+    await page.goto(`${server.url}/t/marine/tools`)
+    await page.waitForSelector('#extraction-lab-heading')
+    expect(await page.$('[data-manage-keys-link]')).toBeNull()
+    for (const mode of ['authenticated', 'restricted'] as const) {
+      server.setAccessMode('marine', mode)
+      await page.goto(`${server.url}/t/marine/tools`)
+      await page.waitForSelector('[data-tools-page]')
+      expect(await page.evaluate(() => document.querySelector('[data-mcp-guidance]')!.textContent))
+        .toContain('authorised session')
+      expect(
+        await page.evaluate(() => document.querySelector('[data-mcp-configuration]')!.textContent),
+      ).toContain('YOUR_KEY')
+    }
+    expect(server.requests.some((r) => r.path.includes('/mcp/keys'))).toBe(false)
+    server.setIdentity(fixtureSession({ oid: 'fixture-portal-admin' }))
+    await page.goto(`${server.url}/t/marine/tools`)
+    await page.waitForSelector('[data-manage-keys-link]')
+    for (const scheme of ['light', 'dark']) {
+      server.tenants.patchBranding('marine', {
+        paletteId: scheme === 'dark' ? 'observatory' : 'default',
+        shape: 'soft',
+        density: 'comfortable',
+        typography: 'lexend-zilla',
+      })
+      await page.evaluate((scheme) => localStorage.setItem('rp-scheme', scheme), { args: [scheme] })
+      await page.goto(`${server.url}/t/marine/tools`)
+      await page.waitForSelector('[data-manage-keys-link]')
+      for (const width of [1440, 390]) {
+        await capture(page, `tools-manager-${scheme}-${width}`, width, '#connector-heading')
+        await capture(page, `tools-actions-${scheme}-${width}`, width, '[data-manage-keys-link]')
+        await capture(page, `tools-extraction-${scheme}-${width}`, width, '#extraction-lab-heading')
+      }
+    }
+    expect(server.requests.some((r) => r.path.includes('/mcp/keys'))).toBe(false)
+    await click(page, 'Manage portal keys', 'a')
+    await page.waitForSelector('[data-keys-panel]')
+    await page.waitForFunction(() => document.activeElement?.id === 'access-keys')
+    expect(await page.evaluate(() => location.pathname + location.search + location.hash)).toBe(
+      '/t/marine/manage?tab=access#access-keys',
+    )
+    expect(
+      await page.evaluate(() => {
+        const rect = document.getElementById('access-keys')!.getBoundingClientRect()
+        return rect.top >= 0 && rect.top < innerHeight
+      }),
+    ).toBe(true)
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
+  }
+})
 async function click(page: Page, text: string, selector = 'button') {
   await page.evaluate((text, selector) => {
     const button = [...document.querySelectorAll<HTMLElement>(selector)].find((b) =>
@@ -51,6 +175,15 @@ async function capture(page: Page, name: string, width: number, selector: string
     ),
   ).toBe(true)
   await captureBoundary(page, logs, name, width)
+  if (name.startsWith('tools-')) {
+    expect(
+      await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>('[data-tools-page] .rp-btn')].every((element) =>
+          element.scrollHeight <= element.clientHeight + 1
+        )
+      ),
+    ).toBe(true)
+  }
   expect(
     await page.evaluate((selector) => {
       const rect = document.querySelector(selector)!.getBoundingClientRect()

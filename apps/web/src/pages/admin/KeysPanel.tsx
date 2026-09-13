@@ -1,6 +1,6 @@
 import { type FormEvent, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { useLocation } from 'react-router-dom'
 import { type PortalRole } from '@research-portal/core'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -53,6 +53,8 @@ function KeyManager({ slug }: { slug: string }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [revoke, setRevoke] = useState<KeySummary | null>(null)
   const errorRef = useRef<HTMLParagraphElement>(null)
+  const anchored = useRef(false)
+  const assignmentsLoading = useIsFetching({ queryKey: ['access-assignments'] })
   useLayoutEffect(() => {
     const abort = new AbortController()
     lifetime.current = abort
@@ -76,6 +78,31 @@ function KeyManager({ slug }: { slug: string }) {
     queryFn: ({ signal }) => listKeys(slug, { ...options, signal }),
     retry: false,
   })
+  useLayoutEffect(() => {
+    if (
+      anchored.current || assignmentsLoading || rows.isPending ||
+      globalThis.location.hash !== '#access-keys'
+    ) return
+    let cancelled = false, frame = 0
+    void document.fonts.ready.then(() => {
+      if (cancelled) return
+      frame = requestAnimationFrame(() => {
+        if (
+          cancelled || controller.context !== context || !lifetime.current ||
+          lifetime.current.signal.aborted ||
+          (document.activeElement !== document.body && document.activeElement?.id !== 'access-keys')
+        ) return
+        const heading = document.getElementById('access-keys')
+        heading?.scrollIntoView({ block: 'start' })
+        heading?.focus({ preventScroll: true })
+        anchored.current = true
+      })
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+    }
+  }, [controller, context, assignmentsLoading, rows.isPending])
   const current = (signal: AbortSignal) =>
     !signal.aborted && controller.context === context &&
     controller.can('keys.manage', { kind: 'portal', slug })
