@@ -668,6 +668,7 @@ export function TenantLayout() {
                 variant='mobile'
                 onProfile={() => {
                   navRestoreFocus.current = false
+                  navTriggerRef.current?.focus()
                   setNavOpen(false)
                   setSignInOpen(true)
                 }}

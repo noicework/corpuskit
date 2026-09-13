@@ -254,6 +254,9 @@ export function AccountMenu({
         role='menuitem'
         tabIndex={-1}
         onClick={() => {
+          // The selected menu item unmounts before the dialog can remember it.
+          // Hand focus to the persistent launcher for the dialog's return path.
+          triggerRef.current?.focus()
           setOpen(false)
           onProfile()
         }}
