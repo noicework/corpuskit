@@ -22,8 +22,6 @@ import {
 
 export interface AdminAccess {
   breakGlassEnabled: boolean
-  /** Compatibility for unmigrated consumers, never grants automatic reads. */
-  coarseAdminEligible: false
   pending: boolean
   sessionAccess: AdminRequestAccess
   /** Invoke from a user event with one concrete operation, never from a query or effect. */
@@ -288,7 +286,6 @@ export function EmergencyAccessProvider({ session, children }: {
     <AdminAccessContext.Provider
       value={{
         breakGlassEnabled: enabled,
-        coarseAdminEligible: false,
         pending: pending !== null,
         sessionAccess,
         runExplicit,

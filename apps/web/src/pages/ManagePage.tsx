@@ -25,25 +25,6 @@ import { usePermissionAdminAccess } from '../components/EmergencyAccess.tsx'
 import { getManageContent, getManageStatus } from '../api/manage.ts'
 import { PortalConnections } from './admin/PortalConnections.tsx'
 
-// Removed after the final panel migration. Readiness never grants a permission.
-const MANAGE_PANEL_READY = {
-  recentList: true,
-  statTiles: true,
-  addContent: true,
-  corpusHealth: true,
-  sources: true,
-  insights: true,
-  labelsets: true,
-  graph: true,
-  enrichments: true,
-  analyse: true,
-  interrogate: true,
-  behaviour: true,
-  extraction: false,
-  appearance: false,
-  rename: false,
-}
-
 const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'overview', label: 'Overview', permission: 'content.write' },
   { id: 'insights', label: 'Insights', permission: 'content.write' },
@@ -210,12 +191,12 @@ function ManageContent() {
           <div className='min-w-0 space-y-4'>
             {tab === 'overview' && can('content.write') && (
               <>
-                {MANAGE_PANEL_READY.statTiles && can('content.write') && reachable && (
+                {can('content.write') && reachable && (
                   <div className='rp-card p-5'>
                     <StatTiles slug={slug} resourceCount={content.data?.counters.resources ?? 0} />
                   </div>
                 )}
-                {MANAGE_PANEL_READY.recentList && can('content.write') && (
+                {can('content.write') && (
                   <div className='rp-card p-5'>
                     <RecentList slug={slug} />
                   </div>
@@ -224,27 +205,22 @@ function ManageContent() {
             )}
             {tab === 'content' && can('content.write') && (
               <>
-                {MANAGE_PANEL_READY.addContent && can('content.write') && reachable && (
+                {can('content.write') && reachable && (
                   <div className='rp-card p-5'>
                     <AddContent slug={slug} onAdded={refresh} />
                   </div>
                 )}
-                {MANAGE_PANEL_READY.sources && can('content.write') && reachable && (
-                  <SourcesPanel slug={slug} />
-                )}
-                {MANAGE_PANEL_READY.recentList && can('content.write') && (
+                {can('content.write') && reachable && <SourcesPanel slug={slug} />}
+                {can('content.write') && (
                   <div className='rp-card p-5'>
                     <RecentList slug={slug} />
                   </div>
                 )}
-                {MANAGE_PANEL_READY.corpusHealth && can('content.write') && reachable && (
-                  <CorpusHealthPanel slug={slug} />
-                )}
-                {!MANAGE_PANEL_READY.addContent && unavailable}
+                {can('content.write') && reachable && <CorpusHealthPanel slug={slug} />}
               </>
             )}
             {tab === 'insights' && can('content.write') &&
-              (MANAGE_PANEL_READY.insights && can('content.write') && reachable
+              (can('content.write') && reachable
                 ? (
                   <div className='rp-card p-5'>
                     <InsightsPanel slug={slug} />
@@ -259,40 +235,27 @@ function ManageContent() {
                     Open taxonomy &rarr;
                   </Link>
                 </div>
-                {MANAGE_PANEL_READY.labelsets && can('taxonomy.write') && reachable && (
+                {can('taxonomy.write') && reachable && (
                   <LabelsetsPanel slug={slug} organisation={config.branding.organisation} />
                 )}
-                {MANAGE_PANEL_READY.analyse && can('behaviour.write') && reachable && (
-                  <AnalysePanel slug={slug} />
-                )}
-                {MANAGE_PANEL_READY.interrogate && can('behaviour.write') && reachable && (
-                  <InterrogatePanel slug={slug} />
-                )}
+                {can('behaviour.write') && reachable && <AnalysePanel slug={slug} />}
+                {can('behaviour.write') && reachable && <InterrogatePanel slug={slug} />}
               </div>
             )}
             {tab === 'graph' && can('graph.write') &&
-              (MANAGE_PANEL_READY.graph && can('graph.write') && reachable
-                ? <KgPanel slug={slug} open />
-                : unavailable)}
+              (can('graph.write') && reachable ? <KgPanel slug={slug} open /> : unavailable)}
             {tab === 'enrichments' && can('enrichments.write') &&
-              (MANAGE_PANEL_READY.enrichments && can('enrichments.write') && reachable
+              (can('enrichments.write') && reachable
                 ? <EnrichmentsPanel slug={slug} />
                 : unavailable)}
-            {tab === 'appearance' && can('appearance.write') &&
-              (MANAGE_PANEL_READY.appearance && can('appearance.write')
-                ? <AppearancePanel slug={slug} branding={config.branding} />
-                : unavailable)}
-            {tab === 'behaviour' && can('behaviour.write') &&
-              (MANAGE_PANEL_READY.behaviour && can('behaviour.write')
-                ? <BehaviourPanel slug={slug} />
-                : unavailable)}
-            {tab === 'extraction' && can('content.write') &&
-              (MANAGE_PANEL_READY.extraction && can('content.write')
-                ? <ExtractionPanel slug={slug} />
-                : unavailable)}
+            {tab === 'appearance' && can('appearance.write') && (
+              <AppearancePanel slug={slug} branding={config.branding} />
+            )}
+            {tab === 'behaviour' && can('behaviour.write') && <BehaviourPanel slug={slug} />}
+            {tab === 'extraction' && can('content.write') && <ExtractionPanel slug={slug} />}
             {tab === 'details' && can('appearance.write') && (
               <div className='rp-card p-5'>
-                {renaming && MANAGE_PANEL_READY.rename && can('appearance.write')
+                {renaming && can('appearance.write')
                   ? (
                     <RenamePortal
                       slug={slug}
@@ -313,7 +276,7 @@ function ManageContent() {
                       </h2>
                       <p className='mt-2 text-sm text-ink-2'>{config.branding.organisation}</p>
                       <p className='mt-2 text-sm text-ink-2'>{config.branding.tagline}</p>
-                      {MANAGE_PANEL_READY.rename && can('appearance.write') && (
+                      {can('appearance.write') && (
                         <button
                           type='button'
                           className='rp-btn rp-btn-outline mt-4'
