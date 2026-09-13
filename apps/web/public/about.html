@@ -211,10 +211,10 @@
     .footer-links { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; }
     .site-footer { flex-wrap: wrap; }
     #main { scroll-margin-top: 10rem; }
-    @media (min-width: 1900px) { :root { --page: min(92vw, 2200px); } .feature-list { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); } }
-    @media (max-width: 980px) { :root { --page: 90vw; } .feature-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (min-width: 1900px) { .feature-list { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); } }
+    @media (max-width: 980px) { :root { --page: min(90vw, 820px); } .feature-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 680px) {
-      :root { --page: calc(100% - 48px); }
+      :root { --page: calc(100vw - 48px); }
       .site-header { position: relative; }
       .nav-shell { align-items: flex-start; }
       .nav-links { gap: .8rem 1.2rem; }

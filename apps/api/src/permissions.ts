@@ -383,7 +383,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   }),
   entry('boundary', 'ALL', 'static-assets', 'portal.read', 'public', {
     reason:
-      'Application shell and public marketing documents, including /about, served outside the API router; no research data is returned.',
+      'Application shell and public marketing documents, including /about and /docs pages, served outside the API router; no research data is returned.',
   }),
 ])
 
