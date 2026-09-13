@@ -144,6 +144,11 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
       })
       await page.waitForSelector('a[href="/t/marine/library"]')
       await click(page, 'button[title="Switch portal"]')
+      // Let the open switcher finish its status probes under the current identity
+      // before the identity changes; a probe still in flight at the flip would be
+      // evaluated as the new identity and recorded as a denial.
+      await page.waitForSelector('[role=menu] button[role=menuitem]')
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 500)))
       const delayed = server.delayResponse('/auth/me?portal=marine')
       server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
       await page.evaluate(() => dispatchEvent(new Event('focus')))
@@ -248,6 +253,7 @@ Deno.test('signed accounts display selected roles and preserve profile keyboard 
           )
           expect(links.includes('/admin/people')).toBe(role === 'owner')
           expect(links).toContain('/t/marine/manage')
+          await page.waitForSelector('[role=menu] [role=menuitem]')
           await page.keyboard.press('End')
           expect(await page.evaluate(() => document.activeElement?.textContent?.trim())).toBe(
             'Profile',

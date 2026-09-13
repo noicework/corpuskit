@@ -43,6 +43,7 @@ const administratorTabs = [
   'details',
   'connections',
   'access',
+  'audit',
 ]
 
 async function navigate(page: Page, path: string) {
