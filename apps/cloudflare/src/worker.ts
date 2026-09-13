@@ -2,6 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 
 import { DurableObject } from 'cloudflare:workers'
+import { docPageById } from '../../../packages/core/src/docs.ts'
 import { initialiseDemo } from './demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
 import {
@@ -281,9 +282,10 @@ export default {
     }
 
     // The shared asset bundle is also bound to tenant hosts. Keep the marketing
-    // About document (including its raw asset alias) on the platform apex only.
+    // documents (including raw asset aliases) on the platform apex only.
     if (
-      ['/about', '/about/', '/about.html'].includes(url.pathname) &&
+      (['/about', '/about/', '/about.html'].includes(url.pathname) ||
+        isPublicDocsPath(url.pathname)) &&
       url.hostname !== PLATFORM_DOMAIN
     ) {
       return secureAssetResponse(
@@ -309,6 +311,10 @@ export default {
   },
 } satisfies ExportedHandler<Env>
 
+function isPublicDocsPath(pathname: string): boolean {
+  return pathname === '/docs' || pathname.startsWith('/docs/')
+}
+
 /** Select marketing documents without leaking the Assets pretty-URL redirects. */
 export function marketingHomeRequest(request: Request): Request {
   const url = new URL(request.url)
@@ -321,6 +327,11 @@ export function marketingHomeRequest(request: Request): Request {
     ['/about', '/about/', '/about.html'].includes(url.pathname)
   ) {
     url.pathname = '/about'
+  } else if (url.hostname === PLATFORM_DOMAIN && isPublicDocsPath(url.pathname)) {
+    const id = /^\/docs\/([a-z0-9-]+)(?:\.html)?\/?$/.exec(url.pathname)?.[1]
+    // Unknown paths deliberately serve the overview. Ask Assets for its
+    // canonical directory/extensionless URL to avoid pretty-URL redirects.
+    url.pathname = id && docPageById(id) ? `/docs/${id}` : '/docs/'
   } else if (url.pathname === '/') {
     // Ask Assets for its extensionless route. Requesting `home.html` directly
     // invokes pretty-URL handling and would leak a `/home` redirect to visitors.
