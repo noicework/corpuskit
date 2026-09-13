@@ -43,6 +43,7 @@ export function useAccessMutation(scope: Scope, permission: Permission, section:
     }
   }, [controller, section])
   const mutate = async (operation: () => Promise<unknown>) => {
+    const originUrl = globalThis.location.href
     const token = lifetime.current
     if (!token) return
     controller.assertCurrent(context)
@@ -68,14 +69,29 @@ export function useAccessMutation(scope: Scope, permission: Permission, section:
     try {
       await controller.refresh(context.slug ?? undefined)
       const refreshed = controller.context
-      requestAnimationFrame(() => {
-        if (controller.context !== refreshed || document.activeElement !== document.body) return
+      let attempts = 0, frame = 0
+      const cleanup = () => {
+        cancelAnimationFrame(frame)
+        unregister()
+      }
+      const unregister = controller.registerCleanup(cleanup)
+      const restore = () => {
+        if (
+          controller.context !== refreshed || globalThis.location.href !== originUrl ||
+          document.activeElement !== document.body
+        ) {
+          cleanup()
+          return
+        }
         const heading = document.querySelector<HTMLElement>('main h1')
         if (heading) {
           heading.tabIndex = -1
           heading.focus({ preventScroll: true })
-        }
-      })
+          cleanup()
+        } else if (++attempts < 30) frame = requestAnimationFrame(restore)
+        else cleanup()
+      }
+      frame = requestAnimationFrame(restore)
     } catch {
       notices.get(controller)?.delete(section)
     }

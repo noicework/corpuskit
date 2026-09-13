@@ -10,6 +10,7 @@ import {
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 import { AssignmentError, changeAccessMode } from '../../api/access.ts'
 import type { TenantOutletContext } from '../TenantLayout.tsx'
+import { KeysPanel } from './KeysPanel.tsx'
 
 export const ACCESS_SECTION_PERMISSIONS: readonly Permission[] = [
   'members.manage',
@@ -42,6 +43,7 @@ export function AccessPanel({ slug, name }: { slug: string; name: string }) {
       {access.can('behaviour.write', scope) && (
         <AccessModeSection key={`${slug}:${access.generation}`} slug={slug} name={name} />
       )}
+      <KeysPanel slug={slug} />
     </section>
   )
 }

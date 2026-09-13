@@ -389,7 +389,11 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
         r.method === 'GET' && r.status === 200
       ),
     ).toBe(true)
-    expect(server.requests.some((r) => r.path.includes('/mcp/keys'))).toBe(false)
+    expect(
+      server.requests.filter((r) => r.path.includes('/mcp/keys')).every((r) =>
+        r.method === 'GET' && r.status === 200
+      ),
+    ).toBe(true)
   } catch (error) {
     await Deno.writeTextFile(
       `${memberLogs}-02/failure.json`,
@@ -397,6 +401,10 @@ Deno.test('Manage Access scopes member CRUD and discards authority after self-do
         {
           requests: server.requests,
           text: await page.evaluate(() => document.body.innerText),
+          focus: await page.evaluate(() => ({
+            tag: document.activeElement?.tagName,
+            text: document.activeElement?.textContent?.slice(0, 120),
+          })),
         },
         null,
         2,
@@ -448,7 +456,16 @@ Deno.test('Access has independent section permissions and no forbidden member re
         await page.waitForSelector('[data-assignment-section=groups] [data-assignment-editor]')
         expect(groupRequests.every((r) => r.method === 'GET' && r.status === 200)).toBe(true)
       } else expect(groupRequests).toHaveLength(0)
-      expect(server.requests.slice(before).some((r) => r.path.includes('/mcp/keys'))).toBe(false)
+      if (permission === 'keys.manage') {
+        await page.waitForSelector('[data-keys-panel] [data-key-id]')
+        expect(
+          server.requests.slice(before).filter((r) => r.path.includes('/mcp/keys')).every((r) =>
+            r.method === 'GET' && r.status === 200
+          ),
+        ).toBe(true)
+      } else {expect(server.requests.slice(before).some((r) => r.path.includes('/mcp/keys'))).toBe(
+          false,
+        )}
     }
     for (const role of ['viewer', 'curator']) {
       server.setIdentity(fixtureSession({ oid: `fixture-${role}` }))

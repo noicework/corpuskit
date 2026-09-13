@@ -23,6 +23,7 @@ import { SuggestionStore } from '../../apps/api/src/interrogate.ts'
 import { KgProposalStore } from '../../apps/api/src/kg.ts'
 import { EnrichmentStore } from '../../apps/api/src/enrichments.ts'
 import { BindingStore } from '../../apps/api/src/bindings.ts'
+import { RbacState } from '../../apps/api/src/rbac-state.ts'
 
 const WEB_DIST = './apps/web/dist'
 
@@ -63,6 +64,7 @@ export function startTestServer(options: {
   insights?: BuildAppOptions['insights']
   domainProvisioner?: BuildAppOptions['domainProvisioner']
   breakGlass?: boolean
+  keyScenarios?: boolean
   identity?: { role: Role; slug?: string }
   emergencyFixture?: { directory: string; state: EmergencyFixtureState }
   componentFixture?: { directory: string }
@@ -160,6 +162,48 @@ export function startTestServer(options: {
         creator: index === 0 ? null : { tenantId: 'tenant-1', oid: 'fixture-owner-one' },
         provenance: index === 0 ? 'legacy-unproven' : 'verified-session',
       })
+    }
+    if (options.keyScenarios) {
+      const old = Date.now() - 28_800_001
+      const historical = new RbacState(database, () => old).assignmentService(
+        'tenant-1',
+        'corpuskit',
+      )
+      for (
+        const [index, label] of [
+          'Claims expired fixture',
+          'Creator lost access fixture',
+          'Reduced ceiling fixture',
+        ].entries()
+      ) {
+        const oid = `fixture-key-creator-${index}`
+        historical.observeSession({
+          verified: true,
+          tenantId: 'tenant-1',
+          oid,
+          roles: index === 0 ? ['CorpusKit.Owner'] : [],
+          groups: [],
+          groupStatus: 'complete',
+          claimIssuedAt: old,
+          expiresAt: old + 28_800_000,
+        })
+        if (index === 2) setAssignment({ kind: 'portal', slug: 'marine' }, oid, 'analyst')
+        stores.mcpKeys.add({
+          v: 1,
+          id: `fixture-reason-${index}`,
+          tenant: 'marine',
+          issuerUserId: oid,
+          label,
+          prefix: `fixture_reason_${index}`,
+          hash: String(index + 4).repeat(64),
+          createdAt: new Date(old).toISOString(),
+          revokedAt: null,
+          role: 'curator',
+          expiresAt: null,
+          creator: { tenantId: 'tenant-1', oid },
+          provenance: 'verified-session',
+        })
+      }
     }
     const requests: TestServer['requests'] = []
     const delays = new Map<string, { entered(): void; wait: Promise<void>; release(): void }>()
