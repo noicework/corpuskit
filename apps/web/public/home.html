@@ -1035,6 +1035,11 @@
     }
 
     .site-footer p { margin: 0; }
+    .site-footer { flex-wrap: wrap; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; }
+    @media (min-width: 681px) and (max-width: 1100px) {
+      .nav-links a[href="#run"], .nav-links a[href="#contribute"] { display: none; }
+    }
 
     :focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
 
@@ -1066,7 +1071,10 @@
         height: calc(64px + env(safe-area-inset-top));
       }
       .nav-links { display: flex; }
-      .nav-links a:not(.nav-demo) { display: none; }
+      .nav-links a:not(.nav-demo):not(.nav-about) { display: none; }
+      .nav-shell { gap: .75rem; flex-wrap: wrap; }
+      .site-header { height: auto; min-height: calc(64px + env(safe-area-inset-top)); }
+      .nav-shell { min-height: 64px; padding-block: .75rem; }
       .hero { min-height: 760px; padding-top: 8.2rem; padding-bottom: 2.5rem; }
       .hero h1 { min-width: 0; font-size: min(13vw, 4.25rem); line-height: .92; text-wrap: wrap; }
       .hero-thread { display: block; }
@@ -1484,6 +1492,9 @@
         <a href="#workings">How it works</a>
         <a href="#run">Run CorpusKit</a>
         <a href="#contribute">Contribute</a>
+        <a class="nav-about" href="/about">About</a>
+        <a href="/docs">Docs</a>
+        <a href="https://github.com/noicework/corpuskit">Repository</a>
         <a class="nav-demo" href="https://demo.corpuskit.org">Demo</a>
       </div>
     </nav>
@@ -1891,6 +1902,7 @@
 
       <footer class="site-footer">
         <p>CorpusKit is open source under the Apache 2.0 licence. Maintained by <a href="https://noice.net.au">Noice</a>. Powered by <a href="https://www.progress.com/agentic-rag">Progress Agentic RAG</a>.</p>
+        <nav class="footer-links" aria-label="Footer navigation"><a href="/about">About</a><a href="/docs">Docs</a><a href="https://github.com/noicework/corpuskit">Repository</a></nav>
       </footer>
     </div>
   </div>
