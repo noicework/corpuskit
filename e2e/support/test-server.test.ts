@@ -1,5 +1,36 @@
 import { expect } from '@std/expect'
 import { startTestServer, type TestServer } from './test-server.ts'
+import { fixtureSession } from '../../apps/api/src/rbac-integration-fixture.ts'
+
+Deno.test('mutable fixture preserves signed ingress and scoped assignment enforcement', async () => {
+  const server = startTestServer({ apiOnly: true })
+  try {
+    server.setAccessMode('marine', 'restricted')
+    server.setIdentity(fixtureSession({ oid: 'mutable-viewer' }))
+    server.setAssignment({ kind: 'portal', slug: 'marine' }, 'mutable-viewer', 'viewer')
+    const me = await (await fetch(server.url + '/auth/me?portal=marine')).json()
+    expect(me.portalAccess.permissions).toContain('portal.read')
+    const overview = await fetch(server.url + '/api/admin/overview')
+    expect(overview.status).toBe(403)
+    await overview.text()
+    server.setAssignment({ kind: 'portal', slug: 'marine' }, 'mutable-viewer', null)
+    const denied = await fetch(server.url + '/api/t/marine/catalog')
+    expect(denied.status).toBe(403)
+    await denied.text()
+    server.setIdentity(null)
+    const anonymous = await fetch(server.url + '/api/t/marine/catalog')
+    expect(anonymous.status).toBe(401)
+    await anonymous.text()
+    for (const path of ['/__test/rbac-component', '/__test/rbac-component.js']) {
+      const response = await fetch(server.url + path)
+      expect(response.status).toBe(404)
+      await response.text()
+    }
+    expect(server.requests.some((request) => request.status === 403)).toBe(true)
+  } finally {
+    await server.close()
+  }
+})
 
 Deno.test('API-only fixture is hermetic without built assets and retains real signed RBAC', async () => {
   const dist = 'apps/web/dist'
