@@ -9,6 +9,40 @@ import { tenantThemeVars } from '../apps/web/src/lib/theme.ts'
 // Suite duration must not age a build that was fresh when this test run started.
 const browserRunStartedAt = Date.now()
 
+async function captureEmergencyNormalText(
+  page: Page,
+  palette: string,
+  width: number,
+  state: string,
+) {
+  if (!Deno.env.get('RBAC_EXPAND_VISUALS')?.split(',').includes('04-05')) return
+  const original = await page.evaluate(() => document.documentElement.style.fontSize)
+  try {
+    await page.evaluate(async () => {
+      document.documentElement.style.fontSize = '16px'
+      await document.fonts.ready
+    })
+    const metrics = await page.evaluate(() => ({
+      width: innerWidth,
+      font: getComputedStyle(document.documentElement).fontSize,
+      overflow: document.documentElement.scrollWidth - innerWidth,
+    }))
+    expect(metrics.width).toBe(width)
+    expect(metrics.font).toBe('16px')
+    expect(metrics.overflow).toBeLessThanOrEqual(1)
+    const path = `.planning/logs/04-19-01/emergency-${palette}-${width}-16-${state}.png`
+    await Deno.writeFile(path, await page.screenshot())
+    await Deno.writeTextFile(
+      path.replace(/\.png$/, '.json'),
+      JSON.stringify({ path, metrics, viewed: false }, null, 2),
+    )
+  } finally {
+    await page.evaluate((font) => {
+      document.documentElement.style.fontSize = font
+    }, { args: [original] })
+  }
+}
+
 Deno.test('signed administration overview requires platform portal.create and clears on access loss', async () => {
   const browser = await launch()
   const directory = '.planning/logs/04-05-01-signed'
@@ -2112,6 +2146,7 @@ Deno.test({
           const screenshot = `${directory}/${palette}-${width}-prompt.png`
           await Deno.writeFile(screenshot, await page.screenshot())
           evidence.push({ palette, ...metrics, screenshot })
+          await captureEmergencyNormalText(page, palette, width, 'prompt')
           await page.keyboard.down('Shift')
           await page.keyboard.press('Tab')
           await page.keyboard.up('Shift')
@@ -2134,6 +2169,7 @@ Deno.test({
             `${directory}/${palette}-${width}-cancelled.png`,
             await page.screenshot(),
           )
+          await captureEmergencyNormalText(page, palette, width, 'cancelled')
           await page.close()
           page = undefined
         }

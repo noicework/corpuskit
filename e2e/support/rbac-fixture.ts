@@ -88,4 +88,78 @@ export async function captureBoundary(page: Page, directory: string, name: strin
   await Deno.mkdir(directory, { recursive: true })
   await Deno.writeFile(`${directory}/${name}.png`, await page.screenshot())
   await Deno.writeTextFile(`${directory}/${name}.json`, JSON.stringify(metrics, null, 2))
+  // Final review reuses the mature signed persona journeys without weakening
+  // their assertions. Optional extra captures restore both scroll and text size.
+  const expanded = Deno.env.get('RBAC_EXPAND_VISUALS')?.split(',')
+  if (expanded?.some((prefix) => directory.includes(prefix))) {
+    const root = '.planning/logs/04-19-01'
+    const source = directory.replace('.planning/logs/', '').replaceAll('/', '-')
+    const saved = await page.evaluate(() => {
+      const header = document.querySelector('header')?.getBoundingClientRect().bottom ?? 0
+      const anchor = [
+        ...document.querySelectorAll<HTMLElement>(
+          'main h1,main h2,main h3,main button,main input,main textarea,[role=dialog]',
+        ),
+      ]
+        .find((el) => {
+          const r = el.getBoundingClientRect()
+          return r.width > 0 && r.top >= header && r.top < innerHeight
+        })
+      anchor?.setAttribute('data-expanded-anchor', '')
+      return {
+        font: document.documentElement.style.fontSize,
+        x: scrollX,
+        y: scrollY,
+        offset: anchor?.getBoundingClientRect().top ?? 0,
+      }
+    })
+    try {
+      for (const font of [16, 22]) {
+        await page.evaluate(async (font, saved) => {
+          document.documentElement.style.fontSize = `${font}px`
+          await document.fonts.ready
+          const anchor = document.querySelector('[data-expanded-anchor]')
+          scrollTo({
+            left: saved.x,
+            top: anchor ? scrollY + anchor.getBoundingClientRect().top - saved.offset : saved.y,
+            behavior: 'instant',
+          })
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        }, { args: [font, saved] })
+        const expandedMetrics = await page.evaluate(() => ({
+          width: innerWidth,
+          clientWidth: document.documentElement.clientWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+          font: getComputedStyle(document.documentElement).fontSize,
+        }))
+        const path = `${root}/journey-${source}-${name}-${font}.png`
+        await Deno.mkdir(root, { recursive: true })
+        await Deno.writeFile(path, await page.screenshot())
+        await Deno.writeTextFile(
+          path.replace(/\.png$/, '.json'),
+          JSON.stringify(
+            {
+              surface: `journey-${source}-${name}`,
+              source: `${directory}/${name}.png`,
+              path,
+              width,
+              font,
+              metrics: expandedMetrics,
+              viewed: false,
+            },
+            null,
+            2,
+          ),
+        )
+        expect(expandedMetrics.width).toBe(width)
+        expect(expandedMetrics.scrollWidth).toBeLessThanOrEqual(expandedMetrics.clientWidth + 1)
+      }
+    } finally {
+      await page.evaluate((saved) => {
+        document.documentElement.style.fontSize = saved.font
+        document.querySelector('[data-expanded-anchor]')?.removeAttribute('data-expanded-anchor')
+        scrollTo(saved.x, saved.y)
+      }, { args: [saved] })
+    }
+  }
 }
