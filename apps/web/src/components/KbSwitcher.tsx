@@ -1,9 +1,10 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import type { KnowledgeBoxStatus, TenantConfig, TenantSummary } from '@research-portal/core'
 import { getKnowledgeBoxStatus, getTenants } from '../api/client.ts'
 import { portalHref } from '../lib/portal-url.ts'
+import { useAccess } from './AccessProvider.tsx'
 
 function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
   const colour = status === 'connected'
@@ -39,16 +40,30 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const navigate = useNavigate()
-  const location = useLocation()
+  const access = useAccess()
+  const canCreate = access.can('portal.create', { kind: 'platform' })
 
-  const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: getTenants })
+  const { data: tenants } = useQuery({
+    queryKey: ['tenants', access.identityKey, access.generation],
+    queryFn: getTenants,
+    enabled: access.state.status === 'ready',
+  })
   const { data: statuses } = useQuery({
-    queryKey: ['kb-statuses', tenants?.map((t) => t.slug).join(',')],
-    enabled: open && Boolean(tenants && tenants.length > 0),
+    queryKey: [
+      'kb-statuses',
+      access.identityKey,
+      access.generation,
+      tenants?.map((t) => t.slug).join(','),
+    ],
+    enabled: access.state.status === 'ready' && open && Boolean(tenants && tenants.length > 0),
     queryFn: async () => {
       const entries = await Promise.all(
         (tenants ?? []).map(async (t) => {
           try {
+            const snapshot = await access.controller.readScopeSnapshot(t.slug)
+            if (!snapshot.portalAccess?.permissions.includes('portal.read')) {
+              return [t.slug, undefined] as const
+            }
             return [t.slug, await getKnowledgeBoxStatus(t.slug)] as const
           } catch {
             return [t.slug, undefined] as const
@@ -103,11 +118,10 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
     setOpen(false)
     const slug = target.slug
     if (slug === config.slug) return
-    // Keep the current section when switching boxes, e.g. /search stays /search.
-    const section = location.pathname.replace(new RegExp(`^/t/${config.slug}`), '')
+    // Each destination resolves its own permissions before mounting content.
     const destination = portalHref(slug, {
       hostname: target.hostname,
-      suffix: `${section}${location.search}`,
+      suffix: '/library',
     })
     if (/^https:\/\//.test(destination)) {
       globalThis.location.assign(destination)
@@ -117,7 +131,7 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
   }
 
   return (
-    <div ref={wrapRef} className='relative'>
+    <div ref={wrapRef} className='relative shrink-0'>
       <button
         ref={triggerRef}
         type='button'
@@ -154,7 +168,7 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
           ref={panelRef}
           role='menu'
           onKeyDown={onMenuKeyDown}
-          className='rp-glass rp-shadow-lg rp-anim-fade absolute left-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] max-w-72 rounded-[var(--rp-radius)] border border-line p-1.5 sm:w-[18.5rem] sm:max-w-none'
+          className='rp-shadow-lg rp-anim-fade fixed left-4 right-4 top-[var(--rp-header-h)] z-50 mt-2 rounded-[var(--rp-radius)] border border-line bg-surface p-1.5 sm:absolute sm:left-0 sm:right-auto sm:top-full sm:w-[18.5rem]'
         >
           <p className='rp-eyebrow px-2.5 pb-1.5 pt-2 text-ink-3'>
             Knowledge boxes
@@ -201,45 +215,49 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
               )
             })}
           </div>
-          <div className='my-1.5 border-t border-line' />
-          <Link
-            to='/admin'
-            role='menuitem'
-            tabIndex={-1}
-            onClick={() => setOpen(false)}
-            className='rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
-          >
-            <svg
-              viewBox='0 0 20 20'
-              fill='currentColor'
-              aria-hidden='true'
-              className='h-4 w-4 shrink-0 text-ink-3'
-            >
-              <path d='M10 4a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 0110 4z' />
-            </svg>
-            Add a portal
-          </Link>
-          <Link
-            to='/admin'
-            role='menuitem'
-            tabIndex={-1}
-            onClick={() => setOpen(false)}
-            className='rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
-          >
-            <svg
-              viewBox='0 0 20 20'
-              fill='currentColor'
-              aria-hidden='true'
-              className='h-4 w-4 shrink-0 text-ink-3'
-            >
-              <path
-                fillRule='evenodd'
-                d='M8.34 2.6a1 1 0 01.99-.85h1.34a1 1 0 01.99.85l.16 1.06c.36.14.7.34 1 .58l1-.4a1 1 0 011.22.44l.67 1.16a1 1 0 01-.23 1.28l-.84.66c.04.19.06.39.06.62s-.02.43-.06.62l.84.66a1 1 0 01.23 1.28l-.67 1.16a1 1 0 01-1.22.44l-1-.4c-.3.24-.64.44-1 .58l-.16 1.06a1 1 0 01-.99.85H9.33a1 1 0 01-.99-.85l-.16-1.06c-.36-.14-.7-.34-1-.58l-1 .4a1 1 0 01-1.22-.44l-.67-1.16a1 1 0 01.23-1.28l.84-.66A3.6 3.6 0 013.3 10c0-.23.02-.43.06-.62l-.84-.66a1 1 0 01-.23-1.28l.67-1.16a1 1 0 011.22-.44l1 .4c.3-.24.64-.44 1-.58zM10 12a2 2 0 100-4 2 2 0 000 4z'
-                clipRule='evenodd'
-              />
-            </svg>
-            Manage portals
-          </Link>
+          {canCreate && (
+            <>
+              <div className='my-1.5 border-t border-line' />
+              <Link
+                to='/admin'
+                role='menuitem'
+                tabIndex={-1}
+                onClick={() => setOpen(false)}
+                className='rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+              >
+                <svg
+                  viewBox='0 0 20 20'
+                  fill='currentColor'
+                  aria-hidden='true'
+                  className='h-4 w-4 shrink-0 text-ink-3'
+                >
+                  <path d='M10 4a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 0110 4z' />
+                </svg>
+                Add a portal
+              </Link>
+              <Link
+                to='/admin'
+                role='menuitem'
+                tabIndex={-1}
+                onClick={() => setOpen(false)}
+                className='rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+              >
+                <svg
+                  viewBox='0 0 20 20'
+                  fill='currentColor'
+                  aria-hidden='true'
+                  className='h-4 w-4 shrink-0 text-ink-3'
+                >
+                  <path
+                    fillRule='evenodd'
+                    d='M8.34 2.6a1 1 0 01.99-.85h1.34a1 1 0 01.99.85l.16 1.06c.36.14.7.34 1 .58l1-.4a1 1 0 011.22.44l.67 1.16a1 1 0 01-.23 1.28l-.84.66c.04.19.06.39.06.62s-.02.43-.06.62l.84.66a1 1 0 01.23 1.28l-.67 1.16a1 1 0 01-1.22.44l-1-.4c-.3.24-.64.44-1 .58l-.16 1.06a1 1 0 01-.99.85H9.33a1 1 0 01-.99-.85l-.16-1.06c-.36-.14-.7-.34-1-.58l-1 .4a1 1 0 01-1.22-.44l-.67-1.16a1 1 0 01.23-1.28l.84-.66A3.6 3.6 0 013.3 10c0-.23.02-.43.06-.62l-.84-.66a1 1 0 01-.23-1.28l.67-1.16a1 1 0 011.22-.44l1 .4c.3-.24.64-.44 1-.58zM10 12a2 2 0 100-4 2 2 0 000 4z'
+                    clipRule='evenodd'
+                  />
+                </svg>
+                Manage portals
+              </Link>
+            </>
+          )}
         </div>
       )}
     </div>

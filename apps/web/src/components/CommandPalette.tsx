@@ -8,12 +8,15 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import type { Question } from '@research-portal/core'
+import type { Permission, Question } from '@research-portal/core'
+import { useAccess } from './AccessProvider.tsx'
+import { accountEntries } from './account-menu-behaviour.ts'
 
 type PaletteOption =
   | { kind: 'search'; text: string }
   | { kind: 'ask'; text: string }
   | { kind: 'suggested'; question: Question }
+  | { kind: 'destination'; text: string; href: string }
 
 function optionKey(option: PaletteOption, index: number): string {
   if (option.kind === 'suggested') return `suggested-${option.question.id}`
@@ -48,25 +51,50 @@ export function CommandPalette({
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const listboxId = useId()
   const navigate = useNavigate()
+  const access = useAccess()
+  const canRead = access.can('portal.read', { kind: 'portal', slug })
+  const canAsk = access.can('portal.ask', { kind: 'portal', slug })
+  const canGenerate = access.can('portal.generate', { kind: 'portal', slug })
+  const destinations = [
+    ...([
+      ['Library', 'library', canRead],
+      ['Graph', 'graph', canRead],
+      ['Investigations', 'investigations', canRead],
+      ['Tools', 'tools', canRead],
+      ['Generate', 'generate', canGenerate],
+      ['Assessment', 'assessment', canGenerate],
+    ] as const).filter(([, , allowed]) => allowed).map(([label, path]) => ({
+      label,
+      href: `/t/${slug}/${path}`,
+    })),
+    ...accountEntries(slug, access.can),
+  ]
 
   const trimmed = query.trim()
 
   const options = useMemo<PaletteOption[]>(() => {
     const list: PaletteOption[] = []
     if (trimmed.length > 0) {
-      list.push({ kind: 'search', text: trimmed })
-      list.push({ kind: 'ask', text: trimmed })
+      if (canRead) list.push({ kind: 'search', text: trimmed })
+      if (canAsk) list.push({ kind: 'ask', text: trimmed })
     }
     const pool = trimmed.length === 0
       ? suggestedQuestions
       : suggestedQuestions.filter((question) =>
         question.text.toLowerCase().includes(trimmed.toLowerCase())
       )
-    for (const question of pool.slice(0, 6)) {
+    for (const question of (canAsk ? pool.slice(0, 6) : [])) {
       list.push({ kind: 'suggested', question })
     }
+    for (
+      const destination of destinations.filter((d) =>
+        d.label.toLowerCase().includes(trimmed.toLowerCase())
+      )
+    ) {
+      list.push({ kind: 'destination', text: destination.label, href: destination.href })
+    }
     return list
-  }, [trimmed, suggestedQuestions])
+  }, [trimmed, suggestedQuestions, canAsk, canRead, canGenerate, access.generation])
 
   // Editing the query re-selects the top result, matching the omnibox
   // convention this dialog borrows from; navigating with the arrow keys
@@ -75,7 +103,23 @@ export function CommandPalette({
     setHighlight(trimmed.length > 0 ? 0 : -1)
   }, [trimmed])
 
+  useEffect(() => {
+    if (highlight >= 0) {
+      document.getElementById(`${listboxId}-option-${highlight}`)?.scrollIntoView({
+        block: 'nearest',
+      })
+    }
+  }, [highlight, listboxId])
+
   function activate(option: PaletteOption) {
+    const permission: Permission = option.kind === 'search' ? 'portal.read' : 'portal.ask'
+    if (option.kind === 'destination') {
+      if (!destinations.some((d) => d.href === option.href)) return
+      navigate(option.href)
+      onClose()
+      return
+    }
+    if (!access.can(permission, { kind: 'portal', slug })) return
     if (option.kind === 'search') {
       navigate(`/t/${slug}/search?q=${encodeURIComponent(option.text)}`)
     } else if (option.kind === 'ask') {
@@ -230,6 +274,9 @@ export function CommandPalette({
                 highlight === index ? 'bg-surface-2 text-ink' : 'text-ink-2'
               }`}
             >
+              {option.kind === 'destination'
+                ? <span className='min-w-0'>{option.text}</span>
+                : null}
               {option.kind === 'search'
                 ? (
                   <>

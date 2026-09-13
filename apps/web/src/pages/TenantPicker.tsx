@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getTenants } from '../api/client.ts'
-import { getAuthSession, microsoftLoginUrl } from '../api/auth.ts'
+import { microsoftLoginUrl } from '../api/auth.ts'
+import { useAccess } from '../components/AccessProvider.tsx'
 import { ErrorCard, Skeleton } from '../components/ui.tsx'
 import { portalHref } from '../lib/portal-url.ts'
 
@@ -35,9 +36,13 @@ function Arrow() {
 }
 
 export function TenantPicker() {
-  const tenants = useQuery({ queryKey: ['tenants'], queryFn: getTenants })
-  const session = useQuery({ queryKey: ['auth-session'], queryFn: getAuthSession })
-  const user = session.data?.user
+  const access = useAccess()
+  const tenants = useQuery({
+    queryKey: ['tenants', access.identityKey, access.generation],
+    queryFn: getTenants,
+    enabled: access.state.status === 'ready',
+  })
+  const user = access.state.session?.user
 
   useEffect(() => {
     document.title = 'CorpusKit | Knowledge people can use'
@@ -173,7 +178,7 @@ export function TenantPicker() {
         </div>
 
         <div className='mk-portal-grid'>
-          {tenants.isLoading
+          {access.state.status === 'loading' || tenants.isLoading
             ? (
               <>
                 <Skeleton className='h-56' />
@@ -191,7 +196,7 @@ export function TenantPicker() {
               />
             )
             : null}
-          {tenants.data?.map((tenant, index) => (
+          {access.state.status === 'ready' && tenants.data?.map((tenant, index) => (
             <a
               key={tenant.slug}
               href={portalHref(tenant.slug, { hostname: tenant.hostname })}
