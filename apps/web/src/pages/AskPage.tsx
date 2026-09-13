@@ -1,9 +1,20 @@
+import { useAccess } from '../components/AccessProvider.tsx'
+import {
+  createResearchStorageContext,
+  readResearchDraft,
+  registerResearchCleanup,
+  type ResearchStorageContext,
+  researchStorageCurrent,
+  writeResearchDraft,
+} from '../lib/research-storage.ts'
 import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -135,10 +146,6 @@ type ChatSession = {
 
 const SESSION_CAP = 20
 
-function storageKey(slug: string): string {
-  return `rp-chat-${slug}`
-}
-
 /**
  * Defensively parses a legacy/malformed `quality` field: older sessions were
  * saved before `quality` existed on `ChatMessage` at all, so anything that
@@ -239,11 +246,9 @@ function migrateSession(raw: unknown): ChatSession | null {
   }
 }
 
-function loadSessions(slug: string): ChatSession[] {
+function loadSessions(storage: ResearchStorageContext): ChatSession[] {
   try {
-    const raw = localStorage.getItem(storageKey(slug))
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as unknown
+    const parsed = readResearchDraft(storage)
     if (!Array.isArray(parsed)) return []
     return parsed
       .map(migrateSession)
@@ -261,19 +266,23 @@ export function hasAnsweredTurn(messages: readonly ChatMessage[]): boolean {
   )
 }
 
-function saveSessions(slug: string, sessions: ChatSession[], deletedIds?: Set<string>) {
+function saveSessions(
+  storage: ResearchStorageContext,
+  sessions: ChatSession[],
+  deletedIds?: Set<string>,
+) {
   try {
     // Merge with what is currently stored: another tab may have added or
     // updated sessions since this tab mounted. In-memory wins for ids we
     // hold; stored-only ids are kept unless this tab deleted them.
-    const stored = loadSessions(slug)
+    const stored = loadSessions(storage)
     const mine = new Map(sessions.map((s) => [s.id, s]))
     const merged = [
       ...sessions,
       ...stored.filter((s) => !mine.has(s.id) && !(deletedIds?.has(s.id))),
     ]
     merged.sort((a, b) => b.updatedAt - a.updatedAt)
-    localStorage.setItem(storageKey(slug), JSON.stringify(merged.slice(0, SESSION_CAP)))
+    writeResearchDraft(storage, merged.slice(0, SESSION_CAP))
   } catch {
     // localStorage unavailable or full - sessions simply won't persist this run.
   }
@@ -1723,8 +1732,14 @@ ${turnsHtml}
 export function AskPage() {
   const { config, isAdmin = false } = useOutletContext<TenantOutletContext>()
   const [searchParams, setSearchParams] = useSearchParams()
+  const access = useAccess()
+  const storage = useMemo(() => createResearchStorageContext(access.controller, config.slug), [
+    access.controller,
+    access.generation,
+    config.slug,
+  ])
 
-  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions(config.slug))
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions(storage))
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
@@ -1770,6 +1785,25 @@ export function AskPage() {
   const askHandledRef = useRef(false)
   // Debounced per-session background sync to the server, keyed by session id.
   const syncTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  useLayoutEffect(() => {
+    const clear = () => {
+      abortRef.current?.abort()
+      followUpAbortRef.current?.abort()
+      for (const timer of syncTimersRef.current.values()) clearTimeout(timer)
+      syncTimersRef.current.clear()
+      deletedIdsRef.current.clear()
+      setSessions([])
+      setMessages([])
+      setDraft('')
+      setActiveSessionId(null)
+      setFollowUps(null)
+    }
+    const unregister = registerResearchCleanup(storage, clear)
+    return () => {
+      unregister()
+      clear()
+    }
+  }, [storage])
   const composerRef = useRef<HTMLFormElement | null>(null)
   /** The element that actually scrolls below `lg` - see the wrapper's comment. */
   const scrollWrapRef = useRef<HTMLDivElement | null>(null)
@@ -1924,23 +1958,24 @@ export function AskPage() {
   /**
    * Fire-and-forget push of one session to the server, debounced so a burst
    * of edits (streaming deltas, renames) collapses into a single request.
-   * Failures are silent - offline / server-sync-unavailable simply means the
-   * localStorage copy (already saved by `persist`) stays the source of truth.
+   * Anonymous public history also persists locally. Signed history stays in
+   * memory when server sync fails; it is never copied into browser storage.
    */
   function scheduleServerSync(session: ChatSession) {
+    if (!researchStorageCurrent(storage)) return
     const timers = syncTimersRef.current
     const existing = timers.get(session.id)
     if (existing) clearTimeout(existing)
     const timer = setTimeout(() => {
       timers.delete(session.id)
+      if (!researchStorageCurrent(storage)) return
       void putServerSession(config.slug, {
         id: session.id,
         title: sessionTitle(session),
         updatedAt: new Date(session.updatedAt).toISOString(),
         messages: session.messages,
       }).catch(() => {
-        // Offline or server sync unavailable - the local session already
-        // persisted, so the research trail still works fully offline.
+        // Anonymous history can persist locally; signed history remains ephemeral.
       })
     }, 1500)
     timers.set(session.id, timer)
@@ -1963,7 +1998,7 @@ export function AskPage() {
   // newer on the server) - background, silent-fail so offline use is
   // unaffected.
   useEffect(() => {
-    const localSessions = loadSessions(config.slug)
+    const localSessions = loadSessions(storage)
     setSessions(localSessions)
     setActiveSessionId(null)
     setMessages([])
@@ -1977,7 +2012,7 @@ export function AskPage() {
     async function syncFromServer() {
       try {
         const remoteMetas = await listServerSessions(config.slug)
-        if (cancelled) return
+        if (cancelled || !researchStorageCurrent(storage)) return
         const toFetch = remoteMetas.filter((meta) => {
           const local = localSessions.find((session) => session.id === meta.id)
           return !local || Date.parse(meta.updatedAt) > local.updatedAt
@@ -1988,8 +2023,9 @@ export function AskPage() {
             getServerSession<ChatMessage>(config.slug, meta.id).catch(() => null)
           ),
         )
-        if (cancelled) return
+        if (cancelled || !researchStorageCurrent(storage)) return
         setSessions((prev) => {
+          if (!researchStorageCurrent(storage)) return []
           const byId = new Map(prev.map((session) => [session.id, session]))
           for (const remote of fetched) {
             if (!remote) continue
@@ -2006,7 +2042,7 @@ export function AskPage() {
           }
           const merged = [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt)
             .slice(0, SESSION_CAP)
-          saveSessions(config.slug, merged, deletedIdsRef.current)
+          saveSessions(storage, merged, deletedIdsRef.current)
           return merged
         })
       } catch {
@@ -2018,7 +2054,7 @@ export function AskPage() {
     return () => {
       cancelled = true
     }
-  }, [config.slug])
+  }, [config.slug, storage])
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -2051,11 +2087,12 @@ export function AskPage() {
    */
   function forgetSession(sessionId: string) {
     setSessions((prev) => {
+      if (!researchStorageCurrent(storage)) return []
       const existing = prev.find((session) => session.id === sessionId)
       if (!existing || hasAnsweredTurn(existing.messages)) return prev
       const next = prev.filter((session) => session.id !== sessionId)
       deletedIdsRef.current.add(sessionId)
-      saveSessions(config.slug, next, deletedIdsRef.current)
+      saveSessions(storage, next, deletedIdsRef.current)
       const timer = syncTimersRef.current.get(sessionId)
       if (timer) {
         clearTimeout(timer)
@@ -2071,6 +2108,7 @@ export function AskPage() {
 
   function persist(nextMessages: ChatMessage[], sessionId: string) {
     setSessions((prev) => {
+      if (!researchStorageCurrent(storage)) return []
       const existing = prev.find((session) => session.id === sessionId)
       const now = Date.now()
       const updatedSession: ChatSession = existing
@@ -2078,7 +2116,7 @@ export function AskPage() {
         : { id: sessionId, createdAt: now, updatedAt: now, messages: nextMessages }
       const rest = prev.filter((session) => session.id !== sessionId)
       const next = [updatedSession, ...rest].slice(0, SESSION_CAP)
-      saveSessions(config.slug, next, deletedIdsRef.current)
+      saveSessions(storage, next, deletedIdsRef.current)
       scheduleServerSync(updatedSession)
       return next
     })
@@ -2093,11 +2131,13 @@ export function AskPage() {
   }
 
   function deleteSession(id: string) {
+    if (!researchStorageCurrent(storage)) return
     if (isStreaming) return
     deletedIdsRef.current.add(id)
     setSessions((prev) => {
+      if (!researchStorageCurrent(storage)) return []
       const next = prev.filter((session) => session.id !== id)
-      saveSessions(config.slug, next, deletedIdsRef.current)
+      saveSessions(storage, next, deletedIdsRef.current)
       return next
     })
     const timer = syncTimersRef.current.get(id)
@@ -2130,8 +2170,9 @@ export function AskPage() {
   /** Sets a custom session name, overriding the auto-title, and syncs it to the server. */
   function renameSession(id: string, title: string) {
     setSessions((prev) => {
+      if (!researchStorageCurrent(storage)) return []
       const next = prev.map((session) => session.id === id ? { ...session, title } : session)
-      saveSessions(config.slug, next, deletedIdsRef.current)
+      saveSessions(storage, next, deletedIdsRef.current)
       const renamed = next.find((session) => session.id === id)
       if (renamed) scheduleServerSync(renamed)
       return next
