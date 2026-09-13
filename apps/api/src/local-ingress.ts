@@ -12,10 +12,13 @@ import {
   verifyPrincipal,
 } from './principal.ts'
 import type { RbacState } from './rbac-state.ts'
+import type { TenantStoreApi } from './tenants.ts'
+import { buildUiAccessSnapshot } from './ui-access.ts'
+import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 
 interface LocalIngressOptions {
   rbac: RbacState
-  tenants: { list(): { slug: string }[] }
+  tenants: { list(): { slug: string }[] } & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled'>>
   env: Record<string, string | undefined>
 }
 type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
@@ -147,7 +150,28 @@ export class LocalIngress {
         return Response.json({ error: 'not_found' }, { status: 404 })
       }
       if (path === '/auth/me' && request.method === 'GET') {
+        const selections = new URL(request.url).searchParams.getAll('portal')
+        const selectedSlug = selections.length === 1 ? selections[0] : undefined
+        const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
+        let tenant: unknown
+        try {
+          if (slug.success) {
+            const current = this.options.tenants.get?.(slug.data)
+            if (current) {
+              tenant = { ...current, disabled: this.options.tenants.isDisabled?.(slug.data) }
+            }
+          }
+        } catch {
+          // Unavailable policy has the same safe projection as a missing portal.
+        }
         return Response.json({
+          ...buildUiAccessSnapshot({
+            session,
+            effectiveRoles: resolution.effectiveRoles,
+            configuredTenantId: this.tenantId,
+            selectedSlug,
+            tenant,
+          }),
           authenticated: session !== null,
           user: principal.user
             ? { ...principal.user, isAdmin: principal.coarseAdminEligible }

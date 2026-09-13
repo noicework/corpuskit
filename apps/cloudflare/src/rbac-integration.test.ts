@@ -1,6 +1,7 @@
 /// <reference path="./runtime.d.ts" />
 /// <reference path="../../../worker-configuration.d.ts" />
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import { expect } from '@std/expect'
 import { DurableState, type DurableStores } from './state.ts'
 import type { TrustedSessionFacts } from '../../api/src/principal.ts'
 import type { AuthUser } from './auth.ts'
@@ -165,6 +166,66 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
         )
       },
     }
+    const snapshotSession: TrustedSessionFacts = {
+      verified: true,
+      tenantId: 'tenant-1',
+      oid: 'snapshot-session',
+      email: 'snapshot@example.test',
+      roles: [],
+      groups: [],
+      groupStatus: 'absent',
+      claimIssuedAt: clock,
+      createdAt: clock,
+      expiresAt: clock + 3600_000,
+    }
+    const snapshot = async () => {
+      const response = await journey.invoke('/auth/me?portal=marine', snapshotSession)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      return response.json()
+    }
+    expect((await snapshot()).portalAccess.effectiveRole).toBe('viewer')
+    const grant = journey.rbac.assignmentService('tenant-1').create({
+      subjectKind: 'active-oid',
+      subjectId: snapshotSession.oid,
+      role: 'curator',
+      scope: { kind: 'portal', slug: 'marine' },
+    }, { requestId: 'snapshot-create', actor: { kind: 'system' } })
+    expect(grant.ok).toBe(true)
+    expect((await snapshot()).portalAccess.permissions).toContain('content.write')
+    if (grant.ok) {
+      journey.rbac.assignmentService('tenant-1').remove(grant.value.id, {
+        requestId: 'snapshot-remove',
+        actor: { kind: 'system' },
+      })
+    }
+    expect((await snapshot()).portalAccess.permissions).toEqual(['portal.read', 'portal.ask'])
+    journey.stores.tenants.patch('marine', { accessMode: 'restricted' })
+    const beforeDenials = journey.rbac.audit.read({ scope: { kind: 'platform' } })
+      .filter((event) => event.action === 'request.denied').length
+    expect((await snapshot()).portalAccess).toEqual({
+      slug: 'marine',
+      permissions: [],
+      effectiveRole: null,
+      available: false,
+      canEnable: false,
+    })
+    const safe = await journey.invoke('/api/t/marine/config', snapshotSession)
+    expect(safe.status).toBe(200)
+    const metadata = await safe.json()
+    expect(Object.keys(metadata).sort()).toEqual(['accessMode', 'branding', 'slug'])
+    expect(Object.keys(metadata.branding).sort()).toEqual([
+      'colours',
+      'logoUrl',
+      'organisation',
+      'paletteId',
+      'productName',
+    ])
+    expect(
+      journey.rbac.audit.read({ scope: { kind: 'platform' } })
+        .filter((event) => event.action === 'request.denied'),
+    ).toHaveLength(beforeDenials)
+    journey.stores.tenants.patch('marine', { accessMode: 'public' })
     await assertIdentityJourney(journey)
     await assertEnforcementJourney(journey)
   } finally {

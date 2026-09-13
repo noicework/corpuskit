@@ -23,6 +23,103 @@ const session = (): TrustedSessionFacts => ({
 const env = { ENTRA_TENANT_ID: 'tenant-1', ADMIN_PASSCODE: 'fixture' }
 const peer = { remoteAddr: { transport: 'tcp' as const, hostname: '127.0.0.1', port: 1234 } }
 
+Deno.test('local selected snapshots use current policy and assignments with safe unavailable states', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  const directory = Deno.makeTempDirSync({ prefix: 'local-ui-access-' })
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    const ingress = new LocalIngress({ rbac, tenants, env })
+    const person = session()
+    const read = async (
+      query = '?portal=marine',
+      identity: TrustedSessionFacts | null = person,
+    ) => {
+      const response = await ingress.handle(
+        new Request(`http://localhost/auth/me${query}`, {
+          headers: { 'x-admin-passcode': 'fixture', 'x-corpuskit-principal': 'forged' },
+        }),
+        () => new Response(),
+        peer,
+        identity,
+      )
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      return response.json()
+    }
+    const first = await read()
+    expect(first.platformPermissions).toEqual([])
+    expect(first.portalAccess).toEqual({
+      slug: 'marine',
+      permissions: ['portal.read', 'portal.ask'],
+      effectiveRole: 'viewer',
+      available: true,
+      canEnable: false,
+    })
+    const service = rbac.assignmentService('tenant-1')
+    const created = service.create({
+      subjectKind: 'active-oid',
+      subjectId: person.oid,
+      role: 'portal-admin',
+      scope: { kind: 'portal', slug: 'marine' },
+    }, { requestId: 'snapshot-create', actor: { kind: 'system' } })
+    expect(created.ok).toBe(true)
+    expect((await read()).portalAccess.permissions).toContain('members.manage')
+    tenants.setDisabled('marine', true)
+    expect((await read()).portalAccess).toEqual({
+      slug: 'marine',
+      permissions: [],
+      effectiveRole: null,
+      available: false,
+      canEnable: true,
+    })
+    const unavailable = {
+      slug: 'marine',
+      permissions: [],
+      effectiveRole: null,
+      available: false,
+      canEnable: false,
+    }
+    expect((await read('?portal=marine', null)).portalAccess).toEqual(unavailable)
+    if (created.ok) {
+      service.remove(created.value.id, { requestId: 'snapshot-remove', actor: { kind: 'system' } })
+    }
+    expect((await read()).portalAccess).toEqual(unavailable)
+    expect((await read('?portal=missing')).portalAccess).toEqual({
+      ...unavailable,
+      slug: 'missing',
+    })
+    for (const query of ['', '?portal=', '?portal=../marine', '?portal=marine&portal=grains']) {
+      expect((await read(query)).portalAccess).toBeNull()
+    }
+    expect(
+      rbac.audit.read({ scope: { kind: 'platform' } }).filter((event) =>
+        event.action === 'request.denied' || event.action === 'break_glass.used'
+      ),
+    ).toEqual([])
+    const listOnly = new LocalIngress({ rbac, tenants: { list: () => [{ slug: 'marine' }] }, env })
+    expect(
+      (await (await listOnly.handle(
+        new Request('http://localhost/auth/me?portal=marine'),
+        () => new Response(),
+        peer,
+        person,
+      )).json()).portalAccess,
+    ).toEqual(unavailable)
+    tenants.setDisabled('marine', false)
+    const noIdentity = new LocalIngress({ rbac, tenants, env: {} })
+    expect(
+      (await (await noIdentity.handle(
+        new Request('http://localhost/auth/me?portal=marine'),
+        () => new Response(),
+      )).json()).portalAccess.permissions,
+    ).toEqual(['portal.read', 'portal.ask'])
+  } finally {
+    db.close()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
 Deno.test('local coarse gate audits disabled and missing-peer passcodes without role fallback', async () => {
   for (const production of [true, false]) {
     const db = new LocalRbacDatabase(':memory:')

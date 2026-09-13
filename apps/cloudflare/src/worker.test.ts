@@ -14,6 +14,111 @@ import type { AuthUser } from './auth.ts'
 import type { PortalDurableObject } from './worker.ts'
 import { AragProvider } from '@research-portal/retrieval'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
+import { LocalIngress } from '../../api/src/local-ingress.ts'
+import { ROLES } from '@research-portal/core'
+import type { DurableStores } from './state.ts'
+
+Deno.test('Worker and local ingress return identical current selected-scope capabilities', async () => {
+  const h = realHarness()
+  try {
+    const stores = (h.object as unknown as { stores: DurableStores }).stores
+    const local = new LocalIngress({
+      rbac: stores.rbac,
+      tenants: stores.tenants,
+      env: { ENTRA_TENANT_ID: 'entra-tenant-id', SESSION_SECRET: secret },
+    })
+    const project = (body: Record<string, unknown>) => ({
+      platformPermissions: body.platformPermissions,
+      portalAccess: body.portalAccess,
+    })
+    const read = async (identity: TrustedSessionFacts | null, query = '?portal=marine') => {
+      const path = `/auth/me${query}`
+      const request = identity
+        ? await principalRequest(path, identity)
+        : new Request(`https://corpuskit.test${path}`)
+      const remote = await h.object.handleTrustedRequest(request, { session: identity })
+      const own = await local.handle(
+        new Request(`http://localhost${path}`),
+        () => new Response(),
+        undefined,
+        identity,
+      )
+      expect(remote.headers.get('cache-control')).toBe('no-store')
+      const body = await remote.json()
+      expect(project(body)).toEqual(project(await own.json()))
+      return body
+    }
+    for (const accessMode of ['public', 'authenticated', 'restricted'] as const) {
+      stores.tenants.patch('marine', { accessMode })
+      expect((await read(null)).portalAccess.available).toBe(accessMode === 'public')
+      for (const role of ROLES) {
+        const identity = { ...facts(), oid: `snapshot-${role}`, roles: [] }
+        const service = stores.rbac.assignmentService(identity.tenantId)
+        if (!service.list().some((row) => row.subjectId === identity.oid)) {
+          const grant = service.create({
+            subjectKind: 'active-oid',
+            subjectId: identity.oid,
+            role,
+            scope: role === 'owner' || role === 'platform-admin'
+              ? { kind: 'platform' }
+              : { kind: 'portal', slug: 'marine' },
+          }, { requestId: 'snapshot-grant', actor: { kind: 'system' } })
+          expect(grant.ok).toBe(true)
+        }
+        expect((await read(identity)).portalAccess.available).toBe(true)
+      }
+    }
+    const owner = { ...facts(), roles: ['CorpusKit.Owner'] }
+    stores.tenants.setDisabled('marine', true)
+    const disabled = await read(owner)
+    expect(disabled.portalAccess).toEqual({
+      slug: 'marine',
+      permissions: [],
+      effectiveRole: null,
+      available: false,
+      canEnable: true,
+    })
+    expect((await read(null)).portalAccess).toEqual({ ...disabled.portalAccess, canEnable: false })
+    for (const query of ['', '?portal=../marine', '?portal=marine&portal=grains']) {
+      expect((await read(owner, query)).portalAccess).toBeNull()
+    }
+    expect((await read(owner, '?portal=missing')).portalAccess).toEqual({
+      ...disabled.portalAccess,
+      slug: 'missing',
+      canEnable: false,
+    })
+    const enable = await principalRequest('/api/admin/t/marine/enable', owner)
+    expect(
+      (await h.object.handleTrustedRequest(new Request(enable, { method: 'POST' }), {
+        session: owner,
+      })).status,
+    ).toBe(200)
+    expect((await read(owner)).portalAccess.available).toBe(true)
+    expect((await read(owner)).portalAccess.canEnable).toBe(false)
+  } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('Worker selected snapshot preserves public access without Entra configuration', async () => {
+  const h = realHarness({ ENTRA_TENANT_ID: '' })
+  try {
+    const response = await worker.fetch(
+      new Request('https://corpuskit.test/auth/me?portal=marine'),
+      h.env,
+    )
+    expect(response.status).toBe(200)
+    expect((await response.json()).portalAccess).toEqual({
+      slug: 'marine',
+      permissions: ['portal.read', 'portal.ask'],
+      effectiveRole: 'viewer',
+      available: true,
+      canEnable: false,
+    })
+  } finally {
+    h.database.close()
+  }
+})
 
 type WorkerHandler = {
   fetch(request: Request, env: Env): Promise<Response>
