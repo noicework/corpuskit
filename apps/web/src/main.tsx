@@ -9,6 +9,7 @@ import { ExplorePage } from './pages/ExplorePage.tsx'
 import { SearchPage } from './pages/SearchPage.tsx'
 import { AdminPage } from './pages/AdminPage.tsx'
 import { PeoplePage } from './pages/PeoplePage.tsx'
+import { AuditPage } from './pages/AuditPage.tsx'
 import { ManagePage } from './pages/ManagePage.tsx'
 import { LibraryPage } from './pages/LibraryPage.tsx'
 import { ResourceDetailPage } from './pages/ResourceDetailPage.tsx'
@@ -78,6 +79,14 @@ createRoot(container).render(
               element={
                 <ResolvedAccess>
                   <AdminPage />
+                </ResolvedAccess>
+              }
+            />
+            <Route
+              path='/admin/audit'
+              element={
+                <ResolvedAccess>
+                  <AuditPage />
                 </ResolvedAccess>
               }
             />

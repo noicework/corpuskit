@@ -12,6 +12,28 @@ const tenantLayoutSource = await Deno.readTextFile(
 )
 
 describe('AccountMenu', () => {
+  it('admits audit export independently in only its authorised scope', () => {
+    expect(
+      accountEntries(
+        'marine',
+        (permission, scope) =>
+          permission === 'audit.export' && scope.kind === 'portal' && scope.slug === 'marine',
+      ),
+    ).toEqual([{ label: 'Manage', href: '/t/marine/manage' }])
+    expect(
+      accountEntries(
+        'grains',
+        (permission, scope) =>
+          permission === 'audit.export' && scope.kind === 'portal' && scope.slug === 'marine',
+      ),
+    ).toEqual([])
+    expect(
+      accountEntries(
+        'marine',
+        (permission, scope) => permission === 'audit.export' && scope.kind === 'platform',
+      ),
+    ).toEqual([{ label: 'Platform audit', href: '/admin/audit' }])
+  })
   it('supplies explicit entries to both desktop and mobile controls', () => {
     expect(tenantLayoutSource.match(/entries=\{menuEntries\}/g)?.length).toBe(2)
     expect(tenantLayoutSource).not.toContain('accountIsAdmin')

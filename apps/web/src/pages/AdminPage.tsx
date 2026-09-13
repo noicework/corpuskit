@@ -134,6 +134,12 @@ export function PlatformAdminShell(
       label: 'People',
       allowed: access.can('platform.members.manage', { kind: 'platform' }),
     },
+    {
+      to: '/admin/audit',
+      label: 'Audit',
+      allowed: access.can('audit.read', { kind: 'platform' }) ||
+        access.can('audit.export', { kind: 'platform' }),
+    },
   ].filter((link) => link.allowed)
   return (
     <main className='min-h-screen bg-app'>

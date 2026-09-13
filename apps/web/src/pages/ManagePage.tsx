@@ -25,6 +25,7 @@ import { usePermissionAdminAccess } from '../components/EmergencyAccess.tsx'
 import { getManageContent, getManageStatus } from '../api/manage.ts'
 import { PortalConnections } from './admin/PortalConnections.tsx'
 import { ACCESS_SECTION_PERMISSIONS, AccessPanel } from './admin/AccessPanel.tsx'
+import { AuditPanel } from './admin/AuditPanel.tsx'
 
 const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'overview', label: 'Overview', permission: 'content.write' },
@@ -39,7 +40,7 @@ const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'details', label: 'Details', permission: 'appearance.write' },
   { id: 'connections', label: 'Connections', permission: 'bindings.write' },
   { id: 'access', label: 'Access', permission: 'members.manage' },
-  // Audit is mounted by its owning panel migration.
+  { id: 'audit', label: 'Audit', permission: 'audit.read' },
 ]
 
 export function ManagePage() {
@@ -60,7 +61,11 @@ function ManageContent() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const allowedTabs = TABS.filter((item) =>
-    item.id === 'access' ? ACCESS_SECTION_PERMISSIONS.some(can) : can(item.permission)
+    item.id === 'access'
+      ? ACCESS_SECTION_PERMISSIONS.some(can)
+      : item.id === 'audit'
+      ? can('audit.read') || can('audit.export')
+      : can(item.permission)
   )
   const wanted = searchParams.get('tab')
   const tab = allowedTabs.find((item) => item.id === wanted)?.id ?? allowedTabs[0]?.id
@@ -212,6 +217,7 @@ function ManageContent() {
           </nav>
           <div className='min-w-0 space-y-4'>
             {tab === 'access' && <AccessPanel slug={slug} name={config.branding.productName} />}
+            {tab === 'audit' && <AuditPanel scope={scope} name={config.branding.productName} />}
             {tab === 'overview' && can('content.write') && (
               <>
                 {can('content.write') && reachable && (

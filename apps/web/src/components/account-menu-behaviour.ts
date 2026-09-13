@@ -59,6 +59,7 @@ export const MANAGEMENT_PERMISSIONS: readonly Permission[] = [
   'keys.manage',
   'members.manage',
   'audit.read',
+  'audit.export',
 ]
 
 export function accountEntries(slug: string, can: CanAccess): AccountEntry[] {
@@ -72,7 +73,9 @@ export function accountEntries(slug: string, can: CanAccess): AccountEntry[] {
     ...(can('platform.members.manage', platform)
       ? [{ label: 'People', href: '/admin/people' }]
       : []),
-    ...(can('audit.read', platform) ? [{ label: 'Platform audit', href: '/admin/audit' }] : []),
+    ...(can('audit.read', platform) || can('audit.export', platform)
+      ? [{ label: 'Platform audit', href: '/admin/audit' }]
+      : []),
   ]
 }
 
