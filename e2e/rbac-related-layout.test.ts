@@ -8,6 +8,13 @@ Deno.test('related resource titles remain readable at large text in the narrow r
   try {
     for (const scheme of ['light', 'dark']) {
       for (const width of [1440, 390]) {
+        server.tenants.patchBranding('marine', {
+          ...server.tenants.get('marine')!.branding,
+          paletteId: scheme === 'dark' ? 'observatory' : 'default',
+          shape: scheme === 'dark' ? 'soft' : 'square',
+          density: scheme === 'dark' ? 'spacious' : 'comfortable',
+          typography: 'lexend-zilla',
+        })
         await page.setViewportSize({ width, height: 960 })
         await page.goto(`${server.url}/t/marine/library/res-1`)
         await page.evaluate((scheme) => localStorage.setItem('rp-scheme', scheme), {
@@ -32,6 +39,9 @@ Deno.test('related resource titles remain readable at large text in the narrow r
             titleHeight: title.clientHeight,
             titleScrollHeight: title.scrollHeight,
             topicWidth: topic.clientWidth,
+            topicRight: topic.getBoundingClientRect().right,
+            badgeRight: topic.parentElement!.getBoundingClientRect().right -
+              parseFloat(getComputedStyle(topic.parentElement!).paddingRight),
             topicScrollWidth: topic.scrollWidth,
             contained: t.left >= r.left && t.right <= r.right && t.bottom <= r.bottom,
           }
@@ -48,6 +58,7 @@ Deno.test('related resource titles remain readable at large text in the narrow r
         expect(metrics.titleHeight).toBeGreaterThanOrEqual(metrics.titleScrollHeight)
         expect(metrics.topicScrollWidth).toBeLessThanOrEqual(metrics.topicWidth + 1)
         expect(metrics.contained).toBe(true)
+        expect(metrics.topicRight).toBeLessThanOrEqual(metrics.badgeRight + 1)
       }
     }
   } finally {

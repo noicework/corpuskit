@@ -1377,8 +1377,11 @@ function RecommendationCard(
           </p>
           {topic
             ? (
-              <span className='rp-badge rp-badge-quiet mt-1.5 max-w-full'>
-                <span className='whitespace-normal break-words'>{topic}</span>
+              <span
+                className='rp-badge rp-badge-quiet mt-1.5 max-w-full'
+                style={{ borderRadius: 'var(--rp-radius)', overflow: 'visible' }}
+              >
+                <span className='min-w-0 whitespace-normal break-words'>{topic}</span>
               </span>
             )
             : null}
