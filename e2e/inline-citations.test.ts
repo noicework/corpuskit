@@ -9,9 +9,10 @@ let server: TestServer
 let screenshots: string
 
 beforeAll(async () => {
-  server = startTestServer({ identity: { role: 'analyst' } })
+  // Citations are part of public Ask and search, with no analyst grant.
+  server = startTestServer()
   browser = await launch()
-  screenshots = '.planning/logs/04-09-02/citations'
+  screenshots = '.planning/logs/04-18-01/citations'
   await Deno.mkdir(screenshots, { recursive: true })
   console.log(`Inline citation screenshots: ${screenshots}`)
 })

@@ -635,8 +635,9 @@ describe('search - AI answer panel and citations', () => {
 })
 
 describe('assessment page', () => {
-  it('renders its knowledge-area cards', async () => {
-    const page = await browser.newPage(`${server.url}/t/marine/assessment`)
+  it('renders its knowledge-area cards for a signed analyst', async () => {
+    const analyst = startTestServer({ identity: { role: 'analyst' } })
+    const page = await browser.newPage(`${analyst.url}/t/marine/assessment`)
     try {
       await page.waitForSelector('h1', { timeout: 15_000 })
       const heading = await (await page.$('h1'))?.innerText()
@@ -649,6 +650,7 @@ describe('assessment page', () => {
       expect(bodyText).toContain('Build an assessment')
     } finally {
       await page.close()
+      await analyst.close()
     }
   })
 })
