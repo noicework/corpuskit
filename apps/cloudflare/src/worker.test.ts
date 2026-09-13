@@ -2,6 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 
 import { expect } from '@std/expect'
+import { DOC_PAGES } from '../../../packages/core/src/docs.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState } from './state.ts'
 import {
@@ -239,7 +240,7 @@ Deno.test('Worker keeps About marketing assets off tenant and non-apex hosts', a
 })
 
 Deno.test('About asset selection preserves SPA paths and does not rewrite mutations', async () => {
-  for (const path of ['/t/marine/about', '/docs', '/about/other']) {
+  for (const path of ['/t/marine/about', '/t/demo/docs', '/about/other', '/docs-other']) {
     const harness = workerHarness()
     await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
     expect(new URL(harness.assetRequests[0]!.url).pathname).toBe(path)
@@ -249,6 +250,94 @@ Deno.test('About asset selection preserves SPA paths and does not rewrite mutati
     const request = new Request('https://corpuskit.org/about/', { method })
     expect(workerModule.marketingHomeRequest(request)).toBe(request)
   }
+})
+
+Deno.test('Worker serves all public docs aliases without asset redirects and with homepage headers', async () => {
+  const home = await worker.fetch(new Request('https://corpuskit.org/'), workerHarness().env)
+  const routes = [
+    ...['/docs', '/docs/', '/docs/index.html', '/docs/index'].map((path) => ({
+      path,
+      asset: '/docs/',
+    })),
+    ...DOC_PAGES.flatMap((page) =>
+      ['', '/', '.html', '.html/'].map((suffix) => ({
+        path: `/docs/${page.id}${suffix}`,
+        asset: `/docs/${page.id}`,
+      }))
+    ),
+    ...['/docs/unknown', '/docs/unknown.html/', '/docs/nested/path', '/docs/unknown/'].map((
+      path,
+    ) => ({ path, asset: '/docs/' })),
+  ]
+  const canonicalAssets = new Set(['/docs/', ...DOC_PAGES.map((page) => `/docs/${page.id}`)])
+  for (const { path, asset } of routes) {
+    for (const method of ['GET', 'HEAD']) {
+      const harness = workerHarness()
+      // Model Assets' pretty-URL redirects, instead of a mock that accepts any URL.
+      harness.env.ASSETS.fetch = (request) => {
+        harness.assetRequests.push(request)
+        return Promise.resolve(
+          canonicalAssets.has(new URL(request.url).pathname)
+            ? new Response(method === 'HEAD' ? null : asset, {
+              headers: { 'content-type': 'text/html' },
+            })
+            : new Response(null, {
+              status: 307,
+              headers: { location: '/unexpected-asset-redirect' },
+            }),
+        )
+      }
+      const response = await worker.fetch(
+        new Request(`https://corpuskit.org${path}?from=docs`, {
+          method,
+          headers: { 'accept-language': 'en-AU' },
+        }),
+        harness.env,
+      )
+      expect(response.status).toBe(200)
+      expect(Object.fromEntries(response.headers)).toEqual(Object.fromEntries(home.headers))
+      expect(response.headers.get('location')).toBeNull()
+      expect(await response.text()).toBe(method === 'HEAD' ? '' : asset)
+      expect(harness.portalRequests).toHaveLength(0)
+      expect(harness.assetRequests).toHaveLength(1)
+      expect(harness.assetRequests[0]!.url).toBe(`https://corpuskit.org${asset}?from=docs`)
+      expect(harness.assetRequests[0]!.method).toBe(method)
+      expect(harness.assetRequests[0]!.headers.get('accept-language')).toBe('en-AU')
+    }
+  }
+})
+
+Deno.test('public docs stay on the apex, preserve www canonicalisation and do not rewrite mutations', async () => {
+  const paths = [
+    '/docs',
+    '/docs/',
+    '/docs/index.html',
+    ...DOC_PAGES.flatMap((page) =>
+      ['', '/', '.html', '.html/'].map((suffix) => `/docs/${page.id}${suffix}`)
+    ),
+  ]
+  for (const host of ['demo.corpuskit.org', 'research.example.org', 'corpuskit.noice.net.au']) {
+    for (const path of paths) {
+      const harness = workerHarness()
+      expect((await worker.fetch(new Request(`https://${host}${path}`), harness.env)).status).toBe(
+        404,
+      )
+      expect(harness.assetRequests).toHaveLength(0)
+      expect(harness.portalRequests).toHaveLength(0)
+    }
+  }
+  for (const path of paths) {
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      const request = new Request(`https://corpuskit.org${path}`, { method })
+      expect(workerModule.marketingHomeRequest(request)).toBe(request)
+    }
+  }
+  const response = await worker.fetch(
+    new Request('https://www.corpuskit.org/docs/search/?from=www'),
+    workerHarness().env,
+  )
+  expect(response.status).toBe(308)
+  expect(response.headers.get('location')).toBe('https://corpuskit.org/docs/search/?from=www')
 })
 
 Deno.test('Worker permanently redirects the Assistant route alias for GET and HEAD', async () => {

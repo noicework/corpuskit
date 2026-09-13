@@ -657,6 +657,7 @@ Deno.test('Worker authentication and static boundaries stay separate from Hono h
   expect(worker).toContain('env.ASSETS.fetch(marketingHomeRequest(request))')
   const boundaries = DECLARATIONS.filter((item) => item.kind === 'boundary')
   expect(boundaries.map((item) => item.path)).toEqual(['/auth/*', 'static-assets'])
+  expect(boundaries.find((item) => item.path === 'static-assets')?.reason).toContain('/docs')
   expect(boundaries.every((item) => item.scope === 'public' && !!item.reason)).toBe(true)
 })
 
