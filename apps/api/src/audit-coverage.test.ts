@@ -3,10 +3,14 @@ import { Hono } from 'hono'
 import type { AuditEvent } from './audit.ts'
 import { TenantStore } from './tenants.ts'
 import { EnrichmentStore } from './enrichments.ts'
-import { buildApp } from './app.ts'
+import { buildApp as buildRawApp, type BuildAppOptions } from './app.ts'
+import { afterEach } from '@std/testing/bdd'
+import { LocalRbacDatabase } from './rbac-local.ts'
+import { RbacState } from './rbac-state.ts'
+import { createEnforcementFixture, sessionFor } from './enforcement-fixture.ts'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
-import { createMcpServer, type McpRoutesOptions } from './mcp.ts'
-import { AUDIT_MAX_RESPONSE_BYTES } from './audit-execution.ts'
+import { AUDIT_MAX_RESPONSE_BYTES, AUDIT_TIMEOUT_MS } from './audit-execution.ts'
+import type { AskEvent } from '@research-portal/core'
 import {
   assertRouteInventory,
   assertToolInventory,
@@ -18,12 +22,159 @@ import {
   isPrivileged,
 } from './permissions.ts'
 
+const fixtureDatabases: LocalRbacDatabase[] = []
+
+Deno.test('break-glass ask withholds output until completion and fails closed on audit failure or cancellation', async () => {
+  for (const failure of ['none', 'intent', 'completion', 'cancel', 'timeout']) {
+    const f = createEnforcementFixture()
+    const originalSetTimeout = globalThis.setTimeout
+    let expire: (() => void) | undefined
+    if (failure === 'timeout') {
+      globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+        const [handler, ms, ...rest] = args
+        if (ms === AUDIT_TIMEOUT_MS && typeof handler === 'function') {
+          expire = () => handler(...rest)
+        }
+        return originalSetTimeout(...args)
+      }) as typeof setTimeout
+    }
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => release = resolve)
+    let started!: () => void
+    const start = new Promise<void>((resolve) => started = resolve)
+    let calls = 0
+    let completed = false
+    let closed!: () => void
+    const closure = new Promise<void>((resolve) => closed = resolve)
+    f.provider.ask = async function* (): AsyncIterable<AskEvent> {
+      try {
+        calls++
+        started()
+        yield { type: 'stage', stage: 'retrieval', status: 'started' }
+        await gate
+        yield { type: 'delta', text: 'Protected answer evidence. ' }
+        yield { type: 'done', text: 'Protected answer evidence.' }
+        completed = true
+      } finally {
+        closed()
+      }
+    }
+    const app = buildRawApp({
+      ...f.stores,
+      provider: f.provider,
+      now: f.now,
+      configuredTenantId: f.tenantId,
+      audience: f.audience,
+      breakGlass: f.rbac.breakGlassService({
+        environment: 'development',
+        passcode: 'fixture-passcode',
+      }),
+      requestContext: () => ({
+        requestId: crypto.randomUUID(),
+        session: null,
+        clientIp: '192.0.2.1',
+        coarseAdminEligible: false,
+      }),
+      rateLimitAskPerMin: 0,
+    })
+    try {
+      if (failure === 'intent') f.failAudit()
+      if (failure === 'completion') {
+        f.database.exec(
+          "CREATE TRIGGER fail_ask_completion BEFORE INSERT ON audit_events WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success' BEGIN SELECT RAISE(ABORT, 'completion failure'); END",
+        )
+      }
+      const controller = new AbortController()
+      let resolved = false
+      const pending = Promise.resolve(app.request('/api/t/a/docs/ask', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'content-type': 'application/json', 'x-admin-passcode': 'fixture-passcode' },
+        body: JSON.stringify({ query: 'Explain the portal' }),
+      })).then((response) => {
+        resolved = true
+        return response
+      })
+      if (failure !== 'intent') {
+        await start
+        expect(resolved).toBe(false)
+        expect(
+          f.rbac.audit.read({ scope: { kind: 'portal', slug: 'a' } }).some((event) =>
+            event.action === 'request.privileged' && event.outcome === 'intent'
+          ),
+        ).toBe(true)
+        if (failure === 'cancel') controller.abort()
+        if (failure === 'timeout') {
+          expect(expire).toBeDefined()
+          expire!()
+          expect(controller.signal.aborted).toBe(false)
+        }
+      }
+      release()
+      const response = await pending
+      const text = await response.text()
+      expect(response.status).toBe(failure === 'none' ? 200 : 500)
+      expect(calls).toBe(failure === 'intent' ? 0 : 1)
+      if (failure === 'none') expect(text).toContain('Protected answer evidence.')
+      else expect(text).not.toContain('Protected answer evidence.')
+      if (failure !== 'intent') await closure
+      if (failure === 'timeout' || failure === 'cancel') expect(completed).toBe(false)
+    } finally {
+      release()
+      globalThis.setTimeout = originalSetTimeout
+      f.close()
+    }
+  }
+})
+afterEach(() => {
+  for (const db of fixtureDatabases.splice(0)) db.close()
+})
+function buildApp(options: BuildAppOptions) {
+  const db = new LocalRbacDatabase(':memory:')
+  fixtureDatabases.push(db)
+  const rbac = new RbacState(db)
+  rbac.migrate()
+  return buildRawApp({
+    ...options,
+    tenants: options.tenants ??
+      new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` }),
+    rbac,
+    configuredTenantId: 'tenant-1',
+    audience: 'corpuskit',
+    breakGlass: rbac.breakGlassService({ environment: 'production' }),
+  })
+}
+
+const curatorContext: NonNullable<BuildAppOptions['requestContext']> = () => ({
+  requestId: crypto.randomUUID(),
+  session: sessionFor('curator', 'marine', Date.now()),
+  effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
+  coarseAdminEligible: false,
+})
+
 Deno.test('cold question jobs deduplicate attribution and require every completion append for all waiters', async () => {
-  for (const failAt of [0, 1, 2, 3, 4]) {
+  for (
+    const failAt of [
+      'none',
+      'generate-intent',
+      'generate-success',
+      'cache-intent',
+      'cache-success',
+      'join-intent',
+      'join-success',
+    ]
+  ) {
     const directory = Deno.makeTempDirSync()
     try {
       const events: AuditEvent[] = []
-      const enrichments = new EnrichmentStore(directory)
+      let puts = 0
+      class CountedEnrichments extends EnrichmentStore {
+        override put(...args: Parameters<EnrichmentStore['put']>) {
+          puts++
+          return super.put(...args)
+        }
+      }
+      const enrichments = new CountedEnrichments(directory)
       let release!: () => void
       const held = new Promise<void>((resolve) => {
         release = resolve
@@ -33,7 +184,6 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         started = resolve
       })
       let calls = 0
-      let appends = 0
       const app = buildApp({
         provider: {
           resource: () =>
@@ -57,14 +207,22 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         enrichments,
         audit: {
           append: (event) => {
-            if (++appends === failAt) throw new Error('private')
+            const [operation, outcome] = failAt.split('-')
+            const action = operation === 'join'
+              ? 'request.privileged'
+              : `resource.questions.${operation}`
+            if (event.action === action && event.outcome === outcome) throw new Error('private')
             events.push(event)
           },
           read: () => events,
         },
         requestContext: (request) => ({
           requestId: request.headers.get('x-test-request')!,
-          session: null,
+          session: {
+            ...sessionFor('curator', 'marine', Date.now()),
+            oid: request.headers.get('x-test-request')!,
+          },
+          effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
           coarseAdminEligible: false,
           actor: { kind: 'user', id: request.headers.get('x-test-request')! },
         }),
@@ -72,7 +230,7 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
       const first = app.request('/api/t/marine/resources/doc/questions', {
         headers: { 'x-test-request': 'first' },
       })
-      if (failAt === 1) {
+      if (failAt === 'generate-intent') {
         expect((await first).status).toBe(500)
         expect(calls).toBe(0)
         continue
@@ -86,24 +244,34 @@ Deno.test('cold question jobs deduplicate attribution and require every completi
         return response
       })
       await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(returned).toBe(false)
+      expect(returned).toBe(failAt === 'join-intent')
       release()
-      for (const response of await Promise.all([first, second])) {
-        expect(response.status).toBe(failAt ? 500 : 200)
+      const responses = await Promise.all([first, second])
+      for (const [index, response] of responses.entries()) {
+        const failed = failAt !== 'none' && (index === 1 || !failAt.startsWith('join-'))
+        expect(response.status).toBe(failed ? 500 : 200)
         expect(await response.json()).toEqual(
-          failAt ? { error: 'audit_write_failed' } : { questions: [] },
+          failed ? { error: 'audit_write_failed' } : { questions: [] },
         )
       }
       expect(calls).toBe(1)
-      expect(events.every((event) => event.request_id === 'first' && event.actor_id === 'first'))
+      expect(puts).toBe(failAt.startsWith('generate-') || failAt === 'cache-intent' ? 0 : 1)
+      expect(
+        events.every((event) => event.actor_kind === 'user' && event.request_id === event.actor_id),
+      )
         .toBe(true)
-      if (!failAt) {
-        expect(events.map((e) => `${e.action}:${e.outcome}`)).toEqual([
+      if (failAt === 'none') {
+        expect(
+          events.filter((e) => e.request_id === 'first').map((e) => `${e.action}:${e.outcome}`),
+        ).toEqual([
           'resource.questions.generate:intent',
+          'resource.questions.generate:success',
           'resource.questions.cache:intent',
           'resource.questions.cache:success',
-          'resource.questions.generate:success',
         ])
+        expect(
+          events.filter((e) => e.request_id === 'second').map((e) => `${e.action}:${e.outcome}`),
+        ).toEqual(['request.privileged:intent', 'request.privileged:success'])
         const count = events.length
         expect(
           (await app.request('/api/t/marine/resources/doc/questions', {
@@ -125,11 +293,12 @@ Deno.test('question waiter arriving during cache write joins mandatory completio
     let late!: Response | Promise<Response>
     class JoiningStore extends EnrichmentStore {
       override put(...args: Parameters<EnrichmentStore['put']>) {
+        late ??= app.request('/api/t/marine/resources/doc/questions?wait=1')
         super.put(...args)
-        late = app.request('/api/t/marine/resources/doc/questions?wait=1')
       }
     }
     const app = buildApp({
+      requestContext: curatorContext,
       provider: {
         resource: () =>
           Promise.resolve({
@@ -146,7 +315,7 @@ Deno.test('question waiter arriving during cache write joins mandatory completio
       audit: {
         append: (event) => {
           if (
-            event.action === 'resource.questions.generate' && event.outcome === 'success'
+            event.action === 'resource.questions.cache' && event.outcome === 'success'
           ) throw new Error('fixture')
         },
         read: () => [],
@@ -174,6 +343,7 @@ Deno.test('question cancellation detaches one waiter and last-waiter abort preve
       const events: AuditEvent[] = []
       const enrichments = new EnrichmentStore(dir)
       const app = buildApp({
+        requestContext: curatorContext,
         provider: {
           resource: () =>
             Promise.resolve({
@@ -243,10 +413,10 @@ Deno.test('materialised enrichment exports above 1 MiB require successful comple
         },
         requestContext: () => ({
           requestId: 'export-request',
-          session: null,
+          session: sessionFor('owner', 'a', Date.now()),
           coarseAdminEligible: true,
           effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-          actor: { kind: 'user', id: 'export-user' },
+          actor: { kind: 'user', id: 'owner-a' },
         }),
       })
       const response = await app.request('/api/admin/t/marine/enrichments/export')
@@ -289,10 +459,10 @@ Deno.test('real privileged responses retain errors and never escape failed compl
       },
       requestContext: () => ({
         requestId: 'real-request',
-        session: null,
+        session: sessionFor('owner', 'a', Date.now()),
         coarseAdminEligible: true,
         effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-        actor: { kind: 'user', id: 'real-user' },
+        actor: { kind: 'user', id: 'owner-a' },
       }),
     })
     const response = await app.request(
@@ -311,7 +481,7 @@ Deno.test('real privileged responses retain errors and never escape failed compl
         mode === 'success' ? 'success' : mode === 'denied' ? 'denied' : 'failure',
       )
     }
-    expect(events.every((e) => e.request_id === 'real-request' && e.actor_id === 'real-user')).toBe(
+    expect(events.every((e) => e.request_id === 'real-request' && e.actor_id === 'owner-a')).toBe(
       true,
     )
     expect(JSON.stringify(events)).not.toContain('private')
@@ -334,7 +504,7 @@ Deno.test('Hono privileged SSE completes audit before response release and recor
       },
       requestContext: () => ({
         requestId: 'stream-request',
-        session: null,
+        session: sessionFor('owner', 'a', Date.now()),
         coarseAdminEligible: true,
         effectiveRoles: { platformRole: 'owner', portalRoles: [] },
       }),
@@ -358,7 +528,6 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
       const events: AuditEvent[] = []
       const app = buildApp({
         provider: {} as RetrievalProvider,
-        tenants: new TenantStore({}),
         audit: {
           append: (event) => {
             events.push(event)
@@ -367,13 +536,13 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
         },
         requestContext: () => ({
           requestId: 'inventory-request',
-          session: null,
+          session: sessionFor('owner', 'a', Date.now()),
           coarseAdminEligible: true,
           effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-          actor: { kind: 'user', id: 'inventory-user' },
+          actor: { kind: 'user', id: 'owner-a' },
         }),
       })
-      const path = declaration.path.replace(/:[^/]+/g, 'fixture')
+      const path = declaration.path.replace(':slug', 'marine').replace(/:[^/]+/g, 'fixture')
       const response = await app.request(path, {
         method: declaration.method,
         ...(declaration.method === 'GET'
@@ -382,10 +551,16 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
       })
       await response.text()
       expect(events[0]?.outcome).toBe('intent')
-      expect(events[0]?.actor_id).toBe('inventory-user')
+      expect(events[0]?.actor_id).toBe('owner-a')
       expect(events[0]?.request_id).toBe('inventory-request')
       expect(events[0]?.scope_kind).toBe(declaration.scope)
-      expect(events[0]?.target_id).toBe(declaration.target.param ? 'fixture' : null)
+      expect(events[0]?.target_id).toBe(
+        declaration.target.param === 'slug'
+          ? 'marine'
+          : declaration.target.param
+          ? 'fixture'
+          : null,
+      )
       expect(JSON.parse(events[0]!.detail_json).permission).toBe(declaration.permission)
       expect(events.at(-1)?.outcome).not.toBe('intent')
       let dispatches = 0
@@ -404,7 +579,7 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
         },
         requestContext: () => ({
           requestId: 'inventory-request',
-          session: null,
+          session: sessionFor('owner', 'a', Date.now()),
           coarseAdminEligible: true,
           effectiveRoles: { platformRole: 'owner', portalRoles: [] },
         }),
@@ -454,23 +629,17 @@ Deno.test('actual routes equal the sole declaration inventory in both directions
 })
 
 Deno.test('actual MCP tools/list equals declarations in both directions', async () => {
-  const server = createMcpServer({
-    provider: {} as RetrievalProvider,
-    tenant: () => undefined,
-    keys: {} as McpRoutesOptions['keys'],
-  })
-  await server.connected
+  const f = createEnforcementFixture()
   try {
-    const response = await server.transport.handleRequest(
-      new Request('https://local.test/mcp', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
-      }),
-    )
+    const response = await f.requestAs(f.sessionFor('viewer'), '/api/t/a/mcp', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(response.status).toBe(200)
     const names = (await response.json()).result.tools.map((tool: { name: string }) => tool.name)
     assertToolInventory(names)
     expect(() => assertToolInventory([...names, 'future_tool'])).toThrow()
@@ -478,7 +647,7 @@ Deno.test('actual MCP tools/list equals declarations in both directions', async 
     expect(DECLARATIONS.filter((item) => item.kind === 'mcp').every((item) => !isPrivileged(item)))
       .toBe(true)
   } finally {
-    await server.transport.close()
+    f.close()
   }
 })
 

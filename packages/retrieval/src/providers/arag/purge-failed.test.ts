@@ -12,6 +12,7 @@ import { AragProvider, isPurgeEligible } from './index.ts'
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'grains',
   branding: {
     productName: 'Dryland Cropping Research Portal',

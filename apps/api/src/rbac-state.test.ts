@@ -1,7 +1,7 @@
 import { expect } from '@std/expect'
 import { AuditWriteError, createAuditEvent } from './audit.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
-import { RbacState } from './rbac-state.ts'
+import { type RbacDatabase, RbacState } from './rbac-state.ts'
 
 /** Real SQLite fixture for subsequent guarded-service and fake-clock tests. */
 export function rbacFixture() {
@@ -74,6 +74,126 @@ export function fixtureEvent() {
   )
 }
 
+/** The same insertion snapshot contract runs through both SQL adapters. */
+export function checkAuditSnapshots(database: RbacDatabase): void {
+  let now = Date.UTC(2026, 8, 12)
+  let state = new RbacState(database, () => now)
+  state.migrate()
+  const scope = { kind: 'platform' } as const
+  const at = new Date(now).toISOString()
+  for (const id of ['b', 'd', 'f']) state.audit.append({ ...fixtureEvent(), id, at })
+  const snapshot = state.createAuditSnapshot(scope, {})
+  expect(
+    state.audit.read({ scope, snapshotSequence: snapshot.watermark, limit: 1 }).map((e) => e.id),
+  ).toEqual(['f'])
+  for (const id of ['a', 'e', 'z']) state.audit.append({ ...fixtureEvent(), id, at })
+  state.audit.append({ ...fixtureEvent(), id: 'backdated' })
+  state.audit.append({
+    ...fixtureEvent(),
+    id: 'completion',
+    at,
+    action: 'request.privileged',
+    detail_json: '{}',
+  })
+  expect(
+    state.audit.read({ scope, snapshotSequence: snapshot.watermark, cursor: { at, id: 'f' } }).map(
+      (e) => e.id,
+    ),
+  ).toEqual(['d', 'b'])
+  state = new RbacState(database, () => now)
+  state.migrate()
+  state.migrate()
+  expect(state.loadAuditSnapshot(snapshot.id, scope, {})).toEqual(snapshot)
+  for (
+    const invalid of [
+      { actorKind: 'owner' },
+      { actorId: 'x'.repeat(161) },
+      { requestId: '' },
+      { action: 'invented' },
+      { outcome: 'ok' },
+      { from: '2026-01-01' },
+      { from: at, to: '2020-01-01T00:00:00.000Z' },
+      { limit: 0 },
+      { limit: 1001 },
+      { snapshotSequence: -1 },
+      { snapshotSequence: 1.1 },
+      { cursor: { at, id: '' } },
+      { cursor: { at, id: 'b', extra: true } },
+      { extra: true },
+    ]
+  ) expect(() => state.audit.read({ scope, ...invalid } as never)).toThrow()
+  expect(
+    state.audit.read({
+      scope,
+      actorKind: 'user',
+      actorId: 'oid-1',
+      action: 'assignment.create',
+      outcome: 'success',
+      requestId: 'request-1',
+      from: at,
+      to: at,
+      snapshotSequence: snapshot.watermark,
+    }).map((e) => e.id),
+  ).toEqual(['f', 'd', 'b'])
+  expect(() => state.loadAuditSnapshot(snapshot.id, { kind: 'portal', slug: 'marine' }, {}))
+    .toThrow('snapshot_mismatch')
+  expect(() => state.loadAuditSnapshot(snapshot.id, scope, { outcome: 'denied' })).toThrow(
+    'snapshot_mismatch',
+  )
+  for (let n = 1; n < 128; n++) state.createAuditSnapshot(scope, {})
+  expect(() => state.createAuditSnapshot(scope, {})).toThrow('snapshot_limit')
+  expect(state.loadAuditSnapshot(snapshot.id, scope, {})).toEqual(snapshot)
+  now += 15 * 60_000
+  expect(() => state.loadAuditSnapshot(snapshot.id, scope, {})).toThrow('snapshot_expired')
+  state.createAuditSnapshot(scope, {})
+  expect(database.all('SELECT count(*) AS n FROM audit_query_snapshots')).toEqual([{ n: 1 }])
+  const before = database.all('SELECT * FROM audit_event_order ORDER BY sequence')
+  database.exec(
+    "CREATE TRIGGER fail_order BEFORE INSERT ON audit_event_order BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+  )
+  expect(() => state.audit.append({ ...fixtureEvent(), id: 'failed' })).toThrow(AuditWriteError)
+  expect(database.all('SELECT * FROM audit_events WHERE id = ?', 'failed')).toEqual([])
+  expect(database.all('SELECT * FROM audit_event_order ORDER BY sequence')).toEqual(before)
+  database.exec('DROP TRIGGER fail_order')
+  database.exec('PRAGMA foreign_keys=ON')
+  database.exec('CREATE TABLE snapshot_parent (id INTEGER PRIMARY KEY)')
+  database.exec(
+    'CREATE TABLE snapshot_child (id INTEGER REFERENCES snapshot_parent(id) DEFERRABLE INITIALLY DEFERRED)',
+  )
+  database.exec(
+    'CREATE TRIGGER fail_commit AFTER INSERT ON audit_events BEGIN INSERT INTO snapshot_child VALUES (1); END',
+  )
+  expect(() =>
+    database.transactionSync(() => state.audit.append({ ...fixtureEvent(), id: 'commit-failed' }))
+  ).toThrow()
+  expect(database.all('SELECT * FROM audit_events WHERE id = ?', 'commit-failed')).toEqual([])
+  expect(database.all('SELECT * FROM audit_event_order ORDER BY sequence')).toEqual(before)
+  database.exec('DROP TRIGGER fail_commit')
+  now += 401 * 86400_000
+  state.retainAudit(400)
+  expect(database.all('SELECT count(*) AS n FROM audit_query_snapshots')).toEqual([{ n: 0 }])
+  const retained = database.all<{ sequence: number }>('SELECT sequence FROM audit_event_order')
+  expect(retained).toHaveLength(1)
+  expect(retained[0]!.sequence).toBeGreaterThan(snapshot.watermark)
+  expect(state.audit.read({ scope, snapshotSequence: snapshot.watermark })).toEqual([])
+  state.audit.append({ ...fixtureEvent(), id: 'after-retention', at: new Date(now).toISOString() })
+  expect(
+    database.all<{ sequence: number }>(
+      'SELECT sequence FROM audit_event_order WHERE event_id = ?',
+      'after-retention',
+    )[0]!.sequence,
+  ).toBeGreaterThan(retained[0]!.sequence)
+}
+
+Deno.test('local insertion snapshots exclude later events and bound durable metadata', () => {
+  const database = new LocalRbacDatabase(':memory:')
+  try {
+    checkAuditSnapshots(database)
+  } finally {
+    database.close()
+  }
+})
+
 Deno.test('RBAC migrations are additive and idempotent with exact audit columns', () => {
   const f = rbacFixture()
   try {
@@ -85,7 +205,7 @@ Deno.test('RBAC migrations are additive and idempotent with exact audit columns'
     f.state.migrate()
     expect(f.database.all('SELECT * FROM unrelated')).toEqual([{ value: 'preserved' }])
     expect(f.database.all('SELECT count(*) AS n FROM role_assignments')).toEqual([{ n: 1 }])
-    expect(f.database.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 1 }])
+    expect(f.database.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 3 }])
     expect(
       f.database.all<{ name: string }>('PRAGMA table_info(audit_events)').map((row) => row.name),
     ).toEqual(Object.keys(fixtureEvent()))
@@ -94,6 +214,111 @@ Deno.test('RBAC migrations are additive and idempotent with exact audit columns'
     expect(Object.keys(f.state.audit).sort()).toEqual(['append', 'read'])
   } finally {
     f.close()
+  }
+})
+
+/** Independently frozen pre-phase-3 schema, shared by both actual SQL adapters. */
+export function checkAuditUpgrade(database: RbacDatabase): void {
+  database.exec(`CREATE TABLE audit_events (
+    id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, request_id TEXT NOT NULL,
+    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('anonymous','user','break-glass','legacy-key','system')),
+    actor_id TEXT, actor_label TEXT, action TEXT NOT NULL,
+    scope_kind TEXT NOT NULL CHECK(scope_kind IN ('platform','portal')), scope_slug TEXT,
+    target_kind TEXT NOT NULL, target_id TEXT,
+    outcome TEXT NOT NULL CHECK(outcome IN ('intent','success','denied','failure','uncertain')),
+    detail_json TEXT NOT NULL,
+    CHECK((scope_kind = 'platform' AND scope_slug IS NULL) OR
+      (scope_kind = 'portal' AND length(scope_slug) > 0)))`)
+  const historical = ['anonymous', 'user', 'break-glass', 'legacy-key', 'system'].map((
+    actor_kind,
+    i,
+  ) => ({
+    ...fixtureEvent(),
+    id: `old-${i}`,
+    actor_kind,
+  }))
+  for (const event of historical) {
+    database.exec(
+      'INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      ...Object.values(event),
+    )
+  }
+  const before = database.all('SELECT * FROM audit_events ORDER BY id')
+  const oldSchema = database.all("SELECT sql FROM sqlite_master WHERE name = 'audit_events'")
+  database.exec('PRAGMA foreign_keys = ON')
+  database.exec('CREATE TABLE migration_parent (id INTEGER PRIMARY KEY)')
+  database.exec(
+    'CREATE TABLE migration_commit_failure (id INTEGER REFERENCES migration_parent(id) DEFERRABLE INITIALLY DEFERRED)',
+  )
+  for (const failure of ['copy', 'marker', 'order-copy', 'order-marker', 'commit']) {
+    const failing: RbacDatabase = {
+      all: database.all.bind(database),
+      exec(query, ...bindings) {
+        if (
+          (failure === 'copy' && query.startsWith('INSERT INTO audit_events_v2')) ||
+          (failure === 'marker' && bindings.includes('rbac-audit-actors-v2')) ||
+          (failure === 'order-copy' && query.startsWith('INSERT INTO audit_event_order')) ||
+          (failure === 'order-marker' && bindings.includes('rbac-audit-order-v1'))
+        ) throw new Error('injected migration failure')
+        database.exec(query, ...bindings)
+      },
+      transactionSync(callback) {
+        return database.transactionSync(() => {
+          const result = callback()
+          if (failure === 'commit') {
+            database.exec('INSERT INTO migration_commit_failure VALUES (123)')
+          }
+          return result
+        })
+      },
+    }
+    expect(() => new RbacState(failing).migrate()).toThrow()
+    expect(database.all('SELECT * FROM audit_events ORDER BY id')).toEqual(before)
+    expect(database.all("SELECT sql FROM sqlite_master WHERE name = 'audit_events'")).toEqual(
+      oldSchema,
+    )
+    expect(
+      database.all(
+        "SELECT name FROM sqlite_master WHERE name IN ('audit_events_v2','rbac_migrations')",
+      ),
+    ).toEqual([])
+  }
+  let state = new RbacState(database)
+  state.migrate()
+  state.migrate()
+  state = new RbacState(database)
+  state.migrate()
+  expect(database.all('SELECT * FROM audit_events ORDER BY id')).toEqual(before)
+  expect(database.all('SELECT count(*) AS n FROM audit_event_order')).toEqual([{
+    n: historical.length,
+  }])
+  expect(
+    database.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'audit_events_by_%' ORDER BY name",
+    ).map((row) => row.name),
+  ).toEqual(['audit_events_by_at', 'audit_events_by_request', 'audit_events_by_scope'])
+  for (const actor_kind of ['key', 'legacy-key'] as const) {
+    const event = { ...fixtureEvent(), id: `new-${actor_kind}`, actor_kind }
+    database.exec(
+      "CREATE TRIGGER fail_new_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect(() => database.transactionSync(() => state.audit.append(event))).toThrow(AuditWriteError)
+    expect(database.all('SELECT * FROM audit_events ORDER BY id')).toEqual(before)
+    database.exec('DROP TRIGGER fail_new_audit')
+    state.audit.append(event)
+    before.push(...database.all('SELECT * FROM audit_events WHERE id = ?', event.id))
+    before.sort((a, b) =>
+      String((a as { id: string }).id).localeCompare(String((b as { id: string }).id))
+    )
+  }
+}
+
+Deno.test('local audit upgrade preserves history and rolls back copy, marker, append and commit failures', () => {
+  const database = new LocalRbacDatabase(':memory:')
+  try {
+    checkAuditUpgrade(database)
+  } finally {
+    database.close()
   }
 })
 

@@ -1,5 +1,6 @@
 import process from 'node:process'
 import { join } from 'node:path'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import {
   type CatalogItem,
   type CatalogPage,
@@ -17,7 +18,7 @@ import {
   type TenantConfig,
 } from '@research-portal/core'
 import { AragApiError, type AragProvider, overlayEnrichment } from '@research-portal/retrieval'
-import { readJsonSafe, writeJsonAtomic } from './persist.ts'
+import { writeJsonAtomic } from './persist.ts'
 
 /**
  * The portal's own store of generated enrichments (the merchandising cache),
@@ -52,7 +53,15 @@ export class EnrichmentStore {
   private load(slug: string): TenantEnrichments {
     const cached = this.cache.get(slug)
     if (cached) return cached
-    const data = readJsonSafe<TenantEnrichments>(this.pathFor(slug), {})
+    let raw: string
+    try {
+      raw = readFileSync(this.pathFor(slug), 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      raw = '{}'
+    }
+    // Reads never quarantine or rewrite corrupt state on behalf of a viewer.
+    const data = JSON.parse(raw) as TenantEnrichments
     this.cache.set(slug, data)
     return data
   }
@@ -71,11 +80,34 @@ export class EnrichmentStore {
     return this.load(slug)[schemaId] ?? {}
   }
 
-  put(slug: string, resourceId: string, enrichment: Enrichment): void {
-    const data = this.load(slug)
+  /** A supplied synchronous completion must succeed exactly once or the write is restored. */
+  put(slug: string, resourceId: string, enrichment: Enrichment, complete?: () => void): void {
+    const previous = this.load(slug)
+    const data = structuredClone(previous)
     const bucket = data[enrichment.schemaId] ?? (data[enrichment.schemaId] = {})
     bucket[resourceId] = enrichment
-    writeJsonAtomic(this.pathFor(slug), data)
+    const path = this.pathFor(slug)
+    let original: Uint8Array | undefined
+    if (complete) {
+      try {
+        original = readFileSync(path)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    try {
+      writeJsonAtomic(path, data)
+      complete?.()
+      this.cache.set(slug, data)
+    } catch (error) {
+      // This entire write/completion boundary is synchronous. No other writer
+      // can enter between the snapshot and an observed failure restoration.
+      if (complete) {
+        if (original) writeFileSync(path, original)
+        else rmSync(path, { force: true })
+      }
+      throw error
+    }
   }
 
   /** How many resources carry an enrichment for this agent. */

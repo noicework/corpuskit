@@ -33,8 +33,6 @@ import {
 } from '../../api/src/cloudflare-domains.ts'
 
 const PORTAL_OBJECT_NAME = 'production'
-const SSO_ADMIN_HEADER = 'x-corpuskit-sso-admin'
-const SSO_USER_ID_HEADER = 'x-corpuskit-sso-user-id'
 const PLATFORM_DOMAIN = 'corpuskit.org'
 const SECURITY_HEADERS: Record<string, string> = {
   'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
@@ -83,6 +81,9 @@ export class PortalDurableObject extends DurableObject<Env> {
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
     })
     this.app = buildApp({
+      rbac: this.stores.rbac,
+      configuredTenantId: bindings.ENTRA_TENANT_ID,
+      audience: bindings.WORKER_NAME,
       provider: this.provider,
       management: this.provider,
       bindings: this.stores.bindings,
@@ -339,13 +340,6 @@ export async function forwardPortalRequest(
         iat: Math.floor(Date.now() / 1000),
       }, bindings.SESSION_SECRET ?? ''),
     )
-    headers.set(SSO_USER_ID_HEADER, user.id)
-    // Legacy transport is emitted only for verified platform claims. The DO resolves current stores.
-    if (
-      user.roles.some((role) =>
-        ['CorpusKit.Owner', 'CorpusKit.PlatformAdmin', 'CorpusKit.Admin'].includes(role)
-      )
-    ) headers.set(SSO_ADMIN_HEADER, '1')
   }
   return new Request(request, { headers })
 }

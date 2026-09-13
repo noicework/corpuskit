@@ -2,7 +2,7 @@
  * Documentation-scoped probe: is Help's index actually populated?
  *
  * Probes each portal's documentation-scoped search at boot and after every
- * ingest, and reports the result on `/api/health` as `docs`/`docsOk`, so a
+ * ingest, and retains the result internally, so a
  * box provisioned without documentation ingestion is caught rather than
  * silently answering "the help documentation does not cover this".
  * Serves: R20 (P7-08, P8-12, P7-31); PR #4.
@@ -25,7 +25,7 @@ import type { RetrievalProvider } from '@research-portal/retrieval'
  *
  * So the server probes each bound portal with a documentation-scoped search
  * for a phrase every authored page carries, records how many documentation
- * resources came back, and reports it on `/api/health` as `docs`. A zero is
+ * resources came back, and retains a private readiness snapshot. A zero is
  * logged loudly at boot and after every re-check so it never passes quietly.
  */
 
@@ -57,7 +57,7 @@ export interface DocsHealthOptions {
 /**
  * Holds the latest documentation readiness snapshot and knows how to refresh
  * it. `check()` is called at boot and after every documentation ingestion;
- * `snapshot()` is what `/api/health` reports.
+ * `snapshot()` and `ok()` are internal diagnostics, never public health response fields.
  */
 export class DocsHealth {
   private status: DocsStatus = {}

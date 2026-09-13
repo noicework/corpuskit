@@ -13,6 +13,7 @@ import { AragProvider } from './index.ts'
  */
 
 const LAB: TenantConfig = {
+  accessMode: 'public',
   slug: 'neuro-lab',
   branding: {
     productName: 'Neurology Research Collective',

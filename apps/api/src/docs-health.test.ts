@@ -5,6 +5,7 @@ import { DOCS_PROBE_QUERY, DocsHealth } from './docs-health.ts'
 
 const tenant = (slug: string): TenantConfig => ({
   slug,
+  accessMode: 'public',
   branding: {
     productName: `${slug} portal`,
     organisation: slug,
@@ -92,7 +93,7 @@ describe('DocsHealth', () => {
     expect(logs[0]).toContain('box offline')
   })
 
-  it('re-checking a single portal replaces its earlier result', async () => {
+  it('keeps internal snapshot and aggregate readiness after re-checking, separate from the public health contract', async () => {
     let count = 0
     const health = new DocsHealth({
       tenants: () => [tenant('neuro')],

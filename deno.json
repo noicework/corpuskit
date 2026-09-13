@@ -17,6 +17,7 @@
     "hono/cors": "jsr:@hono/hono@^4.6.0/cors",
     "hono/streaming": "jsr:@hono/hono@^4.6.0/streaming",
     "hono/deno": "jsr:@hono/hono@^4.6.0/deno",
+    "hono/route": "jsr:@hono/hono@^4.6.0/route",
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
     "@std/expect": "jsr:@std/expect@^1",
     "@astral/astral": "jsr:@astral/astral@^0.5.6",

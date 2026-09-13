@@ -13,6 +13,7 @@ import {
 } from '@research-portal/core'
 import type { AragProvider, RetrievalProvider } from '@research-portal/retrieval'
 import { buildApp } from './app.ts'
+import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { tenantsWithNeuro } from './fixtures/neuro-tenant.ts'
 import { markersPerSentence } from './clause-pin.ts'
 
@@ -148,18 +149,32 @@ const sseEvents = async (response: Response): Promise<AskEvent[]> =>
     .map((chunk) => AskEventSchema.parse(JSON.parse(chunk.slice('data: '.length))))
 
 async function ask(provider: TwoPaperProvider, query: string) {
-  const app = buildApp({ provider, tenants: freshTenants(), management: management() })
-  const response = await app.request('/api/t/neuro/ask', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ query }),
-  })
-  const events = await sseEvents(response)
-  const done = events.find((e) => e.type === 'done')
-  return {
-    events,
-    text: done && done.type === 'done' ? done.text ?? '' : '',
-    citations: events.flatMap((e) => e.type === 'citation' ? [e.citation] : []),
+  const fixture = createEnforcementFixture()
+  try {
+    const app = buildApp({
+      ...fixture.stores,
+      configuredTenantId: fixture.tenantId,
+      audience: fixture.audience,
+      breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+      provider,
+      tenants: freshTenants(),
+      management: management(),
+    })
+    const response = await app.request('/api/t/neuro/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query }),
+    })
+    expect(response.status).toBe(200)
+    const events = await sseEvents(response)
+    const done = events.find((e) => e.type === 'done')
+    return {
+      events,
+      text: done && done.type === 'done' ? done.text ?? '' : '',
+      citations: events.flatMap((e) => e.type === 'citation' ? [e.citation] : []),
+    }
+  } finally {
+    fixture.close()
   }
 }
 

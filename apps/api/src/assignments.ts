@@ -78,6 +78,15 @@ export interface RoleResolution {
   groupCapability: 'enabled' | 'disabled' | VerifiedAssignmentSession['groupStatus']
 }
 
+const emptyResolution = (): RoleResolution => ({
+  effectiveRoles: { portalRoles: [] },
+  provenance: [],
+  groupCapability: 'unverified',
+})
+
+/** Claim data is separate from durable identity provenance and never implies a new session. */
+export type GrantClaims = Pick<VerifiedAssignmentSession, 'roles' | 'groups' | 'groupStatus'>
+
 /** Resolve only verified internal facts. Current assignment reads deliberately have no cache. */
 export async function resolveEffectiveRoles(
   session: VerifiedAssignmentSession | null,
@@ -85,11 +94,6 @@ export async function resolveEffectiveRoles(
   configuredTenantId: string,
   now = Date.now(),
 ): Promise<RoleResolution> {
-  const result: RoleResolution = {
-    effectiveRoles: { portalRoles: [] },
-    provenance: [],
-    groupCapability: 'unverified',
-  }
   if (
     !session || session.verified !== true || !identifier(configuredTenantId) ||
     session.tenantId !== configuredTenantId || !identifier(session.oid) ||
@@ -98,17 +102,41 @@ export async function resolveEffectiveRoles(
     !Number.isSafeInteger(session.expiresAt) || session.claimIssuedAt < 0 ||
     session.claimIssuedAt > now + 30_000 || session.expiresAt <= session.claimIssuedAt ||
     Math.min(session.expiresAt, session.claimIssuedAt + claimLifetime) <= now
-  ) return result
+  ) return emptyResolution()
 
-  const groupsValid = strings(session.groups) && session.groups.every(identifier)
-  result.groupCapability = stores.rbac.groupCapability(stores.audience) !== 'verified-supported'
+  const result = await resolveRoleGrants(session, session, stores)
+  if (result.effectiveRoles.platformRole) {
+    for (const portal of stores.tenants.list(true)) {
+      if (!identifier(portal.slug)) continue
+      const existing = result.effectiveRoles.portalRoles.find((r) => r.slug === portal.slug)
+      if (existing) existing.role = 'portal-admin'
+      else result.effectiveRoles.portalRoles.push({ slug: portal.slug, role: 'portal-admin' })
+    }
+  }
+  result.effectiveRoles.portalRoles.sort((a, b) => a.slug.localeCompare(b.slug))
+  return result
+}
+
+/** Internal accumulation only. Callers must establish identity and original claim freshness. */
+export async function resolveRoleGrants(
+  identity: { tenantId: string; oid: string },
+  claims: GrantClaims | null,
+  stores: Pick<RoleResolutionStores, 'rbac' | 'audience' | 'logUnknownRole'>,
+): Promise<RoleResolution> {
+  const result = emptyResolution()
+  if (!identifier(identity.tenantId) || !identifier(identity.oid)) return result
+
+  const groupsValid = claims && strings(claims.groups) && claims.groups.every(identifier)
+  result.groupCapability = !claims
+    ? 'unverified'
+    : stores.rbac.groupCapability(stores.audience) !== 'verified-supported'
     ? 'disabled'
     : !groupsValid
     ? 'malformed'
-    : session.groupStatus === 'complete'
+    : claims.groupStatus === 'complete'
     ? 'enabled'
-    : ['absent', 'malformed', 'overage', 'unverified'].includes(session.groupStatus)
-    ? session.groupStatus
+    : ['absent', 'malformed', 'overage', 'unverified'].includes(claims.groupStatus)
+    ? claims.groupStatus
     : 'unverified'
   const grant = (source: RoleProvenance['source'], scope: Scope, role: Role) => {
     result.provenance.push({ source, scope, role })
@@ -125,7 +153,7 @@ export async function resolveEffectiveRoles(
       else if (PORTAL_ROLES.indexOf(next) > PORTAL_ROLES.indexOf(current.role)) current.role = next
     }
   }
-  for (const role of [...new Set(session.roles)].sort()) {
+  for (const role of [...new Set(claims && strings(claims.roles) ? claims.roles : [])].sort()) {
     if (role === 'CorpusKit.Owner') grant('app-role', { kind: 'platform' }, 'owner')
     else if (role === 'CorpusKit.PlatformAdmin' || role === 'CorpusKit.Admin') {
       grant('app-role', { kind: 'platform' }, 'platform-admin')
@@ -139,14 +167,14 @@ export async function resolveEffectiveRoles(
       }
     }
   }
-  const rows = stores.rbac.assignments.list(configuredTenantId)
+  const rows = stores.rbac.assignments.list(identity.tenantId)
   for (const source of ['group', 'local'] as const) {
     for (const row of rows) {
-      if (row.tenantId !== configuredTenantId) continue
+      if (row.tenantId !== identity.tenantId) continue
       const matches = source === 'group'
         ? result.groupCapability === 'enabled' && row.subjectKind === 'group' &&
-          session.groups.includes(row.subjectId)
-        : row.subjectKind === 'active-oid' && row.subjectId === session.oid
+          claims?.groups.includes(row.subjectId)
+        : row.subjectKind === 'active-oid' && row.subjectId === identity.oid
       const scope = ScopeSchema.safeParse(row.scope)
       const role = RoleSchema.safeParse(row.role)
       if (!matches || !scope.success || !role.success) continue
@@ -154,14 +182,6 @@ export async function resolveEffectiveRoles(
         ? PLATFORM_ROLES
         : PORTAL_ROLES
       if (domain.includes(role.data)) grant(source, scope.data, role.data)
-    }
-  }
-  if (result.effectiveRoles.platformRole) {
-    for (const portal of stores.tenants.list(true)) {
-      if (!identifier(portal.slug)) continue
-      const existing = result.effectiveRoles.portalRoles.find((r) => r.slug === portal.slug)
-      if (existing) existing.role = 'portal-admin'
-      else result.effectiveRoles.portalRoles.push({ slug: portal.slug, role: 'portal-admin' })
     }
   }
   result.effectiveRoles.portalRoles.sort((a, b) => a.slug.localeCompare(b.slug))
@@ -349,6 +369,8 @@ export class AssignmentService {
       if (next) remaining.push(next)
       if (
         previous.role === 'owner' && previous.subjectKind !== 'pending-email' &&
+        // An inactive mapping cannot remove the final active owner when none exists.
+        this.owners(rows).size > 0 &&
         this.owners(remaining).size === 0
       ) {
         return this.denied(context, 'last_owner', previous)

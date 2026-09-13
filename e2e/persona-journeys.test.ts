@@ -653,6 +653,42 @@ describe('assessment page', () => {
   })
 })
 
+describe('explicit signed research authority', () => {
+  it('denies a viewer and persists an analyst investigation through the real API', async () => {
+    const viewer = startTestServer({ identity: { role: 'viewer' } })
+    const analyst = startTestServer({ identity: { role: 'analyst' } })
+    try {
+      for (const [fixture, status] of [[viewer, 403], [analyst, 200]] as const) {
+        const page = await browser.newPage(`${fixture.url}/t/marine`)
+        try {
+          const result = await page.evaluate(async () => {
+            const response = await fetch('/api/t/marine/investigations', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name: 'Browser research' }),
+            })
+            const body = await response.json()
+            const stored = response.ok
+              ? await (await fetch(`/api/t/marine/investigations/${body.id}`)).json()
+              : null
+            const me = await (await fetch('/auth/me')).json()
+            return { status: response.status, body, stored, me }
+          })
+          expect(result.status).toBe(status)
+          expect(result.me.authenticated).toBe(true)
+          if (status === 200) expect(result.stored.name).toBe('Browser research')
+          else expect(result.body.error).toBe('forbidden')
+        } finally {
+          await page.close()
+        }
+      }
+    } finally {
+      await viewer.close()
+      await analyst.close()
+    }
+  })
+})
+
 describe('390px mobile viewport', () => {
   it('keeps the search journey usable - no horizontal body scroll, tap targets reachable', async () => {
     const page = await browser.newPage()

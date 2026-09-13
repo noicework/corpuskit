@@ -33,6 +33,7 @@ const dir = await Deno.makeTempDir()
 Deno.env.set('DATA_DIR', dir)
 
 const { buildApp } = await import('./app.ts')
+const { sessionFor } = await import('./enforcement-fixture.ts')
 const { pagesPerRun, recordSyncFailure, SYNC_CAP, syncSource } = await import('./scheduler.ts')
 const { SourceStore } = await import('./stores.ts')
 const { TenantStore } = await import('./tenants.ts')
@@ -370,11 +371,15 @@ describe('admin source routes', () => {
         search: async () => ({ query: '', resources: [], relatedQuestions: [] }),
       } as never,
       tenants: freshTenants(),
+      rbac,
+      configuredTenantId: 'tenant-1',
+      audience: 'corpuskit',
       audit: rbac.audit,
       breakGlass: rbac.breakGlassService({ passcode: PASSCODE }),
       requestContext: () => ({
         requestId: crypto.randomUUID(),
-        session: null,
+        session: sessionFor('curator', 'marine', Date.now()),
+        effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'curator' }] },
         clientIp: '127.0.0.1',
         coarseAdminEligible: false,
       }),
@@ -383,7 +388,7 @@ describe('admin source routes', () => {
 
   const post = (body: unknown) => ({
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-admin-passcode': PASSCODE },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
 
@@ -463,7 +468,7 @@ describe('admin source routes', () => {
 
       const response = await instance.request(`/api/admin/t/marine/sources/${created.id}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json', 'x-admin-passcode': PASSCODE },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ auto: false, maxPages: 50 }),
       })
       const patched = await response.json() as { auto: boolean; maxPages: number }

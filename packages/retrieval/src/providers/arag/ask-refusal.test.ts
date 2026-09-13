@@ -16,6 +16,7 @@ import { AragProvider, isGuardrailRefusal, MIN_REFUSAL_OVERRIDE_RELEVANCE } from
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'marine',
   branding: {
     productName: 'Southern Waters Research Portal',

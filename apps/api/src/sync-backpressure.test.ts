@@ -22,6 +22,7 @@ const { syncSource, runAutoSyncs } = await import('./scheduler.ts')
 const { SourceStore } = await import('./stores.ts')
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'marine',
   branding: {
     productName: 'Southern Waters Research Portal',

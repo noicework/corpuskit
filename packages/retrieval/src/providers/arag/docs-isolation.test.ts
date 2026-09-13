@@ -30,6 +30,7 @@ import {
  */
 
 const TENANT: TenantConfig = {
+  accessMode: 'public',
   slug: 'marine',
   branding: {
     productName: 'Southern Waters Research Portal',

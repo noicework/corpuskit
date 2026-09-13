@@ -14,6 +14,13 @@ import { AragProvider, type RetrievalProvider } from '@research-portal/retrieval
 import { buildApp } from './app.ts'
 import { TenantStore } from './tenants.ts'
 import { EnrichmentStore } from './enrichments.ts'
+import { afterEach } from '@std/testing/bdd'
+import { createEnforcementFixture } from './enforcement-fixture.ts'
+
+const fixtures: ReturnType<typeof createEnforcementFixture>[] = []
+afterEach(() => {
+  for (const fixture of fixtures.splice(0)) fixture.close()
+})
 
 /**
  * Route-level tests for the /generate endpoint's grounding gate - the fix
@@ -102,8 +109,22 @@ function hit(id: string, title: string, score: number, text = 'A retrieved passa
 }
 
 function makeApp(askLines: unknown[], enrichments?: EnrichmentStore) {
+  const fixture = createEnforcementFixture()
+  fixtures.push(fixture)
+  const session = fixture.sessionFor('analyst', 'marine')
   return buildApp({
-    audit: { append: () => {}, read: () => [] },
+    rbac: fixture.rbac,
+    configuredTenantId: fixture.tenantId,
+    audience: fixture.audience,
+    now: fixture.now,
+    audit: fixture.rbac.audit,
+    breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+    requestContext: () => ({
+      requestId: crypto.randomUUID(),
+      session,
+      coarseAdminEligible: false,
+      effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'analyst' }] },
+    }),
     provider: new UnusedProvider(),
     tenants: freshTenants(),
     management: buildManagement(askLines),
