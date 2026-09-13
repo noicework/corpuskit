@@ -146,6 +146,11 @@ const pageSchema = z.object({
   complete: z.boolean(),
 }).strict()
 export type AuditPage = z.infer<typeof pageSchema>
+export type AuditFormat = 'csv' | 'json'
+export type AuditExportPage = Pick<AuditPage, 'nextCursor' | 'snapshot' | 'complete'> & {
+  bytes: Uint8Array
+  contentType: string
+}
 export class AuditError extends Error {
   constructor(readonly status = 0) {
     super(
@@ -278,6 +283,84 @@ export async function listAudit(
     )
     assertResponseCurrent(response)
     return result
+  } catch (error) {
+    if (error instanceof AuditError || (error instanceof Error && error.name === 'AbortError')) {
+      throw error
+    }
+    throw new AuditError()
+  } finally {
+    if (response) {
+      await response.body?.cancel().catch(() => {})
+      finishResponse(response)
+    }
+  }
+}
+
+/** Preserve the server's serialisation; a page is never an aggregate export. */
+export async function exportAuditPage(
+  suppliedScope: Scope,
+  filters: Omit<AuditQuery, 'cursor'>,
+  format: AuditFormat,
+  cursor?: string,
+  options: RequestContext = {},
+): Promise<AuditExportPage> {
+  const scope = fixedScope(suppliedScope)
+  const query = Object.freeze({ ...filters, ...(cursor === undefined ? {} : { cursor }) })
+  const params = auditQuery(query)
+  if (!['csv', 'json'].includes(format) || 'cursor' in filters) throw new AuditError(400)
+  params.set('format', format)
+  const authority = options.authority ?? currentAuthority()
+  if (options.context) authority?.assertCurrent(options.context)
+  if (!authority?.session?.user || !authority.can('audit.export', scope)) throw new AuditError()
+  let response: Response | undefined
+  try {
+    response = await authorityFetch(
+      `${
+        scope.kind === 'platform'
+          ? '/api/admin/audit'
+          : `/api/admin/t/${encodeURIComponent(scope.slug)}/audit`
+      }/export?${params}`,
+      {
+        cache: 'no-store',
+        headers: { accept: format === 'csv' ? 'text/csv' : 'application/json' },
+      },
+      options,
+    )
+    if (response.status !== 200) throw new AuditError(response.status)
+    const contentType = format === 'csv' ? 'text/csv' : 'application/json'
+    if (response.headers.get('content-type')?.split(';')[0]?.toLowerCase() !== contentType) {
+      throw new AuditError()
+    }
+    const bytes = await readAuditBytes(response)
+    let metadata: Pick<AuditPage, 'nextCursor' | 'snapshot' | 'complete'>
+    if (format === 'json') {
+      const page = parseAuditPage(
+        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)),
+        scope,
+        query,
+      )
+      metadata = { nextCursor: page.nextCursor, snapshot: page.snapshot, complete: page.complete }
+    } else {
+      const complete = response.headers.get('x-audit-complete')
+      const next = response.headers.get('x-audit-next-cursor')
+      if (
+        !['true', 'false'].includes(complete ?? '') || next === null ||
+        (complete === 'true') !== (next === '')
+      ) throw new AuditError()
+      const snapshot = pageSchema.shape.snapshot.parse({
+        id: response.headers.get('x-audit-snapshot-id'),
+        expiresAt: response.headers.get('x-audit-snapshot-expires-at'),
+      })
+      if (cursor && parseAuditCursor(cursor).snapshotId !== snapshot.id) throw new AuditError()
+      if (next && (parseAuditCursor(next).snapshotId !== snapshot.id || next === cursor)) {
+        throw new AuditError()
+      }
+      if (!bytes.byteLength) throw new AuditError()
+      metadata = { nextCursor: next || null, snapshot, complete: complete === 'true' }
+    }
+    assertResponseCurrent(response)
+    if (!authority.can('audit.export', scope)) throw new AuditError()
+    return { bytes, contentType, ...metadata }
   } catch (error) {
     if (error instanceof AuditError || (error instanceof Error && error.name === 'AbortError')) {
       throw error

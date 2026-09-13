@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import { AuthorityController } from './access-lifecycle.ts'
-import { AuditError, auditQuery, listAudit, parseAuditPage } from './audit.ts'
+import { AuditError, auditQuery, exportAuditPage, listAudit, parseAuditPage } from './audit.ts'
 
 const scope = { kind: 'portal' as const, slug: 'marine' }
 const id = '11111111-1111-4111-8111-111111111111'
@@ -75,7 +75,7 @@ Deno.test('audit pages reject malformed envelopes, scope leaks and contradictory
     parseAuditPage(continued, scope, { cursor: cursor('22222222-2222-4222-8222-222222222222') })
   ).toThrow(AuditError)
 })
-function authority() {
+function authority(permissions = ['portal.read', 'audit.read']) {
   const controller = new AuthorityController(() => 'fixture')
   controller.setSession({
     authenticated: true,
@@ -98,11 +98,45 @@ function authority() {
       available: true,
       canEnable: false,
       effectiveRole: 'portal-admin',
-      permissions: ['portal.read', 'audit.read'],
+      permissions,
     },
   }, 'marine')
   return controller
 }
+Deno.test('audit exports independently require export and retain server serialisation', async () => {
+  const original = globalThis.fetch
+  try {
+    const reader = authority(), exporter = authority(['portal.read', 'audit.export'])
+    let calls = 0
+    globalThis.fetch = () => {
+      calls++
+      return Promise.resolve(Response.json(page()))
+    }
+    await expect(exportAuditPage(scope, {}, 'json', undefined, { authority: reader })).rejects
+      .toThrow()
+    expect(calls).toBe(0)
+    await expect(listAudit(scope, {}, { authority: exporter })).rejects.toThrow()
+    const result = await exportAuditPage(scope, {}, 'json', undefined, { authority: exporter })
+    expect(new TextDecoder().decode(result.bytes)).toBe(
+      JSON.stringify(page()).replace(
+        /"expiresAt":"[^"]+"/,
+        `"expiresAt":"${result.snapshot.expiresAt}"`,
+      ),
+    )
+    expect(result.complete).toBe(true)
+    for (const status of [410, 429, 500]) {
+      globalThis.fetch = () => Promise.resolve(Response.json({}, { status }))
+      await expect(exportAuditPage(scope, {}, 'json', undefined, { authority: exporter })).rejects
+        .toMatchObject({ status })
+    }
+    globalThis.fetch = () =>
+      Promise.resolve(new Response('error', { headers: { 'content-type': 'text/html' } }))
+    await expect(exportAuditPage(scope, {}, 'csv', undefined, { authority: exporter })).rejects
+      .toThrow()
+  } finally {
+    globalThis.fetch = original
+  }
+})
 Deno.test('audit reads use signed current scope, bound bytes and discard obsolete responses', async () => {
   const original = globalThis.fetch
   try {
