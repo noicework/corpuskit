@@ -9,9 +9,10 @@ let server: TestServer
 let screenshots: string
 
 beforeAll(async () => {
-  server = startTestServer()
+  server = startTestServer({ identity: { role: 'analyst' } })
   browser = await launch()
-  screenshots = await Deno.makeTempDir({ prefix: 'corpuskit-inline-citations-' })
+  screenshots = '.planning/logs/04-09-02/citations'
+  await Deno.mkdir(screenshots, { recursive: true })
   console.log(`Inline citation screenshots: ${screenshots}`)
 })
 

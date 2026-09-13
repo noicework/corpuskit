@@ -1,3 +1,5 @@
+import { useAccess } from '../components/AccessProvider.tsx'
+import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import { type FormEvent, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
@@ -76,15 +78,28 @@ function InvestigationCard(
 function CreateInvestigationForm({ slug }: { slug: string }) {
   const { config } = useOutletContext<TenantOutletContext>()
   const copy = tenantCopy(config)
+  const access = useAccess()
+  const context = access.controller.context
+  const canWrite = () =>
+    context === access.controller.context &&
+    access.controller.can('portal.investigate', { kind: 'portal', slug })
   const [name, setName] = useState('')
   const [question, setQuestion] = useState('')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
-    mutationFn: () =>
-      createInvestigation(slug, { name: name.trim(), question: question.trim() || undefined }),
+    mutationFn: async () => {
+      if (!canWrite()) throw new StaleAuthorityError()
+      const result = await createInvestigation(slug, {
+        name: name.trim(),
+        question: question.trim() || undefined,
+      })
+      if (!canWrite()) throw new StaleAuthorityError()
+      return result
+    },
     onSuccess: (investigation) => {
+      if (!canWrite()) return
       void queryClient.invalidateQueries({ queryKey: ['investigations', slug] })
       navigate(`/t/${slug}/investigations/${investigation.id}`)
     },
@@ -92,7 +107,7 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault()
-    if (name.trim().length === 0 || mutation.isPending) return
+    if (!canWrite() || name.trim().length === 0 || mutation.isPending) return
     mutation.mutate()
   }
 
@@ -149,10 +164,12 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
 }
 
 export function InvestigationsPage() {
+  const access = useAccess()
   const { config } = useOutletContext<TenantOutletContext>()
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['investigations', config.slug],
     queryFn: () => listInvestigations(config.slug),
+    enabled: access.can('portal.read', { kind: 'portal', slug: config.slug }),
   })
 
   const sorted = data
@@ -160,15 +177,19 @@ export function InvestigationsPage() {
     : []
 
   return (
-    <main className='mx-auto max-w-6xl px-6 py-10'>
+    <main className='rp-shell py-10'>
       <h1 className='text-2xl font-semibold tracking-tight text-ink'>Investigations</h1>
       <p className='mt-1 text-sm text-ink-3'>
         Named research questions that accumulate evidence, sessions and outputs.
       </p>
 
-      <div className='mt-6 max-w-2xl'>
-        <CreateInvestigationForm slug={config.slug} />
-      </div>
+      {access.can('portal.investigate', { kind: 'portal', slug: config.slug })
+        ? (
+          <div className='mt-6 max-w-2xl'>
+            <CreateInvestigationForm slug={config.slug} />
+          </div>
+        )
+        : null}
 
       <div className='mt-8'>
         {isLoading
@@ -192,7 +213,9 @@ export function InvestigationsPage() {
           ? (
             <EmptyState
               title='No investigations yet'
-              description='Start an investigation to keep every passage, verdict and note you gather - your conclusions stay linked to their evidence.'
+              description={access.can('portal.investigate', { kind: 'portal', slug: config.slug })
+                ? 'Start an investigation to keep every passage, verdict and note you gather - your conclusions stay linked to their evidence.'
+                : 'Your saved investigations will appear here.'}
             />
           )
           : null}
