@@ -2840,7 +2840,7 @@ export function AskPage() {
     >
       <aside
         aria-label='Chat sessions'
-        className='hidden w-64 shrink-0 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-3 lg:flex 2xl:w-72'
+        className='hidden w-64 min-w-0 max-w-[22%] shrink-0 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-3 lg:flex 2xl:w-72'
       >
         <SessionList
           sessions={sessions}
@@ -3309,7 +3309,7 @@ export function AskPage() {
         ? (
           <aside
             aria-label='Sources for the latest answer'
-            className='hidden min-h-0 w-80 shrink-0 flex-col xl:flex 2xl:w-96'
+            className='hidden min-h-0 w-80 min-w-0 max-w-[28%] shrink-0 flex-col xl:flex 2xl:w-96'
           >
             <div className='rp-scroll min-h-0 flex-1 overflow-y-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
               <p className='rp-eyebrow text-ink-3'>Sources for the latest answer</p>
