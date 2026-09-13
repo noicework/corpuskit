@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Explore CorpusKit’s tools for research discovery, cited answers, investigations and portal administration. Open source, built on Progress Agentic RAG.">
+  <meta name="theme-color" content="#f2efe7">
+  <title>About CorpusKit</title>
+  <link rel="canonical" href="https://corpuskit.org/about">
+  <link rel="icon" type="image/png" sizes="96x96" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="CorpusKit">
+  <meta property="og:title" content="About CorpusKit">
+  <meta property="og:description" content="Explore CorpusKit’s tools for research discovery, cited answers, investigations and portal administration. Open source, built on Progress Agentic RAG.">
+  <meta property="og:url" content="https://corpuskit.org/about">
+  <meta property="og:image" content="https://corpuskit.org/og/corpuskit.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="CorpusKit - put your organisation's research to work. An open source research portal under the Apache 2.0 licence.">
+  <meta property="og:locale" content="en_AU">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="About CorpusKit">
+  <meta name="twitter:description" content="Explore CorpusKit’s tools for research discovery, cited answers, investigations and portal administration. Open source, built on Progress Agentic RAG.">
+  <meta name="twitter:image" content="https://corpuskit.org/og/corpuskit.png">
+  <meta name="twitter:image:alt" content="CorpusKit - put your organisation's research to work. An open source research portal under the Apache 2.0 licence.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,300..700&amp;family=Source+Sans+3:ital,wght@0,200..900;1,200..900&amp;family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&amp;display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #f2efe7;
+      --paper-soft: #f8f6f0;
+      --paper-deep: #e6e0d4;
+      --ink: #1c1c19;
+      --ink-soft: #5c5a53;
+      --rule: #cec8bb;
+      --blue: #155da6;
+      --blue-dark: #0d467f;
+      --blue-pale: #dce8f4;
+      --white: #fffdf8;
+      --serif: "Newsreader", Georgia, serif;
+      --sans: "Source Sans 3", Arial, sans-serif;
+      --mono: "IBM Plex Mono", monospace;
+      --display: "Archivo", sans-serif;
+      --display-weight-h1: 600;
+      --display-weight-h2: 600;
+      --display-track-h1: -.04em;
+      --display-track-h2: -.04em;
+      --display-lh-h1: .92;
+      --display-lh-h2: .98;
+      --page: min(92vw, 1480px);
+      --radius: 4px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      font-size: 17px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      opacity: .055;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.72'/%3E%3C/svg%3E");
+    }
+
+    a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: .22em; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    ::selection { background: var(--blue-pale); color: var(--ink); }
+
+    .skip-link {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 100;
+      padding: .65rem 1rem;
+      background: var(--ink);
+      color: var(--white);
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus { transform: none; }
+
+    .site-header {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 12;
+      height: calc(76px + env(safe-area-inset-top));
+      padding-top: env(safe-area-inset-top);
+      border-bottom: 1px solid rgba(28, 28, 25, .15);
+      background: rgba(242, 239, 231, .91);
+      backdrop-filter: blur(16px);
+      transition: background-color .55s ease, color .55s ease, border-color .55s ease;
+    }
+
+    .site-header.nav-dark {
+      color: var(--paper-soft);
+      background: rgba(28, 28, 25, .94);
+      border-bottom-color: rgba(248, 246, 240, .18);
+    }
+
+    .site-header.nav-blue {
+      color: white;
+      background: rgba(21, 93, 166, .94);
+      border-bottom-color: rgba(255, 255, 255, .24);
+    }
+
+    .nav-shell {
+      width: var(--page);
+      height: 100%;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: baseline;
+      gap: .1rem;
+      font-family: var(--display);
+      font-size: 1.55rem;
+      font-weight: 700;
+      line-height: 1;
+      text-decoration: none;
+      letter-spacing: -.055em;
+    }
+
+    .brand-mark { color: var(--blue); transition: color .55s ease; }
+    .site-header.nav-dark .brand-mark { color: #8fc0ee; }
+    .site-header.nav-blue .brand-mark { color: var(--blue-pale); }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: clamp(1rem, 2.2vw, 2.4rem);
+      font-size: .91rem;
+    }
+
+    .nav-links a { text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+    .nav-links .nav-demo {
+      padding: .55rem 1rem;
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .nav-links .nav-demo:hover { background: rgba(128, 128, 128, .1); text-decoration: none; }
+
+    .site-footer {
+      width: var(--page);
+      margin: 0 auto;
+      padding: 1.8rem 0 2rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 2rem;
+      color: var(--ink-soft);
+      border-top: 1px solid var(--rule);
+      font-size: .84rem;
+    }
+
+    .site-footer p { margin: 0; }
+
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+
+
+    body { font-size: 1.0625rem; }
+    .site-header { position: sticky; height: auto; min-height: 4.75rem; background: var(--paper); backdrop-filter: none; }
+    .nav-shell { min-height: 4.75rem; flex-wrap: wrap; padding-block: 1rem; gap: 1rem 2rem; }
+    .nav-links { flex-wrap: wrap; }
+    .nav-links [aria-current] { text-decoration: underline; }
+    .section-shell { width: var(--page); margin-inline: auto; }
+    .intro { padding-block: clamp(4rem, 7vw, 7rem) 3.5rem; }
+    h1, h2, h3 { font-family: var(--display); font-weight: var(--display-weight-h2); letter-spacing: var(--display-track-h2); }
+    h1 { margin: 0 0 2rem; font-size: clamp(3.1rem, 6.5vw, 7.6rem); line-height: .98; text-wrap: balance; }
+    .intro-copy { max-width: 65ch; font-size: 1.25rem; }
+    .intro-copy p { margin: 0 0 1rem; }
+    .intro-copy p + p { color: var(--ink-soft); font-size: 1.0625rem; }
+    .category-nav { border-block: 1px solid var(--rule); padding-block: 1.5rem; }
+    .category-nav ul { display: flex; flex-wrap: wrap; gap: .6rem 1.8rem; padding: 0; margin: 0; list-style: none; }
+    .category-nav a { color: var(--blue-dark); }
+    .features { padding-block: clamp(3rem, 5vw, 5rem); border-bottom: 1px solid var(--rule); scroll-margin-top: 10rem; }
+    .features h2 { margin: 0 0 1.75rem; font-size: clamp(2rem, 3vw, 3.4rem); line-height: 1.1; text-wrap: balance; }
+    .feature-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+    .feature-card { border: 1px solid var(--rule); min-width: 0; padding: clamp(1.4rem, 2.2vw, 2rem); background: var(--paper-soft); }
+    .feature-card h3 { margin: 0 0 .75rem; font-size: 1.5rem; line-height: 1.15; }
+    .feature-card p { max-width: 60ch; margin: 0; color: var(--ink-soft); }
+    .closing { padding-block: clamp(4rem, 7vw, 7rem) 3rem; }
+    .closing h2 { font-size: clamp(2.8rem, 5vw, 5.9rem); line-height: .98; margin: 0 0 2.5rem; }
+    .next-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--rule); background: var(--rule); }
+    .next-step { padding: 1.6rem; background: var(--paper); display: flex; flex-direction: column; }
+    .next-step h3 { margin: 0 0 .6rem; font-size: 1.55rem; line-height: 1.15; }
+    .next-step p { margin: 0 0 1.5rem; color: var(--ink-soft); }
+    .next-step a { margin-top: auto; align-self: flex-start; color: var(--blue-dark); font-weight: 600; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; }
+    .site-footer { flex-wrap: wrap; }
+    #main { scroll-margin-top: 10rem; }
+    @media (min-width: 1900px) { :root { --page: min(92vw, 2200px); } .feature-list { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); } }
+    @media (max-width: 980px) { :root { --page: 90vw; } .feature-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 680px) {
+      :root { --page: calc(100% - 48px); }
+      .site-header { position: relative; }
+      .nav-shell { align-items: flex-start; }
+      .nav-links { gap: .8rem 1.2rem; }
+      .feature-list, .next-steps { grid-template-columns: minmax(0, 1fr); }
+      .intro { padding-top: 3rem; }
+      .features { scroll-margin-top: 1rem; }
+      .site-footer { flex-direction: column; gap: 1rem; padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="nav-shell" aria-label="Main navigation">
+      <a class="brand" href="/" aria-label="CorpusKit home">CorpusKit<span class="brand-mark">/</span></a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/about" aria-current="page">About</a><a href="/docs">Docs</a><a href="https://github.com/noicework/corpuskit">Repository</a><a class="nav-demo" href="https://demo.corpuskit.org">Demo</a>
+      </div>
+    </nav>
+  </header>
+  <main id="main" class="section-shell">
+    <section class="intro" aria-labelledby="about-title">
+      <h1 id="about-title">About CorpusKit</h1>
+      <div class="intro-copy">
+        <p>CorpusKit is an open source research portal over a body of research, built on Progress Agentic RAG. It is licensed under Apache-2.0 and maintained by <a href="https://noice.net.au">Noice</a>.</p>
+        <p>Search the collection, ask questions with sources you can inspect, and follow connections between documents. The tools below support that work, from reading a single report to administering a portal.</p>
+      </div>
+    </section>
+    <nav class="category-nav" aria-label="Feature categories"><ul>
+      <li><a href="#discovery">Discovery and search</a></li>
+      <li><a href="#answers">Answers you can check</a></li>
+      <li><a href="#investigations">Knowledge graph and investigations</a></li>
+      <li><a href="#library">Library and reading</a></li>
+      <li><a href="#generate">Generate and assess</a></li>
+      <li><a href="#content">Content, taxonomy and enrichment</a></li>
+      <li><a href="#access">Access and security</a></li>
+      <li><a href="#integration">Integration and tools</a></li>
+      <li><a href="#platform">Platform and deployment</a></li>
+    </ul></nav>
+    <section class="features" id="discovery" aria-labelledby="discovery-title">
+      <h2 id="discovery-title">Discovery and search</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Explore the collection</h3><p>Start with suggested questions and topic rows drawn from the portal’s own research collection.</p></li>
+        <li class="feature-card"><h3>Search three ways</h3><p>Use hybrid, semantic or keyword search. Narrow results with facets and read the matched passages alongside them.</p></li>
+        <li class="feature-card"><h3>Question routing</h3><p>Ask routes questions to stored search configurations suited to the task, such as an exact lookup or an evidence review. Administrators manage those configurations.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="answers" aria-labelledby="answers-title">
+      <h2 id="answers-title">Answers you can check</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Cited conversations</h3><p>Ask questions across the collection and follow up in the same conversation. Numbered citations connect the answer to its sources.</p></li>
+        <li class="feature-card"><h3>Evidence checks</h3><p>The trust layer checks claims against cited text, including figures and their context. It can remove unsupported statements or withhold an answer, and tells you when it does.</p></li>
+        <li class="feature-card"><h3>Visible confidence</h3><p>See confidence information for sources and answers, including warnings when evidence is thin. These signals help you review an answer; they are not a guarantee of correctness.</p></li>
+        <li class="feature-card"><h3>Footnotes and passages</h3><p>Footnote references are bound to retrieved source passages on the server. Open a citation to inspect its evidence and read the original document.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="investigations" aria-labelledby="investigations-title">
+      <h2 id="investigations-title">Knowledge graph and investigations</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Entity relationships</h3><p>Explore entities and relationships extracted from the research. Follow connections and filter the graph using the portal’s entity and relation types.</p></li>
+        <li class="feature-card"><h3>Concept map</h3><p>See connections between categories that share resources. This offers a different view of the collection from the graph of extracted entities.</p></li>
+        <li class="feature-card"><h3>Investigations</h3><p>Keep a named research question and build its evidence over time. Saved evidence retains its provenance so you can trace where it came from.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="library" aria-labelledby="library-title">
+      <h2 id="library-title">Library and reading</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>A browsable library</h3><p>Browse, sort and filter the collection. Resources show curated titles, summaries and key takeaways to help you decide what to read.</p></li>
+        <li class="feature-card"><h3>Questions about a document</h3><p>Open a resource and ask questions scoped to that document. Use the source material and citations to check the response.</p></li>
+        <li class="feature-card"><h3>Saved research sessions</h3><p>Return to earlier questions, answers and their sources. A saved session keeps the research trail together.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="generate" aria-labelledby="generate-title">
+      <h2 id="generate-title">Generate and assess</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Research formats</h3><p>With analyst access, turn a research question into a briefing, comparison, timeline, FAQ or pros and cons. Generated material includes references for review.</p></li>
+        <li class="feature-card"><h3>Knowledge checks</h3><p>With analyst access, generate an assessment on a topic in the collection. Answer the questions and review feedback against the source material.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="content" aria-labelledby="content-title">
+      <h2 id="content-title">Content, taxonomy and enrichment</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Portal provisioning</h3><p>Platform administrators can create a portal from a domain brief and a knowledge box. Provisioning sets up the taxonomy, graph strategy, suggested questions and branding.</p></li>
+        <li class="feature-card"><h3>Content management</h3><p>Curators and administrators can upload resources and review corpus health. Manage the collection from the portal’s administration area.</p></li>
+        <li class="feature-card"><h3>Label sets</h3><p>Curators and administrators define categories, labels and their descriptions. Separate label sets can describe topics, document types and audiences for browsing and filtering.</p></li>
+        <li class="feature-card"><h3>Enrichment and presentation</h3><p>Curators and administrators manage agents that classify content and generate titles, summaries and key takeaways. These fields make documents easier to discover and recognise.</p></li>
+        <li class="feature-card"><h3>Extraction Lab</h3><p>An administrative lab profiles documents and compares extraction methods in a sandbox knowledge box. Administrators can set routing rules for how new uploads are extracted.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="access" aria-labelledby="access-title">
+      <h2 id="access-title">Access and security</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Roles and permissions</h3><p>Portal roles range from viewer and analyst to curator and portal administrator. Separate platform administrator and owner roles govern the wider installation.</p></li>
+        <li class="feature-card"><h3>Portal access modes</h3><p>Administrators choose public, authenticated or restricted access. Restricted portals require an explicit access assignment.</p></li>
+        <li class="feature-card"><h3>Microsoft Entra sign-in</h3><p>Sign in through the configured Microsoft Entra tenant. Role assignments and supported group mappings determine access to portal capabilities.</p></li>
+        <li class="feature-card"><h3>Scoped keys</h3><p>Administrators issue keys for one portal, with a role and optional expiry. Keys can be revoked and cannot grant more access than their creator currently holds.</p></li>
+        <li class="feature-card"><h3>Audit log</h3><p>Authorised administrators can read and export audit records for privileged actions, access denials and emergency access. Records identify the actor, action, scope and outcome.</p></li>
+        <li class="feature-card"><h3>Emergency access</h3><p>An explicitly enabled break-glass path gives an operator emergency access for a single request. Its use is audited, with lockouts after repeated failed attempts.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="integration" aria-labelledby="integration-title">
+      <h2 id="integration-title">Integration and tools</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>MCP server</h3><p>Connect a compatible Model Context Protocol client to search the corpus, browse the catalogue, retrieve documents and ask questions. Access uses a key scoped to that portal.</p></li>
+        <li class="feature-card"><h3>Research exports</h3><p>With analyst access, export Ask sessions and investigations to Word. Generate also offers Word exports and a print-ready view that you can save as PDF.</p></li>
+        <li class="feature-card"><h3>Custom domains</h3><p>Administrators can connect a custom hostname to a portal. Its branding and knowledge box remain configured for that portal.</p></li>
+      </ul>
+    </section>
+    <section class="features" id="platform" aria-labelledby="platform-title">
+      <h2 id="platform-title">Platform and deployment</h2>
+      <ul class="feature-list">
+        <li class="feature-card"><h3>Cloudflare deployment</h3><p>CorpusKit runs on Cloudflare Workers. SQLite-backed Durable Objects hold application state such as portal configuration, sessions and investigations.</p></li>
+        <li class="feature-card"><h3>One knowledge box per portal</h3><p>Each portal connects to its own Progress Agentic RAG knowledge box. The box handles content extraction, indexing, retrieval and generation.</p></li>
+        <li class="feature-card"><h3>Australian region option</h3><p>Administrators can select an Australian region for the Progress Agentic RAG knowledge box. Application hosting and model provider settings are configured separately.</p></li>
+        <li class="feature-card"><h3>Open source</h3><p>CorpusKit is available under Apache-2.0, so you can run, inspect and adapt the code. Noice maintains the project and welcomes contributions.</p></li>
+      </ul>
+    </section>
+    <section class="closing" aria-labelledby="next-title">
+      <h2 id="next-title">Explore CorpusKit</h2>
+      <div class="next-steps">
+        <article class="next-step"><h3>Use a portal</h3><p>Explore the documentation collection and ask questions in the demo.</p><a href="https://demo.corpuskit.org">Try the demo</a></article>
+        <article class="next-step"><h3>Read the guides</h3><p>Learn how to research with CorpusKit and manage a portal.</p><a href="/docs">Read the docs</a></article>
+        <article class="next-step"><h3>Run CorpusKit</h3><p>Inspect the code, run your own installation or contribute to the project.</p><a href="https://github.com/noicework/corpuskit">View the repository</a></article>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <p>CorpusKit is open source under the Apache 2.0 licence. Maintained by <a href="https://noice.net.au">Noice</a>. Powered by <a href="https://www.progress.com/agentic-rag">Progress Agentic RAG</a>.</p>
+    <nav class="footer-links" aria-label="Footer navigation"><a href="/">Home</a><a href="/about" aria-current="page">About</a><a href="/docs">Docs</a><a href="https://github.com/noicework/corpuskit">Repository</a></nav>
+  </footer>
+</body>
+</html>

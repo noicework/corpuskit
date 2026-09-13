@@ -112,11 +112,13 @@ function localBuildId(): string {
 const buildSha = process.env.BUILD_SHA ?? webBuild?.sha ?? localBuildId()
 let indexHtml = ''
 let homeHtml = ''
+let aboutHtml = ''
 try {
   indexHtml = readFileSync('./apps/web/dist/index.html', 'utf8')
     .replace('"/app.js"', `"/app.js?v=${buildSha}"`)
     .replace('"/styles.css"', `"/styles.css?v=${buildSha}"`)
   homeHtml = readFileSync('./apps/web/dist/home.html', 'utf8')
+  aboutHtml = readFileSync('./apps/web/dist/about.html', 'utf8')
 } catch {
   // No build present (e.g. a dev server before build:web) - the health check
   // reports web:false and the catch-all below returns 503.
@@ -136,6 +138,17 @@ app.get(
     return c.html(homeHtml)
   }),
 )
+// Local marketing preview, under the same static boundary as the homepage.
+for (const path of ['/about', '/about/']) {
+  app.get(
+    path,
+    infrastructureHandler(async (c) => {
+      if (!aboutHtml) return c.text('The web build is not available.', 503)
+      c.header('Cache-Control', 'no-cache')
+      return c.html(aboutHtml)
+    }),
+  )
+}
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
 app.get(
   '*',

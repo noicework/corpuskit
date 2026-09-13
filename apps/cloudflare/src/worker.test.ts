@@ -192,6 +192,65 @@ Deno.test('Worker preserves the marketing URL query while selecting the homepage
   expect(request.method).toBe('HEAD')
 })
 
+Deno.test('Worker serves both About URLs with the homepage caching and security headers', async () => {
+  const home = await worker.fetch(new Request('https://corpuskit.org/'), workerHarness().env)
+  for (const path of ['/about', '/about/', '/about.html']) {
+    for (const method of ['GET', 'HEAD']) {
+      const harness = workerHarness()
+      const response = await worker.fetch(
+        new Request(`https://corpuskit.org${path}?from=home`, {
+          method,
+          headers: { 'accept-language': 'en-AU' },
+        }),
+        harness.env,
+      )
+      expect(response.status).toBe(200)
+      expect(Object.fromEntries(response.headers)).toEqual(Object.fromEntries(home.headers))
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(response.headers.get('location')).toBeNull()
+      expect(harness.portalRequests).toHaveLength(0)
+      expect(harness.assetRequests).toHaveLength(1)
+      const selected = harness.assetRequests[0]!
+      expect(selected.url).toBe('https://corpuskit.org/about?from=home')
+      expect(selected.method).toBe(method)
+      expect(selected.headers.get('accept-language')).toBe('en-AU')
+    }
+  }
+})
+
+Deno.test('Worker keeps About marketing assets off tenant and non-apex hosts', async () => {
+  for (const host of ['demo.corpuskit.org', 'marine.corpuskit.org', 'research.example.org']) {
+    for (const path of ['/about', '/about/', '/about.html']) {
+      const harness = workerHarness()
+      const response = await worker.fetch(new Request(`https://${host}${path}`), harness.env)
+      expect(response.status).toBe(404)
+      expect(harness.assetRequests).toHaveLength(0)
+      expect(harness.portalRequests).toHaveLength(0)
+    }
+  }
+  const harness = workerHarness()
+  const response = await worker.fetch(
+    new Request('https://www.corpuskit.org/about/?from=www'),
+    harness.env,
+  )
+  expect(response.status).toBe(308)
+  expect(response.headers.get('location')).toBe('https://corpuskit.org/about/?from=www')
+})
+
+Deno.test('About asset selection preserves SPA paths and does not rewrite mutations', async () => {
+  for (const path of ['/t/marine/about', '/docs', '/about/other']) {
+    const harness = workerHarness()
+    await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
+    expect(new URL(harness.assetRequests[0]!.url).pathname).toBe(path)
+    expect(harness.portalRequests).toHaveLength(0)
+  }
+  for (const method of ['POST', 'PUT', 'DELETE']) {
+    const request = new Request('https://corpuskit.org/about/', { method })
+    expect(workerModule.marketingHomeRequest(request)).toBe(request)
+  }
+})
+
 Deno.test('Worker permanently redirects the Assistant route alias for GET and HEAD', async () => {
   for (const method of ['GET', 'HEAD']) {
     const harness = workerHarness()
