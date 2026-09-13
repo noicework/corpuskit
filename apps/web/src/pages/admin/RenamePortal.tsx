@@ -1,8 +1,9 @@
-import { type FormEvent, useState } from 'react'
+import { type ComponentProps, type FormEvent, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { renamePortal } from '../../api/client.ts'
 import { AdminAccessError } from '../../api/break-glass.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
@@ -11,7 +12,7 @@ import { errorMessage, type Message } from './shared.ts'
  * Saves via renamePortal and refreshes both the admin overview and the
  * public tenant list so the switcher picks up the change.
  */
-export function RenamePortal({
+function RenamePortalContent({
   slug,
   initialName,
   initialOrganisation,
@@ -26,7 +27,10 @@ export function RenamePortal({
   onCancel: () => void
   onSaved: () => void
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [name, setName] = useState(initialName)
   const [organisation, setOrganisation] = useState(initialOrganisation)
@@ -45,19 +49,23 @@ export function RenamePortal({
           organisation: organisation.trim(),
           tagline: tagline.trim(),
         })
+        assertCurrent()
         if (result?.ok !== true) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (completed === undefined) return
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
+      assertCurrent()
       onSaved()
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not rename the portal.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -113,4 +121,17 @@ export function RenamePortal({
       {message && <MessagePanel message={message} />}
     </form>
   )
+}
+
+export function RenamePortal(props: ComponentProps<typeof RenamePortalContent>) {
+  const authority = useAccess()
+  const permission = usePermissionAdminAccess('appearance.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (
+    authority.state.status !== 'ready' ||
+    (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <RenamePortalContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

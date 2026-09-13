@@ -1,8 +1,9 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AskInsightRow } from '../../api/client.ts'
 import { getInsights } from '../../api/client.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 
@@ -41,8 +42,14 @@ function StatTile({ label, value }: { label: string; value: string }) {
  * questions the corpus could not ground well, so the librarian knows exactly
  * what content to add next.
  */
-export function InsightsPanel({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+function InsightsPanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
+    'content.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getInsights>>>()
   const [error, setError] = useState<string>()
   const queryClient = useQueryClient()
@@ -50,12 +57,12 @@ export function InsightsPanel({ slug }: { slug: string }) {
   const query = useQuery({
     queryKey: ['admin-insights', slug],
     queryFn: () => getInsights(slug, sessionAccess),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
 
   const { isLoading, isError, isFetching } = query
-  const data = coarseAdminEligible ? query.data : snapshot
+  const data = sessionAllowed ? query.data : snapshot
   const onRefresh = async () => {
     setError(undefined)
     try {
@@ -68,8 +75,9 @@ export function InsightsPanel({ slug }: { slug: string }) {
         ) throw new AdminAccessError()
         return insights
       })
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['admin-insights', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['admin-insights', slug], result)
       else setSnapshot(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load insights.')
@@ -95,7 +103,7 @@ export function InsightsPanel({ slug }: { slug: string }) {
         </button>
       </div>
 
-      {!coarseAdminEligible && (
+      {!sessionAllowed && (
         <p className='text-xs text-ink-3'>
           Insights are a snapshot. Refresh explicitly to read them again.
         </p>
@@ -230,4 +238,14 @@ export function InsightsPanel({ slug }: { slug: string }) {
       )}
     </div>
   )
+}
+
+/** Keep editors and protected snapshots within their authority generation. */
+export function InsightsPanel(props: { slug: string }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <InsightsPanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

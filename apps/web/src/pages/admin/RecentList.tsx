@@ -1,11 +1,24 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { RecentResource } from '@research-portal/core'
 import { getAdminRecent, setResourceHidden } from '../../api/client.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { AdminAccessError } from '../../api/break-glass.ts'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 import { errorMessage } from './shared.ts'
+
+async function readRecent(slug: string, access: AdminRequestAccess) {
+  const rows = await getAdminRecent(slug, access)
+  if (
+    !Array.isArray(rows) ||
+    rows.some((row) =>
+      !row || typeof row.id !== 'string' || typeof row.title !== 'string' ||
+      !['pending', 'processed', 'error'].includes(row.status)
+    )
+  ) throw new AdminAccessError()
+  return rows
+}
 
 function StatusChip({ status }: { status: RecentResource['status'] }) {
   if (status === 'pending') {
@@ -33,7 +46,10 @@ function VisibilityControl({
   resource: RecentResource
   onChanged: () => Promise<unknown>
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,8 +61,10 @@ function VisibilityControl({
         resource.hidden ? 'Publish resource' : 'Hide resource',
         (access) => setResourceHidden(slug, access, resource.id, !resource.hidden),
       )
+      assertCurrent()
       if (result === undefined) return
       if (result.ok !== true) throw new AdminAccessError()
+      assertCurrent()
       await onChanged()
     } catch (err) {
       setError(errorMessage(err, 'Could not change visibility.'))
@@ -62,7 +80,7 @@ function VisibilityControl({
         type='button'
         disabled={busy}
         onClick={() => void toggle()}
-        className='text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        className='rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
       >
         {busy ? '…' : resource.hidden ? 'Publish' : 'Hide'}
       </button>
@@ -77,31 +95,38 @@ function VisibilityControl({
  * without a manual refresh. Each row also carries a visibility control so
  * the librarian can hide a resource (draft) or publish it again.
  */
-export function RecentList({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+function RecentListContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
+    'content.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<RecentResource[]>()
   const [error, setError] = useState<string>()
   const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: ['admin-recent', slug],
-    queryFn: () => getAdminRecent(slug, sessionAccess),
-    enabled: coarseAdminEligible,
+    queryFn: () => readRecent(slug, sessionAccess),
+    enabled: sessionAllowed,
     retry: false,
     refetchInterval: (query) =>
-      coarseAdminEligible && query.state.data?.some((r) => r.status === 'pending') ? 4000 : false,
+      sessionAllowed && query.state.data?.some((r) => r.status === 'pending') ? 4000 : false,
   })
 
   const { isLoading, isError } = query
-  const data = coarseAdminEligible ? query.data : snapshot
+  const data = sessionAllowed ? query.data : snapshot
   const refresh = async () => {
     setError(undefined)
     try {
       const result = await runExplicit(
         'Read recent additions',
-        (access) => getAdminRecent(slug, access),
+        (access) => readRecent(slug, access),
       )
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['admin-recent', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['admin-recent', slug], result)
       else setSnapshot(result)
     } catch (err) {
       setError(errorMessage(err, 'Could not load recent additions.'))
@@ -114,13 +139,14 @@ export function RecentList({ slug }: { slug: string }) {
       <h3 className='text-sm font-medium text-ink'>Recent additions</h3>
       <button
         type='button'
-        className='rp-btn rp-btn-outline mt-3'
+        className='rp-btn rp-btn-outline mt-3 min-h-[44px] h-auto whitespace-normal py-2'
+        style={{ height: 'auto', minHeight: '44px', paddingBlock: '0.5rem' }}
         disabled={pending}
         onClick={() => void refresh()}
       >
         Refresh recent additions
       </button>
-      {!coarseAdminEligible && (
+      {!sessionAllowed && (
         <p className='mt-2 text-xs text-ink-3'>
           This is a snapshot. Refresh explicitly to check processing or visibility changes.
         </p>
@@ -163,4 +189,14 @@ export function RecentList({ slug }: { slug: string }) {
       )}
     </div>
   )
+}
+
+/** Authority generations own form state and emergency snapshots. */
+export function RecentList(props: { slug: string }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <RecentListContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

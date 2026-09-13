@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useAccess, useScopeAccess } from '../../components/AccessProvider.tsx'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { AdminTenantOverview, MigrationEvent } from '@research-portal/core'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { migrateKb } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
@@ -29,10 +30,13 @@ const OUTCOME_BADGE: Record<ItemEvent['outcome'], string> = {
  * showing results once the server confirms the audited request. Sits at the bottom of
  * the connections page, its own card, independent of any single tenant.
  */
-export function MigratePanel(
+function MigratePanelContent(
   { rows }: { rows: AdminTenantOverview[] },
 ) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit, sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
+    'platform.settings.write',
+    { kind: 'platform' },
+  )
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [from, setFrom] = useState('')
@@ -42,11 +46,58 @@ export function MigratePanel(
   const [items, setItems] = useState<ItemEvent[]>([])
   const [summary, setSummary] = useState<DoneEvent | null>(null)
   const [message, setMessage] = useState<Message | null>(null)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const source = useScopeAccess(sessionAllowed ? from || null : null)
+  const destination = useScopeAccess(sessionAllowed ? to || null : null)
+  const permitted = () =>
+    authority.can('platform.settings.write', { kind: 'platform' }) && source.can('content.write') &&
+    destination.can('content.write')
+  const emergencyOnly = !sessionAllowed && breakGlassEnabled
+  const selection = `${from}:${to}:${source.state}:${
+    source.can('content.write')
+  }:${destination.state}:${destination.can('content.write')}`
+  const latestSelection = useRef({ key: selection, generation: 0 })
+  if (latestSelection.current.key !== selection) {
+    latestSelection.current = { key: selection, generation: latestSelection.current.generation + 1 }
+  }
+  const selectionGeneration = latestSelection.current.generation
+  const [stagedFor, setStagedFor] = useState(selection)
+  if (stagedFor !== selection) {
+    setStagedFor(selection)
+    setTotal(null)
+    setItems([])
+    setSummary(null)
+    setMessage(null)
+    setRunning(false)
+  }
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const current = () =>
+    mounted.current && context === authority.controller.context &&
+    latestSelection.current.generation === selectionGeneration
+  const assertCurrent = () => {
+    authority.controller.assertCurrent(context)
+    if (!current()) throw new AdminAccessError()
+  }
+  const assertPermitted = () => {
+    assertCurrent()
+    if (!permitted() && !emergencyOnly) throw new AdminAccessError()
+  }
 
   const options = rows.map((r) => ({ slug: r.tenant.slug, label: r.tenant.productName }))
-  const canRun = from.length > 0 && to.length > 0 && from !== to && !running
+  const canRun = from.length > 0 && to.length > 0 && from !== to && !running &&
+    (permitted() || emergencyOnly)
+  const unavailable = from && to && source.state !== 'loading' && destination.state !== 'loading' &&
+    !permitted() && !emergencyOnly
 
   const onRun = async () => {
+    if (!canRun) return
     setRunning(true)
     setMessage(null)
     setTotal(null)
@@ -57,11 +108,23 @@ export function MigratePanel(
       const completed = await runExplicit(
         `Migrate resources from ${from} to ${to}`,
         async (access) => {
-          await migrateKb(from, to, access, (event) => events.push(event))
+          assertPermitted()
+          const checkedAccess = {
+            request: (input: string, init?: RequestInit) => {
+              assertPermitted()
+              return access.request(input, init)
+            },
+          }
+          await migrateKb(from, to, checkedAccess, (event) => {
+            assertPermitted()
+            events.push(event)
+          })
+          assertPermitted()
           if (!events.some((event) => event.type === 'done')) throw new AdminAccessError()
           return true
         },
       )
+      assertPermitted()
       if (completed === undefined) return
       // The server stages privileged progress until mandatory auditing completes.
       for (const event of events) {
@@ -76,14 +139,15 @@ export function MigratePanel(
         queryClient.invalidateQueries({ queryKey: ['admin-counters'] }),
       ])
     } catch (err) {
+      if (!current()) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Migration failed - please try again.') })
     } finally {
-      setRunning(false)
+      if (current()) setRunning(false)
     }
   }
 
   return (
-    <section className='rp-card overflow-hidden'>
+    <section data-migrate-panel className='rp-card overflow-hidden'>
       <button
         type='button'
         onClick={() => setOpen((prev) => !prev)}
@@ -117,7 +181,6 @@ export function MigratePanel(
                 id='migrate-from'
                 className='rp-input'
                 value={from}
-                disabled={running}
                 onChange={(e) => setFrom(e.target.value)}
               >
                 <option value=''>Choose a portal</option>
@@ -136,7 +199,6 @@ export function MigratePanel(
                 id='migrate-to'
                 className='rp-input'
                 value={to}
-                disabled={running}
                 onChange={(e) => setTo(e.target.value)}
               >
                 <option value=''>Choose a portal</option>
@@ -149,22 +211,33 @@ export function MigratePanel(
             </div>
           </div>
 
-          <button
-            type='button'
-            disabled={!canRun}
-            onClick={() => void onRun()}
-            className='rp-btn rp-btn-primary mt-4'
-          >
-            {running ? 'Sending request...' : 'Run migration'}
-          </button>
+          {unavailable
+            ? (
+              <p role='status' className='mt-4 text-sm text-ink-2'>
+                Migration is unavailable for this selection.
+              </p>
+            )
+            : (
+              <button
+                type='button'
+                disabled={!canRun}
+                onClick={() => void onRun()}
+                className='rp-btn rp-btn-primary mt-4'
+              >
+                {running ? 'Sending request...' : 'Run migration'}
+              </button>
+            )}
 
           {total !== null && (
             <div className='mt-5'>
               <p className='text-sm text-ink-2'>{items.length} of {total} processed</p>
               <ul className='mt-2 max-h-64 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>
                 {items.map((item) => (
-                  <li key={item.id} className='flex items-center justify-between gap-3 text-sm'>
-                    <span className='min-w-0 flex-1 truncate text-ink-2'>{item.title}</span>
+                  <li
+                    key={item.id}
+                    className='flex flex-col items-start justify-between gap-3 text-sm sm:flex-row sm:items-center'
+                  >
+                    <span className='min-w-0 flex-1 break-words text-ink-2'>{item.title}</span>
                     <span
                       title={item.detail}
                       className={`rp-badge shrink-0 ${OUTCOME_BADGE[item.outcome]}`}
@@ -188,4 +261,14 @@ export function MigratePanel(
       )}
     </section>
   )
+}
+
+export function MigratePanel({ rows }: { rows: AdminTenantOverview[] }) {
+  const { generation } = useAccess()
+  const { sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
+    'platform.settings.write',
+    { kind: 'platform' },
+  )
+  if (!sessionAllowed && !breakGlassEnabled) return null
+  return <MigratePanelContent key={`${generation}:${sessionAllowed}`} rows={rows} />
 }

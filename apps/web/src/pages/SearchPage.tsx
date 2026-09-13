@@ -1,3 +1,5 @@
+import { useAccess } from '../components/AccessProvider.tsx'
+import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
@@ -416,6 +418,12 @@ function SummaryModal({
 
 /** Hook wiring for the multi-document summary overlay - shared by any caller with a resource list. */
 function useResourceSummary(slug: string) {
+  const access = useAccess()
+  const authority = access.controller.context
+  const current = () =>
+    access.controller.context === authority &&
+    access.controller.can('portal.generate', { kind: 'portal', slug })
+  const abort = useRef<AbortController | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -425,8 +433,17 @@ function useResourceSummary(slug: string) {
   // A slower earlier request must never overwrite a newer one.
   const requestSeq = useRef(0)
 
+  useEffect(() => () => {
+    abort.current?.abort()
+    requestSeq.current++
+  }, [authority])
+
   const run = useCallback(
     (ids: string[], resourceTitles: string[], kind: 'simple' | 'extended' = 'simple') => {
+      if (!current()) return
+      abort.current?.abort()
+      const controller = new AbortController()
+      abort.current = controller
       lastRequest.current = { ids, kind }
       const requestId = ++requestSeq.current
       setTitles(resourceTitles)
@@ -434,21 +451,21 @@ function useResourceSummary(slug: string) {
       setLoading(true)
       setError(null)
       setSummary('')
-      summarizeResources(slug, ids, kind)
+      summarizeResources(slug, ids, kind, controller.signal)
         .then((res) => {
-          if (requestId !== requestSeq.current) return
+          if (requestId !== requestSeq.current || controller.signal.aborted || !current()) return
           setSummary(res.summary)
         })
         .catch((err) => {
-          if (requestId !== requestSeq.current) return
+          if (requestId !== requestSeq.current || controller.signal.aborted || !current()) return
           setError(err instanceof Error ? err.message : 'Could not generate a summary.')
         })
         .finally(() => {
-          if (requestId !== requestSeq.current) return
+          if (requestId !== requestSeq.current || controller.signal.aborted || !current()) return
           setLoading(false)
         })
     },
-    [slug],
+    [slug, authority],
   )
 
   const retry = useCallback(() => {
@@ -456,15 +473,29 @@ function useResourceSummary(slug: string) {
     run(lastRequest.current.ids, titles, lastRequest.current.kind)
   }, [run, titles])
 
-  return { open, loading, error, summary, titles, run, retry, close: () => setOpen(false) }
+  return {
+    open,
+    loading,
+    error,
+    summary,
+    titles,
+    run,
+    retry,
+    close: () => {
+      abort.current?.abort()
+      requestSeq.current++
+      setOpen(false)
+    },
+  }
 }
 
 /** Quiet strip of saved searches - each chip re-runs the search and shows a changed dot when new results have arrived. */
 function WatchStrip(
-  { watches, onRun, onDelete }: {
+  { watches, onRun, onDelete, canWatch }: {
     watches: SavedWatch[]
     onRun: (watch: SavedWatch) => void
     onDelete: (id: string) => void
+    canWatch: boolean
   },
 ) {
   if (watches.length === 0) return null
@@ -480,7 +511,7 @@ function WatchStrip(
           <button
             type='button'
             onClick={() => onRun(watch)}
-            className='rp-focus flex items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-1.5 py-1 text-xs text-ink-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+            className='rp-focus flex min-h-11 items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-1.5 py-1 text-xs text-ink-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
           >
             {watch.changed
               ? (
@@ -497,19 +528,23 @@ function WatchStrip(
               : null}
             <span className='max-w-[12rem] truncate'>{watch.query}</span>
           </button>
-          <button
-            type='button'
-            onClick={(event) => {
-              event.stopPropagation()
-              onDelete(watch.id)
-            }}
-            aria-label={`Remove saved search "${watch.query}"`}
-            className='rp-focus flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-          >
-            <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3 w-3'>
-              <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-            </svg>
-          </button>
+          {canWatch
+            ? (
+              <button
+                type='button'
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onDelete(watch.id)
+                }}
+                aria-label={`Remove saved search "${watch.query}"`}
+                className='rp-focus flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
+              >
+                <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3 w-3'>
+                  <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
+                </svg>
+              </button>
+            )
+            : null}
         </div>
       ))}
     </div>
@@ -518,6 +553,13 @@ function WatchStrip(
 
 export function SearchPage() {
   const { config } = useOutletContext<TenantOutletContext>()
+  const access = useAccess()
+  const authority = access.controller.context
+  const permits = (permission: 'portal.watch' | 'portal.generate' | 'portal.read') =>
+    access.controller.context === authority &&
+    access.controller.can(permission, { kind: 'portal', slug: config.slug })
+  const canWatch = permits('portal.watch')
+  const canGenerate = permits('portal.generate')
   const [searchParams, setSearchParams] = useSearchParams()
   const q = searchParams.get('q') ?? ''
   const mode: RetrievalMode = (() => {
@@ -774,18 +816,33 @@ export function SearchPage() {
     queryKey: ['watches', config.slug],
     queryFn: () => listWatches(config.slug),
   })
-  const invalidateWatches = () =>
-    queryClient.invalidateQueries({ queryKey: ['watches', config.slug] })
+  const invalidateWatches = () => {
+    if (permits('portal.watch')) {
+      void queryClient.invalidateQueries({ queryKey: ['watches', config.slug] })
+    }
+  }
+  const checkWatch = () => {
+    if (!permits('portal.watch')) throw new StaleAuthorityError()
+  }
   const addWatchMutation = useMutation({
-    mutationFn: () => addWatch(config.slug, trimmedQuery),
+    mutationFn: () => {
+      checkWatch()
+      return addWatch(config.slug, trimmedQuery)
+    },
     onSuccess: invalidateWatches,
   })
   const deleteWatchMutation = useMutation({
-    mutationFn: (id: string) => deleteWatch(config.slug, id),
+    mutationFn: (id: string) => {
+      checkWatch()
+      return deleteWatch(config.slug, id)
+    },
     onSuccess: invalidateWatches,
   })
   const markSeenMutation = useMutation({
-    mutationFn: (id: string) => markWatchSeen(config.slug, id),
+    mutationFn: (id: string) => {
+      checkWatch()
+      return markWatchSeen(config.slug, id)
+    },
     onSuccess: invalidateWatches,
   })
   const isWatchingCurrent = hasQuery &&
@@ -793,13 +850,13 @@ export function SearchPage() {
 
   function runWatch(watch: SavedWatch) {
     updateParams({ q: watch.query })
-    markSeenMutation.mutate(watch.id)
+    if (permits('portal.watch')) markSeenMutation.mutate(watch.id)
   }
 
   const summaryModal = useResourceSummary(config.slug)
 
   function summariseResults() {
-    if (filteredResults.length === 0) return
+    if (!permits('portal.generate') || filteredResults.length === 0) return
     const top = filteredResults.slice(0, 10)
     summaryModal.run(top.map((r) => r.id), top.map((r) => r.title))
   }
@@ -953,10 +1010,13 @@ export function SearchPage() {
                   In your Watches
                 </span>
               )
-              : (
+              : canWatch
+              ? (
                 <button
                   type='button'
-                  onClick={() => addWatchMutation.mutate()}
+                  onClick={() => {
+                    if (permits('portal.watch')) addWatchMutation.mutate()
+                  }}
                   disabled={addWatchMutation.isPending}
                   title='Get notified here when new results appear for this search'
                   className='rp-chip h-9 sm:h-7'
@@ -964,6 +1024,7 @@ export function SearchPage() {
                   {addWatchMutation.isPending ? 'Adding…' : 'Add to Watches'}
                 </button>
               )
+              : null
           )
           : null}
       </div>
@@ -1155,8 +1216,11 @@ export function SearchPage() {
         <div className='min-w-0'>
           <WatchStrip
             watches={watches ?? []}
+            canWatch={canWatch}
             onRun={runWatch}
-            onDelete={(id) => deleteWatchMutation.mutate(id)}
+            onDelete={(id) => {
+              if (permits('portal.watch')) deleteWatchMutation.mutate(id)
+            }}
           />
           {hasQuery
             ? (
@@ -1327,13 +1391,17 @@ export function SearchPage() {
                               Every match, most relevant first
                             </p>
                           )}
-                        <button
-                          type='button'
-                          onClick={summariseResults}
-                          className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
-                        >
-                          Summarise these results
-                        </button>
+                        {canGenerate
+                          ? (
+                            <button
+                              type='button'
+                              onClick={summariseResults}
+                              className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                            >
+                              Summarise these results
+                            </button>
+                          )
+                          : null}
                       </div>
 
                       {answerMode && resultView === 'citations' && citedResults.length === 0
@@ -1401,7 +1469,7 @@ export function SearchPage() {
         </div>
       </div>
 
-      {summaryModal.open
+      {canGenerate && summaryModal.open
         ? (
           <SummaryModal
             loading={summaryModal.loading}

@@ -1,6 +1,10 @@
 import { PORTAL_ROLES, type PortalRole, PortalRoleSchema } from '@research-portal/core'
 import { z } from 'zod'
-import { type CreatorAuthorityStores, resolveCreatorAuthority } from './creator-authority.ts'
+import {
+  type CreatorAuthority,
+  type CreatorAuthorityStores,
+  resolveCreatorAuthority,
+} from './creator-authority.ts'
 import { constantTimeHashEqual } from './mcp.ts'
 import { validSessionFacts } from './principal.ts'
 import {
@@ -32,6 +36,8 @@ export type ScopedKeyStatus =
   | 'creator_no_access'
 export type ScopedKeySummary = Omit<ScopedKeyRecord, 'hash'> & {
   status: ScopedKeyStatus
+  /** Safe explanation only; status and effectiveRole retain their authorisation contract. */
+  inactiveReason: CreatorAuthority['reason'] | 'expired' | 'revoked'
   effectiveRole: PortalRole | null
   /** Migrated before phase 3 with no proven creator: a fixed viewer key (D13). */
   legacy: boolean
@@ -67,18 +73,18 @@ async function hashToken(token: string): Promise<string> {
 async function status(
   record: ScopedKeyRecord,
   deps: ScopedKeyDependencies,
-): Promise<{ status: ScopedKeyStatus; effectiveRole: PortalRole | null }> {
-  if (record.revokedAt) return { status: 'revoked', effectiveRole: null }
+): Promise<Pick<ScopedKeySummary, 'status' | 'inactiveReason' | 'effectiveRole'>> {
+  if (record.revokedAt) return { status: 'revoked', inactiveReason: 'revoked', effectiveRole: null }
   if (record.expiresAt && Date.parse(record.expiresAt) <= clock(deps)) {
-    return { status: 'expired', effectiveRole: null }
+    return { status: 'expired', inactiveReason: 'expired', effectiveRole: null }
   }
   // D13: a legacy key keeps working as a fixed viewer key on its bound portal. Its creator is
   // unproven, so no creator cap applies and the schema pins the stored role to viewer.
   if (record.provenance === 'legacy-unproven' && record.role === 'viewer') {
-    return { status: 'active', effectiveRole: 'viewer' }
+    return { status: 'active', inactiveReason: 'active', effectiveRole: 'viewer' }
   }
   if (!record.creator || record.provenance !== 'verified-session') {
-    return { status: 'unproven_creator', effectiveRole: null }
+    return { status: 'unproven_creator', inactiveReason: 'unproven_creator', effectiveRole: null }
   }
   const authority = await resolveCreatorAuthority(
     { ...record.creator, slug: record.tenant },
@@ -87,7 +93,8 @@ async function status(
     clock(deps),
   )
   return {
-    status: authority.reason,
+    status: authority.reason === 'creator_claims_expired' ? 'creator_no_access' : authority.reason,
+    inactiveReason: authority.reason,
     effectiveRole: authority.role ? boundedRole(record.role, authority.role) : null,
   }
 }
@@ -166,6 +173,7 @@ export async function issueScopedKey(
       credential: {
         ...metadata,
         status: 'active' as const,
+        inactiveReason: 'active' as const,
         effectiveRole: role,
         legacy: false,
         upgradeable: true,

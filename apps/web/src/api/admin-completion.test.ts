@@ -11,7 +11,59 @@ import {
   revertKnowledgeBox,
   setPortalDisabled,
 } from './client.ts'
-import { AdminAccessError, runWithEmergencyAccess, sessionAccess } from './break-glass.ts'
+import {
+  AdminAccessError,
+  assertResultCurrent,
+  authorityFetch,
+  runWithEmergencyAccess,
+  sessionAccess,
+} from './break-glass.ts'
+import { AuthorityController, registerAuthorityController } from './access-lifecycle.ts'
+import { sessionFixture } from './auth.test.ts'
+
+Deno.test('parsed results retain their authority until a later completion callback', async () => {
+  const original = globalThis.fetch
+  const authority = new AuthorityController()
+  authority.setSession(sessionFixture(), 'marine')
+  globalThis.fetch = () => Promise.resolve(Response.json({ ok: true }))
+  try {
+    const response = await authorityFetch('/api/t/marine/sessions', undefined, { authority })
+    const result: unknown = await response.json()
+    authority.invalidate('changed before completion')
+    await expect(
+      Promise.resolve(result).then((value) => {
+        assertResultCurrent(value)
+        return value
+      }),
+    ).rejects.toThrow()
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('migration discards buffered completion when authority changes inside a callback', async () => {
+  const original = globalThis.fetch
+  const authority = new AuthorityController()
+  authority.setSession(sessionFixture(), 'marine')
+  const unregister = registerAuthorityController(authority)
+  const received: string[] = []
+  globalThis.fetch = () =>
+    Promise.resolve(
+      new Response(
+        'data: {"type":"start","total":1}\n\ndata: {"type":"done","copied":1,"skipped":0,"errors":0}\n\n',
+      ),
+    )
+  try {
+    await expect(migrateKb('marine', 'other', sessionAccess, (event) => {
+      received.push(event.type)
+      authority.invalidate('lost access')
+    })).rejects.toThrow()
+    expect(received).toEqual(['start'])
+  } finally {
+    unregister()
+    globalThis.fetch = original
+  }
+})
 
 Deno.test('platform and taxonomy operations require validated success before callbacks can run', async () => {
   const originalFetch = globalThis.fetch

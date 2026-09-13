@@ -1,9 +1,20 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getAdminCounters } from '../../api/client.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { AdminAccessError } from '../../api/break-glass.ts'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
+
+async function readCounters(slug: string, access: AdminRequestAccess) {
+  const counters = await getAdminCounters(slug, access)
+  if (
+    !counters || ![counters.paragraphs, counters.sentences, counters.indexMb].every(Number.isFinite)
+  ) {
+    throw new AdminAccessError()
+  }
+  return counters
+}
 
 function StatTile({ label, value }: { label: string; value: string | null }) {
   return (
@@ -21,38 +32,45 @@ function StatTile({ label, value }: { label: string; value: string | null }) {
  * (from the overview, already known) plus paragraphs, sentences and index
  * size (from the live /counters endpoint). Emergency reads are local snapshots.
  */
-export function StatTiles({
+function StatTilesContent({
   slug,
   resourceCount,
 }: {
   slug: string
   resourceCount: number
 }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+  const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
+    'content.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const client = useQueryClient()
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getAdminCounters>>>()
   const [error, setError] = useState<string>()
   const query = useQuery({
     queryKey: ['admin-counters', slug],
-    queryFn: () => getAdminCounters(slug, sessionAccess),
-    enabled: coarseAdminEligible,
+    queryFn: () => readCounters(slug, sessionAccess),
+    enabled: sessionAllowed,
     retry: false,
   })
 
-  const data = coarseAdminEligible ? query.data : snapshot
+  const data = sessionAllowed ? query.data : snapshot
   const refresh = async () => {
     setError(undefined)
     try {
       const result = await runExplicit('Read corpus metrics', async (access) => {
-        const counters = await getAdminCounters(slug, access)
+        const counters = await readCounters(slug, access)
         if (
           !counters ||
           ![counters.paragraphs, counters.sentences, counters.indexMb].every(Number.isFinite)
         ) throw new AdminAccessError()
         return counters
       })
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) client.setQueryData(['admin-counters', slug], result)
+      if (sessionAllowed) client.setQueryData(['admin-counters', slug], result)
       else setSnapshot(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load metrics.')
@@ -69,7 +87,7 @@ export function StatTiles({
       >
         Refresh metrics
       </button>
-      {!coarseAdminEligible && (
+      {!sessionAllowed && (
         <p className='text-xs text-ink-3'>
           Metrics are a snapshot. Refresh explicitly to read them again.
         </p>
@@ -96,4 +114,14 @@ export function StatTiles({
       </dl>
     </div>
   )
+}
+
+/** Authority generations own form state and emergency snapshots. */
+export function StatTiles(props: { slug: string; resourceCount: number }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <StatTilesContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

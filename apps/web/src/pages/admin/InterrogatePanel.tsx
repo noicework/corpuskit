@@ -1,4 +1,5 @@
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -88,34 +89,60 @@ function SuggestionCard({
   suggestion: SetupSuggestion
   onDecided: (status: SetupSuggestion['status']) => void
 }) {
-  const { runExplicit, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
+    'behaviour.write',
+    {
+      kind: 'portal',
+      slug,
+    },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
+  const subPermission = suggestion.kind === 'labelset' || suggestion.kind === 'label-addition'
+    ? 'taxonomy.write'
+    : suggestion.kind === 'entity-type' || suggestion.kind === 'graph-example'
+    ? 'graph.write'
+    : null
+  const canImplement = subPermission !== null &&
+    (sessionAllowed ? authority.can(subPermission, { kind: 'portal', slug }) : breakGlassEnabled)
   const [busy, setBusy] = useState<'implement' | 'ignore' | null>(null)
   const [outcome, setOutcome] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const refresh = () => {
-    if (coarseAdminEligible) void queryClient.invalidateQueries({ queryKey: ['suggestions', slug] })
+    assertCurrent()
+    if (sessionAllowed) void queryClient.invalidateQueries({ queryKey: ['suggestions', slug] })
     void queryClient.invalidateQueries({ queryKey: ['labelsets', slug] })
   }
 
   const implement = async () => {
+    if (!canImplement) return
+    assertCurrent()
     setBusy('implement')
     setError(null)
     try {
       const result = await runExplicit('Implement this setup suggestion', async (access) => {
+        assertCurrent()
+        if (
+          subPermission === null ||
+          (sessionAllowed && !authority.can(subPermission, { kind: 'portal', slug }))
+        ) throw new AdminAccessError()
         const result = await implementSuggestion(slug, access, suggestion.id)
         if (result?.ok !== true || typeof result.summary !== 'string') throw new AdminAccessError()
         return result
       })
+      assertCurrent()
       if (result === undefined) return
       onDecided('implemented')
       setOutcome(result.summary)
       refresh()
     } catch (err) {
+      if (context !== authority.controller.context) return
       setError(err instanceof Error ? err.message : 'Could not implement this suggestion.')
     } finally {
-      setBusy(null)
+      if (context === authority.controller.context) setBusy(null)
     }
   }
 
@@ -128,13 +155,15 @@ function SuggestionCard({
         if (result?.ok !== true) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (result === undefined) return
       onDecided('ignored')
       refresh()
     } catch (err) {
+      if (context !== authority.controller.context) return
       setError(err instanceof Error ? err.message : 'Could not update the suggestion.')
     } finally {
-      setBusy(null)
+      if (context === authority.controller.context) setBusy(null)
     }
   }
 
@@ -151,7 +180,9 @@ function SuggestionCard({
       <div className='flex flex-wrap items-start justify-between gap-2'>
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
-            <span className='rp-badge'>{KIND_COPY[suggestion.kind]}</span>
+            <span className='rp-badge'>
+              {KIND_COPY[suggestion.kind] ?? 'Unsupported suggestion'}
+            </span>
             {status === 'implemented'
               ? <span className='text-xs font-medium text-[var(--rp-ok-ink)]'>Implemented</span>
               : status === 'ignored'
@@ -164,16 +195,18 @@ function SuggestionCard({
         </div>
         {!decided
           ? (
-            <div className='flex shrink-0 gap-1.5'>
-              <button
-                type='button'
-                disabled={busy !== null}
-                data-suggestion-implement
-                onClick={() => void implement()}
-                className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
-              >
-                {busy === 'implement' ? 'Implementing…' : 'Implement'}
-              </button>
+            <div className='flex max-w-full flex-wrap gap-1.5'>
+              {canImplement && (
+                <button
+                  type='button'
+                  disabled={busy !== null}
+                  data-suggestion-implement
+                  onClick={() => void implement()}
+                  className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
+                >
+                  {busy === 'implement' ? 'Implementing…' : 'Implement'}
+                </button>
+              )}
               <button
                 type='button'
                 disabled={busy !== null}
@@ -193,8 +226,14 @@ function SuggestionCard({
   )
 }
 
-export function InterrogatePanel({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+function InterrogatePanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
+    'behaviour.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<SetupSuggestion[]>()
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
@@ -204,11 +243,11 @@ export function InterrogatePanel({ slug }: { slug: string }) {
     queryKey: ['suggestions', slug],
     queryFn: () => getSuggestions(slug, sessionAccess),
     staleTime: 30_000,
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
 
-  const suggestions = coarseAdminEligible ? sessionSuggestions : snapshot
+  const suggestions = sessionAllowed ? sessionSuggestions : snapshot
   const interrogate = async (readOnly = false) => {
     setRunning(true)
     setRunError(null)
@@ -246,15 +285,17 @@ export function InterrogatePanel({ slug }: { slug: string }) {
           return result
         },
       )
+      assertCurrent()
       if (fresh === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['suggestions', slug], fresh)
+      if (sessionAllowed) queryClient.setQueryData(['suggestions', slug], fresh)
       else setSnapshot(fresh)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setRunError(
         err instanceof Error ? err.message : 'The interrogation could not complete - try again.',
       )
     } finally {
-      setRunning(false)
+      if (context === authority.controller.context) setRunning(false)
     }
   }
 
@@ -310,7 +351,7 @@ export function InterrogatePanel({ slug }: { slug: string }) {
                 slug={slug}
                 suggestion={suggestion}
                 onDecided={(status) => {
-                  if (!coarseAdminEligible) {
+                  if (!sessionAllowed) {
                     setSnapshot((items) =>
                       items?.map((item) => item.id === suggestion.id ? { ...item, status } : item)
                     )
@@ -341,7 +382,7 @@ export function InterrogatePanel({ slug }: { slug: string }) {
                   slug={slug}
                   suggestion={suggestion}
                   onDecided={(status) => {
-                    if (!coarseAdminEligible) {
+                    if (!sessionAllowed) {
                       setSnapshot((items) =>
                         items?.map((item) => item.id === suggestion.id ? { ...item, status } : item)
                       )
@@ -355,4 +396,17 @@ export function InterrogatePanel({ slug }: { slug: string }) {
         : null}
     </div>
   )
+}
+
+export function InterrogatePanel(props: { slug: string }) {
+  const authority = useAccess()
+  const permission = usePermissionAdminAccess('behaviour.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (
+    authority.state.status !== 'ready' ||
+    (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <InterrogatePanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

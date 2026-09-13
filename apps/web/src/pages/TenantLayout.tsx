@@ -1,8 +1,8 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
-import type { TenantConfig } from '@research-portal/core'
-import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
+import type { Permission, TenantConfig } from '@research-portal/core'
+import { getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import {
   tenantThemeVars,
   useBodyTheme,
@@ -12,18 +12,22 @@ import {
 } from '../lib/theme.ts'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
+import {
+  accountEntries,
+  MANAGEMENT_PERMISSIONS,
+  roleLabel,
+} from '../components/account-menu-behaviour.ts'
 import { HelpItemIcon, HelpMenu } from '../components/HelpMenu.tsx'
 import { helpMenuItems } from '../components/help-menu-items.ts'
 import { pageTitle } from '../lib/page-title.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
-import { getAuthSession } from '../api/auth.ts'
+import { useAccess } from '../components/AccessProvider.tsx'
+import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
 
 export type TenantOutletContext = {
   config: TenantConfig
-  /** True for a signed-in administrator; developer-facing widgets show only then. */
-  isAdmin?: boolean
 }
 
 function FullPageSpinner() {
@@ -40,16 +44,14 @@ function FullPageSpinner() {
 }
 
 // Explore is reached by the logo and Help by its own icon.
-const NAV_ITEMS: { path: string; label: string; end: boolean }[] = [
-  { path: '/library', label: 'Library', end: false },
-  { path: '/ask', label: 'Ask', end: false },
-  { path: '/graph', label: 'Graph', end: false },
-  { path: '/tools', label: 'Tools', end: false },
-]
-
-// The phone sheet lists the same four destinations as the desktop nav band.
-const MOBILE_NAV_ITEMS: { path: string; label: string; end: boolean }[] = [
-  ...NAV_ITEMS,
+const NAV_ITEMS: { path: string; label: string; end: boolean; permission: Permission }[] = [
+  { path: '/library', label: 'Library', end: false, permission: 'portal.read' },
+  { path: '/ask', label: 'Ask', end: false, permission: 'portal.ask' },
+  { path: '/graph', label: 'Graph', end: false, permission: 'portal.read' },
+  { path: '/tools', label: 'Tools', end: false, permission: 'portal.read' },
+  { path: '/investigations', label: 'Investigations', end: false, permission: 'portal.read' },
+  { path: '/generate', label: 'Generate', end: false, permission: 'portal.generate' },
+  { path: '/assessment', label: 'Assessment', end: false, permission: 'portal.generate' },
 ]
 
 // One name for the account control, read by both the header icon and the phone
@@ -124,14 +126,27 @@ export function TenantLayout() {
   const [logoFailed, setLogoFailed] = useState(false)
   const [headerQuery, setHeaderQuery] = useState('')
   const [signInOpen, setSignInOpen] = useState(false)
-  const { data: auth } = useQuery({
-    queryKey: ['auth-session'],
-    queryFn: getAuthSession,
-    staleTime: 60_000,
-    retry: false,
-  })
+  const access = useAccess()
+  const auth = access.state.session
   const accountLabel = auth?.user?.name || ACCOUNT_LABEL
-  const accountIsAdmin = auth?.user?.isAdmin === true
+  const menuEntries = slug ? accountEntries(slug, access.can) : []
+  const portalRole = auth?.user ? roleLabel(auth.portalAccess?.effectiveRole) : null
+  const platformRole = auth?.user ? roleLabel(auth.effectiveRoles.platformRole) : null
+  const scope = { kind: 'portal' as const, slug: slug ?? '' }
+  const navigation = NAV_ITEMS.filter((item) => access.can(item.permission, scope))
+  const section = location.pathname.split('/')[3] ?? ''
+  // Manage owns exact section permission checks and the first-allowed fallback.
+  // The outer route gate must not reject a stale or forbidden tab before that runs.
+  const routeAllowed = section === 'manage'
+    ? MANAGEMENT_PERMISSIONS.some((permission) => access.can(permission, scope))
+    : access.can(
+      section === 'ask'
+        ? 'portal.ask'
+        : ['generate', 'assessment'].includes(section)
+        ? 'portal.generate'
+        : 'portal.read',
+      scope,
+    )
   const headerRef = useRef<HTMLElement | null>(null)
   const navPanelRef = useRef<HTMLElement | null>(null)
   const navTriggerRef = useRef<HTMLButtonElement | null>(null)
@@ -252,19 +267,18 @@ export function TenantLayout() {
     data: config,
     isLoading,
     isError,
-    error,
   } = useQuery({
     queryKey: ['tenant-config', slug],
     queryFn: () => getTenantConfig(slug ?? ''),
-    enabled: Boolean(slug),
+    enabled: !!slug && access.can('portal.read', scope),
   })
   // Routes whose page owns the full viewport height.
   const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
 
   const { data: kbStatus } = useQuery({
-    queryKey: ['kb-status', slug],
+    queryKey: ['kb-status', access.identityKey, slug, access.generation],
     queryFn: () => getKnowledgeBoxStatus(slug ?? ''),
-    enabled: Boolean(slug),
+    enabled: !!slug && access.can('portal.read', scope),
   })
 
   // The header is two-tier and its height changes with the breakpoint, so full
@@ -322,27 +336,7 @@ export function TenantLayout() {
     return <FullPageSpinner />
   }
 
-  if (isError || !config) {
-    const notFound = error instanceof ApiError && error.status === 404
-
-    return (
-      <main className='flex min-h-screen flex-col items-center justify-center bg-app px-6 text-center'>
-        <h1 className='rp-display text-3xl text-ink'>
-          {notFound ? 'This portal does not exist' : 'Something went wrong'}
-        </h1>
-        <p className='mt-3 max-w-sm text-sm leading-relaxed text-ink-2'>
-          {notFound
-            ? 'Check the address, or head back and choose a portal from the list.'
-            : error instanceof Error
-            ? error.message
-            : 'We could not load this portal right now.'}
-        </p>
-        <Link to='/' className='rp-btn rp-btn-primary mt-6'>
-          Back to portals
-        </Link>
-      </main>
-    )
-  }
+  if (isError || !config) return <AccessUnavailable failedRead />
 
   // Links sit on the solid brand band, so the active state is white type over
   // an accent underline (see .rp-navlink in styles.css) rather than the accent
@@ -476,7 +470,7 @@ export function TenantLayout() {
               * search box optically centred. */
             }
             <div className='ml-auto flex flex-none items-center justify-end gap-2 sm:flex-1'>
-              {kbStatus?.status === 'none' && (
+              {kbStatus?.status === 'none' && access.can('portal.create', { kind: 'platform' }) && (
                 <span className='hidden shrink-0 lg:block'>
                   <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
                     Not connected
@@ -512,9 +506,11 @@ export function TenantLayout() {
               </span>
               <span className='hidden sm:inline-flex'>
                 <AccountMenu
-                  isAdmin={accountIsAdmin}
+                  entries={menuEntries}
+                  portalRole={portalRole}
+                  platformRole={platformRole}
+                  portalName={config.branding.productName}
                   label={accountLabel}
-                  manageHref='/admin'
                   onProfile={() => setSignInOpen(true)}
                 />
               </span>
@@ -559,7 +555,7 @@ export function TenantLayout() {
               aria-label='Primary'
               className='rp-no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'
             >
-              {NAV_ITEMS.map((item) => (
+              {navigation.map((item) => (
                 <NavLink
                   key={item.label}
                   to={`/t/${config.slug}${item.path}`}
@@ -608,7 +604,7 @@ export function TenantLayout() {
             }}
           >
             <ul>
-              {MOBILE_NAV_ITEMS.map((item, index) => (
+              {navigation.map((item, index) => (
                 <li
                   key={item.label}
                   className={navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'}
@@ -642,7 +638,7 @@ export function TenantLayout() {
               className={`mt-7 flex min-w-0 flex-col gap-2.5 ${
                 navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'
               }`}
-              style={{ '--rp-stage-i': MOBILE_NAV_ITEMS.length } as CSSProperties}
+              style={{ '--rp-stage-i': navigation.length } as CSSProperties}
             >
               <button
                 type='button'
@@ -664,12 +660,15 @@ export function TenantLayout() {
                 </NavLink>
               ))}
               <AccountMenu
-                isAdmin={accountIsAdmin}
+                entries={menuEntries}
+                portalRole={portalRole}
+                platformRole={platformRole}
+                portalName={config.branding.productName}
                 label={accountLabel}
-                manageHref='/admin'
                 variant='mobile'
                 onProfile={() => {
                   navRestoreFocus.current = false
+                  navTriggerRef.current?.focus()
                   setNavOpen(false)
                   setSignInOpen(true)
                 }}
@@ -691,7 +690,21 @@ export function TenantLayout() {
 
       {/* Keyed on the path so each route change replays the entrance. */}
       <div key={location.pathname} className='rp-page-enter'>
-        <Outlet context={{ config, isAdmin: accountIsAdmin } satisfies TenantOutletContext} />
+        {routeAllowed
+          ? <Outlet context={{ config } satisfies TenantOutletContext} />
+          : (
+            <main data-route-unavailable className='rp-shell py-12'>
+              <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>
+                This page is unavailable
+              </h1>
+              <p className='mt-4 text-ink-2'>
+                You cannot open this page with your current account.
+              </p>
+              <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-secondary mt-6'>
+                Back to the library
+              </Link>
+            </main>
+          )}
       </div>
 
       {

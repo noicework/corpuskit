@@ -1,9 +1,20 @@
+import { useAccess } from './AccessProvider.tsx'
+import {
+  createResearchStorageContext,
+  type CurrentInvestigation,
+  readCurrentInvestigation,
+  registerResearchCleanup,
+  researchStorageCurrent,
+  writeCurrentInvestigation,
+} from '../lib/research-storage.ts'
 // Aliased: the DOM `KeyboardEvent` is used for the document-level listeners
 // below, so React's synthetic one must not shadow it.
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MutableRefObject,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -24,76 +35,38 @@ import {
 // investigations with inline creation. Used on search results, answer
 // sources, evidence tables and the document reader.
 //
-// A tenant can also mark one investigation "current" (kept in localStorage,
-// per browser). Once set, Save becomes a one-click action straight into it -
+// An authorised researcher can mark one investigation current in its identity
+// and authority generation. Only anonymous public references persist locally. Once set, Save becomes a one-click action straight into it -
 // the chevron alongside still opens the full picker to switch or start new.
 // ---------------------------------------------------------------------------
 
-export interface CurrentInvestigation {
-  id: string
-  name: string
-}
-
 const CURRENT_INVESTIGATION_EVENT = 'rp-current-investigation-change'
 
-function currentInvestigationKey(slug: string): string {
-  return `rp-current-investigation-${slug}`
+export function useResearchStorage(slug: string) {
+  const access = useAccess()
+  return useMemo(() => createResearchStorageContext(access.controller, slug), [
+    access.controller,
+    access.generation,
+    slug,
+  ])
 }
 
-/** Read the tenant's current investigation from localStorage - null if none is set. */
-export function getCurrentInvestigation(slug: string): CurrentInvestigation | null {
-  try {
-    const raw = localStorage.getItem(currentInvestigationKey(slug))
-    if (!raw) return null
-    const parsed: unknown = JSON.parse(raw)
-    if (
-      parsed !== null && typeof parsed === 'object' &&
-      typeof (parsed as { id?: unknown }).id === 'string' &&
-      typeof (parsed as { name?: unknown }).name === 'string'
-    ) {
-      return parsed as CurrentInvestigation
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
-/** Set (or clear, with null) the tenant's current investigation. */
-export function setCurrentInvestigation(slug: string, value: CurrentInvestigation | null): void {
-  try {
-    if (value) localStorage.setItem(currentInvestigationKey(slug), JSON.stringify(value))
-    else localStorage.removeItem(currentInvestigationKey(slug))
-  } catch {
-    // localStorage unavailable (private mode, quota) - current investigation is a
-    // convenience, not critical, so fail quietly.
-  }
-  globalThis.dispatchEvent(new CustomEvent(CURRENT_INVESTIGATION_EVENT, { detail: { slug } }))
-}
-
-/**
- * Reactive read of the current investigation - every mounted instance updates
- * the moment any of them calls setCurrentInvestigation, so a badge here and a
- * toggle there never drift out of sync.
- */
 export function useCurrentInvestigation(slug: string): CurrentInvestigation | null {
-  const [current, setCurrent] = useState(() => getCurrentInvestigation(slug))
-
-  useEffect(() => {
-    setCurrent(getCurrentInvestigation(slug))
-    const onChange = (event: Event) => {
-      const detail = (event as CustomEvent<{ slug: string } | undefined>).detail
-      if (!detail || detail.slug === slug) setCurrent(getCurrentInvestigation(slug))
-    }
+  const storage = useResearchStorage(slug)
+  const [current, setCurrent] = useState(() => readCurrentInvestigation(storage))
+  useLayoutEffect(() => {
+    const onChange = () => setCurrent(readCurrentInvestigation(storage))
+    onChange()
+    const unregister = registerResearchCleanup(storage, () => setCurrent(null))
     globalThis.addEventListener(CURRENT_INVESTIGATION_EVENT, onChange)
     globalThis.addEventListener('storage', onChange)
     return () => {
+      unregister()
       globalThis.removeEventListener(CURRENT_INVESTIGATION_EVENT, onChange)
       globalThis.removeEventListener('storage', onChange)
     }
-  }, [slug])
-
-  return current
+  }, [storage])
+  return researchStorageCurrent(storage) ? current : null
 }
 
 function truncateName(name: string, max = 18): string {
@@ -238,16 +211,25 @@ export function MakeCurrentToggle({
   className?: string
 }) {
   const current = useCurrentInvestigation(slug)
+  const storage = useResearchStorage(slug)
+  const access = useAccess()
+  const canWrite = () =>
+    researchStorageCurrent(storage) &&
+    access.controller.can('portal.investigate', { kind: 'portal', slug })
   const isCurrent = current?.id === investigation.id
 
   const toggle = (event: { preventDefault: () => void; stopPropagation: () => void }) => {
     event.preventDefault()
     event.stopPropagation()
-    setCurrentInvestigation(
-      slug,
+    if (!canWrite()) return
+    writeCurrentInvestigation(
+      storage,
       isCurrent ? null : { id: investigation.id, name: investigation.name },
     )
+    globalThis.dispatchEvent(new Event(CURRENT_INVESTIGATION_EVENT))
   }
+
+  if (!canWrite()) return null
 
   if (variant === 'icon') {
     return (
@@ -496,11 +478,25 @@ export function SaveEvidenceButton({
   const panelRef = useRef<HTMLDivElement | null>(null)
   const queryClient = useQueryClient()
   const current = useCurrentInvestigation(slug)
+  const storage = useResearchStorage(slug)
+  const access = useAccess()
+  const canWrite = () =>
+    researchStorageCurrent(storage) &&
+    access.controller.can('portal.investigate', { kind: 'portal', slug })
+
+  useLayoutEffect(() =>
+    registerResearchCleanup(storage, () => {
+      setOpen(false)
+      setSaved(null)
+      setBusy(false)
+      setError(false)
+      setNewName('')
+    }), [storage])
 
   const { data: investigations } = useQuery({
     queryKey: ['investigations', slug],
     queryFn: () => listInvestigations(slug),
-    enabled: open,
+    enabled: open && canWrite(),
     staleTime: 30_000,
   })
 
@@ -526,24 +522,26 @@ export function SaveEvidenceButton({
   }, [open])
 
   const saveTo = async (investigationId: string, name: string) => {
+    if (!canWrite()) return
     setBusy(true)
     setError(false)
     try {
       await addEvidence(slug, investigationId, evidence)
+      if (!canWrite()) return
       setSaved(name)
       setOpen(false)
       void queryClient.invalidateQueries({ queryKey: ['investigations', slug] })
       void queryClient.invalidateQueries({ queryKey: ['investigation', slug, investigationId] })
     } catch {
-      setError(true)
+      if (canWrite()) setError(true)
     } finally {
-      setBusy(false)
+      if (canWrite()) setBusy(false)
     }
   }
 
   const createAndSave = async () => {
     const name = newName.trim()
-    if (!name) return
+    if (!name || !canWrite()) return
     setBusy(true)
     setError(false)
     try {
@@ -551,13 +549,16 @@ export function SaveEvidenceButton({
         name,
         question: evidence.question,
       })
+      if (!canWrite()) return
       setNewName('')
       await saveTo(investigation.id, investigation.name)
     } catch {
-      setError(true)
-      setBusy(false)
+      if (canWrite()) setError(true)
+      if (canWrite()) setBusy(false)
     }
   }
+
+  if (!canWrite()) return null
 
   if (saved) {
     return (
@@ -673,11 +674,25 @@ export function SaveArtefactButton({
   const panelRef = useRef<HTMLDivElement | null>(null)
   const queryClient = useQueryClient()
   const current = useCurrentInvestigation(slug)
+  const storage = useResearchStorage(slug)
+  const access = useAccess()
+  const canWrite = () =>
+    researchStorageCurrent(storage) &&
+    access.controller.can('portal.investigate', { kind: 'portal', slug })
+
+  useLayoutEffect(() =>
+    registerResearchCleanup(storage, () => {
+      setOpen(false)
+      setSaved(null)
+      setBusy(false)
+      setError(false)
+      setNewName('')
+    }), [storage])
 
   const { data: investigations } = useQuery({
     queryKey: ['investigations', slug],
     queryFn: () => listInvestigations(slug),
-    enabled: open,
+    enabled: open && canWrite(),
     staleTime: 30_000,
   })
 
@@ -700,35 +715,40 @@ export function SaveArtefactButton({
   }, [open])
 
   const saveTo = async (investigationId: string, name: string) => {
+    if (!canWrite()) return
     setBusy(true)
     setError(false)
     try {
       await saveArtefact(slug, investigationId, artefact)
+      if (!canWrite()) return
       setSaved(name)
       setOpen(false)
       void queryClient.invalidateQueries({ queryKey: ['investigations', slug] })
       void queryClient.invalidateQueries({ queryKey: ['investigation', slug, investigationId] })
     } catch {
-      setError(true)
+      if (canWrite()) setError(true)
     } finally {
-      setBusy(false)
+      if (canWrite()) setBusy(false)
     }
   }
 
   const createAndSave = async () => {
     const name = newName.trim()
-    if (!name) return
+    if (!name || !canWrite()) return
     setBusy(true)
     setError(false)
     try {
       const investigation = await createInvestigation(slug, { name })
+      if (!canWrite()) return
       setNewName('')
       await saveTo(investigation.id, investigation.name)
     } catch {
-      setError(true)
-      setBusy(false)
+      if (canWrite()) setError(true)
+      if (canWrite()) setBusy(false)
     }
   }
+
+  if (!canWrite()) return null
 
   if (saved) {
     return (

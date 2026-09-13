@@ -1,4 +1,4 @@
-import { type ChangeEvent, type ReactNode, useState } from 'react'
+import { type ChangeEvent, type ComponentProps, type ReactNode, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   DEFAULT_PALETTES,
@@ -24,16 +24,21 @@ import {
 } from '../../lib/theme.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 
 const MAX_BYTES = 5 * 1024 * 1024
 
 function useAppearanceSave(slug: string) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   return (input: Parameters<typeof updatePortalAppearance>[2], label: string) =>
     runExplicit(label, async (access) => {
       const result = await updatePortalAppearance(slug, access, input)
+      assertCurrent()
       if (result?.ok !== true) throw new AdminAccessError()
       return true
     })
@@ -66,7 +71,10 @@ function UploadCard({
   guidance: string
   onUploaded: () => Promise<unknown>
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [version, setVersion] = useState(0)
   const [missing, setMissing] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -87,22 +95,26 @@ function UploadCard({
         `Upload ${title.toLowerCase()} for ${slug}`,
         async (access) => {
           const result = await uploadBranding(slug, access, kind, file)
+          assertCurrent()
           if (result?.ok !== true || typeof result.url !== 'string') throw new AdminAccessError()
           return true
         },
       )
+      assertCurrent()
       if (uploaded === undefined) return
       setVersion((v) => v + 1)
       setMissing(false)
       await onUploaded()
+      assertCurrent()
       setMessage({ tone: 'ok', text: 'Uploaded - the portal now uses it.' })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Could not upload that image - please try again.'),
       })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -285,6 +297,9 @@ function ColoursSection({
 }) {
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -295,12 +310,15 @@ function ColoursSection({
     setMessage(null)
     try {
       if (!await saveAppearance({ paletteId: selected }, 'Save portal colours')) return
+      assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      assertCurrent()
       setMessage({ tone: 'ok', text: 'Saved - the portal colours are updated.' })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -392,6 +410,9 @@ function TypographySection({
   useAllPairingFonts()
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -408,12 +429,15 @@ function TypographySection({
           'Save portal typography',
         )
       ) return
+      assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      assertCurrent()
       setMessage({ tone: 'ok', text: 'Saved - the portal typography is updated.' })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -612,7 +636,10 @@ function FontUploadCard({
   previewFamily: string
 }) {
   const queryClient = useQueryClient()
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -631,20 +658,25 @@ function FontUploadCard({
         `Upload ${title.toLowerCase()} for ${slug}`,
         async (access) => {
           const result = await uploadBranding(slug, access, kind, file)
+          assertCurrent()
           if (result?.ok !== true || typeof result.url !== 'string') throw new AdminAccessError()
           return true
         },
       )
+      assertCurrent()
       if (uploaded === undefined) return
+      assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      assertCurrent()
       setMessage({ tone: 'ok', text: 'Uploaded - the portal now uses it.' })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Could not upload that font - please try again.'),
       })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -694,6 +726,9 @@ function ShapeSection({
 }) {
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -704,12 +739,15 @@ function ShapeSection({
     setMessage(null)
     try {
       if (!await saveAppearance({ shape: selected }, 'Save portal shape')) return
+      assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      assertCurrent()
       setMessage({ tone: 'ok', text: `Saved - this portal is now ${selected}.` })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -789,6 +827,9 @@ function DensitySection({
 }) {
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -799,12 +840,15 @@ function DensitySection({
     setMessage(null)
     try {
       if (!await saveAppearance({ density: selected }, 'Save portal density')) return
+      assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      assertCurrent()
       setMessage({ tone: 'ok', text: `Saved - density is now ${selected}.` })
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -870,7 +914,7 @@ function DensitySection({
  * Appearance: the portal's images (logo, hero), typeface pairing, shape
  * language and density. Choices stay local until saved. Each upload is a separate explicit request.
  */
-export function AppearancePanel({
+function AppearancePanelContent({
   slug,
   branding,
 }: {
@@ -916,4 +960,17 @@ export function AppearancePanel({
       <DensitySection slug={slug} branding={branding} />
     </div>
   )
+}
+
+export function AppearancePanel(props: ComponentProps<typeof AppearancePanelContent>) {
+  const authority = useAccess()
+  const permission = usePermissionAdminAccess('appearance.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (
+    authority.state.status !== 'ready' ||
+    (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <AppearancePanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

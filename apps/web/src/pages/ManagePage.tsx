@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import { Skeleton } from '../components/ui.tsx'
 import { AddContent } from './admin/AddContent.tsx'
@@ -18,39 +18,31 @@ import { RenamePortal } from './admin/RenamePortal.tsx'
 import { SourcesPanel } from './admin/SourcesPanel.tsx'
 import { StatTiles } from './admin/StatTiles.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
-import { AdminPageAccess, OverviewAccess, useAdminOverview } from './AdminPage.tsx'
+import { AdminPageAccess } from './AdminPage.tsx'
+import type { Permission } from '@research-portal/core'
+import { useAccess } from '../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../components/EmergencyAccess.tsx'
+import { getManageContent, getManageStatus } from '../api/manage.ts'
+import { PortalConnections } from './admin/PortalConnections.tsx'
+import { ACCESS_SECTION_PERMISSIONS, AccessPanel } from './admin/AccessPanel.tsx'
+import { AuditPanel } from './admin/AuditPanel.tsx'
 
-type TabId =
-  | 'overview'
-  | 'insights'
-  | 'content'
-  | 'enrichments'
-  | 'taxonomy'
-  | 'graph'
-  | 'appearance'
-  | 'behaviour'
-  | 'extraction'
-  | 'details'
-
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'insights', label: 'Insights' },
-  { id: 'content', label: 'Content' },
-  { id: 'enrichments', label: 'Enrichments' },
-  { id: 'taxonomy', label: 'Taxonomy' },
-  { id: 'graph', label: 'Knowledge graph' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'behaviour', label: 'Behaviour' },
-  { id: 'extraction', label: 'Extraction' },
-  { id: 'details', label: 'Details' },
+const TABS: { id: string; label: string; permission: Permission }[] = [
+  { id: 'overview', label: 'Overview', permission: 'content.write' },
+  { id: 'insights', label: 'Insights', permission: 'content.write' },
+  { id: 'content', label: 'Content', permission: 'content.write' },
+  { id: 'enrichments', label: 'Enrichments', permission: 'enrichments.write' },
+  { id: 'taxonomy', label: 'Taxonomy', permission: 'taxonomy.write' },
+  { id: 'graph', label: 'Knowledge graph', permission: 'graph.write' },
+  { id: 'appearance', label: 'Appearance', permission: 'appearance.write' },
+  { id: 'behaviour', label: 'Behaviour', permission: 'behaviour.write' },
+  { id: 'extraction', label: 'Extraction', permission: 'content.write' },
+  { id: 'details', label: 'Details', permission: 'appearance.write' },
+  { id: 'connections', label: 'Connections', permission: 'bindings.write' },
+  { id: 'access', label: 'Access', permission: 'members.manage' },
+  { id: 'audit', label: 'Audit', permission: 'audit.read' },
 ]
 
-/**
- * The portal's librarian workspace: everything that used to hang off the
- * global admin accordion, scoped to a single tenant and organised as tabs
- * rather than a stack of collapsible sections. Reuses the same
- * request-only access as the global admin page.
- */
 export function ManagePage() {
   return (
     <AdminPageAccess>
@@ -62,274 +54,283 @@ export function ManagePage() {
 function ManageContent() {
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
+  const authority = useAccess()
+  const scope = { kind: 'portal' as const, slug }
+  const can = (permission: Permission) => authority.can(permission, scope)
+  const contentAccess = usePermissionAdminAccess('content.write', scope)
   const queryClient = useQueryClient()
-
-  const [searchParams] = useSearchParams()
-  // A deep link (Tools > Extraction Lab) can open a tab directly.
-  const [tab, setTab] = useState<TabId>(() => {
-    const wanted = searchParams.get('tab')
-    return TABS.some((t) => t.id === wanted) ? wanted as TabId : 'overview'
-  })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const allowedTabs = TABS.filter((item) =>
+    item.id === 'access'
+      ? ACCESS_SECTION_PERMISSIONS.some(can)
+      : item.id === 'audit'
+      ? can('audit.read') || can('audit.export')
+      : can(item.permission)
+  )
+  const wanted = searchParams.get('tab')
+  const tab = allowedTabs.find((item) => item.id === wanted)?.id ?? allowedTabs[0]?.id
+  const navigation = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const nav = navigation.current
+    const active = nav?.querySelector<HTMLElement>('[aria-current=true]')
+    if (!nav || !active) return
+    const reveal = () => {
+      if (nav.scrollWidth <= nav.clientWidth) return
+      const container = nav.getBoundingClientRect()
+      const item = active.getBoundingClientRect()
+      if (item.left < container.left) nav.scrollLeft += item.left - container.left
+      else if (item.right > container.right) nav.scrollLeft += item.right - container.right
+    }
+    reveal()
+    const observer = new ResizeObserver(reveal)
+    observer.observe(nav)
+    return () => observer.disconnect()
+  }, [tab])
   const [renaming, setRenaming] = useState(false)
-  const overview = useAdminOverview(slug)
-  const { data, isLoading } = overview
-  const row = data?.find((r) => r.tenant.slug === slug)
-
-  const onContentAdded = () =>
+  const status = useQuery({
+    queryKey: ['manage-status', slug, authority.identityKey, authority.generation],
+    queryFn: ({ signal }) =>
+      getManageStatus(slug, {
+        signal,
+        authority: authority.controller,
+        context: authority.controller.context,
+      }),
+    enabled: !!tab && can('portal.read'),
+    retry: false,
+  })
+  const content = useQuery({
+    queryKey: ['manage-content', slug, authority.identityKey, authority.generation],
+    queryFn: ({ signal }) => getManageContent(slug, contentAccess.sessionAccess, signal),
+    enabled: !!tab && contentAccess.sessionAllowed,
+    retry: false,
+  })
+  const platformConnections = authority.can('portal.create', { kind: 'platform' })
+  const chooseTab = (id: string) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', id)
+    setSearchParams(next)
+  }
+  const refresh = () =>
     Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['manage-content', slug] }),
+      queryClient.invalidateQueries({ queryKey: ['manage-status', slug] }),
       queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] }),
-      queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-counters', slug] }),
     ])
-
-  const onRenamed = () => {
-    setRenaming(false)
-    void queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+  const reachable = content.data !== undefined || status.data?.status === 'connected' ||
+    status.data?.status === 'demo'
+  const unavailable = <p className='text-sm text-ink-2'>This section is currently unavailable.</p>
+  if (!tab) {
+    return (
+      <main className='rp-shell py-10' data-route-unavailable>
+        <h1 className='rp-display text-2xl'>Manage</h1>
+        <p className='mt-4 text-ink-2'>This administration page is unavailable.</p>
+      </main>
+    )
   }
 
-  const reachable = row ? row.resourceCount !== null : false
-
   return (
-    <main className='min-h-[calc(100dvh-var(--rp-header-h,126px))] bg-app'>
+    <main className='min-h-[calc(100dvh-var(--rp-header-h,126px))] bg-app' data-manage-shell>
       <div className='rp-shell py-10'>
         <div className='flex flex-wrap items-center justify-between gap-3'>
-          <div>
-            <h1 className='text-2xl font-semibold tracking-tight text-ink'>Manage</h1>
-          </div>
-          <div className='flex items-center gap-4'>
+          <h1 className='rp-display text-2xl text-ink'>Manage</h1>
+          <div className='flex min-w-0 flex-wrap items-center gap-4'>
             <Link
               to={`/t/${slug}`}
               className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
             >
               &larr; Back to the portal
             </Link>
-            <Link to='/admin' className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'>
-              Connections &rarr;
-            </Link>
+            {platformConnections && (
+              <Link
+                to='/admin'
+                className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
+              >
+                Platform connections &rarr;
+              </Link>
+            )}
           </div>
         </div>
-
-        {isLoading && (
-          <div className='mt-8 space-y-3'>
-            <Skeleton className='h-16 w-full' />
-            <Skeleton className='h-40 w-full' />
-          </div>
-        )}
-
-        <OverviewAccess overview={overview} returnTo={`/t/${slug}/manage`} />
-
-        {row && (
-          <div
-            data-admin-overview
-            className='mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'
-          >
-            <nav
-              aria-label='Manage sections'
-              className='rp-no-scrollbar -mx-1 flex gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
+        <section aria-label='Portal status' className='rp-card mt-6 min-w-0 p-5'>
+          <p className='text-sm text-ink-2' data-manage-status>
+            {status.data
+              ? status.data.status === 'connected'
+                ? 'Knowledge box connected'
+                : status.data.status === 'demo'
+                ? 'Demo knowledge box'
+                : 'Knowledge box not connected'
+              : status.isError
+              ? 'Connection status is unavailable.'
+              : 'Checking connection...'}
+          </p>
+          {can('content.write') && content.data && (
+            <div className='mt-3 min-w-0 space-y-2 text-sm'>
+              <p data-manage-counts>
+                <strong>{content.data.counters.resources}</strong> documents ·{' '}
+                {content.data.counters.paragraphs} paragraphs
+              </p>
+              <p data-manage-recent className='break-words text-ink-2'>
+                {content.data.recent[0]
+                  ? `Latest addition: ${content.data.recent[0].title}`
+                  : 'No recent additions.'}
+              </p>
+            </div>
+          )}
+          {content.isLoading && can('content.write') && <Skeleton className='mt-3 h-5 w-32' />}
+          {content.isError && can('content.write') && (
+            <p role='alert' className='mt-3 text-sm text-ink-2'>
+              Content statistics are unavailable.
+            </p>
+          )}
+          {status.data?.status === 'none' && can('bindings.write') && tab !== 'connections' && (
+            <button
+              type='button'
+              className='rp-btn rp-btn-outline mt-3'
+              onClick={() => chooseTab('connections')}
             >
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type='button'
-                  onClick={() => setTab(t.id)}
-                  aria-current={tab === t.id ? 'true' : undefined}
-                  className={`shrink-0 rounded-[var(--rp-radius)] px-3 py-2 text-left text-sm font-medium transition-colors duration-150 ${
-                    tab === t.id
-                      ? 'bg-surface-3 text-ink'
-                      : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </nav>
-
-            <div className='min-w-0'>
-              {tab === 'overview' && (
-                <div className='space-y-4'>
-                  {reachable
-                    ? (
-                      <div className='rp-card p-5'>
-                        <StatTiles
-                          slug={slug}
-                          resourceCount={row.resourceCount ?? 0}
-                        />
-                      </div>
-                    )
-                    : (
-                      <div className='rp-card p-5'>
-                        <p className='text-sm text-ink-3'>
-                          Connect a knowledge box to see stats.{' '}
-                          <Link
-                            to='/admin'
-                            className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
-                          >
-                            Go to connections
-                          </Link>
-                        </p>
-                      </div>
-                    )}
+              Open connections
+            </button>
+          )}
+        </section>
+        <div className='mt-8 grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'>
+          <nav
+            ref={navigation}
+            aria-label='Manage sections'
+            className='rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
+          >
+            {allowedTabs.map((item) => (
+              <button
+                key={item.id}
+                type='button'
+                data-manage-tab={item.id}
+                onClick={() => chooseTab(item.id)}
+                aria-current={tab === item.id ? 'true' : undefined}
+                className={`shrink-0 rounded-[var(--rp-radius)] px-3 py-2 text-left text-sm font-medium transition-colors duration-150 ${
+                  tab === item.id
+                    ? 'bg-surface-3 text-ink'
+                    : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className='min-w-0 space-y-4'>
+            {tab === 'access' && <AccessPanel slug={slug} name={config.branding.productName} />}
+            {tab === 'audit' && <AuditPanel scope={scope} name={config.branding.productName} />}
+            {tab === 'overview' && can('content.write') && (
+              <>
+                {can('content.write') && reachable && (
+                  <div className='rp-card p-5'>
+                    <StatTiles slug={slug} resourceCount={content.data?.counters.resources ?? 0} />
+                  </div>
+                )}
+                {can('content.write') && (
                   <div className='rp-card p-5'>
                     <RecentList slug={slug} />
                   </div>
-                </div>
-              )}
-
-              {tab === 'insights' && (
-                <div className='rp-card p-5'>
-                  {reachable ? <InsightsPanel slug={slug} /> : (
-                    <p className='text-sm text-ink-3'>
-                      Connect a knowledge box to see insights.{' '}
-                      <Link
-                        to='/admin'
-                        className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
-                      >
-                        Go to connections
-                      </Link>
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {tab === 'content' && (
-                <div className='space-y-4'>
+                )}
+              </>
+            )}
+            {tab === 'content' && can('content.write') && (
+              <>
+                {can('content.write') && reachable && (
                   <div className='rp-card p-5'>
-                    {reachable
-                      ? (
-                        <AddContent
-                          slug={slug}
-                          onAdded={onContentAdded}
-                        />
-                      )
-                      : (
-                        <p className='text-sm text-ink-3'>
-                          Connect a knowledge box to add content.{' '}
-                          <Link
-                            to='/admin'
-                            className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
-                          >
-                            Go to connections
-                          </Link>
-                        </p>
-                      )}
+                    <AddContent slug={slug} onAdded={refresh} />
                   </div>
-                  {reachable && <SourcesPanel slug={slug} />}
+                )}
+                {can('content.write') && reachable && <SourcesPanel slug={slug} />}
+                {can('content.write') && (
                   <div className='rp-card p-5'>
                     <RecentList slug={slug} />
                   </div>
-                  {reachable && <CorpusHealthPanel slug={slug} />}
-                </div>
-              )}
-
-              {tab === 'enrichments' && (
-                reachable ? <EnrichmentsPanel slug={slug} /> : (
+                )}
+                {can('content.write') && reachable && <CorpusHealthPanel slug={slug} />}
+              </>
+            )}
+            {tab === 'insights' && can('content.write') &&
+              (can('content.write') && reachable
+                ? (
                   <div className='rp-card p-5'>
-                    <p className='text-sm text-ink-3'>
-                      Connect a knowledge box to generate enrichments.
-                    </p>
+                    <InsightsPanel slug={slug} />
                   </div>
                 )
-              )}
-
-              {tab === 'taxonomy' && (
-                // One container: the tab card. Everything inside is a flat
-                // section (heading, then controls), separated by hairlines.
-                <div className='rp-card p-5'>
-                  <div className='flex flex-wrap items-baseline justify-between gap-3'>
-                    <h3 className='text-sm font-semibold text-ink'>Label sets</h3>
-                    <Link
-                      to={`/t/${slug}/taxonomy`}
-                      className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
-                    >
-                      Open taxonomy &rarr;
-                    </Link>
-                  </div>
-                  {reachable
-                    ? (
-                      <>
-                        <LabelsetsPanel
-                          slug={slug}
-                          organisation={config.branding.organisation}
-                        />
-                        <AnalysePanel slug={slug} />
-                        <InterrogatePanel slug={slug} />
-                      </>
-                    )
-                    : (
-                      <p className='mt-4 text-sm text-ink-3'>
-                        Connect a knowledge box to edit label sets or run analysis.
-                      </p>
-                    )}
+                : unavailable)}
+            {tab === 'taxonomy' && can('taxonomy.write') && (
+              <div className='rp-card p-5'>
+                <div className='flex flex-wrap items-baseline justify-between gap-3'>
+                  <h2 className='text-sm font-semibold text-ink'>Label sets</h2>
+                  <Link to={`/t/${slug}/taxonomy`} className='text-sm text-ink-2'>
+                    Open taxonomy &rarr;
+                  </Link>
                 </div>
-              )}
-
-              {tab === 'graph' && (
-                <div className='min-w-0'>
-                  {reachable
-                    ? <KgPanel slug={slug} open={tab === 'graph'} />
-                    : (
-                      <p className='text-sm text-ink-3'>
-                        Connect a knowledge box to build a knowledge graph.
-                      </p>
-                    )}
-                </div>
-              )}
-
-              {tab === 'appearance' && (
-                <AppearancePanel
-                  slug={slug}
-                  branding={config.branding}
-                />
-              )}
-
-              {tab === 'behaviour' && <BehaviourPanel slug={slug} />}
-              {tab === 'extraction' && <ExtractionPanel slug={slug} />}
-
-              {tab === 'details' && (
-                <div className='rp-card p-5'>
-                  {renaming
-                    ? (
-                      <RenamePortal
-                        slug={slug}
-                        initialName={config.branding.productName}
-                        initialOrganisation={config.branding.organisation}
-                        initialTagline={config.branding.tagline}
-                        onCancel={() => setRenaming(false)}
-                        onSaved={onRenamed}
-                      />
-                    )
-                    : (
-                      <div className='flex flex-wrap items-start justify-between gap-4'>
-                        <div>
-                          <h3 className='text-sm font-semibold text-ink'>
-                            {config.branding.productName}
-                          </h3>
-                          <p className='mt-0.5 text-sm text-ink-3'>
-                            {config.branding.organisation}
-                          </p>
-                          <p className='mt-0.5 text-sm text-ink-3'>{config.branding.tagline}</p>
-                        </div>
+                {can('taxonomy.write') && reachable && (
+                  <LabelsetsPanel slug={slug} organisation={config.branding.organisation} />
+                )}
+                {can('behaviour.write') && reachable && <AnalysePanel slug={slug} />}
+                {can('behaviour.write') && reachable && <InterrogatePanel slug={slug} />}
+              </div>
+            )}
+            {tab === 'graph' && can('graph.write') &&
+              (can('graph.write') && reachable ? <KgPanel slug={slug} open /> : unavailable)}
+            {tab === 'enrichments' && can('enrichments.write') &&
+              (can('enrichments.write') && reachable
+                ? <EnrichmentsPanel slug={slug} />
+                : unavailable)}
+            {tab === 'appearance' && can('appearance.write') && (
+              <AppearancePanel slug={slug} branding={config.branding} />
+            )}
+            {tab === 'behaviour' && can('behaviour.write') && <BehaviourPanel slug={slug} />}
+            {tab === 'extraction' && can('content.write') && <ExtractionPanel slug={slug} />}
+            {tab === 'details' && can('appearance.write') && (
+              <div className='rp-card p-5'>
+                {renaming && can('appearance.write')
+                  ? (
+                    <RenamePortal
+                      slug={slug}
+                      initialName={config.branding.productName}
+                      initialOrganisation={config.branding.organisation}
+                      initialTagline={config.branding.tagline}
+                      onCancel={() => setRenaming(false)}
+                      onSaved={() => {
+                        setRenaming(false)
+                        void queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+                      }}
+                    />
+                  )
+                  : (
+                    <>
+                      <h2 className='text-sm font-semibold text-ink'>
+                        {config.branding.productName}
+                      </h2>
+                      <p className='mt-2 text-sm text-ink-2'>{config.branding.organisation}</p>
+                      <p className='mt-2 text-sm text-ink-2'>{config.branding.tagline}</p>
+                      {can('appearance.write') && (
                         <button
                           type='button'
+                          className='rp-btn rp-btn-outline mt-4'
                           onClick={() => setRenaming(true)}
-                          className='rp-btn rp-btn-outline'
                         >
                           Rename
                         </button>
-                      </div>
-                    )}
-                  <p className='mt-5 border-t border-line pt-4 text-xs text-ink-3'>
-                    To disable or remove this portal, or change its knowledge box connection, use
-                    {' '}
-                    <Link to='/admin' className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'>
-                      the global connections page
-                    </Link>.
-                  </p>
-                </div>
-              )}
-            </div>
+                      )}
+                    </>
+                  )}
+              </div>
+            )}
+            {tab === 'connections' && can('bindings.write') && status.data && (
+              <div className='rp-card min-w-0 p-5'>
+                <PortalConnections
+                  slug={slug}
+                  name={config.branding.productName}
+                  knowledgeBox={status.data}
+                  resourceCount={content.data?.counters.resources ?? null}
+                  onChanged={refresh}
+                />
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </main>
   )

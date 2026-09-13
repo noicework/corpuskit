@@ -17,7 +17,42 @@ import {
   sessionAccess,
 } from './break-glass.ts'
 import { getAdminOverview, migrateKb, uploadAdminFile } from './client.ts'
-import { getAuthSession } from './auth.ts'
+import { AuthSessionError, getAuthSession } from './auth.ts'
+import { AuthorityController, registerAuthorityController } from './access-lifecycle.ts'
+
+Deno.test('explicit emergency denial clears authority once and does not retry', async () => {
+  const original = globalThis.fetch
+  const authority = new AuthorityController()
+  authority.setSession({
+    authenticated: false,
+    user: null,
+    effectiveRoles: { portalRoles: [] },
+    provenance: [],
+    claimAgeSeconds: null,
+    groupMappings: 'disabled',
+    platformPermissions: [],
+    portalAccess: null,
+    breakGlassEnabled: true,
+  })
+  const unregister = registerAuthorityController(authority)
+  let calls = 0
+  globalThis.fetch = () => {
+    calls++
+    return Promise.resolve(new Response('{}', { status: 403 }))
+  }
+  try {
+    const error = await assertRejects(() =>
+      runWithEmergencyAccess('fixture', (access) => adminFetch(access, '/api/admin/overview'))
+    )
+    expect(error).toBeInstanceOf(AdminAccessError)
+    expect(error).toMatchObject({ status: 403 })
+    expect(authority.status).toBe('unavailable')
+    expect(calls).toBe(1)
+  } finally {
+    unregister()
+    globalThis.fetch = original
+  }
+})
 
 Deno.test('one confirmation dispatches once and cannot retain access', async () => {
   const original = globalThis.fetch
@@ -63,6 +98,13 @@ Deno.test('session access sends no credentials and all legacy strings fail befor
   } finally {
     globalThis.fetch = original
   }
+})
+
+Deno.test('administration overview uses the exact platform permission', async () => {
+  const source = await Deno.readTextFile(new URL('../pages/AdminPage.tsx', import.meta.url))
+  expect(source).toContain("usePermissionAdminAccess('portal.create', { kind: 'platform' })")
+  expect(source).not.toContain('coarseAdminEligible')
+  expect(source).not.toContain('function AdminScope')
 })
 
 Deno.test('browser source inventory contains no credential bridge, persistence or query leases', async () => {
@@ -154,11 +196,18 @@ Deno.test('failed and malformed capability responses fail closed', async () => {
   try {
     for (const value of [null, {}, { authenticated: false, breakGlassEnabled: 'true' }]) {
       globalThis.fetch = () => Promise.resolve(Response.json(value))
-      assertEquals((await getAuthSession()).breakGlassEnabled, false)
-      assertEquals((await getAuthSession()).coarseAdminEligible, false)
+      const error = await assertRejects(() => getAuthSession())
+      expect(error).toBeInstanceOf(AuthSessionError)
+      expect(error).toMatchObject({
+        status: 'unavailable',
+        platformPermissions: [],
+        portalAccess: null,
+        breakGlassEnabled: false,
+        coarseAdminEligible: false,
+      })
     }
     globalThis.fetch = () => Promise.reject(new Error('network'))
-    assertEquals((await getAuthSession()).breakGlassEnabled, false)
+    expect(await assertRejects(() => getAuthSession())).toBeInstanceOf(AuthSessionError)
   } finally {
     globalThis.fetch = original
   }

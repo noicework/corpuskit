@@ -1,4 +1,5 @@
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -44,10 +45,16 @@ function ChipGroup({
  * surrounding tab/section is visible, so the agents list is only fetched
  * while it can actually be seen.
  */
-export function KgPanel(
+function KgPanelContent(
   { slug, open }: { slug: string; open: boolean },
 ) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess('graph.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getAgents>>>()
   const queryClient = useQueryClient()
   const [proposing, setProposing] = useState(false)
@@ -62,7 +69,7 @@ export function KgPanel(
   const agentsQuery = useQuery({
     queryKey: ['kb-agents', slug],
     queryFn: () => getAgents(slug, sessionAccess),
-    enabled: open && coarseAdminEligible,
+    enabled: open && sessionAllowed,
     retry: false,
   })
 
@@ -74,15 +81,17 @@ export function KgPanel(
         'Propose a graph strategy',
         async (access) => KgProposalSchema.parse(await proposeKg(slug, access)),
       )
+      assertCurrent()
       if (result === undefined) return
       setProposal(result)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Could not propose a strategy - please try again.'),
       })
     } finally {
-      setProposing(false)
+      if (context === authority.controller.context) setProposing(false)
     }
   }
 
@@ -99,6 +108,7 @@ export function KgPanel(
           access,
           { applyExisting, includeSummaries, includeMemory },
           (event) => {
+            assertCurrent()
             setLog((prev) => [...prev, event])
             if (event.type === 'error') failed = true
             if (event.type === 'done') {
@@ -116,20 +126,22 @@ export function KgPanel(
         if (!completed || failed) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) {
+      if (sessionAllowed) {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] }),
           queryClient.invalidateQueries({ queryKey: ['kg-strategy', slug] }),
         ])
       }
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Implementation failed - please retry.'),
       })
     } finally {
-      setImplementing(false)
+      if (context === authority.controller.context) setImplementing(false)
     }
   }
 
@@ -141,12 +153,14 @@ export function KgPanel(
         if (result?.ok !== true) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (result === undefined) return
       setSnapshot((agents) => agents?.filter((agent) => agent.id !== taskId))
-      if (coarseAdminEligible) {
+      if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
       }
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not remove the agent.') })
     }
   }
@@ -157,15 +171,17 @@ export function KgPanel(
         const agents = await getAgents(slug, access)
         return KbAgentSchema.array().parse(agents)
       })
+      assertCurrent()
       if (result !== undefined) {
-        if (coarseAdminEligible) queryClient.setQueryData(['kb-agents', slug], result)
+        if (sessionAllowed) queryClient.setQueryData(['kb-agents', slug], result)
         else setSnapshot(result)
       }
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load agents.') })
     }
   }
-  const agents = (coarseAdminEligible ? agentsQuery.data : snapshot) ?? []
+  const agents = (sessionAllowed ? agentsQuery.data : snapshot) ?? []
 
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
@@ -323,4 +339,13 @@ export function KgPanel(
       </div>
     </div>
   )
+}
+
+export function KgPanel(props: { slug: string; open: boolean }) {
+  const access = useAccess()
+  const permission = usePermissionAdminAccess('graph.write', { kind: 'portal', slug: props.slug })
+  if (
+    access.state.status !== 'ready' || (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <KgPanelContent key={`${props.slug}:${access.generation}`} {...props} />
 }

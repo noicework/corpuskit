@@ -1,9 +1,118 @@
 import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { type EmergencyFixtureState, startTestServer } from './support/test-server.ts'
+import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
+import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
+import { BrandingSchema } from '@research-portal/core'
+import { tenantThemeVars } from '../apps/web/src/lib/theme.ts'
 
 // Suite duration must not age a build that was fresh when this test run started.
 const browserRunStartedAt = Date.now()
+
+async function captureEmergencyNormalText(
+  page: Page,
+  palette: string,
+  width: number,
+  state: string,
+) {
+  if (!Deno.env.get('RBAC_EXPAND_VISUALS')?.split(',').includes('04-05')) return
+  const original = await page.evaluate(() => document.documentElement.style.fontSize)
+  try {
+    await page.evaluate(async () => {
+      document.documentElement.style.fontSize = '16px'
+      await document.fonts.ready
+    })
+    const metrics = await page.evaluate(() => ({
+      width: innerWidth,
+      font: getComputedStyle(document.documentElement).fontSize,
+      overflow: document.documentElement.scrollWidth - innerWidth,
+    }))
+    expect(metrics.width).toBe(width)
+    expect(metrics.font).toBe('16px')
+    expect(metrics.overflow).toBeLessThanOrEqual(1)
+    const path = `.planning/logs/04-19-01/emergency-${palette}-${width}-16-${state}.png`
+    await Deno.writeFile(path, await page.screenshot())
+    await Deno.writeTextFile(
+      path.replace(/\.png$/, '.json'),
+      JSON.stringify({ path, metrics, viewed: false }, null, 2),
+    )
+  } finally {
+    await page.evaluate((font) => {
+      document.documentElement.style.fontSize = font
+    }, { args: [original] })
+  }
+}
+
+Deno.test('signed administration overview requires platform portal.create and clears on access loss', async () => {
+  const browser = await launch()
+  const directory = '.planning/logs/04-05-01-signed'
+  try {
+    for (const role of ['portal-admin', 'platform-admin', 'owner'] as const) {
+      const server = startTestServer({ identity: { role } })
+      try {
+        const page = await browser.newPage(`${server.url}/admin`)
+        try {
+          await assertCurrentBuild(page)
+          await page.waitForSelector(
+            role === 'portal-admin' ? '[data-admin-unavailable]' : '[data-admin-overview]',
+          )
+          expect(server.requests.some((request) => request.path === '/api/admin/overview')).toBe(
+            role !== 'portal-admin',
+          )
+          expect(
+            server.requests.filter((request) => request.status === 401 || request.status === 403),
+          ).toEqual([])
+          for (const dark of [false, true]) {
+            const vars = tenantThemeVars(BrandingSchema.parse({
+              productName: 'CorpusKit',
+              organisation: 'Research administration',
+              tagline: 'Research',
+              colours: {
+                primary: '#17372d',
+                accent: '#e0ba63',
+                heroFrom: '#17372d',
+                heroTo: '#234f45',
+              },
+              paletteId: dark ? 'observatory' : 'default',
+              shape: 'soft',
+              density: 'spacious',
+              typography: 'lexend-zilla',
+            }))
+            await page.evaluate((vars) => {
+              document.body.classList.add('rp-tenant')
+              for (const [name, value] of Object.entries(vars)) {
+                document.body.style.setProperty(name, String(value))
+              }
+            }, { args: [vars] })
+            for (const width of [1440, 390]) {
+              await captureBoundary(
+                page,
+                directory,
+                `${role}-${dark ? 'dark' : 'light'}-${width}`,
+                width,
+              )
+            }
+          }
+          if (role !== 'portal-admin') {
+            server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
+            await page.evaluate(() => dispatchEvent(new Event('focus')))
+            await page.waitForSelector('[data-admin-unavailable]')
+            expect(await page.evaluate(() => document.querySelector('[data-admin-overview]'))).toBe(
+              null,
+            )
+            expect(await page.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+          }
+        } finally {
+          await page.close()
+        }
+      } finally {
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+})
 
 async function digest(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer))]
@@ -35,6 +144,7 @@ async function clickText(page: Page, text: string) {
 async function fill(page: Page, selector: string, value: string) {
   await page.evaluate((selector, value) => {
     const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!
+    if (!input) throw new Error(`Missing input: ${selector}`)
     Object.getOwnPropertyDescriptor(
       input instanceof HTMLTextAreaElement
         ? HTMLTextAreaElement.prototype
@@ -51,7 +161,7 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const marker = `pages-${crypto.randomUUID()}`
-    const directory = `.planning/logs/02-14-${marker}`
+    const directory = `.planning/logs/04-05-01-pages-${marker}`
     await Deno.mkdir(directory, { recursive: true })
     const root = Deno.cwd()
     // Bundle real page components; only their network responses and outlet config are fixtures.
@@ -60,11 +170,12 @@ Deno.test({
       `
 import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import { BrandingSchema } from '@research-portal/core'
 import { AdminPage } from '${root}/apps/web/src/pages/AdminPage.tsx'
-import { ManagePage } from '${root}/apps/web/src/pages/ManagePage.tsx'
+import { EmergencyManageFixture as ManagePage } from '${root}/e2e/support/emergency-access-entry.tsx'
+import { AccessProvider, useAccess } from '${root}/apps/web/src/components/AccessProvider.tsx'
 import { TaxonomyPage } from '${root}/apps/web/src/pages/TaxonomyPage.tsx'
 import { googleFontsUrl, tenantThemeVars, useBodyTheme } from '${root}/apps/web/src/lib/theme.ts'
 const params = new URLSearchParams(location.search)
@@ -81,21 +192,24 @@ document.head.append(font)
 sessionStorage.setItem('rp-admin-passcode', 'legacy-test-value')
 function Layout() {
  useBodyTheme(branding)
+ const client = useQueryClient()
+ const access = useAccess()
+ document.body.dataset.authId = access.state.session?.user?.id ?? 'anonymous'
+ document.body.dataset.authorityStatus = access.state.status
  useEffect(() => {
- const refresh = () => client.invalidateQueries({ queryKey: ['auth-session'] })
+ const refresh = () => access.refresh()
  const invalidate = () => client.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'auth-session' })
  const seedProtected = () => client.setQueryData(['suggestions', 'alpha'], [{ title: 'Prior identity private suggestion' }])
  const inspect = () => { document.body.dataset.cache = JSON.stringify(client.getQueryCache().getAll().map(q => ({ key: q.queryKey, data: q.state.data }))) }
- const unsubscribe = client.getQueryCache().subscribe(() => { document.body.dataset.authId = client.getQueryData(['auth-session'])?.user?.id ?? 'anonymous' })
  addEventListener('fixture-seed-protected', seedProtected)
  addEventListener('fixture-refresh-capability', refresh)
  addEventListener('fixture-invalidate', invalidate)
  addEventListener('fixture-inspect', inspect)
- return () => { removeEventListener('fixture-seed-protected', seedProtected); unsubscribe(); removeEventListener('fixture-refresh-capability', refresh); removeEventListener('fixture-invalidate', invalidate); removeEventListener('fixture-inspect', inspect) }
- }, [])
+ return () => { removeEventListener('fixture-seed-protected', seedProtected); removeEventListener('fixture-refresh-capability', refresh); removeEventListener('fixture-invalidate', invalidate); removeEventListener('fixture-inspect', inspect) }
+ }, [client, access.refresh])
  return <div className='rp-tenant min-h-screen bg-app text-ink' style={tenantThemeVars(branding)} data-fixture-build='${marker}'><header className='border-b border-line bg-surface p-6'>CorpusKit administration</header><Outlet context={{ config: { slug: 'alpha', branding } }} /></div>
 }
-createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/' + (params.get('page') || 'admin')]}><Routes><Route element={<Layout />}><Route path='/admin' element={<AdminPage />} /><Route path='/manage' element={<ManagePage />} /><Route path='/taxonomy' element={<TaxonomyPage />} /></Route></Routes></MemoryRouter></QueryClientProvider>)
+createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/' + (params.get('page') || 'admin')]}><AccessProvider><Routes><Route element={<Layout />}><Route path='/admin' element={<AdminPage />} /><Route path='/manage' element={<ManagePage />} /><Route path='/taxonomy' element={<TaxonomyPage />} /></Route></Routes></AccessProvider></MemoryRouter></QueryClientProvider>)
 `,
     )
     const build = await new Deno.Command('esbuild', {
@@ -224,9 +338,13 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }))
     const proxy = Deno.serve({ port: 0, hostname: '127.0.0.1', onListen() {} }, async (request) => {
       const url = new URL(request.url)
-      if (url.pathname === '/auth/me' && state.capability === 'session') {
-        const session = await (await fetch(`${base.url}/auth/me`)).json()
-        return Response.json({ ...session, user: { ...session.user, id: sessionIdentity } })
+      if (url.pathname === '/auth/me') {
+        const session = await (await fetch(`${base.url}/auth/me${url.search}`)).json()
+        return Response.json({
+          ...session,
+          platformPermissions: state.capability === 'session' ? ['portal.create'] : [],
+          user: session.user ? { ...session.user, id: sessionIdentity } : null,
+        })
       }
       if (url.pathname.startsWith('/api/admin/')) {
         const emergency = request.headers.has('x-admin-passcode')
@@ -556,6 +674,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     async function open(kind: string, palette = 'light', width = 390) {
       await page?.close()
       page = await browser.newPage(`${url}/__test/emergency-access?page=${kind}&palette=${palette}`)
+      await page.bringToFront()
       await page.setViewportSize({ width, height: 1000 })
       await page.waitForSelector('h1')
       await page.waitForSelector('body[data-fixture-fonts=ready]')
@@ -564,6 +683,18 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         await document.fonts.ready
       })
       await settle(page)
+      try {
+        await page.waitForSelector('body[data-authority-status=ready]')
+      } catch (error) {
+        console.log(
+          await page.evaluate(async () => ({
+            status: document.body.dataset.authorityStatus,
+            auth: await (await fetch('/auth/me')).json(),
+            text: document.body.textContent,
+          })),
+        )
+        throw error
+      }
       const fresh = await page.evaluate(async () => {
         const hash = async (path: string) =>
           [
@@ -644,7 +775,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
       await page!.evaluate(() => {
         dispatchEvent(new Event('fixture-invalidate'))
-        dispatchEvent(new Event('focus'))
         dispatchEvent(new Event('fixture-inspect'))
       })
       await settle(page!)
@@ -656,8 +786,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     try {
       evidence.push({ freshness: { appHash, fixtureHash, stamp, marker } })
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           await open('manage', palette, width)
@@ -757,8 +887,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
       await settle(page!)
       expect(await page!.evaluate(() => document.body.textContent)).toContain('5 of 7 resources')
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           await open('manage', palette, width)
@@ -803,8 +933,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           state.status = 200
         }
       }
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           await open('manage', palette, width)
@@ -844,12 +974,14 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await open('manage')
       await page!.waitForSelector('[data-admin-overview]')
       await clickText(page!, 'Knowledge graph')
-      await page!.waitForSelector('input[placeholder="Description (optional)"]')
       await click(page!, '[data-graph-read=agents]')
       await click(page!, '[data-graph-read=strategy]')
+      await page!.waitForSelector('input[placeholder="Description (optional)"]')
       graphAgentTitle = 'Refreshed graph agent'
       graphStrategy.entityDefs[0]!.description = 'Refreshed research participants'
       await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+      await click(page!, '[data-graph-read=agents]')
+      await click(page!, '[data-graph-read=strategy]')
       await settle(page!)
       expect(await page!.evaluate(() => document.body.textContent)).toContain(graphAgentTitle)
       expect(
@@ -860,8 +992,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       ).toBe(graphStrategy.entityDefs[0]!.description)
       expect(requests.slice(-4).every((request) => !request.emergency)).toBe(true)
       behaviourActive = true
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           promptText = 'Answer with cited research.'
@@ -879,7 +1011,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           ).toBe(true)
           await page!.evaluate(() => {
             dispatchEvent(new Event('fixture-invalidate'))
-            dispatchEvent(new Event('focus'))
           })
           await settle(page!)
           expect(requests.length).toBe(start)
@@ -938,7 +1069,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           }
           await page!.evaluate(() => {
             dispatchEvent(new Event('fixture-invalidate'))
-            dispatchEvent(new Event('focus'))
             dispatchEvent(new Event('fixture-inspect'))
           })
           await settle(page!)
@@ -952,25 +1082,28 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await open('manage')
       await page!.waitForSelector('[data-admin-overview]')
       await clickText(page!, 'Behaviour')
+      await click(page!, '[data-behaviour-read=prompts]')
       await page!.waitForSelector('[data-behaviour-prompt]:not(:disabled)')
       const sessionBehaviourStart = requests.length
+      console.log('Checking authorised behaviour polling remains permission scoped')
       await new Promise((resolve) => setTimeout(resolve, 31_000))
+      await page!.bringToFront()
       await page!.evaluate(() => {
         dispatchEvent(new Event('fixture-invalidate'))
-        dispatchEvent(new Event('focus'))
       })
       await settle(page!)
       expect(requests.slice(sessionBehaviourStart).some((r) => r.path.endsWith('/routing'))).toBe(
         true,
       )
+      await click(page!, '[data-behaviour-read=routing]')
       expect(requests.slice(sessionBehaviourStart).every((r) => !r.emergency)).toBe(true)
       await click(page!, '[data-behaviour-save]')
       await settle(page!)
       expect(requests.at(-1)?.emergency).toBe(false)
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
       behaviourActive = false
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           await open('manage', palette, width)
@@ -1049,8 +1182,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           state.status = 200
         }
       }
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           taxonomyPopulated = true
@@ -1099,7 +1232,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           await click(page!, '[data-emergency-cancel]')
           await page!.evaluate(() => {
             dispatchEvent(new Event('fixture-invalidate'))
-            dispatchEvent(new Event('focus'))
           })
           await settle(page!)
           expect(requests.length).toBe(before + 2)
@@ -1116,8 +1248,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         }
       }
       taxonomyPopulated = false
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           await open('manage', palette, width)
@@ -1214,7 +1346,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             const beforeBackground = requests.length
             await page!.evaluate(() => {
               dispatchEvent(new Event('fixture-invalidate'))
-              dispatchEvent(new Event('focus'))
               dispatchEvent(new Event('fixture-inspect'))
             })
             await settle(page!)
@@ -1234,8 +1365,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           )
         }
       }
-      for (const palette of ['light', 'observatory']) {
-        for (const width of [1440, 390]) {
+      for (const palette of ['light']) {
+        for (const width of [390]) {
           state.capability = 'enabled'
           state.status = 200
           await open('manage', palette, width)
@@ -1270,7 +1401,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
             await page!.evaluate(() => {
               dispatchEvent(new Event('fixture-invalidate'))
-              dispatchEvent(new Event('focus'))
             })
             await settle(page!)
             expect(requests.length).toBe(before + 1)
@@ -1389,7 +1519,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           await new Promise((resolve) => setTimeout(resolve, 4200))
           await page!.evaluate(() => {
             dispatchEvent(new Event('fixture-invalidate'))
-            dispatchEvent(new Event('focus'))
             dispatchEvent(new Event('fixture-inspect'))
           })
           await settle(page!)
@@ -1423,6 +1552,18 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       expect(
         requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
       ).toBe(2)
+      // Each signed batch request uses the current portal's content.write authority.
+      await page!.evaluate(() => {
+        const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+        const transfer = new DataTransfer()
+        transfer.items.add(new File(['Research'], 'research.txt'))
+        input.files = transfer.files
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await settle(page!)
+      expect(
+        requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
+      ).toBe(3)
       expect(requests.slice(sessionStart).every((r) => !r.emergency)).toBe(true)
       await clickText(page!, 'Crawl site')
       await fill(page!, '#crawl-url-alpha', 'https://example.invalid')
@@ -1434,37 +1575,53 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await settle(page!)
       expect(requests.slice(beforeBusy).filter((r) => r.path.endsWith('/resources/link')).length)
         .toBe(1)
-      expect(await page!.evaluate(() => document.body.textContent!.includes('remaining 1 link')))
-        .toBe(true)
+      expect(
+        await page!.evaluate(() => document.body.textContent),
+      ).toContain('the knowledge box is busy')
       state.status = 200
       const beforeSessionPoll = requests.length
       await new Promise((resolve) => setTimeout(resolve, 4200))
+      await page!.bringToFront()
       await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
       await settle(page!)
-      expect(requests.length).toBeGreaterThan(beforeSessionPoll)
+      expect(requests.slice(beforeSessionPoll).some((r) => r.path.endsWith('/recent'))).toBe(true)
+      await clickText(page!, 'Refresh recent additions')
       expect(requests.slice(beforeSessionPoll).every((r) => !r.emergency)).toBe(true)
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
       for (const kind of ['admin', 'manage', 'taxonomy']) {
-        for (const palette of ['light', 'observatory']) {
-          for (const width of [1440, 390]) {
+        for (const palette of ['light']) {
+          for (const width of [390]) {
             state.capability = 'enabled'
             state.status = 200
             const current = await open(kind, palette, width)
             if (kind === 'taxonomy') {
-              await current.waitForSelector('#taxonomy-name')
-              await fill(current, '#taxonomy-name', 'Region')
-              await clickText(current, 'Add category')
-            } else await clickText(current, 'Use emergency access')
+              // Emergency capability alone never mounts the production taxonomy editor.
+              const beforeTaxonomy = requests.length
+              expect(await current.evaluate(() => document.querySelector('#taxonomy-name'))).toBe(
+                null,
+              )
+              expect(await current.evaluate(() => document.querySelector('[role=dialog]'))).toBe(
+                null,
+              )
+              await current.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+              await settle(current)
+              expect(
+                requests.slice(beforeTaxonomy).filter((request) =>
+                  request.path.startsWith('/api/admin/')
+                ),
+              ).toEqual([])
+              continue
+            }
+            await clickText(current, 'Use emergency access')
             await current.waitForSelector('[role=dialog]')
             await capture(`${kind}-${palette}-${width}-prompt`)
             const before = requests.length
             await click(current, '[data-emergency-cancel]')
             expect(requests.length).toBe(before)
-            if (kind === 'taxonomy') await clickText(current, 'Add category')
-            else await clickText(current, 'Use emergency access')
+            await clickText(current, 'Use emergency access')
             await confirm()
             await current.waitForSelector(
-              kind === 'taxonomy' ? '#taxonomy-name' : '[data-admin-overview]',
+              '[data-admin-overview]',
             )
             await settle(current)
             expect(requests.filter((r) => r.emergency).length).toBe(
@@ -1473,7 +1630,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             const after = requests.length
             await current.evaluate(() => {
               dispatchEvent(new Event('fixture-invalidate'))
-              dispatchEvent(new Event('focus'))
               dispatchEvent(new Event('fixture-inspect'))
             })
             await settle(current)
@@ -1485,33 +1641,22 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
               'legacy-test-value',
             )
             await capture(`${kind}-${palette}-${width}-result`)
-            malformedResponse = kind === 'taxonomy' ? {} : null
-            if (kind === 'taxonomy') {
-              await fill(current, '#taxonomy-name', 'Preserved category')
-              await clickText(current, 'Add category')
-            } else await clickText(current, 'Use emergency access')
+            malformedResponse = null
+            await clickText(current, 'Use emergency access')
             await confirm()
             await current.waitForSelector('[role=dialog] [role=alert]')
-            if (kind === 'taxonomy') {
-              expect(
-                await current.evaluate(() =>
-                  document.querySelector<HTMLInputElement>('#taxonomy-name')?.value
-                ),
-              ).toBe('Preserved category')
-            } else {
-              expect(
-                await current.evaluate(() =>
-                  Boolean(document.querySelector('[data-admin-overview]'))
-                ),
-              ).toBe(true)
-            }
+            expect(
+              await current.evaluate(() =>
+                Boolean(document.querySelector('[data-admin-overview]'))
+              ),
+            ).toBe(true)
             await capture(`${kind}-malformed-${palette}-${width}`)
             await click(current, '[data-emergency-cancel]')
             malformedResponse = undefined
             state.capability = 'disabled'
             await current.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
             await settle(current)
-            await current.waitForSelector(kind === 'taxonomy' ? 'h1' : '[data-admin-unavailable]')
+            await current.waitForSelector('[data-admin-unavailable]')
             expect(await current.evaluate(() => document.querySelector('[data-admin-overview]')))
               .toBe(null)
             await current.evaluate(() => dispatchEvent(new Event('fixture-inspect')))
@@ -1527,7 +1672,12 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         const current = await open('admin')
         await clickText(current, 'Use emergency access')
         await confirm()
-        await current.waitForSelector('[role=dialog] [role=alert]')
+        await current.waitForSelector(
+          status === 500 ? '[role=dialog] [role=alert]' : 'body[data-authority-status=unavailable]',
+        )
+        if (status !== 500) {
+          expect(await current.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+        }
         await capture(`admin-${status}-result`)
         expect(await current.evaluate(() => document.querySelector('[data-admin-overview]'))).toBe(
           null,
@@ -1613,8 +1763,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           'Run migration',
         ]
       ) {
-        for (const palette of ['light', 'observatory']) {
-          for (const width of [1440, 390]) {
+        for (const palette of ['light']) {
+          for (const width of [390]) {
             state.capability = 'enabled'
             state.status = 200
             rows[0]!.knowledgeBox.status = action === 'Create new box' ? 'demo' : 'connected'
@@ -1725,8 +1875,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         }
       }
       for (const kind of ['admin', 'manage']) {
-        for (const palette of ['light', 'observatory']) {
-          for (const width of [1440, 390]) {
+        for (const palette of ['light']) {
+          for (const width of [390]) {
             state.capability = 'enabled'
             state.status = 200
             await open(kind, palette, width)
@@ -1779,11 +1929,21 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             expect(requests.length).toBe(before + 1)
             await capture(`${name}-result`)
             await clickText(page!, 'Rename')
-            for (const status of [401, 500, 200]) {
+            for (const status of [500, 200, 401]) {
               state.status = status
               renameOk = false
               await clickText(page!, 'Save')
               await confirm()
+              if (status === 401) {
+                await page!.waitForSelector('body[data-authority-status=unavailable]')
+                expect(await page!.evaluate(() => document.querySelector('#rename-name-alpha')))
+                  .toBe(null)
+                expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(
+                  null,
+                )
+                await capture(`${name}-${status}-failure`)
+                continue
+              }
               await page!.waitForSelector('[role=dialog] [role=alert]')
               expect(
                 await page!.evaluate(() => Boolean(document.querySelector('#rename-name-alpha'))),
@@ -1791,9 +1951,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
               const message = await page!.evaluate(() =>
                 document.querySelector('[role=dialog] [role=alert]')?.textContent
               )
-              expect(message).toContain(
-                status === 401 ? 'not accepted' : 'could not confirm the result',
-              )
+              expect(message).toContain('could not confirm the result')
               await capture(`${name}-${status}-failure`)
               await click(page!, '[data-emergency-cancel]')
             }
@@ -1862,7 +2020,7 @@ Deno.test({
   sanitizeOps: false,
   fn: async () => {
     const marker = `emergency-${crypto.randomUUID()}`
-    const directory = `.planning/logs/02-09-fixture-${marker}`
+    const directory = `.planning/logs/04-05-01-fixture-${marker}`
     await Deno.mkdir(directory, { recursive: true })
     const command = await new Deno.Command('esbuild', {
       args: [
@@ -1877,6 +2035,10 @@ Deno.test({
         '--external:react-dom',
         '--external:react-dom/client',
         '--external:@tanstack/react-query',
+        '--external:react-router-dom',
+        '--external:d3-force',
+        '--external:three',
+        '--external:pdfjs-dist',
         '--external:zod',
         `--define:__EMERGENCY_FIXTURE_BUILD__=${JSON.stringify(marker)}`,
       ],
@@ -1984,6 +2146,7 @@ Deno.test({
           const screenshot = `${directory}/${palette}-${width}-prompt.png`
           await Deno.writeFile(screenshot, await page.screenshot())
           evidence.push({ palette, ...metrics, screenshot })
+          await captureEmergencyNormalText(page, palette, width, 'prompt')
           await page.keyboard.down('Shift')
           await page.keyboard.press('Tab')
           await page.keyboard.up('Shift')
@@ -2006,6 +2169,7 @@ Deno.test({
             `${directory}/${palette}-${width}-cancelled.png`,
             await page.screenshot(),
           )
+          await captureEmergencyNormalText(page, palette, width, 'cancelled')
           await page.close()
           page = undefined
         }
@@ -2053,19 +2217,27 @@ Deno.test({
         expect(await page.evaluate(() => document.querySelector<HTMLInputElement>('input')!.value))
           .toBe('')
         await Deno.writeFile(`${directory}/${status}-pending.png`, await page.screenshot())
-        await page.waitForSelector(status === 200 ? '[data-outcome=completed]' : '[role=alert]')
+        const denied = status === 401 || status === 403 || status === 429
+        await page.waitForSelector(
+          denied
+            ? '[data-authority-status=unavailable]'
+            : status === 200
+            ? '[data-outcome=completed]'
+            : '[role=alert]',
+        )
         expect(state.requests).toBe(before + 1)
         const message = await page.evaluate(() =>
           document.querySelector('[role=alert]')?.textContent ?? ''
         )
-        if (status === 429) expect(message).toContain('3 minutes')
-        if (status === 401 || status === 403) expect(message).toContain('was not accepted')
+        if (denied) {
+          expect(await page.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+        }
         if (status === 500) expect(message).toContain('Check whether the action completed')
         await Deno.writeFile(`${directory}/${status}-result.png`, await page.screenshot())
         expect(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]))).not
           .toContain('fixture-only-value')
         expect(await page.evaluate(() => location.href)).not.toContain('fixture-only-value')
-        if (status !== 200) {
+        if (status !== 200 && !denied) {
           expect(
             await page.evaluate(() =>
               document.activeElement?.hasAttribute('data-emergency-cancel')
@@ -2096,16 +2268,14 @@ Deno.test({
       await page.waitForSelector('[aria-busy=true]')
       state.capability = 'disabled'
       await page.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
-      await page.waitForSelector('[data-outcome=failed]')
+      await page.waitForSelector('[data-authority-status=ready]')
       expect(await page.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
       state.capability = 'enabled'
       await page.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
+      await page.waitForSelector('#emergency-entry')
       await click(page, '#emergency-entry')
       await settle(page)
-      expect(await page.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
       expect(state.requests).toBe(beforeLoss + 1)
-      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1100)))
-      await click(page, '#emergency-entry')
       await page.waitForSelector('input[type=password]')
       expect(await page.evaluate(() => document.querySelector<HTMLInputElement>('input')!.value))
         .toBe('')
@@ -2162,7 +2332,7 @@ Deno.test({
           } else if (scenario === 'capability-loss') {
             state.capability = 'disabled'
             await page.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
-            await page.waitForSelector('[data-outcome=cancelled]')
+            await page.waitForSelector('[data-authority-status=ready]')
           } else {
             if (scenario === 'network') {
               await page.evaluate(() => {

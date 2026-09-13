@@ -1,7 +1,14 @@
-import { type CSSProperties, type FormEvent, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import type { GenerateKind, ResourceSummary } from '@research-portal/core'
+import { useAccess } from '../components/AccessProvider.tsx'
+import { StaleAuthorityError } from '../api/access-lifecycle.ts'
+import {
+  exportResearchFile,
+  printResearchHtml,
+  researchExportAuthority,
+} from '../lib/research-export.ts'
 import { generateArtifact } from '../api/client.ts'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
 import { EmptyState, ExportNotice, savedFileNotice, useExportNotice } from '../components/ui.tsx'
@@ -989,36 +996,6 @@ function slugOrDate(title: string): string {
   return slug.length > 0 ? slug.slice(0, 60) : new Date().toISOString().slice(0, 10)
 }
 
-/** Downloads the artefact as a Word-compatible .doc and returns the file name. */
-function exportToWord(kind: GenerateKind, object: unknown, sourceTitles: string[]): string {
-  const { title, bodyHtml } = artifactToHtml(kind, object, sourceTitles)
-  const html = wordDocumentHtml(title, bodyHtml)
-  const blob = new Blob(['﻿', html], { type: 'application/msword' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${kind}-${slugOrDate(title)}.doc`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-  return link.download
-}
-
-/** Opens a print-ready view in a new window and triggers the browser's print dialog.
- * Returns false when the window could not be opened (popup blocked). */
-function exportToPdf(kind: GenerateKind, object: unknown, sourceTitles: string[]): boolean {
-  const { title, bodyHtml } = artifactToHtml(kind, object, sourceTitles)
-  const html = printDocumentHtml(title, bodyHtml)
-  const win = globalThis.open('', '_blank')
-  if (!win) return false
-  win.document.write(html)
-  win.document.close()
-  win.focus()
-  setTimeout(() => win.print(), 250)
-  return true
-}
-
 function ExportRow(
   { kind, object, sourceTitles, slug }: {
     kind: GenerateKind
@@ -1029,11 +1006,46 @@ function ExportRow(
 ) {
   const [popupBlocked, setPopupBlocked] = useState(false)
   const { notice, announce } = useExportNotice()
+  const access = useAccess()
+  const lifetime = useRef(new AbortController())
+  useEffect(() => {
+    if (lifetime.current.signal.aborted) lifetime.current = new AbortController()
+    return () => lifetime.current.abort()
+  }, [])
+  const authority = researchExportAuthority(access.controller, slug)
+  const canExport = access.can('portal.export', { kind: 'portal', slug })
   const disabled = object === undefined || object === null
+  const output = async (format: 'word' | 'pdf') => {
+    if (disabled || !canExport) return
+    const current = { ...authority, signal: lifetime.current.signal }
+    try {
+      const { title, bodyHtml } = artifactToHtml(kind, object, sourceTitles)
+      if (format === 'word') {
+        const filename = await exportResearchFile(current, () => ({
+          parts: ['\uFEFF', wordDocumentHtml(title, bodyHtml)],
+          type: 'application/msword',
+          filename: `${kind}-${slugOrDate(title)}.doc`,
+        }))
+        current.signal.throwIfAborted()
+        access.controller.assertCurrent(current.context)
+        announce(savedFileNotice(filename, 'Word document'))
+      } else {
+        const opened = await printResearchHtml(current, () => printDocumentHtml(title, bodyHtml))
+        current.signal.throwIfAborted()
+        access.controller.assertCurrent(current.context)
+        setPopupBlocked(!opened)
+        if (opened) announce('Opened a print-ready copy - save it as PDF from the print dialog')
+      }
+    } catch (error) {
+      if (current.signal.aborted || access.controller.context !== current.context) return
+      if (error instanceof Error && error.name === 'AbortError') return
+      announce('Could not export this artefact. Try again.')
+    }
+  }
 
   return (
     <div className='mt-4 flex flex-wrap items-center gap-3'>
-      {!disabled
+      {!disabled && access.can('portal.investigate', { kind: 'portal', slug })
         ? (
           <SaveArtefactButton
             slug={slug}
@@ -1045,31 +1057,26 @@ function ExportRow(
           />
         )
         : null}
-      <button
-        type='button'
-        disabled={disabled}
-        onClick={() =>
-          announce(savedFileNotice(exportToWord(kind, object, sourceTitles), 'Word document'))}
-        className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
-      >
-        Export to Word
-      </button>
-      <button
-        type='button'
-        disabled={disabled}
-        onClick={() => {
-          const opened = exportToPdf(kind, object, sourceTitles)
-          setPopupBlocked(!opened)
-          if (opened) {
-            announce(
-              'Opened a print-ready copy in a new tab - save it as PDF from the print dialog',
-            )
-          }
-        }}
-        className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
-      >
-        Export to PDF
-      </button>
+      {canExport && (
+        <>
+          <button
+            type='button'
+            disabled={disabled}
+            onClick={() => void output('word')}
+            className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
+          >
+            Export to Word
+          </button>
+          <button
+            type='button'
+            disabled={disabled}
+            onClick={() => void output('pdf')}
+            className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
+          >
+            Export to PDF
+          </button>
+        </>
+      )}
       <ExportNotice notice={notice} />
       {popupBlocked
         ? (
@@ -1137,6 +1144,36 @@ function SuggestedTopicChips({
  */
 export function GeneratePage() {
   const { config } = useOutletContext<TenantOutletContext>()
+  const access = useAccess()
+  return access.can('portal.generate', { kind: 'portal', slug: config.slug })
+    ? <GenerateWorkspace key={access.generation} />
+    : (
+      <main className='rp-shell py-10'>
+        <EmptyState
+          title='This page is unavailable'
+          description='You can continue exploring the portal.'
+        >
+          <Link className='rp-btn rp-btn-outline' to={`/t/${config.slug}/library`}>
+            Back to Library
+          </Link>
+        </EmptyState>
+      </main>
+    )
+}
+
+function GenerateWorkspace() {
+  const { config } = useOutletContext<TenantOutletContext>()
+  const access = useAccess()
+  const context = access.controller.context
+  const lifetime = useRef(new AbortController())
+  const retire = () => {
+    lifetime.current.abort()
+    lifetime.current = new AbortController()
+  }
+  useEffect(() => {
+    if (lifetime.current.signal.aborted) lifetime.current = new AbortController()
+    return () => lifetime.current.abort()
+  }, [])
   const copy = tenantCopy(config)
   // Direct links can select a kind (?kind=briefing).
   const [searchParams] = useSearchParams()
@@ -1154,14 +1191,29 @@ export function GeneratePage() {
   }
 
   const mutation = useMutation({
-    mutationFn: (vars: { kind: GenerateKind; query: string }) =>
-      generateArtifact(config.slug, vars.kind, vars.query),
-    onSuccess: () => setResultVersion((v) => v + 1),
+    mutationFn: async (vars: { kind: GenerateKind; query: string; signal: AbortSignal }) => {
+      access.controller.assertCurrent(context)
+      if (!access.controller.can('portal.generate', { kind: 'portal', slug: config.slug })) {
+        throw new StaleAuthorityError()
+      }
+      const result = await generateArtifact(config.slug, vars.kind, vars.query, {}, {
+        signal: vars.signal,
+      })
+      vars.signal.throwIfAborted()
+      access.controller.assertCurrent(context)
+      return result
+    },
+    onSuccess: (_, vars) => {
+      if (!vars.signal.aborted && access.controller.context === context) {
+        setResultVersion((v) => v + 1)
+      }
+    },
   })
 
   const activeMeta = KIND_BY_ID.get(kind) ?? KINDS[0]
 
   const selectKind = (next: GenerateKind) => {
+    retire()
     setKind(next)
     mutation.reset()
   }
@@ -1169,8 +1221,12 @@ export function GeneratePage() {
   const onSubmit = (event: FormEvent) => {
     event.preventDefault()
     const query = drafts[kind].trim()
-    if (!query) return
-    mutation.mutate({ kind, query })
+    if (
+      !query || mutation.isPending ||
+      !access.controller.can('portal.generate', { kind: 'portal', slug: config.slug })
+    ) return
+    retire()
+    mutation.mutate({ kind, query, signal: lifetime.current.signal })
   }
 
   return (

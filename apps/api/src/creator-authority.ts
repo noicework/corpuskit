@@ -5,7 +5,7 @@ import type { RbacState } from './rbac-state.ts'
 export interface CreatorAuthority {
   proven: boolean
   role: PortalRole | null
-  reason: 'active' | 'unproven_creator' | 'creator_no_access'
+  reason: 'active' | 'unproven_creator' | 'creator_no_access' | 'creator_claims_expired'
 }
 export interface CreatorAuthorityStores {
   rbac: RoleResolutionStores['rbac'] & Pick<RbacState, 'creatorEvidence'>
@@ -36,5 +36,21 @@ export async function resolveCreatorAuthority(
   const role = grants.effectiveRoles.platformRole
     ? 'portal-admin'
     : grants.effectiveRoles.portalRoles.find((grant) => grant.slug === creator.slug)?.role ?? null
+  if (!role && !fresh) {
+    // Explanation only: never return these stale grants as authority. Ignore unknown app
+    // roles here so inspecting an inactive key adds no stale role observations.
+    const expired = await resolveRoleGrants(evidence, {
+      ...evidence,
+      roles: evidence.roles.filter((value) =>
+        ['CorpusKit.Owner', 'CorpusKit.PlatformAdmin', 'CorpusKit.Admin'].includes(value)
+      ),
+    }, stores)
+    if (
+      expired.provenance.some((grant) =>
+        grant.source !== 'local' &&
+        (grant.scope.kind === 'platform' || grant.scope.slug === creator.slug)
+      )
+    ) return { proven: true, role: null, reason: 'creator_claims_expired' }
+  }
   return { proven: true, role, reason: role ? 'active' : 'creator_no_access' }
 }

@@ -1,3 +1,5 @@
+import { useAccess } from '../components/AccessProvider.tsx'
+import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import { type FormEvent, type RefObject, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
@@ -164,7 +166,37 @@ function AreaCard({
  */
 export function AssessmentPage() {
   const { config } = useOutletContext<TenantOutletContext>()
+  const access = useAccess()
+  return access.can('portal.generate', { kind: 'portal', slug: config.slug })
+    ? <AssessmentWorkspace key={access.generation} />
+    : (
+      <main className='rp-shell py-10'>
+        <EmptyState
+          title='This page is unavailable'
+          description='You can continue exploring the portal.'
+        >
+          <Link className='rp-btn rp-btn-outline' to={`/t/${config.slug}/library`}>
+            Back to Library
+          </Link>
+        </EmptyState>
+      </main>
+    )
+}
+
+function AssessmentWorkspace() {
+  const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
+  const access = useAccess()
+  const context = access.controller.context
+  const lifetime = useRef(new AbortController())
+  const retire = () => {
+    lifetime.current.abort()
+    lifetime.current = new AbortController()
+  }
+  useEffect(() => {
+    if (lifetime.current.signal.aborted) lifetime.current = new AbortController()
+    return () => lifetime.current.abort()
+  }, [])
 
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null)
   const [count, setCount] = useState<QuestionCount>(5)
@@ -177,19 +209,40 @@ export function AssessmentPage() {
   const topicCounts = facets?.topic ?? {}
 
   const mutation = useMutation({
-    mutationFn: (vars: { query: string; guidance: string; count: number; topicIds?: string[] }) =>
-      generateArtifact(slug, 'assessment', vars.query, {
+    mutationFn: async (
+      vars: {
+        query: string
+        guidance: string
+        count: number
+        topicIds?: string[]
+        signal: AbortSignal
+      },
+    ) => {
+      access.controller.assertCurrent(context)
+      if (!access.controller.can('portal.generate', { kind: 'portal', slug })) {
+        throw new StaleAuthorityError()
+      }
+      const result = await generateArtifact(slug, 'assessment', vars.query, {
         guidance: vars.guidance,
         count: vars.count,
         topicIds: vars.topicIds,
-      }),
+      }, { signal: vars.signal })
+      vars.signal.throwIfAborted()
+      access.controller.assertCurrent(context)
+      return result
+    },
   })
 
   // A knowledge-area tile scopes retrieval to the resources filed under that
   // topic, so a question cannot be seeded by an off-topic source; a typed
   // topic has no such scope and searches the whole corpus.
   const generate = (topic: Topic, nextCount: QuestionCount, nextDepth: Depth) => {
+    if (mutation.isPending || !access.controller.can('portal.generate', { kind: 'portal', slug })) {
+      return
+    }
+    retire()
     mutation.mutate({
+      signal: lifetime.current.signal,
       query: buildAssessmentQuery(topic.label),
       guidance: buildAssessmentBrief(topic.label, nextCount, nextDepth),
       count: nextCount,
@@ -210,6 +263,7 @@ export function AssessmentPage() {
 
   const chooseTopic = (topic: Topic) => {
     setSelectedTopic(topic)
+    retire()
     mutation.reset()
   }
 
@@ -217,10 +271,12 @@ export function AssessmentPage() {
 
   const changeArea = () => {
     setSelectedTopic(null)
+    retire()
     mutation.reset()
   }
 
   const tryAnother = () => {
+    retire()
     mutation.reset()
   }
 

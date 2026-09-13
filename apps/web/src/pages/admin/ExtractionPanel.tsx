@@ -1,4 +1,5 @@
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import {
   ExtractionMethodSchema,
@@ -51,18 +52,22 @@ function validLab(value: LabInfo): LabInfo {
   }
 }
 
-export function ExtractionPanel({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+function ExtractionPanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed, breakGlassEnabled } =
+    usePermissionAdminAccess('content.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [snapshot, setSnapshot] = useState<LabInfo>()
   const [message, setMessage] = useState<Message | null>(null)
   const { data: sessionLab } = useQuery({
     queryKey: ['extraction-methods', slug],
     queryFn: async () => validLab(await getExtractionMethods(slug, sessionAccess)),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
-  const lab = coarseAdminEligible ? sessionLab : snapshot
+  const lab = sessionAllowed ? sessionLab : snapshot
   const load = async () => {
     setMessage(null)
     try {
@@ -70,10 +75,12 @@ export function ExtractionPanel({ slug }: { slug: string }) {
         'Load extraction methods and routing rules',
         async (access) => validLab(await getExtractionMethods(slug, access)),
       )
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['extraction-methods', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['extraction-methods', slug], result)
       else setSnapshot(result)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load extraction methods.') })
     }
   }
@@ -90,17 +97,21 @@ export function ExtractionPanel({ slug }: { slug: string }) {
       {message && <MessagePanel message={message} />}
       <MethodsCard lab={lab} />
       <CompareCard slug={slug} methods={lab?.methods ?? []} available={lab?.available ?? false} />
-      <RulesCard
-        slug={slug}
-        methods={lab?.methods ?? []}
-        rules={lab?.rules ?? null}
-        onSaved={(rules) => {
-          if (!lab) return
-          const next = { ...lab, rules }
-          if (coarseAdminEligible) queryClient.setQueryData(['extraction-methods', slug], next)
-          else setSnapshot(next)
-        }}
-      />
+      {(authority.can('behaviour.write', { kind: 'portal', slug }) ||
+        (!sessionAllowed && breakGlassEnabled)) && (
+        <RulesCard
+          slug={slug}
+          methods={lab?.methods ?? []}
+          rules={lab?.rules ?? null}
+          onSaved={(rules) => {
+            assertCurrent()
+            if (!lab) return
+            const next = { ...lab, rules }
+            if (sessionAllowed) queryClient.setQueryData(['extraction-methods', slug], next)
+            else setSnapshot(next)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -196,7 +207,10 @@ function CompareCard(
     available: boolean
   },
 ) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<CatalogItem | null>(null)
   const [profile, setProfile] = useState<{ profile: ExtractionProfile; filename: string } | null>(
@@ -254,15 +268,17 @@ function CompareCard(
         if (typeof result?.filename !== 'string') throw new AdminAccessError()
         return { ...result, profile: ExtractionProfileSchema.parse(result.profile) }
       })
+      assertCurrent()
       if (result === undefined) return
       setPicked(item)
       setProfile(result)
       setResults([])
       setDone(null)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not profile the document.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
 
@@ -284,6 +300,7 @@ function CompareCard(
           methods: selected,
           ...(question.trim() ? { question: question.trim() } : {}),
         }, (event: ExtractionCompareEvent) => {
+          assertCurrent()
           if (event.type === 'stage') setStage(event.label)
           else if (event.type === 'profile') {
             setProfile({ profile: event.profile, filename: event.filename })
@@ -328,12 +345,15 @@ function CompareCard(
         return true
       })
     } catch (err) {
+      if (context !== authority.controller.context) return
       if (!controller.signal.aborted) {
         setMessage({ tone: 'error', text: errorMessage(err, 'The comparison failed.') })
       }
     } finally {
-      setBusy(false)
-      setStage(null)
+      if (context === authority.controller.context) {
+        setBusy(false)
+        setStage(null)
+      }
     }
   }
 
@@ -601,7 +621,13 @@ function RulesCard(
     onSaved: (rules: ExtractionRules) => void
   },
 ) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit, sessionAllowed } = usePermissionAdminAccess('behaviour.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [draft, setDraft] = useState<ExtractionRules>({
     default: 'default',
     rules: [],
@@ -650,10 +676,15 @@ function RulesCard(
     setMessage(null)
     try {
       const result = await runExplicit('Save extraction routing rules', async (access) => {
+        assertCurrent()
+        if (sessionAllowed && !authority.can('content.write', { kind: 'portal', slug })) {
+          throw new AdminAccessError()
+        }
         const result = await saveExtractionRules(slug, access, draft)
         if (result?.ok !== true) throw new AdminAccessError()
         return ExtractionRulesSchema.parse(result.rules)
       })
+      assertCurrent()
       if (result === undefined) return
       dirtyRef.current = false
       setDraft(result)
@@ -663,9 +694,10 @@ function RulesCard(
       })
       onSaved(result)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the rules.') })
     } finally {
-      setBusy(false)
+      if (context === authority.controller.context) setBusy(false)
     }
   }
   return (
@@ -732,4 +764,14 @@ function RulesCard(
       {message && <MessagePanel message={message} className='mt-3' />}
     </div>
   )
+}
+
+export function ExtractionPanel(props: { slug: string }) {
+  const authority = useAccess()
+  const permission = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (
+    authority.state.status !== 'ready' ||
+    (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <ExtractionPanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

@@ -1,3 +1,4 @@
+import { useAccess } from './AccessProvider.tsx'
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 
@@ -35,6 +36,7 @@ function writeDismissed(slug: string) {
  * indicator or a browser chrome overlay on mobile.
  */
 export function ChatFab({ slug }: { slug: string }) {
+  const access = useAccess()
   const location = useLocation()
   const [dismissed, setDismissed] = useState(() => readDismissed(slug))
 
@@ -43,7 +45,10 @@ export function ChatFab({ slug }: { slug: string }) {
     setDismissed(readDismissed(slug))
   }, [slug])
 
-  if (HIDE_ROUTE.test(location.pathname) || dismissed) return null
+  if (
+    !access.can('portal.ask', { kind: 'portal', slug }) || HIDE_ROUTE.test(location.pathname) ||
+    dismissed
+  ) return null
 
   function dismiss() {
     writeDismissed(slug)

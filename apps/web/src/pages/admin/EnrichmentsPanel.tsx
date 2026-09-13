@@ -1,5 +1,6 @@
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { AdminAccessError } from '../../api/break-glass.ts'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError, adminFetch } from '../../api/break-glass.ts'
 import { EnrichmentAgentStatusSchema } from '@research-portal/core'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -82,7 +83,13 @@ function Coverage({ done, total }: { done: number; total: number }) {
 function AgentCard(
   { slug, status }: { slug: string; status: EnrichmentAgentStatus },
 ) {
-  const { runExplicit, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAllowed } = usePermissionAdminAccess('enrichments.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const { agent } = status
   const [scope, setScope] = useState<'missing' | 'all'>('missing')
@@ -108,6 +115,7 @@ function AgentCard(
             access,
             { agentId: agent.id, scope },
             (event: EnrichmentRunEvent) => {
+              assertCurrent()
               if (event.type === 'start') setProgress({ done: 0, total: event.total, errors: 0 })
               if (event.type === 'item') {
                 setProgress((prev) =>
@@ -138,17 +146,19 @@ function AgentCard(
           return true
         },
       )
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) {
+      if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['enrichment-agents', slug] })
       }
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Enrichment run failed - please retry.'),
       })
     } finally {
-      setRunning(false)
+      if (context === authority.controller.context) setRunning(false)
     }
   }
 
@@ -267,8 +277,14 @@ function AgentCard(
   )
 }
 
-export function EnrichmentsPanel({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+function EnrichmentsPanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
+    'enrichments.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [snapshot, setSnapshot] = useState<EnrichmentAgentStatus[]>()
   const [message, setMessage] = useState<Message | null>(null)
@@ -276,11 +292,11 @@ export function EnrichmentsPanel({ slug }: { slug: string }) {
     queryKey: ['enrichment-agents', slug],
     queryFn: async () =>
       EnrichmentAgentStatusSchema.array().parse(await getEnrichmentAgents(slug, sessionAccess)),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
 
-  const data = coarseAdminEligible ? sessionData : snapshot
+  const data = sessionAllowed ? sessionData : snapshot
   const load = async () => {
     setMessage(null)
     try {
@@ -289,11 +305,44 @@ export function EnrichmentsPanel({ slug }: { slug: string }) {
         async (access) =>
           EnrichmentAgentStatusSchema.array().parse(await getEnrichmentAgents(slug, access)),
       )
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['enrichment-agents', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['enrichment-agents', slug], result)
       else setSnapshot(result)
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load enrichments.') })
+    }
+  }
+
+  const exportArchive = async () => {
+    setMessage(null)
+    try {
+      const response = await adminFetch(
+        sessionAccess,
+        `/api/admin/t/${encodeURIComponent(slug)}/enrichments/export`,
+      )
+      if (!response.ok) throw new AdminAccessError(response.status)
+      const records: unknown = await response.json()
+      assertCurrent()
+      if (!records || typeof records !== 'object' || Array.isArray(records)) {
+        throw new AdminAccessError()
+      }
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' }),
+      )
+      try {
+        assertCurrent()
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${slug}-enrichments.json`
+        link.click()
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+    } catch (err) {
+      if (context !== authority.controller.context) return
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not export enrichments.') })
     }
   }
 
@@ -308,6 +357,14 @@ export function EnrichmentsPanel({ slug }: { slug: string }) {
         Load enrichment schemas
       </button>
       {message && <MessagePanel message={message} />}
+      <button
+        type='button'
+        data-enrichments-export
+        className='rp-btn rp-btn-outline'
+        onClick={() => void exportArchive()}
+      >
+        Export enrichment archive
+      </button>
       <div className='rp-card p-5'>
         <h2 className='rp-display text-xl text-ink'>Enrichments</h2>
         <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
@@ -340,4 +397,16 @@ export function EnrichmentsPanel({ slug }: { slug: string }) {
       {data?.map((status) => <AgentCard key={status.agent.id} slug={slug} status={status} />)}
     </div>
   )
+}
+
+export function EnrichmentsPanel(props: { slug: string }) {
+  const access = useAccess()
+  const permission = usePermissionAdminAccess('enrichments.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (
+    access.state.status !== 'ready' || (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <EnrichmentsPanelContent key={`${props.slug}:${access.generation}`} {...props} />
 }

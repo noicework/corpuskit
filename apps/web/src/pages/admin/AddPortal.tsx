@@ -1,6 +1,8 @@
-import { type FormEvent, useState } from 'react'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { addPortal } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -11,8 +13,22 @@ import { errorMessage, type Message } from './shared.ts'
  * existing endpoint. Collapsed to a slim button row by default so it doesn't
  * compete with the portal list for attention.
  */
-export function AddPortal() {
-  const { runExplicit } = useAdminAccess()
+function AddPortalContent() {
+  const { runExplicit } = usePermissionAdminAccess('portal.create', { kind: 'platform' })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const current = () => mounted.current && context === authority.controller.context
+  const assertCurrent = () => {
+    authority.controller.assertCurrent(context)
+    if (!mounted.current) throw new AdminAccessError()
+  }
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -26,12 +42,15 @@ export function AddPortal() {
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit('Create a portal', (access) =>
-        addPortal(access, {
+      const result = await runExplicit('Create a portal', (access) => {
+        assertCurrent()
+        return addPortal(access, {
           name,
           organisation: organisation || undefined,
           tagline: tagline || undefined,
-        }))
+        })
+      })
+      assertCurrent()
       if (result === undefined) return
       setName('')
       setOrganisation('')
@@ -47,17 +66,21 @@ export function AddPortal() {
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
     } catch (err) {
+      if (!current()) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not add the portal.') })
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
 
   return (
-    <section className='rp-card overflow-hidden' style={{ borderStyle: 'dashed' }}>
+    <section data-add-portal className='rp-card overflow-hidden' style={{ borderStyle: 'dashed' }}>
       <button
         type='button'
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() =>
+          setOpen((prev) =>
+            !prev
+          )}
         aria-expanded={open}
         className='flex w-full items-center justify-between gap-3 px-6 py-4 text-left'
       >
@@ -125,4 +148,13 @@ export function AddPortal() {
       )}
     </section>
   )
+}
+
+export function AddPortal() {
+  const { generation } = useAccess()
+  const { sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess('portal.create', {
+    kind: 'platform',
+  })
+  if (!sessionAllowed && !breakGlassEnabled) return null
+  return <AddPortalContent key={`${generation}:${sessionAllowed}`} />
 }

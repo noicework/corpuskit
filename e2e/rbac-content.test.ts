@@ -1,0 +1,722 @@
+import { expect } from '@std/expect'
+import { launch, type Page } from '@astral/astral'
+import { startTestServer as startServer } from './support/test-server.ts'
+import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
+import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
+import type { BuildAppOptions } from '../apps/api/src/app.ts'
+import type { Source, SourceStoreApi } from '../apps/api/src/stores.ts'
+
+/** Isolate fixture storage while exercising the real HTTP handlers and declarations. */
+function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
+  const portals = new Map<string, Source[]>()
+  const sources: SourceStoreApi = {
+    list: (slug) => structuredClone(portals.get(slug) ?? []),
+    summaries: (slug) =>
+      sources.list(slug).map(({ synced, ...source }) => ({
+        ...source,
+        itemCount: source.itemCount ?? synced?.length ?? 0,
+      })),
+    find: (slug, id) => sources.list(slug).find((source) => source.id === id),
+    findByUrl: (slug, url) => sources.list(slug).find((source) => source.url === url),
+    slugs: () => [...portals.keys()],
+    add: (slug, url, auto, maxPages) => {
+      const source = {
+        id: crypto.randomUUID(),
+        url,
+        auto,
+        maxPages,
+        addedAt: new Date().toISOString(),
+        lastSync: null,
+        lastAdded: 0,
+        synced: [],
+        itemCount: 0,
+      }
+      portals.set(slug, [...sources.list(slug), source])
+      return structuredClone(source)
+    },
+    update: (slug, id, patch) => {
+      portals.set(
+        slug,
+        sources.list(slug).map((source) => source.id === id ? { ...source, ...patch } : source),
+      )
+    },
+    remove: (slug, id) => {
+      portals.set(slug, sources.list(slug).filter((source) => source.id !== id))
+    },
+  }
+  return startServer({
+    ...options,
+    sources,
+    insights: {
+      record: () => {
+        throw new Error('Unsupported content fixture: record insight')
+      },
+      summary: () => ({
+        totalAsks: 0,
+        answered: 0,
+        unanswered: 0,
+        avgGroundedness: null,
+        avgAnswerRelevance: null,
+        topQuestions: [],
+        gaps: [],
+        recent: [],
+      }),
+    },
+  })
+}
+
+function contentManagement() {
+  let hidden = false
+  const calls: string[] = []
+  const management = new Proxy({}, {
+    get: (_target, method) => (...args: unknown[]) => {
+      calls.push(String(method))
+      switch (method) {
+        case 'counters':
+          return Promise.resolve({ resources: 2, paragraphs: 14, sentences: 28, indexMb: 1 })
+        case 'recentResources':
+          return Promise.resolve([{
+            id: 'res-2',
+            title: 'Marine research',
+            status: 'processed',
+            hidden,
+          }])
+        case 'corpusHealth':
+          return Promise.resolve([{
+            id: 'res-2',
+            title: 'Marine research',
+            status: 'thin',
+            words: 4,
+            hidden,
+          }])
+        case 'setResourceHidden':
+          hidden = args[2] as boolean
+          return Promise.resolve()
+        case 'createLink':
+        case 'createText':
+        case 'uploadFile':
+          return Promise.resolve({ id: 'res-2' })
+        case 'createLabelset':
+        case 'updateLabelset':
+          return Promise.resolve()
+        case 'agentConfigs':
+          return Promise.resolve([])
+        default:
+          return Promise.reject(new Error(`Unsupported management fixture: ${String(method)}`))
+      }
+    },
+  }) as NonNullable<BuildAppOptions['management']>
+  return { management, calls }
+}
+
+const stage = Deno.env.get('RBAC_MANAGE_STAGE')
+const stages = ['04-05-02', '04-06-01', '04-06-02', '04-07-01', '04-07-02', '04-07-03']
+async function navigate(page: Page, tab: string) {
+  await page.evaluate((tab) => {
+    history.pushState(null, '', `/t/marine/manage?tab=${tab}`)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }, { args: [tab] })
+  await page.waitForSelector(`[data-manage-tab=${tab}][aria-current=true]`)
+}
+async function click(page: Page, text: string) {
+  await page.waitForFunction(
+    (text: string) =>
+      [...document.querySelectorAll('button')].some((b) =>
+        b.textContent?.trim().replace(/^[▸▾]\s*/, '') === text && !b.disabled
+      ),
+    { args: [text] },
+  )
+  await page.evaluate((text) => {
+    const button = [...document.querySelectorAll('button')].find((b) =>
+      b.textContent?.trim().replace(/^[▸▾]\s*/, '') === text
+    )
+    if (!button) throw new Error(`Missing button: ${text}`)
+    button.click()
+  }, { args: [text] })
+}
+async function fill(page: Page, selector: string, value: string) {
+  await page.evaluate(({ selector, value }) => {
+    const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!
+    Object.getOwnPropertyDescriptor(
+      input instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype,
+      'value',
+    )!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }, { args: [{ selector, value }] })
+}
+async function textShown(page: Page, text: string) {
+  try {
+    await page.waitForFunction((text: string) => document.body.innerText.includes(text), {
+      args: [text],
+    })
+  } catch (error) {
+    console.error('Missing text', text, await page.evaluate(() => document.body.innerText))
+    throw error
+  }
+}
+async function upload(page: Page) {
+  await page.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['Marine research evidence'], 'marine.txt', { type: 'text/plain' }))
+    input.files = transfer.files
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+Deno.test('content readiness stage is exact and invalid names fail', async () => {
+  if (stage !== undefined) expect(stages).toContain(stage)
+  if (stage !== '04-06-01' && stage !== '04-06-02') return
+  const source = await Deno.readTextFile('apps/web/src/pages/ManagePage.tsx')
+  const map = source.match(/const MANAGE_PANEL_READY = \{([\s\S]*?)\}/)![1]!
+  const ready = [
+    'recentList',
+    'statTiles',
+    'addContent',
+    'corpusHealth',
+    ...(stage === '04-06-02' ? ['sources', 'insights', 'labelsets'] : []),
+  ]
+  const entries = [...map.matchAll(/(\w+):\s*(true|false)/g)]
+  expect(entries).toHaveLength(15)
+  expect(entries.filter((m) => m[2] === 'true').map((m) => m[1])).toEqual(ready)
+})
+
+/** Double only the external website; browser API traffic uses signed LocalIngress. */
+function sourceWebsite() {
+  const original = globalThis.fetch
+  const origin = 'https://content.example.test'
+  globalThis.fetch = (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
+    if (url.origin !== origin) return original(input, init)
+    const content = url.pathname === '/sitemap.xml'
+      ? `<urlset><url><loc>${origin}/report</loc></url></urlset>`
+      : `<html><head><title>Marine research report</title></head><body><main><h1>Marine research report</h1><p>${
+        'Marine research evidence supports better fisheries decisions. '.repeat(80)
+      }</p></main></body></html>`
+    return Promise.resolve(
+      new Response(content, {
+        headers: {
+          'content-type': url.pathname.endsWith('.xml') ? 'application/xml' : 'text/html',
+        },
+      }),
+    )
+  }
+  return {
+    url: `${origin}/sitemap.xml`,
+    close: () => {
+      globalThis.fetch = original
+    },
+  }
+}
+
+Deno.test('public taxonomy remains readable while only signed curators can create and edit categories', async () => {
+  const browser = await launch()
+  try {
+    for (const role of [null, 'viewer', 'curator'] as const) {
+      const { management, calls } = contentManagement()
+      const server = startTestServer({ ...(role ? { identity: { role } } : {}), management })
+      try {
+        const page = await browser.newPage(`${server.url}/t/marine/taxonomy`)
+        try {
+          await page.waitForSelector('h1')
+          await textShown(page, 'Categories used to classify resources')
+          await textShown(page, 'Topic')
+          if (role !== 'curator') {
+            expect(await page.evaluate(() => !!document.querySelector('#taxonomy-name'))).toBe(
+              false,
+            )
+            expect(server.requests.filter((r) => r.path.startsWith('/api/admin/'))).toEqual([])
+            continue
+          }
+          await page.waitForSelector('#taxonomy-name')
+          await fill(page, '#taxonomy-name', 'Region')
+          await fill(page, '#taxonomy-seed', 'North, South')
+          await click(page, 'Add category')
+          await textShown(page, 'Added "Region"')
+          await navigate(page, 'taxonomy')
+          await page.waitForSelector('#ls-topic-title')
+          await fill(page, '#ls-topic-title', 'Research topic')
+          await click(page, 'Save')
+          await textShown(page, 'Saved "Research topic"')
+          await click(page, 'New label set')
+          await fill(page, '#ls-new-title', 'Habitat')
+          await fill(page, '#ls-new-label-0', 'Reef')
+          await click(page, 'Create label set')
+          await textShown(page, 'Created "Habitat"')
+          expect(calls).toEqual(
+            expect.arrayContaining(['createLabelset', 'updateLabelset', 'agentConfigs']),
+          )
+          expect(
+            server.requests.filter((r) =>
+              r.path.match(/analyse|interrogate|suggestions|kb-agents/)
+            ),
+          ).toEqual([])
+          expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+        } finally {
+          await page.close()
+        }
+      } finally {
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+})
+
+Deno.test('signed source add edit sync remove and insights use real declared routes', async () => {
+  const website = sourceWebsite()
+  const server = startTestServer({
+    identity: { role: 'curator' },
+    management: contentManagement().management,
+  })
+  const browser = await launch()
+  try {
+    const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+    try {
+      await assertCurrentBuild(page)
+      await page.waitForSelector('#source-url-marine')
+      await fill(page, '#source-url-marine', website.url)
+      await click(page, 'Add source')
+      await textShown(page, 'Source added. Found 1 page')
+      await page.waitForSelector('select[id^=source-cap-]:not(#source-cap-marine)')
+      await page.evaluate(() => {
+        const select = document.querySelector<HTMLSelectElement>(
+          'select[id^=source-cap-]:not(#source-cap-marine)',
+        )!
+        select.value = '5'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+      await page.waitForFunction(() =>
+        !document.querySelector<HTMLSelectElement>(
+          'select[id^=source-cap-]:not(#source-cap-marine)',
+        )?.disabled
+      )
+      await click(page, 'Sync now')
+      await textShown(page, 'Synced - 1 page added.')
+      await click(page, 'Refresh sources')
+      await click(page, 'Remove')
+      await textShown(page, 'No sources registered yet.')
+      await navigate(page, 'insights')
+      await textShown(page, 'No questions asked yet')
+      await click(page, 'Refresh insights')
+      for (const method of ['GET', 'POST', 'PATCH', 'DELETE']) {
+        expect(
+          server.requests.some((r) =>
+            r.path.includes('/sources') && r.method === method && r.status === 200
+          ),
+        ).toBe(true)
+      }
+      expect(server.requests.some((r) => r.path.endsWith('/sync') && r.status === 200)).toBe(true)
+      expect(server.requests.some((r) => r.path.endsWith('/insights') && r.status === 200)).toBe(
+        true,
+      )
+      expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+    } finally {
+      await page.close()
+    }
+  } finally {
+    await browser.close()
+    await server.close()
+    website.close()
+  }
+})
+
+Deno.test('source streams and forged old editor callbacks cannot publish or dispatch after revocation', async () => {
+  const website = sourceWebsite()
+  const browser = await launch()
+  try {
+    for (const tab of ['content', 'taxonomy']) {
+      const base = contentManagement().management
+      const entered = Promise.withResolvers<void>()
+      const held = Promise.withResolvers<void>()
+      const management = new Proxy(base, {
+        get: (target, key) =>
+          key === 'createText'
+            ? async () => {
+              entered.resolve()
+              await held.promise
+              return { id: 'res-2' }
+            }
+            : Reflect.get(target, key),
+      })
+      const server = startTestServer({ identity: { role: 'curator' }, management })
+      const page = await browser.newPage(`${server.url}/t/marine/manage?tab=${tab}`)
+      try {
+        if (tab === 'content') {
+          await page.waitForSelector('#source-url-marine')
+          await fill(page, '#source-url-marine', website.url)
+          await click(page, 'Add source')
+          await click(page, 'Sync now')
+          const timeout = setTimeout(
+            () => entered.reject(new Error('Source ingestion did not start')),
+            10_000,
+          )
+          try {
+            await entered.promise
+          } finally {
+            clearTimeout(timeout)
+          }
+        } else {
+          await page.waitForSelector('#ls-topic-title')
+          await fill(page, '#ls-topic-title', 'Private draft')
+          await textShown(page, 'Save')
+        }
+        // Save the real React callback, then invoke it after its authority is obsolete.
+        await page.evaluate((tab) => {
+          const element = tab === 'content'
+            ? document.querySelector('#source-url-marine')!.closest('form')!
+            : [...document.querySelectorAll('button')].find((b) =>
+              b.textContent?.trim() === 'Save'
+            )!
+          const props = Object.keys(element).find((key) => key.startsWith('__reactProps'))!
+          const callback =
+            (element as unknown as Record<string, Record<string, () => unknown>>)[props]![
+              tab === 'content' ? 'onSubmit' : 'onClick'
+            ]!
+          ;(globalThis as unknown as { oldCallback: typeof callback }).oldCallback = callback
+        }, { args: [tab] })
+        server.setAssignment({ kind: 'portal', slug: 'marine' }, 'e2e-curator', 'viewer')
+        await page.evaluate(() => dispatchEvent(new Event('focus')))
+        await page.waitForSelector('[data-route-unavailable]')
+        const before = server.requests.filter((r) => r.path.startsWith('/api/admin/')).length
+        await page.evaluate(() => {
+          const callback = (globalThis as unknown as {
+            oldCallback: (event: { preventDefault(): void }) => unknown
+          }).oldCallback
+          callback({ preventDefault() {} })
+        })
+        held.resolve()
+        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
+        expect(server.requests.filter((r) => r.path.startsWith('/api/admin/')).length).toBe(before)
+        expect(await page.evaluate(() => document.body.innerText)).not.toMatch(
+          /Synced -|Finished -|Private draft|Saved/,
+        )
+      } finally {
+        held.resolve()
+        await page.close()
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+    website.close()
+  }
+})
+
+Deno.test('sources insights and taxonomy obey light dark wide390 and22px appearance tokens', async () => {
+  const browser = await launch()
+  const website = sourceWebsite()
+  try {
+    for (const dark of [false, true]) {
+      const server = startTestServer({
+        identity: { role: 'curator' },
+        management: contentManagement().management,
+      })
+      server.tenants.patchBranding('marine', {
+        paletteId: dark ? 'observatory' : 'default',
+        shape: 'soft',
+        density: 'spacious',
+        typography: 'lexend-zilla',
+      })
+      const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+      try {
+        await page.waitForSelector('#source-url-marine')
+        await page.evaluate(() =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Switch to light mode"]')
+            ?.click()
+        )
+        await page.waitForFunction(
+          (dark: boolean) =>
+            getComputedStyle(document.body).colorScheme === (dark ? 'dark' : 'light'),
+          { args: [dark] },
+        )
+        await fill(page, '#source-url-marine', website.url)
+        await click(page, 'Add source')
+        await click(page, 'Sync now')
+        await textShown(page, 'Synced - 1 page added.')
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 960 })
+          await page.evaluate(() => {
+            document.documentElement.style.fontSize = '22px'
+          })
+          for (const tab of ['content', 'insights', 'taxonomy']) {
+            await navigate(page, tab)
+            const target = tab === 'content'
+              ? '#source-url-marine'
+              : tab === 'insights'
+              ? '[data-admin-insights]'
+              : '#ls-topic-title'
+            await page.waitForSelector(target)
+            await page.evaluate(async () => {
+              await Promise.all(
+                document.getAnimations().filter((animation) =>
+                  Number.isFinite(animation.effect?.getComputedTiming().endTime)
+                ).map((animation) => animation.finished.catch(() => {})),
+              )
+            })
+            await page.evaluate(
+              (target) => document.querySelector(target)?.scrollIntoView({ block: 'center' }),
+              { args: [target] },
+            )
+            await captureBoundary(
+              page,
+              '.planning/logs/04-06-02-visual',
+              `${tab}-${dark ? 'dark' : 'light'}-${width}`,
+              width,
+            )
+            if (tab === 'content') {
+              await page.evaluate(() =>
+                document.querySelector('select[id^=source-cap-]:not(#source-cap-marine)')?.closest(
+                  'li',
+                )?.scrollIntoView({ block: 'center' })
+              )
+              await captureBoundary(
+                page,
+                '.planning/logs/04-06-02-visual',
+                `source-row-${dark ? 'dark' : 'light'}-${width}`,
+                width,
+              )
+            }
+          }
+          await page.evaluate(() => {
+            history.pushState(null, '', '/t/marine/taxonomy')
+            dispatchEvent(new PopStateEvent('popstate'))
+          })
+          await page.waitForSelector('#taxonomy-name')
+          await page.evaluate(async () => {
+            await Promise.all(
+              document.getAnimations().filter((animation) =>
+                Number.isFinite(animation.effect?.getComputedTiming().endTime)
+              ).map((animation) => animation.finished.catch(() => {})),
+            )
+          })
+          await page.evaluate(() =>
+            document.querySelector('#taxonomy-name')?.scrollIntoView({ block: 'center' })
+          )
+          await captureBoundary(
+            page,
+            '.planning/logs/04-06-02-visual',
+            `public-taxonomy-${dark ? 'dark' : 'light'}-${width}`,
+            width,
+          )
+        }
+      } finally {
+        await page.close()
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+    website.close()
+  }
+})
+
+Deno.test('signed viewers emit no content administration requests; curator completes real Manage content operations', async () => {
+  const browser = await launch()
+  try {
+    for (const role of ['viewer', 'curator'] as const) {
+      const { management, calls } = contentManagement()
+      const server = startTestServer({ identity: { role }, management })
+      try {
+        const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+        try {
+          await assertCurrentBuild(page)
+          if (role === 'viewer') {
+            await page.waitForSelector('[data-route-unavailable]')
+            expect(server.requests.filter((r) => r.path.startsWith('/api/admin/'))).toEqual([])
+            expect(calls).toEqual([])
+            continue
+          }
+          await click(page, 'Add content')
+          await upload(page)
+          await textShown(page, 'Uploaded "marine.txt"')
+          await click(page, 'Paste text')
+          await fill(page, '#text-title-marine', 'Marine text')
+          await fill(page, '#text-body-marine', 'Verified marine evidence')
+          await click(page, 'Add text')
+          await textShown(page, 'Text added -')
+          await click(page, 'Add link')
+          await fill(page, '#link-url-marine', `${server.url}/build.json`)
+          await page.evaluate(() =>
+            document.querySelector<HTMLFormElement>('#link-url-marine')!.closest('form')!
+              .requestSubmit()
+          )
+          await textShown(page, 'Link added -')
+          await click(page, 'Hide')
+          await click(page, 'Publish')
+          await click(page, 'Scan corpus')
+          await textShown(page, '4 words extracted')
+          await click(page, 'Refresh recent additions')
+          await navigate(page, 'overview')
+          await click(page, 'Refresh metrics')
+          await textShown(page, '28')
+          expect(calls).toEqual(
+            expect.arrayContaining([
+              'createText',
+              'createLink',
+              'uploadFile',
+              'setResourceHidden',
+              'corpusHealth',
+              'counters',
+              'recentResources',
+            ]),
+          )
+          expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+        } finally {
+          await page.close()
+        }
+      } finally {
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+})
+
+Deno.test('pending uploads and refreshes cannot publish after revocation', async () => {
+  const browser = await launch()
+  try {
+    for (const path of ['resources/upload', 'recent', 'corpus-health']) {
+      const server = startTestServer({
+        identity: { role: 'curator' },
+        management: contentManagement().management,
+      })
+      const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+      let delay: ReturnType<typeof server.delayResponse> | undefined
+      try {
+        await click(page, 'Add content')
+        delay = server.delayResponse(`/api/admin/t/marine/${path}`)
+        if (path === 'resources/upload') await upload(page)
+        else await click(page, path === 'recent' ? 'Refresh recent additions' : 'Scan corpus')
+        await delay.entered
+        server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
+        await page.evaluate(() => dispatchEvent(new Event('focus')))
+        await page.waitForSelector('[data-route-unavailable]')
+        delay.release()
+        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
+        expect(await page.evaluate(() => document.body.innerText)).not.toMatch(
+          /Uploaded|Marine research|words extracted|Add content/,
+        )
+      } finally {
+        delay?.release()
+        await page.close()
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+})
+
+Deno.test('owner cannot mount pending Manage panels at the owning content stage', async () => {
+  if (stage !== '04-06-01' && stage !== '04-06-02') return
+  const server = startTestServer({
+    identity: { role: 'owner' },
+    management: contentManagement().management,
+  })
+  const browser = await launch()
+  try {
+    const page = await browser.newPage(`${server.url}/t/marine/manage`)
+    await page.waitForSelector('[data-admin-metrics]')
+    for (
+      const tab of [
+        'content',
+        'insights',
+        'taxonomy',
+        'graph',
+        'enrichments',
+        'behaviour',
+        'extraction',
+        'appearance',
+        'details',
+      ]
+    ) {
+      await navigate(page, tab)
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 40)))
+    }
+    const allowed = [
+      '/counters',
+      '/recent',
+      ...(stage === '04-06-02' ? ['/sources', '/insights'] : []),
+    ]
+    expect(
+      server.requests.filter((r) =>
+        r.path.startsWith('/api/admin/') && !allowed.some((end) => r.path.endsWith(end))
+      ),
+    ).toEqual([])
+    expect(await page.evaluate(() => document.body.innerText)).not.toContain('Rename')
+    await page.close()
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+})
+
+Deno.test('content controls fit light and Observatory at wide and390 with22px and tenant tokens', async () => {
+  const browser = await launch()
+  try {
+    for (const dark of [false, true]) {
+      const server = startTestServer({
+        identity: { role: 'curator' },
+        management: contentManagement().management,
+      })
+      try {
+        server.tenants.patchBranding('marine', {
+          paletteId: dark ? 'observatory' : 'default',
+          shape: 'soft',
+          density: 'spacious',
+          typography: 'lexend-zilla',
+        })
+        const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+        try {
+          await click(page, 'Add content')
+          await page.evaluate(() =>
+            document.querySelector<HTMLButtonElement>('button[aria-label="Switch to light mode"]')
+              ?.click()
+          )
+          await page.waitForFunction(
+            (dark: boolean) =>
+              getComputedStyle(document.body).colorScheme === (dark ? 'dark' : 'light'),
+            { args: [dark] },
+          )
+          await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 350)))
+          for (const width of [1440, 390]) {
+            await click(page, 'Scan corpus')
+            await textShown(page, '4 words extracted')
+            const dir = '.planning/logs/04-06-01-visual'
+            await captureBoundary(page, dir, `content-${dark ? 'dark' : 'light'}-${width}`, width)
+            await page.evaluate(() =>
+              document.querySelector('input[type=file]')?.closest('label')?.scrollIntoView({
+                block: 'center',
+              })
+            )
+            await captureBoundary(page, dir, `upload-${dark ? 'dark' : 'light'}-${width}`, width)
+            await page.evaluate(() =>
+              document.querySelector('[data-admin-health]')?.scrollIntoView()
+            )
+            await captureBoundary(page, dir, `health-${dark ? 'dark' : 'light'}-${width}`, width)
+            await navigate(page, 'overview')
+            await page.waitForSelector('[data-admin-metrics]')
+            await page.evaluate(() =>
+              document.querySelector('[data-admin-metrics]')?.scrollIntoView()
+            )
+            await captureBoundary(page, dir, `metrics-${dark ? 'dark' : 'light'}-${width}`, width)
+            await navigate(page, 'content')
+            await click(page, 'Add content')
+            await page.evaluate(() => scrollTo(0, 0))
+          }
+        } finally {
+          await page.close()
+        }
+      } finally {
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+})

@@ -1,12 +1,15 @@
 import { Component, type ReactNode, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { AccessProvider } from './components/AccessProvider.tsx'
+import { PortalAccessGate, ResolvedAccess } from './components/PortalAccessGate.tsx'
 import { RootRedirect } from './components/RootRedirect.tsx'
 import { TenantLayout } from './pages/TenantLayout.tsx'
 import { ExplorePage } from './pages/ExplorePage.tsx'
 import { SearchPage } from './pages/SearchPage.tsx'
 import { AdminPage } from './pages/AdminPage.tsx'
+import { PeoplePage } from './pages/PeoplePage.tsx'
+import { AuditPage } from './pages/AuditPage.tsx'
 import { ManagePage } from './pages/ManagePage.tsx'
 import { LibraryPage } from './pages/LibraryPage.tsx'
 import { ResourceDetailPage } from './pages/ResourceDetailPage.tsx'
@@ -23,15 +26,6 @@ import { ToolsPage } from './pages/ToolsPage.tsx'
 import { TaxonomyPage } from './pages/TaxonomyPage.tsx'
 import { EntityPage } from './pages/EntityPage.tsx'
 import { NotFoundPage, RootNotFound } from './pages/NotFoundPage.tsx'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-})
 
 /** Last line of defence: a render error shows a recoverable message, never a blank page. */
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -69,12 +63,49 @@ if (!container) {
 createRoot(container).render(
   <StrictMode>
     <AppErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
+      <BrowserRouter>
+        <AccessProvider>
           <Routes>
-            <Route path='/' element={<RootRedirect />} />
-            <Route path='/admin' element={<AdminPage />} />
-            <Route path='/t/:slug' element={<TenantLayout />}>
+            <Route
+              path='/'
+              element={
+                <ResolvedAccess>
+                  <RootRedirect />
+                </ResolvedAccess>
+              }
+            />
+            <Route
+              path='/admin'
+              element={
+                <ResolvedAccess>
+                  <AdminPage />
+                </ResolvedAccess>
+              }
+            />
+            <Route
+              path='/admin/audit'
+              element={
+                <ResolvedAccess>
+                  <AuditPage />
+                </ResolvedAccess>
+              }
+            />
+            <Route
+              path='/admin/people'
+              element={
+                <ResolvedAccess>
+                  <PeoplePage />
+                </ResolvedAccess>
+              }
+            />
+            <Route
+              path='/t/:slug'
+              element={
+                <PortalAccessGate>
+                  <TenantLayout />
+                </PortalAccessGate>
+              }
+            >
               <Route index element={<ExplorePage />} />
               <Route path='search' element={<SearchPage />} />
               <Route path='library' element={<LibraryPage />} />
@@ -99,8 +130,8 @@ createRoot(container).render(
             {/* Catch-all outside any portal (bad top-level path). */}
             <Route path='*' element={<RootNotFound />} />
           </Routes>
-        </BrowserRouter>
-      </QueryClientProvider>
+        </AccessProvider>
+      </BrowserRouter>
     </AppErrorBoundary>
   </StrictMode>,
 )

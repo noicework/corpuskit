@@ -1,4 +1,5 @@
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -429,18 +430,24 @@ function ExampleCard({
  * mode - with a sticky save bar appearing once the draft diverges from what
  * is registered on the box.
  */
-export function KgStrategyEditor({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible } = useAdminAccess()
+function KgStrategyEditorContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess('graph.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getGraphStrategy>>>()
   const queryClient = useQueryClient()
   const { data: sessionData, isLoading, isError } = useQuery({
     queryKey: ['kg-strategy', slug],
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
     queryFn: () => getGraphStrategy(slug, sessionAccess),
   })
 
-  const data = coarseAdminEligible ? sessionData : snapshot
+  const data = sessionAllowed ? sessionData : snapshot
   const [draft, setDraft] = useState<Draft | null>(null)
   const baselineRef = useRef<Draft | null>(null)
   const dirtyRef = useRef(false)
@@ -478,11 +485,13 @@ export function KgStrategyEditor({ slug }: { slug: string }) {
         ) throw new AdminAccessError()
         return result
       })
+      assertCurrent()
       if (result !== undefined) {
-        if (coarseAdminEligible) queryClient.setQueryData(['kg-strategy', slug], result)
+        if (sessionAllowed) queryClient.setQueryData(['kg-strategy', slug], result)
         else setSnapshot(result)
       }
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load the strategy.') })
     }
   }
@@ -548,6 +557,7 @@ export function KgStrategyEditor({ slug }: { slug: string }) {
             applyExisting,
           },
           (event) => {
+            assertCurrent()
             setLog((prev) => [...prev, event])
             if (event.type === 'error') failed = true
             if (event.type === 'done') {
@@ -565,17 +575,19 @@ export function KgStrategyEditor({ slug }: { slug: string }) {
         if (!completed || failed) throw new AdminAccessError()
         return true
       })
+      assertCurrent()
       if (result === undefined) return
       baselineRef.current = draft
       dirtyRef.current = false
       setDraft({ ...draft })
-      if (coarseAdminEligible) {
+      if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
       }
     } catch (err) {
+      if (context !== authority.controller.context) return
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the strategy.') })
     } finally {
-      setSaving(false)
+      if (context === authority.controller.context) setSaving(false)
     }
   }
 
@@ -729,4 +741,13 @@ export function KgStrategyEditor({ slug }: { slug: string }) {
       )}
     </div>
   )
+}
+
+export function KgStrategyEditor(props: { slug: string }) {
+  const access = useAccess()
+  const permission = usePermissionAdminAccess('graph.write', { kind: 'portal', slug: props.slug })
+  if (
+    access.state.status !== 'ready' || (!permission.sessionAllowed && !permission.breakGlassEnabled)
+  ) return null
+  return <KgStrategyEditorContent key={`${props.slug}:${access.generation}`} {...props} />
 }

@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import type { AdminTenantOverview } from '@research-portal/core'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { createAdminKb } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -11,16 +13,33 @@ import { errorMessage, type Message } from './shared.ts'
  * when the tenant is still sitting on the shared demo box. Renders nothing
  * once a real box is connected.
  */
-export function CreateKbBox({
+function CreateKbBoxContent({
   row,
   onCreated,
 }: {
   row: AdminTenantOverview
   onCreated: () => Promise<unknown>
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('bindings.write', {
+    kind: 'portal',
+    slug: row.tenant.slug,
+  })
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const current = () => mounted.current && context === authority.controller.context
+  const assertCurrent = () => {
+    authority.controller.assertCurrent(context)
+    if (!mounted.current) throw new AdminAccessError()
+  }
 
   const onCreate = async () => {
     setBusy(true)
@@ -28,8 +47,12 @@ export function CreateKbBox({
     try {
       const result = await runExplicit(
         `Create a knowledge box for ${row.tenant.productName}`,
-        (access) => createAdminKb(row.tenant.slug, access),
+        (access) => {
+          assertCurrent()
+          return createAdminKb(row.tenant.slug, access)
+        },
       )
+      assertCurrent()
       if (result === undefined) return
       setMessage({
         tone: 'ok',
@@ -37,12 +60,13 @@ export function CreateKbBox({
       })
       await onCreated()
     } catch (err) {
+      if (!current()) return
       setMessage({
         tone: 'error',
         text: errorMessage(err, 'Could not create a knowledge box - please try again.'),
       })
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
 
@@ -60,6 +84,13 @@ export function CreateKbBox({
           disabled={busy}
           onClick={() => void onCreate()}
           className='rp-btn rp-btn-primary mt-3'
+          style={{
+            height: 'auto',
+            minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
+            paddingBlock: '0.5rem',
+            whiteSpace: 'normal',
+            maxWidth: '100%',
+          }}
         >
           {busy ? 'Creating…' : 'Create a knowledge box'}
         </button>
@@ -77,6 +108,13 @@ export function CreateKbBox({
             disabled={busy}
             onClick={() => void onCreate()}
             className='rp-btn rp-btn-outline'
+            style={{
+              height: 'auto',
+              minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
+              paddingBlock: '0.5rem',
+              whiteSpace: 'normal',
+              maxWidth: '100%',
+            }}
           >
             {busy ? 'Creating…' : 'Create new box'}
           </button>
@@ -90,4 +128,19 @@ export function CreateKbBox({
   }
 
   return null
+}
+
+export function CreateKbBox(props: ComponentProps<typeof CreateKbBoxContent>) {
+  const { generation } = useAccess()
+  const { sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess('bindings.write', {
+    kind: 'portal',
+    slug: props.row.tenant.slug,
+  })
+  if (props.row.disabled || (!sessionAllowed && !breakGlassEnabled)) return null
+  return (
+    <CreateKbBoxContent
+      key={`${generation}:${props.row.tenant.slug}:${sessionAllowed}`}
+      {...props}
+    />
+  )
 }

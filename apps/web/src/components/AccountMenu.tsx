@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  type AccountEntry,
   type AccountMenuTabDirection,
   accountTriggerAttributes,
   nextAccountMenuIndex,
@@ -13,9 +14,11 @@ const PAGE_TAB_STOP_SELECTOR =
 export type AccountMenuVariant = 'header' | 'mobile'
 
 type AccountMenuProps = {
-  isAdmin: boolean
+  entries: readonly AccountEntry[]
+  portalRole?: string | null
+  platformRole?: string | null
+  portalName?: string
   label: string
-  manageHref: string
   onProfile: () => void
   variant?: AccountMenuVariant
   onTabOut?: (direction: AccountMenuTabDirection) => void
@@ -47,15 +50,17 @@ function visibleTabStops(): HTMLElement[] {
 }
 
 /**
- * An admin-only menu button. Mouse hover may reveal it, but activation owns
+ * A supplied-destination menu button. Mouse hover may reveal it, but activation owns
  * focus and the full menu-button keyboard contract. It deliberately does not
  * close on pointer leave, satisfying the persistence requirement for content
  * disclosed on hover.
  */
 export function AccountMenu({
-  isAdmin,
+  entries,
+  portalRole,
+  platformRole,
+  portalName,
   label,
-  manageHref,
   onProfile,
   variant = 'header',
   onTabOut,
@@ -69,7 +74,8 @@ export function AccountMenu({
   const panelRef = useRef<HTMLDivElement | null>(null)
   const focusOnOpen = useRef<'first' | 'last' | null>(null)
 
-  const triggerAttributes = accountTriggerAttributes(isAdmin, open, menuId)
+  const hasEntries = entries.length > 0
+  const triggerAttributes = accountTriggerAttributes(hasEntries, open, menuId)
 
   useEffect(() => {
     if (!open) return
@@ -130,7 +136,7 @@ export function AccountMenu({
   }
 
   function onTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (!isAdmin) return
+    if (!hasEntries) return
     if (event.key === 'Escape' && open) {
       event.preventDefault()
       event.stopPropagation()
@@ -181,7 +187,7 @@ export function AccountMenu({
 
   const buttonClass = variant === 'header'
     ? `rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150 ${
-      isAdmin ? 'hover:bg-[var(--rp-surface-2)]' : ''
+      hasEntries ? 'hover:bg-[var(--rp-surface-2)]' : ''
     }`
     : 'rp-navsheet-action rp-focus-inverse w-full'
 
@@ -190,7 +196,7 @@ export function AccountMenu({
       ref={triggerRef}
       id={triggerId}
       type='button'
-      onClick={() => isAdmin ? openAndFocus('first') : onProfile()}
+      onClick={() => hasEntries ? openAndFocus('first') : onProfile()}
       onKeyDown={onTriggerKeyDown}
       aria-label={label}
       title={label}
@@ -208,7 +214,7 @@ export function AccountMenu({
     </button>
   )
 
-  if (!isAdmin) return button
+  if (!hasEntries) return button
 
   const menuSurface = (
     <div
@@ -221,20 +227,36 @@ export function AccountMenu({
         variant === 'mobile' ? 'shrink-0' : ''
       }`}
     >
-      <Link
-        to={manageHref}
-        role='menuitem'
-        tabIndex={-1}
-        onClick={() => setOpen(false)}
-        className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
-      >
-        Manage Account
-      </Link>
+      {(portalRole || platformRole) && (
+        <div
+          role='group'
+          aria-label='Current access'
+          className='border-b border-line px-3 py-2 text-sm text-ink-2 break-words'
+        >
+          {portalRole && <p>{portalName}: {portalRole}</p>}
+          {platformRole && <p>Platform: {platformRole}</p>}
+        </div>
+      )}
+      {entries.map((entry) => (
+        <Link
+          key={entry.href}
+          to={entry.href}
+          role='menuitem'
+          tabIndex={-1}
+          onClick={() => setOpen(false)}
+          className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+        >
+          {entry.label}
+        </Link>
+      ))}
       <button
         type='button'
         role='menuitem'
         tabIndex={-1}
         onClick={() => {
+          // The selected menu item unmounts before the dialog can remember it.
+          // Hand focus to the persistent launcher for the dialog's return path.
+          triggerRef.current?.focus()
           setOpen(false)
           onProfile()
         }}

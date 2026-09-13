@@ -1,34 +1,44 @@
 import { expect } from '@std/expect'
 import { mcpConfigSnippet } from './ToolsPage.tsx'
 
-Deno.test('MCP config includes the tenant endpoint and bearer authorisation', () => {
-  const snippet = mcpConfigSnippet(
-    'https://portal.example/api/t/marine/mcp',
-    'marine',
-    'ck_mcp_example_secret',
+Deno.test('public MCP configuration is keyless and restricted configuration uses only a placeholder', () => {
+  expect(
+    JSON.parse(mcpConfigSnippet('https://portal.example/api/t/marine/mcp', 'marine'))
+      .mcpServers['marine-knowledge'],
+  ).toEqual({ type: 'streamable-http', url: 'https://portal.example/api/t/marine/mcp' })
+  const restricted = mcpConfigSnippet(
+    'https://portal.example/api/t/grains/mcp',
+    'grains',
+    'YOUR_KEY',
   )
-  const parsed = JSON.parse(snippet)
-
-  expect(parsed.mcpServers['marine-knowledge']).toEqual({
-    type: 'streamable-http',
-    url: 'https://portal.example/api/t/marine/mcp',
-    headers: { Authorization: 'Bearer ck_mcp_example_secret' },
-  })
+  expect(restricted).toContain('Bearer YOUR_KEY')
+  expect(restricted).not.toContain('ck_')
 })
-
-Deno.test('MCP config defaults to a non-secret key placeholder', () => {
-  const snippet = mcpConfigSnippet('https://portal.example/api/t/grains/mcp', 'grains')
-  expect(snippet).toContain('Bearer YOUR_KEY')
-  expect(snippet).not.toContain('ck_mcp_')
-})
-
-Deno.test('Tools page gates key controls and deliberately contains opaque strings on phones', async () => {
+Deno.test('Tools has one canonical permitted manager link and exact extraction permission', async () => {
   const source = await Deno.readTextFile(new URL('./ToolsPage.tsx', import.meta.url))
-
-  expect(source).toContain('const isAdmin = auth?.user?.isAdmin === true')
-  expect(source).toContain('enabled: isAdmin')
-  expect(source).toContain('!isAdmin')
-  expect(source).toContain('break-all')
-  expect(source).toContain('[overflow-wrap:anywhere]')
-  expect(source).toContain('rounded-[var(--rp-radius-input)]')
+  expect(source).toContain("access.can('keys.manage', scope)")
+  expect(source).toContain("access.can('content.write', scope)")
+  expect(source).toContain('manage?tab=access#access-keys')
+  expect(source).not.toMatch(/\bfetch\s*\(|useQuery|useMutation|createCredential|revokeCredential/)
+  expect(source).toContain('without a key')
+})
+Deno.test('all rendered frontend surfaces reject coarse administrator authority', async () => {
+  const scan = async (path: string): Promise<void> => {
+    for await (const entry of Deno.readDir(path)) {
+      const file = `${path}/${entry.name}`
+      if (entry.isDirectory) await scan(file)
+      else if (
+        /\.(tsx?|jsx?)$/.test(file) && !file.includes('.test.') &&
+        file !== 'apps/web/src/api/auth.ts'
+      ) {
+        expect({
+          file,
+          usesCoarseAuthority: /\bisAdmin\b|\bcoarseAdminEligible\b/.test(
+            await Deno.readTextFile(file),
+          ),
+        }).toEqual({ file, usesCoarseAuthority: false })
+      }
+    }
+  }
+  await scan('apps/web/src')
 })

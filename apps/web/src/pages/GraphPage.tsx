@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
+import { useAccess } from '../components/AccessProvider.tsx'
 import {
   getGraph,
   getLabelsets,
@@ -1142,7 +1143,9 @@ function CanvasNotice({ children }: { children: React.ReactNode }) {
 }
 
 export function GraphPage() {
-  const { config, isAdmin = false } = useOutletContext<TenantOutletContext>()
+  const { config } = useOutletContext<TenantOutletContext>()
+  const access = useAccess()
+  const canConfigure = access.can('graph.write', { kind: 'portal', slug: config.slug })
   const slug = config.slug
   const [mode, setMode] = useState<Mode>('entity')
   const [layout, setLayout] = useState<MapLayout>('grouped')
@@ -1558,7 +1561,7 @@ export function GraphPage() {
                   ? 'Once resources carry topics and kinds, their overlaps appear here.'
                   : extracting
                   ? 'The knowledge-graph agent is working through the corpus now. Relations appear here as it extracts them - check back shortly.'
-                  : isAdmin
+                  : canConfigure
                   ? 'No knowledge-graph agent has run over this corpus yet - configure one from Manage and the entities and relations will appear here.'
                   : 'The map is built from relations extracted across the corpus, and none are available yet. Search and the library work as usual in the meantime.'}
               />

@@ -1,16 +1,62 @@
 import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import type { TenantConfig } from '@research-portal/core'
 import type { AuthUser } from '../api/auth.ts'
 import { microsoftLoginUrl } from '../api/auth.ts'
+import { useAccess } from './AccessProvider.tsx'
+import { roleLabel } from './account-menu-behaviour.ts'
 
-export function SignInDialog({ onClose, user }: { onClose: () => void; user?: AuthUser | null }) {
+export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser | null }) {
+  const access = useAccess()
+  const portalName =
+    useQueryClient().getQueryData<TenantConfig>(['tenant-config', access.slug])?.branding
+      .productName ?? access.slug
+  const session = access.state.session
+  const user = session?.user
+  const portalRole = roleLabel(session?.portalAccess?.effectiveRole)
+  const platformRole = roleLabel(session?.effectiveRoles.platformRole)
+  const sources = [
+    ...new Set(
+      session?.provenance.filter((entry) =>
+        entry.scope.kind === 'platform' || entry.scope.slug === access.slug
+      ).map((
+        entry,
+      ) => ({
+        'app-role': 'Entra app role',
+        group: 'Entra group',
+        local: 'Local assignment',
+      }[entry.source])) ?? [],
+    ),
+  ]
+  const claimAge = session?.claimAgeSeconds
+  const closeCallback = useRef(onClose)
+  closeCallback.current = onClose
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   const closeRef = useRef<HTMLButtonElement | null>(null)
   const title = user ? 'Profile' : 'Sign in'
   const summary = user ? 'Your organisation account.' : 'Use your organisation account.'
 
   useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null
     closeRef.current?.focus()
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        closeCallback.current()
+      }
+      if (event.key !== 'Tab') return
+      const items = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [],
+      )
+      const first = items[0], last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
     }
     document.addEventListener('keydown', onKey)
     const previous = document.body.style.overflow
@@ -18,8 +64,9 @@ export function SignInDialog({ onClose, user }: { onClose: () => void; user?: Au
     return () => {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previous
+      if (previousFocus?.isConnected) previousFocus.focus()
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div
@@ -28,10 +75,11 @@ export function SignInDialog({ onClose, user }: { onClose: () => void; user?: Au
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role='dialog'
         aria-modal='true'
         aria-labelledby='signin-title'
-        className='rp-shadow-xl w-full max-w-md bg-surface'
+        className='rp-shadow-xl max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[var(--rp-radius)] bg-surface'
         onClick={(event) => event.stopPropagation()}
       >
         <div className='flex items-start justify-between gap-4 border-b border-line px-6 py-5'>
@@ -46,7 +94,7 @@ export function SignInDialog({ onClose, user }: { onClose: () => void; user?: Au
             type='button'
             onClick={onClose}
             aria-label='Close'
-            className='rp-btn rp-btn-ghost h-9 w-9 shrink-0 !px-0'
+            className='rp-btn rp-btn-ghost min-h-11 min-w-11 shrink-0 !px-0'
           >
             <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
               <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
@@ -57,13 +105,48 @@ export function SignInDialog({ onClose, user }: { onClose: () => void; user?: Au
         <div className='px-6 py-6'>
           {user
             ? (
-              <div>
+              <div className='break-words'>
                 <p className='font-semibold text-ink'>{user.name}</p>
                 <p className='mt-1 text-sm text-ink-2'>{user.email}</p>
-                {user.isAdmin
-                  ? <span className='rp-badge rp-badge-quiet mt-3'>Administrator</span>
-                  : null}
-                <a href='/auth/logout' className='rp-btn rp-btn-secondary mt-6 w-full'>
+                <section aria-label='Current access' className='mt-4 space-y-2 text-sm text-ink-2'>
+                  {portalRole && (
+                    <p>
+                      {portalName}: <span className='text-ink'>{portalRole}</span>
+                    </p>
+                  )}
+                  {platformRole && (
+                    <p>
+                      Platform: <span className='text-ink'>{platformRole}</span>
+                    </p>
+                  )}
+                  {sources.length > 0 && <p>Access source: {sources.join(', ')}</p>}
+                  <p>
+                    {claimAge == null
+                      ? 'Entra claim age unavailable'
+                      : `Entra claims checked ${
+                        claimAge < 60
+                          ? 'less than a minute'
+                          : claimAge < 3600
+                          ? `${Math.floor(claimAge / 60)} minutes`
+                          : `${Math.floor(claimAge / 3600)} hours`
+                      } ago.`}
+                  </p>
+                  <p>
+                    Entra access updates when you sign in again. Local assignments are checked on
+                    each request.
+                  </p>
+                  <a
+                    href={microsoftLoginUrl()}
+                    className='rp-focus text-[var(--rp-accent-fg)] underline'
+                  >
+                    Sign in again
+                  </a>
+                </section>
+                <a
+                  href='/auth/logout'
+                  onClick={() => access.controller.invalidate('sign out')}
+                  className='rp-btn rp-btn-secondary mt-6 w-full'
+                >
                   Sign out
                 </a>
               </div>
@@ -85,8 +168,9 @@ export function SignInDialog({ onClose, user }: { onClose: () => void; user?: Au
                 </a>
 
                 <p className='mt-4 text-sm leading-relaxed text-ink-2'>
-                  You will be redirected to your organisation's sign-in page. Access is granted by
-                  role; if you cannot sign in, ask an administrator to assign you one.
+                  {access.state.status === 'unavailable'
+                    ? 'Access could not be checked.'
+                    : 'You will be redirected to your organisation’s sign-in page.'}
                 </p>
               </>
             )}

@@ -1,4 +1,13 @@
-import { AdminAccessError, adminFetch, type AdminRequestAccess } from './break-glass.ts'
+import {
+  AdminAccessError,
+  adminFetch,
+  type AdminRequestAccess,
+  assertResponseCurrent,
+  assertResultCurrent,
+  authorityFetch,
+  finishResponse,
+} from './break-glass.ts'
+import type { RequestContext } from './access-lifecycle.ts'
 import type {
   AdminTenantOverview,
   AnalyseEvent,
@@ -107,11 +116,31 @@ function friendlyError(body: unknown, fallback: string): string {
   return fallback
 }
 
-async function request<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+async function transportFetch(
+  path: string,
+  init?: RequestInit,
+  options?: RequestContext,
+): Promise<Response> {
+  try {
+    return await authorityFetch(path, init, options)
+  } catch (error) {
+    if (error instanceof AdminAccessError) {
+      throw new ApiError(error.status, 'Access could not be confirmed', error.retryAfter)
+    }
+    throw error
+  }
+}
+
+export async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options?: RequestContext,
+): Promise<T> {
+  const res = await transportFetch(path, init, options)
 
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null)
+    assertResponseCurrent(res)
     throw new ApiError(res.status, friendlyError(body, res.statusText || 'Request failed'))
   }
 
@@ -145,8 +174,15 @@ export function getResource(slug: string, id: string): Promise<ResourceSummary> 
   )
 }
 
-export function getKnowledgeBoxStatus(slug: string): Promise<KnowledgeBoxStatus> {
-  return request<KnowledgeBoxStatus>(`/api/t/${encodeURIComponent(slug)}/knowledge-box`)
+export function getKnowledgeBoxStatus(
+  slug: string,
+  context?: RequestContext,
+): Promise<KnowledgeBoxStatus> {
+  return request<KnowledgeBoxStatus>(
+    `/api/t/${encodeURIComponent(slug)}/knowledge-box`,
+    undefined,
+    context,
+  )
 }
 
 export function searchTenantFull(
@@ -182,13 +218,14 @@ export async function streamDocsAsk(
   body: { query: string; context?: { author: 'USER' | 'AGENT'; text: string }[] },
   onEvent: (event: AskEvent) => void,
   signal?: AbortSignal,
+  options: RequestContext = {},
 ): Promise<void> {
-  const res = await fetch(`/api/t/${encodeURIComponent(slug)}/docs/ask`, {
+  const res = await transportFetch(`/api/t/${encodeURIComponent(slug)}/docs/ask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal,
-  })
+  }, options)
   if (!res.ok || !res.body) {
     throw new ApiError(res.status, res.statusText || 'The help assistant is unavailable')
   }
@@ -196,6 +233,7 @@ export async function streamDocsAsk(
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -205,15 +243,22 @@ export async function streamDocsAsk(
       // A truncated trailing frame (dropped connection) is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 export function getCatalog(
@@ -298,8 +343,9 @@ export function generateArtifact(
     /** How many questions the reader asked for (an assessment): the server trims to it. */
     count?: number
   } = {},
+  options: RequestContext = {},
 ): Promise<GenerateResult> {
-  return fetch(`/api/t/${encodeURIComponent(slug)}/generate`, {
+  return transportFetch(`/api/t/${encodeURIComponent(slug)}/generate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -309,9 +355,10 @@ export function generateArtifact(
       ...(opts.guidance?.trim() ? { guidance: opts.guidance.trim() } : {}),
       ...(opts.count ? { count: opts.count } : {}),
     }),
-  }).then(async (res) => {
+  }, options).then(async (res) => {
     if (!res.ok) {
       const body: unknown = await res.json().catch(() => null)
+      assertResponseCurrent(res)
       const message = body && typeof body === 'object' && 'message' in body &&
           typeof body.message === 'string'
         ? body.message
@@ -356,19 +403,22 @@ export async function streamAsk(
   body: AskRequest,
   onEvent: (event: AskEvent) => void,
   signal?: AbortSignal,
+  options: RequestContext = {},
 ): Promise<void> {
-  const res = await fetch(`/api/t/${encodeURIComponent(slug)}/ask`, {
+  const res = await transportFetch(`/api/t/${encodeURIComponent(slug)}/ask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
     body: JSON.stringify(body),
     signal,
-  })
+  }, options)
+  assertResponseCurrent(res)
   noteAskBudget(res)
   if (!res.ok || !res.body) throw askError(res, 'The answer service is unavailable')
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -378,20 +428,28 @@ export async function streamAsk(
       // A truncated trailing frame (dropped connection) is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 /** Reject uncertain responses before a caller changes forms, snapshots or query state. */
 function validatedAdminResult<T>(schema: z.ZodType<T>): (value: unknown) => T {
   return (value) => {
+    assertResultCurrent(value)
     const parsed = schema.safeParse(value)
     if (!parsed.success) throw new AdminAccessError()
     return parsed.data
@@ -412,13 +470,15 @@ const portalSourceSchema = z.object({
   maxPages: z.number().int().positive().optional(),
 })
 
-async function adminRequest<T>(
+export async function adminRequest<T>(
   path: string,
   passcode: AdminRequestAccess,
   init?: RequestInit,
+  options?: RequestContext,
 ): Promise<T> {
-  const res = await adminFetch(passcode, path, init)
+  const res = await adminFetch(passcode, path, init, options)
   const body: unknown = await res.json().catch(() => null)
+  assertResponseCurrent(res)
   if (!res.ok) {
     const message = body && typeof body === 'object' && 'message' in body &&
         typeof body.message === 'string'
@@ -538,6 +598,7 @@ export function uploadAdminFile(
   slug: string,
   passcode: AdminRequestAccess,
   file: File,
+  options: RequestContext = {},
 ): Promise<{ id: string }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/upload`, passcode, {
     method: 'POST',
@@ -546,7 +607,7 @@ export function uploadAdminFile(
       'x-filename': encodeURIComponent(file.name),
     },
     body: file,
-  })
+  }, options)
 }
 
 /**
@@ -559,6 +620,7 @@ export async function migrateKb(
   to: string,
   passcode: AdminRequestAccess,
   onEvent: (event: MigrationEvent) => void,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(passcode, '/api/admin/migrate', {
     method: 'POST',
@@ -566,7 +628,7 @@ export async function migrateKb(
       'content-type': 'application/json',
     },
     body: JSON.stringify({ from, to }),
-  })
+  }, options)
 
   if (!res.ok || !res.body) {
     let message = res.statusText || 'Migration failed'
@@ -593,6 +655,7 @@ export async function migrateKb(
   const events: MigrationEvent[] = []
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     try {
@@ -620,7 +683,11 @@ export async function migrateKb(
     ) {
       throw new AdminAccessError()
     }
-    for (const event of events) onEvent(event)
+    for (const event of events) {
+      assertResponseCurrent(res)
+      onEvent(event)
+      assertResponseCurrent(res)
+    }
   } finally {
     await reader.cancel().catch(() => {})
     reader.releaseLock()
@@ -700,6 +767,7 @@ export async function updateAdminLabelset(
     },
   )
   const body: unknown = await res.json().catch(() => null)
+  assertResponseCurrent(res)
   if (!res.ok) {
     const record = body && typeof body === 'object' ? body as Record<string, unknown> : {}
     const message = typeof record.message === 'string'
@@ -746,11 +814,12 @@ export async function analysePortal(
   slug: string,
   passcode: AdminRequestAccess,
   onEvent: (event: AnalyseEvent) => void,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/analyse`, {
     method: 'POST',
     headers: {},
-  })
+  }, options)
   if (!res.ok || !res.body) {
     throw new ApiError(res.status, res.statusText || 'Analysis failed to start')
   }
@@ -758,6 +827,7 @@ export async function analysePortal(
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -767,15 +837,22 @@ export async function analysePortal(
       // A truncated trailing frame (dropped connection) is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 export function getResourceContent(slug: string, id: string): Promise<ResourceContent> {
@@ -796,7 +873,10 @@ export function getResourceQuestions(
 ): Promise<{ questions: string[]; pending: boolean }> {
   return request<{ questions: string[]; pending?: boolean }>(
     `/api/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}/questions`,
-  ).then((r) => ({ questions: r.questions ?? [], pending: r.pending === true }))
+  ).then((r) => {
+    assertResultCurrent(r)
+    return { questions: r.questions ?? [], pending: r.pending === true }
+  })
 }
 
 /** URL for streaming a stored file field (PDF/video/audio) inline. */
@@ -873,14 +953,16 @@ export async function implementKg(
   passcode: AdminRequestAccess,
   opts: { applyExisting: boolean; includeSummaries: boolean; includeMemory?: boolean },
   onEvent: (event: KgImplementEvent) => void,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/kg/implement`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(opts),
-  })
+  }, options)
   if (!res.ok || !res.body) {
     const body: unknown = await res.json().catch(() => null)
+    assertResponseCurrent(res)
     const message = body && typeof body === 'object' && 'message' in body &&
         typeof body.message === 'string'
       ? body.message
@@ -891,6 +973,7 @@ export async function implementKg(
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -900,15 +983,22 @@ export async function implementKg(
       // A truncated trailing frame (dropped connection) is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 /** Thumbnail URL for a resource; 404s when the platform has none. */
@@ -930,6 +1020,7 @@ export async function uploadBranding(
   passcode: AdminRequestAccess,
   kind: BrandingUploadKind,
   file: File,
+  options: RequestContext = {},
 ): Promise<{ ok: boolean; url: string }> {
   // Browsers rarely set File.type for font files, so derive it from the name.
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
@@ -940,7 +1031,7 @@ export async function uploadBranding(
     method: 'POST',
     headers: { 'content-type': contentType },
     body: file,
-  })
+  }, options)
 }
 
 export function getTypeahead(
@@ -1019,12 +1110,19 @@ export function clientId(): string {
   return id
 }
 
-async function clientRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+export async function clientRequest<T>(
+  path: string,
+  init?: RequestInit,
+  options?: RequestContext,
+): Promise<T> {
+  const headers = new Headers(init?.headers)
+  headers.set('x-rp-client', clientId())
+  const res = await transportFetch(path, {
     ...init,
-    headers: { ...(init?.headers ?? {}), 'x-rp-client': clientId() },
-  })
+    headers,
+  }, options)
   const body: unknown = await res.json().catch(() => null)
+  assertResponseCurrent(res)
   if (!res.ok) {
     throw new ApiError(res.status, friendlyError(body, 'Request failed'))
   }
@@ -1036,8 +1134,10 @@ async function clientRequest<T>(path: string, init?: RequestInit): Promise<T> {
 export function sendAnswerFeedback(
   slug: string,
   input: { learningId: string; good: boolean; text?: string },
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/feedback`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
@@ -1050,8 +1150,10 @@ export function summarizeResources(
   slug: string,
   resourceIds: string[],
   kind: 'simple' | 'extended' = 'simple',
+  signal?: AbortSignal,
 ): Promise<{ summary: string }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/summarize`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ resourceIds, kind }),
@@ -1060,8 +1162,13 @@ export function summarizeResources(
 
 // --- Deep research: decompose a question into sub-questions ------------------
 
-export function getSubqueries(slug: string, query: string): Promise<{ questions: string[] }> {
+export function getSubqueries(
+  slug: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<{ questions: string[] }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/subqueries`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query }),
@@ -1138,8 +1245,9 @@ export function listWatches(slug: string): Promise<SavedWatch[]> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/watches`)
 }
 
-export function addWatch(slug: string, query: string): Promise<SavedWatch> {
+export function addWatch(slug: string, query: string, signal?: AbortSignal): Promise<SavedWatch> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/watches`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query }),
@@ -1171,13 +1279,14 @@ export async function streamEstateAsk(
   query: string,
   onEvent: (event: EstateEvent) => void,
   signal?: AbortSignal,
+  options: RequestContext = {},
 ): Promise<void> {
-  const res = await fetch('/api/ask-estate', {
+  const res = await transportFetch('/api/ask-estate', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query }),
     signal,
-  })
+  }, options)
   if (!res.ok || !res.body) {
     throw new ApiError(res.status, res.statusText || 'The answer service is unavailable')
   }
@@ -1185,6 +1294,7 @@ export async function streamEstateAsk(
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -1194,15 +1304,22 @@ export async function streamEstateAsk(
       // A truncated trailing frame (dropped connection) is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 // --- Admin: ask insights -----------------------------------------------------
@@ -1336,17 +1453,20 @@ export async function syncSource(
   passcode: AdminRequestAccess,
   id: string,
   onEvent: (event: SourceSyncEvent) => void,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(
     passcode,
     `/api/admin/t/${encodeURIComponent(slug)}/sources/${encodeURIComponent(id)}/sync`,
     { method: 'POST', headers: {} },
+    options,
   )
   if (!res.ok || !res.body) throw new ApiError(res.status, 'The sync failed to start')
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -1356,15 +1476,22 @@ export async function syncSource(
       // A truncated trailing frame (dropped connection) is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 // --- Investigations: the research workspace ----------------------------------
@@ -1546,8 +1673,10 @@ export function getSourceVerdicts(
   slug: string,
   question: string,
   sources: { id: string; title: string; passage: string }[],
+  signal?: AbortSignal,
 ): Promise<{ verdicts: SourceVerdict[] }> {
   return clientRequest(`/api/t/${encodeURIComponent(slug)}/verdicts`, {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ question, sources: sources.slice(0, 12) }),
@@ -1649,14 +1778,16 @@ export async function saveGraphStrategy(
   passcode: AdminRequestAccess,
   input: GraphStrategyUpdate,
   onEvent: (event: KgImplementEvent) => void,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(passcode, `/api/admin/t/${encodeURIComponent(slug)}/kg/strategy`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+  }, options)
   if (!res.ok || !res.body) {
     const body: unknown = await res.json().catch(() => null)
+    assertResponseCurrent(res)
     const problems = body && typeof body === 'object' && 'problems' in body &&
         Array.isArray((body as { problems: unknown }).problems)
       ? (body as { problems: string[] }).problems.join(' ')
@@ -1667,6 +1798,7 @@ export async function saveGraphStrategy(
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -1676,15 +1808,22 @@ export async function saveGraphStrategy(
       // truncated trailing frame
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 // --- Knowledge-box interrogation and suggestions ------------------------------
@@ -1793,6 +1932,7 @@ export async function runEnrichment(
   passcode: AdminRequestAccess,
   body: { agentId?: string; scope: 'all' | 'missing'; limit?: number },
   onEvent: (event: EnrichmentRunEvent) => void,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(
     passcode,
@@ -1802,6 +1942,7 @@ export async function runEnrichment(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     },
+    options,
   )
   if (!res.ok || !res.body) {
     let message = res.statusText || 'Enrichment run failed'
@@ -1822,6 +1963,7 @@ export async function runEnrichment(
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -1831,15 +1973,22 @@ export async function runEnrichment(
       // A truncated trailing frame is not an event.
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }
 
 // ---------------------------------------------------------------------------
@@ -1863,13 +2012,15 @@ export async function routeIntent(
   query: string,
   surface: 'ask' | 'search' = 'ask',
   signal?: AbortSignal,
+  options: RequestContext = {},
 ): Promise<RouteDecision> {
-  const res = await fetch(`/api/t/${encodeURIComponent(slug)}/route`, {
+  const res = await transportFetch(`/api/t/${encodeURIComponent(slug)}/route`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
     body: JSON.stringify({ query, surface }),
     signal,
-  })
+  }, options)
+  assertResponseCurrent(res)
   noteAskBudget(res)
   if (!res.ok) throw askError(res, 'Routing is unavailable')
   return (await res.json()) as RouteDecision
@@ -1975,6 +2126,7 @@ export async function compareExtraction(
   body: { resourceId: string; methods: string[]; question?: string; keep?: boolean },
   onEvent: (event: ExtractionCompareEvent) => void,
   signal?: AbortSignal,
+  options: RequestContext = {},
 ): Promise<void> {
   const res = await adminFetch(
     passcode,
@@ -1985,12 +2137,14 @@ export async function compareExtraction(
       body: JSON.stringify(body),
       signal,
     },
+    options,
   )
   if (!res.ok || !res.body) throw new ApiError(res.status, 'The comparison could not start')
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   const emit = (frame: string) => {
+    assertResponseCurrent(res)
     const line = frame.trim()
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
@@ -2000,13 +2154,20 @@ export async function compareExtraction(
       // truncated trailing frame
     }
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-    for (const frame of frames) emit(frame)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
   }
-  emit(buffer)
 }

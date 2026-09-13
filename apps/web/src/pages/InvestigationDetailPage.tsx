@@ -1,4 +1,11 @@
-import { type CSSProperties, useEffect, useRef, useState } from 'react'
+import { useAccess } from '../components/AccessProvider.tsx'
+import { StaleAuthorityError } from '../api/access-lifecycle.ts'
+import {
+  exportResearchFile,
+  researchExportAuthority,
+  type ResearchFile,
+} from '../lib/research-export.ts'
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import {
@@ -33,6 +40,27 @@ import type { TenantOutletContext } from './TenantLayout.tsx'
 // query (['investigation', slug, id]) so any mutation just invalidates it.
 // ---------------------------------------------------------------------------
 
+function useInvestigationAuthority(slug: string) {
+  const access = useAccess()
+  const context = access.controller.context
+  const lifetime = useRef(new AbortController())
+  useLayoutEffect(() => {
+    if (lifetime.current.signal.aborted) lifetime.current = new AbortController()
+    return () => lifetime.current.abort()
+  }, [])
+  const canWrite = () =>
+    !lifetime.current.signal.aborted &&
+    context === access.controller.context &&
+    access.controller.can('portal.investigate', { kind: 'portal', slug })
+  const run = async <T,>(operation: () => Promise<T>): Promise<T> => {
+    if (!canWrite()) throw new StaleAuthorityError()
+    const result = await operation()
+    if (!canWrite()) throw new StaleAuthorityError()
+    return result
+  }
+  return { access, canWrite, run, signal: () => lifetime.current.signal }
+}
+
 function formatDate(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
@@ -66,7 +94,9 @@ function EditableField({
   ariaLabel,
   onSave,
   className,
+  editable,
 }: {
+  editable: boolean
   value: string
   placeholder: string
   ariaLabel: string
@@ -89,6 +119,14 @@ function EditableField({
   const cancel = () => {
     setDraft(value)
     setEditing(false)
+  }
+
+  if (!editable) {
+    return (
+      <p className={`break-words ${className ?? ''}`}>
+        {value || (ariaLabel === 'Research question' ? 'No research question set' : placeholder)}
+      </p>
+    )
   }
 
   if (editing) {
@@ -196,19 +234,22 @@ function InvestigationHeader(
 ) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { canWrite, run } = useInvestigationAuthority(slug)
 
   const patch = useMutation({
     mutationFn: (input: { name?: string; question?: string; status?: 'active' | 'closed' }) =>
-      updateInvestigation(slug, investigation.id, input),
+      run(() => updateInvestigation(slug, investigation.id, input)),
     onSuccess: () => {
+      if (!canWrite()) return
       void queryClient.invalidateQueries({ queryKey: ['investigation', slug, investigation.id] })
       void queryClient.invalidateQueries({ queryKey: ['investigations', slug] })
     },
   })
 
   const removeMutation = useMutation({
-    mutationFn: () => deleteInvestigation(slug, investigation.id),
+    mutationFn: () => run(() => deleteInvestigation(slug, investigation.id)),
     onSuccess: () => {
+      if (!canWrite()) return
       void queryClient.invalidateQueries({ queryKey: ['investigations', slug] })
       navigate(`/t/${slug}/investigations`)
     },
@@ -219,6 +260,7 @@ function InvestigationHeader(
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='min-w-0 flex-1'>
           <EditableField
+            editable={canWrite()}
             value={investigation.name}
             placeholder='Untitled investigation'
             ariaLabel='Investigation name'
@@ -229,6 +271,7 @@ function InvestigationHeader(
           />
           <div className='mt-1.5'>
             <EditableField
+              editable={canWrite()}
               value={investigation.question}
               placeholder='No research question set - click to add one'
               ariaLabel='Research question'
@@ -255,26 +298,34 @@ function InvestigationHeader(
             </Link>
           )
           : null}
-        <button
-          type='button'
-          disabled={patch.isPending}
-          onClick={() =>
-            patch.mutate({ status: investigation.status === 'active' ? 'closed' : 'active' })}
-          className='rp-btn rp-btn-outline'
-        >
-          {investigation.status === 'active' ? 'Close investigation' : 'Reopen investigation'}
-        </button>
+        {canWrite()
+          ? (
+            <button
+              type='button'
+              disabled={patch.isPending}
+              onClick={() =>
+                patch.mutate({ status: investigation.status === 'active' ? 'closed' : 'active' })}
+              className='rp-btn rp-btn-outline'
+            >
+              {investigation.status === 'active' ? 'Close investigation' : 'Reopen investigation'}
+            </button>
+          )
+          : null}
         <MakeCurrentToggle slug={slug} investigation={investigation} />
-        <div className='ml-auto'>
-          <ConfirmButton
-            label='Delete'
-            confirmLabel='Confirm delete'
-            disabled={removeMutation.isPending}
-            onConfirm={() => removeMutation.mutate()}
-            className='rp-btn rp-btn-ghost text-[var(--rp-bad-ink)]'
-            confirmClassName='rp-btn rp-btn-danger'
-          />
-        </div>
+        {canWrite()
+          ? (
+            <div className='ml-auto'>
+              <ConfirmButton
+                label='Delete'
+                confirmLabel='Confirm delete'
+                disabled={removeMutation.isPending}
+                onConfirm={() => removeMutation.mutate()}
+                className='rp-btn rp-btn-ghost text-[var(--rp-bad-ink)]'
+                confirmClassName='rp-btn rp-btn-danger'
+              />
+            </div>
+          )
+          : null}
       </div>
     </div>
   )
@@ -284,6 +335,7 @@ function InvestigationHeader(
 
 function NotebookSection({ slug, investigation }: { slug: string; investigation: Investigation }) {
   const queryClient = useQueryClient()
+  const { access, canWrite, run } = useInvestigationAuthority(slug)
   const [draft, setDraft] = useState(investigation.notes)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -299,23 +351,34 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
     }
   }, [investigation.id, investigation.notes])
 
+  useLayoutEffect(() =>
+    access.controller.registerCleanup(() => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      setDraft('')
+    }), [access.controller])
+
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current)
   }, [])
 
   const mutation = useMutation({
-    mutationFn: (notes: string) => updateInvestigation(slug, investigation.id, { notes }),
+    mutationFn: (notes: string) =>
+      run(() => updateInvestigation(slug, investigation.id, { notes })),
     onSuccess: () => {
+      if (!canWrite()) return
       setStatus('saved')
       void queryClient.invalidateQueries({ queryKey: ['investigation', slug, investigation.id] })
     },
   })
 
   const onChange = (value: string) => {
+    if (!canWrite()) return
     setDraft(value)
     setStatus('saving')
     if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => mutation.mutate(value), 1500)
+    timerRef.current = setTimeout(() => {
+      if (canWrite()) mutation.mutate(value)
+    }, 1500)
   }
 
   return (
@@ -326,13 +389,21 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
           {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ''}
         </span>
       </div>
-      <textarea
-        rows={6}
-        value={draft}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder='Working notes, hunches, things still to check…'
-        className='rp-input mt-3'
-      />
+      {canWrite()
+        ? (
+          <textarea
+            rows={6}
+            value={draft}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder='Working notes, hunches, things still to check…'
+            className='rp-input mt-3'
+          />
+        )
+        : (
+          <p className='mt-3 whitespace-pre-wrap break-words text-sm text-ink-2'>
+            {investigation.notes || 'No notes yet.'}
+          </p>
+        )}
     </section>
   )
 }
@@ -385,6 +456,7 @@ function EvidenceCard(
   { slug, investigationId, item }: { slug: string; investigationId: string; item: EvidenceItem },
 ) {
   const queryClient = useQueryClient()
+  const { access, canWrite, run } = useInvestigationAuthority(slug)
   const [expanded, setExpanded] = useState(false)
   const [note, setNote] = useState(item.note)
   const [noteDirty, setNoteDirty] = useState(false)
@@ -395,49 +467,65 @@ function EvidenceCard(
     if (noteTimerRef.current) clearTimeout(noteTimerRef.current)
   }, [])
 
+  useLayoutEffect(() =>
+    access.controller.registerCleanup(() => {
+      if (noteTimerRef.current) clearTimeout(noteTimerRef.current)
+      setNote('')
+      setTagDraft('')
+    }), [access.controller])
+
   const invalidate = () =>
+    canWrite() &&
     void queryClient.invalidateQueries({ queryKey: ['investigation', slug, investigationId] })
 
   const verdictMutation = useMutation({
     mutationFn: (verdict: EvidenceVerdict) =>
-      updateEvidence(slug, investigationId, item.id, { verdict }),
+      run(() => updateEvidence(slug, investigationId, item.id, { verdict })),
     onSuccess: invalidate,
   })
 
   const noteMutation = useMutation({
     mutationFn: (nextNote: string) =>
-      updateEvidence(slug, investigationId, item.id, { note: nextNote }),
+      run(() => updateEvidence(slug, investigationId, item.id, { note: nextNote })),
     onSuccess: () => {
+      if (!canWrite()) return
       setNoteDirty(false)
       invalidate()
     },
   })
 
   const removeMutation = useMutation({
-    mutationFn: () => deleteEvidence(slug, investigationId, item.id),
+    mutationFn: () => run(() => deleteEvidence(slug, investigationId, item.id)),
     onSuccess: invalidate,
   })
 
   const tagsMutation = useMutation({
-    mutationFn: (tags: string[]) => updateEvidence(slug, investigationId, item.id, { tags }),
+    mutationFn: (tags: string[]) =>
+      run(() => updateEvidence(slug, investigationId, item.id, { tags })),
     onSuccess: invalidate,
   })
 
   const onNoteChange = (value: string) => {
+    if (!canWrite()) return
     setNote(value)
     setNoteDirty(true)
     if (noteTimerRef.current) clearTimeout(noteTimerRef.current)
-    noteTimerRef.current = setTimeout(() => noteMutation.mutate(value), 1500)
+    noteTimerRef.current = setTimeout(() => {
+      if (canWrite()) noteMutation.mutate(value)
+    }, 1500)
   }
 
   const addTag = () => {
+    if (!canWrite()) return
     const tag = tagDraft.trim()
     setTagDraft('')
     if (!tag || item.tags.includes(tag)) return
     tagsMutation.mutate([...item.tags, tag])
   }
 
-  const removeTag = (tag: string) => tagsMutation.mutate(item.tags.filter((t) => t !== tag))
+  const removeTag = (tag: string) => {
+    if (canWrite()) tagsMutation.mutate(item.tags.filter((t) => t !== tag))
+  }
 
   const sourceHref = `/t/${slug}/library/${encodeURIComponent(item.resourceId)}?passage=${
     encodeURIComponent(item.passage.slice(0, 200))
@@ -493,66 +581,80 @@ function EvidenceCard(
       {item.aiRelevance ? <p className='mt-1 text-xs text-ink-2'>{item.aiRelevance}</p> : null}
 
       <div className='mt-3 flex flex-wrap gap-1.5' role='group' aria-label='Verdict'>
-        {VERDICTS.map((v) => {
-          const active = item.verdict === v.id
-          return (
-            <button
-              key={v.id}
-              type='button'
-              aria-pressed={active}
-              disabled={verdictMutation.isPending}
-              onClick={() => verdictMutation.mutate(v.id)}
-              style={verdictChipStyle(v.id, active)}
-              className='rp-chip'
-            >
-              {v.label}
-            </button>
-          )
-        })}
+        {canWrite()
+          ? VERDICTS.map((v) => {
+            const active = item.verdict === v.id
+            return (
+              <button
+                key={v.id}
+                type='button'
+                aria-pressed={active}
+                disabled={verdictMutation.isPending}
+                onClick={() => verdictMutation.mutate(v.id)}
+                style={verdictChipStyle(v.id, active)}
+                className='rp-chip'
+              >
+                {v.label}
+              </button>
+            )
+          })
+          : <span className='rp-chip'>{verdictLabel(item.verdict)}</span>}
       </div>
 
       <div className='mt-3 flex flex-wrap items-center gap-1.5' aria-label='Tags'>
         {item.tags.map((tag) => (
           <span key={tag} className='rp-chip'>
             {tag}
-            <button
-              type='button'
-              onClick={() => removeTag(tag)}
-              aria-label={`Remove tag ${tag}`}
-              className='rp-focus -my-1 inline-flex min-h-6 min-w-6 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 hover:text-ink'
-            >
-              &times;
-            </button>
+            {canWrite()
+              ? (
+                <button
+                  type='button'
+                  onClick={() => removeTag(tag)}
+                  aria-label={`Remove tag ${tag}`}
+                  className='rp-focus -my-1 inline-flex min-h-6 min-w-6 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 hover:text-ink'
+                >
+                  &times;
+                </button>
+              )
+              : null}
           </span>
         ))}
-        <input
-          type='text'
-          value={tagDraft}
-          onChange={(event) => setTagDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              addTag()
-            }
-          }}
-          onBlur={() => {
-            if (tagDraft.trim()) addTag()
-          }}
-          placeholder='Add tag…'
-          aria-label={`Add tag for ${item.resourceTitle}`}
-          className='rp-input h-7 w-24 text-xs'
-        />
+        {canWrite()
+          ? (
+            <input
+              type='text'
+              value={tagDraft}
+              onChange={(event) => setTagDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  addTag()
+                }
+              }}
+              onBlur={() => {
+                if (tagDraft.trim()) addTag()
+              }}
+              placeholder='Add tag…'
+              aria-label={`Add tag for ${item.resourceTitle}`}
+              className='rp-input h-7 w-24 text-xs'
+            />
+          )
+          : null}
       </div>
 
       <div className='mt-3 flex items-center gap-2'>
-        <input
-          type='text'
-          value={note}
-          onChange={(event) => onNoteChange(event.target.value)}
-          placeholder='Add a note…'
-          aria-label={`Note for ${item.resourceTitle}`}
-          className='rp-input h-8 text-xs'
-        />
+        {canWrite()
+          ? (
+            <input
+              type='text'
+              value={note}
+              onChange={(event) => onNoteChange(event.target.value)}
+              placeholder='Add a note…'
+              aria-label={`Note for ${item.resourceTitle}`}
+              className='rp-input h-8 text-xs'
+            />
+          )
+          : <p className='text-xs text-ink-2 break-words'>{item.note}</p>}
         {noteMutation.isPending || noteDirty
           ? <span className='shrink-0 text-xs text-ink-3'>Saving…</span>
           : null}
@@ -564,14 +666,18 @@ function EvidenceCard(
           <Link to={askHref} className='rp-btn rp-btn-ghost h-7 px-2 text-xs'>
             Ask about this
           </Link>
-          <ConfirmButton
-            label='Remove'
-            confirmLabel='Confirm remove'
-            disabled={removeMutation.isPending}
-            onConfirm={() => removeMutation.mutate()}
-            className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
-            confirmClassName='rp-btn rp-btn-danger h-7 px-2 text-xs'
-          />
+          {canWrite()
+            ? (
+              <ConfirmButton
+                label='Remove'
+                confirmLabel='Confirm remove'
+                disabled={removeMutation.isPending}
+                onConfirm={() => removeMutation.mutate()}
+                className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
+                confirmClassName='rp-btn rp-btn-danger h-7 px-2 text-xs'
+              />
+            )
+            : null}
         </div>
       </div>
     </div>
@@ -949,20 +1055,14 @@ function slugOrDate(title: string): string {
   return slug.length > 0 ? slug.slice(0, 60) : new Date().toISOString().slice(0, 10)
 }
 
-/** Downloads the investigation as a Word-compatible .doc and returns the file name. */
-function exportInvestigationToWord(investigation: Investigation): string {
+/** Build complete output in memory; the shared helper owns every browser sink. */
+function investigationWordFile(investigation: Investigation): ResearchFile {
   const { title, bodyHtml } = investigationToHtml(investigation)
-  const html = wordDocumentHtml(title, bodyHtml)
-  const blob = new Blob(['﻿', html], { type: 'application/msword' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `investigation-${slugOrDate(title)}.doc`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-  return link.download
+  return {
+    parts: ['\ufeff', wordDocumentHtml(title, bodyHtml)],
+    type: 'application/msword',
+    filename: `investigation-${slugOrDate(title)}.doc`,
+  }
 }
 
 // --- Tags: v1's stand-in for claims/hypotheses - group and filter evidence -
@@ -1064,14 +1164,22 @@ const VERDICT_FILTERS = ['all', 'supports', 'partial', 'contradicts', 'not-relev
 type VerdictFilter = typeof VERDICT_FILTERS[number]
 
 export function InvestigationDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  return <InvestigationDetailBody key={id} />
+}
+
+function InvestigationDetailBody() {
   const { config } = useOutletContext<TenantOutletContext>()
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const { access, canWrite, run, signal } = useInvestigationAuthority(config.slug)
+  const exportAuthority = researchExportAuthority(access.controller, config.slug)
   const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('all')
   const { notice: exportNotice, announce: announceExport } = useExportNotice()
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [groupByTag, setGroupByTag] = useState(false)
   const [highlightArtefactId, setHighlightArtefactId] = useState<string | null>(null)
+  const [exportError, setExportError] = useState(false)
   const [synthesisMessage, setSynthesisMessage] = useState('')
   const [synthesisWarning, setSynthesisWarning] = useState(false)
   const synthesisTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1089,23 +1197,26 @@ export function InvestigationDetailPage() {
   } = useQuery({
     queryKey: ['investigation', config.slug, id],
     queryFn: () => getInvestigation(config.slug, id ?? ''),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && access.can('portal.read', { kind: 'portal', slug: config.slug }),
   })
 
   const evidenceCount = investigation?.evidence.length ?? 0
 
   const synthesise = useMutation({
-    mutationFn: () => synthesiseInvestigation(config.slug, investigation?.id ?? ''),
+    mutationFn: () => run(() => synthesiseInvestigation(config.slug, investigation?.id ?? '')),
     onMutate: () => {
+      if (!canWrite()) return
       setSynthesisMessage(
         `Reading ${evidenceCount} evidence ${evidenceCount === 1 ? 'item' : 'items'}…`,
       )
       if (synthesisTimerRef.current) clearTimeout(synthesisTimerRef.current)
       synthesisTimerRef.current = setTimeout(() => {
+        if (!canWrite()) return
         setSynthesisMessage('Still working - larger evidence sets can take up to thirty seconds…')
       }, 8000)
     },
     onSuccess: (result) => {
+      if (!canWrite()) return
       if (synthesisTimerRef.current) clearTimeout(synthesisTimerRef.current)
       setSynthesisMessage('')
       void queryClient.invalidateQueries({
@@ -1113,20 +1224,31 @@ export function InvestigationDetailPage() {
       })
       setHighlightArtefactId(result.artefact.id)
       globalThis.setTimeout(() => {
+        if (!canWrite()) return
         document.getElementById(`artefact-${result.artefact.id}`)?.scrollIntoView({
           behavior: 'smooth',
           block: 'start',
         })
       }, 60)
       globalThis.setTimeout(() => {
+        if (!canWrite()) return
         setHighlightArtefactId((current) => current === result.artefact.id ? null : current)
       }, 5000)
     },
     onError: () => {
+      if (!canWrite()) return
       if (synthesisTimerRef.current) clearTimeout(synthesisTimerRef.current)
       setSynthesisMessage('')
     },
   })
+
+  useLayoutEffect(() =>
+    access.controller.registerCleanup(() => {
+      if (synthesisTimerRef.current) clearTimeout(synthesisTimerRef.current)
+      setSynthesisMessage('')
+      setSynthesisWarning(false)
+      setHighlightArtefactId(null)
+    }), [access.controller])
 
   if (isLoading) {
     return (
@@ -1180,6 +1302,7 @@ export function InvestigationDetailPage() {
   const coverage = synthesisCoverage(sortedEvidence)
   const needsWarning = coverage.unjudged > 0 || coverage.contradicting > 0
   const startSynthesis = () => {
+    if (!canWrite()) return
     if (needsWarning && !synthesisWarning) {
       setSynthesisWarning(true)
       return
@@ -1190,6 +1313,7 @@ export function InvestigationDetailPage() {
 
   return (
     <main className='rp-shell py-10'>
+      <h1 className='sr-only'>{investigation.name}</h1>
       <Link to={`/t/${config.slug}/investigations`} className='text-sm text-ink-3 hover:text-ink'>
         &larr; Investigations
       </Link>
@@ -1227,26 +1351,53 @@ export function InvestigationDetailPage() {
                 Evidence <span className='font-normal text-ink-3'>({sortedEvidence.length})</span>
               </h2>
               <div className='flex flex-wrap items-center gap-2'>
-                <button
-                  type='button'
-                  disabled={sortedEvidence.length === 0 || synthesise.isPending}
-                  onClick={startSynthesis}
-                  className='rp-btn rp-btn-primary disabled:cursor-not-allowed'
-                >
-                  {synthesise.isPending ? 'Synthesising…' : 'Synthesise the evidence'}
-                </button>
-                <button
-                  type='button'
-                  disabled={sortedEvidence.length === 0}
-                  onClick={() =>
-                    announceExport(
-                      savedFileNotice(exportInvestigationToWord(investigation), 'Word document'),
-                    )}
-                  className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
-                >
-                  Export to Word
-                </button>
+                {canWrite()
+                  ? (
+                    <button
+                      type='button'
+                      disabled={sortedEvidence.length === 0 || synthesise.isPending}
+                      onClick={startSynthesis}
+                      className='rp-btn rp-btn-primary disabled:cursor-not-allowed'
+                    >
+                      {synthesise.isPending ? 'Synthesising…' : 'Synthesise the evidence'}
+                    </button>
+                  )
+                  : null}
+                {access.can('portal.export', { kind: 'portal', slug: config.slug })
+                  ? (
+                    <button
+                      type='button'
+                      disabled={sortedEvidence.length === 0}
+                      onClick={() => {
+                        setExportError(false)
+                        void exportResearchFile({ ...exportAuthority, signal: signal() }, () =>
+                          investigationWordFile(investigation)).then((filename) => {
+                            signal().throwIfAborted()
+                            access.controller.assertCurrent(exportAuthority.context)
+                            announceExport(savedFileNotice(filename, 'Word document'))
+                          }).catch(() => {
+                            if (
+                              !signal().aborted &&
+                              access.controller.context === exportAuthority.context
+                            ) {
+                              setExportError(true)
+                            }
+                          })
+                      }}
+                      className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
+                    >
+                      Export to Word
+                    </button>
+                  )
+                  : null}
                 <ExportNotice notice={exportNotice} />
+                {exportError
+                  ? (
+                    <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
+                      Could not export this investigation. Check your access and try again.
+                    </p>
+                  )
+                  : null}
               </div>
             </div>
 

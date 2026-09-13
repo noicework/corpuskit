@@ -15,6 +15,8 @@ import {
   verifyPrincipal,
 } from '../../api/src/principal.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from '../../api/src/assignments.ts'
+import { buildUiAccessSnapshot } from '../../api/src/ui-access.ts'
+import { KeyPortalSlugSchema } from '../../api/src/scoped-key-record.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
 import type { BreakGlassService } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
@@ -175,7 +177,28 @@ export class PortalDurableObject extends DurableObject<Env> {
         return json({ error: 'not_found' }, 404)
       }
       if (new URL(request.url).pathname === '/auth/me' && request.method === 'GET') {
+        const selections = new URL(request.url).searchParams.getAll('portal')
+        const selectedSlug = selections.length === 1 ? selections[0] : undefined
+        const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
+        let tenant: unknown
+        try {
+          if (slug.success) {
+            const current = this.stores.tenants.get(slug.data)
+            if (current) {
+              tenant = { ...current, disabled: this.stores.tenants.isDisabled(slug.data) }
+            }
+          }
+        } catch {
+          // Unavailable policy has the same safe projection as a missing portal.
+        }
         return json({
+          ...buildUiAccessSnapshot({
+            session: principal.session,
+            effectiveRoles: principal.effectiveRoles,
+            configuredTenantId: this.bindings.ENTRA_TENANT_ID ?? '',
+            selectedSlug,
+            tenant,
+          }),
           authenticated: principal.session !== null,
           user: principal.user
             ? { ...principal.user, isAdmin: principal.coarseAdminEligible }
