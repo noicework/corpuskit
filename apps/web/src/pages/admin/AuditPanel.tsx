@@ -7,11 +7,13 @@ import {
   AUDIT_OUTCOMES,
   AuditError,
   type AuditEvent,
+  type AuditFormat,
   type AuditPage,
   type AuditQuery,
   auditQuery,
   listAudit,
 } from '../../api/audit.ts'
+import { AuditDownload, type AuditDownloadResult } from '../../lib/audit-download.ts'
 
 export function AuditPanel({ scope, name }: { scope: Scope; name: string }) {
   const access = useAccess()
@@ -28,23 +30,24 @@ export function AuditPanel({ scope, name }: { scope: Scope; name: string }) {
       <p className='mt-2 break-words text-base text-ink-2'>
         {scope.kind === 'platform' ? 'All portals and platform events' : `Events for ${name}`}
       </p>
-      {read
-        ? (
-          <AuditReader
-            key={`${access.generation}:${scope.kind}:${scope.kind === 'portal' ? scope.slug : ''}`}
-            scope={fixed}
-          />
-        )
-        : (
-          <p className='mt-4 text-base text-ink-2' data-audit-export-only>
-            Audit export access is available for this scope. Event viewing is unavailable.
-          </p>
-        )}
+      {!read && (
+        <p className='mt-4 text-base text-ink-2' data-audit-export-only>
+          Audit export access is available for this scope. Event viewing is unavailable.
+        </p>
+      )}
+      <AuditWorkspace key={`${access.generation}:${scope.kind}:${slug}`} scope={fixed} />
     </section>
   )
 }
-function AuditReader({ scope }: { scope: Scope }) {
+function AuditWorkspace({ scope }: { scope: Scope }) {
   const access = useAccess(), controller = access.controller
+  const read = access.can('audit.read', scope)
+  const [exportSelection, setExportSelection] = useState<{ sequence: number; query: AuditQuery }>({
+    sequence: 0,
+    query: {},
+  })
+  const resetExport = (query?: AuditQuery) =>
+    setExportSelection((value) => ({ sequence: value.sequence + 1, query: query ?? value.query }))
   const [draft, setDraft] = useState<Record<string, string>>({ limit: '100' })
   const [selection, setSelection] = useState<
     { sequence: number; query: AuditQuery; snapshot?: AuditPage['snapshot'] }
@@ -61,6 +64,7 @@ function AuditReader({ scope }: { scope: Scope }) {
     setResult(null)
   }
   useEffect(() => {
+    if (!read) return
     // Each setup owns a fresh controller, including StrictMode effect replay.
     const abort = new AbortController(), token = ++operation.current, context = controller.context
     pending.current = abort
@@ -94,7 +98,7 @@ function AuditReader({ scope }: { scope: Scope }) {
       operation.current++
       abort.abort()
     }
-  }, [controller, selection, scope])
+  }, [controller, selection, scope, read])
   const page = result?.sequence === selection.sequence ? result.page : undefined
   const error = result?.sequence === selection.sequence ? result.error : undefined
   const select = (query: AuditQuery, snapshot?: AuditPage['snapshot']) => {
@@ -103,6 +107,7 @@ function AuditReader({ scope }: { scope: Scope }) {
   }
   const apply = () => {
     clear()
+    resetExport()
     try {
       const query = Object.fromEntries(
         Object.entries(draft).filter(([, v]) => v !== '').map((
@@ -112,6 +117,7 @@ function AuditReader({ scope }: { scope: Scope }) {
       auditQuery(query)
       setValidation(false)
       select(query)
+      resetExport(query)
     } catch {
       setValidation(true)
     }
@@ -125,7 +131,10 @@ function AuditReader({ scope }: { scope: Scope }) {
             className='rp-input w-full min-w-0'
             aria-label={label}
             value={draft[key] ?? ''}
-            onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+            onChange={(e) => {
+              resetExport()
+              setDraft({ ...draft, [key]: e.target.value })
+            }}
           >
             <option value=''>Any</option>
             {choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
@@ -139,13 +148,16 @@ function AuditReader({ scope }: { scope: Scope }) {
             aria-invalid={validation || undefined}
             maxLength={key === 'from' || key === 'to' ? 24 : 160}
             value={draft[key] ?? ''}
-            onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+            onChange={(e) => {
+              resetExport()
+              setDraft({ ...draft, [key]: e.target.value })
+            }}
           />
         )}
     </label>
   )
   return (
-    <div className='mt-6 min-w-0' data-audit-reader>
+    <div className='mt-6 min-w-0' data-audit-reader={read ? '' : undefined}>
       <form
         className='rp-card p-4'
         aria-label='Audit filters'
@@ -181,13 +193,21 @@ function AuditReader({ scope }: { scope: Scope }) {
               setDraft({ limit: '100' })
               setValidation(false)
               select({})
+              resetExport({})
             }}
           >
             Clear filters
           </button>
         </div>
       </form>
-      {!validation && !page && !error && (
+      {access.can('audit.export', scope) && !validation && (
+        <AuditExporter
+          key={exportSelection.sequence}
+          scope={scope}
+          filters={exportSelection.query}
+        />
+      )}
+      {read && !validation && !page && !error && (
         <p role='status' className='mt-6 text-base text-ink-2'>Loading audit events...</p>
       )}
       {error && (
@@ -314,6 +334,117 @@ function AuditReader({ scope }: { scope: Scope }) {
         </div>
       )}
     </div>
+  )
+}
+function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }) {
+  const access = useAccess(), download = useRef<AuditDownload | null>(null), operation = useRef(0)
+  const [pending, setPending] = useState(false)
+  const [result, setResult] = useState<{ format: AuditFormat; page: AuditDownloadResult } | null>(
+    null,
+  )
+  const [error, setError] = useState<{ format: AuditFormat; status: number } | null>(null)
+  const [stopped, setStopped] = useState(false)
+  useEffect(() => () => {
+    operation.current++
+    download.current?.dispose()
+    download.current = null
+  }, [])
+  const run = async (format: AuditFormat, previous?: AuditDownloadResult) => {
+    download.current?.dispose()
+    const token = ++operation.current, context = access.controller.context
+    const task = new AuditDownload(access.controller, scope, filters, format)
+    download.current = task
+    setPending(true)
+    setResult(null)
+    setError(null)
+    setStopped(false)
+    const current = () =>
+      operation.current === token && access.controller.context === context &&
+      access.controller.can('audit.export', scope)
+    try {
+      const page = await task.download(previous)
+      if (current()) setResult({ format, page })
+    } catch (cause) {
+      if (current() && !(cause instanceof Error && cause.name === 'AbortError')) {
+        setError({ format, status: cause instanceof AuditError ? cause.status : 0 })
+      }
+    } finally {
+      task.dispose()
+      if (current()) setPending(false)
+    }
+  }
+  return (
+    <section className='rp-card mt-6 min-w-0 p-4' data-audit-export aria-label='Audit export'>
+      <h3 className='rp-display text-lg'>Export audit events</h3>
+      <p className='mt-2 text-sm text-ink-2'>
+        Each action downloads one page, up to 512 KiB, using the applied filters. Partial pages need
+        a separate action to continue. Stopping cannot remove files already saved.
+      </p>
+      <div className='mt-4 flex flex-wrap gap-3'>
+        <button type='button' className='rp-btn' disabled={pending} onClick={() => void run('csv')}>
+          Export CSV
+        </button>
+        <button
+          type='button'
+          className='rp-btn'
+          disabled={pending}
+          onClick={() => void run('json')}
+        >
+          Export JSON
+        </button>
+        {pending && (
+          <button
+            type='button'
+            className='rp-btn'
+            onClick={() => {
+              operation.current++
+              download.current?.dispose()
+              download.current = null
+              setPending(false)
+              setResult(null)
+              setError(null)
+              setStopped(true)
+            }}
+          >
+            Stop export
+          </button>
+        )}
+      </div>
+      {pending && <p role='status' className='mt-4 text-sm text-ink-2'>Preparing export page...</p>}
+      {stopped && <p role='status' className='mt-4 text-sm text-ink-2'>Export stopped.</p>}
+      {result && (
+        <div className='mt-4' data-audit-export-result>
+          <p role='status' className='text-sm text-ink-2'>
+            {result.page.complete
+              ? 'Complete: final export page downloaded.'
+              : 'Partial: export page downloaded. More events remain in this snapshot.'}
+          </p>
+          {!result.page.complete && result.page.nextCursor && (
+            <button
+              type='button'
+              className='rp-btn mt-4'
+              onClick={() => void run(result.format, result.page)}
+            >
+              Export next {result.format.toUpperCase()} page
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <div className='mt-4'>
+          <p role='alert' className='text-sm text-ink'>
+            {error.status === 410
+              ? 'This export snapshot has expired. Restart export to begin a new snapshot.'
+              : error.status === 429
+              ? 'Too many event snapshots are open. Wait before trying again.'
+              : 'Could not download the audit page. Restart export to try a new snapshot.'}
+          </p>
+          <button type='button' className='rp-btn mt-4' onClick={() => void run(error.format)}>
+            Restart export
+          </button>
+        </div>
+      )}
+    </section>
   )
 }
 function Detail({ row }: { row: AuditEvent }) {
