@@ -1,8 +1,9 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { type FormEvent, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PortalSource, SourceSyncEvent } from '../../api/client.ts'
 import { addSource, deleteSource, getSources, syncSource, updateSource } from '../../api/client.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
@@ -35,7 +36,10 @@ function SourceRow({
   slug: string
   onChanged: () => Promise<unknown>
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [syncing, setSyncing] = useState(false)
   const [log, setLog] = useState<SourceSyncEvent[]>([])
   const [deleting, setDeleting] = useState(false)
@@ -50,7 +54,10 @@ function SourceRow({
         'Update website source',
         (access) => updateSource(slug, access, source.id, change),
       )
+      assertCurrent()
       if (result === undefined) return
+      if (result.id !== source.id) throw new AdminAccessError()
+      assertCurrent()
       await onChanged()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that change.') })
@@ -69,6 +76,7 @@ function SourceRow({
         let failed = false
         const events: SourceSyncEvent[] = []
         await syncSource(slug, access, source.id, (event) => {
+          assertCurrent()
           if (event.type === 'done') {
             if (
               !Number.isFinite(event.added) || event.added < 0 ||
@@ -83,6 +91,7 @@ function SourceRow({
         if (!completed || failed) throw new AdminAccessError()
         return { completed, events }
       })
+      assertCurrent()
       if (result === undefined) return
       setLog([...result.events, result.completed])
       setMessage({
@@ -92,6 +101,7 @@ function SourceRow({
             ? ` ${result.completed.deferred} left for the next sync.`
             : ''),
       })
+      assertCurrent()
       await onChanged()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Sync failed - please retry.') })
@@ -108,8 +118,10 @@ function SourceRow({
         'Remove website source',
         (access) => deleteSource(slug, access, source.id),
       )
+      assertCurrent()
       if (result === undefined) return
       if (result.ok !== true) throw new AdminAccessError()
+      assertCurrent()
       await onChanged()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not remove that source.') })
@@ -240,8 +252,14 @@ function SourceRow({
  * the portal re-checks daily and ingests newly published pages from. Distinct
  * from the one-off "Add content" ingestion methods, which never re-check.
  */
-export function SourcesPanel({ slug }: { slug: string }) {
-  const { runExplicit, sessionAccess, coarseAdminEligible, pending } = useAdminAccess()
+function SourcesPanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
+    'content.write',
+    { kind: 'portal', slug },
+  )
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<PortalSource[]>()
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
@@ -253,18 +271,19 @@ export function SourcesPanel({ slug }: { slug: string }) {
   const query = useQuery({
     queryKey: ['admin-sources', slug],
     queryFn: () => getSources(slug, sessionAccess),
-    enabled: coarseAdminEligible,
+    enabled: sessionAllowed,
     retry: false,
   })
 
   const { isLoading, isError } = query
-  const data = coarseAdminEligible ? query.data : snapshot
+  const data = sessionAllowed ? query.data : snapshot
   const refresh = async () => {
     setMessage(null)
     try {
       const result = await runExplicit('Read website sources', (access) => getSources(slug, access))
+      assertCurrent()
       if (result === undefined) return
-      if (coarseAdminEligible) queryClient.setQueryData(['admin-sources', slug], result)
+      if (sessionAllowed) queryClient.setQueryData(['admin-sources', slug], result)
       else setSnapshot(result)
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not load sources.') })
@@ -289,9 +308,10 @@ export function SourcesPanel({ slug }: { slug: string }) {
         'Add website source',
         (access) => addSource(slug, access, { url, auto, maxPages }),
       )
+      assertCurrent()
       if (added === undefined) return
       if (!added.id || !Number.isFinite(added.discovered)) throw new AdminAccessError()
-      if (!coarseAdminEligible) setSnapshot((previous) => [...(previous ?? []), added])
+      if (!sessionAllowed) setSnapshot((previous) => [...(previous ?? []), added])
       setUrl('')
       setMessage({
         tone: 'ok',
@@ -300,6 +320,7 @@ export function SourcesPanel({ slug }: { slug: string }) {
           `Press Sync now to ingest the first ${maxPages}` +
           (auto ? ', or leave it for the next daily sync.' : '.'),
       })
+      assertCurrent()
       await onChanged()
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not add that source.') })
@@ -380,7 +401,7 @@ export function SourcesPanel({ slug }: { slug: string }) {
         >
           Refresh sources
         </button>
-        {!coarseAdminEligible && (
+        {!sessionAllowed && (
           <p className='mb-3 text-xs text-ink-3'>
             Sources are a snapshot. Refresh explicitly after changes.
           </p>
@@ -426,4 +447,14 @@ export function SourcesPanel({ slug }: { slug: string }) {
       </div>
     </div>
   )
+}
+
+/** Keep editors and protected snapshots within their authority generation. */
+export function SourcesPanel(props: { slug: string }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <SourcesPanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

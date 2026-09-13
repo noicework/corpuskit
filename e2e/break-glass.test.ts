@@ -1561,20 +1561,33 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             state.status = 200
             const current = await open(kind, palette, width)
             if (kind === 'taxonomy') {
-              await current.waitForSelector('#taxonomy-name')
-              await fill(current, '#taxonomy-name', 'Region')
-              await clickText(current, 'Add category')
-            } else await clickText(current, 'Use emergency access')
+              // Emergency capability alone never mounts the production taxonomy editor.
+              const beforeTaxonomy = requests.length
+              expect(await current.evaluate(() => document.querySelector('#taxonomy-name'))).toBe(
+                null,
+              )
+              expect(await current.evaluate(() => document.querySelector('[role=dialog]'))).toBe(
+                null,
+              )
+              await current.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
+              await settle(current)
+              expect(
+                requests.slice(beforeTaxonomy).filter((request) =>
+                  request.path.startsWith('/api/admin/')
+                ),
+              ).toEqual([])
+              continue
+            }
+            await clickText(current, 'Use emergency access')
             await current.waitForSelector('[role=dialog]')
             await capture(`${kind}-${palette}-${width}-prompt`)
             const before = requests.length
             await click(current, '[data-emergency-cancel]')
             expect(requests.length).toBe(before)
-            if (kind === 'taxonomy') await clickText(current, 'Add category')
-            else await clickText(current, 'Use emergency access')
+            await clickText(current, 'Use emergency access')
             await confirm()
             await current.waitForSelector(
-              kind === 'taxonomy' ? '#taxonomy-name' : '[data-admin-overview]',
+              '[data-admin-overview]',
             )
             await settle(current)
             expect(requests.filter((r) => r.emergency).length).toBe(
@@ -1594,33 +1607,22 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
               'legacy-test-value',
             )
             await capture(`${kind}-${palette}-${width}-result`)
-            malformedResponse = kind === 'taxonomy' ? {} : null
-            if (kind === 'taxonomy') {
-              await fill(current, '#taxonomy-name', 'Preserved category')
-              await clickText(current, 'Add category')
-            } else await clickText(current, 'Use emergency access')
+            malformedResponse = null
+            await clickText(current, 'Use emergency access')
             await confirm()
             await current.waitForSelector('[role=dialog] [role=alert]')
-            if (kind === 'taxonomy') {
-              expect(
-                await current.evaluate(() =>
-                  document.querySelector<HTMLInputElement>('#taxonomy-name')?.value
-                ),
-              ).toBe('Preserved category')
-            } else {
-              expect(
-                await current.evaluate(() =>
-                  Boolean(document.querySelector('[data-admin-overview]'))
-                ),
-              ).toBe(true)
-            }
+            expect(
+              await current.evaluate(() =>
+                Boolean(document.querySelector('[data-admin-overview]'))
+              ),
+            ).toBe(true)
             await capture(`${kind}-malformed-${palette}-${width}`)
             await click(current, '[data-emergency-cancel]')
             malformedResponse = undefined
             state.capability = 'disabled'
             await current.evaluate(() => dispatchEvent(new Event('fixture-refresh-capability')))
             await settle(current)
-            await current.waitForSelector(kind === 'taxonomy' ? 'h1' : '[data-admin-unavailable]')
+            await current.waitForSelector('[data-admin-unavailable]')
             expect(await current.evaluate(() => document.querySelector('[data-admin-overview]')))
               .toBe(null)
             await current.evaluate(() => dispatchEvent(new Event('fixture-inspect')))

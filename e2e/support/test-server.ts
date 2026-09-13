@@ -53,6 +53,8 @@ export interface EmergencyFixtureState {
 export function startTestServer(options: {
   apiOnly?: boolean
   management?: BuildAppOptions['management']
+  sources?: BuildAppOptions['sources']
+  insights?: BuildAppOptions['insights']
   identity?: { role: Role; slug?: string }
   emergencyFixture?: { directory: string; state: EmergencyFixtureState }
   componentFixture?: { directory: string }
@@ -161,6 +163,8 @@ export function startTestServer(options: {
       ...stores,
       provider,
       management: options.management,
+      sources: options.sources,
+      insights: options.insights,
       tenants,
       rbac,
       audit: rbac.audit,

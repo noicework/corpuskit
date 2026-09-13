@@ -1,3 +1,5 @@
+import { useAccess } from '../components/AccessProvider.tsx'
+import { AdminAccessError } from '../api/break-glass.ts'
 import { type FormEvent, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useOutletContext } from 'react-router-dom'
@@ -9,7 +11,7 @@ import { MessagePanel } from './admin/MessagePanel.tsx'
 import { errorMessage, inputClass, type Message } from './admin/shared.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { AdminPageAccess } from './AdminPage.tsx'
-import { useAdminAccess } from '../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../components/EmergencyAccess.tsx'
 
 /** Whether a labelset has any indexed value at all - one with none is hidden. */
 export function labelsetHasCounts(counts: Record<string, number> | undefined): boolean {
@@ -66,7 +68,7 @@ function LabelsetCard({
 
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm'>
-      <div className='flex items-baseline justify-between gap-3'>
+      <div className='flex flex-wrap items-baseline justify-between gap-3'>
         <h2 className='text-lg font-semibold tracking-tight text-ink'>
           {prettyLabel(labelset.title, organisation)}
         </h2>
@@ -119,7 +121,9 @@ function AddLabelsetCard({
   const [title, setTitle] = useState('')
   const [multiple, setMultiple] = useState(false)
   const [seed, setSeed] = useState('')
-  const { runExplicit } = useAdminAccess()
+  const authority = useAccess()
+  const context = authority.controller.context
+  const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -142,7 +146,11 @@ function AddLabelsetCard({
             labels,
           }),
       )
+      authority.controller.assertCurrent(context)
       if (result === undefined) return
+      if (result?.ok !== true || typeof result.id !== 'string' || !result.id) {
+        throw new AdminAccessError()
+      }
       setMessage({ tone: 'ok', text: `Added "${title.trim()}" - it will appear once indexed.` })
       setTitle('')
       setSeed('')
@@ -270,7 +278,7 @@ function TaxonomyContent() {
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const queryClient = useQueryClient()
-  const { coarseAdminEligible, breakGlassEnabled } = useAdminAccess()
+  const { sessionAllowed } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
 
   const {
     data: labelsets,
@@ -310,8 +318,8 @@ function TaxonomyContent() {
     ])
 
   return (
-    <main className='mx-auto max-w-6xl px-6 py-10'>
-      <h1 className='text-2xl font-semibold tracking-tight text-ink'>Taxonomy</h1>
+    <main className='rp-shell py-10'>
+      <h1 className='rp-display text-2xl text-ink'>Taxonomy</h1>
       <p className='mt-1 text-sm text-ink-3'>
         Categories used to classify resources. Counts reflect indexed content.
       </p>
@@ -344,7 +352,7 @@ function TaxonomyContent() {
                 resources={counters?.resources}
               />
             ))}
-            {(coarseAdminEligible || breakGlassEnabled)
+            {sessionAllowed
               ? (
                 <AddLabelsetCard
                   slug={slug}

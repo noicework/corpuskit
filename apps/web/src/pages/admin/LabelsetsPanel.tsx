@@ -1,3 +1,4 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Labelset } from '@research-portal/core'
@@ -11,7 +12,7 @@ import {
 import { ErrorCard, prettyLabel, Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 
 // Mirrors the server's schema so problems surface before a save attempt.
@@ -340,7 +341,10 @@ function LabelsetEditor({
   onSaved: () => Promise<unknown>
   organisation: string
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [previous, setPrevious] = useState<unknown>(null)
@@ -361,6 +365,7 @@ function LabelsetEditor({
         if (saved?.ok !== true || !Array.isArray(saved.agents)) throw new AdminAccessError()
         return saved
       })
+      assertCurrent()
       if (result === undefined) return
       setMessage({ tone: 'ok', text: resultMessage(body.title, result) })
       onDraft(null)
@@ -460,7 +465,10 @@ function NewLabelsetForm({
   /** Absent for the first set, where there is nothing to go back to. */
   onCancel?: () => void
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [draft, setDraft] = useState<Draft>(blankDraft)
   const [touched, setTouched] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -480,6 +488,7 @@ function NewLabelsetForm({
         if (result?.ok !== true || typeof result.id !== 'string') throw new AdminAccessError()
         return result
       })
+      assertCurrent()
       if (created === undefined) return
       await onCreated(created.id, body.title)
     } catch (err) {
@@ -543,17 +552,21 @@ function NewLabelsetForm({
  * switching sets loses nothing. The section heading is rendered by the
  * caller, so this component is the body only.
  */
-export function LabelsetsPanel({
+function LabelsetsPanelContent({
   slug,
   organisation = '',
 }: {
   slug: string
   organisation?: string
 }) {
+  const authority = useAccess()
+  const context = authority.controller.context
+  const access = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
   const queryClient = useQueryClient()
   const { data: labelsets, isLoading, isError, refetch } = useQuery({
     queryKey: ['labelsets', slug],
     queryFn: () => getLabelsets(slug),
+    enabled: access.sessionAllowed || access.breakGlassEnabled,
   })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -584,6 +597,7 @@ export function LabelsetsPanel({
 
   const onCreated = async (id: string, title: string) => {
     await refresh()
+    authority.controller.assertCurrent(context)
     setNotice({ tone: 'ok', text: createdMessage(title) })
     setSelectedId(id)
     setCreating(false)
@@ -711,4 +725,14 @@ export function LabelsetsPanel({
       )}
     </section>
   )
+}
+
+/** Keep editors and protected snapshots within their authority generation. */
+export function LabelsetsPanel(props: { slug: string; organisation?: string }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <LabelsetsPanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

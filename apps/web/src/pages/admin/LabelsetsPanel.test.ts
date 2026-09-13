@@ -74,7 +74,9 @@ describe('LabelsetsPanel - creating a set in place', () => {
 
 describe('TaxonomyPage - administrator rule', () => {
   it('uses explicit request access for both taxonomy entry points', () => {
-    expect(taxonomySource).toContain('useAdminAccess')
+    expect(taxonomySource).toContain('usePermissionAdminAccess')
+    expect(taxonomySource).toContain("'taxonomy.write'")
+    expect(panelSource).toContain("'taxonomy.write'")
     expect(taxonomySource).toContain('runExplicit')
     expect(panelSource).toContain('runExplicit')
     expect(panelSource).not.toContain('passcode')
