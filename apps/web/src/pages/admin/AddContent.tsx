@@ -1,3 +1,4 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { type ChangeEvent, type DragEvent, type FormEvent, useState } from 'react'
 import {
   addAdminLink,
@@ -6,8 +7,8 @@ import {
   discoverCrawl,
   uploadAdminFile,
 } from '../../api/client.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { type AdminRequestAccess, sessionAccess } from '../../api/break-glass.ts'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
@@ -34,7 +35,13 @@ function CrawlTab({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
-  const { runExplicit, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAllowed, sessionAccess } = usePermissionAdminAccess('content.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [url, setUrl] = useState('')
   const [limit, setLimit] = useState<(typeof CRAWL_LIMITS)[number]>(50)
   const [discovering, setDiscovering] = useState(false)
@@ -57,7 +64,11 @@ function CrawlTab({
         'Discover site links',
         (access) => discoverCrawl(slug, access, url, limit),
       )
+      assertCurrent()
       if (result === undefined) return
+      if (!Array.isArray(result.links) || !result.links.every((link) => typeof link === 'string')) {
+        throw new AdminAccessError()
+      }
       setLinks(result.links)
       setChecked(Object.fromEntries(result.links.map((link) => [link, true])))
       if (result.links.length === 0) {
@@ -79,7 +90,7 @@ function CrawlTab({
   }
 
   const onIngest = async () => {
-    if (!coarseAdminEligible || selectedLinks.length === 0) return
+    if (!sessionAllowed || selectedLinks.length === 0) return
     setIngesting(true)
     setMessage(null)
     setProgress({ done: 0, total: selectedLinks.length })
@@ -90,9 +101,24 @@ function CrawlTab({
     for (const link of selectedLinks) {
       attempted += 1
       try {
-        await addAdminLink(slug, sessionAccess, { url: link })
+        const result = await addAdminLink(slug, sessionAccess, { url: link })
+        if (!result || typeof result.id !== 'string' || !result.id) throw new AdminAccessError()
         added += 1
       } catch (err) {
+        if (
+          err instanceof AdminAccessError || (err instanceof Error && err.name === 'AbortError')
+        ) {
+          setIngesting(false)
+          setProgress(null)
+          setMessage({
+            tone: 'error',
+            text: errorMessage(
+              err,
+              'The result could not be confirmed. Check recent additions before trying again.',
+            ),
+          })
+          return
+        }
         // The knowledge box's processing queue is full - stop the batch
         // here rather than hammering it for every remaining link. The ones
         // not yet attempted can be re-run once it has drained.
@@ -132,12 +158,13 @@ function CrawlTab({
     )
     setLinks(null)
     setChecked({})
+    assertCurrent()
     await onAdded()
   }
 
   return (
     <div className='space-y-4'>
-      {!coarseAdminEligible && (
+      {!sessionAllowed && (
         <p className='text-sm text-ink-2'>
           Discovery is one request. Sign in with an administrator account to ingest selected links
           as a batch, or add each link separately.
@@ -226,7 +253,7 @@ function CrawlTab({
           <button
             type='button'
             onClick={() => void onIngest()}
-            disabled={!coarseAdminEligible || ingesting || selectedLinks.length === 0}
+            disabled={!sessionAllowed || ingesting || selectedLinks.length === 0}
             className='rp-btn rp-btn-primary mt-4'
           >
             {ingesting
@@ -247,14 +274,20 @@ function CrawlTab({
  * and ingest links from a crawled site. Closed by default so a stats-only
  * glance at the card stays uncluttered.
  */
-export function AddContent({
+function AddContentContent({
   slug,
   onAdded,
 }: {
   slug: string
   onAdded: () => Promise<unknown>
 }) {
-  const { runExplicit, coarseAdminEligible } = useAdminAccess()
+  const { runExplicit, sessionAllowed, sessionAccess } = usePermissionAdminAccess('content.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('upload')
   const [busy, setBusy] = useState(false)
@@ -273,17 +306,20 @@ export function AddContent({
     label: string,
     sessionOnly = false,
   ): Promise<boolean> => {
+    if (sessionOnly && !sessionAllowed) return false
     setBusy(true)
     setMessage(null)
     try {
       const result = sessionOnly ? await action(sessionAccess) : await runExplicit(label, action)
+      assertCurrent()
       if (result === undefined) return false
-      if (!result.id) {
+      if (!result || typeof result.id !== 'string' || !result.id) {
         throw new Error(
           'We could not confirm the result. Check whether the action completed before trying again.',
         )
       }
       setMessage({ tone: 'ok', text: successText })
+      assertCurrent()
       await onAdded()
       return true
     } catch (err) {
@@ -299,7 +335,7 @@ export function AddContent({
 
   const uploadMany = (files: File[]) => {
     if (files.length === 0) return
-    if (files.length > 1 && !coarseAdminEligible) {
+    if (files.length > 1 && !sessionAllowed) {
       setMessage({
         tone: 'error',
         text:
@@ -311,7 +347,10 @@ export function AddContent({
     void run(
       async (access) => {
         let result = { id: '' }
-        for (const file of files) result = await uploadAdminFile(slug, access, file)
+        for (const file of files) {
+          result = await uploadAdminFile(slug, access, file)
+          if (!result || typeof result.id !== 'string' || !result.id) throw new AdminAccessError()
+        }
         return result
       },
       files.length === 1
@@ -422,17 +461,20 @@ export function AddContent({
                 }}
               >
                 <p className='text-sm text-ink-2'>Drag a file here, or choose one to upload.</p>
-                {!coarseAdminEligible && (
+                {!sessionAllowed && (
                   <p className='mt-2 text-xs text-ink-3'>
                     Emergency access uploads one file per confirmation. Multiple files require an
                     administrator sign-in.
                   </p>
                 )}
-                <label className='rp-btn rp-btn-primary mt-3 cursor-pointer'>
+                <label
+                  className='rp-btn rp-btn-primary mt-3 cursor-pointer'
+                  style={{ height: 'auto', minHeight: '44px', paddingBlock: '0.5rem' }}
+                >
                   {busy ? 'Uploading…' : 'Choose file'}
                   <input
                     type='file'
-                    multiple={coarseAdminEligible}
+                    multiple={sessionAllowed}
                     className='sr-only'
                     disabled={busy}
                     onChange={onChooseFile}
@@ -540,4 +582,14 @@ export function AddContent({
       )}
     </div>
   )
+}
+
+/** Authority generations own form state and emergency snapshots. */
+export function AddContent(props: { slug: string; onAdded: () => Promise<unknown> }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <AddContentContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

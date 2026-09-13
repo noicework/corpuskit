@@ -1,9 +1,10 @@
+import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { CorpusHealthRow } from '../../api/client.ts'
 import { getCorpusHealth, setResourceHidden } from '../../api/client.ts'
 import { errorMessage, type Message } from './shared.ts'
-import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 
@@ -21,7 +22,10 @@ function HealthRow({
   slug: string
   onChanged: (id: string, hidden: boolean) => Promise<unknown>
 }) {
-  const { runExplicit } = useAdminAccess()
+  const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -33,8 +37,10 @@ function HealthRow({
         row.hidden ? 'Publish resource' : 'Hide resource',
         (access) => setResourceHidden(slug, access, row.id, !row.hidden),
       )
+      assertCurrent()
       if (result === undefined) return
       if (result.ok !== true) throw new AdminAccessError()
+      assertCurrent()
       await onChanged(row.id, !row.hidden)
     } catch (err) {
       setMessage({ tone: 'error', text: errorMessage(err, 'Could not update that resource.') })
@@ -83,8 +89,14 @@ function HealthRow({
  * automatically - the scan reads every resource's extracted text, which is
  * slow on a large box, so the librarian triggers it deliberately.
  */
-export function CorpusHealthPanel({ slug }: { slug: string }) {
-  const { runExplicit, coarseAdminEligible, pending } = useAdminAccess()
+function CorpusHealthPanelContent({ slug }: { slug: string }) {
+  const { runExplicit, sessionAllowed, pending } = usePermissionAdminAccess('content.write', {
+    kind: 'portal',
+    slug,
+  })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
   const [rows, setRows] = useState<CorpusHealthRow[] | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -100,6 +112,7 @@ export function CorpusHealthPanel({ slug }: { slug: string }) {
         if (!Array.isArray(health)) throw new AdminAccessError()
         return health
       })
+      assertCurrent()
       if (result === undefined) return
       setRows(result)
     } catch (err) {
@@ -142,7 +155,7 @@ export function CorpusHealthPanel({ slug }: { slug: string }) {
         </button>
       </div>
 
-      {!coarseAdminEligible && (
+      {!sessionAllowed && (
         <p className='mt-3 text-xs text-ink-3'>
           Health results are a snapshot. Each scan and visibility change needs its own confirmation.
         </p>
@@ -230,4 +243,14 @@ export function CorpusHealthPanel({ slug }: { slug: string }) {
         : null}
     </div>
   )
+}
+
+/** Authority generations own form state and emergency snapshots. */
+export function CorpusHealthPanel(props: { slug: string }) {
+  const authority = useAccess()
+  const access = usePermissionAdminAccess('content.write', { kind: 'portal', slug: props.slug })
+  if (authority.state.status !== 'ready' || (!access.sessionAllowed && !access.breakGlassEnabled)) {
+    return null
+  }
+  return <CorpusHealthPanelContent key={`${props.slug}:${authority.generation}`} {...props} />
 }

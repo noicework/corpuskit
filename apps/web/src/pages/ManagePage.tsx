@@ -27,10 +27,10 @@ import { PortalConnections } from './admin/PortalConnections.tsx'
 
 // Removed after the final panel migration. Readiness never grants a permission.
 const MANAGE_PANEL_READY = {
-  recentList: false,
-  statTiles: false,
-  addContent: false,
-  corpusHealth: false,
+  recentList: true,
+  statTiles: true,
+  addContent: true,
+  corpusHealth: true,
   sources: false,
   insights: false,
   labelsets: false,

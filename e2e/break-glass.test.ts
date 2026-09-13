@@ -1517,8 +1517,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await settle(page!)
       expect(
         requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
-      ).toBe(0)
-      // Unmigrated controls have no batch authority. One intentional session upload still works.
+      ).toBe(2)
+      // Each signed batch request uses the current portal's content.write authority.
       await page!.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>('input[type=file]')!
         const transfer = new DataTransfer()
@@ -1529,7 +1529,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await settle(page!)
       expect(
         requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
-      ).toBe(1)
+      ).toBe(3)
       expect(requests.slice(sessionStart).every((r) => !r.emergency)).toBe(true)
       await clickText(page!, 'Crawl site')
       await fill(page!, '#crawl-url-alpha', 'https://example.invalid')
@@ -1540,24 +1540,17 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await clickText(page!, 'Ingest 2 selected')
       await settle(page!)
       expect(requests.slice(beforeBusy).filter((r) => r.path.endsWith('/resources/link')).length)
-        .toBe(0)
+        .toBe(1)
       expect(
-        await page!.evaluate(() =>
-          [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
-            button.textContent?.includes('Ingest 2 selected')
-          )?.disabled
-        ),
-      )
-        .toBe(true)
+        await page!.evaluate(() => document.body.textContent),
+      ).toContain('the knowledge box is busy')
       state.status = 200
       const beforeSessionPoll = requests.length
       await new Promise((resolve) => setTimeout(resolve, 4200))
       await page!.bringToFront()
       await page!.evaluate(() => dispatchEvent(new Event('fixture-invalidate')))
       await settle(page!)
-      expect(requests.slice(beforeSessionPoll).filter((r) => r.path.endsWith('/recent'))).toEqual(
-        [],
-      )
+      expect(requests.slice(beforeSessionPoll).some((r) => r.path.endsWith('/recent'))).toBe(true)
       await clickText(page!, 'Refresh recent additions')
       expect(requests.slice(beforeSessionPoll).every((r) => !r.emergency)).toBe(true)
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
