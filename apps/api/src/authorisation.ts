@@ -30,6 +30,14 @@ import {
 import type { TenantStoreApi } from './tenants.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 
+/**
+ * A deployment without Entra configuration (no ENTRA_TENANT_ID) still serves public portals to
+ * anonymous callers. This sentinel stands in for the configured tenant so the authority stack is
+ * always built; no verified Entra session can carry it, so signed identity, `authenticated`
+ * portals and assignment activation stay fail-closed there.
+ */
+export const UNCONFIGURED_TENANT_ID = 'identity-unconfigured'
+
 export type RequestAuthority =
   | { kind: 'anonymous'; actor: AuditActor; provenanceSession: null }
   | {
