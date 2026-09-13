@@ -1368,17 +1368,17 @@ function RecommendationCard(
         to={`/t/${slug}/library/${resource.id}`}
         className='rp-focus group flex gap-3 rounded-[var(--rp-radius-btn)] p-1.5 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
       >
-        <div className='h-16 w-24 shrink-0 overflow-hidden rounded-[var(--rp-radius)] border border-line'>
+        <div className='h-16 w-16 shrink-0 overflow-hidden rounded-[var(--rp-radius)] border border-line'>
           <ResourceThumb slug={slug} id={resource.id} type={resource.type} />
         </div>
         <div className='min-w-0 flex-1'>
-          <p className='rp-clamp-2 text-sm font-medium leading-snug text-ink-2 transition-colors duration-150 group-hover:text-ink'>
+          <p className='break-words text-sm font-medium leading-snug text-ink-2 transition-colors duration-150 group-hover:text-ink'>
             {resource.title}
           </p>
           {topic
             ? (
               <span className='rp-badge rp-badge-quiet mt-1.5 max-w-full'>
-                <span className='truncate'>{topic}</span>
+                <span className='whitespace-normal break-words'>{topic}</span>
               </span>
             )
             : null}
