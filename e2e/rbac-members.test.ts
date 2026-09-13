@@ -8,6 +8,33 @@ import {
   sourcePath,
 } from './support/rbac-fixture.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
+import { AuthorityController } from '../apps/web/src/api/access-lifecycle.ts'
+
+Deno.test('assignment notice generation matches exactly one complete signed refresh', async () => {
+  const server = startTestServer({ apiOnly: true, identity: { role: 'portal-admin' } })
+  const original = globalThis.fetch
+  globalThis.fetch = (input, init) => original(new URL(String(input), server.url), init)
+  try {
+    const controller = new AuthorityController(() => 'fixture-browser')
+    await controller.refresh('marine')
+    const origin = controller.context
+    const pending = controller.refresh('marine')
+    expect(controller.context.generation).toBe(origin.generation + 1)
+    expect(controller.status).toBe('loading')
+    await pending
+    expect(controller.context.generation).toBe(origin.generation + 2)
+    expect(controller.context.identityKey).toBe(origin.identityKey)
+    await controller.refresh('grains')
+    await controller.refresh('marine')
+    expect(controller.context.generation).toBeGreaterThan(origin.generation + 2)
+    server.setResponseStatus('/auth/me', 500)
+    await expect(controller.refresh('marine')).rejects.toThrow('Access could not be checked')
+    expect(controller.status).toBe('unavailable')
+  } finally {
+    globalThis.fetch = original
+    await server.close()
+  }
+})
 
 async function click(page: Page, text: string) {
   await page.evaluate((text) => {
@@ -111,12 +138,13 @@ Deno.test('member component uses signed assignment CRUD, conflict feedback and a
     await input(page, '[data-assignment-subject]', 'new@example.test')
     await click(page, 'Add member')
     await page.waitForFunction(() =>
-      !document.querySelector('form') && document.body.textContent?.includes('new@example.test')
+      !document.querySelector('[data-assignment-editor] form') &&
+      document.body.textContent?.includes('new@example.test')
     )
     await rowAction(page, 'new@example.test', 'Edit role')
     await input(page, '[data-assignment-role]', 'analyst')
     await click(page, 'Save role')
-    await page.waitForFunction(() => !document.querySelector('form'))
+    await page.waitForFunction(() => !document.querySelector('[data-assignment-editor] form'))
     await page.waitForSelector('[data-assignment-editor]')
     expect(
       await page.evaluate(() =>
@@ -224,5 +252,309 @@ Deno.test('member component uses signed assignment CRUD, conflict feedback and a
     await browser.close()
     await server.close()
     await fixture.close()
+  }
+})
+
+Deno.test('Manage Access scopes member CRUD and discards authority after self-downgrade', async () => {
+  const server = startTestServer({ identity: { role: 'portal-admin' } })
+  const browser = await launch()
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=access`)
+  try {
+    await page.bringToFront()
+    await page.waitForSelector('[data-manage-shell]')
+    expect(await page.$('[data-manage-tab=access]')).not.toBeNull()
+    await page.waitForSelector('[data-assignment-editor]')
+    await assertCurrentBuild(page)
+    await click(page, 'Add member')
+    await input(page, '[data-assignment-subject]', 'portal-pending@example.test')
+    await click(page, 'Add member')
+    await page.waitForFunction(() =>
+      !document.querySelector('[data-assignment-editor] form') &&
+      document.querySelector('[data-assignment-editor]')?.textContent?.includes(
+        'portal-pending@example.test',
+      )
+    )
+    await click(page, 'Add member')
+    await input(page, 'form select', 'active-oid')
+    await input(
+      page,
+      '[data-assignment-subject]',
+      'researcher-with-a-very-long-object-id-for-layout-verification-and-independent-scope',
+    )
+    await click(page, 'Add member')
+    await page.waitForFunction(() =>
+      !document.querySelector('[data-assignment-editor] form') &&
+      document.querySelector('[data-assignment-editor]')?.textContent?.includes(
+        'researcher-with-a-very-long',
+      )
+    )
+    for (const scheme of ['light', 'dark']) {
+      server.tenants.patchBranding('marine', {
+        paletteId: scheme === 'dark' ? 'observatory' : 'default',
+        shape: scheme === 'dark' ? 'soft' : 'square',
+        density: 'comfortable',
+        typography: 'lexend-zilla',
+      })
+      await page.evaluate((scheme) => localStorage.setItem('rp-scheme', scheme), { args: [scheme] })
+      await page.goto(`${server.url}/t/marine/manage?tab=access`)
+      await page.waitForSelector('[data-assignment-editor]')
+      for (const width of [1440, 390]) {
+        await capture(
+          page,
+          '.planning/logs/04-12-02',
+          `access-${scheme}-${width}`,
+          width,
+          '[data-access-panel] h2',
+        )
+        expect(
+          await page.evaluate(() => {
+            const nav = document.querySelector('nav[aria-label="Manage sections"]')!
+              .getBoundingClientRect()
+            const active = document.querySelector('[data-manage-tab=access]')!
+              .getBoundingClientRect()
+            return active.left >= nav.left - 1 && active.right <= nav.right + 1
+          }),
+        ).toBe(true)
+      }
+      await page.evaluate(() => {
+        const row = [...document.querySelectorAll('[data-assignment-id]')].find((row) =>
+          row.textContent?.includes('researcher-with-a-very-long')
+        )!
+        row.setAttribute('data-fixture-long-identity', '')
+      })
+      for (const width of [1440, 390]) {
+        await capture(
+          page,
+          '.planning/logs/04-12-02',
+          `long-id-${scheme}-${width}`,
+          width,
+          '[data-fixture-long-identity] p',
+        )
+      }
+      await rowAction(page, 'portal-pending@example.test', 'Edit role')
+      for (const width of [1440, 390]) {
+        await capture(page, '.planning/logs/04-12-02', `edit-${scheme}-${width}`, width, 'form h3')
+      }
+      await input(page, '[data-assignment-role]', 'analyst')
+      await click(page, 'Save role')
+      await page.waitForFunction(() =>
+        !document.querySelector('[data-assignment-editor] form') &&
+        !!document.querySelector('[data-assignment-editor]')
+      )
+      await rowAction(page, 'portal-pending@example.test', 'Remove member')
+      for (const width of [1440, 390]) {
+        await capture(
+          page,
+          '.planning/logs/04-12-02',
+          `remove-${scheme}-${width}`,
+          width,
+          'dialog h2',
+        )
+      }
+      await page.keyboard.press('Escape')
+    }
+    await rowAction(page, 'portal-pending@example.test', 'Remove member')
+    await page.evaluate(() =>
+      document.querySelector<HTMLButtonElement>('dialog button:last-child')!.click()
+    )
+    await page.waitForFunction(() =>
+      !!document.querySelector('[data-assignment-editor]') &&
+      !document.body.textContent?.includes('portal-pending@example.test')
+    )
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1')
+    await rowAction(page, 'e2e-portal-admin', 'Edit role')
+    await input(page, '[data-assignment-role]', 'viewer')
+    const ownId = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-assignment-id]')].find((row) =>
+        row.querySelector('p')?.textContent === 'e2e-portal-admin'
+      )!.getAttribute('data-assignment-id')
+    )
+    const downgrade = server.delayResponse(`/api/admin/t/marine/members/${ownId}`)
+    await click(page, 'Save role')
+    await downgrade.entered
+    await page.evaluate(() =>
+      document.querySelector<HTMLButtonElement>('[data-manage-tab=content]')!.click()
+    )
+    downgrade.release()
+    await page.waitForFunction(() => !document.querySelector('[data-manage-shell]'))
+    expect(await page.$('[data-assignment-editor]')).toBeNull()
+    expect(await page.$('dialog')).toBeNull()
+    expect(await page.evaluate(() => document.body.textContent)).not.toContain(
+      'researcher-with-a-very-long',
+    )
+    expect(server.requests.some((r) => r.path.includes('/groups') || r.path.includes('/mcp/keys')))
+      .toBe(false)
+  } catch (error) {
+    await Deno.writeTextFile(
+      '.planning/logs/04-12-02/failure.json',
+      JSON.stringify(
+        {
+          requests: server.requests,
+          text: await page.evaluate(() => document.body.innerText),
+        },
+        null,
+        2,
+      ),
+    )
+    await Deno.writeFile('.planning/logs/04-12-02/failure.png', await page.screenshot())
+    throw error
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
+  }
+})
+
+Deno.test('Access has independent section permissions and no forbidden member reads', async () => {
+  const server = startTestServer({ identity: { role: 'portal-admin' } })
+  const browser = await launch()
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=access`)
+  try {
+    await page.bringToFront()
+    await page.waitForSelector('[data-assignment-editor]')
+    for (const permission of ['keys.manage', 'behaviour.write', 'members.manage']) {
+      await page.goto(`${server.url}/t/marine/manage?tab=access`)
+      await page.waitForSelector('[data-assignment-editor]')
+      const before = server.requests.length
+      await page.evaluate((permission) => {
+        const original = fetch
+        globalThis.fetch = async (input, init) => {
+          const response = await original(input, init)
+          if (!String(input).startsWith('/auth/me')) return response
+          const snapshot = await response.json()
+          snapshot.portalAccess.permissions = snapshot.portalAccess.permissions.filter((
+            p: string,
+          ) => p === 'portal.read' || p === 'portal.ask' || p === permission)
+          return Response.json(snapshot)
+        }
+        dispatchEvent(new Event('focus'))
+      }, { args: [permission] })
+      await page.waitForSelector('[data-access-panel]')
+      expect(await page.$('[data-manage-tab=access]')).not.toBeNull()
+      if (permission === 'members.manage') await page.waitForSelector('[data-assignment-editor]')
+      else {
+        await page.waitForFunction(() => !document.querySelector('[data-assignment-editor]'))
+        expect(server.requests.slice(before).filter((r) => r.path.includes('/members')))
+          .toHaveLength(0)
+      }
+      expect(
+        server.requests.slice(before).some((r) =>
+          r.path.includes('/groups') || r.path.includes('/mcp/keys')
+        ),
+      ).toBe(false)
+    }
+    for (const role of ['viewer', 'curator']) {
+      server.setIdentity(fixtureSession({ oid: `fixture-${role}` }))
+      const before = server.requests.length
+      await page.goto(`${server.url}/t/marine/manage?tab=access`)
+      await page.waitForFunction(() =>
+        !!(document.querySelector('[data-access-state=denied]') ||
+          document.querySelector('[data-route-unavailable]') ||
+          document.querySelector('[data-manage-shell]'))
+      )
+      expect(await page.$('[data-assignment-editor]')).toBeNull()
+      expect(await page.$('[data-manage-tab=access]')).toBeNull()
+      expect(
+        server.requests.slice(before).some((r) =>
+          r.path.includes('/members') || r.path.includes('/groups')
+        ),
+      ).toBe(false)
+    }
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
+  }
+})
+
+Deno.test('member panels discard old scope and identity, and refresh uncertain mutations without replay', async () => {
+  const server = startTestServer({ identity: { role: 'portal-admin' } })
+  server.setAssignment({ kind: 'portal', slug: 'grains' }, 'e2e-portal-admin', 'portal-admin')
+  server.setAssignment({ kind: 'portal', slug: 'grains' }, 'grain-only-person', 'viewer')
+  const browser = await launch()
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=access`)
+  try {
+    await page.bringToFront()
+    await page.waitForSelector('[data-assignment-editor]')
+    await rowAction(page, 'pending@example.test', 'Remove member')
+    const delayed = server.delayResponse('/api/admin/t/marine/members')
+    await page.evaluate(() => {
+      history.pushState({}, '', '/t/grains/manage?tab=access')
+      dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await page.waitForFunction(() =>
+      document.querySelector('[data-assignment-editor]')?.textContent?.includes('grain-only-person')
+    )
+    expect(await page.$('dialog')).toBeNull()
+    expect(
+      await page.evaluate(() => document.querySelector('[data-assignment-editor]')?.textContent),
+    ).not.toContain('pending@example.test')
+    await page.evaluate(() => {
+      history.pushState({}, '', '/t/marine/manage?tab=access')
+      dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await delayed.entered
+    await page.evaluate(() => {
+      history.pushState({}, '', '/t/grains/manage?tab=access')
+      dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await page.waitForSelector('[data-assignment-editor]')
+    delayed.release()
+    await page.evaluate(() => {
+      history.pushState({}, '', '/t/marine/manage?tab=access')
+      dispatchEvent(new PopStateEvent('popstate'))
+    })
+    await page.waitForFunction(() =>
+      document.querySelector('[data-assignment-editor]')?.textContent?.includes(
+        'pending@example.test',
+      )
+    )
+    expect(
+      await page.evaluate(() => document.querySelector('[data-assignment-editor]')?.textContent),
+    ).not.toContain('grain-only-person')
+    await page.evaluate(() => {
+      const original = fetch
+      globalThis.fetch = async (input, init) => {
+        const response = await original(input, init)
+        if (String(input) === '/api/admin/t/marine/members' && init?.method === 'POST') {
+          await response.body?.cancel()
+          return Response.json({ error: 'audit_write_failed' }, { status: 500 })
+        }
+        return response
+      }
+    })
+    const before = server.requests.length
+    await click(page, 'Add member')
+    await input(page, '[data-assignment-subject]', 'uncertain@example.test')
+    await click(page, 'Add member')
+    await page.waitForSelector('[data-access-panel] [role=alert]')
+    await page.waitForSelector('[data-assignment-editor]')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('[data-access-panel] [role=alert]')?.textContent
+      ),
+    ).toContain('The change could not be confirmed')
+    expect(server.requests.slice(before).filter((r) => r.method === 'POST')).toHaveLength(1)
+    expect(server.requests.slice(before).some((r) => r.path === '/auth/me?portal=marine')).toBe(
+      true,
+    )
+    await click(page, 'Add member')
+    await input(page, '[data-assignment-subject]', 'discarded-form@example.test')
+    server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
+    await page.evaluate(() => dispatchEvent(new Event('focus')))
+    await page.waitForFunction(() => !document.querySelector('[data-assignment-editor]'))
+    expect(await page.$('dialog')).toBeNull()
+    expect(await page.evaluate(() => document.body.textContent)).not.toContain(
+      'uncertain@example.test',
+    )
+    server.setIdentity(fixtureSession({ oid: 'e2e-portal-admin' }))
+    await page.evaluate(() => dispatchEvent(new Event('focus')))
+    await page.waitForSelector('[data-assignment-editor]')
+    expect(await page.$('[data-access-panel] [role=alert]')).toBeNull()
+    expect(await page.$('[data-assignment-subject]')).toBeNull()
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
   }
 })

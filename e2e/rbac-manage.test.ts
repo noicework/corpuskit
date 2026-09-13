@@ -36,7 +36,14 @@ const curatorTabs = [
   'graph',
   'extraction',
 ]
-const administratorTabs = [...curatorTabs, 'appearance', 'behaviour', 'details', 'connections']
+const administratorTabs = [
+  ...curatorTabs,
+  'appearance',
+  'behaviour',
+  'details',
+  'connections',
+  'access',
+]
 
 async function navigate(page: Page, path: string) {
   await page.evaluate((path) => {

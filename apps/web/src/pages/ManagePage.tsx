@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import { Skeleton } from '../components/ui.tsx'
@@ -24,6 +24,7 @@ import { useAccess } from '../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../components/EmergencyAccess.tsx'
 import { getManageContent, getManageStatus } from '../api/manage.ts'
 import { PortalConnections } from './admin/PortalConnections.tsx'
+import { ACCESS_SECTION_PERMISSIONS, AccessPanel } from './admin/AccessPanel.tsx'
 
 const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'overview', label: 'Overview', permission: 'content.write' },
@@ -37,7 +38,8 @@ const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'extraction', label: 'Extraction', permission: 'content.write' },
   { id: 'details', label: 'Details', permission: 'appearance.write' },
   { id: 'connections', label: 'Connections', permission: 'bindings.write' },
-  // Access and Audit are mounted by their owning panel migrations.
+  { id: 'access', label: 'Access', permission: 'members.manage' },
+  // Audit is mounted by its owning panel migration.
 ]
 
 export function ManagePage() {
@@ -57,9 +59,28 @@ function ManageContent() {
   const contentAccess = usePermissionAdminAccess('content.write', scope)
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
-  const allowedTabs = TABS.filter((item) => can(item.permission))
+  const allowedTabs = TABS.filter((item) =>
+    item.id === 'access' ? ACCESS_SECTION_PERMISSIONS.some(can) : can(item.permission)
+  )
   const wanted = searchParams.get('tab')
   const tab = allowedTabs.find((item) => item.id === wanted)?.id ?? allowedTabs[0]?.id
+  const navigation = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const nav = navigation.current
+    const active = nav?.querySelector<HTMLElement>('[aria-current=true]')
+    if (!nav || !active) return
+    const reveal = () => {
+      if (nav.scrollWidth <= nav.clientWidth) return
+      const container = nav.getBoundingClientRect()
+      const item = active.getBoundingClientRect()
+      if (item.left < container.left) nav.scrollLeft += item.left - container.left
+      else if (item.right > container.right) nav.scrollLeft += item.right - container.right
+    }
+    reveal()
+    const observer = new ResizeObserver(reveal)
+    observer.observe(nav)
+    return () => observer.disconnect()
+  }, [tab])
   const [renaming, setRenaming] = useState(false)
   const status = useQuery({
     queryKey: ['manage-status', slug, authority.identityKey, authority.generation],
@@ -168,6 +189,7 @@ function ManageContent() {
         </section>
         <div className='mt-8 grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'>
           <nav
+            ref={navigation}
             aria-label='Manage sections'
             className='rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
           >
@@ -189,6 +211,7 @@ function ManageContent() {
             ))}
           </nav>
           <div className='min-w-0 space-y-4'>
+            {tab === 'access' && <AccessPanel slug={slug} name={config.branding.productName} />}
             {tab === 'overview' && can('content.write') && (
               <>
                 {can('content.write') && reachable && (
