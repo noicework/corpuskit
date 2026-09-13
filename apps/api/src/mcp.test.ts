@@ -25,7 +25,7 @@ import { LocalIngress } from './local-ingress.ts'
 import { selectRequestAuthority } from './authorisation.ts'
 import { issueScopedKey } from './scoped-keys.ts'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
-import { signPrincipal } from './principal.ts'
+import { signPrincipal, validSessionFacts } from './principal.ts'
 
 const cleanups: (() => void)[] = []
 afterEach(() => {
@@ -269,6 +269,111 @@ const adminHeaders = {
   'x-test-admin': '1',
 }
 
+Deno.test('key summaries expose only safe expiry reasons and recover with current creator authority', async () => {
+  for (const adapter of ['local', 'durable'] as const) {
+    const f = createEnforcementFixture({}, adapter)
+    try {
+      const owner = f.sessionFor('owner')
+      const response = await f.requestAs(owner, '/api/t/a/mcp/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'Expiry client', role: 'curator' }),
+      })
+      expect(response.status).toBe(201)
+      const issued = await response.json()
+      expect(Object.keys(issued).sort()).toEqual(['credential', 'key'])
+      expect(issued.credential.inactiveReason).toBe('active')
+      const bearer = { authorization: `Bearer ${issued.key}` }
+      const call = () =>
+        f.requestAs(null, '/api/t/a/mcp', rpcInit(rpcBody('browse_catalogue', {}), bearer))
+      expect((await call()).status).toBe(200)
+      f.advance(owner.expiresAt - f.now())
+      const manager = {
+        ...f.creator,
+        createdAt: f.now(),
+        claimIssuedAt: f.now(),
+        expiresAt: f.now() + 28_800_000,
+      }
+      const inspect = async (
+        status: string,
+        inactiveReason: string,
+        effectiveRole: string | null,
+      ) => {
+        const listed = await f.requestAs(manager, '/api/t/a/mcp/keys')
+        expect(listed.status).toBe(200)
+        const text = await listed.text()
+        const [summary] = JSON.parse(text)
+        expect(Object.keys(summary).sort()).toEqual([
+          'id',
+          'label',
+          'prefix',
+          'createdAt',
+          'revokedAt',
+          'role',
+          'expiresAt',
+          'status',
+          'inactiveReason',
+          'effectiveRole',
+          'legacy',
+          'upgradeable',
+        ].sort())
+        expect(summary).toMatchObject({ status, inactiveReason, effectiveRole })
+        for (
+          const hidden of [
+            issued.key,
+            owner.oid,
+            'CorpusKit.Owner',
+            'hash',
+            'creator',
+            'groups',
+            'claimIssuedAt',
+          ]
+        ) {
+          // Safe enum values may contain creator; no creator metadata field is returned.
+          expect(text).not.toContain(hidden === 'creator' ? '"creator":' : hidden)
+        }
+      }
+      await inspect('creator_no_access', 'creator_claims_expired', null)
+      expect((await call()).status).toBe(401)
+      const service = f.rbac.assignmentService(f.tenantId, f.audience)
+      service.observeSession(owner)
+      await inspect('creator_no_access', 'creator_claims_expired', null)
+      const refreshedOwner = {
+        ...owner,
+        createdAt: f.now(),
+        claimIssuedAt: f.now(),
+        expiresAt: f.now() + 28_800_000,
+      }
+      expect(validSessionFacts(refreshedOwner, f.now())).toBe(true)
+      service.observeSession(refreshedOwner)
+      await inspect('active', 'active', 'curator')
+      expect((await call()).status).toBe(200)
+      f.advance(1)
+      service.observeSession({
+        ...refreshedOwner,
+        roles: [],
+        claimIssuedAt: f.now(),
+        expiresAt: f.now() + 28_800_000,
+      })
+      await inspect('creator_no_access', 'creator_no_access', null)
+      expect((await call()).status).toBe(401)
+      service.create({
+        subjectKind: 'active-oid',
+        subjectId: owner.oid,
+        scope: { kind: 'portal', slug: 'a' },
+        role: 'viewer',
+      }, { requestId: 'restore-local', actor: { kind: 'system' } })
+      await inspect('active', 'active', 'viewer')
+      expect((await call()).status).toBe(200)
+      expect((await f.requestAs(null, '/api/t/a/mcp/keys', { headers: bearer })).status).toBe(403)
+      expect((await f.requestAs(null, '/api/t/b/search?q=research', { headers: bearer })).status)
+        .toBe(401)
+    } finally {
+      f.close()
+    }
+  }
+})
+
 async function mint(test: McpHarness, slug = 'marine') {
   const response = await test.app.request(`/api/t/${slug}/mcp/keys`, {
     method: 'POST',
@@ -337,6 +442,7 @@ describe('MCP credential management', () => {
     expect(listedText).not.toContain('"hash"')
     expect(listedText).not.toContain('issuerUserId')
     expect(JSON.parse(listedText)[0].prefix).toBe(issued.credential.prefix)
+    expect(JSON.parse(listedText)[0].inactiveReason).toBe('active')
   })
 
   it('keeps credentials tenant-scoped and revokes them immediately', async () => {
@@ -1402,6 +1508,7 @@ Deno.test('a migrated legacy key is a fixed viewer key on its portal until revok
       expiresAt: null,
       legacy: true,
       upgradeable: false,
+      inactiveReason: 'active',
     })
     expect(JSON.stringify(summary)).not.toContain('hash')
     expect(JSON.stringify(summary)).not.toContain('issuerUserId')
@@ -1417,6 +1524,7 @@ Deno.test('a migrated legacy key is a fixed viewer key on its portal until revok
       status: 'revoked',
       effectiveRole: null,
       legacy: true,
+      inactiveReason: 'revoked',
     })
   } finally {
     f.close()

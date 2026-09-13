@@ -31,7 +31,11 @@ Deno.test('scoped keys prepare hash-only storage and verify exact bounded author
     })
     expect(await verifyScopedKey(prepared.key, 'b', deps)).toBeNull()
     const inspected = await inspectScopedKeys('a', deps)
-    expect(inspected[0]).toMatchObject({ status: 'active', effectiveRole: 'analyst' })
+    expect(inspected[0]).toMatchObject({
+      status: 'active',
+      inactiveReason: 'active',
+      effectiveRole: 'analyst',
+    })
     expect(JSON.stringify(inspected)).not.toContain('hash')
     expect(JSON.stringify(inspected)).not.toContain(prepared.key)
   } finally {
@@ -100,6 +104,7 @@ Deno.test('scoped keys reject malformed digests and keep legacy keys at a fixed 
     const legacySummary = (await inspectScopedKeys('a', deps))[0]
     expect(legacySummary).toMatchObject({
       status: 'active',
+      inactiveReason: 'active',
       role: 'viewer',
       effectiveRole: 'viewer',
       legacy: true,
@@ -115,6 +120,7 @@ Deno.test('scoped keys reject malformed digests and keep legacy keys at a fixed 
     expect(await verifyScopedKey(legacy, 'a', deps)).toBeNull()
     expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({
       status: 'revoked',
+      inactiveReason: 'revoked',
       effectiveRole: null,
       legacy: true,
       upgradeable: false,
@@ -178,6 +184,10 @@ Deno.test('scoped key app evidence expires at original time while local grants r
     f.advance(owner.expiresAt - f.now())
     expect(await verifyScopedKey(prepared.key, 'a', deps)).toBeNull()
     expect((await inspectScopedKeys('a', deps))[0]?.status).toBe('creator_no_access')
+    expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({
+      inactiveReason: 'creator_claims_expired',
+      effectiveRole: null,
+    })
     f.rbac.assignmentService(f.tenantId, f.audience).create({
       subjectKind: 'active-oid',
       subjectId: owner.oid,
@@ -185,6 +195,11 @@ Deno.test('scoped key app evidence expires at original time while local grants r
       role: 'viewer',
     }, { requestId: 'local', actor: { kind: 'system' } })
     expect((await verifyScopedKey(prepared.key, 'a', deps))?.role).toBe('viewer')
+    expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({
+      status: 'active',
+      inactiveReason: 'active',
+      effectiveRole: 'viewer',
+    })
     expect(await verifyScopedKey(prepared.key, 'b', deps)).toBeNull()
   } finally {
     f.close()
@@ -204,6 +219,14 @@ Deno.test('scoped issuance rejects unverified creators, elevation and invalid ex
       await expect(issueScopedKey({ slug: 'a', label: 'Research', role: 'viewer' }, session, deps))
         .rejects.toThrow()
     }
+    for (const label of ['', ' '.repeat(80), 'x'.repeat(81)]) {
+      await expect(issueScopedKey({ slug: 'a', label, role: 'viewer' }, f.creator, deps))
+        .rejects.toThrow('invalid_input')
+    }
+    expect(
+      (await issueScopedKey({ slug: 'a', label: 'x'.repeat(80), role: 'viewer' }, f.creator, deps))
+        .credential.label,
+    ).toHaveLength(80)
     await expect(
       issueScopedKey(
         { slug: 'a', label: 'Research', role: 'curator' },
@@ -228,6 +251,61 @@ Deno.test('scoped issuance rejects unverified creators, elevation and invalid ex
       ).rejects.toThrow()
     }
     expect(f.stores.mcpKeys.list('a')).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('concurrent key inspection keeps unproven, expired and active reasons isolated', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const deps = f.authorityDependencies()
+    const active = await issueScopedKey(
+      { slug: 'a', label: 'Active', role: 'viewer' },
+      f.creator,
+      deps,
+    )
+    active.commit()
+    const expiring = await issueScopedKey(
+      {
+        slug: 'a',
+        label: 'Expiring',
+        role: 'viewer',
+        expiresAt: new Date(f.now() + 1).toISOString(),
+      },
+      f.creator,
+      deps,
+    )
+    expiring.commit()
+    const unknown = await issueScopedKey(
+      { slug: 'a', label: 'Unproven', role: 'viewer' },
+      f.sessionFor('owner'),
+      deps,
+    )
+    unknown.commit()
+    f.database.exec('DELETE FROM rbac_owner_evidence WHERE oid = ?', f.sessionFor('owner').oid)
+    f.advance(1)
+    const [first, second] = await Promise.all([
+      inspectScopedKeys('a', deps),
+      inspectScopedKeys('a', deps),
+    ])
+    expect(first).toEqual(second)
+    for (
+      const [label, status, effectiveRole] of [
+        ['Active', 'active', 'viewer'],
+        ['Expiring', 'expired', null],
+        ['Unproven', 'unproven_creator', null],
+      ] as const
+    ) {
+      expect(first.find((row) => row.label === label)).toMatchObject({
+        status,
+        inactiveReason: status,
+        effectiveRole,
+      })
+    }
+    expect(await verifyScopedKey(unknown.key, 'a', deps)).toBeNull()
+    expect(await verifyScopedKey(expiring.key, 'a', deps)).toBeNull()
+    expect((await verifyScopedKey(active.key, 'a', deps))?.role).toBe('viewer')
   } finally {
     f.close()
   }
@@ -261,10 +339,15 @@ Deno.test('scoped key creator downgrade, removal, expiry and revocation apply on
     expect(service.remove(assignment.id, context).ok).toBe(true)
     expect(await verifyScopedKey(prepared.key, 'a', deps)).toBeNull()
     expect((await inspectScopedKeys('a', deps))[0]?.status).toBe('creator_no_access')
+    expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({
+      inactiveReason: 'creator_no_access',
+    })
     f.advance(10_000)
     expect((await inspectScopedKeys('a', deps))[0]?.status).toBe('expired')
+    expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({ inactiveReason: 'expired' })
     f.stores.mcpKeys.revoke('a', prepared.credential.id, new Date(f.now()).toISOString())
     expect((await inspectScopedKeys('a', deps))[0]?.status).toBe('revoked')
+    expect((await inspectScopedKeys('a', deps))[0]).toMatchObject({ inactiveReason: 'revoked' })
   } finally {
     f.close()
   }
