@@ -22,6 +22,7 @@ import { InsightsStore, RoutingLog, SourceStore } from '../../apps/api/src/store
 import { SuggestionStore } from '../../apps/api/src/interrogate.ts'
 import { KgProposalStore } from '../../apps/api/src/kg.ts'
 import { EnrichmentStore } from '../../apps/api/src/enrichments.ts'
+import { BindingStore } from '../../apps/api/src/bindings.ts'
 
 const WEB_DIST = './apps/web/dist'
 
@@ -42,6 +43,7 @@ export interface TestServer {
   delayResponse: (path: string) => { entered: Promise<void>; release(): void }
   setResponseStatus: (path: string, status: number | null) => void
   tenants: TenantStore
+  bindings: BindingStore
   close: () => Promise<void>
 }
 let nextPort = 8791
@@ -59,6 +61,7 @@ export function startTestServer(options: {
   management?: BuildAppOptions['management']
   sources?: BuildAppOptions['sources']
   insights?: BuildAppOptions['insights']
+  domainProvisioner?: BuildAppOptions['domainProvisioner']
   identity?: { role: Role; slug?: string }
   emergencyFixture?: { directory: string; state: EmergencyFixtureState }
   componentFixture?: { directory: string }
@@ -81,6 +84,7 @@ export function startTestServer(options: {
   try {
     const stores = localOwnedStores(directory, database, rbac.audit, env)
     const tenants = stores.tenants as TenantStore
+    const bindings = new BindingStore({ BINDINGS_PATH: `${directory}/bindings.json` })
     const ingress = new LocalIngress({ rbac, tenants, env })
     const identity = options.identity
     let session = identity
@@ -173,6 +177,8 @@ export function startTestServer(options: {
       ...stores,
       provider,
       management: options.management,
+      bindings,
+      domainProvisioner: options.domainProvisioner ?? null,
       sources: options.sources ?? isolatedStore(new SourceStore(), 'sources', 'json'),
       insights: options.insights ?? isolatedStore(new InsightsStore(), 'insights', 'jsonl'),
       routing: isolatedStore(new RoutingLog(), 'routing', 'jsonl'),
@@ -340,6 +346,7 @@ export function startTestServer(options: {
       providerCalls,
       requests,
       tenants,
+      bindings,
       setIdentity: (value) => {
         session = value ? structuredClone(value) : null
       },

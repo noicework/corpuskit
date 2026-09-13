@@ -1,4 +1,6 @@
-import { type FormEvent, useState } from 'react'
+import { useAccess } from '../../components/AccessProvider.tsx'
+import { AdminAccessError } from '../../api/break-glass.ts'
+import { type ComponentProps, type FormEvent, useEffect, useRef, useState } from 'react'
 import type { KnowledgeBoxStatus } from '@research-portal/core'
 import { connectKnowledgeBox, revertKnowledgeBox } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
@@ -6,7 +8,7 @@ import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
 /** Portal connection controls require only this portal's binding permission. */
-export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onChanged }: {
+function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onChanged }: {
   slug: string
   name: string
   knowledgeBox: KnowledgeBoxStatus
@@ -21,6 +23,21 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const current = () => mounted.current && context === authority.controller.context
+  const assertCurrent = () => {
+    authority.controller.assertCurrent(context)
+    if (!mounted.current) throw new AdminAccessError()
+  }
+
   if (!sessionAllowed && !breakGlassEnabled) {
     return <p className='text-sm text-ink-2'>Connection management is unavailable.</p>
   }
@@ -32,8 +49,12 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
     try {
       const outcome = await runExplicit(
         `Connect the knowledge box for ${name}`,
-        (access) => connectKnowledgeBox(slug, { url, token }, access),
+        (access) => {
+          assertCurrent()
+          return connectKnowledgeBox(slug, { url, token }, access)
+        },
       )
+      assertCurrent()
       if (outcome === undefined) return
       setUrl('')
       setToken('')
@@ -45,12 +66,13 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
       })
       await onChanged()
     } catch (error) {
+      if (!current()) return
       setMessage({
         tone: 'error',
         text: errorMessage(error, 'Connection failed - please try again.'),
       })
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
 
@@ -60,18 +82,23 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
     try {
       const result = await runExplicit(
         `Revert ${name} to its demo knowledge box`,
-        (access) => revertKnowledgeBox(slug, access),
+        (access) => {
+          assertCurrent()
+          return revertKnowledgeBox(slug, access)
+        },
       )
+      assertCurrent()
       if (result === undefined) return
       setMessage({ tone: 'ok', text: 'Reverted to the demo knowledge box.' })
       await onChanged()
     } catch (error) {
+      if (!current()) return
       setMessage({
         tone: 'error',
         text: errorMessage(error, 'Could not revert - please try again.'),
       })
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
 
@@ -123,7 +150,18 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
           />
         </div>
         <div className='flex min-w-0 flex-wrap items-center gap-3 sm:col-span-2'>
-          <button type='submit' disabled={busy || pending} className='rp-btn rp-btn-primary'>
+          <button
+            type='submit'
+            disabled={busy || pending}
+            className='rp-btn rp-btn-primary'
+            style={{
+              height: 'auto',
+              minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
+              paddingBlock: '0.5rem',
+              whiteSpace: 'normal',
+              maxWidth: '100%',
+            }}
+          >
             {busy ? 'Working...' : 'Verify and connect'}
           </button>
           {knowledgeBox.status === 'connected' && (
@@ -132,6 +170,13 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
               disabled={busy || pending}
               onClick={() => void onRevert()}
               className='rp-btn rp-btn-outline'
+              style={{
+                height: 'auto',
+                minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
+                paddingBlock: '0.5rem',
+                whiteSpace: 'normal',
+                maxWidth: '100%',
+              }}
             >
               Revert to demo box
             </button>
@@ -144,5 +189,17 @@ export function PortalConnections({ slug, name, knowledgeBox, resourceCount, onC
       </p>
       {message && <MessagePanel message={message} className='mt-4' />}
     </section>
+  )
+}
+
+export function PortalConnections(props: ComponentProps<typeof PortalConnectionsContent>) {
+  const { generation } = useAccess()
+  const { sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess('bindings.write', {
+    kind: 'portal',
+    slug: props.slug,
+  })
+  if (!sessionAllowed && !breakGlassEnabled) return null
+  return (
+    <PortalConnectionsContent key={`${generation}:${props.slug}:${sessionAllowed}`} {...props} />
   )
 }

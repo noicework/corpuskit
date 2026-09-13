@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import type { AdminTenantOverview } from '@research-portal/core'
 import { removePortal, setPortalDisabled } from '../../api/client.ts'
 import { useAdminAccess } from '../../components/EmergencyAccess.tsx'
+import { useAccess, useScopeAccess } from '../../components/AccessProvider.tsx'
+import { AdminAccessError, sessionAccess } from '../../api/break-glass.ts'
 import { PortalConnections } from './PortalConnections.tsx'
 import { CreateKbBox } from './CreateKbBox.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
@@ -40,7 +42,7 @@ function StatusBadge({ status }: { status: Status }) {
  * everything else (content, appearance, analysis) lives in that portal's own
  * Manage workspace at /t/:slug/manage.
  */
-export function PortalRow({
+function PortalRowContent({
   row,
   expanded,
   onToggleExpanded,
@@ -49,7 +51,55 @@ export function PortalRow({
   expanded: boolean
   onToggleExpanded: () => void
 }) {
-  const { runExplicit } = useAdminAccess()
+  const emergency = useAdminAccess()
+  const authority = useAccess()
+  const context = authority.controller.context
+  const leaf = useScopeAccess(expanded ? row.tenant.slug : null)
+  const active = useRef(true)
+  useEffect(() => {
+    active.current = true
+    return () => {
+      active.current = false
+    }
+  }, [])
+  const current = () => active.current && context === authority.controller.context
+  const assertCurrent = () => {
+    authority.controller.assertCurrent(context)
+    if (!active.current) throw new AdminAccessError()
+  }
+  const canBind = !row.disabled && leaf.can('bindings.write')
+  const canRename = !row.disabled && leaf.can('appearance.write')
+  const canRead = !row.disabled && leaf.can('portal.read')
+  const canEnable = row.disabled === true && leaf.session?.portalAccess?.slug === row.tenant.slug &&
+    leaf.session.portalAccess.canEnable === true
+  const canDisable = !row.disabled && leaf.can('behaviour.write')
+  const canRemove = !row.disabled && authority.can('portal.delete', { kind: 'platform' }) &&
+    (!row.tenant.hostname || leaf.can('domains.write'))
+  const emergencyOnly = emergency.breakGlassEnabled &&
+    !authority.can('portal.create', { kind: 'platform' })
+  const run = async <T,>(
+    allowed: () => boolean,
+    label: string,
+    action: (access: typeof sessionAccess) => Promise<T>,
+  ) => {
+    assertCurrent()
+    if (allowed()) {
+      return action({
+        request: (input, init) => {
+          assertCurrent()
+          if (!allowed()) throw new AdminAccessError()
+          return sessionAccess.request(input, init)
+        },
+      })
+    }
+    if (emergencyOnly) {
+      return emergency.runEmergency(label, (access) => {
+        assertCurrent()
+        return action(access)
+      })
+    }
+    throw new AdminAccessError()
+  }
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
@@ -61,10 +111,12 @@ export function PortalRow({
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit(
+      const result = await run(
+        () => row.disabled ? canEnable : leaf.can('behaviour.write'),
         `${row.disabled ? 'Enable' : 'Disable'} ${row.tenant.productName}`,
         (access) => setPortalDisabled(row.tenant.slug, access, !row.disabled),
       )
+      assertCurrent()
       if (result === undefined) return
       setMessage({
         tone: 'ok',
@@ -76,13 +128,16 @@ export function PortalRow({
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
+      assertCurrent()
+      if (!emergencyOnly) await authority.refresh()
     } catch (err) {
+      if (!current()) return
       setMessage({
         tone: 'error',
         text: err instanceof Error ? err.message : 'Could not update the portal.',
       })
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
 
@@ -91,10 +146,14 @@ export function PortalRow({
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit(
+      const result = await run(
+        () =>
+          !row.disabled && authority.can('portal.delete', { kind: 'platform' }) &&
+          (!row.tenant.hostname || leaf.can('domains.write')),
         `Remove ${row.tenant.productName}`,
         (access) => removePortal(row.tenant.slug, access),
       )
+      assertCurrent()
       if (result === undefined) return
       setMessage({
         tone: 'ok',
@@ -105,26 +164,27 @@ export function PortalRow({
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
     } catch (err) {
+      if (!current()) return
       setMessage({
         tone: 'error',
         text: err instanceof Error ? err.message : 'Could not remove the portal.',
       })
     } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }
 
   return (
-    <section className='rp-card overflow-hidden'>
+    <section data-portal-row={row.tenant.slug} className='rp-card overflow-hidden'>
       <button
         type='button'
         onClick={onToggleExpanded}
         aria-expanded={expanded}
         className='flex w-full flex-wrap items-center gap-x-4 gap-y-1.5 px-6 py-4 text-left transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
       >
-        <span className='flex min-w-0 flex-1 items-center gap-3'>
+        <span className='flex min-w-0 basis-full items-center gap-3 sm:basis-auto sm:flex-1'>
           <StatusDot status={row.knowledgeBox.status} />
-          <span className='min-w-0 truncate'>
+          <span className='min-w-0 break-words'>
             <span className='font-semibold text-ink'>{row.tenant.productName}</span>
             <span className='ml-2 text-sm text-ink-3'>{row.tenant.organisation}</span>
           </span>
@@ -151,7 +211,7 @@ export function PortalRow({
       </button>
 
       {expanded && (
-        <div className='border-t border-line'>
+        <div data-portal-actions={row.tenant.slug} className='border-t border-line'>
           <div className='flex flex-wrap items-start justify-between gap-4 px-6 py-5'>
             {renaming
               ? (
@@ -165,18 +225,20 @@ export function PortalRow({
                 />
               )
               : (
-                <div className='min-w-0 flex-1'>
+                <div className='min-w-0 basis-full sm:basis-auto sm:flex-1'>
                   <div className='flex flex-wrap items-center gap-2'>
-                    <h3 className='truncate text-lg font-semibold tracking-tight text-ink'>
+                    <h3 className='break-words text-lg font-semibold tracking-tight text-ink'>
                       {row.tenant.productName}
                     </h3>
-                    <button
-                      type='button'
-                      onClick={() => setRenaming(true)}
-                      className='text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
-                    >
-                      Rename
-                    </button>
+                    {(canRename || (emergencyOnly && !row.disabled)) && (
+                      <button
+                        type='button'
+                        onClick={() => setRenaming(true)}
+                        className='text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                      >
+                        Rename
+                      </button>
+                    )}
                   </div>
                   <p className='mt-0.5 text-sm text-ink-3'>{row.tenant.organisation}</p>
                 </div>
@@ -184,50 +246,63 @@ export function PortalRow({
 
             <div className='flex min-w-0 max-w-full flex-col items-start gap-2 sm:items-end'>
               <StatusBadge status={row.knowledgeBox.status} />
-              <Link
-                to={`/t/${row.tenant.slug}/manage`}
-                className='rp-btn rp-btn-primary max-w-full whitespace-normal text-center'
-                style={{
-                  height: 'auto',
-                  minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-                  paddingBlock: '0.5rem',
-                }}
-              >
-                Open portal management &rarr;
-              </Link>
-              <Link
-                to={`/t/${row.tenant.slug}`}
-                className='text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
-              >
-                View portal
-              </Link>
+              {(canBind || canRename || canDisable) && (
+                <Link
+                  to={`/t/${row.tenant.slug}/manage`}
+                  className='rp-btn rp-btn-primary max-w-full whitespace-normal text-center'
+                  style={{
+                    height: 'auto',
+                    minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
+                    paddingBlock: '0.5rem',
+                  }}
+                >
+                  Open portal management &rarr;
+                </Link>
+              )}
+              {canRead && (
+                <Link
+                  to={`/t/${row.tenant.slug}`}
+                  className='text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                >
+                  View portal
+                </Link>
+              )}
             </div>
           </div>
 
           <div className='px-6 pb-6'>
-            <CreateKbBox row={row} onCreated={refresh} />
-            <PortalConnections
-              slug={row.tenant.slug}
-              name={row.tenant.productName}
-              knowledgeBox={row.knowledgeBox}
-              resourceCount={row.resourceCount}
-              onChanged={refresh}
-            />
+            {(canBind || (emergencyOnly && !row.disabled)) && (
+              <>
+                <CreateKbBox row={row} onCreated={refresh} />
+                <PortalConnections
+                  slug={row.tenant.slug}
+                  name={row.tenant.productName}
+                  knowledgeBox={row.knowledgeBox}
+                  resourceCount={row.resourceCount}
+                  onChanged={refresh}
+                />
+              </>
+            )}
 
             <div className='mt-4 flex flex-wrap items-center gap-4 border-t border-line pt-3'>
-              <button
-                type='button'
-                disabled={busy}
-                onClick={() => void onToggleDisabled()}
-                className='text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)] disabled:opacity-60'
-                title={row.disabled
-                  ? 'Show this portal in the switcher and portal list again'
-                  : 'Hide this portal from the switcher and portal list'}
-              >
-                {row.disabled ? 'Enable' : 'Disable'}
-              </button>
-              {row.custom && (
+              {(canEnable || canDisable || emergencyOnly) && (
                 <button
+                  data-portal-enable={row.disabled ? true : undefined}
+                  data-portal-disable={!row.disabled ? true : undefined}
+                  type='button'
+                  disabled={busy}
+                  onClick={() => void onToggleDisabled()}
+                  className='min-h-11 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)] disabled:opacity-60'
+                  title={row.disabled
+                    ? 'Show this portal in the switcher and portal list again'
+                    : 'Hide this portal from the switcher and portal list'}
+                >
+                  {row.disabled ? 'Enable' : 'Disable'}
+                </button>
+              )}
+              {row.custom && (canRemove || (emergencyOnly && !row.disabled)) && (
+                <button
+                  data-portal-remove
                   type='button'
                   disabled={busy}
                   onClick={() => void onRemove()}
@@ -244,5 +319,15 @@ export function PortalRow({
         </div>
       )}
     </section>
+  )
+}
+
+export function PortalRow(props: ComponentProps<typeof PortalRowContent>) {
+  const { generation } = useAccess()
+  return (
+    <PortalRowContent
+      key={`${generation}:${props.row.tenant.slug}:${props.expanded}:${props.row.disabled}`}
+      {...props}
+    />
   )
 }

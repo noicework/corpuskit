@@ -54,6 +54,7 @@ export function useAdminOverview(scope: string) {
       controller.assertCurrent(context)
       if (result !== undefined) setSnapshot(result)
     } catch (error) {
+      if (context !== controller.context) return
       setOperationError(error instanceof Error ? error.message : 'Could not load the overview.')
     }
   }
