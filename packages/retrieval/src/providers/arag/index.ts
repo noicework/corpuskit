@@ -30,7 +30,7 @@ import {
   type LabelRef,
   ResourceSummarySchema,
 } from '@research-portal/core'
-import type { DocPage } from '@research-portal/core'
+import type { Citation, DocPage } from '@research-portal/core'
 import type {
   AskOptions,
   CatalogOptions,
@@ -51,7 +51,12 @@ import {
   citationRequest,
   FOOTNOTE_PROMPT,
 } from './citation-mode.ts'
-import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
+import {
+  bindFootnotes,
+  type FootnoteDrop,
+  FootnoteStream,
+  parseFootnoteAnswer,
+} from './footnotes.ts'
 import { prepareExtraContext } from './extra-context.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
@@ -4210,26 +4215,50 @@ export class AragProvider implements RetrievalProvider {
             byId.get(resourceId)?.title ?? sources.find((s) => s.id === resourceId)?.title ??
               'Untitled resource'
           const parsedFootnotes = footnotes?.finish()
-          if (
-            parsedFootnotes && parsedFootnotes.anchors.length === 0 &&
-            Object.keys(citationsMapAccum).length > 0
-          ) {
-            // The service returned standard attribution despite our explicit
-            // footnote request. Do not quietly accept an uncited answer.
-            throw new FootnoteError('unexpected_standard_citations')
-          }
-          const bound = parsedFootnotes
-            ? bindFootnotes(parsedFootnotes, citable, resolveTitle, extraContext.resources)
-            : spliceCitationMarkers(
-              fullAnswer,
-              scopedCitations,
-              // Both branches already resolve through toSummary/displayTitle,
-              // so this never surfaces a raw hash - but a resource id absent
-              // from both (never retrieved as a scored source) still needs a
-              // clean fallback rather than citations.ts's own last-resort
-              // `?? resourceId`.
+          // `spliceCitationMarkers` is the portal's standard-attribution
+          // binder. Both branches already resolve through toSummary/
+          // displayTitle, so neither surfaces a raw hash - but a resource id
+          // absent from both (never retrieved as a scored source) still needs
+          // a clean fallback rather than citations.ts's own last-resort
+          // `?? resourceId`.
+          const standard = () => spliceCitationMarkers(fullAnswer, scopedCitations, resolveTitle)
+          // The service sometimes answers with standard attribution despite an
+          // explicit footnote request, and sometimes anchors only at blocks the
+          // binder has to drop. Either way the answer itself is finished and
+          // correct, so bind it the standard way rather than discarding it -
+          // the citations map it did return is the same evidence the portal
+          // showed before footnote mode existed. Nothing here accepts an
+          // UNCITED answer: with no anchors and no citations map, `standard()`
+          // returns the prose unchanged and the grounding audit downstream
+          // annotates whatever it cannot support.
+          let footnoteDrops: FootnoteDrop[] = parsedFootnotes?.drops ?? []
+          let bound: { text: string; citations: Citation[] }
+          if (!parsedFootnotes) {
+            bound = standard()
+          } else {
+            const footnoteBound = bindFootnotes(
+              parsedFootnotes,
+              citable,
               resolveTitle,
+              extraContext.resources,
             )
+            footnoteDrops = footnoteBound.drops
+            bound = footnoteBound.citations.length === 0 &&
+                Object.keys(scopedCitations).length > 0
+              ? standard()
+              : footnoteBound
+          }
+          if (footnoteDrops.length > 0) {
+            // Fixed classifications and counts only - never answer text,
+            // source IDs, credentials or raw upstream payloads. A corpus whose
+            // generation configuration needs fixing stays visible here even
+            // though the reader now gets their answer.
+            console.warn(JSON.stringify({
+              event: 'arag_footnote_citations_degraded',
+              drops: footnoteDrops,
+              citations: bound.citations.length,
+            }))
+          }
           // No emit-time filtering: binding already validated the source set.
           for (const citation of bound.citations) yield { type: 'citation', citation }
           boundText = bound.text
@@ -4284,14 +4313,6 @@ export class AragProvider implements RetrievalProvider {
         yield { type: 'stage', stage: 'validating', status: 'completed' }
         return
       } catch (err) {
-        if (err instanceof FootnoteError) {
-          // Emit only fixed classifications, not answer text, source IDs,
-          // credentials or raw upstream errors. The public copy stays unchanged.
-          console.error(JSON.stringify({
-            event: 'arag_footnote_validation_failed',
-            reason: err.reason,
-          }))
-        }
         const status = err instanceof AragApiError ? err.status : 0
         // A 4xx before any output usually means an optional capability
         // (graph strategy, reranker) is unsupported here - shed it and go

@@ -1,17 +1,14 @@
 import { expect } from '@std/expect'
-import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
+import { bindFootnotes, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
 
-function failureReason(run: () => unknown) {
-  try {
-    run()
-  } catch (error) {
-    if (!(error instanceof FootnoteError)) throw error
-    expect(error.message).toBe(
-      'The response citation links could not be verified. Please try again.',
-    )
-    return error.reason
-  }
-  throw new Error('Expected footnote validation to fail')
+/**
+ * The single reason a citation was dropped. Binding never throws: the answer
+ * has already reached the reader by then, so an unusable anchor costs its own
+ * marker and nothing else.
+ */
+function dropReason(drops: readonly { reason: string; count: number }[]) {
+  expect(drops.length).toBe(1)
+  return drops[0]!.reason
 }
 
 const answer =
@@ -80,27 +77,42 @@ Deno.test('footnotes: code, escaped brackets and Markdown links remain literal',
     .toBe('See [7](https://example.test):')
 })
 
-Deno.test('footnotes: missing, conflicting and malformed mappings fail closed', () => {
+Deno.test('footnotes: missing, conflicting and malformed mappings anchor nothing', () => {
   for (
     const raw of [
       'Claim[6].',
       'Claim[6].\n[6]: block-MISSING\n',
-      'Claim[6].\n[6]: block-AA\n[6]: block-BB\n',
       'Claim[6].\n[6]: https://evil.test\n',
     ]
-  ) expect(() => finish([raw])).toThrow(FootnoteError)
+  ) {
+    const result = finish([raw])
+    expect(result.anchors).toEqual([])
+    expect(result.drops.length).toBeGreaterThan(0)
+    // The prose survives and the wire syntax never leaks into it.
+    expect(result.text).toContain('Claim')
+    expect(result.text).not.toContain('block-')
+    expect(result.text).not.toContain('evil.test')
+  }
+  // A redefinition is refused rather than honoured: the first definition of a
+  // number stands, so a later line cannot repoint a citation the reader has
+  // already seen.
+  const redefined = finish(['Claim[6].\n[6]: block-AA\n[6]: block-BB\n'])
+  expect(redefined.anchors.map((a) => a.id)).toEqual(['doc/f/pdf/0-5'])
+  expect(dropReason(redefined.drops)).toBe('conflicting_definition')
   const stream = new FootnoteStream()
   stream.consume(mapping)
-  expect(() =>
-    stream.consume({
-      type: 'footnote_citations',
-      footnote_to_context: {
-        'block-AA': 'different/f/pdf/0-5',
-      },
-    })
-  ).toThrow(FootnoteError)
-  expect(() => stream.consume({ type: 'footnote_citations', footnote_to_context: [] }))
-    .toThrow(FootnoteError)
+  stream.consume({
+    type: 'footnote_citations',
+    footnote_to_context: { 'block-AA': 'different/f/pdf/0-5' },
+  })
+  stream.consume({ type: 'footnote_citations', footnote_to_context: [] })
+  stream.consume({ type: 'answer', text: answer })
+  const finished = stream.finish()
+  // The conflicting remap is refused, so block-AA keeps its first identity.
+  expect(finished.anchors[0]!.id).toBe('doc/f/pdf/0-5')
+  expect(finished.drops.map((d) => d.reason).sort()).toEqual(
+    ['conflicting_mapping', 'invalid_mapping'],
+  )
 })
 
 Deno.test('footnotes: canonical numbering follows claims, not wire numbers or headings', () => {
@@ -121,20 +133,46 @@ Deno.test('footnotes: resource numbering stays compatible with CorpusKit evidenc
   expect(bound.text).not.toContain('[1][1]')
 })
 
-Deno.test('footnotes: excluded, generated and anonymous extra-context references cannot bind', () => {
+Deno.test('footnotes: excluded and anonymous extra-context references cannot bind', () => {
   for (
     const id of [
       'excluded/f/pdf/0-5',
-      'doc/t/da-summary/0-5',
       'USER_CONTEXT_0',
       'javascript:alert(1)',
     ]
   ) {
     const parsed = finish([answer])
     parsed.anchors[0]!.id = id
-    expect(() => bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report'))
-      .toThrow(FootnoteError)
+    const bound = bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')
+    // The unusable anchor is gone; the answer and its good citations stand.
+    // `doc` still binds through the third anchor, which was never touched.
+    expect(bound.drops.length).toBe(1)
+    expect(bound.citations.map((c) => c.resourceId)).toEqual(['other', 'doc'])
+    expect(bound.text).toContain('A claim.')
   }
+})
+
+Deno.test('footnotes: a data-augmentation anchor cites the resource that owns it', () => {
+  const parsed = finish([answer])
+  parsed.anchors[0]!.id = 'doc/t/da-summary/0-5'
+  const bound = bindFootnotes(parsed, () => true, (id) => id + ' title')
+  // `doc` is a real resource: the generated field belongs to it, so the reader
+  // is sent to the document rather than losing the answer.
+  expect(bound.citations).toEqual([
+    { index: 1, resourceId: 'doc', title: 'doc title' },
+    { index: 2, resourceId: 'other', title: 'other title' },
+  ])
+  expect(dropReason(bound.drops)).toBe('generated_context')
+})
+
+Deno.test('footnotes: a generated anchor outside scope is still refused', () => {
+  const parsed = finish([answer])
+  parsed.anchors[0]!.id = 'excluded/t/da-summary/0-5'
+  const bound = bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')
+  // `excluded` never appears, generated field or not. `doc` binds through the
+  // untouched third anchor.
+  expect(bound.citations.map((c) => c.resourceId)).toEqual(['other', 'doc'])
+  expect(bound.drops.map((d) => d.reason).sort()).toEqual(['generated_context', 'out_of_scope'])
 })
 
 Deno.test('footnotes: mapping can arrive before, after or between answer chunks', () => {
@@ -146,7 +184,7 @@ Deno.test('footnotes: mapping can arrive before, after or between answer chunks'
   expect(stream.finish()).toEqual(finish([answer]))
 })
 
-Deno.test('footnotes: validation diagnostics distinguish definitions from mappings', () => {
+Deno.test('footnotes: degradation diagnostics distinguish definitions from mappings', () => {
   for (
     const [raw, reason] of [
       ['Claim[6].', 'missing_definition'],
@@ -155,27 +193,28 @@ Deno.test('footnotes: validation diagnostics distinguish definitions from mappin
       ['Claim[6].\n[6]: invalid-private-value\n', 'invalid_definition'],
       ['Claim[6].\n[6]: block-AA another-value\n', 'invalid_definition'],
     ]
-  ) expect(failureReason(() => finish([raw!]))).toBe(reason)
+  ) {
+    const drops = finish([raw!]).drops
+    expect(drops.map((d) => d.reason)).toContain(reason)
+  }
 
   const stream = new FootnoteStream()
   stream.consume(mapping)
-  expect(failureReason(() => stream.consume({ type: 'footnote_citations' })))
-    .toBe('invalid_mapping')
-  expect(failureReason(() =>
-    stream.consume({
-      type: 'footnote_citations',
-      footnote_to_context: { 'block-AA': { secret: 'private-value' } },
-    })
-  )).toBe('invalid_mapping')
-  expect(failureReason(() =>
-    stream.consume({
-      type: 'footnote_citations',
-      footnote_to_context: { 'block-AA': 'private-source/f/pdf/0-5' },
-    })
-  )).toBe('conflicting_mapping')
+  stream.consume({ type: 'footnote_citations' })
+  stream.consume({
+    type: 'footnote_citations',
+    footnote_to_context: { 'block-AA': { secret: 'private-value' } },
+  })
+  stream.consume({
+    type: 'footnote_citations',
+    footnote_to_context: { 'block-AA': 'private-source/f/pdf/0-5' },
+  })
+  const drops = stream.finish().drops
+  expect(drops.find((d) => d.reason === 'invalid_mapping')?.count).toBe(2)
+  expect(drops.find((d) => d.reason === 'conflicting_mapping')?.count).toBe(1)
 })
 
-Deno.test('footnotes: context failure classifications do not loosen citation validation', () => {
+Deno.test('footnotes: context classifications stay distinct when a citation is dropped', () => {
   for (
     const [id, reason] of [
       ['USER_CONTEXT_0', 'anonymous_context'],
@@ -188,7 +227,9 @@ Deno.test('footnotes: context failure classifications do not loosen citation val
   ) {
     const parsed = finish([answer])
     parsed.anchors[0]!.id = id!
-    expect(failureReason(() => bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')))
-      .toBe(reason)
+    const bound = bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')
+    expect(dropReason(bound.drops)).toBe(reason)
+    // A classification never carries the id, the block or the answer text.
+    expect(JSON.stringify(bound.drops)).not.toContain(id!)
   }
 })
