@@ -399,8 +399,9 @@ export class DurableState {
 
   list<T>(prefix: string): { key: string; value: T }[] {
     return this.sql.exec<{ key: string; value: string }>(
-      `SELECT key, value FROM state WHERE key LIKE ? ESCAPE '\\' ORDER BY key`,
-      `${escapeLike(prefix)}%`,
+      'SELECT key, value FROM state WHERE key >= ? AND key < ? ORDER BY key',
+      prefix,
+      prefixUpperBound(prefix),
     ).toArray().flatMap((row) => {
       try {
         return [{ key: row.key, value: JSON.parse(row.value) as T }]
@@ -639,8 +640,26 @@ export class DurableState {
   }
 }
 
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (character) => `\\${character}`)
+/**
+ * Half-open upper bound for a prefix scan, so `key >= prefix AND key < bound`
+ * selects exactly the keys under `prefix`.
+ *
+ * A LIKE pattern cannot be used for this. The Workers SQLite runtime caps LIKE
+ * pattern length far below the owner-scoped research prefixes this store
+ * builds, and raises "LIKE or GLOB pattern too complex" when it evaluates one.
+ * The pattern is only evaluated once there is a row to test, so an empty
+ * Durable Object listed fine and every populated one failed the whole request:
+ * Ask sessions and investigations returned 500 in production while single-key
+ * reads kept working. A range over the primary key has no such limit, needs no
+ * escaping, and uses the index instead of testing every row.
+ */
+function prefixUpperBound(prefix: string): string {
+  const last = prefix.charCodeAt(prefix.length - 1)
+  // An empty or unboundable prefix would silently widen the scan; refuse it.
+  if (!Number.isFinite(last) || last >= 0xffff) {
+    throw new Error('Unboundable storage prefix')
+  }
+  return prefix.slice(0, -1) + String.fromCharCode(last + 1)
 }
 
 function segment(value: string): string {
