@@ -138,6 +138,8 @@ All commands are `deno task <name>`, defined in `deno.json`.
 | `build:js`  | Bundles `apps/web/src/main.tsx` with esbuild into `apps/web/dist/app.js` (React and friends stay external, resolved by the browser's import map). |
 | `check`     | The full gate: `deno check` on the server/scripts/web entry points, `deno lint`, `deno fmt --check`, then `test`. This is what CI runs. |
 | `test`      | Runs the Deno test suite (`deno test`) across `packages/` and `apps/`.                          |
+| `test:e2e`  | Builds the web bundle, then runs the browser end-to-end suite in `e2e/` against a local test server. |
+| `test:e2e:visual` | The opt-in screenshot matrix (`e2e/rbac-visual.test.ts`, about 22 minutes). CI skips it; the "Visual matrix" workflow runs it on demand and keeps the captures. |
 | `enrich`    | Runs `apps/api/scripts/enrich-labels.ts` - a second-dimension labelling enrichment pass, idempotent. |
 | `provision` | Runs `apps/api/scripts/provision.ts` - creates/binds each tenant's knowledge box, pushes the topic labelset, uploads the seed corpus from `content/seed/`, and appends the resulting bindings to `.env`. Idempotent - safe to re-run. |
 

@@ -72,6 +72,7 @@
     "check": "deno check apps/api/src/server.ts apps/api/scripts/provision.ts apps/api/scripts/persona-smoke.ts apps/api/scripts/accuracy-eval.ts apps/api/scripts/persona-eval.ts apps/web/src/main.tsx apps/cloudflare/src/worker.ts && deno lint && deno fmt --check && deno task test",
     "test": "deno test --allow-env --allow-read --allow-write packages/ apps/",
     "test:e2e": "deno task build:web && deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/",
+    "test:e2e:visual": "deno task build:web && E2E_VISUAL_MATRIX=1 deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/rbac-visual.test.ts",
     "enrich": "deno run --allow-net --allow-env --allow-read apps/api/scripts/enrich-labels.ts",
     "provision": "deno run --allow-net --allow-env --allow-read --allow-write=.env apps/api/scripts/provision.ts"
   }
