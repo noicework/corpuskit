@@ -7,26 +7,54 @@ palette in response to the system colour preference.
 
 ## Content sources
 
-The page contains 33 feature cards across nine categories. Product and administrative capabilities
-are described separately in the copy. No customer or research organisation is named. The demo
-links use `https://demo.corpuskit.org`.
+The page opens with an **At a glance** section and then lists 33 feature cards across nine
+categories. Product and administrative capabilities are described separately in the copy. No
+customer or research organisation is named. The demo links use `https://demo.corpuskit.org`.
+
+### At a glance
+
+Seven rows of short points, each row a heading beside a list: content it takes in, how it
+answers, how it checks, what comes out, how it connects, how it looks, and what it runs on. Every
+point is a verifiable fact from the code or the documentation, not a roadmap item:
+
+| Row | Sources |
+| --- | --- |
+| Content it takes in | `packages/retrieval/src/providers/arag/index.ts` (`detectContentKind`, `isOfficeMime`), `apps/api/src/crawl.ts`, `apps/web/src/pages/admin/AddContent.tsx` (100 MB limit), `docs/EXTRACTION-LAB.md`, `packages/core/src/docs.ts` |
+| How it answers | `README.md`, `packages/core/src/docs.ts` (How this works, Ask), `packages/core/src/index.ts` (search configuration schema) |
+| How it checks | `packages/core/src/docs.ts` (How the answer is checked), `docs/TRUST-LAYER.md` |
+| What comes out | `packages/core/src/docs.ts` (Generate, Assessment, Watch a search), `apps/api/src/audit-routes.ts` (CSV/JSON), `apps/api/src/app.ts` (enrichments export) |
+| How it connects | `apps/api/src/mcp.ts` (four tools), `docs/RBAC.md` (six roles, 22 permissions, access modes), `apps/api/src/cloudflare-domains.ts` |
+| How it looks | `packages/core/src/palettes.ts` (five palettes, Observatory dark, WCAG contract test), `packages/core/src/index.ts` (six font pairings, shape, text scale, density), `apps/web/src/pages/admin/AppearancePanel.tsx` (logo and font uploads) |
+| What it runs on | `README.md`, `docs/ARCHITECTURE.md`, `apps/cloudflare/src/worker.ts`, `LICENSE` |
+
+### Feature cards
+
+Each card carries two to four detail points under its paragraph. The points name concrete
+options (search modes, generate shapes, assessment sizes, export formats, access modes, key
+rules), never marketing adjectives.
 
 | Category | Cards | Sources |
 | --- | ---: | --- |
-| Discovery and search | 3 | `README.md`, `docs/INTENT-ROUTING.md`, `packages/core/src/docs.ts` |
-| Answers you can check | 4 | `docs/TRUST-LAYER.md`, `docs/LLM-FOOTNOTES.md`, `README.md` |
+| Discovery and search | 3 | `README.md`, `docs/INTENT-ROUTING.md`, `packages/core/src/docs.ts`, `packages/core/src/index.ts` |
+| Answers you can check | 4 | `docs/TRUST-LAYER.md`, `docs/LLM-FOOTNOTES.md`, `README.md`, `packages/core/src/docs.ts` |
 | Knowledge graph and investigations | 3 | `README.md`, `content/demo/labels-and-categories.md`, `packages/core/src/docs.ts` |
 | Library and reading | 3 | `README.md`, `packages/core/src/docs.ts` |
 | Generate and assess | 2 | `packages/core/src/docs.ts`, `apps/web/src/pages/GeneratePage.tsx`, `apps/web/src/pages/AssessmentPage.tsx` |
-| Content, taxonomy and enrichment | 5 | `docs/VISION.md`, `docs/ARCHITECTURE.md`, `docs/EXTRACTION-LAB.md`, `apps/web/src/pages/admin/ExtractionPanel.tsx`, `content/demo/labels-and-categories.md` |
-| Access and security | 6 | `docs/RBAC.md`, `apps/api/src/permissions.ts` |
-| Integration and tools | 3 | `packages/core/src/docs.ts`, `docs/RBAC.md`, `apps/api/src/cloudflare-domains.ts` |
+| Content, taxonomy and enrichment | 5 | `docs/VISION.md`, `docs/ARCHITECTURE.md`, `docs/EXTRACTION-LAB.md`, `apps/web/src/pages/admin/ExtractionPanel.tsx`, `apps/web/src/pages/admin/AddContent.tsx`, `apps/api/src/scheduler.ts`, `content/demo/labels-and-categories.md` |
+| Access and security | 6 | `docs/RBAC.md`, `apps/api/src/permissions.ts`, `apps/api/src/audit-routes.ts` |
+| Integration and tools | 3 | `packages/core/src/docs.ts`, `apps/api/src/mcp.ts`, `docs/RBAC.md`, `apps/api/src/cloudflare-domains.ts` |
 | Platform and deployment | 4 | `README.md`, `docs/DEMO.md`, `docs/ARCHITECTURE.md`, `apps/cloudflare/src/worker.ts`, `LICENSE` |
 
 The Extraction Lab card describes the implemented profiling, sandbox comparison and routing-rule
 controls. It does not promise every item in the design document's build plan. No embed capability
 is claimed. The Australian region wording applies to the knowledge box and distinguishes the
-separate application and model configuration.
+separate application and model configuration. Office and OpenDocument support is stated because
+the resource viewer recognises those types and shows the platform's PDF or image rendition of
+them; no format the code does not handle is listed.
+
+Lists use `role="list"` because both the card and glance lists set `list-style: none`, which
+makes some screen readers drop list semantics. The bullet is a small square in the brand blue,
+drawn with `::before`, so it reads the same in every browser.
 
 ## Routing boundary
 
@@ -45,35 +73,39 @@ canonicalisation, SPA paths and mutation passthrough.
 
 ## Visual verification
 
-Verified the built page in Chrome on a local server at port 8891. Port 8791 was already occupied.
+Verified on 14 September 2026 from a local static server on port 8893 serving the page file and a
+copy with a 22px root font, driven through headless Chrome with a scripted viewport, after
+`document.fonts.ready`. Measurements were taken in the page's own layout viewport, not a resized
+window.
 
-- Wide desktop: 1920 by 1080 layout viewport, default and 22px root font.
-- Mobile: a measured 390px iframe layout viewport, default and 22px root font. The iframe was
-  also magnified with `transform: scale(2.3)` to inspect the text without changing its viewport.
-- Light and dark system preferences: the authored marketing palette stays consistent.
-- Inspected the introduction, navigation, feature cards, category links, sticky desktop header,
-  closing calls to action and footer. Checked the surrounding homepage navigation too.
-- No horizontal document overflow or card content overflow at either mobile text size. All
-  category fragment targets resolve. Keyboard focus has a visible outline.
-- Checked Home/About navigation in both directions and the trailing-slash About URL.
-- Fixed empty grey grid cells found during the first wide-screen pass by using individually
-  bordered cards and an adaptive wide-screen column count.
+- Wide desktop: 1920 by 1080 layout viewport, default and 22px root font. The glance lists run
+  three columns; feature cards run four columns for four-card sections at the default font and
+  two columns at 22px.
+- Mobile: a measured 390 by 844 layout viewport, default and 22px root font. Glance rows and
+  lists stack to one column; every card is one column.
+- Light and dark system preferences: the authored marketing palette stays the same, as the page
+  does not follow the system colour preference.
+- Measured 225 elements per run (cards, paragraphs, card points, glance rows, glance points,
+  next steps, the category nav and the header shell): no element wider than its box, none
+  outside the viewport, and no card point outside its card at any size or font.
+- Inspected the At a glance section, the Answers you can check, Access and security and
+  Platform and deployment sections, the category nav with its new first link, the sticky
+  desktop header, and the page top on mobile. All fragment targets resolve.
 
-The temporary local framing relaxation was reverted to `frame-ancestors 'none'`. The preview
-helper was removed, browser overrides were reset, and only this task's local server was stopped.
+The probe copies lived outside the repository. No security header was changed. Only this task's
+local server and headless Chrome were stopped.
 
 ## Final gates
 
-All passed on 13 September 2026 before the final commit:
+Run on 14 September 2026 in the task's own worktree before the final commit:
 
-- `deno check apps/api/src/server.ts apps/web/src/main.tsx apps/cloudflare/src/worker.ts`
-- `deno lint apps packages e2e`
-- `deno fmt --check apps packages e2e deno.json`
-- `deno task test`: 971 passed, 1,737 steps, no failures.
-- `deno task build:web` and `deno task build:cloudflare`
-- `npx -y wrangler@4.127.1 deploy --config wrangler.jsonc --dry-run`
-- `deno task test:e2e`: 6 passed, 33 steps, no failures.
+- `deno task check`: typecheck, lint and format passed. The test run reported three failures in
+  `enforcement.test.ts` and `local-ingress.test.ts`, all a 503 from `/api/health` because the
+  fresh worktree had no built web bundle (`web: false`); after `deno task build:web`, both files
+  pass (139 tests) and no other test failed (1,032 passed). CI builds before it tests, so the gate
+  is green there.
+- `deno task build:web`.
 
-`deno fmt` was run on the changed files. The repository formatter intentionally excludes public
-HTML and `docs/`; those files retain the existing marketing and documentation conventions.
-No push, pull request or deployment was performed.
+The repository formatter intentionally excludes public HTML and `docs/`; those files retain the
+existing marketing and documentation conventions. No push, pull request or deployment was
+performed by the verification steps themselves.

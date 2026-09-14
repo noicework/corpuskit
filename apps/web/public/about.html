@@ -201,6 +201,17 @@
     .feature-card { border: 1px solid var(--rule); min-width: 0; padding: clamp(1.4rem, 2.2vw, 2rem); background: var(--paper-soft); }
     .feature-card h3 { margin: 0 0 .75rem; font-size: 1.5rem; line-height: 1.15; }
     .feature-card p { max-width: 60ch; margin: 0; color: var(--ink-soft); }
+    .feature-card ul { list-style: none; margin: 1rem 0 0; padding: 0; font-size: .95rem; line-height: 1.45; }
+    .feature-card li { position: relative; margin: 0 0 .45rem; padding-left: 1.05rem; color: var(--ink-soft); }
+    .feature-card li:last-child { margin-bottom: 0; }
+    .feature-card li::before, .glance-row li::before { content: ""; position: absolute; left: 0; top: .55em; width: .38rem; height: .38rem; background: var(--blue); }
+    .glance { padding-block: clamp(3rem, 5vw, 5rem); border-bottom: 1px solid var(--rule); scroll-margin-top: 10rem; }
+    .glance h2 { margin: 0 0 .75rem; font-size: clamp(2rem, 3vw, 3.4rem); line-height: 1.1; text-wrap: balance; }
+    .glance-intro { max-width: 60ch; margin: 0 0 2rem; color: var(--ink-soft); font-size: 1.0625rem; }
+    .glance-row { display: grid; grid-template-columns: minmax(11rem, 1fr) minmax(0, 3fr); gap: .75rem 2.5rem; padding-block: 1.5rem; border-top: 1px solid var(--rule); }
+    .glance-row h3 { margin: 0; font-size: 1.35rem; line-height: 1.2; }
+    .glance-row ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem 2rem; line-height: 1.45; }
+    .glance-row li { position: relative; min-width: 0; padding-left: 1.05rem; color: var(--ink-soft); }
     .closing { padding-block: clamp(4rem, 7vw, 7rem) 3rem; }
     .closing h2 { font-size: clamp(2.8rem, 5vw, 5.9rem); line-height: .98; margin: 0 0 2.5rem; }
     .next-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--rule); background: var(--rule); }
@@ -211,8 +222,8 @@
     .footer-links { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; }
     .site-footer { flex-wrap: wrap; }
     #main { scroll-margin-top: 10rem; }
-    @media (min-width: 1900px) { .feature-list { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); } }
-    @media (max-width: 980px) { :root { --page: min(90vw, 820px); } .feature-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (min-width: 1900px) { .feature-list { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); } .glance-row ul { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 980px) { :root { --page: min(90vw, 820px); } .feature-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } .glance-row ul { grid-template-columns: minmax(0, 1fr); } }
     @media (max-width: 680px) {
       :root { --page: calc(100vw - 48px); }
       .site-header { position: relative; }
@@ -220,7 +231,8 @@
       .nav-links { gap: .8rem 1.2rem; }
       .feature-list, .next-steps { grid-template-columns: minmax(0, 1fr); }
       .intro { padding-top: 3rem; }
-      .features { scroll-margin-top: 1rem; }
+      .features, .glance { scroll-margin-top: 1rem; }
+      .glance-row { grid-template-columns: minmax(0, 1fr); gap: .6rem; }
       .site-footer { flex-direction: column; gap: 1rem; padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
     }
     @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
@@ -245,6 +257,7 @@
       </div>
     </section>
     <nav class="category-nav" aria-label="Feature categories"><ul>
+      <li><a href="#glance">At a glance</a></li>
       <li><a href="#discovery">Discovery and search</a></li>
       <li><a href="#answers">Answers you can check</a></li>
       <li><a href="#investigations">Knowledge graph and investigations</a></li>
@@ -255,82 +268,327 @@
       <li><a href="#integration">Integration and tools</a></li>
       <li><a href="#platform">Platform and deployment</a></li>
     </ul></nav>
+    <section class="glance" id="glance" aria-labelledby="glance-title">
+      <h2 id="glance-title">At a glance</h2>
+      <p class="glance-intro">The specifics behind the catalogue: what a portal takes in, how it answers, what it produces and what it runs on.</p>
+      <div class="glance-row">
+        <h3>Content it takes in</h3>
+        <ul role="list">
+          <li>PDF reports, including scanned and image-only pages read by a vision language model</li>
+          <li>Word, PowerPoint, Excel and OpenDocument files</li>
+          <li>Web pages, whole sites and sitemaps, re-synced on a schedule</li>
+          <li>Video and audio, transcribed and searchable</li>
+          <li>Pasted text as a resource of its own</li>
+          <li>Tables extracted as tables with the table-aware method</li>
+          <li>Uploads up to 100 MB per file, singly or in batches</li>
+          <li>Originals never altered; generated fields sit beside them</li>
+        </ul>
+      </div>
+      <div class="glance-row">
+        <h3>How it answers</h3>
+        <ul role="list">
+          <li>Hybrid, semantic and keyword retrieval with a reranking pass</li>
+          <li>Neighbouring-paragraph or full-document grounding, chosen per question type</li>
+          <li>Knowledge graph relations in the retrieval loop</li>
+          <li>Deep research that maps a broad question into sub-questions</li>
+          <li>Answers stream as they are written, then the checked answer replaces the stream</li>
+          <li>Nothing from general knowledge or the internet; every sentence cites its passage</li>
+        </ul>
+      </div>
+      <div class="glance-row">
+        <h3>How it checks</h3>
+        <ul role="list">
+          <li>Figures, populations, named studies, years and safety wording checked sentence by sentence</li>
+          <li>Plain-text comparison against the extracted documents, with no language model in the loop</li>
+          <li>Unsupported sentences removed, and the removal declared under the answer</li>
+          <li>Reference lists cut out before the check, so a bibliography cannot stand in for a finding</li>
+          <li>Confidence shown as high, moderate or low, led by the check</li>
+          <li>Platform quality scores can lower that label but never raise it</li>
+        </ul>
+      </div>
+      <div class="glance-row">
+        <h3>What comes out</h3>
+        <ul role="list">
+          <li>Briefings, comparisons, timelines, FAQs and pros and cons, each with numbered references</li>
+          <li>Knowledge checks of 3, 5 or 10 questions at foundational, intermediate or advanced level</li>
+          <li>Word exports of Ask sessions, investigations and generated material</li>
+          <li>A print-ready view for saving a briefing as a PDF</li>
+          <li>Audit records as CSV or JSON, and enrichment records as JSON</li>
+          <li>Watches that re-run a saved search daily and flag new results</li>
+        </ul>
+      </div>
+      <div class="glance-row">
+        <h3>How it connects</h3>
+        <ul role="list">
+          <li>An MCP server over Streamable HTTP with four read-only tools: search, answer, get document and browse catalogue</li>
+          <li>Bearer keys scoped to one portal, with a role, an optional expiry and instant revocation</li>
+          <li>Microsoft Entra sign-in with app roles and group mappings</li>
+          <li>Public, authenticated and restricted access modes</li>
+          <li>Six roles across portal and platform scopes, over 22 declared permissions</li>
+          <li>Custom hostnames per portal</li>
+        </ul>
+      </div>
+      <div class="glance-row">
+        <h3>How it looks</h3>
+        <ul role="list">
+          <li>Five library palettes, one of them dark, or the portal’s own seeded colours</li>
+          <li>Six typeface pairings, or your own uploaded fonts</li>
+          <li>Square, rounded or soft shapes, three text sizes and four densities</li>
+          <li>Logo, hero and banner images per portal</li>
+          <li>Every palette passes an automated WCAG contrast check before it ships</li>
+          <li>Responsive from a phone to a wide display</li>
+        </ul>
+      </div>
+      <div class="glance-row">
+        <h3>What it runs on</h3>
+        <ul role="list">
+          <li>Cloudflare Workers, with application state in SQLite-backed Durable Objects</li>
+          <li>One Progress Agentic RAG knowledge box per portal, with an Australian region option</li>
+          <li>Deno 2 and TypeScript throughout, with React on the front end</li>
+          <li>A typecheck, lint, format and test gate before any deploy</li>
+          <li>Knowledge box credentials held on the server and never sent to the browser</li>
+          <li>No mock mode: the portal always works against a live knowledge box</li>
+          <li>Apache 2.0 licence</li>
+        </ul>
+      </div>
+    </section>
     <section class="features" id="discovery" aria-labelledby="discovery-title">
       <h2 id="discovery-title">Discovery and search</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Explore the collection</h3><p>Start with suggested questions and topic rows drawn from the portal’s own research collection.</p></li>
-        <li class="feature-card"><h3>Search three ways</h3><p>Use hybrid, semantic or keyword search. Narrow results with facets and read the matched passages alongside them.</p></li>
-        <li class="feature-card"><h3>Question routing</h3><p>Ask routes questions to stored search configurations suited to the task, such as an exact lookup or an evidence review. Administrators manage those configurations.</p></li>
+        <li class="feature-card"><h3>Explore the collection</h3><p>Start with suggested questions and topic rows drawn from the portal’s own research collection.</p>
+          <ul role="list">
+            <li>Questions written from the documents themselves, not a static list</li>
+            <li>Topic rows built from the taxonomy the portal designed for your domain</li>
+          </ul></li>
+        <li class="feature-card"><h3>Search three ways</h3><p>Use hybrid, semantic or keyword search. Narrow results with facets and read the matched passages alongside them.</p>
+          <ul role="list">
+            <li>Hybrid, semantic or keyword, with a reranking pass</li>
+            <li>Facets for topics, document kinds and any label set you define</li>
+            <li>A short cited answer over the results, or the results alone</li>
+            <li>Save a search as a watch and be told when its results change</li>
+          </ul></li>
+        <li class="feature-card"><h3>Question routing</h3><p>Ask routes questions to stored search configurations suited to the task, such as an exact lookup or an evidence review. Administrators manage those configurations.</p>
+          <ul role="list">
+            <li>Rule and classifier stages pick the configuration; the choice shows as a chip you can change</li>
+            <li>Each configuration sets retrieval features, grounding strategy, graph use and prompt variant</li>
+            <li>Content sets such as documentation are kept apart in stored configurations, not per-request filters</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="answers" aria-labelledby="answers-title">
       <h2 id="answers-title">Answers you can check</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Cited conversations</h3><p>Ask questions across the collection and follow up in the same conversation. Numbered citations connect the answer to its sources.</p></li>
-        <li class="feature-card"><h3>Evidence checks</h3><p>The trust layer checks claims against cited text, including figures and their context. It can remove unsupported statements or withhold an answer, and tells you when it does.</p></li>
-        <li class="feature-card"><h3>Visible confidence</h3><p>See confidence information for sources and answers, including warnings when evidence is thin. These signals help you review an answer; they are not a guarantee of correctness.</p></li>
-        <li class="feature-card"><h3>Footnotes and passages</h3><p>Footnote references are bound to retrieved source passages on the server. Open a citation to inspect its evidence and read the original document.</p></li>
+        <li class="feature-card"><h3>Cited conversations</h3><p>Ask questions across the collection and follow up in the same conversation. Numbered citations connect the answer to its sources.</p>
+          <ul role="list">
+            <li>Stages shown as the answer streams: interpreting, retrieving, writing, checking</li>
+            <li>An “Interpreted as” line shows how the question was read</li>
+            <li>Follow-ups keep the context; deep research splits broad questions into sub-questions</li>
+          </ul></li>
+        <li class="feature-card"><h3>Evidence checks</h3><p>The trust layer checks claims against cited text, including figures and their context. It can remove unsupported statements or withhold an answer, and tells you when it does.</p>
+          <ul role="list">
+            <li>Figures, populations, named studies, years and safety wording, sentence by sentence</li>
+            <li>Plain-text comparison with no language model in the loop</li>
+            <li>A thinly grounded answer offers a one-tap deep re-answer over full documents</li>
+          </ul></li>
+        <li class="feature-card"><h3>Visible confidence</h3><p>See confidence information for sources and answers, including warnings when evidence is thin. These signals help you review an answer; they are not a guarantee of correctness.</p>
+          <ul role="list">
+            <li>High, moderate or low, led by the evidence check</li>
+            <li>Platform quality scores can lower the label but never raise it</li>
+            <li>Each source carries a relevance score, and a Supports, Partial or Not relevant verdict on request</li>
+          </ul></li>
+        <li class="feature-card"><h3>Footnotes and passages</h3><p>Footnote references are bound to retrieved source passages on the server. Open a citation to inspect its evidence and read the original document.</p>
+          <ul role="list">
+            <li>A citation opens the PDF at the cited page with the passage highlighted</li>
+            <li>“Also retrieved” keeps visible the passages the answer did not use</li>
+            <li>Reference lists are cut out before the check, so a bibliography cannot count as evidence</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="investigations" aria-labelledby="investigations-title">
       <h2 id="investigations-title">Knowledge graph and investigations</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Entity relationships</h3><p>Explore entities and relationships extracted from the research. Follow connections and filter the graph using the portal’s entity and relation types.</p></li>
-        <li class="feature-card"><h3>Concept map</h3><p>See connections between categories that share resources. This offers a different view of the collection from the graph of extracted entities.</p></li>
-        <li class="feature-card"><h3>Investigations</h3><p>Keep a named research question and build its evidence over time. Saved evidence retains its provenance so you can trace where it came from.</p></li>
+        <li class="feature-card"><h3>Entity relationships</h3><p>Explore entities and relationships extracted from the research. Follow connections and filter the graph using the portal’s entity and relation types.</p>
+          <ul role="list">
+            <li>Entity and relation types chosen for your domain during provisioning</li>
+            <li>A legend to show or hide types, a most-connected list and find by name</li>
+            <li>Click a node for its evidence, or trace how two entities connect</li>
+            <li>Optionally include the platform’s built-in people, dates and places</li>
+          </ul></li>
+        <li class="feature-card"><h3>Concept map</h3><p>See connections between categories that share resources. This offers a different view of the collection from the graph of extracted entities.</p>
+          <ul role="list">
+            <li>Nodes are topics and document kinds; shared resources pull them closer</li>
+            <li>Pick a category to see what it pairs with</li>
+          </ul></li>
+        <li class="feature-card"><h3>Investigations</h3><p>Keep a named research question and build its evidence over time. Saved evidence retains its provenance so you can trace where it came from.</p>
+          <ul role="list">
+            <li>Mark evidence Supports, Partial, Contradicts or Not relevant, with tags and notes</li>
+            <li>Synthesis is grounded only on the evidence you kept, and lists what it excluded</li>
+            <li>Export the whole case to Word</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="library" aria-labelledby="library-title">
       <h2 id="library-title">Library and reading</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>A browsable library</h3><p>Browse, sort and filter the collection. Resources show curated titles, summaries and key takeaways to help you decide what to read.</p></li>
-        <li class="feature-card"><h3>Questions about a document</h3><p>Open a resource and ask questions scoped to that document. Use the source material and citations to check the response.</p></li>
-        <li class="feature-card"><h3>Saved research sessions</h3><p>Return to earlier questions, answers and their sources. A saved session keeps the research trail together.</p></li>
+        <li class="feature-card"><h3>A browsable library</h3><p>Browse, sort and filter the collection. Resources show curated titles, summaries and key takeaways to help you decide what to read.</p>
+          <ul role="list">
+            <li>Sort by newest, oldest or title, and page through large corpora</li>
+            <li>Search within the library using real retrieval rather than title matching</li>
+            <li>Failed ingests and junk entries hidden automatically</li>
+          </ul></li>
+        <li class="feature-card"><h3>Questions about a document</h3><p>Open a resource and ask questions scoped to that document. Use the source material and citations to check the response.</p>
+          <ul role="list">
+            <li>A PDF reader, web page, video or audio player with transcript, or extracted text</li>
+            <li>Extracted text for every document, with the matches listed</li>
+            <li>A related-work rail to the next document</li>
+          </ul></li>
+        <li class="feature-card"><h3>Saved research sessions</h3><p>Return to earlier questions, answers and their sources. A saved session keeps the research trail together.</p>
+          <ul role="list">
+            <li>Start, rename, reopen and delete sessions from the sidebar</li>
+            <li>Export a session to Word with questions, answers, sources and scores</li>
+            <li>Mark answers helpful or not helpful</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="generate" aria-labelledby="generate-title">
       <h2 id="generate-title">Generate and assess</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Research formats</h3><p>With analyst access, turn a research question into a briefing, comparison, timeline, FAQ or pros and cons. Generated material includes references for review.</p></li>
-        <li class="feature-card"><h3>Knowledge checks</h3><p>With analyst access, generate an assessment on a topic in the collection. Answer the questions and review feedback against the source material.</p></li>
+        <li class="feature-card"><h3>Research formats</h3><p>With analyst access, turn a research question into a briefing, comparison, timeline, FAQ or pros and cons. Generated material includes references for review.</p>
+          <ul role="list">
+            <li>A section nothing in the corpus supports is left out and listed as omitted</li>
+            <li>Comparison cells name the source each score came from</li>
+            <li>Save to an investigation, export to Word or print to PDF</li>
+          </ul></li>
+        <li class="feature-card"><h3>Knowledge checks</h3><p>With analyst access, generate an assessment on a topic in the collection. Answer the questions and review feedback against the source material.</p>
+          <ul role="list">
+            <li>3, 5 or 10 questions at foundational, intermediate or advanced level</li>
+            <li>Choose a corpus topic or type your own</li>
+            <li>Every question links to the source it was written from</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="content" aria-labelledby="content-title">
       <h2 id="content-title">Content, taxonomy and enrichment</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Portal provisioning</h3><p>Platform administrators can create a portal from a domain brief and a knowledge box. Provisioning sets up the taxonomy, graph strategy, suggested questions and branding.</p></li>
-        <li class="feature-card"><h3>Content management</h3><p>Curators and administrators can upload resources and review corpus health. Manage the collection from the portal’s administration area.</p></li>
-        <li class="feature-card"><h3>Label sets</h3><p>Curators and administrators define categories, labels and their descriptions. Separate label sets can describe topics, document types and audiences for browsing and filtering.</p></li>
-        <li class="feature-card"><h3>Enrichment and presentation</h3><p>Curators and administrators manage agents that classify content and generate titles, summaries and key takeaways. These fields make documents easier to discover and recognise.</p></li>
-        <li class="feature-card"><h3>Extraction Lab</h3><p>An administrative lab profiles documents and compares extraction methods in a sandbox knowledge box. Administrators can set routing rules for how new uploads are extracted.</p></li>
+        <li class="feature-card"><h3>Portal provisioning</h3><p>Platform administrators can create a portal from a domain brief and a knowledge box. Provisioning sets up the taxonomy, graph strategy, suggested questions and branding.</p>
+          <ul role="list">
+            <li>Bind an existing knowledge box, or create and provision a new one from the app</li>
+            <li>Entity types, label sets and suggested questions designed from the corpus itself</li>
+            <li>Bindings and credentials stay on the server</li>
+          </ul></li>
+        <li class="feature-card"><h3>Content management</h3><p>Curators and administrators can upload resources and review corpus health. Manage the collection from the portal’s administration area.</p>
+          <ul role="list">
+            <li>Upload files up to 100 MB, add a link, paste text, or register a site or sitemap as a source</li>
+            <li>Sources re-sync on a schedule; back-pressure from the box is reported, never hidden</li>
+            <li>Corpus health finds failed ingests, thin extraction and bot-challenge pages, and purges them after confirmation</li>
+          </ul></li>
+        <li class="feature-card"><h3>Label sets</h3><p>Curators and administrators define categories, labels and their descriptions. Separate label sets can describe topics, document types and audiences for browsing and filtering.</p>
+          <ul role="list">
+            <li>Single-value or multi-value sets, each label with a definition the classifiers apply</li>
+            <li>Editing a set restarts its labellers for new resources without relabelling the existing corpus</li>
+            <li>Definitions double as the vocabulary reference on the Taxonomy page</li>
+          </ul></li>
+        <li class="feature-card"><h3>Enrichment and presentation</h3><p>Curators and administrators manage agents that classify content and generate titles, summaries and key takeaways. These fields make documents easier to discover and recognise.</p>
+          <ul role="list">
+            <li>A real title, summary, key takeaways and quotes of interest for every document</li>
+            <li>Each enrichment is an agent plus a schema; new fields render without code changes</li>
+            <li>Runs automatically on a cadence from hourly to monthly, and exports as JSON</li>
+          </ul></li>
+        <li class="feature-card"><h3>Extraction Lab</h3><p>An administrative lab profiles documents and compares extraction methods in a sandbox knowledge box. Administrators can set routing rules for how new uploads are extracted.</p>
+          <ul role="list">
+            <li>Default, table-aware and visual methods compared side by side on the same file</li>
+            <li>Documents profiled as prose, tables, image-only, garbled text or long scan</li>
+            <li>Routing rules send each class to the cheapest method that recovers it</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="access" aria-labelledby="access-title">
       <h2 id="access-title">Access and security</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Roles and permissions</h3><p>Portal roles range from viewer and analyst to curator and portal administrator. Separate platform administrator and owner roles govern the wider installation.</p></li>
-        <li class="feature-card"><h3>Portal access modes</h3><p>Administrators choose public, authenticated or restricted access. Restricted portals require an explicit access assignment.</p></li>
-        <li class="feature-card"><h3>Microsoft Entra sign-in</h3><p>Sign in through the configured Microsoft Entra tenant. Role assignments and supported group mappings determine access to portal capabilities.</p></li>
-        <li class="feature-card"><h3>Scoped keys</h3><p>Administrators issue keys for one portal, with a role and optional expiry. Keys can be revoked and cannot grant more access than their creator currently holds.</p></li>
-        <li class="feature-card"><h3>Audit log</h3><p>Authorised administrators can read and export audit records for privileged actions, access denials and emergency access. Records identify the actor, action, scope and outcome.</p></li>
-        <li class="feature-card"><h3>Emergency access</h3><p>An explicitly enabled break-glass path gives an operator emergency access for a single request. Its use is audited, with lockouts after repeated failed attempts.</p></li>
+        <li class="feature-card"><h3>Roles and permissions</h3><p>Portal roles range from viewer and analyst to curator and portal administrator. Separate platform administrator and owner roles govern the wider installation.</p>
+          <ul role="list">
+            <li>22 permissions; every route and MCP tool declares exactly one</li>
+            <li>Roles are cumulative within a scope</li>
+            <li>A portal role grants nothing on any other portal</li>
+          </ul></li>
+        <li class="feature-card"><h3>Portal access modes</h3><p>Administrators choose public, authenticated or restricted access. Restricted portals require an explicit access assignment.</p>
+          <ul role="list">
+            <li>Public: anyone can read</li>
+            <li>Authenticated: signed-in users of your Entra tenant</li>
+            <li>Restricted: only explicit assignments; everyone else sees sign-in metadata only</li>
+            <li>Mode changes are audited and take effect on the next request</li>
+          </ul></li>
+        <li class="feature-card"><h3>Microsoft Entra sign-in</h3><p>Sign in through the configured Microsoft Entra tenant. Role assignments and supported group mappings determine access to portal capabilities.</p>
+          <ul role="list">
+            <li>App roles for owner and platform administrator</li>
+            <li>Group mappings per portal once group claims are verified</li>
+            <li>Highest role wins per scope across app roles, groups and assignments</li>
+          </ul></li>
+        <li class="feature-card"><h3>Scoped keys</h3><p>Administrators issue keys for one portal, with a role and optional expiry. Keys can be revoked and cannot grant more access than their creator currently holds.</p>
+          <ul role="list">
+            <li>One portal, one role, optional expiry</li>
+            <li>Capped at the creator’s current role at every use</li>
+            <li>Revoke at any time; clients stop immediately</li>
+          </ul></li>
+        <li class="feature-card"><h3>Audit log</h3><p>Authorised administrators can read and export audit records for privileged actions, access denials and emergency access. Records identify the actor, action, scope and outcome.</p>
+          <ul role="list">
+            <li>Portal-scoped and platform-scoped views</li>
+            <li>Export as CSV or JSON</li>
+          </ul></li>
+        <li class="feature-card"><h3>Emergency access</h3><p>An explicitly enabled break-glass path gives an operator emergency access for a single request. Its use is audited, with lockouts after repeated failed attempts.</p>
+          <ul role="list">
+            <li>Off unless explicitly enabled</li>
+            <li>Single-request access, audited every time</li>
+            <li>Lockout after repeated failed attempts</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="integration" aria-labelledby="integration-title">
       <h2 id="integration-title">Integration and tools</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>MCP server</h3><p>Connect a compatible Model Context Protocol client to search the corpus, browse the catalogue, retrieve documents and ask questions. Access uses a key scoped to that portal.</p></li>
-        <li class="feature-card"><h3>Research exports</h3><p>With analyst access, export Ask sessions and investigations to Word. Generate also offers Word exports and a print-ready view that you can save as PDF.</p></li>
-        <li class="feature-card"><h3>Custom domains</h3><p>Administrators can connect a custom hostname to a portal. Its branding and knowledge box remain configured for that portal.</p></li>
+        <li class="feature-card"><h3>MCP server</h3><p>Connect a compatible Model Context Protocol client to search the corpus, browse the catalogue, retrieve documents and ask questions. Access uses a key scoped to that portal.</p>
+          <ul role="list">
+            <li>Streamable HTTP endpoint with bearer keys</li>
+            <li>Four read-only tools: search the corpus, answer a question, get a document, browse the catalogue</li>
+            <li>A ready-to-paste JSON configuration for any MCP client</li>
+          </ul></li>
+        <li class="feature-card"><h3>Research exports</h3><p>With analyst access, export Ask sessions and investigations to Word. Generate also offers Word exports and a print-ready view that you can save as PDF.</p>
+          <ul role="list">
+            <li>Word: Ask sessions, investigations and generated material, references included</li>
+            <li>PDF: a print-ready view of a briefing</li>
+            <li>CSV or JSON: audit records; JSON: enrichment records</li>
+          </ul></li>
+        <li class="feature-card"><h3>Custom domains</h3><p>Administrators can connect a custom hostname to a portal. Its branding and knowledge box remain configured for that portal.</p>
+          <ul role="list">
+            <li>Connect a hostname from the administration area</li>
+            <li>Branding, knowledge box and access mode follow the portal</li>
+          </ul></li>
       </ul>
     </section>
     <section class="features" id="platform" aria-labelledby="platform-title">
       <h2 id="platform-title">Platform and deployment</h2>
       <ul class="feature-list">
-        <li class="feature-card"><h3>Cloudflare deployment</h3><p>CorpusKit runs on Cloudflare Workers. SQLite-backed Durable Objects hold application state such as portal configuration, sessions and investigations.</p></li>
-        <li class="feature-card"><h3>One knowledge box per portal</h3><p>Each portal connects to its own Progress Agentic RAG knowledge box. The box handles content extraction, indexing, retrieval and generation.</p></li>
-        <li class="feature-card"><h3>Australian region option</h3><p>Administrators can select an Australian region for the Progress Agentic RAG knowledge box. Application hosting and model provider settings are configured separately.</p></li>
-        <li class="feature-card"><h3>Open source</h3><p>CorpusKit is available under Apache-2.0, so you can run, inspect and adapt the code. Noice maintains the project and welcomes contributions.</p></li>
+        <li class="feature-card"><h3>Cloudflare deployment</h3><p>CorpusKit runs on Cloudflare Workers. SQLite-backed Durable Objects hold application state such as portal configuration, sessions and investigations.</p>
+          <ul role="list">
+            <li>Deploys only from a green gate: typecheck, lint, format, tests and build</li>
+            <li>Deno 2 and TypeScript, with no npm install step</li>
+          </ul></li>
+        <li class="feature-card"><h3>One knowledge box per portal</h3><p>Each portal connects to its own Progress Agentic RAG knowledge box. The box handles content extraction, indexing, retrieval and generation.</p>
+          <ul role="list">
+            <li>Reranking, answer scoring and entity extraction also run on the platform</li>
+            <li>One typed retrieval interface; no screen knows which model answered</li>
+            <li>No mock mode: always a live knowledge box</li>
+          </ul></li>
+        <li class="feature-card"><h3>Australian region option</h3><p>Administrators can select an Australian region for the Progress Agentic RAG knowledge box. Application hosting and model provider settings are configured separately.</p>
+          <ul role="list">
+            <li>Knowledge box created in the Australian region when selected</li>
+            <li>Corpus, index and graph stay with the box</li>
+          </ul></li>
+        <li class="feature-card"><h3>Open source</h3><p>CorpusKit is available under Apache-2.0, so you can run, inspect and adapt the code. Noice maintains the project and welcomes contributions.</p>
+          <ul role="list">
+            <li>The provisioning engine, retrieval layer, design system and every screen are yours to fork</li>
+            <li>Maintained by Noice, a Melbourne digital agency and Progress partner</li>
+          </ul></li>
       </ul>
     </section>
     <section class="closing" aria-labelledby="next-title">
