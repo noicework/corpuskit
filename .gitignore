@@ -30,3 +30,4 @@ data/
 
 # Persona evaluation transcripts - regenerate with --out, never committed
 persona-eval-*.json
+design/home-candidates/fonts-trial/
