@@ -75,6 +75,8 @@ jobs:
           key: astral-chromium-${{ runner.os }}-${{ hashFiles('deno.json') }}
 
       - name: Browser E2E persona journeys
+        # The 22-minute screenshot matrix in e2e/rbac-visual.test.ts is opt-in
+        # (E2E_VISUAL_MATRIX=1) and runs from visual-matrix.yml on demand.
         env:
           # GitHub-hosted runners do not expose Chromium's setuid sandbox.
           # Astral appends this to the browser process it launches in CI.

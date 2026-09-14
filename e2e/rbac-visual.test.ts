@@ -7,6 +7,24 @@ import { BrandingSchema } from '@research-portal/core'
 import { googleFontsUrl, tenantThemeVars } from '../apps/web/src/lib/theme.ts'
 
 const logs = '.planning/logs/04-19-01'
+
+/**
+ * The screenshot matrix below captures 68 surfaces at 8 variants each and
+ * takes about 22 minutes on a GitHub runner, and its images are only useful
+ * when someone sits down to review them. It therefore runs only when asked
+ * for, with `E2E_VISUAL_MATRIX=1` (`deno task test:e2e:visual`, or the
+ * "Visual matrix" workflow, which keeps the captures as an artefact). Without
+ * the flag the three tests report as ignored and the ordinary e2e run stays
+ * fast. The overflow and token assertions on the individual surfaces still run
+ * in the other e2e files.
+ *
+ * The wrapper is named `test` on purpose: the formatter keeps a long test
+ * title on one line only for calls it recognises as test declarations, so any
+ * other name re-indents every test body in this file.
+ */
+const visualMatrixRequested = Deno.env.get('E2E_VISUAL_MATRIX') === '1'
+const test = (name: string, fn: () => Promise<void>) =>
+  Deno.test({ name, ignore: !visualMatrixRequested, fn })
 const matrix = ['light', 'dark'].flatMap((scheme) =>
   [1440, 390].flatMap((width) => [16, 22].map((font) => ({ scheme, width, font })))
 )
@@ -320,7 +338,7 @@ async function capture(page: Page, surface: string, variant: Variant, selector =
   }
 }
 
-Deno.test('visual matrix covers management, reading, access and platform surfaces in both themes widths and text sizes', async () => {
+test('visual matrix covers management, reading, access and platform surfaces in both themes widths and text sizes', async () => {
   if (Deno.env.get('RBAC_VISUAL_GROUP')) return
   const server = startTestServer({
     identity: { role: 'owner' },
@@ -584,7 +602,7 @@ async function input(page: Page, selector: string, value: string) {
   }, { args: [selector, value] })
 }
 
-Deno.test('visual state matrix exercises keyboard menus forms confirmations keys exports and safe recovery', async () => {
+test('visual state matrix exercises keyboard menus forms confirmations keys exports and safe recovery', async () => {
   if (Deno.env.get('RBAC_VISUAL_SURFACES') || Deno.env.get('RBAC_VISUAL_GROUP') === 'operations') {
     return
   }
@@ -774,7 +792,7 @@ Deno.test('visual state matrix exercises keyboard menus forms confirmations keys
   }
 })
 
-Deno.test('visual operation states keep typed questions editable and retire extraction and enrichment work', async () => {
+test('visual operation states keep typed questions editable and retire extraction and enrichment work', async () => {
   if (Deno.env.get('RBAC_VISUAL_SURFACES') || Deno.env.get('RBAC_VISUAL_GROUP') === 'states') return
   const server = startTestServer({ identity: { role: 'owner' }, management: visualManagement() })
   const browser = await launch()
