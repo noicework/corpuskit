@@ -1496,6 +1496,27 @@ describe('GET /api/t/:slug/facets', () => {
     await app.request('/api/t/marine/facets?labelsets=topic,chunk-labels')
     expect(provider.calls).toEqual([['topic', 'kind', 'format'], ['chunk-labels']])
   })
+
+  it('returns an empty facet for a labelset the portal does not define', async () => {
+    // The demo corpus defines topic but not format; the rails ask for both.
+    class TopicOnlyProvider extends FacetProvider {
+      override labelsets(): Promise<Labelset[]> {
+        return Promise.resolve([
+          { id: 'topic', title: 'Topic', multiple: false, labels: ['stock-assessment'] },
+        ])
+      }
+    }
+    const provider = new TopicOnlyProvider()
+    const app = buildApp({ provider, tenants: freshTenants() })
+    const response = await app.request('/api/t/marine/facets')
+    expect(response.status).toBe(200)
+    const body = FacetCountsSchema.parse(await response.json())
+    expect(Object.keys(body).sort()).toEqual(['format', 'kind', 'topic', 'untagged'])
+    expect(body.format).toEqual({})
+    expect(body.topic).toEqual({ 'topic-label': 3 })
+    // The undefined labelset is never sent to the platform.
+    expect(provider.calls).toEqual([['topic', 'kind']])
+  })
 })
 
 describe('POST /api/t/:slug/ask', () => {
