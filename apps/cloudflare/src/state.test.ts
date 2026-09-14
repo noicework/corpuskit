@@ -1554,3 +1554,38 @@ Deno.test('public investigation reads return all 140 passages without audit stag
     sql.database.close()
   }
 })
+
+Deno.test('Durable prefix listing scans a bounded key range instead of a LIKE pattern', () => {
+  const sql = new TestSqlStorage()
+  const queries: string[] = []
+  const recording: SqlStorageLike = {
+    exec: (query, ...bindings) => {
+      queries.push(query)
+      return sql.exec(query, ...bindings)
+    },
+  }
+  const state = new DurableState(recording, sql)
+  state.migrate()
+  const prefix = 'research-v2:portal:sessions:owner:'
+  state.put(`${prefix}1`, { id: '1' })
+  state.put(`${prefix}2`, { id: '2' })
+  // ';' is the byte after the ':' the prefix ends with: the upper bound must exclude it.
+  state.put('research-v2:portal:sessions:owner;stray', { id: 'stray' })
+  state.put('research-v2:portal:sessions:other:1', { id: 'other' })
+
+  expect(state.list(prefix).map((row) => row.key)).toEqual([`${prefix}1`, `${prefix}2`])
+
+  // The Workers runtime rejects a LIKE pattern this long with "LIKE or GLOB
+  // pattern too complex" as soon as there is a row to test it against, so every
+  // populated Durable Object failed while an empty one passed. node:sqlite
+  // allows the same pattern, so only the query shape can guard the fix here.
+  expect(queries.some((query) => /\bLIKE\b/i.test(query) && query.includes('?'))).toBe(false)
+})
+
+Deno.test('Durable prefix listing refuses a prefix it cannot bound', () => {
+  const sql = new TestSqlStorage()
+  const state = new DurableState(sql, sql)
+  state.migrate()
+  state.put('research-v2:portal:sessions:owner:1', { id: '1' })
+  expect(() => state.list('')).toThrow('Unboundable storage prefix')
+})
