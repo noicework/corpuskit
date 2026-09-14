@@ -1400,6 +1400,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return false
     }
   }
+  /** The facets every Search and Library rail asks for, whether or not a portal defines them. */
+  const RAIL_LABELSETS = ['topic', 'kind', 'format']
+  /**
+   * The subset of `ids` this portal defines, keeping the derived `kind`, or
+   * null when its labelset catalogue cannot be read at all.
+   */
+  const knownLabelsets = async (config: TenantConfig, ids: string[]) => {
+    try {
+      const defined = new Set((await provider.labelsets(config)).map((set) => set.id))
+      return ids.filter((id) => id === 'kind' || defined.has(id))
+    } catch {
+      return null
+    }
+  }
   const scopedEntity = async (config: TenantConfig, name: string) => {
     if (!opts.management) return false
     try {
@@ -2238,8 +2252,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // facets every rail shows come back together.
     const requested = c.req.query('labelsets') ?? c.req.query('ls') ?? 'topic,kind,format'
     const labelsets = [...new Set(requested.split(',').filter(Boolean))]
-    if (!await scopedLabels(config, labelsets)) return adminNotFound(c)
-    return c.json(await facetsFor(config, labelsets))
+    // A rail labelset this portal does not define (the demo corpus has no
+    // `format`) comes back empty rather than failing the whole request, so the
+    // Search and Library rails still get their topic and kind counts on every
+    // portal. Any other undefined id is a foreign reference and stays not
+    // found, and only defined labelsets are ever sent to the platform.
+    const known = await knownLabelsets(config, labelsets)
+    if (!known) return adminNotFound(c)
+    if (labelsets.some((id) => !known.includes(id) && !RAIL_LABELSETS.includes(id))) {
+      return adminNotFound(c)
+    }
+    const counts = await facetsFor(config, known)
+    for (const ls of labelsets) counts[ls] ??= {}
+    return c.json(counts)
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/labelsets'), async (c) => {
