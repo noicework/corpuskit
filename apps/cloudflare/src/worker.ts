@@ -30,6 +30,7 @@ import {
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
+import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
   createCloudflareDomainProvisioner,
   portalHostnameForSlug,
@@ -37,9 +38,13 @@ import {
 
 const PORTAL_OBJECT_NAME = 'production'
 const PLATFORM_DOMAIN = 'corpuskit.org'
+// The same set the API's own middleware sends; here it reaches the app shell,
+// static assets and every response the Worker composes itself.
 const SECURITY_HEADERS: Record<string, string> = {
+  'content-security-policy': "frame-ancestors 'none'",
   'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
   'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=63072000; includeSubDomains',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
 }
@@ -268,58 +273,7 @@ export class PortalDurableObject extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url)
-    const hostnameLocation = platformHostnameLocation(request)
-    if (hostnameLocation) {
-      return new Response(null, { status: 308, headers: { location: hostnameLocation } })
-    }
-
-    const auth = authConfig(env, url.hostname)
-
-    if (url.pathname === '/auth/me' && request.method === 'GET') {
-      return forwardTrusted(request, env, auth)
-    }
-
-    if (url.pathname.startsWith('/auth/')) {
-      if (!authConfigured(auth)) {
-        return json({ error: 'microsoft_sign_in_not_configured' }, 503)
-      }
-      const response = (await handleAuthRequest(request, auth)) ?? json({ error: 'not_found' }, 404)
-      if (response.status === 401 || response.status === 403) {
-        try {
-          await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
-        } catch {
-          return json({ error: 'audit_write_failed' }, 500)
-        }
-      }
-      return response
-    }
-
-    const aliasLocation = tenantAliasLocation(request)
-    if (aliasLocation) {
-      return new Response(null, { status: 308, headers: { location: aliasLocation } })
-    }
-
-    if (url.pathname.startsWith('/api/')) {
-      return forwardTrusted(request, env, auth)
-    }
-
-    // The shared asset bundle is also bound to tenant hosts. Keep the marketing
-    // documents (including raw asset aliases) on the platform apex only.
-    if (
-      (['/about', '/about/', '/about.html'].includes(url.pathname) ||
-        isPublicDocsPath(url.pathname)) &&
-      url.hostname !== PLATFORM_DOMAIN
-    ) {
-      return secureAssetResponse(
-        new Response('Not found', {
-          status: 404,
-          headers: { 'content-type': 'text/plain; charset=utf-8' },
-        }),
-      )
-    }
-
-    return secureAssetResponse(await env.ASSETS.fetch(marketingHomeRequest(request)))
+    return withSecurityHeaders(await route(request, env))
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -333,6 +287,73 @@ export default {
     )
   },
 } satisfies ExportedHandler<Env>
+
+async function route(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
+  const hostnameLocation = platformHostnameLocation(request)
+  if (hostnameLocation) {
+    return new Response(null, { status: 308, headers: { location: hostnameLocation } })
+  }
+
+  const auth = authConfig(env, url.hostname)
+
+  if (url.pathname === '/auth/me' && request.method === 'GET') {
+    return forwardTrusted(request, env, auth)
+  }
+
+  if (url.pathname.startsWith('/auth/')) {
+    if (!authConfigured(auth)) {
+      return json({ error: 'microsoft_sign_in_not_configured' }, 503)
+    }
+    const response = (await handleAuthRequest(request, auth)) ?? json({ error: 'not_found' }, 404)
+    if (response.status === 401 || response.status === 403) {
+      try {
+        await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
+      } catch {
+        return json({ error: 'audit_write_failed' }, 500)
+      }
+    }
+    return response
+  }
+
+  const aliasLocation = tenantAliasLocation(request)
+  if (aliasLocation) {
+    return new Response(null, { status: 308, headers: { location: aliasLocation } })
+  }
+
+  if (url.pathname.startsWith('/api/')) {
+    return forwardTrusted(request, env, auth)
+  }
+
+  // The shared asset bundle is also bound to tenant hosts. Keep the marketing
+  // documents (including raw asset aliases) on the platform apex only.
+  if (
+    (['/about', '/about/', '/about.html'].includes(url.pathname) ||
+      isPublicDocsPath(url.pathname)) &&
+    url.hostname !== PLATFORM_DOMAIN
+  ) {
+    return plain('Not found', 404)
+  }
+
+  // Pages and assets are read-only; nothing here accepts a body.
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return plain('Method not allowed', 405, { allow: 'GET, HEAD' })
+  }
+
+  // The internet's routine search for secrets and server-side scripts is
+  // refused before any asset lookup. The router's own paths are exempt.
+  if (!documentPath(url.pathname) && probePath(url.pathname)) {
+    return plain('Not found', 404)
+  }
+
+  const asset = await env.ASSETS.fetch(marketingHomeRequest(request))
+  // Assets answers every unknown path with the app shell and a 200. Keep
+  // the shell, so a person still sees the app's own not-found page, but say
+  // 404: a scanner learns nothing and a crawler does not index the typo.
+  const unknownShell = asset.status === 200 && !documentPath(url.pathname) &&
+    (asset.headers.get('content-type') ?? '').includes('text/html')
+  return secureAssetResponse(asset, unknownShell ? 404 : asset.status)
+}
 
 function isPublicDocsPath(pathname: string): boolean {
   return pathname === '/docs' || pathname.startsWith('/docs/')
@@ -478,11 +499,38 @@ function numberBinding(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
-function secureAssetResponse(response: Response): Response {
+function secureAssetResponse(response: Response, status = response.status): Response {
   const headers = new Headers(response.headers)
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value)
   const type = headers.get('content-type') ?? ''
   headers.set('cache-control', type.includes('text/html') ? 'no-store' : 'public, max-age=300')
+  return new Response(response.body, {
+    status,
+    statusText: status === response.status ? response.statusText : '',
+    headers,
+  })
+}
+
+/** A short text answer with the asset headers, for refusals the Worker makes itself. */
+function plain(body: string, status: number, extra: Record<string, string> = {}): Response {
+  return secureAssetResponse(
+    new Response(body, {
+      status,
+      headers: { 'content-type': 'text/plain; charset=utf-8', ...extra },
+    }),
+  )
+}
+
+/**
+ * Every response leaves with the baseline headers. API responses already
+ * carry the ones the Hono middleware sets; redirects, auth answers and the
+ * Worker's own JSON gain them here without disturbing a streamed body.
+ */
+function withSecurityHeaders(response: Response): Response {
+  const missing = Object.entries(SECURITY_HEADERS).filter(([name]) => !response.headers.has(name))
+  if (missing.length === 0) return response
+  const headers = new Headers(response.headers)
+  for (const [name, value] of missing) headers.set(name, value)
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
