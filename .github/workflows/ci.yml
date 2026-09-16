@@ -1,12 +1,12 @@
 name: CI
 
 # The quality gate for this repository: typecheck, lint, format, tests and the
-# web build, on every push and pull request. Deployment lives in deploy.yml and
-# is deliberately separate - CI must be able to go green before any deploy
-# credentials exist.
+# web build, on every pull request. A push to main runs the identical gate job
+# inside deploy.yml before anything deploys, so it is not repeated here - two
+# copies of the same gate on every merge doubled the runner time and the
+# failure noise. Deployment stays in deploy.yml, deliberately separate: CI must
+# be able to go green before any deploy credentials exist.
 on:
-  push:
-    branches: [main, scaffold]
   pull_request:
   workflow_dispatch:
 
