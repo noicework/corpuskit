@@ -390,6 +390,108 @@ Deno.test('Worker keeps normal tenant routes on the static asset fast path', asy
   expect(harness.portalRequests).toHaveLength(0)
 })
 
+Deno.test('Worker refuses secret and script probes before any asset lookup', async () => {
+  const probes = [
+    '/.env',
+    '/transactional/.env',
+    '/.git/config',
+    '/wp-admin/install.php',
+    '/phpinfo.php',
+    '/auth%20(1).zip',
+    '/cgi-bin/test',
+  ]
+  for (const path of probes) {
+    const harness = workerHarness()
+    const response = await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
+    expect([path, response.status]).toEqual([path, 404])
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(harness.assetRequests).toHaveLength(0)
+    expect(harness.portalRequests).toHaveLength(0)
+  }
+})
+
+Deno.test('Worker serves the app shell for an unknown path, but as a 404', async () => {
+  for (const path of ['/sitemap.xml', '/nope', '/admin/users', '/t', '/firebase-adminsdk.json']) {
+    const harness = workerHarness()
+    const response = await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
+    expect([path, response.status]).toEqual([path, 404])
+    expect(await response.text()).toBe('asset')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(harness.assetRequests.map((request) => new URL(request.url).pathname)).toEqual([path])
+    expect(harness.portalRequests).toHaveLength(0)
+  }
+})
+
+Deno.test('Worker keeps router paths and real assets at their own status', async () => {
+  for (
+    const path of ['/', '/admin', '/t/marine', '/t/marine/library/abc', '/t/marine/robots.txt']
+  ) {
+    const harness = workerHarness()
+    const response = await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
+    expect([path, response.status]).toEqual([path, 200])
+  }
+
+  const files: Record<string, [string, string]> = {
+    '/app.js': ['text/javascript', 'js'],
+    '/robots.txt': ['text/plain; charset=utf-8', 'User-agent: *'],
+  }
+  for (const [path, [type, body]] of Object.entries(files)) {
+    const harness = workerHarness({
+      assets: () => new Response(body, { headers: { 'content-type': type } }),
+    })
+    const response = await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
+    expect([path, response.status]).toEqual([path, 200])
+    expect(await response.text()).toBe(body)
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300')
+  }
+
+  const missing = workerHarness({ assets: () => new Response('gone', { status: 404 }) })
+  const response = await worker.fetch(new Request('https://corpuskit.org/og/old.png'), missing.env)
+  expect(response.status).toBe(404)
+  expect(await response.text()).toBe('gone')
+})
+
+Deno.test('Worker answers writes to pages and assets with 405 and no asset lookup', async () => {
+  for (const [path, method] of [['/', 'POST'], ['/t/marine', 'PUT'], ['/app.js', 'DELETE']]) {
+    const harness = workerHarness()
+    const response = await worker.fetch(
+      new Request(`https://corpuskit.org${path}`, { method }),
+      harness.env,
+    )
+    expect([path, response.status]).toEqual([path, 405])
+    expect(response.headers.get('allow')).toBe('GET, HEAD')
+    expect(harness.assetRequests).toHaveLength(0)
+    expect(harness.portalRequests).toHaveLength(0)
+  }
+})
+
+Deno.test('Worker sends HSTS and frame-ancestors on pages, refusals and its own JSON', async () => {
+  const harness = workerHarness({
+    assets: (request) =>
+      new URL(request.url).pathname === '/app.js'
+        ? new Response('js', { headers: { 'content-type': 'text/javascript' } })
+        : new Response('asset', { headers: { 'content-type': 'text/html' } }),
+  })
+  const responses = await Promise.all([
+    worker.fetch(new Request('https://corpuskit.org/'), harness.env),
+    worker.fetch(new Request('https://corpuskit.org/t/marine'), harness.env),
+    worker.fetch(new Request('https://corpuskit.org/.env'), harness.env),
+    worker.fetch(new Request('https://corpuskit.org/app.js'), harness.env),
+    worker.fetch(new Request('https://corpuskit.org/auth/login'), harness.env),
+    worker.fetch(new Request('https://www.corpuskit.org/'), harness.env),
+  ])
+  expect(responses.map((response) => response.status)).toEqual([200, 200, 404, 200, 503, 308])
+  for (const response of responses) {
+    expect(response.headers.get('strict-transport-security')).toBe(
+      'max-age=63072000; includeSubDomains',
+    )
+    expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'")
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('x-frame-options')).toBe('DENY')
+  }
+  expect(responses[5].headers.get('location')).toBe('https://corpuskit.org/')
+})
+
 Deno.test('Worker keeps API requests routed through the Durable Object', async () => {
   const harness = workerHarness()
 
@@ -454,7 +556,9 @@ Deno.test('Worker forwards identity only from a validated session user', async (
   ).toBe('verified')
 })
 
-function workerHarness(): WorkerHarness {
+function workerHarness(
+  overrides: { assets?: (request: Request) => Response } = {},
+): WorkerHarness {
   const assetRequests: Request[] = []
   const portalRequests: Request[] = []
   const env: Env = {
@@ -462,7 +566,10 @@ function workerHarness(): WorkerHarness {
     ASSETS: {
       fetch(request) {
         assetRequests.push(request)
-        return Promise.resolve(new Response('asset', { headers: { 'content-type': 'text/html' } }))
+        return Promise.resolve(
+          overrides.assets?.(request) ??
+            new Response('asset', { headers: { 'content-type': 'text/html' } }),
+        )
       },
     },
     ENVIRONMENT: 'production',

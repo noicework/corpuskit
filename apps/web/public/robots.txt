@@ -1,0 +1,6 @@
+# CorpusKit portal. Research content is open to crawlers; the API, sign-in
+# and administration surfaces are not pages.
+User-agent: *
+Disallow: /api/
+Disallow: /auth/
+Disallow: /admin

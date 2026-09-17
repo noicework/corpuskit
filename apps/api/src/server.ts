@@ -13,6 +13,7 @@ import { startScheduler } from './scheduler.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
+import { documentPath, probePath } from './public-paths.ts'
 
 loadRootEnv()
 
@@ -150,12 +151,16 @@ for (const path of ['/about', '/about/']) {
   )
 }
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
+// The same answers the Worker gives: probes are refused, and an unknown path
+// still renders the shell (the app has its own not-found page) but as a 404.
 app.get(
   '*',
   infrastructureHandler(async (c) => {
     if (!indexHtml) return c.text('The web build is not available.', 503)
+    const path = new URL(c.req.url).pathname
+    if (!documentPath(path) && probePath(path)) return c.text('Not found', 404)
     c.header('Cache-Control', 'no-cache')
-    return c.html(indexHtml)
+    return c.html(indexHtml, documentPath(path) ? 200 : 404)
   }),
 )
 
