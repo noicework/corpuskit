@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
-import { startTestServer } from './support/test-server.ts'
+import { startTestServer, type TestServer } from './support/test-server.ts'
 import {
   assertCurrentBuild,
   buildComponentFixture,
@@ -28,6 +28,31 @@ async function fill(page: Page, selector: string, value: string) {
     Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }, { args: [selector, value] })
+}
+/**
+ * How many recorded requests match, once no new match has arrived for `quietMs`.
+ * A navigation can leave a request in flight on a slow runner; a count taken
+ * before it lands makes a later "nothing else was sent" assertion fail for the
+ * wrong reason.
+ */
+async function settledCount(
+  server: TestServer,
+  matches: (request: TestServer['requests'][number]) => boolean,
+  quietMs = 500,
+  timeoutMs = 10_000,
+): Promise<number> {
+  const started = Date.now()
+  let count = server.requests.filter(matches).length
+  let since = Date.now()
+  while (Date.now() - since < quietMs) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const latest = server.requests.filter(matches).length
+    if (latest === count) continue
+    if (Date.now() - started > timeoutMs) throw new Error('Requests did not settle in time')
+    count = latest
+    since = Date.now()
+  }
+  return count
 }
 async function seed(server: ReturnType<typeof startTestServer>) {
   const post = async (path: string, value: unknown) => {
@@ -208,18 +233,14 @@ Deno.test('analyst creates and synthesises, exports independently and cancels no
     )
     // The server already saved the artefact before delaying its response. A new
     // authorised read may show it, but the obsolete callback must not refetch A.
-    const itemReads = server.requests.filter((r) =>
+    // Let the reads the navigation itself caused land first: only a read that
+    // follows the release is the obsolete callback under test.
+    const readsOfItem = (r: TestServer['requests'][number]) =>
       r.method === 'GET' && r.path === `/api/t/marine/investigations/${id}`
-    ).length
+    const itemReads = await settledCount(server, readsOfItem)
     itemDelay.release()
-    await page.evaluate(() =>
-      new Promise((resolve) => setTimeout(resolve, 1600))
-    )
-    expect(
-      server.requests.filter((r) =>
-        r.method === 'GET' && r.path === `/api/t/marine/investigations/${id}`
-      ).length,
-    ).toBe(itemReads)
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1600)))
+    expect(server.requests.filter(readsOfItem).length).toBe(itemReads)
     expect(server.requests.filter((r) => r.method === 'PATCH').length).toBe(itemPatches)
     expect(await page.evaluate(() => document.querySelector('textarea')?.value)).not.toBe(
       'Old item pending note',
