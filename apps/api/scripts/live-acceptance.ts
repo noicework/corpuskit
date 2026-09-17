@@ -55,15 +55,21 @@ const isCounters = (value: unknown): boolean =>
 const isCatalog = (value: unknown): boolean =>
   isRecord(value) && Array.isArray(value.items) && isNonNegativeInteger(value.total)
 
+// A labelset the portal does not define comes back as an empty record, so the
+// shape check asks only that every entry is a count table and that at least
+// one of them has counts.
 const isFacets = (value: unknown): boolean => {
   if (!isRecord(value)) return false
   const labelsets = Object.values(value)
-  return labelsets.length > 0 && labelsets.every((labelset) => {
-    if (!isRecord(labelset)) return false
-    const counts = Object.values(labelset)
-    return counts.length > 0 && counts.every(isNonNegativeInteger)
-  })
+  return labelsets.length > 0 &&
+    labelsets.every((labelset) =>
+      isRecord(labelset) && Object.values(labelset).every(isNonNegativeInteger)
+    ) &&
+    labelsets.some((labelset) => Object.keys(labelset as Record<string, unknown>).length > 0)
 }
+
+const isHealth = (value: unknown): boolean =>
+  isRecord(value) && value.ok === true && value.web === true && isNonEmptyString(value.version)
 
 const isLabelsets = (value: unknown): boolean =>
   Array.isArray(value) &&
@@ -161,23 +167,41 @@ function createChecks(options: Required<AcceptanceSweepOptions>): AcceptanceChec
     if (!expected(body)) throw new Error('Response did not match the live API contract')
   }
 
+  // A portal hostname answers its root with one redirect onto the portal's
+  // own path (demo.corpuskit.org/ -> /t/demo). That hop is followed; any
+  // redirect off the origin, or a second hop, is a failure.
+  const shell = (path: string, redirect: RequestRedirect) =>
+    options.fetcher(new URL(path, `${options.baseUrl}/`), {
+      headers: { accept: 'text/html' },
+      redirect,
+      signal: AbortSignal.timeout(options.timeoutMs),
+    })
+
   const checks: AcceptanceCheck[] = [
     {
       name: 'public app shell',
       run: async () => {
-        const response = await options.fetcher(new URL('/', `${options.baseUrl}/`), {
-          headers: { accept: 'text/html' },
-          redirect: 'error',
-          signal: AbortSignal.timeout(options.timeoutMs),
-        })
+        let response = await shell('/', 'manual')
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const location = response.headers.get('location')
+          const target = location ? new URL(location, `${options.baseUrl}/`) : null
+          if (!target || target.origin !== new URL(options.baseUrl).origin) {
+            throw new Error(`Redirected off the portal to ${location ?? 'nowhere'}`)
+          }
+          response = await shell(`${target.pathname}${target.search}`, 'error')
+        }
         if (response.status !== 200) {
           throw new Error(`HTTP ${response.status} ${response.statusText}`.trim())
         }
         const html = await response.text()
-        if (!/\/app\.js\?v=[^"'\s<]+/.test(html)) {
-          throw new Error('HTML did not contain the versioned app.js asset')
+        if (!/<script[^>]+src="\/app\.js(?:\?[^"]*)?"/.test(html)) {
+          throw new Error('HTML did not load the app.js bundle')
         }
       },
+    },
+    {
+      name: 'platform health',
+      run: () => request('/api/health', isHealth),
     },
   ]
 

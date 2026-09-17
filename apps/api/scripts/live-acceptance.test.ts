@@ -32,10 +32,20 @@ function fixtureFetcher(
     const overridden = override?.(url, call)
     if (overridden) return Promise.resolve(overridden)
 
+    // A portal hostname redirects its root onto the portal path, as the live
+    // demo does; the shell itself loads the unversioned app.js bundle.
     if (url.pathname === '/') {
       return Promise.resolve(
-        new Response('<script type="module" src="/app.js?v=abc123"></script>', { status: 200 }),
+        new Response(null, { status: 308, headers: { location: '/t/marine' } }),
       )
+    }
+    if (url.pathname === '/t/marine') {
+      return Promise.resolve(
+        new Response('<script type="module" src="/app.js"></script>', { status: 200 }),
+      )
+    }
+    if (url.pathname === '/api/health') {
+      return Promise.resolve(Response.json({ ok: true, web: true, version: 'abc123' }))
     }
 
     const endpoint = url.pathname.split('/').slice(4).join('/')
@@ -43,7 +53,8 @@ function fixtureFetcher(
       config: { branding: { productName: 'Fisheries Research' } },
       counters: { resources: 12, paragraphs: 30, sentences: 80, indexMb: 1.5 },
       catalog: { items: [], total: 12 },
-      facets: { topic: { fisheries: 12 } },
+      // `format` is a rail default the portal does not define, served empty.
+      facets: { topic: { fisheries: 12 }, kind: { report: 4 }, format: {} },
       labelsets: [
         { id: 'topic', title: 'Topic', multiple: true, labels: ['fisheries'] },
       ],
@@ -94,8 +105,54 @@ Deno.test('runAcceptanceSweep validates the public shell and each tenant endpoin
     attempts: 1,
   })
 
-  assertEquals(results.length, 11)
+  assertEquals(results.length, 12)
   assert(results.every((result) => result.ok), JSON.stringify(results))
+})
+
+Deno.test('runAcceptanceSweep accepts a shell served without a redirect', async () => {
+  const results = await runAcceptanceSweep({
+    baseUrl: 'https://portal.example.test',
+    tenantSlugs: ['marine'],
+    fetcher: fixtureFetcher((url) =>
+      url.pathname === '/'
+        ? new Response('<script type="module" src="/app.js?v=abc123"></script>', { status: 200 })
+        : undefined
+    ),
+    attempts: 1,
+  })
+  const shell = results.find((result) => result.name === 'public app shell')
+  assert(shell?.ok, JSON.stringify(shell))
+})
+
+Deno.test('runAcceptanceSweep fails the shell check on a redirect off the portal', async () => {
+  const results = await runAcceptanceSweep({
+    baseUrl: 'https://portal.example.test',
+    tenantSlugs: ['marine'],
+    fetcher: fixtureFetcher((url) =>
+      url.pathname === '/'
+        ? new Response(null, { status: 308, headers: { location: 'https://elsewhere.test/' } })
+        : undefined
+    ),
+    attempts: 1,
+  })
+  const shell = results.find((result) => result.name === 'public app shell')
+  assert(shell && !shell.ok, JSON.stringify(shell))
+  assert(shell.error?.includes('elsewhere.test'), shell.error ?? 'no error recorded')
+})
+
+Deno.test('runAcceptanceSweep fails the facet check when every labelset is empty', async () => {
+  const results = await runAcceptanceSweep({
+    baseUrl: 'https://portal.example.test',
+    tenantSlugs: ['marine'],
+    fetcher: fixtureFetcher((url) =>
+      url.pathname.endsWith('/facets') ? Response.json({ topic: {}, format: {} }) : undefined
+    ),
+    attempts: 1,
+  })
+  assertEquals(
+    results.filter((result) => !result.ok).map((result) => result.name),
+    ['marine: facet shape'],
+  )
 })
 
 Deno.test('runAcceptanceSweep retries transient failures before reporting success', async () => {
