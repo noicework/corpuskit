@@ -35,3 +35,25 @@ Original assets (under `apps/web/public/brands/acmd`):
 These assets retain their original ownership and are included for the requested
 ACMD demonstration. Delivery follows the existing pull-request gate and GitHub
 Actions deployment, including the real CorpusKit demo functional check.
+
+## Source-matched chrome and refinement
+
+The ACMD palette selects `AcmdChrome.tsx` for the real website navigation and
+footer destinations. The portal navigation remains a separate compact strip,
+and the source notice is included in measured header height so Ask and Graph
+still fit the viewport. Other tenant headers and footers keep their existing UI.
+
+The hero and section headings use the site's `#283583 → #188ecb → #212d57`
+text gradient. The footer uses `#83d0f5 → #188ecb → #ffffff`; the image caption
+uses its navy-to-blue panel treatment. Dark mode uses a legible pale variant.
+
+Additional original assets:
+
+- Footer logo: https://acmd.org.au/images/logo-v2.png
+- Tile artwork: https://acmd.org.au/images/tiles-colour-combined.svg
+- White tile artwork: https://acmd.org.au/images/tiles-white.svg
+
+Newsletter signup links to the existing public `#signupForm` on ACMD's website;
+the demo does not collect subscription data. The existing footer links, contact
+button, LinkedIn destination and acknowledgement are retained. The footer is
+shown on scrolling pages; Ask and Graph retain their full-height workspace.

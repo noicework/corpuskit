@@ -133,6 +133,7 @@ function Hero({
                   ref={inputRef}
                   type='text'
                   autoComplete='off'
+                  placeholder={isAcmd ? 'Ask a question' : undefined}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className='min-w-0 flex-1 border-0 bg-transparent px-2 py-2 text-[0.95rem] text-ink focus:outline-none'
@@ -169,7 +170,10 @@ function Hero({
                 src={config.branding.heroImageUrl}
                 alt='Biomedical researchers working together in a laboratory'
               />
-              <span aria-hidden='true' />
+              <div className='rp-acmd-image-caption'>
+                <span>Ideas into impact.</span>
+                <span>Explore. Connect. Discover.</span>
+              </div>
             </div>
           )
           : <RecentDocuments slug={config.slug} />}
