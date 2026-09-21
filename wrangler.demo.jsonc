@@ -11,6 +11,10 @@
     {
       "pattern": "demo.corpuskit.org",
       "custom_domain": true
+    },
+    {
+      "pattern": "acmd.corpuskit.org",
+      "custom_domain": true
     }
   ],
   "assets": {

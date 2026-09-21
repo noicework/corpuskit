@@ -62,6 +62,7 @@ function Hero({
 }) {
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const isAcmd = config.branding.paletteId === 'acmd'
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -78,18 +79,29 @@ function Hero({
   return (
     <section
       className={`relative isolate pb-24 pt-14 sm:px-6 sm:pb-28 sm:pt-20 ${
-        config.branding.paletteId === 'corpuskit' ? 'rp-corpuskit-hero' : ''
+        isAcmd
+          ? 'rp-acmd-hero'
+          : config.branding.paletteId === 'corpuskit'
+          ? 'rp-corpuskit-hero'
+          : ''
       }`}
     >
-      {config.branding.paletteId !== 'corpuskit' && (
+      {!isAcmd && config.branding.paletteId !== 'corpuskit' && (
         <HeroBackdrop imageUrl={config.branding.heroImageUrl} />
       )}
 
       <div className='rp-shell grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-14'>
         <div className='min-w-0'>
+          {isAcmd && <p className='rp-acmd-demo-label'>ACMD Research Portal · Demo</p>}
           <h1 className='rp-display rp-anim-rise text-4xl text-[var(--rp-on-hero)] sm:text-5xl lg:text-6xl'>
-            What would you like to explore?
+            {isAcmd ? config.branding.tagline : 'What would you like to explore?'}
           </h1>
+          {isAcmd && (
+            <p className='rp-acmd-intro'>
+              Explore connected knowledge. Ask a question, discover the evidence and follow it back
+              to its source.
+            </p>
+          )}
 
           <form onSubmit={handleSubmit} className='rp-anim-rise rp-delay-1 mt-8' role='search'>
             <label htmlFor='explore-search' className='sr-only'>
@@ -150,7 +162,17 @@ function Hero({
             : null}
         </div>
 
-        <RecentDocuments slug={config.slug} />
+        {isAcmd
+          ? (
+            <div className='rp-acmd-research-image'>
+              <img
+                src={config.branding.heroImageUrl}
+                alt='Biomedical researchers working together in a laboratory'
+              />
+              <span aria-hidden='true' />
+            </div>
+          )
+          : <RecentDocuments slug={config.slug} />}
       </div>
     </section>
   )

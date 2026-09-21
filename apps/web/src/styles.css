@@ -2703,3 +2703,117 @@ button:disabled,
   letter-spacing: -.055em;
   white-space: nowrap;
 }
+
+/* ACMD: the public site's Montserrat, navy, blue and laboratory photography. */
+.rp-acmd {
+  --rp-font-display-weight: 700;
+  --rp-font-display-bold-weight: 700;
+  --rp-font-display-tracking: -.035em;
+  --rp-font-display-leading: 1.18;
+}
+
+.rp-acmd header img {
+  width: 10rem;
+  height: auto;
+  padding: .3rem;
+  background: #ffffff;
+}
+
+.rp-acmd .rp-btn-primary {
+  color: #212d57;
+  background: #83d0f5;
+}
+
+.rp-acmd .rp-btn-primary:hover:not(:disabled) {
+  background: #a9e0fa;
+}
+
+.rp-acmd .rp-navband {
+  --rp-on-primary: var(--rp-ink);
+  --rp-accent: var(--rp-accent-fg);
+  background: var(--rp-surface);
+  border-bottom: 1px solid var(--rp-line);
+}
+
+.rp-acmd-hero {
+  --rp-on-hero: var(--rp-ink);
+  overflow: hidden;
+  background: var(--rp-surface);
+  padding-top: 3.5rem;
+  padding-bottom: 6rem;
+}
+
+.rp-acmd-hero > .rp-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rp-acmd-demo-label {
+  margin-bottom: 1.25rem;
+  font-size: .875rem;
+  font-weight: 600;
+  color: var(--rp-accent-fg);
+}
+
+.rp-acmd-hero h1 {
+  max-width: 13ch;
+  font-size: clamp(2.25rem, 4.3vw, 3.65rem);
+}
+
+.rp-acmd-intro {
+  max-width: 44ch;
+  margin-top: 1.5rem;
+  line-height: 1.8;
+  color: var(--rp-ink-2);
+}
+
+.rp-acmd-hero .rp-shadow-xl {
+  border: 1px solid var(--rp-line);
+  box-shadow: none;
+}
+
+.rp-acmd-hero .rp-shadow-xl:focus-within {
+  outline: 2px solid var(--rp-focus);
+  outline-offset: 2px;
+}
+
+.rp-acmd-research-image {
+  position: relative;
+  min-height: 18rem;
+  align-self: stretch;
+  margin-top: 1rem;
+}
+
+.rp-acmd-research-image img {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 38%;
+}
+
+.rp-acmd-research-image span {
+  position: absolute;
+  bottom: -1rem;
+  left: -1rem;
+  width: 5rem;
+  height: 5rem;
+  background: linear-gradient(135deg, #6ebd8b, #188ecb 65%, #212d57);
+}
+
+.rp-acmd[data-colour-scheme='light'] .rp-acmd-hero .rp-focus-inverse:focus-visible {
+  outline: 2px solid var(--rp-focus);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+
+@media (min-width: 1024px) {
+  .rp-acmd-hero > .rp-shell {
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+    gap: 4rem;
+  }
+
+  .rp-acmd-research-image {
+    margin-top: 0;
+    min-height: 32rem;
+  }
+}
