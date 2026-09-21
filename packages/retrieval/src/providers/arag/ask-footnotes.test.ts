@@ -187,27 +187,49 @@ Deno.test('grouping is generation guidance, not post-generation removal of repea
   }
 })
 
-Deno.test('broken or excluded references fail explicitly without success or standard-mode retry', async () => {
+Deno.test('an unusable reference costs its citation, not the answer', async () => {
+  // Binding happens after the whole answer has streamed. A reference the
+  // binder cannot honour loses its own marker; the reader still gets the
+  // finished prose instead of "the answer was cut short".
   for (
     const options of [
       { broken: true },
       { id: 'unknown/f/pdf/0-16' },
-      { id: 'report/t/da-summary/0-16' },
       { id: 'USER_CONTEXT_0' },
-      { doc: true },
     ]
   ) {
     const f = fixture(options)
     const events = await collect(f.provider)
     expect(events.some((e) => e.type === 'citation')).toBe(false)
-    if (options.doc) {
-      expect(events.some((e) => e.type === 'done' && e.refused)).toBe(true)
-    } else {
-      expect(events.some((e) => e.type === 'done')).toBe(false)
-      expect(events.some((e) => e.type === 'error')).toBe(true)
-    }
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(events.find((e) => e.type === 'done')).toEqual({
+      type: 'done',
+      refused: false,
+      text: '## Findings\n\nStocks recovered.\n\n',
+      citationPresentation: 'authored_blocks',
+    })
+    // Still no standard-mode retry: one upstream call, as before.
     expect(f.bodies.length).toBe(1)
   }
+})
+
+Deno.test('a data-augmentation reference cites the resource that owns the field', async () => {
+  const f = fixture({ id: 'report/t/da-summary/0-16' })
+  const events = await collect(f.provider)
+  expect(events.some((e) => e.type === 'error')).toBe(false)
+  expect(events.filter((e) => e.type === 'citation')).toEqual([{
+    type: 'citation',
+    citation: { index: 1, resourceId: 'report', title: 'Original report' },
+  }])
+  expect(f.bodies.length).toBe(1)
+})
+
+Deno.test('a documentation resource stays out of a research answer', async () => {
+  const f = fixture({ doc: true })
+  const events = await collect(f.provider)
+  expect(events.some((e) => e.type === 'citation')).toBe(false)
+  expect(events.some((e) => e.type === 'done' && e.refused)).toBe(true)
+  expect(f.bodies.length).toBe(1)
 })
 
 Deno.test('capability retry keeps the citation mode and resets footnote parsing', async () => {
@@ -222,21 +244,33 @@ Deno.test('document pins reject references leaked by weak platform filters', asy
   for (const options of [{ resourceId: 'different' }, { resourceIds: ['different'] }]) {
     const f = fixture()
     const events = await collect(f.provider, options)
-    expect(events.some((e) => e.type === 'error')).toBe(true)
-    expect(events.some((e) => e.type === 'citation' || e.type === 'done')).toBe(false)
+    // The pin still wins: the leaked resource is never cited. Dropping it no
+    // longer costs the answer.
+    expect(events.some((e) => e.type === 'citation')).toBe(false)
+    expect(events.some((e) => e.type === 'error')).toBe(false)
   }
 })
 
-Deno.test('standard attribution returned despite the footnote request is not silently accepted', async () => {
+Deno.test('standard attribution returned despite the footnote request still binds', async () => {
+  const catalogued = {
+    title: 'Original report',
+    metadata: { status: 'PROCESSED' },
+    fields: {
+      'f/pdf': { paragraphs: { 'report/f/pdf/0-16': { score: 0.9, text: 'Stocks recovered.' } } },
+    },
+  }
   const footnoteProvider = new AragProvider({
     resolveBinding: () => ({
       baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
       token: 'test',
     }),
     fetchImpl: async (input) => {
-      if (String(input).includes('/catalog')) return Response.json({ resources: {} })
+      const url = String(input)
+      if (url.includes('/catalog')) return Response.json({ resources: { report: catalogued } })
+      if (url.includes('/predict/remi')) return Response.json({})
       return new Response(
         [
+          { item: { type: 'retrieval', results: { resources: { report: catalogued } } } },
           { item: { type: 'answer', text: 'Stocks recovered.' } },
           { item: { type: 'citations', citations: { 'report/f/pdf/0-16': [[0, 17]] } } },
         ].map((item) => JSON.stringify(item)).join('\n') + '\n',
@@ -244,8 +278,42 @@ Deno.test('standard attribution returned despite the footnote request is not sil
     },
   })
   const events = await collect(footnoteProvider)
-  expect(events.some((e) => e.type === 'error')).toBe(true)
-  expect(events.some((e) => e.type === 'done')).toBe(false)
+  // The service answered with standard attribution despite the footnote
+  // request. The evidence it returned is the same evidence standard mode has
+  // always bound, so the answer is bound that way rather than discarded.
+  expect(events.some((e) => e.type === 'error')).toBe(false)
+  expect(events.filter((e) => e.type === 'citation')).toEqual([{
+    type: 'citation',
+    citation: { index: 1, resourceId: 'report', title: 'Original report' },
+  }])
+  expect(events.find((e) => e.type === 'done')).toEqual({
+    type: 'done',
+    refused: false,
+    text: 'Stocks recovered.[1]',
+    citationPresentation: 'authored_blocks',
+  })
+})
+
+Deno.test('an uncited answer is never dressed up as a cited one', async () => {
+  // No anchors AND no citations map: there is nothing to bind, so the prose
+  // goes out exactly as written, with no citation invented for it.
+  const bareProvider = new AragProvider({
+    resolveBinding: () => ({
+      baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
+      token: 'test',
+    }),
+    fetchImpl: async (input) => {
+      const url = String(input)
+      if (url.includes('/catalog')) return Response.json({ resources: {} })
+      if (url.includes('/predict/remi')) return Response.json({})
+      return new Response(
+        JSON.stringify({ item: { type: 'answer', text: 'Stocks recovered.' } }) + '\n',
+      )
+    },
+  })
+  const events = await collect(bareProvider)
+  expect(events.some((e) => e.type === 'citation')).toBe(false)
+  expect(events.find((e) => e.type === 'done')?.text).toBe('Stocks recovered.')
 })
 
 Deno.test('standard mode remains available through server construction only', async () => {
@@ -270,37 +338,37 @@ Deno.test('structured JSON never receives either citation mode', async () => {
   expect(f.bodies[0]?.citations).toBeUndefined()
 })
 
-Deno.test('footnote validation logs fixed reason codes without leaking source IDs or payloads', async () => {
-  const originalError = console.error
+Deno.test('degraded citations log fixed reason codes without leaking source IDs or payloads', async () => {
+  const originalWarn = console.warn
   const logs: unknown[][] = []
-  console.error = (...args: unknown[]) => logs.push(args)
+  console.warn = (...args: unknown[]) => logs.push(args)
   try {
     for (
-      const [id, reason] of [
-        ['USER_CONTEXT_0', 'anonymous_context'],
-        ['report/t/da-private-summary/0-16', 'generated_context'],
-        ['report/a/private-metadata/0-16', 'metadata_context'],
-        ['private-excluded-source/f/pdf/0-16', 'out_of_scope'],
-        ['private-unsupported-value', 'unsupported_context'],
-      ]
+      const [id, reason, cited] of [
+        ['USER_CONTEXT_0', 'anonymous_context', 0],
+        ['report/t/da-private-summary/0-16', 'generated_context', 1],
+        ['report/a/private-metadata/0-16', 'metadata_context', 0],
+        ['private-excluded-source/f/pdf/0-16', 'out_of_scope', 0],
+        ['private-unsupported-value', 'unsupported_context', 0],
+      ] as const
     ) {
       const f = fixture({ id })
       const events = await collect(f.provider)
-      expect(events.some((e) => e.type === 'done' || e.type === 'citation')).toBe(false)
-      expect(events.filter((e) => e.type === 'error')).toEqual([{
-        type: 'error',
-        message: 'The response citation links could not be verified. Please try again.',
-      }])
+      // The answer always lands; only the citation count varies.
+      expect(events.some((e) => e.type === 'error')).toBe(false)
+      expect(events.some((e) => e.type === 'done')).toBe(true)
+      expect(events.filter((e) => e.type === 'citation').length).toBe(cited)
       expect(logs.at(-1)).toEqual([JSON.stringify({
-        event: 'arag_footnote_validation_failed',
-        reason,
+        event: 'arag_footnote_citations_degraded',
+        drops: [{ reason, count: 1 }],
+        citations: cited,
       })])
       expect(f.bodies.length).toBe(1)
     }
     expect(logs.length).toBe(5)
     expect(JSON.stringify(logs)).not.toMatch(/private|USER_CONTEXT|block-AA|Stocks|report/)
   } finally {
-    console.error = originalError
+    console.warn = originalWarn
   }
 })
 
@@ -349,8 +417,10 @@ Deno.test('supplied context cannot evade resource pins or bind an unsent alias',
       })),
     })
     expect((f.bodies[0]?.extra_context as string[]).length).toBe(12)
-    expect(events.some((e) => e.type === 'done' || e.type === 'citation')).toBe(false)
-    expect(events.some((e) => e.type === 'error')).toBe(true)
+    // The pin holds: an alias that was never sent, or one that resolves past
+    // the pin, binds nothing. Refusing it no longer discards the answer.
+    expect(events.some((e) => e.type === 'citation')).toBe(false)
+    expect(events.some((e) => e.type === 'error')).toBe(false)
   }
 })
 
