@@ -4,6 +4,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import { docPageById } from '../../../packages/core/src/docs.ts'
 import { initialiseDemo } from './demo.ts'
+import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
 import {
   PRINCIPAL_HEADER,
@@ -84,6 +85,7 @@ export class PortalDurableObject extends DurableObject<Env> {
         .bootstrapAdminEmails(bindings.ENTRA_ADMIN_EMAILS ?? '')
     }
     initialiseDemo(this.stores.tenants, bindings.ENVIRONMENT)
+    initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,

@@ -68,6 +68,7 @@ export const PaletteIdSchema = z.enum([
   'kiln',
   'observatory',
   'corpuskit',
+  'acmd',
 ])
 export type PaletteId = z.infer<typeof PaletteIdSchema>
 
@@ -88,6 +89,33 @@ export interface PaletteEntry {
 }
 
 export const DEFAULT_PALETTES: Record<PaletteId, PaletteEntry> = {
+  acmd: {
+    id: 'acmd',
+    label: 'ACMD',
+    description: 'ACMD navy, clear blue and white, from its current public website.',
+    palette: {
+      mode: 'light',
+      brandSurface: '#212d57',
+      onBrandSurface: '#ffffff',
+      brandForeground: '#212d57',
+      accent: '#83d0f5',
+      onAccent: '#212d57',
+      accentForeground: '#24658c',
+      focusRing: '#24658c',
+      accentWash: '#eaf6fc',
+      accentWashStrong: '#d1ebf8',
+      heroFrom: '#ffffff',
+      heroTo: '#f5f5f5',
+      onHero: '#212d57',
+      paper: '#f5f5f5',
+      surface: '#ffffff',
+      surface2: '#eef3f6',
+      line: '#d6dee5',
+      ink: '#212d57',
+      ink2: '#3d4c67',
+      ink3: '#59677b',
+    },
+  },
   corpuskit: {
     'id': 'corpuskit',
     'label': 'CorpusKit',

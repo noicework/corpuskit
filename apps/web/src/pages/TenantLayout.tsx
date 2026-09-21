@@ -346,8 +346,11 @@ export function TenantLayout() {
 
   return (
     <div
-      className='rp-tenant min-h-screen bg-app'
+      className={`rp-tenant min-h-screen bg-app${
+        config.branding.paletteId === 'acmd' ? ' rp-acmd' : ''
+      }`}
       style={tenantThemeVars(config.branding, scheme)}
+      data-colour-scheme={scheme}
     >
       {
         /* Two-tier header: a white strip carrying the logo, over a solid
@@ -569,6 +572,14 @@ export function TenantLayout() {
           </div>
         </div>
       </header>
+
+      {config.slug === 'acmd' && (
+        <div className='border-b border-line bg-surface-2'>
+          <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
+            Demo portal. Answers currently use the CorpusKit documentation knowledge base.
+          </p>
+        </div>
+      )}
 
       {
         /* The phone menu. It hangs from under the header rather than covering
