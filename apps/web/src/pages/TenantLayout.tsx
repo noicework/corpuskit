@@ -22,6 +22,7 @@ import { helpMenuItems } from '../components/help-menu-items.ts'
 import { pageTitle } from '../lib/page-title.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
+import { AcmdSiteFooter, AcmdSiteHeader } from '../components/AcmdChrome.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
@@ -323,11 +324,12 @@ export function TenantLayout() {
   // Start the CorpusKit identity in light mode, independent of browser preferences.
   const [demoScheme, setDemoScheme] = useState<'light' | 'dark'>('light')
   const isCorpusKit = config?.branding.paletteId === 'corpuskit'
-  const scheme = isCorpusKit ? demoScheme : viewerScheme
+  const isAcmd = config?.branding.paletteId === 'acmd'
+  const scheme = isCorpusKit || isAcmd ? demoScheme : viewerScheme
   const schemeLabel = scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
   const toggleScheme = () => {
     const next = scheme === 'dark' ? 'light' : 'dark'
-    if (isCorpusKit) setDemoScheme(next)
+    if (isCorpusKit || isAcmd) setDemoScheme(next)
     else setChoice(next)
   }
   useBodyTheme(config?.branding, scheme)
@@ -344,6 +346,17 @@ export function TenantLayout() {
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     `rp-navlink${isActive ? ' rp-navlink-active' : ''}`
 
+  const accountControl = (
+    <AccountMenu
+      entries={menuEntries}
+      portalRole={portalRole}
+      platformRole={platformRole}
+      portalName={config.branding.productName}
+      label={accountLabel}
+      onProfile={() => setSignInOpen(true)}
+    />
+  )
+
   return (
     <div
       className={`rp-tenant min-h-screen bg-app${
@@ -357,168 +370,230 @@ export function TenantLayout() {
         * brand-colour band carrying the navigation. */
       }
       <header ref={headerRef} className='sticky top-0 z-40'>
-        <div className='border-b border-line bg-surface'>
-          {
-            /* Below `sm` the row may wrap, and the wordmark keeps a 10rem
+        {isAcmd && <AcmdSiteHeader slug={config.slug} onSearch={() => setPaletteOpen(true)} />}
+        {isAcmd
+          ? (
+            <div className='acmd-portal-bar'>
+              <div className='rp-shell acmd-portal-bar-inner'>
+                <Link to={`/t/${config.slug}`} className='acmd-portal-name rp-focus'>
+                  Research portal
+                </Link>
+                <nav aria-label='Primary' className='acmd-portal-nav'>
+                  {navigation.map((item) => (
+                    <NavLink
+                      key={item.label}
+                      to={`/t/${config.slug}${item.path}`}
+                      end={item.end}
+                      className={navLinkClass}
+                    >
+                      {item.label}
+                    </NavLink>
+                  ))}
+                </nav>
+                <div className='acmd-portal-tools'>
+                  <span className='hidden sm:inline-flex'>
+                    <button
+                      type='button'
+                      onClick={toggleScheme}
+                      aria-label={schemeLabel}
+                      title={schemeLabel}
+                      aria-pressed={scheme === 'dark'}
+                      className='acmd-scheme rp-focus'
+                    >
+                      <SchemeIcon scheme={scheme} className='h-5 w-5' />
+                    </button>
+                  </span>
+                  <span className='hidden sm:inline-flex'>
+                    <HelpMenu slug={config.slug} />
+                  </span>
+                  <span className='hidden sm:inline-flex'>
+                    {accountControl}
+                  </span>
+                  <span className='md:hidden'>
+                    <button
+                      ref={navTriggerRef}
+                      type='button'
+                      onClick={() => {
+                        if (navOpen) {
+                          navRestoreFocus.current = true
+                          setNavOpen(false)
+                        } else {
+                          setNavMounted(true)
+                          setNavOpen(true)
+                        }
+                      }}
+                      aria-label={navOpen ? 'Close menu' : 'Open menu'}
+                      aria-expanded={navOpen}
+                      aria-controls='mobile-nav-sheet'
+                      className='acmd-portal-menu rp-focus'
+                    >
+                      Explore <MenuBars />
+                    </button>
+                  </span>
+                </div>
+              </div>
+            </div>
+          )
+          : (
+            <>
+              <div className='border-b border-line bg-surface'>
+                {
+                  /* Below `sm` the row may wrap, and the wordmark keeps a 10rem
             * floor. A portal with no uploaded logo falls back to its product
             * name here, and the floor is in rem so it grows with the reader's
             * text size: at a 22px root font the three round controls alone eat
             * most of a 390px row, and without the floor the name was squeezed
             * into a 38px column and clipped to one letter a line. When the two
             * no longer fit, the controls take their own line instead. */
-          }
-          <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-6'>
-            <div className='flex min-w-[10rem] flex-1 items-center gap-2 sm:min-w-0'>
-              <Link
-                to={`/t/${config.slug}`}
-                className='rp-focus flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]'
-              >
-                {isCorpusKit
-                  ? (
-                    <span className='rp-corpuskit-wordmark'>
-                      CorpusKit<span style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}>
-                        /
-                      </span>
-                    </span>
-                  )
-                  : config.branding.logoUrl && !logoFailed
-                  ? (
-                    <img
-                      src={config.branding.logoUrl}
-                      alt={config.branding.organisation}
-                      onError={() => setLogoFailed(true)}
-                      // Tenant logos vary wildly in aspect ratio (a wordmark
-                      // with a tagline under it can be 4:1 while a compact
-                      // wordmark is closer to 2:1), so a fixed height alone
-                      // decides nothing about how much of a phone row the logo
-                      // eats. Below `sm` it is boxed by BOTH a max
-                      // width and a max height and left free to pick its own
-                      // height, so every tenant fits the same slot without being
-                      // letterboxed. `min-w-0` is the real overlap guard: an
-                      // image is a flex item whose automatic minimum size is its
-                      // intrinsic width, so without it the logo refuses to
-                      // shrink and simply paints over its neighbours. Desktop is
-                      // untouched - `sm:` restores h-16 with the 20rem cap.
-                      className='h-auto max-h-10 w-auto min-w-0 max-w-[9rem] object-contain sm:h-16 sm:max-h-none sm:max-w-[20rem]'
-                    />
-                  )
-                  : (
-                    <span className='rp-display truncate text-lg text-ink sm:text-xl'>
-                      {config.branding.productName}
-                    </span>
-                  )}
-              </Link>
-              {
-                /* Portal switcher, beside the logo - each portal is its own
+                }
+                <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-6'>
+                  <div className='flex min-w-[10rem] flex-1 items-center gap-2 sm:min-w-0'>
+                    <Link
+                      to={`/t/${config.slug}`}
+                      className='rp-focus flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]'
+                    >
+                      {isCorpusKit
+                        ? (
+                          <span className='rp-corpuskit-wordmark'>
+                            CorpusKit<span
+                              style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}
+                            >
+                              /
+                            </span>
+                          </span>
+                        )
+                        : config.branding.logoUrl && !logoFailed
+                        ? (
+                          <img
+                            src={config.branding.logoUrl}
+                            alt={config.branding.organisation}
+                            onError={() => setLogoFailed(true)}
+                            // Tenant logos vary wildly in aspect ratio (a wordmark
+                            // with a tagline under it can be 4:1 while a compact
+                            // wordmark is closer to 2:1), so a fixed height alone
+                            // decides nothing about how much of a phone row the logo
+                            // eats. Below `sm` it is boxed by BOTH a max
+                            // width and a max height and left free to pick its own
+                            // height, so every tenant fits the same slot without being
+                            // letterboxed. `min-w-0` is the real overlap guard: an
+                            // image is a flex item whose automatic minimum size is its
+                            // intrinsic width, so without it the logo refuses to
+                            // shrink and simply paints over its neighbours. Desktop is
+                            // untouched - `sm:` restores h-16 with the 20rem cap.
+                            className='h-auto max-h-10 w-auto min-w-0 max-w-[9rem] object-contain sm:h-16 sm:max-h-none sm:max-w-[20rem]'
+                          />
+                        )
+                        : (
+                          <span className='rp-display truncate text-lg text-ink sm:text-xl'>
+                            {config.branding.productName}
+                          </span>
+                        )}
+                    </Link>
+                    {
+                      /* Portal switcher, beside the logo - each portal is its own
                 * knowledge box, content and branding. */
-              }
-              <KbSwitcher config={config} />
-            </div>
-            {
-              /* Header search, centred and full-measure: it is the only search
+                    }
+                    <KbSwitcher config={config} />
+                  </div>
+                  {
+                    /* Header search, centred and full-measure: it is the only search
               * box in the product now, so it carries the weight. */
-            }
-            <div className='hidden w-[min(40rem,42vw)] shrink-0 items-center lg:flex'>
-              <form
-                role='search'
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  const trimmed = headerQuery.trim()
-                  if (!trimmed) return
-                  navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
-                  setHeaderQuery('')
-                }}
-                className='flex w-full items-center'
-              >
-                <label htmlFor='header-search' className='sr-only'>
-                  Search {config.branding.productName}
-                </label>
-                <input
-                  id='header-search'
-                  type='search'
-                  value={headerQuery}
-                  onChange={(event) => setHeaderQuery(event.target.value)}
-                  placeholder={config.searchPlaceholder}
-                  className='rp-input rp-input-flush-end h-[calc(3rem*var(--rp-density-ctl,1))] min-w-0 flex-1 text-base'
-                />
-                <button
-                  type='submit'
-                  aria-label='Search'
-                  className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
-                  style={{
-                    borderColor: 'var(--rp-line)',
-                    color: 'var(--rp-brand-fg)',
-                  }}
-                >
-                  <svg
-                    viewBox='0 0 20 20'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeWidth='1.8'
-                    strokeLinecap='round'
-                    className='h-5 w-5'
-                    aria-hidden='true'
-                  >
-                    <circle cx='9' cy='9' r='5.5' />
-                    <path d='M13.2 13.2 17 17' />
-                  </svg>
-                </button>
-              </form>
-            </div>
+                  }
+                  <div className='hidden w-[min(40rem,42vw)] shrink-0 items-center lg:flex'>
+                    <form
+                      role='search'
+                      onSubmit={(event) => {
+                        event.preventDefault()
+                        const trimmed = headerQuery.trim()
+                        if (!trimmed) return
+                        navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
+                        setHeaderQuery('')
+                      }}
+                      className='flex w-full items-center'
+                    >
+                      <label htmlFor='header-search' className='sr-only'>
+                        Search {config.branding.productName}
+                      </label>
+                      <input
+                        id='header-search'
+                        type='search'
+                        value={headerQuery}
+                        onChange={(event) => setHeaderQuery(event.target.value)}
+                        placeholder={config.searchPlaceholder}
+                        className='rp-input rp-input-flush-end h-[calc(3rem*var(--rp-density-ctl,1))] min-w-0 flex-1 text-base'
+                      />
+                      <button
+                        type='submit'
+                        aria-label='Search'
+                        className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
+                        style={{
+                          borderColor: 'var(--rp-line)',
+                          color: 'var(--rp-brand-fg)',
+                        }}
+                      >
+                        <svg
+                          viewBox='0 0 20 20'
+                          fill='none'
+                          stroke='currentColor'
+                          strokeWidth='1.8'
+                          strokeLinecap='round'
+                          className='h-5 w-5'
+                          aria-hidden='true'
+                        >
+                          <circle cx='9' cy='9' r='5.5' />
+                          <path d='M13.2 13.2 17 17' />
+                        </svg>
+                      </button>
+                    </form>
+                  </div>
 
-            {
-              /* Below `sm` this cluster takes exactly the width its buttons
+                  {
+                    /* Below `sm` this cluster takes exactly the width its buttons
               * need, so the rest of the row belongs to the logo. `flex-1` from
               * `sm` up restores the even three-way split that keeps the desktop
               * search box optically centred. */
-            }
-            <div className='ml-auto flex flex-none items-center justify-end gap-2 sm:flex-1'>
-              {kbStatus?.status === 'none' && access.can('portal.create', { kind: 'platform' }) && (
-                <span className='hidden shrink-0 lg:block'>
-                  <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
-                    Not connected
-                  </Link>
-                </span>
-              )}
-              {
-                /* Below `sm` the help and account controls live in the phone
+                  }
+                  <div className='ml-auto flex flex-none items-center justify-end gap-2 sm:flex-1'>
+                    {kbStatus?.status === 'none' &&
+                      access.can('portal.create', { kind: 'platform' }) && (
+                      <span className='hidden shrink-0 lg:block'>
+                        <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
+                          Not connected
+                        </Link>
+                      </span>
+                    )}
+                    {
+                      /* Below `sm` the help and account controls live in the phone
                 * menu only (the sheet carries both): three 44px circles plus
                 * the logo no longer fit a 390px header once the root font is
                 * scaled up for accessibility. Wrapped, for the same reason as
                 * the menu toggle below - component classes set their own
                 * display and would beat a utility on the element itself. */
-              }
-              <span className='hidden sm:inline-flex'>
-                <button
-                  type='button'
-                  onClick={toggleScheme}
-                  aria-label={schemeLabel}
-                  title={schemeLabel}
-                  aria-pressed={scheme === 'dark'}
-                  className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
-                  style={{
-                    borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-                    color: 'var(--rp-brand-fg)',
-                  }}
-                >
-                  <SchemeIcon scheme={scheme} className='h-6 w-6' />
-                </button>
-              </span>
-              <span className='hidden sm:inline-flex'>
-                <HelpMenu slug={config.slug} />
-              </span>
-              <span className='hidden sm:inline-flex'>
-                <AccountMenu
-                  entries={menuEntries}
-                  portalRole={portalRole}
-                  platformRole={platformRole}
-                  portalName={config.branding.productName}
-                  label={accountLabel}
-                  onProfile={() => setSignInOpen(true)}
-                />
-              </span>
-              {
-                /* Wrapped, because .rp-navtoggle sets its own display and would
+                    }
+                    <span className='hidden sm:inline-flex'>
+                      <button
+                        type='button'
+                        onClick={toggleScheme}
+                        aria-label={schemeLabel}
+                        title={schemeLabel}
+                        aria-pressed={scheme === 'dark'}
+                        className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
+                        style={{
+                          borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
+                          color: 'var(--rp-brand-fg)',
+                        }}
+                      >
+                        <SchemeIcon scheme={scheme} className='h-6 w-6' />
+                      </button>
+                    </span>
+                    <span className='hidden sm:inline-flex'>
+                      <HelpMenu slug={config.slug} />
+                    </span>
+                    <span className='hidden sm:inline-flex'>
+                      {accountControl}
+                    </span>
+                    {
+                      /* Wrapped, because .rp-navtoggle sets its own display and would
                 * beat a `md:hidden` utility on the button itself - component
                 * classes in styles.css are unlayered and win over Tailwind's
                 * utility layer no matter what the class list says. That is
@@ -526,60 +601,61 @@ export function TenantLayout() {
                 * nav. The toggle is sized to match the help and account buttons
                 * beside it rather than being scaled up on its own, so the three
                 * read as one 44px cluster. */
-              }
-              <span className='md:hidden'>
-                <button
-                  ref={navTriggerRef}
-                  type='button'
-                  onClick={() => {
-                    if (navOpen) {
-                      navRestoreFocus.current = true
-                      setNavOpen(false)
-                      return
                     }
-                    setNavMounted(true)
-                    setNavOpen(true)
-                  }}
-                  aria-label={navOpen ? 'Close menu' : 'Open menu'}
-                  aria-expanded={navOpen}
-                  aria-controls='mobile-nav-sheet'
-                  className='rp-navtoggle rp-focus'
-                >
-                  <MenuBars />
-                </button>
-              </span>
-            </div>
-          </div>
-        </div>
+                    <span className='md:hidden'>
+                      <button
+                        ref={navTriggerRef}
+                        type='button'
+                        onClick={() => {
+                          if (navOpen) {
+                            navRestoreFocus.current = true
+                            setNavOpen(false)
+                            return
+                          }
+                          setNavMounted(true)
+                          setNavOpen(true)
+                        }}
+                        aria-label={navOpen ? 'Close menu' : 'Open menu'}
+                        aria-expanded={navOpen}
+                        aria-controls='mobile-nav-sheet'
+                        className='rp-navtoggle rp-focus'
+                      >
+                        <MenuBars />
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-        <div className='rp-navband relative hidden md:block'>
-          <div className='rp-shell'>
-            <nav
-              aria-label='Primary'
-              className='rp-no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'
-            >
-              {navigation.map((item) => (
-                <NavLink
-                  key={item.label}
-                  to={`/t/${config.slug}${item.path}`}
-                  end={item.end}
-                  className={navLinkClass}
-                >
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
+              <div className='rp-navband relative hidden md:block'>
+                <div className='rp-shell'>
+                  <nav
+                    aria-label='Primary'
+                    className='rp-no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'
+                  >
+                    {navigation.map((item) => (
+                      <NavLink
+                        key={item.label}
+                        to={`/t/${config.slug}${item.path}`}
+                        end={item.end}
+                        className={navLinkClass}
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </nav>
+                </div>
+              </div>
+            </>
+          )}
+        {config.slug === 'acmd' && (
+          <div className='border-b border-line bg-surface-2'>
+            <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
+              Demo portal. Answers currently use the CorpusKit documentation knowledge base.
+            </p>
           </div>
-        </div>
+        )}
       </header>
-
-      {config.slug === 'acmd' && (
-        <div className='border-b border-line bg-surface-2'>
-          <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
-            Demo portal. Answers currently use the CorpusKit documentation knowledge base.
-          </p>
-        </div>
-      )}
 
       {
         /* The phone menu. It hangs from under the header rather than covering
@@ -725,7 +801,11 @@ export function TenantLayout() {
         * it, and it overruns anything stacked below - which is exactly the
         * overlap this avoids. */
       }
-      {isViewportHeightRoute ? null : <PortalFooter branding={config.branding} />}
+      {isViewportHeightRoute
+        ? null
+        : isAcmd
+        ? <AcmdSiteFooter />
+        : <PortalFooter branding={config.branding} />}
 
       {signInOpen ? <SignInDialog user={auth?.user} onClose={() => setSignInOpen(false)} /> : null}
 
