@@ -19,7 +19,7 @@ permissions:
 jobs:
   gate:
     name: Typecheck, lint, format, tests, build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       deployable: ${{ steps.creds.outputs.deployable }}
     steps:
@@ -98,7 +98,7 @@ jobs:
     # The documentation demo exercises the real ARAG protocol before production changes.
     needs: [gate, deploy-demo]
     if: needs.gate.outputs.deployable == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -182,7 +182,7 @@ jobs:
     name: Deploy documentation demo
     needs: gate
     if: needs.gate.outputs.deployable == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
