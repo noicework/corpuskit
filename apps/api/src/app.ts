@@ -3877,12 +3877,29 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const requireManagement = (c: Context) =>
     management ? null : c.json({ error: 'management_unavailable' }, 503)
 
+  /** Member rows and group mappings scoped to one portal. */
+  const portalAssignments = (slug: string) =>
+    opts.rbac?.assignments.list(configuredTenantId).filter((row) =>
+      row.scope.kind === 'portal' && row.scope.slug === slug
+    ) ?? []
+  /**
+   * A slug that still carries access from a portal removed before slugs were retired. A new
+   * portal must not take it, or it would inherit those members and keys.
+   */
+  const heldByRemovedPortal = (slug: string) =>
+    portalAssignments(slug).length > 0 ||
+    (KeyPortalSlugSchema.safeParse(slug).success && mcpKeys.list(slug).length > 0)
+
   app.post(declaredRoute('POST', '/api/admin/tenants'), async (c) => {
     const parsed = newTenantSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const base = parsed.data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     let newSlug = base
-    for (let index = 2; tenants.get(newSlug); index++) newSlug = `${base}-${index}`
+    for (
+      let index = 2;
+      tenants.get(newSlug) || tenants.isRetired(newSlug) || heldByRemovedPortal(newSlug);
+      index++
+    ) newSlug = `${base}-${index}`
     if (!KeyPortalSlugSchema.safeParse(newSlug).success) {
       return c.json({ error: 'invalid_request' }, 400)
     }
@@ -3894,7 +3911,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Allocation is rechecked after authority awaits and immediately before the synchronous add.
     if (tenants.get(newSlug)) return c.json({ error: 'portal_conflict' }, 409)
     try {
-      const config = tenants.add(parsed.data as NewTenantInput)
+      const config = tenants.add(parsed.data as NewTenantInput, heldByRemovedPortal)
       if (config.slug !== newSlug) throw new AuthorisationError(403)
       if (config.hostname) {
         return c.json({
@@ -4022,10 +4039,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return c.json({ error: 'domain_removal_failed', message }, 502)
       }
     }
+    const { requestId, actor } = requestContext(c.req.raw)
+    const grants = portalAssignments(slug)
+    if (grants.length > 0 && !actor) throw new AuthorisationError(403)
+    // Removal retires the slug, so no later portal can take it. Its members, group mappings and
+    // data keys are then revoked, so no access to the removed portal remains on record.
     tenants.remove(slug)
     bindings.remove(slug)
     lifecycle.remove(slug)
     opts.invalidate?.(slug)
+    const assignments = opts.rbac?.assignmentService(
+      configuredTenantId,
+      opts.audience,
+      opts.externalLoginEnabled,
+    )
+    for (const row of grants) assignments?.remove(row.id, { requestId, actor: actor! })
+    if (KeyPortalSlugSchema.safeParse(slug).success) {
+      const revokedAt = new Date(opts.now?.() ?? Date.now()).toISOString()
+      for (const key of mcpKeys.list(slug)) {
+        if (!key.revokedAt) mcpKeys.revoke(slug, key.id, revokedAt)
+      }
+    }
     return c.json({
       ok: true,
       domain: config?.hostname

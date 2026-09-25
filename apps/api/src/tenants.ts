@@ -229,11 +229,23 @@ export function validateTenantPatch(value: unknown): TenantPatch {
   return patch as TenantPatch
 }
 
+/** Slugs recorded as retired, from a persisted `retired` list. Anything else reads as none. */
+export function retiredSlugs(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((slug): slug is string => typeof slug === 'string')
+    : []
+}
+
 export class TenantStore {
   private custom: Record<string, unknown> = {}
   /** Analysis-derived overrides, applicable to seeded portals too. */
   private overrides: Record<string, unknown> = {}
   private disabled = new Set<string>()
+  /**
+   * Slugs of removed portals. Grants, keys and research records are keyed by slug, so a new
+   * portal never takes one of these and cannot inherit what the removed portal left behind.
+   */
+  private retired = new Set<string>()
   private readonly path: string
   private readonly platformDomain: string
 
@@ -241,6 +253,7 @@ export class TenantStore {
     custom: Record<string, unknown>
     overrides: Record<string, unknown>
     disabled: string[]
+    retired: string[]
   }
 
   constructor(
@@ -262,6 +275,7 @@ export class TenantStore {
     if (Array.isArray(raw.disabled)) {
       this.disabled = new Set(raw.disabled.filter((s): s is string => typeof s === 'string'))
     }
+    this.retired = new Set(retiredSlugs(raw.retired))
     this.committed = structuredClone(this.snapshot())
   }
 
@@ -296,6 +310,11 @@ export class TenantStore {
 
   isDisabled(slug: string): boolean {
     return this.disabled.has(slug)
+  }
+
+  /** A removed portal's slug, which no new portal may take. */
+  isRetired(slug: string): boolean {
+    return this.retired.has(slug)
   }
 
   setDisabled(slug: string, disabled: boolean): void {
@@ -371,11 +390,17 @@ export class TenantStore {
     return all
   }
 
-  add(input: NewTenantInput): TenantConfig {
+  /**
+   * Create a portal under the first free slug made from its name. A slug is taken while a portal
+   * holds it, once it has been retired, or when `unavailable` says so.
+   */
+  add(input: NewTenantInput, unavailable?: (slug: string) => boolean): TenantConfig {
     const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!base) throw new Error('The portal name must contain letters or numbers')
     let slug = base
-    for (let i = 2; this.get(slug); i++) slug = `${base}-${i}`
+    for (let i = 2; this.get(slug) || this.retired.has(slug) || unavailable?.(slug); i++) {
+      slug = `${base}-${i}`
+    }
     const config = TenantConfigSchema.parse({
       slug,
       branding: {
@@ -396,11 +421,13 @@ export class TenantStore {
     return config
   }
 
+  /** Remove a portal created in the app and retire its slug in the same write. */
   remove(slug: string): boolean {
     if (!this.isCustom(slug)) return false
     delete this.custom[slug]
     delete this.overrides[slug]
     this.disabled.delete(slug)
+    this.retired.add(slug)
     this.persist()
     return true
   }
@@ -414,6 +441,7 @@ export class TenantStore {
       this.custom = before.custom
       this.overrides = before.overrides
       this.disabled = new Set(before.disabled)
+      this.retired = new Set(before.retired)
       throw error
     }
   }
@@ -423,6 +451,7 @@ export class TenantStore {
       custom: this.custom,
       overrides: this.overrides,
       disabled: [...this.disabled],
+      retired: [...this.retired],
     }
   }
 }

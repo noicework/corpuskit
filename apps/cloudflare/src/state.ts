@@ -41,6 +41,7 @@ import type {
 } from '../../api/src/stores.ts'
 import {
   type NewTenantInput,
+  retiredSlugs,
   tenantConfig,
   type TenantPatch,
   tenantRecord,
@@ -710,6 +711,8 @@ interface TenantState {
   custom: Record<string, unknown>
   overrides: Record<string, unknown>
   disabled: string[]
+  /** Slugs of removed portals; see `TenantStore`. */
+  retired: string[]
 }
 
 const DEFAULT_COLOURS = {
@@ -728,6 +731,7 @@ export class DurableTenantStore implements TenantStoreApi {
       custom: Object.hasOwn(raw, 'custom') ? tenantRecord(raw.custom) : {},
       overrides: Object.hasOwn(raw, 'overrides') ? tenantRecord(raw.overrides) : {},
       disabled: Array.isArray(raw.disabled) ? raw.disabled : [],
+      retired: retiredSlugs(raw.retired),
     }
   }
 
@@ -775,6 +779,10 @@ export class DurableTenantStore implements TenantStoreApi {
 
   isDisabled(slug: string): boolean {
     return this.load().disabled.includes(slug)
+  }
+
+  isRetired(slug: string): boolean {
+    return this.load().retired.includes(slug)
   }
 
   setDisabled(slug: string, disabled: boolean): void {
@@ -851,12 +859,16 @@ export class DurableTenantStore implements TenantStoreApi {
     return rows
   }
 
-  add(input: NewTenantInput): TenantConfig {
+  add(input: NewTenantInput, unavailable?: (slug: string) => boolean): TenantConfig {
     const data = this.load()
     const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!base) throw new Error('The portal name must contain letters or numbers')
     let slug = base
-    for (let index = 2; this.get(slug); index += 1) slug = `${base}-${index}`
+    for (
+      let index = 2;
+      this.get(slug) || data.retired.includes(slug) || unavailable?.(slug);
+      index += 1
+    ) slug = `${base}-${index}`
     const config = TenantConfigSchema.parse({
       slug,
       branding: {
@@ -883,6 +895,7 @@ export class DurableTenantStore implements TenantStoreApi {
     delete data.custom[slug]
     delete data.overrides[slug]
     data.disabled = data.disabled.filter((item) => item !== slug)
+    if (!data.retired.includes(slug)) data.retired.push(slug)
     this.save(data)
     return true
   }

@@ -504,12 +504,26 @@ writes nothing to disk. Records are kept for every slug the route guard can addr
 digits, `_` and `-`, up to 64 characters). A record that cannot be read fails closed: requests
 to that portal fail rather than treating it as active or unlimited, the portal list and
 cross-portal asks leave it out, and scheduled jobs skip it, while every other portal keeps
-working. Deleting a portal removes its records, so a later portal with the same slug starts
-fresh. Connecting a different knowledge box or disconnecting one resets the capacity ledger
+working. Connecting a different knowledge box or disconnecting one resets the capacity ledger
 wherever the binding is written. Replacing or removing a withheld binding always resets it,
 because the withheld record cannot show which box the ledger described.
 
 No secret or variable is needed.
+
+### Deleting a portal
+
+`DELETE /api/admin/tenants/<slug>` (owner only) removes the portal and retires its slug in one
+write, then removes its knowledge box binding and lifecycle records. It then revokes every member
+row and group mapping scoped to the portal, each recorded as an `assignment.delete` audit event,
+and every data key issued for it. The portal's other records (sources, enrichments, insights,
+suggestions, knowledge graph proposals, research sessions, investigations, watches and branding)
+stay stored under the retired slug, where no portal route can reach them. Its audit events stay
+in the platform audit log.
+
+A new portal never takes a retired slug: `POST /api/admin/tenants` moves on to the next free
+slug for the same name (`acme`, then `acme-2`). It also passes over a slug that still has member
+rows, group mappings or data keys on record, which covers portals deleted before slugs were
+retired. So a new portal, whoever creates it, never inherits access or data from a removed one.
 
 ### In the web app
 
