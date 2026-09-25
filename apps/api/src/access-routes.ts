@@ -53,6 +53,7 @@ export function registerAccessRoutes(app: Hono, services: AccessRouteServices): 
       : z.object({
         subjectKind: z.enum(['active-oid', 'pending-email']),
         subjectId: z.string(),
+        source: z.enum(['entra', 'external']).default('entra'),
         role,
       }).strict()
     const patchSchema = z.object({ role }).strict()
@@ -94,7 +95,8 @@ export function registerAccessRoutes(app: Hono, services: AccessRouteServices): 
         if (
           service.list().some((row) =>
             belongs(row, input.scope) && row.subjectKind === subjectKind &&
-            row.subjectId === subjectId
+            row.subjectId === subjectId &&
+            row.source === ('source' in input ? input.source : 'entra')
           )
         ) {
           return c.json({ error: 'assignment_conflict' }, 409)

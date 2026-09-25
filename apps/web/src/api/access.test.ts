@@ -15,6 +15,7 @@ const row = {
   tenantId: 'tenant-1',
   subjectKind: 'pending-email',
   subjectId: 'pending@example.test',
+  source: 'entra',
   scope,
   role: 'viewer',
   emailProvenance: 'pending@example.test',
@@ -121,6 +122,7 @@ Deno.test('assignment responses reject malformed, wrong-scope, wrong-family and 
         { items: [{ ...row, scope: { kind: 'portal', slug: 'other' } }] },
         { items: [{ ...row, subjectKind: 'group' }] },
         { items: [{ ...row, role: 'owner' }] },
+        { items: [{ ...row, source: 'unknown' }] },
       ]
     ) {
       globalThis.fetch = () => Promise.resolve(Response.json(value))
@@ -130,6 +132,40 @@ Deno.test('assignment responses reject malformed, wrong-scope, wrong-family and 
     await expect(listAssignments(scope, 'groups')).rejects.toThrow(AssignmentError)
     globalThis.fetch = () => Promise.resolve(Response.json({ items: [], capability: 'disabled' }))
     expect((await listAssignments(scope, 'groups')).capability).toBe('disabled')
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('assignment transport preserves external source and defaults legacy rows to Entra', async () => {
+  const original = globalThis.fetch
+  const calls: unknown[] = []
+  try {
+    globalThis.fetch = (_input, init) => {
+      calls.push(JSON.parse(String(init?.body)))
+      return Promise.resolve(Response.json({ ...row, source: 'external' }))
+    }
+    for (const subjectKind of ['pending-email', 'active-oid'] as const) {
+      const saved = await createAssignment(scope, 'members', {
+        subjectKind,
+        subjectId: subjectKind === 'pending-email' ? row.subjectId : 'ext:reader',
+        role: 'viewer',
+        source: 'external',
+      })
+      expect(saved.source).toBe('external')
+    }
+    expect(calls).toEqual([
+      {
+        subjectKind: 'pending-email',
+        subjectId: row.subjectId,
+        role: 'viewer',
+        source: 'external',
+      },
+      { subjectKind: 'active-oid', subjectId: 'ext:reader', role: 'viewer', source: 'external' },
+    ])
+    const { source: _source, ...legacy } = row
+    globalThis.fetch = () => Promise.resolve(Response.json({ items: [legacy] }))
+    expect((await listAssignments(scope, 'members')).items[0]?.source).toBe('entra')
   } finally {
     globalThis.fetch = original
   }

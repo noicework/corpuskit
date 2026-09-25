@@ -7,7 +7,7 @@ import { Skeleton } from '../components/ui.tsx'
 import { AddPortal } from './admin/AddPortal.tsx'
 import { MigratePanel } from './admin/MigratePanel.tsx'
 import { PortalRow } from './admin/PortalRow.tsx'
-import { microsoftLoginUrl } from '../api/auth.ts'
+import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import {
   EmergencyAccessProvider,
   usePermissionAdminAccess,
@@ -85,9 +85,18 @@ export function OverviewAccess(
         </>
       )}
       <div className='flex flex-wrap gap-3'>
-        {!overview.sessionAllowed && (
+        {!overview.sessionAllowed && overview.auth?.entraEnabled !== false && (
           <a href={microsoftLoginUrl(returnTo)} className='rp-btn rp-btn-primary'>
             Sign in with Microsoft
+          </a>
+        )}
+        {!overview.sessionAllowed && overview.auth?.externalLogin && (
+          <a
+            href={externalLoginUrl(overview.auth.externalLogin.startUrl, returnTo)}
+            className='rp-btn rp-btn-outline whitespace-normal text-center'
+            data-external-login
+          >
+            {overview.auth.externalLogin.name}
           </a>
         )}
         {(overview.sessionAllowed || overview.breakGlassEnabled) && (

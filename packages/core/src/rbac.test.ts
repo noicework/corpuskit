@@ -806,3 +806,35 @@ describe('operator principals', () => {
     ) expect(PrincipalSchema.safeParse(invalid).success).toBe(false)
   })
 })
+
+Deno.test('external identities need explicit local authority on authenticated portals', () => {
+  const identity = { kind: 'user', tenantId: 'external', oid: 'ext:person' }
+  for (const configuredTenantId of ['tenant-a', 'external']) {
+    const policy = { slug: 'alpha', accessMode: 'authenticated', configuredTenantId }
+    const unassigned = normalisePrincipal(identity, noRoles, policy)
+    expect(authorize(unassigned, 'portal.read', alpha)).toBe(false)
+    const assigned = normalisePrincipal(identity, {
+      portalRoles: [{ slug: 'alpha', role: 'viewer' }],
+    }, policy)
+    expect(authorize(assigned, 'portal.read', alpha)).toBe(true)
+  }
+})
+
+Deno.test('external identities and operator principals stay distinct kinds', () => {
+  const external = { kind: 'user', tenantId: 'external', oid: 'ext:automation' }
+  expect(PrincipalSchema.parse(external)).toEqual(external)
+  // An external identity never parses as an operator, and an operator carries no identity fields.
+  for (
+    const invalid of [
+      { kind: 'operator', id: 'automation', tenantId: 'external' },
+      { kind: 'operator', id: 'automation', oid: 'ext:automation' },
+      { kind: 'operator', tenantId: 'external', oid: 'ext:automation' },
+    ]
+  ) expect(PrincipalSchema.safeParse(invalid).success).toBe(false)
+  // Assigned platform authority on an external user is a user grant, not the operator's.
+  const assigned = normalisePrincipal(external, {
+    platformRole: 'platform-admin',
+    portalRoles: [],
+  })
+  expect(assigned?.identity).toEqual(external)
+})

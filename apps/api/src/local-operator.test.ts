@@ -1,6 +1,11 @@
 import { expect } from '@std/expect'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { buildApp } from './app.ts'
+import {
+  externalLoginConfig,
+  externalLoginConfigured,
+  ExternalLoginReplayStore,
+} from './external-login.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { OPERATOR_FAILURE_LIMIT_PER_MIN, operatorRequestContext } from './operator.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
@@ -36,7 +41,10 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
   }
   const owned = localOwnedStores(directory, database, rbac.audit, env)
   const tenants = owned.tenants!
-  const ingress = new LocalIngress({ rbac, tenants, env })
+  const externalReplays = new ExternalLoginReplayStore(database)
+  const ingress = new LocalIngress({ rbac, tenants, env, externalReplays })
+  // The same identity configuration the local server derives from its environment.
+  const externalLoginEnabled = externalLoginConfigured(externalLoginConfig(env))
   const initialAuditIds = new Set(
     rbac.audit.read({ scope: { kind: 'platform' } }).map((event) => event.id),
   )
@@ -44,7 +52,8 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     ...owned,
     rbac,
     tenants,
-    configuredTenantId: env.ENTRA_TENANT_ID,
+    configuredTenantId: env.ENTRA_TENANT_ID || (externalLoginEnabled ? 'external' : undefined),
+    externalLoginEnabled,
     audience: 'corpuskit',
     provider: new DoubleProvider(),
     audit: rbac.audit,
@@ -372,5 +381,120 @@ Deno.test('local server warns once at startup without the value when a present o
     }
   } finally {
     console.warn = originalWarn
+  }
+})
+
+Deno.test('local operator beside an external session cookie never reads or upgrades it, with or without Entra', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const handoffUrl = async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+      part({
+        iss: 'https://issuer.example',
+        aud: 'corpuskit',
+        sub: 'person-1',
+        email: 'person@example.test',
+        email_verified: true,
+        iat: now - 5,
+        exp: now + 60,
+        jti: crypto.randomUUID(),
+      })
+    }`
+    const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
+    const assertion = `${content}.${encode(new Uint8Array(signature))}`
+    return `http://localhost/auth/external?${new URLSearchParams({
+      assertion,
+      returnTo: '/t/marine',
+    })}`
+  }
+  const external = {
+    SESSION_SECRET: 'local-operator-session-secret-of-32-bytes-or-more',
+    WORKER_NAME: 'corpuskit',
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  }
+  for (const entra of [true, false]) {
+    const f = fixture({ ...external, ...(entra ? {} : { ENTRA_TENANT_ID: undefined }) })
+    const tenantId = entra ? 'tenant-1' : 'external'
+    const dispatch = (request: Request) => f.app.fetch(request)
+    try {
+      f.rbac.assignmentService(tenantId, 'corpuskit', true).create({
+        subjectKind: 'pending-email',
+        subjectId: 'person@example.test',
+        source: 'external',
+        scope: { kind: 'portal', slug: 'marine' },
+        role: 'analyst',
+      }, { requestId: 'setup', actor: { kind: 'system' } })
+      // The operator credential is decided first: the handoff refuses it and consumes nothing.
+      const url = await handoffUrl()
+      const operatorHandoff = await f.ingress.handle(
+        new Request(url, { headers: { authorization: `Operator ${operatorKey}` } }),
+        dispatch,
+      )
+      expect(operatorHandoff.status).toBe(403)
+      expect(await operatorHandoff.json()).toEqual({ error: 'operator_not_allowed' })
+      const handoff = await f.ingress.handle(new Request(url), dispatch)
+      expect(handoff.status).toBe(303)
+      const cookie = handoff.headers.get('set-cookie')!.split(';')[0]!
+      const call = (path: string, init: RequestInit = {}, operator = true) => {
+        const headers = new Headers(init.headers)
+        headers.set('cookie', cookie)
+        if (operator) headers.set('authorization', `Operator ${operatorKey}`)
+        return f.ingress.handle(
+          new Request(`http://localhost${path}`, { ...init, headers }),
+          dispatch,
+        )
+      }
+      const created = await call('/api/admin/t/marine/members', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subjectKind: 'pending-email',
+          subjectId: 'reader@example.test',
+          source: 'external',
+          role: 'viewer',
+        }),
+      })
+      expect(created.status).toBe(201)
+      // The session was not read, so its own pending assignment is still unclaimed.
+      expect(
+        f.rbac.assignments.list(tenantId).map((row) => row.subjectKind),
+      ).toEqual(['pending-email', 'pending-email'])
+      for (const path of ['/api/t/marine/config', '/auth/me', '/auth/logout']) {
+        const refused = await call(path)
+        expect([path, refused.status]).toEqual([path, 403])
+        expect(await refused.json()).toEqual({ error: 'operator_not_allowed' })
+      }
+      // Apart from the setup grant, every event so far is the operator's; none is the person's.
+      expect(JSON.stringify(f.events())).not.toContain('ext:person-1')
+      const operatorEvents = f.events().filter((event) => event.actor_kind !== 'system')
+      expect(operatorEvents.length).toBeGreaterThan(0)
+      expect(
+        operatorEvents.every((event) =>
+          event.actor_kind === 'operator' && event.actor_id === 'operator:hosting-test'
+        ),
+      ).toBe(true)
+      // Alone, the cookie is only the external person with only its own portal assignment.
+      const me = await (await call('/auth/me?portal=marine', {}, false)).json()
+      expect(me).toMatchObject({
+        authenticated: true,
+        sessionProvenance: 'external',
+        entraEnabled: false,
+        effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'analyst' }] },
+      })
+      expect(me.effectiveRoles.platformRole).toBeUndefined()
+      const platform = await call('/api/admin/tenants', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Not Allowed' }),
+      }, false)
+      expect(platform.status).toBe(403)
+    } finally {
+      f.dispose()
+    }
   }
 })

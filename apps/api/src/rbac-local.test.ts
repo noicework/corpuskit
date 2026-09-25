@@ -10,7 +10,7 @@ Deno.test('local RBAC reopens audit, assignments, lockouts, evidence and durable
     const state = new RbacState(db, () => 10)
     state.migrate()
     db.exec(
-      "INSERT INTO role_assignments VALUES ('a','tid','pending-email','person@example.test','platform','','owner',NULL,1,1)",
+      "INSERT INTO role_assignments (id,tenant_id,subject_kind,subject_id,scope_kind,scope_slug,role,email_provenance,created_at,updated_at) VALUES ('a','tid','pending-email','person@example.test','platform','','owner',NULL,1,1)",
     )
     db.exec("INSERT INTO break_glass_attempts VALUES ('attempt-1','127.0.0.1',1)")
     db.exec("INSERT INTO break_glass_locks VALUES ('127.0.0.1',600001)")
@@ -36,6 +36,7 @@ Deno.test('local RBAC reopens audit, assignments, lockouts, evidence and durable
     ) {
       expect(db.all(`SELECT count(*) AS n FROM ${table}`)).toEqual([{ n: 1 }])
     }
+    expect(db.all('SELECT source FROM role_assignments')).toEqual([{ source: 'entra' }])
     expect(db.all('SELECT status, verified_at FROM rbac_group_capabilities')).toEqual([{
       status: 'disabled',
       verified_at: null,

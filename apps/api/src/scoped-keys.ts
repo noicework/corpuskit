@@ -19,6 +19,7 @@ export interface ScopedKeyDependencies {
   keys: ScopedKeyStore
   creatorStores: CreatorAuthorityStores
   configuredTenantId: string
+  externalLoginEnabled?: boolean
   now?: () => number
 }
 export interface VerifiedScopedKey {
@@ -111,7 +112,10 @@ export async function issueScopedKey(
     throw new ScopedKeyError('invalid_input')
   }
   if (
-    !validSessionFacts(trustedSession, now) || trustedSession.tenantId !== deps.configuredTenantId
+    !validSessionFacts(trustedSession, now) ||
+    (trustedSession.tenantId === 'external'
+      ? !deps.externalLoginEnabled || trustedSession.provenance !== 'external'
+      : trustedSession.tenantId !== deps.configuredTenantId)
   ) throw new ScopedKeyError('forbidden')
   const { slug, label, role, expiresAt } = parsed.data
   const creator = { tenantId: trustedSession.tenantId, oid: trustedSession.oid }
@@ -119,7 +123,7 @@ export async function issueScopedKey(
   const authoritySnapshot = () =>
     JSON.stringify({
       evidence: deps.creatorStores.rbac.creatorEvidence(creator.tenantId, creator.oid),
-      assignments: deps.creatorStores.rbac.assignments.list(creator.tenantId),
+      assignments: deps.creatorStores.rbac.assignments.list(deps.configuredTenantId),
       groups: deps.creatorStores.rbac.groupCapability(deps.creatorStores.audience),
     })
   const snapshot = authoritySnapshot()

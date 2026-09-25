@@ -15,6 +15,7 @@ export type MemberInput = {
   subjectKind: 'active-oid' | 'pending-email'
   subjectId: string
   role: Role
+  source?: 'entra' | 'external'
 }
 export type GroupInput = { subjectId: string; role: Role }
 const rowSchema = z.object({
@@ -22,6 +23,7 @@ const rowSchema = z.object({
   tenantId: z.string().min(1),
   subjectKind: z.enum(['active-oid', 'pending-email', 'group']),
   subjectId: z.string().min(1),
+  source: z.enum(['entra', 'external']).default('entra'),
   scope: ScopeSchema,
   role: RoleSchema,
   emailProvenance: z.string().nullable(),
@@ -140,6 +142,7 @@ export function createAssignment(
       subjectKind: z.enum(['active-oid', 'pending-email']),
       subjectId: z.string().min(1),
       role,
+      source: z.enum(['entra', 'external']).optional(),
     }).strict()).parse(input)
   return request(
     scope,

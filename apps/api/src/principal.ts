@@ -9,6 +9,7 @@ export interface TrustedSessionFacts extends VerifiedAssignmentSession {
 
 export const TrustedSessionFactsSchema = z.object({
   verified: z.literal(true),
+  provenance: z.enum(['entra', 'external']).optional(),
   tenantId: z.string().min(1),
   oid: z.string().min(1),
   email: z.string().max(254).optional(),
@@ -25,9 +26,17 @@ export function validSessionFacts(value: unknown, now = Date.now()): value is Tr
   const parsed = TrustedSessionFactsSchema.safeParse(value)
   if (!parsed.success) return false
   const facts = parsed.data
+  const external = facts.tenantId === 'external'
+  if (
+    external &&
+    (facts.provenance !== 'external' || !/^ext:[\s\S]{1,128}$/u.test(facts.oid) ||
+      facts.roles.length || facts.groups.length)
+  ) return false
+  if (!external && facts.provenance === 'external') return false
   return facts.claimIssuedAt <= now + 30_000 && facts.createdAt <= now + 30_000 &&
     facts.createdAt >= facts.claimIssuedAt - 30_000 && facts.expiresAt > now &&
-    facts.expiresAt > facts.createdAt && facts.expiresAt <= facts.claimIssuedAt + 8 * 3600_000 &&
+    facts.expiresAt > facts.createdAt &&
+    facts.expiresAt <= (external ? facts.createdAt : facts.claimIssuedAt) + 8 * 3600_000 &&
     (facts.groupStatus === 'complete' || facts.groups.length === 0)
 }
 
@@ -36,14 +45,16 @@ const maximumHeaderBytes = 8192
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/)
+/** The deployment name (WORKER_NAME); verification binds it exactly to the configured audience. */
+const audience = z.string().min(1).max(128)
 
 /** D4 wire fields only. Original session facts travel separately in trusted internal context. */
 const SessionEnvelopeSchema = z.object({
   v: z.literal(1),
   kind: z.literal('session').optional(),
-  aud: z.enum(['corpuskit', 'corpuskit-demo', 'corpuskit-demos']),
+  aud: audience,
   tid: identifier,
-  oid: identifier,
+  oid: z.union([identifier, z.string().regex(/^ext:[\s\S]{1,128}$/u)]),
   email: z.string().max(254),
   name: z.string().max(512),
   roles: z.array(z.string().min(1).max(256)).max(1024),
@@ -55,7 +66,7 @@ export type SessionEnvelope = z.infer<typeof SessionEnvelopeSchema>
 const OperatorEnvelopeSchema = z.object({
   v: z.literal(1),
   kind: z.literal('operator'),
-  aud: identifier,
+  aud: audience,
   id: OperatorIdSchema,
   iat: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 }).strict()
@@ -67,6 +78,7 @@ export interface PrincipalVerificationConfig {
   audience: string
   tenantId: string
   operatorId?: string
+  externalLoginEnabled?: boolean
 }
 export type PrincipalRejectionCode =
   | 'size'
@@ -185,6 +197,11 @@ export async function verifyPrincipal(
   if (envelope.aud !== config.audience) return reject('audience')
   if (envelope.kind === 'operator') {
     if (!config.operatorId || envelope.id !== config.operatorId) return reject('configuration')
+  } else if (envelope.tid === 'external') {
+    if (
+      !config.externalLoginEnabled || !/^ext:[\s\S]{1,128}$/u.test(envelope.oid) ||
+      envelope.roles.length || envelope.groups.length
+    ) return reject('tenant')
   } else if (envelope.tid !== config.tenantId) return reject('tenant')
   const age = now - envelope.iat * 1000
   if (!Number.isSafeInteger(now) || age > 60_000 || age < -30_000) return reject('freshness')

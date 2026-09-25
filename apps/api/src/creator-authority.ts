@@ -10,6 +10,7 @@ export interface CreatorAuthority {
 export interface CreatorAuthorityStores {
   rbac: RoleResolutionStores['rbac'] & Pick<RbacState, 'creatorEvidence'>
   audience: string
+  externalLoginEnabled?: boolean
   logUnknownRole?: RoleResolutionStores['logUnknownRole']
 }
 
@@ -24,15 +25,19 @@ export async function resolveCreatorAuthority(
   const identifier = (value: unknown): value is string =>
     typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
   if (
-    !identifier(configuredTenantId) || creator.tenantId !== configuredTenantId ||
-    !identifier(creator.oid) || !identifier(creator.slug) || !Number.isSafeInteger(now) || now < 0
+    !identifier(configuredTenantId) ||
+    (creator.tenantId === 'external'
+      ? !stores.externalLoginEnabled || !/^ext:[\s\S]{1,128}$/u.test(creator.oid)
+      : creator.tenantId !== configuredTenantId || !identifier(creator.oid)) ||
+    !identifier(creator.slug) || !Number.isSafeInteger(now) || now < 0
   ) return unproven
   const evidence = stores.rbac.creatorEvidence(creator.tenantId, creator.oid)
   if (!evidence || evidence.observedAt > now || evidence.claimIssuedAt > now + 30_000) {
     return unproven
   }
   const fresh = Math.min(evidence.expiresAt, evidence.claimIssuedAt + 28_800_000) > now
-  const grants = await resolveRoleGrants(evidence, fresh ? evidence : null, stores)
+  const roleStores = { ...stores, assignmentTenantId: configuredTenantId }
+  const grants = await resolveRoleGrants(evidence, fresh ? evidence : null, roleStores)
   const role = grants.effectiveRoles.platformRole
     ? 'portal-admin'
     : grants.effectiveRoles.portalRoles.find((grant) => grant.slug === creator.slug)?.role ?? null
@@ -44,7 +49,7 @@ export async function resolveCreatorAuthority(
       roles: evidence.roles.filter((value) =>
         ['CorpusKit.Owner', 'CorpusKit.PlatformAdmin', 'CorpusKit.Admin'].includes(value)
       ),
-    }, stores)
+    }, roleStores)
     if (
       expired.provenance.some((grant) =>
         grant.source !== 'local' &&

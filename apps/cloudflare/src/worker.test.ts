@@ -712,6 +712,12 @@ function workerHarness(
               coarseAdminEligible: false,
             })
           },
+          consumeExternalAssertion() {
+            return Promise.resolve(false)
+          },
+          auditExternalFailure() {
+            return Promise.resolve()
+          },
           maintenance() {
             return Promise.resolve()
           },
@@ -789,8 +795,12 @@ async function principalRequest(
     headers: { 'x-corpuskit-principal': header, 'x-corpuskit-sso-admin': '1' },
   })
 }
-async function realHarness(extraEnv: Record<string, string> = {}, legacyBindings?: unknown) {
-  const database = new DatabaseSync(':memory:')
+async function realHarness(
+  extraEnv: Record<string, string> = {},
+  legacyBindings?: unknown,
+  databasePath = ':memory:',
+) {
+  const database = new DatabaseSync(databasePath)
   const storage: DurableObjectState['storage'] = {
     sql: {
       exec<T>(query: string, ...bindings: unknown[]) {
@@ -1378,3 +1388,681 @@ async function loadWorker(): Promise<WorkerModule> {
   const moduleUrl = `data:application/typescript,${encodeURIComponent(source)}`
   return await import(moduleUrl) as WorkerModule
 }
+
+Deno.test('external handoff reaches the real Worker and durable roles across object restarts', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const key = JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey))
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const mint = async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+      part({
+        iss: 'https://issuer.example',
+        aud: 'dedicated-portal',
+        sub: 'person-1',
+        email: 'Person@Example.test',
+        email_verified: true,
+        name: 'Person',
+        iat: now - 20,
+        exp: now + 60,
+        jti: crypto.randomUUID(),
+        roles: ['CorpusKit.Owner'],
+      })
+    }`
+    return `${content}.${
+      encode(
+        new Uint8Array(
+          await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content)),
+        ),
+      )
+    }`
+  }
+  const directory = Deno.makeTempDirSync()
+  try {
+    for (const entra of [true, false]) {
+      const settings = {
+        WORKER_NAME: 'dedicated-portal',
+        EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+        EXTERNAL_LOGIN_JWK: key,
+        EXTERNAL_LOGIN_START_URL: 'https://issuer.example/start',
+        ...(entra ? {} : { ENTRA_TENANT_ID: '', ENTRA_CLIENT_ID: '', ENTRA_CLIENT_SECRET: '' }),
+      }
+      const path = `${directory}/${entra}.sqlite`
+      let h = await realHarness(settings, undefined, path)
+      try {
+        h.state.rbac.assignmentService(
+          entra ? 'entra-tenant-id' : 'external',
+          'dedicated-portal',
+          true,
+        ).create({
+          subjectKind: 'pending-email',
+          subjectId: 'person@example.test',
+          source: 'external',
+          scope: { kind: 'portal', slug: 'marine' },
+          role: 'analyst',
+        }, { requestId: 'external-grant', actor: { kind: 'system' } })
+        const stores = (h.object as unknown as { stores: DurableStores }).stores
+        stores.tenants.patch('marine', { accessMode: 'restricted' })
+        const token = await mint()
+        const externalRequest = (returnTo = '/t/marine') =>
+          new Request(
+            `https://corpuskit.test/auth/external?${new URLSearchParams({
+              assertion: token,
+              returnTo,
+            })}`,
+          )
+        const response = await worker.fetch(externalRequest(), h.env)
+        expect(response.status).toBe(303)
+        expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+        const cookie = response.headers.get('set-cookie')!.split(';')[0]!
+        const authenticated = (path: string) =>
+          new Request(`https://corpuskit.test${path}`, { headers: { cookie } })
+        const me = await worker.fetch(authenticated('/auth/me?portal=marine'), h.env)
+        const body = await me.json()
+        expect(body.authenticated).toBe(true)
+        expect(body.sessionProvenance).toBe('external')
+        expect(body.user.roles).toEqual([])
+        expect(body.effectiveRoles).toEqual({ portalRoles: [{ slug: 'marine', role: 'analyst' }] })
+        expect(body.portalAccess.permissions).toContain('portal.investigate')
+        expect(body.entraEnabled).toBe(entra)
+        expect((await worker.fetch(authenticated('/api/t/marine/config'), h.env)).status).toBe(200)
+        // Authorisation and owned-store paths use the same external identity, with no provider call.
+        const trail = await worker.fetch(
+          new Request('https://corpuskit.test/api/t/marine/sessions/external-trail', {
+            method: 'PUT',
+            headers: { cookie, 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: 'external-trail',
+              title: 'External research',
+              updatedAt: new Date().toISOString(),
+              messages: [],
+            }),
+          }),
+          h.env,
+        )
+        expect(trail.status).toBe(200)
+        h.database.close()
+        h = await realHarness(settings, undefined, path)
+        expect((await worker.fetch(externalRequest(), h.env)).status).toBe(401)
+        const afterRestart = await worker.fetch(authenticated('/auth/me?portal=marine'), h.env)
+        expect((await afterRestart.json()).portalAccess.available).toBe(true)
+        const rows = h.state.rbac.assignments.list(entra ? 'entra-tenant-id' : 'external')
+        expect(rows.find((row) => row.source === 'external')).toMatchObject({
+          subjectKind: 'active-oid',
+          subjectId: 'ext:person-1',
+        })
+        expect(
+          h.state.rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
+            .map((event) => JSON.parse(event.detail_json)),
+        ).toEqual([{ externalReason: 'replay' }])
+      } finally {
+        h.database.close()
+      }
+    }
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('external-only Worker sets up its first owner through break-glass and an external sign-in', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const now = Math.floor(Date.now() / 1000)
+  const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+    part({
+      iss: 'https://issuer.example',
+      aud: 'dedicated-portal',
+      sub: 'first-owner',
+      email: 'First-Owner@Example.test',
+      email_verified: true,
+      iat: now - 5,
+      exp: now + 60,
+      jti: crypto.randomUUID(),
+    })
+  }`
+  const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
+  const h = await realHarness({
+    WORKER_NAME: 'dedicated-portal',
+    ENTRA_TENANT_ID: '',
+    ENTRA_CLIENT_ID: '',
+    ENTRA_CLIENT_SECRET: '',
+    ADMIN_BREAK_GLASS: 'true',
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  })
+  try {
+    const grant = (body: Record<string, unknown>) =>
+      worker.fetch(
+        new Request('https://corpuskit.test/api/admin/people', {
+          method: 'POST',
+          headers: {
+            'x-admin-passcode': 'fixture',
+            'cf-connecting-ip': '192.0.2.1',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            subjectKind: 'pending-email',
+            subjectId: 'first-owner@example.test',
+            role: 'owner',
+            ...body,
+          }),
+        }),
+        h.env,
+      )
+    // Without an Entra tenant an Entra row could never be claimed, so it is refused.
+    for (const body of [{}, { source: 'entra' }]) {
+      const refused = await grant(body)
+      expect(refused.status).toBe(400)
+      expect(await refused.json()).toEqual({ error: 'invalid_input' })
+    }
+    const created = await grant({ source: 'external' })
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ source: 'external', role: 'owner' })
+    const handoff = await worker.fetch(
+      new Request(
+        `https://corpuskit.test/auth/external?${new URLSearchParams({
+          assertion: `${content}.${encode(new Uint8Array(signature))}`,
+          returnTo: '/admin',
+        })}`,
+      ),
+      h.env,
+    )
+    expect(handoff.status).toBe(303)
+    expect(handoff.headers.get('location')).toBe('/admin')
+    const cookie = handoff.headers.get('set-cookie')!.split(';')[0]!
+    const me = await (await worker.fetch(
+      new Request('https://corpuskit.test/auth/me', { headers: { cookie } }),
+      h.env,
+    )).json()
+    expect(me).toMatchObject({
+      entraEnabled: false,
+      sessionProvenance: 'external',
+      effectiveRoles: { platformRole: 'owner' },
+    })
+    const overview = await worker.fetch(
+      new Request('https://corpuskit.test/api/admin/overview', { headers: { cookie } }),
+      h.env,
+    )
+    expect(overview.status).toBe(200)
+  } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('Worker refuses external handoffs, cookies and envelopes once the issuer is removed', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const mint = async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+      part({
+        iss: 'https://issuer.example',
+        aud: 'corpuskit',
+        sub: 'person-1',
+        email: 'person@example.test',
+        email_verified: true,
+        iat: now - 5,
+        exp: now + 60,
+        jti: crypto.randomUUID(),
+      })
+    }`
+    const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
+    return `${content}.${encode(new Uint8Array(signature))}`
+  }
+  const handoff = async (env: Env) =>
+    worker.fetch(
+      new Request(
+        `https://corpuskit.test/auth/external?${new URLSearchParams({
+          assertion: await mint(),
+          returnTo: '/t/marine',
+        })}`,
+      ),
+      env,
+    )
+  const enabled = await realHarness({
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  })
+  const disabled = await realHarness()
+  try {
+    const issued = await handoff(enabled.env)
+    expect(issued.status).toBe(303)
+    const cookie = issued.headers.get('set-cookie')!.split(';')[0]!
+    const me = (env: Env) =>
+      worker.fetch(new Request('https://corpuskit.test/auth/me', { headers: { cookie } }), env)
+    expect((await (await me(enabled.env)).json()).authenticated).toBe(true)
+    // Same session key, no external configuration: the cookie is anonymous, not an identity.
+    const ignored = await (await me(disabled.env)).json()
+    expect(ignored.authenticated).toBe(false)
+    expect(ignored.externalLogin).toBeNull()
+    const refused = await handoff(disabled.env)
+    expect(refused.status).toBe(401)
+    expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
+    expect(refused.headers.get('set-cookie')).toBeNull()
+    expect(
+      disabled.state.rbac.audit.read({
+        scope: { kind: 'platform' },
+        action: 'auth.external.denied',
+      }).map((event) => JSON.parse(event.detail_json)),
+    ).toEqual([{ externalReason: 'configuration' }])
+    // A correctly signed envelope for an external identity is refused, not downgraded.
+    const external: TrustedSessionFacts = {
+      verified: true,
+      provenance: 'external',
+      tenantId: 'external',
+      oid: 'ext:person-1',
+      email: 'person@example.test',
+      roles: [],
+      groups: [],
+      groupStatus: 'absent',
+      claimIssuedAt: Date.now() - 5_000,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 3600_000,
+    }
+    const forged = await disabled.object.handleTrustedRequest(
+      await principalRequest('/auth/me', external),
+      { session: external },
+    )
+    expect(forged.status).toBe(401)
+    expect(await forged.json()).toEqual({ error: 'invalid_principal' })
+    const accepted = await enabled.object.handleTrustedRequest(
+      await principalRequest('/auth/me', external),
+      { session: external },
+    )
+    expect((await accepted.json()).authenticated).toBe(true)
+  } finally {
+    enabled.database.close()
+    disabled.database.close()
+  }
+})
+
+// Operator credential (hosting automation) combined with external sign-in and Entra sign-in.
+const hostingOperatorKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
+
+async function externalIssuer(audience = 'corpuskit') {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const mint = async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+      part({
+        iss: 'https://issuer.example',
+        aud: audience,
+        sub: 'person-1',
+        email: 'person@example.test',
+        email_verified: true,
+        iat: now - 5,
+        exp: now + 60,
+        jti: crypto.randomUUID(),
+      })
+    }`
+    const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
+    return `${content}.${encode(new Uint8Array(signature))}`
+  }
+  return {
+    env: {
+      WORKER_NAME: audience,
+      EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+      EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    },
+    mint,
+    url: (assertion: string, origin = 'https://corpuskit.test', returnTo = '/t/marine') =>
+      `${origin}/auth/external?${new URLSearchParams({ assertion, returnTo })}`,
+  }
+}
+
+Deno.test('Worker operator credential beside an external session cookie never reads or upgrades the session', async () => {
+  const issuer = await externalIssuer()
+  const h = await realHarness({
+    ...issuer.env,
+    OPERATOR_API_KEY: hostingOperatorKey,
+    OPERATOR_ID: 'hosting-test',
+  })
+  try {
+    const assignments = h.state.rbac.assignmentService('entra-tenant-id', 'corpuskit', true)
+    assignments.create({
+      subjectKind: 'pending-email',
+      subjectId: 'person@example.test',
+      source: 'external',
+      scope: { kind: 'portal', slug: 'marine' },
+      role: 'analyst',
+    }, { requestId: 'external-grant', actor: { kind: 'system' } })
+    const handoff = await worker.fetch(new Request(issuer.url(await issuer.mint())), h.env)
+    expect(handoff.status).toBe(303)
+    const cookie = handoff.headers.get('set-cookie')!.split(';')[0]!
+    const call = (path: string, init: RequestInit = {}, authorization?: string) => {
+      const headers = new Headers(init.headers)
+      headers.set('cookie', cookie)
+      headers.set('cf-connecting-ip', '192.0.2.10')
+      if (authorization) headers.set('authorization', authorization)
+      return worker.fetch(new Request(`https://corpuskit.test${path}`, { ...init, headers }), h.env)
+    }
+    const operator = `Operator ${hostingOperatorKey}`
+    const earlier = new Set(
+      h.state.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 }).map((event) =>
+        event.id
+      ),
+    )
+
+    // A flagged admin route: the operator acts, and the external session is never read.
+    const created = await call('/api/admin/t/marine/members', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subjectKind: 'pending-email',
+        subjectId: 'reader@example.test',
+        source: 'external',
+        role: 'viewer',
+      }),
+    }, operator)
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ source: 'external', role: 'viewer' })
+    const pending = h.state.rbac.assignments.list('entra-tenant-id')
+      .filter((row) => row.source === 'external')
+    // The session's own pending assignment was not activated by the operator request.
+    expect(pending.map((row) => [row.subjectKind, row.subjectId]).sort()).toEqual([
+      ['pending-email', 'person@example.test'],
+      ['pending-email', 'reader@example.test'],
+    ])
+
+    // Unflagged routes refuse the operator and never fall back to the session's own access.
+    for (const path of ['/api/t/marine/config', '/auth/me', '/auth/external']) {
+      const refused = await call(path, {}, operator)
+      expect([path, refused.status]).toEqual([path, 403])
+      expect(await refused.json()).toEqual({ error: 'operator_not_allowed' })
+    }
+    // A wrong operator key beside a valid session is refused rather than treated as the session.
+    const wrong = await call('/api/t/marine/config', {}, `Operator ${'A'.repeat(43)}`)
+    expect(wrong.status).toBe(401)
+    expect(await wrong.json()).toEqual({ error: 'invalid_operator' })
+
+    const operatorEvents = h.state.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 })
+      .filter((event) => !earlier.has(event.id))
+    expect(operatorEvents.length).toBeGreaterThan(0)
+    expect(JSON.stringify(operatorEvents)).not.toContain('ext:person-1')
+    expect(JSON.stringify(operatorEvents)).not.toContain(hostingOperatorKey)
+    expect(
+      operatorEvents.filter((event) => event.actor_kind !== 'anonymous')
+        .every((event) =>
+          event.actor_kind === 'operator' && event.actor_id === 'operator:hosting-test'
+        ),
+    ).toBe(true)
+
+    // The same cookie alone is still only the external person, with only its own assignment.
+    const me = await (await call('/auth/me?portal=marine')).json()
+    expect(me).toMatchObject({
+      authenticated: true,
+      sessionProvenance: 'external',
+      effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'analyst' }] },
+    })
+    expect(me.effectiveRoles.platformRole).toBeUndefined()
+    expect((await call('/api/t/marine/config')).status).toBe(200)
+    const platformRoute = await call('/api/admin/tenants', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Not Allowed' }),
+    })
+    expect(platformRoute.status).toBe(403)
+  } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('an external identity never becomes the operator principal', async () => {
+  const issuer = await externalIssuer()
+  const h = await realHarness({
+    ...issuer.env,
+    OPERATOR_API_KEY: hostingOperatorKey,
+    OPERATOR_ID: 'hosting-test',
+  })
+  try {
+    const external: TrustedSessionFacts = {
+      verified: true,
+      provenance: 'external',
+      tenantId: 'external',
+      oid: 'ext:person-1',
+      email: 'person@example.test',
+      roles: [],
+      groups: [],
+      groupStatus: 'absent',
+      claimIssuedAt: Date.now() - 5_000,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 3600_000,
+    }
+    // A verified external envelope is a session principal with no operator marker or platform role.
+    const principal = await h.object.requestPrincipal(
+      await principalRequest('/api/admin/tenants', external),
+      { session: external },
+    )
+    expect(principal.operator).toBeUndefined()
+    expect(principal.session?.provenance).toBe('external')
+    expect(principal.effectiveRoles).toEqual({ portalRoles: [] })
+    // A genuine operator envelope arriving with an external session is refused outright.
+    const operatorEnvelope = await signPrincipal({
+      v: 1,
+      kind: 'operator',
+      aud: 'corpuskit',
+      id: 'hosting-test',
+      iat: Math.floor(Date.now() / 1000),
+    }, secret)
+    const combined = await h.object.handleTrustedRequest(
+      new Request('https://corpuskit.test/api/admin/tenants', {
+        headers: { 'x-corpuskit-principal': operatorEnvelope },
+      }),
+      { session: external },
+    )
+    expect(combined.status).toBe(401)
+    expect(await combined.json()).toEqual({ error: 'invalid_principal' })
+    // An operator envelope naming the external identity is not the configured operator.
+    const impersonation = await h.object.handleTrustedRequest(
+      new Request('https://corpuskit.test/api/admin/tenants', {
+        headers: {
+          'x-corpuskit-principal': await signPrincipal({
+            v: 1,
+            kind: 'operator',
+            aud: 'corpuskit',
+            id: 'ext:person-1',
+            iat: Math.floor(Date.now() / 1000),
+          }, secret),
+        },
+      }),
+      {},
+    )
+    expect(impersonation.status).toBe(401)
+    // Through the Worker, the external session is refused on an operator-flagged platform route
+    // and audited as itself.
+    const handoff = await worker.fetch(new Request(issuer.url(await issuer.mint())), h.env)
+    const cookie = handoff.headers.get('set-cookie')!.split(';')[0]!
+    const refused = await worker.fetch(
+      new Request('https://corpuskit.test/api/admin/tenants', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Hosted Lab' }),
+      }),
+      h.env,
+    )
+    expect(refused.status).toBe(403)
+    const denial = h.state.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 })
+      .find((event) => event.action === 'request.denied' && event.actor_id === 'ext:person-1')
+    expect(denial?.actor_kind).toBe('user')
+    const stores = (h.object as unknown as { stores: DurableStores }).stores
+    expect(stores.tenants.get('hosted-lab')).toBeUndefined()
+  } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('Worker serves /auth/external without Entra after platform-domain and operator checks', async () => {
+  const issuer = await externalIssuer()
+  const h = await realHarness({
+    ...issuer.env,
+    ENTRA_TENANT_ID: '',
+    ENTRA_CLIENT_ID: '',
+    ENTRA_CLIENT_SECRET: '',
+    OPERATOR_API_KEY: hostingOperatorKey,
+    PLATFORM_DOMAIN: 'research.example.org',
+  })
+  try {
+    const origin = 'https://research.example.org'
+    const assertion = await issuer.mint()
+    // Platform-domain validation comes first and leaves the assertion unused.
+    const invalid = await worker.fetch(
+      new Request(issuer.url(assertion, origin)),
+      { ...h.env, PLATFORM_DOMAIN: 'research.example.org/"' } as Env,
+    )
+    expect(invalid.status).toBe(503)
+    expect(await invalid.json()).toEqual({ error: 'platform_domain_invalid' })
+    // An operator credential on the handoff is refused as a non-API route and consumes nothing.
+    const operatorAttempt = await worker.fetch(
+      new Request(issuer.url(assertion, origin), {
+        headers: { authorization: `Operator ${hostingOperatorKey}` },
+      }),
+      h.env,
+    )
+    expect(operatorAttempt.status).toBe(403)
+    expect(operatorAttempt.headers.get('set-cookie')).toBeNull()
+    // The handoff itself works with Entra unconfigured, scoped to the configured platform domain.
+    const handoff = await worker.fetch(new Request(issuer.url(assertion, origin)), h.env)
+    expect(handoff.status).toBe(303)
+    expect(handoff.headers.get('location')).toBe('/t/marine')
+    const setCookie = handoff.headers.get('set-cookie')!
+    expect(setCookie).toContain('Domain=research.example.org')
+    const cookie = setCookie.split(';')[0]!
+    const me = await (await worker.fetch(
+      new Request(`${origin}/auth/me`, { headers: { cookie } }),
+      h.env,
+    )).json()
+    expect(me).toMatchObject({
+      authenticated: true,
+      sessionProvenance: 'external',
+      entraEnabled: false,
+      externalLoginEnabled: true,
+    })
+    // Only the Microsoft routes report that Microsoft sign-in is not configured.
+    for (const path of ['/auth/login', '/auth/callback']) {
+      const response = await worker.fetch(new Request(`${origin}${path}`), h.env)
+      expect([path, response.status]).toEqual([path, 503])
+      expect(await response.json()).toEqual({ error: 'microsoft_sign_in_not_configured' })
+    }
+  } finally {
+    h.database.close()
+  }
+})
+
+Deno.test('Worker Entra sign-in is unchanged beside external sign-in and the operator credential', async () => {
+  const issuer = await externalIssuer()
+  const h = await realHarness({
+    ...issuer.env,
+    OPERATOR_API_KEY: hostingOperatorKey,
+    OPERATOR_ID: 'hosting-test',
+  })
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['sign', 'verify'],
+  )
+  const publicKey = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const text = (value: unknown) => encode(new TextEncoder().encode(JSON.stringify(value)))
+  const original = globalThis.fetch
+  let nonce = ''
+  globalThis.fetch = async (input) => {
+    const url = String(input instanceof Request ? input.url : input)
+    if (url.endsWith('openid-configuration')) {
+      return Response.json({
+        issuer: 'https://issuer.test',
+        jwks_uri: 'https://issuer.test/keys',
+        token_endpoint: 'https://issuer.test/token',
+        authorization_endpoint: 'https://issuer.test/authorize',
+      })
+    }
+    if (url.endsWith('/keys')) return Response.json({ keys: [{ ...publicKey, kid: 'test' }] })
+    if (url.endsWith('/token')) {
+      const content = `${text({ alg: 'RS256', kid: 'test' })}.${
+        text({
+          aud: '147a13c9-2a9e-4e32-aa01-3f020d2a18cd',
+          iss: 'https://issuer.test',
+          tid: 'entra-tenant-id',
+          oid: 'entra-person',
+          email: 'entra.person@example.test',
+          nonce,
+          iat: Math.floor(Date.now() / 1000) - 60,
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        })
+      }`
+      const signature = await crypto.subtle.sign(
+        'RSASSA-PKCS1-v1_5',
+        pair.privateKey,
+        new TextEncoder().encode(content),
+      )
+      return Response.json({ id_token: `${content}.${encode(new Uint8Array(signature))}` })
+    }
+    throw new Error('Unexpected fixture request')
+  }
+  try {
+    h.state.rbac.assignmentService('entra-tenant-id', 'corpuskit', true).create({
+      subjectKind: 'active-oid',
+      subjectId: 'entra-person',
+      scope: { kind: 'portal', slug: 'marine' },
+      role: 'viewer',
+    }, { requestId: 'entra-grant', actor: { kind: 'system' } })
+    const login = await worker.fetch(new Request('https://corpuskit.org/auth/login'), h.env)
+    expect(login.status).toBe(302)
+    const location = new URL(login.headers.get('location')!)
+    expect(location.origin + location.pathname).toBe('https://issuer.test/authorize')
+    nonce = location.searchParams.get('nonce')!
+    const callback = await worker.fetch(
+      new Request(
+        `https://corpuskit.org/auth/callback?code=test&state=${location.searchParams.get('state')}`,
+        { headers: { cookie: login.headers.get('set-cookie')!.split(';')[0]! } },
+      ),
+      h.env,
+    )
+    expect(callback.status).toBe(302)
+    const cookie = callback.headers.getSetCookie().find((value) =>
+      value.startsWith('__Secure-corpuskit_session=')
+    )!.split(';')[0]!
+    const me = await (await worker.fetch(
+      new Request('https://corpuskit.org/auth/me?portal=marine', { headers: { cookie } }),
+      h.env,
+    )).json()
+    expect(me).toMatchObject({
+      authenticated: true,
+      sessionProvenance: 'entra',
+      user: { id: 'entra-person', provenance: 'entra' },
+      entraEnabled: true,
+      externalLoginEnabled: true,
+      effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'viewer' }] },
+    })
+    // The Entra session is not upgraded by an operator credential either.
+    const combined = await worker.fetch(
+      new Request('https://corpuskit.org/api/t/marine/config', {
+        headers: { cookie, authorization: `Operator ${hostingOperatorKey}` },
+      }),
+      h.env,
+    )
+    expect(combined.status).toBe(403)
+    expect(await combined.json()).toEqual({ error: 'operator_not_allowed' })
+  } finally {
+    globalThis.fetch = original
+    h.database.close()
+  }
+})

@@ -2,6 +2,14 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 
 import { DurableObject } from 'cloudflare:workers'
+import {
+  auditExternalLoginFailure,
+  externalLoginConfig,
+  externalLoginConfigured,
+  type ExternalLoginFailure,
+  externalLoginPresentation,
+  ExternalLoginReplayStore,
+} from '../../api/src/external-login.ts'
 import { docPageById } from '../../../packages/core/src/docs.ts'
 import {
   getPlatformDomain,
@@ -44,6 +52,7 @@ import {
   type AuthUser,
   authUser,
   handleAuthRequest,
+  sessionAuthConfigured,
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
@@ -83,11 +92,13 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
   private readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
+  private readonly externalReplays: ExternalLoginReplayStore
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     const state = new DurableState(ctx.storage.sql, ctx.storage)
     state.migrate()
+    this.externalReplays = new ExternalLoginReplayStore(state.rbacDatabase)
     const bindings = stringEnv(env)
     this.bindings = bindings
     const operatorWarning = operatorConfigurationWarning(bindings)
@@ -119,7 +130,9 @@ export class PortalDurableObject extends DurableObject<Env> {
     })
     this.app = buildApp({
       rbac: this.stores.rbac,
-      configuredTenantId: bindings.ENTRA_TENANT_ID,
+      configuredTenantId: bindings.ENTRA_TENANT_ID ||
+        (externalLoginConfigured(externalLoginConfig(bindings)) ? 'external' : undefined),
+      externalLoginEnabled: externalLoginConfigured(externalLoginConfig(bindings)),
       audience: bindings.WORKER_NAME,
       provider: this.provider,
       management: this.provider,
@@ -165,6 +178,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       audience: this.bindings.WORKER_NAME ?? '',
       tenantId: this.bindings.ENTRA_TENANT_ID ?? '',
       operatorId: configuredOperatorId(this.bindings),
+      externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
     })
     if (result.kind === 'rejected') throw new InvalidPrincipal()
     const session = context.session ?? null
@@ -187,8 +201,9 @@ export class PortalDurableObject extends DurableObject<Env> {
     const requestId = crypto.randomUUID()
     if (session) {
       const activation = this.stores.rbac.assignmentService(
-        session.tenantId,
+        this.bindings.ENTRA_TENANT_ID || 'external',
         this.bindings.WORKER_NAME,
+        externalLoginConfigured(externalLoginConfig(this.bindings)),
       ).activate(session, { requestId, actor: { kind: 'user', id: session.oid } })
       if (!activation.ok && activation.code === 'invalid_principal') throw new InvalidPrincipal()
     }
@@ -196,7 +211,8 @@ export class PortalDurableObject extends DurableObject<Env> {
       rbac: this.stores.rbac,
       tenants: this.stores.tenants,
       audience: this.bindings.WORKER_NAME ?? '',
-    }, this.bindings.ENTRA_TENANT_ID ?? '')
+      externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
+    }, this.bindings.ENTRA_TENANT_ID || 'external')
     return {
       requestId,
       session,
@@ -240,17 +256,35 @@ export class PortalDurableObject extends DurableObject<Env> {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
+        // Deployment-wide sign-in availability; hostname-specific settings do not change it.
+        const signIn = {
+          clientId: this.bindings.ENTRA_CLIENT_ID,
+          clientSecret: this.bindings.ENTRA_CLIENT_SECRET,
+          tenantId: this.bindings.ENTRA_TENANT_ID,
+          sessionSecret: this.bindings.SESSION_SECRET,
+          externalLogin: externalLoginConfig(this.bindings),
+        }
         return json({
           ...buildUiAccessSnapshot({
+            externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
             session: principal.session,
             effectiveRoles: principal.effectiveRoles,
             configuredTenantId: this.bindings.ENTRA_TENANT_ID ?? '',
             selectedSlug,
             tenant,
           }),
+          enabled: sessionAuthConfigured(signIn),
+          entraEnabled: authConfigured(signIn),
+          externalLogin: externalLoginPresentation(externalLoginConfig(this.bindings)),
+          externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
+          sessionProvenance: principal.session ? principal.session.provenance ?? 'entra' : null,
           authenticated: principal.session !== null,
           user: principal.user
-            ? { ...principal.user, isAdmin: principal.coarseAdminEligible }
+            ? {
+              ...principal.user,
+              provenance: principal.session?.provenance ?? 'entra',
+              isAdmin: principal.coarseAdminEligible,
+            }
             : null,
           effectiveRoles: principal.effectiveRoles,
           provenance: principal.provenance,
@@ -330,6 +364,14 @@ export class PortalDurableObject extends DurableObject<Env> {
     return { limited: false }
   }
 
+  async consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean> {
+    return this.externalReplays.consume(key, expiresAt)
+  }
+
+  async auditExternalFailure(reason: ExternalLoginFailure): Promise<void> {
+    auditExternalLoginFailure(this.stores.audit, reason)
+  }
+
   async maintenance(): Promise<void> {
     await runSystemMaintenance(this.provider, this.stores, this.bindings.AUDIT_RETENTION_DAYS)
   }
@@ -377,11 +419,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname.startsWith('/auth/')) {
-    if (!authConfigured(auth)) {
+    if (!sessionAuthConfigured(auth) && url.pathname !== '/auth/external') {
       return json({ error: 'microsoft_sign_in_not_configured' }, 503)
     }
-    const response = (await handleAuthRequest(request, auth)) ?? json({ error: 'not_found' }, 404)
-    if (response.status === 401 || response.status === 403) {
+    const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
+    const response = (await handleAuthRequest(request, auth, {
+      consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
+      auditFailure: (reason) => stub.auditExternalFailure(reason),
+    })) ?? json({ error: 'not_found' }, 404)
+    if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
       try {
         await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
       } catch {
@@ -539,7 +585,8 @@ async function forwardTrusted(
     return json({ error: 'binding_key_invalid' }, 503)
   }
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
-  const user = !hasOperatorScheme(request) && authConfigured(auth)
+  // An operator credential is the whole authority: no session cookie is read beside it.
+  const user = !hasOperatorScheme(request) && sessionAuthConfigured(auth)
     ? await authUser(request, auth)
     : null
   const clientIp = request.headers.get('cf-connecting-ip') ?? undefined
@@ -590,6 +637,7 @@ function authConfig(env: Env, hostname: string, platformDomain: string): Partial
       ? `https://${hostname}/auth/callback`
       : values.ENTRA_REDIRECT_URI,
     adminEmails: values.ENTRA_ADMIN_EMAILS,
+    externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
   }
 }
