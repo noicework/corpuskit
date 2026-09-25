@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ownedMutation, type OwnedMutationBoundary } from './stores.ts'
+import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 
 /** Synchronous persistence keeps quota and capacity admission atomic in each server runtime. */
 export interface LifecycleState {
@@ -48,7 +49,8 @@ const MAX_IN_FLIGHT = 1_000
 /** Beyond this many sized resources the ledger stops sizing and reports bytes as unknown. */
 const MAX_SIZED = 50_000
 
-const SlugSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/)
+/** Every portal the route guard can address; the same rule keys its other stored records. */
+const SlugSchema = KeyPortalSlugSchema
 const Count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const ResourceIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,64}$/)
 const TokenSchema = z.string().regex(/^[a-f0-9]{32}$/)
@@ -91,7 +93,12 @@ export type AddAdmission =
   | { admitted: string | null }
   | { unavailable: true }
   | { limit: 'maxResources' | 'maxBytes'; value: number; max: number }
+/** A created resource without an id is one whose size the ledger cannot record. */
 export type AddOutcome = { created: false } | { created: true; id?: string }
+export interface AddInput {
+  observed?: number
+  bytes: number | null
+}
 
 function dateFormatter(timeZone: string): Intl.DateTimeFormat {
   // Invalid configured timezones fail instead of resetting quotas in another timezone.
@@ -244,9 +251,12 @@ export class PortalLifecycleStore {
     return { limit, resetsAt: nextPortalDay(timeZone, now) }
   }
 
-  /** Count one ask, or refuse it when the portal's daily limit is spent. */
+  /**
+   * Count one ask, or refuse it when the portal's daily limit is spent. Activity is recorded
+   * separately (`touch`) once the ask succeeds, so a refused request leaves no trace.
+   */
   consumeAsk(slug: string, timeZone = 'UTC', now = this.clock()): PortalAskQuota | null {
-    const iso = timestamp(now)
+    timestamp(now)
     const denied = this.askQuota(slug, timeZone, now)
     if (denied) return denied
     const asks = this.readAsks(slug)
@@ -256,29 +266,34 @@ export class PortalLifecycleStore {
     )
     const bucket = String(Math.floor(now / BUCKET))
     buckets[bucket] = (buckets[bucket] ?? 0) + 1
-    const activity = this.activity(slug, iso, true)
-    this.persistAll([
-      [this.key('asks', slug), { v: 1, buckets }],
-      ...(activity ? [[this.key('lifecycle', slug), activity] as const] : []),
-    ])
+    this.persist(this.key('asks', slug), { v: 1, buckets })
     return null
+  }
+
+  /**
+   * Return one ask counted at `now` whose request was then refused before it was answered, such
+   * as by the per-minute rate limit or invalid input, so a refused request costs no quota.
+   */
+  refundAsk(slug: string, now: number): void {
+    timestamp(now)
+    const asks = this.readAsks(slug)
+    const bucket = String(Math.floor(now / BUCKET))
+    const count = asks.buckets[bucket]
+    if (count === undefined) return
+    if (count > 1) asks.buckets[bucket] = count - 1
+    else delete asks.buckets[bucket]
+    // No asks left is the same as no record, so a lone refused ask leaves nothing behind.
+    this.persist(this.key('asks', slug), Object.keys(asks.buckets).length ? asks : undefined)
   }
 
   /** Record portal activity, at most once per resolution interval and never backwards. */
   touch(slug: string, now = this.clock()): void {
-    const activity = this.activity(slug, timestamp(now), false)
-    if (activity) this.persist(this.key('lifecycle', slug), activity)
-  }
-
-  private activity(slug: string, iso: string, exact: boolean): StoredLifecycle | undefined {
+    const iso = timestamp(now)
     const record = this.read(slug)
     const last = record.lastActivityAt ? Date.parse(record.lastActivityAt) : undefined
-    if (last !== undefined && last >= Date.parse(iso)) return undefined
-    if (!exact && last !== undefined && Date.parse(iso) - last < ACTIVITY_RESOLUTION) {
-      return undefined
-    }
+    if (last !== undefined && (last >= now || now - last < ACTIVITY_RESOLUTION)) return
     record.lastActivityAt = iso
-    return record
+    this.persist(this.key('lifecycle', slug), record)
   }
 
   /** Whether the ledger has started; before then an add must observe the knowledge box. */
@@ -321,25 +336,22 @@ export class PortalLifecycleStore {
   /**
    * Admit one add against the current limits in a single synchronous step, so concurrent
    * requests cannot both take the last slot. `observed` is a fresh resource count; it is
-   * required while a capacity limit is set and before the ledger has started.
+   * required while a capacity limit is set and before the ledger has started. `bytes` is null
+   * for an add whose size the portal cannot know, which a byte limit refuses as unavailable.
    */
-  reserveAdd(slug: string, input: { observed?: number; bytes: number }): AddAdmission {
+  reserveAdd(slug: string, input: AddInput): AddAdmission {
     return this.admit(slug, input, true)
   }
 
   /** The same decision as `reserveAdd`, without reserving or writing anything. */
-  checkAdd(slug: string, input: { observed?: number; bytes: number }): AddAdmission {
+  checkAdd(slug: string, input: AddInput): AddAdmission {
     return this.admit(slug, input, false)
   }
 
-  private admit(
-    slug: string,
-    input: { observed?: number; bytes: number },
-    reserve: boolean,
-  ): AddAdmission {
+  private admit(slug: string, input: AddInput, reserve: boolean): AddAdmission {
     const now = this.clock()
     timestamp(now)
-    const bytes = Count.parse(input.bytes)
+    const bytes = input.bytes === null ? null : Count.parse(input.bytes)
     const observed = input.observed === undefined ? undefined : Count.parse(input.observed)
     const limits = this.get(slug).limits
     const limited = limits?.maxResources !== undefined || limits?.maxBytes !== undefined
@@ -374,14 +386,14 @@ export class PortalLifecycleStore {
     const maxBytes = limits?.maxBytes
     if (maxBytes !== undefined) {
       const used = this.bytesOf(record)
-      if (used === null) return refuse({ unavailable: true })
+      if (used === null || bytes === null) return refuse({ unavailable: true })
       const value = used + sum(record.inflight.map((entry) => entry.bytes)) + bytes
       if (value > maxBytes) return refuse({ limit: 'maxBytes', value, max: maxBytes })
     }
     if (record.inflight.length >= MAX_IN_FLIGHT) return refuse({ unavailable: true })
     if (!reserve) return { admitted: null }
     const token = crypto.randomUUID().replaceAll('-', '')
-    record.inflight.push({ token, at: now, bytes })
+    record.inflight.push({ token, at: now, bytes: bytes ?? 0 })
     this.persist(key, record)
     return { admitted: token }
   }
@@ -455,7 +467,7 @@ export class FileLifecycleState implements LifecycleState {
   constructor(private readonly dataDir: string) {}
 
   path(key: string): string {
-    if (!/^portal-(?:lifecycle|asks|capacity):[a-z0-9][a-z0-9_-]{0,127}$/.test(key)) {
+    if (!/^portal-(?:lifecycle|asks|capacity):[A-Za-z0-9_-]{1,64}$/.test(key)) {
       throw new Error('Invalid portal lifecycle storage key')
     }
     return join(this.dataDir, 'lifecycle', `${key.replace(':', '-')}.json`)

@@ -56,6 +56,7 @@ Deno.test('durable lifecycle, ask usage and capacity reservations survive object
       limits: { asksPerDay: 1, maxResources: 2 },
     })
     stores.lifecycle.consumeAsk('marine', 'Australia/Melbourne', now)
+    stores.lifecycle.touch('marine', now)
     const admission = stores.lifecycle.reserveAdd('marine', { observed: 1, bytes: 5 })
     stores.lifecycle.settleAdd('marine', (admission as { admitted: string }).admitted, {
       created: true,

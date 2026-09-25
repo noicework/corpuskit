@@ -221,9 +221,46 @@ Deno.test('malformed persisted lifecycle data fails closed without resetting lim
     expect(() => store.set('marine', { status: 'active', limits: null })).toThrow()
     expect(state.values.get('portal-lifecycle:marine')).toEqual(value)
   }
-  for (const slug of ['../marine', 'marine:other', '__proto__', '', 'x'.repeat(129)]) {
+  for (const slug of ['../marine', 'marine:other', 'a.b', '', 'x'.repeat(65)]) {
     expect(() => store.get(slug)).toThrow()
   }
+})
+
+Deno.test('lifecycle accepts every slug the route guard can address', () => {
+  const directory = Deno.makeTempDirSync()
+  try {
+    for (
+      const store of [
+        new PortalLifecycleStore(new MemoryLifecycleState()),
+        new FileLifecycleStore(directory),
+      ]
+    ) {
+      for (const slug of ['Research_A', '_private', 'a', 'x'.repeat(64), '-dash']) {
+        expect(store.get(slug).status).toBe('active')
+        store.set(slug, { status: 'read_only', limits: { asksPerDay: 2 } })
+        expect(store.get(slug).status).toBe('read_only')
+        expect(store.consumeAsk(slug, 'UTC', instant('2026-09-25T00:00:00Z'))).toBeNull()
+        store.refundAsk(slug, instant('2026-09-25T00:00:00Z'))
+        expect(store.usage(slug, 'UTC', instant('2026-09-25T00:00:00Z')).asksToday).toBe(0)
+      }
+    }
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('a refunded ask frees its slot in the bucket it was counted in', () => {
+  const store = new PortalLifecycleStore(new MemoryLifecycleState())
+  store.set('marine', { status: 'active', limits: { asksPerDay: 1 } })
+  const at = instant('2026-09-25T10:00:00Z')
+  expect(store.consumeAsk('marine', 'UTC', at)).toBeNull()
+  expect(store.consumeAsk('marine', 'UTC', at + 1)?.limit).toBe(1)
+  store.refundAsk('marine', at)
+  expect(store.usage('marine', 'UTC', at).asksToday).toBe(0)
+  expect(store.consumeAsk('marine', 'UTC', at + 2)).toBeNull()
+  // A refund with nothing counted in that bucket changes nothing.
+  store.refundAsk('marine', at - 86_400_000)
+  expect(store.usage('marine', 'UTC', at + 2).asksToday).toBe(1)
 })
 
 Deno.test('local JSON lifecycle survives restart and shares quota between adapter instances', () => {
