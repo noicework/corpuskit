@@ -1,5 +1,16 @@
 import { expect } from '@std/expect'
-import { authenticateOperator, configuredOperatorId, operatorEnvelope } from './operator.ts'
+import {
+  AuthorisationPrincipalSchema,
+  OperatorIdSchema,
+  PrincipalSchema,
+} from '@research-portal/core'
+import {
+  authenticateOperator,
+  configuredOperatorId,
+  operatorConfigurationWarning,
+  operatorEnvelope,
+  operatorRequestContext,
+} from './operator.ts'
 import { signPrincipal, verifyPrincipal } from './principal.ts'
 
 const key = btoa('operator-test-fixture-only-32bytes').replace(/=+$/g, '')
@@ -102,4 +113,72 @@ Deno.test('operator envelope requires its configured actor, audience, signature 
     await expect(signPrincipal({ ...payload, ...extra }, secret)).rejects.toThrow()
   }
   expect(JSON.stringify(payload)).not.toContain(key)
+})
+
+Deno.test('operator identifiers use one schema for configuration, envelopes and the core', async () => {
+  const secret = 'principal-signing-fixture-32bytes-long'
+  for (
+    const id of [
+      'operator',
+      'host-1',
+      'svc@example.org/automation',
+      'region:host_2.a',
+      'a'.repeat(151),
+      '',
+      'a b',
+      '-leading',
+      'x'.repeat(152),
+      'https://invalid',
+      'host\n',
+    ]
+  ) {
+    const accepted = OperatorIdSchema.safeParse(id).success
+    expect(configuredOperatorId({ ...env, OPERATOR_ID: id }) === id, id).toBe(accepted)
+    expect(PrincipalSchema.safeParse({ kind: 'operator', id }).success, id).toBe(accepted)
+    const signed = signPrincipal(operatorEnvelope(id, 'corpuskit'), secret)
+    if (accepted) await expect(signed).resolves.toBeDefined()
+    else await expect(signed).rejects.toThrow()
+  }
+})
+
+Deno.test('operator configuration warning names the unusable setting and never its value', () => {
+  expect(operatorConfigurationWarning({})).toBeUndefined()
+  expect(operatorConfigurationWarning({ OPERATOR_API_KEY: '' })).toBeUndefined()
+  expect(operatorConfigurationWarning(env)).toBeUndefined()
+  expect(operatorConfigurationWarning({ ...env, OPERATOR_ID: 'host-1' })).toBeUndefined()
+  for (const configuredKey of [`${key}=`, 'x'.repeat(31), '!'.repeat(43), ` ${key}`]) {
+    const warning = operatorConfigurationWarning({ OPERATOR_API_KEY: configuredKey })
+    expect(warning).toContain('OPERATOR_API_KEY')
+    expect(warning).toContain('disabled')
+    expect(warning).not.toContain(configuredKey.trim())
+  }
+  for (const id of ['hosting automation', 'https://invalid', 'x'.repeat(152)]) {
+    const warning = operatorConfigurationWarning({ ...env, OPERATOR_ID: id })
+    expect(warning).toContain('OPERATOR_ID')
+    expect(warning).not.toContain(id)
+    expect(warning).not.toContain(key)
+  }
+  // An identifier without a key leaves the scheme unconfigured rather than misconfigured.
+  expect(operatorConfigurationWarning({ OPERATOR_ID: 'a b' })).toBeUndefined()
+})
+
+Deno.test('operator request context is platform-admin only with no session, user or group authority', () => {
+  const context = operatorRequestContext('host-1', 'request-1', '192.0.2.1')
+  expect(context).toEqual({
+    requestId: 'request-1',
+    operator: { id: 'host-1' },
+    session: null,
+    clientIp: '192.0.2.1',
+    effectiveRoles: { platformRole: 'platform-admin', portalRoles: [] },
+    provenance: [],
+    groupCapability: 'disabled',
+    coarseAdminEligible: true,
+    user: null,
+  })
+  expect(
+    AuthorisationPrincipalSchema.safeParse({
+      identity: { kind: 'operator', id: context.operator!.id },
+      effectiveRoles: context.effectiveRoles,
+    }).success,
+  ).toBe(true)
 })

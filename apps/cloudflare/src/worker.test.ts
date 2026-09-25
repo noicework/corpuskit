@@ -590,6 +590,9 @@ function workerHarness(
           auditDenial() {
             return Promise.resolve()
           },
+          auditOperatorFailure() {
+            return Promise.resolve({ limited: false as const })
+          },
           requestPrincipal() {
             return Promise.resolve({
               requestId: 'fixture',

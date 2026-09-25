@@ -22,7 +22,11 @@ import {
   authenticateOperator,
   configuredOperatorId,
   hasOperatorScheme,
+  type OperatorAuthentication,
+  operatorConfigurationWarning,
   operatorEnvelope,
+  operatorFailureLimiter,
+  operatorRequestContext,
 } from '../../api/src/operator.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
 import type { BreakGlassService } from '../../api/src/break-glass.ts'
@@ -73,6 +77,7 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly bindings: Record<string, string | undefined>
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
   private readonly breakGlass: BreakGlassService
+  private readonly operatorFailures = operatorFailureLimiter()
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -80,6 +85,8 @@ export class PortalDurableObject extends DurableObject<Env> {
     state.migrate()
     const bindings = stringEnv(env)
     this.bindings = bindings
+    const operatorWarning = operatorConfigurationWarning(bindings)
+    if (operatorWarning) console.warn(operatorWarning)
     this.stores = durableStores(state, bindings)
     this.breakGlass = this.stores.rbac.breakGlassService({
       passcode: bindings.ADMIN_PASSCODE,
@@ -153,15 +160,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       ) {
         throw new InvalidPrincipal()
       }
-      return {
-        requestId: crypto.randomUUID(),
-        operator: { id: envelope.id },
-        session: null,
-        clientIp: context.clientIp,
-        effectiveRoles: { platformRole: 'platform-admin', portalRoles: [] },
-        coarseAdminEligible: true,
-        user: null,
-      }
+      return operatorRequestContext(envelope.id, crypto.randomUUID(), context.clientIp)
     }
     if (
       envelope === null ? session !== null : !validSessionFacts(session) ||
@@ -302,6 +301,20 @@ export class PortalDurableObject extends DurableObject<Env> {
     )
   }
 
+  /**
+   * Worker RPC for an operator credential the Worker refused. The Worker sends only the method
+   * and URL. Past the per-address limit the refusal is answered with 429 and not audited again.
+   */
+  async auditOperatorFailure(
+    request: Request,
+    clientIp?: string,
+  ): Promise<{ limited: false } | { limited: true; retryAfterSec: number }> {
+    const { allowed, retryAfterSec } = this.operatorFailures.check(clientIp ?? 'unknown')
+    if (!allowed) return { limited: true, retryAfterSec }
+    await this.auditDenial(request, 401)
+    return { limited: false }
+  }
+
   async maintenance(): Promise<void> {
     await runSystemMaintenance(this.provider, this.stores, this.bindings.AUDIT_RETENTION_DAYS)
   }
@@ -327,8 +340,9 @@ export default {
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
-  if ((await authenticateOperator(request, stringEnv(env))).kind !== 'absent') {
-    return forwardTrusted(request, env, authConfig(env, url.hostname))
+  const operator = await authenticateOperator(request, stringEnv(env))
+  if (operator.kind !== 'absent') {
+    return forwardTrusted(request, env, authConfig(env, url.hostname), operator)
   }
   const hostnameLocation = platformHostnameLocation(request)
   if (hostnameLocation) {
@@ -338,7 +352,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const auth = authConfig(env, url.hostname)
 
   if (url.pathname === '/auth/me' && request.method === 'GET') {
-    return forwardTrusted(request, env, auth)
+    return forwardTrusted(request, env, auth, operator)
   }
 
   if (url.pathname.startsWith('/auth/')) {
@@ -362,7 +376,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname.startsWith('/api/')) {
-    return forwardTrusted(request, env, auth)
+    return forwardTrusted(request, env, auth, operator)
   }
 
   // The shared asset bundle is also bound to tenant hosts. Keep the marketing
@@ -439,10 +453,11 @@ export async function forwardPortalRequest(
   request: Request,
   user: AuthUser | null,
   env: Env,
+  credential?: OperatorAuthentication,
 ): Promise<Request> {
   const headers = stripIdentityHeaders(request.headers)
   const bindings = stringEnv(env)
-  const operator = await authenticateOperator(request, bindings)
+  const operator = credential ?? await authenticateOperator(request, bindings)
   if (operator.kind === 'rejected') throw new InvalidOperator()
   if (operator.kind === 'verified') {
     headers.delete('authorization')
@@ -477,25 +492,43 @@ export async function forwardPortalRequest(
 class InvalidPrincipal extends Error {}
 class InvalidOperator extends Error {}
 
+/** Refusals reach the Durable Object's audit without headers, so no credential can travel. */
+function refusalRecord(request: Request): Request {
+  try {
+    return new Request(request.url, { method: request.method })
+  } catch {
+    // A method the constructor refuses to set directly is kept by a header-free copy.
+    return new Request(request, { headers: new Headers() })
+  }
+}
+
 async function forwardTrusted(
   request: Request,
   env: Env,
   auth: Partial<AuthConfig>,
+  operator: OperatorAuthentication,
 ): Promise<Response> {
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
   const user = !hasOperatorScheme(request) && authConfigured(auth)
     ? await authUser(request, auth)
     : null
+  const clientIp = request.headers.get('cf-connecting-ip') ?? undefined
   let forwarded: Request
   try {
-    forwarded = await forwardPortalRequest(request, user, env)
+    forwarded = await forwardPortalRequest(request, user, env, operator)
   } catch (error) {
+    const refused = refusalRecord(request)
     try {
-      const headers = stripIdentityHeaders(request.headers)
-      headers.delete('authorization')
-      headers.delete('cookie')
-      headers.delete('x-admin-passcode')
-      await stub.auditDenial(new Request(request, { headers }), 401)
+      if (error instanceof InvalidOperator) {
+        const outcome = await stub.auditOperatorFailure(refused, clientIp)
+        if (outcome.limited) {
+          return json({ error: 'rate_limited' }, 429, {
+            'retry-after': String(outcome.retryAfterSec),
+          })
+        }
+      } else {
+        await stub.auditDenial(refused, 401)
+      }
     } catch {
       return json({ error: 'audit_write_failed' }, 500)
     }
@@ -506,7 +539,7 @@ async function forwardTrusted(
   try {
     return await stub.handleTrustedRequest(forwarded, {
       session: user?.sessionFacts ?? null,
-      clientIp: request.headers.get('cf-connecting-ip') ?? undefined,
+      clientIp,
     })
   } catch {
     return json({ error: 'internal_error' }, 500)
@@ -599,9 +632,9 @@ function withSecurityHeaders(response: Response): Response {
   })
 }
 
-function json(value: unknown, status: number): Response {
+function json(value: unknown, status: number, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers },
   })
 }

@@ -1,15 +1,17 @@
-import { z } from 'zod'
+import { OperatorIdSchema } from '@research-portal/core'
+import type { PortalRequestContext } from './app.ts'
+import { coarseAdminEligibility } from './assignments.ts'
 import type { OperatorEnvelope } from './principal.ts'
-
-/** Leaves room for the operator: prefix in the audit actor identifier. */
-export const OperatorIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,150}$/)
-  .refine((id) => !id.includes('://'))
+import { SlidingWindowLimiter } from './rate-limit.ts'
 
 type OperatorEnvironment = Record<string, string | undefined>
 export type OperatorAuthentication =
   | { kind: 'absent' }
   | { kind: 'verified'; id: string }
   | { kind: 'rejected' }
+
+/** Invalid operator credentials audited per client address each minute before a 429 applies. */
+export const OPERATOR_FAILURE_LIMIT_PER_MIN = 60
 
 /** Canonical, unpadded base64url containing at least 32 bytes. Entropy is supplied at generation. */
 function validKey(value: string | undefined): value is string {
@@ -27,6 +29,22 @@ export function configuredOperatorId(env: OperatorEnvironment): string | undefin
   if (!validKey(env.OPERATOR_API_KEY)) return undefined
   const id = OperatorIdSchema.safeParse(env.OPERATOR_ID ?? 'operator')
   return id.success ? id.data : undefined
+}
+
+/**
+ * Explains, without either value, why a present operator key leaves the scheme disabled. Callers
+ * log it once at startup so a misconfiguration is distinguishable from a caller's wrong key.
+ */
+export function operatorConfigurationWarning(env: OperatorEnvironment): string | undefined {
+  if (!env.OPERATOR_API_KEY) return undefined
+  if (!validKey(env.OPERATOR_API_KEY)) {
+    return 'OPERATOR_API_KEY is set but is not unpadded base64url encoding at least 32 bytes; ' +
+      'the operator credential is disabled'
+  }
+  if (!OperatorIdSchema.safeParse(env.OPERATOR_ID ?? 'operator').success) {
+    return 'OPERATOR_ID is not a valid operator identifier; the operator credential is disabled'
+  }
+  return undefined
 }
 
 export function hasOperatorScheme(request: Request): boolean {
@@ -75,4 +93,35 @@ export async function authenticateOperator(
 
 export function operatorEnvelope(id: string, audience: string, now = Date.now()): OperatorEnvelope {
   return { v: 1, kind: 'operator', aud: audience, id, iat: Math.floor(now / 1000) }
+}
+
+/**
+ * The only request context a verified operator receives, shared by the Worker's Durable Object
+ * and the local server so both ingress paths grant identical authority.
+ */
+export function operatorRequestContext(
+  id: string,
+  requestId: string,
+  clientIp?: string,
+): PortalRequestContext {
+  const effectiveRoles = { platformRole: 'platform-admin' as const, portalRoles: [] }
+  return {
+    requestId,
+    operator: { id },
+    session: null,
+    clientIp,
+    effectiveRoles,
+    provenance: [],
+    groupCapability: 'disabled',
+    coarseAdminEligible: coarseAdminEligibility(effectiveRoles),
+    user: null,
+  }
+}
+
+/**
+ * Counts invalid operator credentials per client address, so a looping caller cannot grow the
+ * audit log without bound. Verified operator requests are never counted.
+ */
+export function operatorFailureLimiter(now?: () => number): SlidingWindowLimiter {
+  return new SlidingWindowLimiter({ limit: OPERATOR_FAILURE_LIMIT_PER_MIN, windowMs: 60_000, now })
 }

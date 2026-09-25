@@ -37,6 +37,10 @@ interface DurableObjectStub extends Fetcher {
     context: import('./worker.ts').TrustedRequestContext,
   ): Promise<import('../../api/src/app.ts').PortalRequestContext>
   auditDenial(request: Request, status: 401 | 403): Promise<void>
+  auditOperatorFailure(
+    request: Request,
+    clientIp?: string,
+  ): Promise<{ limited: false } | { limited: true; retryAfterSec: number }>
   maintenance(): Promise<void>
 }
 

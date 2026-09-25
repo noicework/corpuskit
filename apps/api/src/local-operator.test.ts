@@ -2,6 +2,7 @@ import { expect } from '@std/expect'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { buildApp } from './app.ts'
 import { LocalIngress } from './local-ingress.ts'
+import { OPERATOR_FAILURE_LIMIT_PER_MIN, operatorRequestContext } from './operator.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import type { TrustedSessionFacts } from './principal.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
@@ -65,6 +66,7 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     )
   }
   return {
+    app,
     database,
     rbac,
     tenants,
@@ -118,6 +120,8 @@ Deno.test('local operator uses a signed principal without credentials, a session
           portalRoles: [],
         })
         expect(context?.coarseAdminEligible).toBe(true)
+        // The Worker's Durable Object builds its operator context with the same helper.
+        expect(context).toEqual(operatorRequestContext('hosting-test', context!.requestId))
         return new Response('ok')
       },
       undefined,
@@ -293,5 +297,80 @@ Deno.test('local operator fails closed on audit and signing failure without logg
     expect(JSON.stringify(logs)).not.toContain(operatorKey)
   } finally {
     console.error = originalError
+  }
+})
+
+Deno.test('local operator rate limits invalid credentials per peer address without limiting verified calls', async () => {
+  const f = fixture()
+  const peer = (hostname: string) => ({
+    remoteAddr: { transport: 'tcp' as const, hostname, port: 40_000 },
+  })
+  const send = (authorization: string, hostname = '192.0.2.10') =>
+    f.ingress.handle(
+      new Request('http://localhost/api/admin/t/marine/members', { headers: { authorization } }),
+      (request) => f.app.fetch(request),
+      peer(hostname),
+    )
+  const wrong = `Operator ${'Ag'.repeat(22)}`
+  const denials = () => f.events().filter((event) => event.action === 'request.denied').length
+  try {
+    for (let attempt = 0; attempt < OPERATOR_FAILURE_LIMIT_PER_MIN; attempt++) {
+      const response = await send(wrong)
+      expect(response.status).toBe(401)
+      await response.body?.cancel()
+    }
+    expect(denials()).toBe(OPERATOR_FAILURE_LIMIT_PER_MIN)
+    for (const authorization of [wrong, `Bearer ${operatorKey}`]) {
+      const limited = await send(authorization)
+      expect(limited.status).toBe(429)
+      expect(await limited.json()).toEqual({ error: 'rate_limited' })
+      expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+    }
+    expect(denials()).toBe(OPERATOR_FAILURE_LIMIT_PER_MIN)
+    const elsewhere = await send(wrong, '198.51.100.20')
+    expect(elsewhere.status).toBe(401)
+    expect(await elsewhere.json()).toEqual({ error: 'invalid_operator' })
+    expect(denials()).toBe(OPERATOR_FAILURE_LIMIT_PER_MIN + 1)
+    expect((await send(`Operator ${operatorKey}`)).status).toBe(200)
+    expect(JSON.stringify(f.events())).not.toContain(operatorKey)
+  } finally {
+    f.dispose()
+  }
+})
+
+Deno.test('local server warns once at startup without the value when a present operator key is unusable', async () => {
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '))
+  const operatorWarnings = () => warnings.filter((line) => line.includes('operator credential'))
+  try {
+    for (
+      const [env, variable] of [
+        [{ OPERATOR_API_KEY: `${operatorKey}=` }, 'OPERATOR_API_KEY'],
+        [{ OPERATOR_ID: 'hosting automation' }, 'OPERATOR_ID'],
+      ] as const
+    ) {
+      warnings.length = 0
+      const f = fixture(env)
+      try {
+        expect(operatorWarnings()).toHaveLength(1)
+        expect(operatorWarnings()[0]).toContain(variable)
+        const response = await f.invoke('/api/admin/t/marine/members')
+        expect(response.status).toBe(401)
+        expect(await response.json()).toEqual({ error: 'invalid_operator' })
+        expect(operatorWarnings()).toHaveLength(1)
+        expect(JSON.stringify(warnings)).not.toContain(operatorKey)
+        expect(JSON.stringify(warnings)).not.toContain('hosting automation')
+      } finally {
+        f.dispose()
+      }
+    }
+    for (const env of [{}, { OPERATOR_API_KEY: undefined }]) {
+      warnings.length = 0
+      fixture(env).dispose()
+      expect(operatorWarnings()).toEqual([])
+    }
+  } finally {
+    console.warn = originalWarn
   }
 })

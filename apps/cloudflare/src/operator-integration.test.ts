@@ -4,7 +4,13 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
 import { KbClient } from '@research-portal/retrieval'
 import { DurableState, type DurableStores } from './state.ts'
-import { PRINCIPAL_HEADER, signPrincipal, verifyPrincipal } from '../../api/src/principal.ts'
+import {
+  PRINCIPAL_HEADER,
+  signPrincipal,
+  type TrustedSessionFacts,
+  verifyPrincipal,
+} from '../../api/src/principal.ts'
+import { OPERATOR_FAILURE_LIMIT_PER_MIN, operatorRequestContext } from '../../api/src/operator.ts'
 import type { PortalDurableObject, TrustedRequestContext } from './worker.ts'
 
 const operatorKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
@@ -59,6 +65,12 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     },
   }
   const forwarded: { headers: Record<string, string>; context: TrustedRequestContext }[] = []
+  const refusals: {
+    rpc: string
+    method: string
+    headers: Record<string, string>
+    body: boolean
+  }[] = []
   const env = {
     WORKER_NAME: 'corpuskit',
     SESSION_SECRET: sessionSecret,
@@ -81,6 +93,24 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     forwarded.push({ headers: Object.fromEntries(request.headers), context })
     return ingress(request, context)
   }
+  // Record exactly what the Worker hands the Durable Object when it refuses a request.
+  const record = (rpc: string, request: Request) =>
+    refusals.push({
+      rpc,
+      method: request.method,
+      headers: Object.fromEntries(request.headers),
+      body: request.body !== null,
+    })
+  const auditDenial = object.auditDenial.bind(object)
+  object.auditDenial = (request, ...rest) => {
+    record('auditDenial', request)
+    return auditDenial(request, ...rest)
+  }
+  const auditOperatorFailure = object.auditOperatorFailure.bind(object)
+  object.auditOperatorFailure = (request, clientIp) => {
+    record('auditOperatorFailure', request)
+    return auditOperatorFailure(request, clientIp)
+  }
   const state = new DurableState(storage.sql, storage)
   const stores = (object as unknown as { stores: DurableStores }).stores
   const bootstrapEvents = new Set(
@@ -91,13 +121,14 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     database,
     stores,
     forwarded,
+    refusals,
     events: () =>
       state.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 })
         .filter((event) => !bootstrapEvents.has(event.id)),
     invoke: (path: string, init: RequestInit = {}, authorization = `Operator ${operatorKey}`) => {
       const headers = new Headers(init.headers)
       if (authorization) headers.set('authorization', authorization)
-      headers.set('cf-connecting-ip', '192.0.2.1')
+      if (!headers.has('cf-connecting-ip')) headers.set('cf-connecting-ip', '192.0.2.1')
       return workerModule.default.fetch(
         new Request(`https://corpuskit.test${path}`, { ...init, headers }),
         env,
@@ -109,6 +140,34 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
 
 function jsonRequest(method: string, value: unknown): RequestInit {
   return { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }
+}
+
+const ownerFacts = (): TrustedSessionFacts => ({
+  verified: true,
+  tenantId: 'tenant-1',
+  oid: 'owner-1',
+  email: 'owner@example.test',
+  roles: ['CorpusKit.Owner'],
+  groups: [],
+  groupStatus: 'absent',
+  claimIssuedAt: Date.now(),
+  createdAt: Date.now(),
+  expiresAt: Date.now() + 3600_000,
+})
+
+const operatorPrincipal = () =>
+  signPrincipal({
+    v: 1,
+    kind: 'operator',
+    aud: 'corpuskit',
+    id: 'hosting-automation',
+    iat: Math.floor(Date.now() / 1000),
+  }, sessionSecret)
+
+const newMember = {
+  subjectKind: 'pending-email',
+  subjectId: 'reader@example.test',
+  role: 'viewer',
 }
 
 Deno.test('Worker operator ingress signs a restricted principal and strips raw credentials', async () => {
@@ -154,6 +213,8 @@ Deno.test('Worker operator ingress signs a restricted principal and strips raw c
     expect(principal.operator).toEqual({ id: 'hosting-automation' })
     expect(principal.session).toBeNull()
     expect(principal.effectiveRoles?.platformRole).toBe('platform-admin')
+    // Local ingress builds its operator context with the same helper.
+    expect(principal).toEqual(operatorRequestContext('hosting-automation', principal.requestId))
     const events = f.events()
     expect(events.length).toBeGreaterThan(0)
     expect(events.every((event) => event.actor_kind === 'operator')).toBe(true)
@@ -536,6 +597,171 @@ Deno.test('Operator audit failures stop mutations and credentials never enter di
   } finally {
     Object.assign(console, originals)
     f.close()
+  }
+})
+
+Deno.test('Worker refusals reach the Durable Object without credentials, cookies, passcodes or a body', async () => {
+  const cases = [
+    ['operator key under Bearer', {}, `Bearer ${operatorKey}`, true, 'invalid_operator'],
+    ['wrong operator key', {}, `Operator ${'B'.repeat(43)}`, true, 'invalid_operator'],
+    // A correct key still fails closed when the Worker cannot sign the principal.
+    [
+      'short signing secret',
+      { SESSION_SECRET: 'too-short' },
+      `Operator ${operatorKey}`,
+      false,
+      'invalid_principal',
+    ],
+    [
+      'missing audience',
+      { WORKER_NAME: '' },
+      `Operator ${operatorKey}`,
+      false,
+      'invalid_principal',
+    ],
+  ] as const
+  for (const [label, overrides, authorization, passcode, error] of cases) {
+    const f = fixture(overrides)
+    try {
+      const response = await f.invoke('/api/admin/t/marine/members', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: 'corpuskit_session=fixture-session-cookie',
+          ...(passcode ? { 'x-admin-passcode': 'fixture-passcode' } : {}),
+        },
+        body: JSON.stringify(newMember),
+      }, authorization)
+      expect(response.status, label).toBe(401)
+      expect(await response.json()).toEqual({ error })
+      expect(f.forwarded).toHaveLength(0)
+      expect(f.refusals.length, label).toBeGreaterThan(0)
+      for (const refusal of f.refusals) {
+        expect(refusal.method).toBe('POST')
+        expect(refusal.headers.authorization, label).toBeUndefined()
+        expect(refusal.headers.cookie, label).toBeUndefined()
+        expect(refusal.headers['x-admin-passcode'], label).toBeUndefined()
+        expect(refusal.headers[PRINCIPAL_HEADER], label).toBeUndefined()
+        expect(refusal.body, label).toBe(false)
+      }
+      expect(JSON.stringify(f.refusals)).not.toContain(operatorKey)
+      expect(JSON.stringify(f.refusals)).not.toContain('fixture-session-cookie')
+      const denials = f.events().filter((event) => event.action === 'request.denied')
+      expect(denials).toHaveLength(1)
+      expect(denials[0]?.actor_kind).toBe('anonymous')
+      expect(f.events().some((event) => event.action === 'assignment.create')).toBe(false)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('DO refuses a signed operator envelope that arrives with a session or explicit credential', async () => {
+  const cases: [string, TrustedRequestContext, Record<string, string>][] = [
+    ['session facts', { session: ownerFacts() }, {}],
+    ['portal data key', {}, { authorization: `Bearer ck_${'A'.repeat(43)}` }],
+    ['raw operator key', {}, { authorization: `Operator ${operatorKey}` }],
+    ['break-glass passcode', {}, { 'x-admin-passcode': 'fixture-passcode' }],
+  ]
+  for (const [label, context, headers] of cases) {
+    const f = fixture()
+    try {
+      const response = await f.object.handleTrustedRequest(
+        new Request('https://corpuskit.test/api/admin/t/marine/members', {
+          method: 'POST',
+          headers: {
+            [PRINCIPAL_HEADER]: await operatorPrincipal(),
+            'content-type': 'application/json',
+            ...headers,
+          },
+          body: JSON.stringify(newMember),
+        }),
+        context,
+      )
+      expect(response.status, label).toBe(401)
+      expect(await response.json(), label).toEqual({ error: 'invalid_principal' })
+      const events = f.events()
+      expect(events, label).toHaveLength(1)
+      expect(events[0]?.action).toBe('request.denied')
+      expect(events[0]?.actor_kind, label).toBe('anonymous')
+      expect(f.stores.rbac.assignments.list('tenant-1'), label).toEqual([])
+      expect(JSON.stringify(events)).not.toContain(operatorKey)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('Worker rate limits invalid operator credentials per address without limiting verified calls', async () => {
+  const f = fixture()
+  const path = '/api/admin/t/marine/members'
+  const wrong = `Operator ${'B'.repeat(43)}`
+  const denials = () => f.events().filter((event) => event.action === 'request.denied').length
+  try {
+    for (let attempt = 0; attempt < OPERATOR_FAILURE_LIMIT_PER_MIN; attempt++) {
+      const response = await f.invoke(path, {}, wrong)
+      expect(response.status).toBe(401)
+      await response.body?.cancel()
+    }
+    expect(denials()).toBe(OPERATOR_FAILURE_LIMIT_PER_MIN)
+    for (const authorization of [wrong, `Bearer ${operatorKey}`]) {
+      const limited = await f.invoke(path, {}, authorization)
+      expect(limited.status).toBe(429)
+      expect(await limited.json()).toEqual({ error: 'rate_limited' })
+      expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+    }
+    expect(denials()).toBe(OPERATOR_FAILURE_LIMIT_PER_MIN)
+    const elsewhere = await f.invoke(
+      path,
+      { headers: { 'cf-connecting-ip': '198.51.100.7' } },
+      wrong,
+    )
+    expect(elsewhere.status).toBe(401)
+    expect(await elsewhere.json()).toEqual({ error: 'invalid_operator' })
+    expect(denials()).toBe(OPERATOR_FAILURE_LIMIT_PER_MIN + 1)
+    const verified = await f.invoke(path)
+    expect(verified.status).toBe(200)
+    expect(JSON.stringify(f.events())).not.toContain(operatorKey)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('Durable Object warns once without the value when a present operator key is unusable', async () => {
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '))
+  const operatorWarnings = () => warnings.filter((line) => line.includes('operator credential'))
+  try {
+    const misconfigured = [
+      [{ OPERATOR_API_KEY: `${operatorKey}=` }, 'OPERATOR_API_KEY'],
+      [{ OPERATOR_API_KEY: 'short-operator-fixture' }, 'OPERATOR_API_KEY'],
+      [{ OPERATOR_ID: 'hosting automation' }, 'OPERATOR_ID'],
+    ] as const
+    for (const [overrides, variable] of misconfigured) {
+      warnings.length = 0
+      const f = fixture(overrides)
+      try {
+        expect(operatorWarnings()).toHaveLength(1)
+        expect(operatorWarnings()[0]).toContain(variable)
+        const response = await f.invoke('/api/admin/t/marine/members')
+        expect(response.status).toBe(401)
+        expect(await response.json()).toEqual({ error: 'invalid_operator' })
+        expect(operatorWarnings()).toHaveLength(1)
+        expect(JSON.stringify(warnings)).not.toContain(operatorKey)
+        expect(JSON.stringify(warnings)).not.toContain('short-operator-fixture')
+        expect(JSON.stringify(warnings)).not.toContain('hosting automation')
+      } finally {
+        f.close()
+      }
+    }
+    for (const overrides of [{}, { OPERATOR_API_KEY: undefined }, { OPERATOR_API_KEY: '' }]) {
+      warnings.length = 0
+      fixture(overrides).close()
+      expect(operatorWarnings()).toEqual([])
+    }
+  } finally {
+    console.warn = originalWarn
   }
 })
 
