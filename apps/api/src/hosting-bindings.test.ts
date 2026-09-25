@@ -24,6 +24,7 @@ Deno.test('Cloudflare missing binding key reports readiness and refuses writes b
       writable: false,
       error: 'binding_key_missing',
       unavailable: 0,
+      plaintext: 0,
     }
     // Anonymous health carries one coarse flag; the cause is for authorised administrators.
     const health = await f.requestAs(null, '/api/health')
@@ -195,6 +196,7 @@ Deno.test('a binding sealed under another key is withheld per portal and recover
       required: true,
       writable: true,
       unavailable: 1,
+      plaintext: 0,
     })
     // Another portal on the same deployment is unaffected.
     const other = await f.requestAs(admin, '/api/t/b/knowledge-box')

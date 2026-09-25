@@ -28,16 +28,43 @@ tag and additional authenticated data `corpuskit-binding-v1:<portal slug>`. Its 
 ciphertext. Moving a sealed token to another portal, altering it, or supplying the wrong key
 fails closed. API responses, audit details, logs and errors never include the token or the key.
 
-On startup with a key, sealed tokens are opened before requests are served, then remaining
-plaintext tokens are sealed. Sealing waits until every stored token opens with the configured
-key, so a well-formed but wrong key never re-seals plaintext under itself. Migration accepts mixed
-plaintext and sealed records and is idempotent across restarts; if its write fails, the records
-stay readable as before and sealing is retried at the next start. Later writes seal tokens
-before committing them. Environment-provided bindings stay in the runtime secret store.
+On startup with a key, sealed tokens are opened before requests are served. New and replaced
+tokens are sealed before they are committed. Tokens already stored as plaintext stay plaintext,
+and readable, until the deployment sets `BINDING_KEY_MIGRATE` to `true`; each start with that
+setting then seals the remaining plaintext tokens. Sealing waits until every stored token opens
+with the configured key, so a well-formed but wrong key never re-seals plaintext under itself.
+Migration accepts mixed plaintext and sealed records and is idempotent across restarts; if its
+write fails, the records stay readable as before and sealing is retried at the next start.
+Environment-provided bindings stay in the runtime secret store.
 
 Without a key on Cloudflare, existing plaintext bindings remain readable and can still be
 disconnected. New or replacement bindings return HTTP 503 with `{ "error": "binding_key_missing" }`
 before contacting the knowledge box.
+
+### Turning on encryption for existing bindings
+
+Code from before sealing reads a stored token verbatim, so it sends a sealed token to the
+knowledge box as if it were the credential, and every portal connected through the admin app
+stops working. The release pipeline rolls a release that fails verification back to the version
+it replaced, and the first request a new version serves, its health probe, is what starts the
+Durable Object. Sealing stored tokens during that window would break every admin-connected portal
+on the rolled-back version, while its own checks still pass. So existing tokens are sealed only as
+a separate step, after a release that understands sealed tokens has been verified:
+
+1. Release this version, or a later one, and let the pipeline finish verifying it. If
+   `BINDING_KEY` is already set, stored plaintext is left untouched; avoid connecting or replacing
+   a knowledge box until verification finishes, because a token written then is sealed.
+2. If `BINDING_KEY` is not set yet, set it now. New and replaced tokens are sealed from then on.
+3. Read `bindingEncryption.plaintext` in the admin overview: it counts stored tokens not yet
+   sealed.
+4. Set `BINDING_KEY_MIGRATE` to `true`. On Cloudflare, run
+   `npx wrangler secret put BINDING_KEY_MIGRATE --name <worker>` and enter `true`; the secret
+   upload task never sends it. The new version seals the remaining tokens when it starts.
+5. Check that `plaintext` and `unavailable` are both `0`.
+
+A secret change publishes a new version, so from then on the version a failed release rolls back to
+already understands sealed tokens. The same order applies to every Worker that stores bindings,
+including a demo Worker.
 
 ### Unavailable bindings
 
@@ -69,11 +96,14 @@ present on Cloudflare and appears elsewhere only when false. It is false when ne
 be stored or any stored binding is withheld.
 
 Each row of the authorised `GET /api/admin/overview` includes
-`bindingEncryption: { configured, required, writable, error?, unavailable }`. `error` names a
-deployment-wide cause: `binding_key_missing`, `binding_key_invalid` or `binding_storage_invalid`.
-`unavailable` counts withheld bindings. A missing Cloudflare key reports
-`{ "configured": false, "required": true, "writable": false, "error": "binding_key_missing", "unavailable": 0 }`.
-The overview remains an array for existing clients.
+`bindingEncryption: { configured, required, writable, error?, unavailable, plaintext }`. `error`
+names a deployment-wide cause: `binding_key_missing`, `binding_key_invalid` or
+`binding_storage_invalid`. `unavailable` counts withheld bindings, and `plaintext` counts stored
+bindings whose token is not sealed. A missing Cloudflare key with nothing stored reports
+`{ "configured": false, "required": true, "writable": false, "error": "binding_key_missing", "unavailable": 0, "plaintext": 0 }`.
+The overview remains an array for existing clients. A deployment with a key and stored plaintext
+also logs one start-up warning with the count, never a portal or a token, until it opts in to
+sealing.
 
 ### Recovering from a changed or lost key
 
@@ -82,12 +112,13 @@ The overview remains an array for existing clients.
 2. If the previous key still exists, restore it as `BINDING_KEY`. Withheld bindings open again
    unchanged at the next start.
 3. If it is lost, keep or set a new key, then reconnect each `unavailable` portal with a fresh
-   service account key, or disconnect it. Sealing of any remaining plaintext resumes at the next
-   start once nothing is withheld.
+   service account key, or disconnect it. With `BINDING_KEY_MIGRATE` set, sealing of any
+   remaining plaintext resumes at the next start once nothing is withheld.
 
 Keep the key available with your protected backups. This release does not provide automatic key
-rotation or re-encryption under a replacement key. A code rollback must understand the sealed
-format; do not roll back to a version that treats sealed tokens as plaintext.
+rotation or re-encryption under a replacement key. Once any token is sealed, a code rollback must
+understand the sealed format; do not roll back to a version that treats sealed tokens as
+plaintext.
 
 ## Operator credential
 

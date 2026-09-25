@@ -68,7 +68,8 @@ Deno.test('durable binding migration seals plaintext once while preserving encry
       marine: storedBinding,
       grains: { ...storedBinding, token: sealed },
     })
-    const store = new DurableBindingStore(f.state, { BINDING_KEY: KEY })
+    const migrate = { BINDING_KEY: KEY, BINDING_KEY_MIGRATE: 'true' }
+    const store = new DurableBindingStore(f.state, migrate)
     expect(() => store.get('marine')).toThrow('binding_not_initialized')
     await store.initialize()
     expect(store.get('marine')?.token).toBe(TOKEN)
@@ -80,11 +81,47 @@ Deno.test('durable binding migration seals plaintext once while preserving encry
     const before = f.raw()
     expect(before).not.toContain(TOKEN)
     await store.initialize()
-    const restarted = new DurableBindingStore(f.state, { BINDING_KEY: KEY })
+    const restarted = new DurableBindingStore(f.state, migrate)
     await restarted.initialize()
     expect(f.raw()).toBe(before)
     expect(restarted.get('marine')?.token).toBe(TOKEN)
   } finally {
+    f.cleanup()
+  }
+})
+
+Deno.test('durable start-up leaves stored plaintext for rollback until the deployment opts in', async () => {
+  const f = fixture()
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    f.state.put('bindings', { marine: storedBinding })
+    const before = f.raw()
+    const store = new DurableBindingStore(f.state, { BINDING_KEY: KEY })
+    await store.initialize()
+    // The previous release returns the stored record verbatim, so start-up must not rewrite it.
+    expect(f.raw()).toBe(before)
+    expect(store.get('marine')?.token).toBe(TOKEN)
+    expect(store.encryptionStatus()).toMatchObject({ writable: true, plaintext: 1 })
+    await f.state.localMutations.run(
+      { ...input, scope: { kind: 'portal', slug: 'grains' } },
+      new AbortController().signal,
+      () => store.set('grains', binding),
+    )
+    const written = f.state.get('bindings', {} as Record<string, typeof storedBinding>)
+    expect(written.grains?.token).toMatch(/^enc:v1:/)
+    expect(written.marine?.token).toBe(TOKEN)
+
+    const migrated = new DurableBindingStore(f.state, {
+      BINDING_KEY: KEY,
+      BINDING_KEY_MIGRATE: 'true',
+    })
+    await migrated.initialize()
+    expect(f.raw()).not.toContain(TOKEN)
+    expect(migrated.get('marine')?.token).toBe(TOKEN)
+    expect(migrated.encryptionStatus().plaintext).toBe(0)
+  } finally {
+    console.warn = warn
     f.cleanup()
   }
 })
@@ -108,6 +145,7 @@ Deno.test('durable bindings without a key read existing plaintext and environmen
       writable: false,
       error: 'binding_key_missing',
       unavailable: 0,
+      plaintext: 1,
     })
     const before = f.raw()
     expect(() => store.assertWritable()).toThrow('binding_key_missing')
@@ -145,6 +183,7 @@ Deno.test('durable binding inserts and replacements seal fresh values and preser
       required: true,
       writable: true,
       unavailable: 0,
+      plaintext: 0,
     })
   } finally {
     f.cleanup()
@@ -177,6 +216,7 @@ async function ciphertextFailures() {
           : kind === 'wrong-key'
           ? btoa('x'.repeat(32))
           : KEY,
+        BINDING_KEY_MIGRATE: 'true',
         ARAG_ZONE: 'us1',
         ARAG_KB_GRAINS: 'environment',
         ARAG_KB_GRAINS_TOKEN: 'test-only-env-token',
@@ -259,6 +299,7 @@ Deno.test('durable malformed binding key never throws at start-up and refuses wr
       writable: false,
       error: 'binding_key_invalid',
       unavailable: 1,
+      plaintext: 0,
     })
     expect(() => store.assertWritable()).toThrow('binding_key_invalid')
     await expect(store.set('marine', binding)).rejects.toThrow('binding_key_invalid')

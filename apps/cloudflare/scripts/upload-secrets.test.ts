@@ -28,6 +28,13 @@ CLOUDFLARE_DOMAINS_TOKEN=domain-token
   })
 })
 
+Deno.test('Worker secret upload never sends the sealing opt-in with the binding key', () => {
+  // Opting in to seal stored plaintext is a separate step taken after a release is verified.
+  expect(workerSecrets('BINDING_KEY=test-only-key\nBINDING_KEY_MIGRATE=true')).toEqual({
+    BINDING_KEY: 'test-only-key',
+  })
+})
+
 Deno.test('Worker secret allowlist includes an optional operator key without non-secret labels', () => {
   const fixture = btoa('operator-test-fixture-only-32bytes').replace(/=+$/g, '')
   expect(workerSecrets(`OPERATOR_API_KEY=${fixture}\nOPERATOR_ID=hosting-test`)).toEqual({

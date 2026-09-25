@@ -864,36 +864,51 @@ async function realHarness(
   return { ...harness, object, database, state: new DurableState(storage.sql, storage) }
 }
 
-Deno.test('Worker startup migrates legacy binding credentials before serving requests', async () => {
-  for (const configured of [false, true]) {
-    const token = 'fixture-only-stored-credential'
-    const h = await realHarness(configured ? { BINDING_KEY: btoa('x'.repeat(32)) } : {}, {
-      marine: {
-        baseUrl: 'https://example.test/kb/marine',
-        token,
-        connectedAt: '2026-01-01T00:00:00Z',
-      },
-    })
-    try {
-      const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
-      expect(health.status).toBe(200)
-      const healthBody = await health.json()
-      expect(healthBody.bindingsReady).toBe(configured)
-      expect(healthBody.bindingEncryption).toBeUndefined()
-      const binding = await worker.fetch(
-        new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
-        h.env,
+Deno.test('Worker startup seals stored binding credentials only when the deployment opts in', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    // A release verification health probe is the first request a new version serves. Unless
+    // the operator has opted in, it must leave stored plaintext readable by the version a failed
+    // verification rolls back to.
+    for (const mode of ['no-key', 'key', 'key-and-migrate'] as const) {
+      const token = 'fixture-only-stored-credential'
+      const h = await realHarness(
+        mode === 'no-key' ? {} : {
+          BINDING_KEY: btoa('x'.repeat(32)),
+          ...(mode === 'key-and-migrate' ? { BINDING_KEY_MIGRATE: 'true' } : {}),
+        },
+        {
+          marine: {
+            baseUrl: 'https://example.test/kb/marine',
+            token,
+            connectedAt: '2026-01-01T00:00:00Z',
+          },
+        },
       )
-      expect(binding.status).toBe(200)
-      const body = await binding.text()
-      expect(JSON.parse(body).status).toBe('connected')
-      expect(body).not.toContain(token)
-      const stored = h.state.get<Record<string, { token: string }>>('bindings', {})
-      if (configured) expect(stored.marine?.token).toMatch(/^enc:v1:/)
-      else expect(stored.marine?.token).toBe(token)
-    } finally {
-      h.database.close()
+      try {
+        const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
+        expect(health.status).toBe(200)
+        const healthBody = await health.json()
+        expect(healthBody.bindingsReady).toBe(mode !== 'no-key')
+        expect(healthBody.bindingEncryption).toBeUndefined()
+        const binding = await worker.fetch(
+          new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+          h.env,
+        )
+        expect(binding.status).toBe(200)
+        const body = await binding.text()
+        expect(JSON.parse(body).status).toBe('connected')
+        expect(body).not.toContain(token)
+        const stored = h.state.get<Record<string, { token: string }>>('bindings', {})
+        if (mode === 'key-and-migrate') expect(stored.marine?.token).toMatch(/^enc:v1:/)
+        else expect(stored.marine?.token).toBe(token)
+      } finally {
+        h.database.close()
+      }
     }
+  } finally {
+    console.warn = warn
   }
 })
 

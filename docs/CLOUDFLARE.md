@@ -81,6 +81,10 @@ Only Worker-relevant values are read at runtime:
   [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption) for migration,
   readiness signals and key recovery. The secret upload task includes this value when
   configured; it never generates or rotates it.
+- `BINDING_KEY_MIGRATE`, set to `true` to seal tokens already stored as plaintext at the next
+  start. Set it with `wrangler secret put` only after a release that understands sealed tokens
+  has passed verification; the secret upload task never sends it. See
+  [turning on encryption for existing bindings](HOSTING.md#turning-on-encryption-for-existing-bindings).
 - `OPERATOR_API_KEY`, optional hosting automation credential containing at least 32 random bytes
   encoded as unpadded base64url. Set the optional non-secret `OPERATOR_ID` variable to label its
   audit actor; it defaults to `operator`. See [Hosting CorpusKit](HOSTING.md#operator-credential)
@@ -229,6 +233,9 @@ a published release that is running verification; let it verify or recover.
 Code rollback preserves current Durable Object state, not a historical database snapshot. Cloudflare
 [does not permit rollback across a Durable Object class lifecycle change](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/),
 and old code may not understand newly written data. Releases that change class migrations, storage
-schemas or resource bindings need an explicitly reviewed compatibility/recovery plan. This safety
+schemas or resource bindings need an explicitly reviewed compatibility/recovery plan. Sealed
+knowledge-box tokens are one such format: a version that seals stored tokens as it starts would
+have them sealed by its own verification probe, before a rollback. Stored tokens are therefore
+sealed only after an explicit `BINDING_KEY_MIGRATE` step taken once the release has verified. This safety
 mechanism is for compatible code releases, including the citation-provider fix; it is not a database
 backup or schema reversal mechanism.

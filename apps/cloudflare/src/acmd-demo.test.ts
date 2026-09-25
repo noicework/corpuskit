@@ -40,6 +40,7 @@ function fixture(writable = true) {
         required: true,
         writable,
         unavailable: unavailable.size,
+        plaintext: 0,
       }),
     },
   }

@@ -11,7 +11,8 @@ function fixture() {
   const path = `${directory}/bindings.json`
   return {
     path,
-    env: { BINDING_KEY: KEY, BINDINGS_PATH: path },
+    // These tests cover sealing stored plaintext, which a deployment opts in to.
+    env: { BINDING_KEY: KEY, BINDING_KEY_MIGRATE: 'true', BINDINGS_PATH: path },
     raw: () => Deno.readTextFileSync(path),
     cleanup: () => Deno.removeSync(directory, { recursive: true }),
   }
@@ -48,6 +49,49 @@ Deno.test('local bindings migrate mixed plaintext and encrypted rows once, prese
   }
 })
 
+Deno.test('local stored plaintext stays readable by earlier code until the deployment opts in', async () => {
+  const f = fixture()
+  const messages: unknown[][] = []
+  const warn = console.warn
+  console.warn = (...args) => {
+    messages.push(args)
+  }
+  try {
+    const stored = JSON.stringify({ marine: { ...binding, connectedAt: '2026-01-01' } })
+    Deno.writeTextFileSync(f.path, stored)
+    const keyOnly = { BINDING_KEY: KEY, BINDINGS_PATH: f.path }
+    const store = new BindingStore(keyOnly)
+    await store.initialize()
+    // Code that predates sealing reads the stored token verbatim, so it is left as it was.
+    expect(f.raw()).toBe(stored)
+    expect(store.get('marine')?.token).toBe(TOKEN)
+    expect(store.encryptionStatus()).toEqual({
+      configured: true,
+      required: false,
+      writable: true,
+      unavailable: 0,
+      plaintext: 1,
+    })
+    expect(JSON.stringify(messages)).toContain('BINDING_KEY_MIGRATE')
+    expect(JSON.stringify(messages)).not.toContain(TOKEN)
+    // New and replaced tokens are still sealed.
+    await store.set('grains', binding)
+    expect(JSON.parse(f.raw()).grains.token).toMatch(/^enc:v1:/)
+    expect(JSON.parse(f.raw()).marine.token).toBe(TOKEN)
+    await new BindingStore(keyOnly).initialize()
+    expect(JSON.parse(f.raw()).marine.token).toBe(TOKEN)
+
+    const migrated = new BindingStore({ ...keyOnly, BINDING_KEY_MIGRATE: 'true' })
+    await migrated.initialize()
+    expect(f.raw()).not.toContain(TOKEN)
+    expect(migrated.get('marine')?.token).toBe(TOKEN)
+    expect(migrated.encryptionStatus().plaintext).toBe(0)
+  } finally {
+    console.warn = warn
+    f.cleanup()
+  }
+})
+
 Deno.test('local bindings seal every insert and replacement and never disclose tokens in status', async () => {
   const f = fixture()
   try {
@@ -68,6 +112,7 @@ Deno.test('local bindings seal every insert and replacement and never disclose t
       required: false,
       writable: true,
       unavailable: 0,
+      plaintext: 0,
     })
     store.remove('marine')
     expect(store.get('marine')).toBeUndefined()
@@ -97,6 +142,7 @@ Deno.test('local bindings allow plaintext writes without a key and warn without 
       required: false,
       writable: true,
       unavailable: 0,
+      plaintext: 1,
     })
     expect(messages).toHaveLength(1)
     expect(JSON.stringify(messages)).toContain('BINDING_KEY')
@@ -222,6 +268,7 @@ Deno.test('local malformed binding key withholds sealed records and refuses writ
       writable: false,
       error: 'binding_key_invalid',
       unavailable: 1,
+      plaintext: 0,
     })
     await expect(broken.set('grains', binding)).rejects.toThrow('binding_key_invalid')
     expect(f.raw()).toBe(before)

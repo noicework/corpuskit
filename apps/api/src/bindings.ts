@@ -32,6 +32,8 @@ export interface BindingEncryptionStatus {
   error?: BindingStoreError
   /** Stored bindings withheld because they cannot be opened; each reports `unavailable`. */
   unavailable: number
+  /** Stored bindings whose token is not sealed yet. See `BINDING_KEY_MIGRATE`. */
+  plaintext: number
 }
 
 export type BindingChange =
@@ -75,11 +77,18 @@ function unavailableStatus(slug: string, entry?: StoredBinding): KnowledgeBoxSta
  * A stored record that cannot be opened (wrong or missing key, corrupt ciphertext or shape)
  * is withheld: it reports `unavailable`, never falls back to an environment binding or to
  * its stored text, and can still be replaced or removed. The rest of the store keeps working.
+ *
+ * New and replaced tokens are sealed whenever a key is configured. Tokens already stored as
+ * plaintext are sealed at start-up only when `BINDING_KEY_MIGRATE` is `true`. Code that predates
+ * sealing reads sealed tokens as plaintext, so a release that could still be rolled back to such
+ * code must not rewrite them; the operator opts in once the release has been verified.
  */
 export class SealedBindingStore {
   private readonly demo: Record<string, KbBinding>
   private readonly keyState: BindingKeyState
   private readonly cipher: BindingCipher
+  /** Portals whose stored token is plaintext. */
+  private readonly plaintext = new Set<string>()
   /** The record set exactly as stored, so a write never drops records it could not read. */
   private stored: Record<string, unknown> = {}
   private storageInvalid = false
@@ -98,6 +107,7 @@ export class SealedBindingStore {
     this.demo = envBindings(env)
     this.keyState = bindingKeyState(env.BINDING_KEY)
     this.cipher = new BindingCipher(this.keyState === 'valid' ? env.BINDING_KEY : undefined)
+    const migrate = this.keyState === 'valid' && env.BINDING_KEY_MIGRATE === 'true'
     let value: unknown
     try {
       value = persistence.read() ?? {}
@@ -113,7 +123,8 @@ export class SealedBindingStore {
         if (!entry) this.unavailable.set(slug, unavailableStatus(slug))
         else if (!isSealedBindingToken(entry.token)) {
           this.connected.set(slug, entry)
-          if (this.keyState === 'valid') this.pendingSeal.push(slug)
+          this.plaintext.add(slug)
+          if (migrate) this.pendingSeal.push(slug)
         } else if (this.keyState === 'valid') this.pendingOpen.push([slug, entry])
         else this.unavailable.set(slug, unavailableStatus(slug, entry))
       }
@@ -144,7 +155,7 @@ export class SealedBindingStore {
 
   /** Say that credentials are withheld, and why, without naming a portal or a secret. */
   private reportWithheld(): void {
-    const { error, unavailable } = this.encryptionStatus()
+    const { error, unavailable, plaintext } = this.encryptionStatus()
     if (error === 'binding_storage_invalid') {
       console.warn(
         '[bindings] binding_storage_invalid: stored bindings are unreadable and withheld',
@@ -153,6 +164,11 @@ export class SealedBindingStore {
       console.warn(
         `[bindings] ${error ?? 'binding_unavailable'}: ${unavailable} stored binding(s) could ` +
           'not be opened and are withheld until the key is fixed or they are replaced or removed',
+      )
+    } else if (this.keyState === 'valid' && plaintext > 0) {
+      console.warn(
+        `[bindings] ${plaintext} stored binding(s) remain plaintext; set ` +
+          'BINDING_KEY_MIGRATE=true once this release is verified to seal them at the next start',
       )
     }
   }
@@ -172,6 +188,7 @@ export class SealedBindingStore {
         next[slug] = { ...entry, token: await this.cipher.seal(slug, entry.token) }
       }
       this.commit(next, { operation: 'bindings.migrate' })
+      for (const slug of slugs) this.plaintext.delete(slug)
     } catch {
       // The records stay readable as before and sealing is retried on the next start.
       console.warn('[bindings] Stored credentials could not be sealed; retrying on next start')
@@ -192,6 +209,7 @@ export class SealedBindingStore {
       writable: this.writeError() === undefined,
       ...(error ? { error } : {}),
       unavailable: this.unavailable.size,
+      plaintext: this.plaintext.size,
     }
   }
 
@@ -241,6 +259,8 @@ export class SealedBindingStore {
     })
     this.connected.set(slug, entry)
     this.unavailable.delete(slug)
+    if (this.keyState === 'valid') this.plaintext.delete(slug)
+    else this.plaintext.add(slug)
   }
 
   /** Remove a stored binding, including a withheld one; the environment box then applies. */
@@ -252,6 +272,7 @@ export class SealedBindingStore {
     this.commit(next, { operation: 'bindings.remove', slug })
     this.connected.delete(slug)
     this.unavailable.delete(slug)
+    this.plaintext.delete(slug)
   }
 
   status(slug: string): KnowledgeBoxStatus {
