@@ -11,6 +11,7 @@ import {
 } from './external-login.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
+import { LocalIngress } from './local-ingress.ts'
 import { signPrincipal, verifyPrincipal } from './principal.ts'
 
 const secret = 'test-session-key-with-at-least-32-bytes'
@@ -391,6 +392,96 @@ Deno.test('external principal envelopes require explicit configuration and never
         externalLoginEnabled: true,
       }),
     ).toMatchObject({ kind: 'rejected' })
+  }
+})
+
+Deno.test('local ingress exchanges, reads and logs out external sessions using durable replay', async () => {
+  const { config, mint } = await fixture()
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const env = {
+      SESSION_SECRET: secret,
+      WORKER_NAME: 'portal-deployment',
+      EXTERNAL_LOGIN_ISSUER: config.externalLogin!.issuer,
+      EXTERNAL_LOGIN_JWK: config.externalLogin!.jwk,
+      EXTERNAL_LOGIN_START_URL: 'https://issuer.example/start',
+    }
+    const makeIngress = () =>
+      new LocalIngress({
+        rbac,
+        tenants: { list: () => [] },
+        env,
+        externalReplays: new ExternalLoginReplayStore(db),
+      })
+    const ingress = makeIngress()
+    const token = await mint()
+    const response = await ingress.handle(request(token), () => new Response('unexpected'))
+    expect(response.status).toBe(303)
+    const cookie = response.headers.get('set-cookie')!.split(';')[0]!
+    const me = await ingress.handle(
+      new Request('https://portal.example/auth/me', { headers: { cookie } }),
+      () => new Response('unexpected'),
+    )
+    expect(await me.json()).toMatchObject({
+      authenticated: true,
+      sessionProvenance: 'external',
+      user: { id: 'ext:person-1', provenance: 'external' },
+      externalLogin: { startUrl: 'https://issuer.example/start' },
+      entraEnabled: false,
+    })
+    expect((await makeIngress().handle(request(token), () => new Response('unexpected'))).status)
+      .toBe(401)
+    let dispatched: { session: unknown } | undefined
+    const portal = await ingress.handle(
+      new Request('https://portal.example/api/t/marine/config', { headers: { cookie } }),
+      (clean) => {
+        dispatched = ingress.requestContext(clean)
+        return new Response('dispatched')
+      },
+    )
+    expect(await portal.text()).toBe('dispatched')
+    expect(dispatched?.session).toMatchObject({
+      tenantId: 'external',
+      oid: 'ext:person-1',
+      provenance: 'external',
+      roles: [],
+    })
+    // The Entra flow is not served locally, so its paths still reach the application.
+    for (const path of ['/auth/login', '/auth/callback']) {
+      const passed = await ingress.handle(
+        new Request(`https://portal.example${path}`),
+        () => new Response('application'),
+      )
+      expect(await passed.text()).toBe('application')
+    }
+    const logout = await ingress.handle(
+      new Request('https://portal.example/auth/logout', { headers: { cookie } }),
+      () => new Response('unexpected'),
+    )
+    expect(logout.headers.get('set-cookie')).toContain('Max-Age=0')
+    // Removing the configuration ignores the existing cookie and refuses new handoffs.
+    const disabled = new LocalIngress({
+      rbac,
+      tenants: { list: () => [] },
+      env: { SESSION_SECRET: secret, WORKER_NAME: 'portal-deployment' },
+      externalReplays: new ExternalLoginReplayStore(db),
+    })
+    const anonymous = await disabled.handle(
+      new Request('https://portal.example/auth/me', { headers: { cookie } }),
+      () => new Response('unexpected'),
+    )
+    expect(await anonymous.json()).toMatchObject({ authenticated: false, externalLogin: null })
+    const refused = await disabled.handle(request(await mint()), () => new Response('unexpected'))
+    expect(refused.status).toBe(401)
+    expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
+    expect(
+      rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
+        .map((event) => JSON.parse(event.detail_json).externalReason).sort(),
+    ).toEqual(['configuration', 'replay'])
+  } finally {
+    db.close()
   }
 })
 

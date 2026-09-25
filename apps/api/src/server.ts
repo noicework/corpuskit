@@ -1,3 +1,8 @@
+import {
+  externalLoginConfig,
+  externalLoginConfigured,
+  ExternalLoginReplayStore,
+} from './external-login.ts'
 import { serveStatic } from 'hono/deno'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
@@ -36,7 +41,12 @@ const { database, rbac } = openLocalRbac(process.env)
 const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
 const tenants = owned.tenants!
 const { watches } = owned
-const ingress = new LocalIngress({ rbac, tenants, env: process.env })
+const ingress = new LocalIngress({
+  rbac,
+  tenants,
+  env: process.env,
+  externalReplays: new ExternalLoginReplayStore(database),
+})
 
 // Documentation readiness: probe every bound portal's documentation-scoped
 // search at boot and report it on /api/health, so a portal provisioned
@@ -70,7 +80,9 @@ const webBuild = webBuildStamp()
 const app = buildApp({
   ...owned,
   rbac,
-  configuredTenantId: process.env.ENTRA_TENANT_ID,
+  configuredTenantId: process.env.ENTRA_TENANT_ID ||
+    (externalLoginConfigured(externalLoginConfig(process.env)) ? 'external' : undefined),
+  externalLoginEnabled: externalLoginConfigured(externalLoginConfig(process.env)),
   audience: process.env.WORKER_NAME ?? 'corpuskit',
   provider,
   tenants,

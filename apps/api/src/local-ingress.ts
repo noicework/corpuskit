@@ -1,3 +1,17 @@
+import {
+  type AuthConfig,
+  authConfigured,
+  authUser,
+  handleAuthRequest,
+  sessionAuthConfigured,
+} from '../../cloudflare/src/auth.ts'
+import {
+  auditExternalLoginFailure,
+  externalLoginConfig,
+  externalLoginConfigured,
+  externalLoginPresentation,
+  type ExternalLoginReplayStore,
+} from './external-login.ts'
 import type { PortalRequestContext } from './app.ts'
 import { coarseAdminEligibility, resolveEffectiveRoles } from './assignments.ts'
 import { appendAudit, createAuditEvent } from './audit.ts'
@@ -19,6 +33,7 @@ import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 interface LocalIngressOptions {
   rbac: RbacState
   tenants: { list(): { slug: string }[] } & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled'>>
+  externalReplays?: ExternalLoginReplayStore
   env: Record<string, string | undefined>
 }
 type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
@@ -30,6 +45,8 @@ export class LocalIngress {
   private readonly secret: string
   private readonly audience: string
   private readonly tenantId: string
+  private readonly auth: AuthConfig
+  private readonly externalEnabled: boolean
   readonly breakGlassEnabled: boolean
   readonly breakGlass: BreakGlassService
 
@@ -49,14 +66,24 @@ export class LocalIngress {
         (byte) => byte.toString(16).padStart(2, '0'),
       ).join('')
     this.audience = env.WORKER_NAME ?? 'corpuskit'
-    this.tenantId = env.ENTRA_TENANT_ID ?? ''
+    this.externalEnabled = externalLoginConfigured(externalLoginConfig(env))
+    this.tenantId = env.ENTRA_TENANT_ID || (this.externalEnabled ? 'external' : '')
+    this.auth = {
+      clientId: env.ENTRA_CLIENT_ID ?? '',
+      clientSecret: env.ENTRA_CLIENT_SECRET ?? '',
+      tenantId: env.ENTRA_TENANT_ID ?? '',
+      sessionSecret: this.secret,
+      redirectUri: env.ENTRA_REDIRECT_URI,
+      adminEmails: env.ENTRA_ADMIN_EMAILS,
+      externalLogin: { ...externalLoginConfig(env), audience: this.audience },
+    }
     this.breakGlass = rbac.breakGlassService({
       passcode: env.ADMIN_PASSCODE,
       environment: env.ENVIRONMENT,
       explicitFlag: env.ADMIN_BREAK_GLASS,
     })
     this.breakGlassEnabled = this.breakGlass.enabled
-    if (this.tenantId) {
+    if (env.ENTRA_TENANT_ID) {
       rbac.assignmentService(this.tenantId, this.audience)
         .bootstrapAdminEmails(env.ENTRA_ADMIN_EMAILS ?? '')
     }
@@ -87,9 +114,30 @@ export class LocalIngress {
         }),
       )
     try {
+      const path = new URL(request.url).pathname
+      // Only the external handoff and sign-out are served locally; the Entra flow is unchanged.
+      if (path === '/auth/external' || path === '/auth/logout') {
+        return (await handleAuthRequest(request, this.auth, {
+          consume: (key, expiresAt) => {
+            if (!this.options.externalReplays) throw new Error('Replay store unavailable')
+            return this.options.externalReplays.consume(key, expiresAt)
+          },
+          auditFailure: (reason) => auditExternalLoginFailure(rbac.audit, reason),
+        })) ?? Response.json({ error: 'not_found' }, { status: 404 })
+      }
+      // The local server reads only the sessions it can issue: external handoff cookies.
+      if (!session && this.externalEnabled && sessionAuthConfigured(this.auth)) {
+        const user = await authUser(request, this.auth)
+        if (user?.sessionFacts.provenance === 'external') session = user.sessionFacts
+      }
       const headers = stripIdentityHeaders(request.headers)
       if (session) {
-        if (!validSessionFacts(session) || session.tenantId !== this.tenantId) {
+        if (
+          !validSessionFacts(session) ||
+          (session.tenantId === 'external'
+            ? !this.externalEnabled
+            : session.tenantId !== this.tenantId)
+        ) {
           throw new InvalidLocalPrincipal()
         }
         try {
@@ -115,19 +163,22 @@ export class LocalIngress {
         sessionSecret: this.secret,
         audience: this.audience,
         tenantId: this.tenantId,
+        externalLoginEnabled: this.externalEnabled,
       })
       if (verified.kind === 'rejected') throw new InvalidLocalPrincipal()
       if (session) {
-        const result = rbac.assignmentService(this.tenantId, this.audience).activate(session, {
-          requestId,
-          actor: { kind: 'user', id: session.oid },
-        })
+        const result = rbac.assignmentService(this.tenantId, this.audience, this.externalEnabled)
+          .activate(session, {
+            requestId,
+            actor: { kind: 'user', id: session.oid },
+          })
         if (!result.ok && result.code === 'invalid_principal') throw new InvalidLocalPrincipal()
       }
       const resolution = await resolveEffectiveRoles(session, {
         rbac,
         tenants: this.options.tenants,
         audience: this.audience,
+        externalLoginEnabled: this.externalEnabled,
       }, this.tenantId)
       const principal: PortalRequestContext = {
         requestId,
@@ -145,7 +196,6 @@ export class LocalIngress {
           }
           : null,
       }
-      const path = new URL(request.url).pathname
       if (path.startsWith('/__corpuskit/')) {
         return Response.json({ error: 'not_found' }, { status: 404 })
       }
@@ -166,15 +216,24 @@ export class LocalIngress {
         }
         return Response.json({
           ...buildUiAccessSnapshot({
+            externalLoginEnabled: this.externalEnabled,
             session,
             effectiveRoles: resolution.effectiveRoles,
             configuredTenantId: this.tenantId,
             selectedSlug,
             tenant,
           }),
+          enabled: sessionAuthConfigured(this.auth),
+          entraEnabled: authConfigured(this.auth),
+          externalLogin: externalLoginPresentation(this.auth.externalLogin),
+          sessionProvenance: session ? session.provenance ?? 'entra' : null,
           authenticated: session !== null,
           user: principal.user
-            ? { ...principal.user, isAdmin: principal.coarseAdminEligible }
+            ? {
+              ...principal.user,
+              provenance: session?.provenance ?? 'entra',
+              isAdmin: principal.coarseAdminEligible,
+            }
             : null,
           effectiveRoles: resolution.effectiveRoles,
           provenance: resolution.provenance,
