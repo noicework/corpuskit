@@ -1660,13 +1660,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Baseline security headers on every response. Deliberately narrow for now:
   // frame-ancestors only, not a full CSP - the app legitimately loads
   // modules from esm.sh and fonts from Google, so default-src/script-src is
-  // a later work item once those origins are catalogued.
+  // a later work item once those origins are catalogued. A stored file keeps
+  // its own stricter policy, which forbids framing as well.
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
     c.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains')
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-    c.header('Content-Security-Policy', "frame-ancestors 'none'")
+    if (c.res.headers.get('Content-Security-Policy') !== STORED_FILE_POLICY) {
+      c.header('Content-Security-Policy', "frame-ancestors 'none'")
+    }
   })
 
   // Operator scope is enforced before data-plane limiters or CORS can finish a request.
@@ -2078,9 +2081,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     const stored = opts.branding?.get(config.slug, kind)
     if (stored) {
-      return new Response(stored.bytes, {
-        headers: { 'content-type': stored.contentType, 'cache-control': 'private, no-store' },
-      })
+      return new Response(stored.bytes, { headers: storedFileHeaders(stored.contentType) })
     }
     const path = brandingFile(config.slug, kind)
     if (!path) return c.json({ error: 'not_found' }, 404)
@@ -2092,9 +2093,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       : ext === 'woff2' || ext === 'woff' || ext === 'ttf' || ext === 'otf'
       ? `font/${ext}`
       : `image/${ext === 'jpg' ? 'jpeg' : ext}`
-    return new Response(readFileSync(path), {
-      headers: { 'content-type': type, 'cache-control': 'private, no-store' },
-    })
+    return new Response(readFileSync(path), { headers: storedFileHeaders(type) })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/thumbnail'), async (c) => {
@@ -2110,6 +2109,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (value) headers.set(name, value)
     }
     headers.set('cache-control', 'private, no-store')
+    headers.set('content-security-policy', STORED_FILE_POLICY)
     return new Response(upstream.body, { status: 200, headers })
   })
 
@@ -2703,7 +2703,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const v = upstream.headers.get(h)
       if (v) headers.set(h, v)
     }
-    headers.set('content-disposition', 'inline')
+    // A PDF opens in the browser's own viewer, which a sandboxed document cannot use. Any other
+    // stored file is sandboxed, and only passive media is shown in place.
+    const type = storedFileType(headers.get('content-type'))
+    if (type !== 'application/pdf') headers.set('content-security-policy', STORED_FILE_POLICY)
+    headers.set(
+      'content-disposition',
+      type === 'application/pdf' || passiveMedia(type) ? 'inline' : 'attachment',
+    )
     return new Response(upstream.body, { status: upstream.status, headers })
   })
 
@@ -4640,6 +4647,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     const isFont = kind === 'font-heading' || kind === 'font-body'
     const contentType = c.req.header('content-type') ?? ''
+    // SVG is refused: it is a document that can carry script, not only a picture.
     const ext = isFont
       ? (contentType === 'font/woff2'
         ? 'woff2'
@@ -4656,11 +4664,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ? 'jpg'
         : contentType === 'image/webp'
         ? 'webp'
-        : contentType === 'image/svg+xml'
-        ? 'svg'
         : null)
     if (!ext) {
-      const message = isFont ? 'Use WOFF2, WOFF, TTF or OTF.' : 'Use PNG, JPEG, WebP or SVG.'
+      const message = isFont ? 'Use WOFF2, WOFF, TTF or OTF.' : 'Use PNG, JPEG or WebP.'
       return c.json({ error: 'unsupported_type', message }, 415)
     }
     const bytes = new Uint8Array(await c.req.arrayBuffer())
@@ -6842,6 +6848,34 @@ export function buildApp(opts: BuildAppOptions): Hono {
 /** The strongest matches first: what a decline names as the closest the corpus holds. */
 function nearestTitles(resources: readonly ScoredResource[]): string[] {
   return [...resources].sort((a, b) => b.relevance - a.relevance).slice(0, 3).map((r) => r.title)
+}
+
+/**
+ * The policy for bytes a portal administrator or a knowledge box supplied. Every portal host can
+ * share one session cookie, so opening such a file directly must never run script there.
+ */
+export const STORED_FILE_POLICY = "sandbox; default-src 'none'; frame-ancestors 'none'"
+
+/** Headers for a stored branding asset: sandboxed, never sniffed and saved rather than shown. */
+function storedFileHeaders(contentType: string): Record<string, string> {
+  return {
+    'content-type': contentType,
+    'cache-control': 'private, no-store',
+    'content-security-policy': STORED_FILE_POLICY,
+    'content-disposition': 'attachment',
+    'x-content-type-options': 'nosniff',
+  }
+}
+
+/** A stored file's media type without parameters, lower case. */
+function storedFileType(contentType: string | null): string {
+  return (contentType ?? '').split(';')[0]!.trim().toLowerCase()
+}
+
+/** Raster images, audio and video: shown in place, never a document that can run script. */
+function passiveMedia(type: string): boolean {
+  return /^image\/(png|jpeg|gif|webp|avif)$/.test(type) ||
+    /^(audio|video)\/[a-z0-9.+-]+$/.test(type)
 }
 
 /** The same SSE response with an explicit UTF-8 charset on its content type. */

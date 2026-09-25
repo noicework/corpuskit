@@ -728,6 +728,16 @@ the app shell, homepage, About page and documentation. Custom hostnames outside 
 domain retain host-only cookies; lookalike suffixes are never included in the platform cookie
 scope, and the SPA only links across origins to hostnames within the platform domain.
 
+Every host under the platform domain, and every portal's API on each of them, shares that one
+session cookie. A file that a portal administrator or a knowledge box supplied therefore must
+never run as a page there. Branding uploads accept PNG, JPEG and WebP images and WOFF2, WOFF, TTF
+and OTF fonts; SVG is refused with HTTP 415 `unsupported_type`, because an SVG can carry script.
+Branding assets, including any SVG stored before this rule, are served with
+`Content-Security-Policy: sandbox; default-src 'none'; frame-ancestors 'none'` and
+`Content-Disposition: attachment`. Resource thumbnails carry the same policy. Knowledge box files
+carry it too and download, except PDFs, which open in the browser's own viewer, and raster images,
+audio and video, which show in place.
+
 The two seeded showcase portals, and one showcase portal created before hostnames were stored,
 receive their `corpuskit.org` hostnames when read on the `corpuskit.org` platform domain only.
 On any other platform domain they have no hostname until one is attached, and every new portal,

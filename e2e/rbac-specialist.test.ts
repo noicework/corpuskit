@@ -598,13 +598,14 @@ Deno.test('appearance and rename omit behaviour fields and revoke every control 
     await page.evaluate(() => {
       const input = document.querySelector<HTMLInputElement>('[data-branding-upload=logo]')!
       const files = new DataTransfer()
-      files.items.add(
-        new File(
-          ['<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="12" fill="navy"/></svg>'],
-          'fixture.svg',
-          { type: 'image/svg+xml' },
+      // A one-pixel PNG: SVG uploads are refused because an SVG can carry script.
+      const png = Uint8Array.from(
+        atob(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
         ),
+        (char) => char.charCodeAt(0),
       )
+      files.items.add(new File([png], 'fixture.png', { type: 'image/png' }))
       input.files = files.files
       input.dispatchEvent(new Event('change', { bubbles: true }))
     })

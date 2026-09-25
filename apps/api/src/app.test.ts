@@ -20,7 +20,12 @@ import {
   TenantConfigSchema,
 } from '@research-portal/core'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
-import { buildApp as buildRawApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
+import {
+  buildApp as buildRawApp,
+  type BuildAppOptions,
+  type PortalRequestContext,
+  STORED_FILE_POLICY,
+} from './app.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import {
@@ -1128,6 +1133,7 @@ describe('GET /api/t/:slug/resources/:id/thumbnail', () => {
     expect(response.headers.get('content-length')).toBe('3')
     expect(response.headers.get('etag')).toBe('"thumb-v1"')
     expect(response.headers.get('last-modified')).toBe('Mon, 31 Aug 2026 00:00:00 GMT')
+    expect(response.headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 })
@@ -2156,6 +2162,43 @@ describe('appearance (typography, shape, branding fonts)', () => {
       body: new Uint8Array([1, 2, 3]),
     })
     expect(response.status).toBe(415)
+  })
+
+  it('serves a branding file kept on disk sandboxed as a download', async () => {
+    const brandingPath = `${Deno.makeTempDirSync()}/branding`
+    Deno.mkdirSync(brandingPath)
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/admin/people")</script></svg>'
+    Deno.writeTextFileSync(`${brandingPath}/marine-logo.svg`, svg)
+    const app = buildApp({ provider: new StubProvider(), tenants: freshTenants(), brandingPath })
+    const served = await app.request('/api/t/marine/branding/logo')
+    expect(served.status).toBe(200)
+    expect(served.headers.get('content-type')).toBe('image/svg+xml')
+    expect(served.headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
+    expect(served.headers.get('content-disposition')).toBe('attachment')
+    expect(served.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(await served.text()).toBe(svg)
+  })
+
+  it('refuses an SVG logo upload and writes nothing to disk', async () => {
+    const brandingPath = `${Deno.makeTempDirSync()}/branding`
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      adminPasscode: passcode,
+      brandingPath,
+    })
+    const response = await app.request('/api/admin/t/marine/branding/logo', {
+      method: 'POST',
+      headers: { 'x-admin-passcode': passcode, 'content-type': 'image/svg+xml' },
+      body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    })
+    expect(response.status).toBe(415)
+    expect(await response.json()).toEqual({
+      error: 'unsupported_type',
+      message: 'Use PNG, JPEG or WebP.',
+    })
+    expect(() => Deno.statSync(`${brandingPath}/marine-logo.svg`)).toThrow(Deno.errors.NotFound)
   })
 
   it('rejects an unknown branding kind', async () => {

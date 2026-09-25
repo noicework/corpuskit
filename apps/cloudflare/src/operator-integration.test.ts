@@ -305,11 +305,11 @@ Deno.test('Worker operator allowlist reaches portal setup, email assignments, co
     expect(await counters.json()).toEqual({ resources: 2, paragraphs: 3, sentences: 4 })
     const branding = await f.invoke('/api/admin/t/hosted-lab/branding/logo', {
       method: 'POST',
-      headers: { 'content-type': 'image/svg+xml' },
-      body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
     })
     expect(branding.status).toBe(200)
-    expect(f.stores.branding.get('hosted-lab', 'logo')?.contentType).toBe('image/svg+xml')
+    expect(f.stores.branding.get('hosted-lab', 'logo')?.contentType).toBe('image/png')
     const migration = await f.invoke(
       '/api/admin/migrate',
       jsonRequest('POST', {
@@ -380,6 +380,39 @@ Deno.test('Worker operator reads and sets portal lifecycle and reads usage, and 
     ).toEqual(['intent', 'success', 'success'])
     expect(events.every((event) => event.actor_id === 'operator:hosting-automation')).toBe(true)
     expect(JSON.stringify(events)).not.toContain(operatorKey)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('Worker refuses SVG branding and serves stored branding sandboxed as a download', async () => {
+  const f = await fixture()
+  try {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/admin/people")</script></svg>'
+    const upload = await f.invoke('/api/admin/t/marine/branding/logo', {
+      method: 'POST',
+      headers: { 'content-type': 'image/svg+xml' },
+      body: svg,
+    })
+    expect(upload.status).toBe(415)
+    expect(f.stores.branding.get('marine', 'logo')).toBeNull()
+    // An SVG stored before uploads refused them reaches any reader of the public portal, but the
+    // Worker must keep the policy that stops it running as a page on the shared cookie domain.
+    f.stores.branding.put('marine', 'logo', {
+      bytes: new TextEncoder().encode(svg),
+      contentType: 'image/svg+xml',
+      version: 'v1',
+    })
+    const served = await f.invoke('/api/t/marine/branding/logo', {}, '')
+    expect(served.status).toBe(200)
+    expect(served.headers.get('content-security-policy')).toBe(
+      "sandbox; default-src 'none'; frame-ancestors 'none'",
+    )
+    expect(served.headers.get('content-disposition')).toBe('attachment')
+    expect(served.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(served.headers.get('x-frame-options')).toBe('DENY')
+    await served.body?.cancel()
   } finally {
     f.close()
   }
