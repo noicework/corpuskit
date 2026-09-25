@@ -71,9 +71,12 @@ Only Worker-relevant values are read at runtime:
 - `SESSION_SECRET`, a random value of at least 32 bytes
 - `BINDING_KEY`, standard base64 of 32 random bytes, seals persisted knowledge-box tokens
   with AES-256-GCM. Required for new or replacement bindings; existing plaintext records remain
-  readable without it. See [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption)
-  for migration, readiness and key recovery constraints. The secret upload task includes this
-  value when configured; it never generates or rotates it.
+  readable without it. A malformed value makes every API request answer 503
+  `binding_key_invalid`; a stored binding the key cannot open is reported `unavailable` and can
+  be replaced or disconnected. See
+  [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption) for migration,
+  readiness signals and key recovery. The secret upload task includes this value when
+  configured; it never generates or rotates it.
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_DOMAINS_TOKEN`, optional credentials for
   automatically attaching a safe `<slug>.<PLATFORM_DOMAIN>` custom domain when an administrator
   creates a portal
@@ -95,7 +98,8 @@ credentials are configured, the admin create route then:
 1. validates the generated slug as a public DNS label and rejects reserved infrastructure names;
 2. looks up the exact hostname with
    [`GET /accounts/{account_id}/workers/domains`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/list/);
-3. attaches it to the `WORKER_NAME` Worker (default `corpuskit`) with
+3. attaches it to the Worker script named by `WORKER_NAME` (default `corpuskit`; it must equal the
+   script `name` in the Wrangler configuration) with
    [`PUT /accounts/{account_id}/workers/domains`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/update/)
    when it is absent, letting Cloudflare place it in the account zone that contains the hostname,
    and rejects a result for another hostname, Worker or zone; and
