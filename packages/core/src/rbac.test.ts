@@ -751,3 +751,58 @@ describe('RBAC catalogue and schema contracts', () => {
     ) expect(AuthorisationPrincipalSchema.safeParse(invalid).success).toBe(false)
   })
 })
+
+describe('operator principals', () => {
+  const operator = { kind: 'operator', id: 'automation' }
+  const roles = { platformRole: 'platform-admin', portalRoles: [] }
+
+  it('holds platform-admin authority for every portal without implicit or assigned roles', () => {
+    const principal = normalisePrincipal(operator, roles, publicPolicy)
+    expect(principal).toEqual({
+      identity: operator,
+      effectiveRoles: roles,
+      portalPolicy: publicPolicy,
+    })
+    expect(authorize(principal, 'portal.create', platform)).toBe(true)
+    for (
+      const permission of ['bindings.write', 'members.manage', 'domains.write', 'content.write']
+    ) {
+      expect(authorize(principal, permission, alpha), permission).toBe(true)
+    }
+    for (
+      const permission of ['portal.delete', 'platform.members.manage', 'platform.settings.write']
+    ) {
+      expect(authorize(principal, permission, platform), permission).toBe(false)
+    }
+  })
+
+  it('rejects elevated, missing and portal-scoped operator roles rather than downgrading them', () => {
+    for (
+      const effectiveRoles of [
+        { platformRole: 'owner', portalRoles: [] },
+        { portalRoles: [] },
+        { ...roles, portalRoles: [{ slug: 'alpha', role: 'portal-admin' }] },
+      ]
+    ) {
+      expect(normalisePrincipal(operator, effectiveRoles)).toBeNull()
+      for (const permission of PERMISSIONS) {
+        for (const scope of [alpha, platform]) {
+          expect(authorize({ identity: operator, effectiveRoles }, permission, scope)).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('validates a bounded audit-safe operator identifier and excludes session fields', () => {
+    expect(PrincipalSchema.parse(operator)).toEqual(operator)
+    for (
+      const invalid of [
+        { kind: 'operator', id: '' },
+        { kind: 'operator', id: 'a'.repeat(152) },
+        { kind: 'operator', id: 'https://example.test' },
+        { kind: 'operator', id: 'line\nbreak' },
+        { ...operator, oid: 'user' },
+      ]
+    ) expect(PrincipalSchema.safeParse(invalid).success).toBe(false)
+  })
+})
