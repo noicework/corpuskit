@@ -291,6 +291,17 @@ Deno.test('external redirect rejects encoded, nested and browser-normalised esca
       '/\u0000evil',
       '/%00evil',
       `/${'a'.repeat(2048)}`,
+      // Dot segments that a browser resolves to a protocol-relative path.
+      '/..//evil.example',
+      '/.//evil.example',
+      '/%2e%2e//evil.example',
+      '/%2E%2E//evil.example',
+      '/%2e//evil.example',
+      '/.%2e//evil.example',
+      '/%252e%252e//evil.example',
+      '/t/..//evil.example',
+      '/t/marine/..',
+      '/t/./marine',
     ]
   ) {
     expect(externalReturnTo(value)).toBe('/')
@@ -302,9 +313,16 @@ Deno.test('external redirect rejects encoded, nested and browser-normalised esca
       '/t/marine?q=climate#sources',
       '/t/marine?q=one%20two',
       '/t/%E7%94%A8%E6%88%B7',
+      '/t/marine?path=../other',
+      '/t/marine/...',
+      '/t/v1.2/notes',
     ]
   ) {
     expect(externalReturnTo(value)).toBe(value)
+    // Every accepted value stays on the origin with one leading slash once a browser resolves it.
+    const resolved = new URL(value, 'https://portal.example')
+    expect(resolved.origin).toBe('https://portal.example')
+    expect(resolved.pathname.startsWith('//')).toBe(false)
   }
 })
 

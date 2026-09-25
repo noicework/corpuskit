@@ -176,27 +176,42 @@ export async function verifyExternalAssertion(
   }
 }
 
-/** Reject ambiguous paths at every percent-decoding layer, including browser backslash handling. */
+const returnBase = 'https://return-path.invalid'
+
+/**
+ * Reject ambiguous paths at every percent-decoding layer, including browser backslash handling
+ * and dot segments, which a browser would resolve (`/..//host` becomes `//host`).
+ */
 export function externalReturnTo(value: string | null): string {
   // A Location header carries visible ASCII only; anything else must arrive percent-encoded.
   if (!value || value.length > 2048 || !/^[\x21-\x7e]+$/.test(value)) return '/'
   let decoded = value
-  for (let depth = 0; depth <= value.length; depth++) {
+  let stable = false
+  for (let depth = 0; depth <= value.length && !stable; depth++) {
     if (
       !decoded.startsWith('/') || decoded.startsWith('//') ||
       decoded.includes('\\') || [...decoded].some((char) =>
         char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127
-      )
+      ) ||
+      decoded.split(/[?#]/, 1)[0]!.split('/').some((segment) => segment === '.' || segment === '..')
     ) return '/'
     try {
       const next = decodeURIComponent(decoded)
-      if (next === decoded) return value
+      stable = next === decoded
       decoded = next
     } catch {
       return '/'
     }
   }
-  return '/'
+  if (!stable) return '/'
+  // Resolve as a browser would: the result must stay on this origin with a single leading slash.
+  try {
+    const resolved = new URL(value, returnBase)
+    if (resolved.origin !== returnBase || resolved.pathname.startsWith('//')) return '/'
+  } catch {
+    return '/'
+  }
+  return value
 }
 
 /** The unique insert is atomic on SQLite, including separate adapters and Worker isolates. */
