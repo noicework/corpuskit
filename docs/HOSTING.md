@@ -22,6 +22,10 @@ Configure the same values in the Worker environment or the local server's `.env`
 | `WORKER_NAME` | Deployment-specific assertion audience and principal-envelope audience. Local development defaults to `corpuskit`. |
 | `SESSION_SECRET` | Random secret of at least 32 bytes, used to seal the normal session cookie and sign the internal principal envelope. |
 
+The Worker and a production local server require `SESSION_SECRET`. For local development only,
+an omitted secret uses a randomly generated process key, so sessions end on restart. Replay
+identifiers still persist independently in SQLite; restarting does not make an assertion reusable.
+
 External sign-in is off unless both issuer and public JWK are set. Invalid configuration fails
 closed. Entra credentials are not required for an external-only deployment. When Entra is also
 configured, the portal sign-in gate keeps its Entra button and adds the external button when the
