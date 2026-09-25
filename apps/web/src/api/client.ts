@@ -1462,7 +1462,8 @@ export type SourceSyncEvent =
   // `deferred` counts pages left un-synced this run (e.g. the knowledge box
   // was busy) - they are picked up automatically on the next sync.
   | { type: 'done'; added: number; deferred?: number }
-  | { type: 'error'; message: string }
+  // A hosting refusal also carries its code (`error`) and detail.
+  | { type: 'error'; message: string; error?: string }
 
 export async function syncSource(
   slug: string,
@@ -1477,7 +1478,13 @@ export async function syncSource(
     { method: 'POST', headers: {} },
     options,
   )
-  if (!res.ok || !res.body) throw new ApiError(res.status, 'The sync failed to start')
+  if (!res.ok || !res.body) {
+    const body: unknown = await res.json().catch(() => null)
+    assertResponseCurrent(res)
+    const error = new ApiError(res.status, hostingErrorMessage(body) ?? 'The sync failed to start')
+    error.code = errorCode(body)
+    throw error
+  }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -1487,7 +1494,10 @@ export async function syncSource(
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
     try {
-      onEvent(JSON.parse(data) as SourceSyncEvent)
+      const event = JSON.parse(data) as SourceSyncEvent
+      // A sync stopped by a portal limit, read-only or pause is explained in the app's words.
+      const hosting = event.type === 'error' ? hostingErrorMessage(event) : undefined
+      onEvent(event.type === 'error' && hosting ? { ...event, message: hosting } : event)
     } catch {
       // A truncated trailing frame (dropped connection) is not an event.
     }

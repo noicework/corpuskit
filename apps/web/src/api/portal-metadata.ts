@@ -28,3 +28,10 @@ export async function readSafePortalMetadata(response: Response, slug: string) {
   if (value.slug !== slug) throw new Error('Mismatched portal')
   return value
 }
+
+/** Access and hosting refusals are answers, not faults: retry only what may be transient. */
+export function retryTenantConfig(failureCount: number, error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === 'number' && [401, 403, 404, 423].includes(status)) return false
+  return failureCount < 3
+}

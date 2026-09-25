@@ -159,7 +159,12 @@ export async function authorityFetch(
     // An explicit disabled-agent policy is not a loss of the signed-in user's authority.
     const agentsDisabled = response.status === 403 &&
       errorCode(await response.clone().json().catch(() => null)) === 'agents_disabled'
-    lifecycle.assertCurrent()
+    try {
+      lifecycle.assertCurrent()
+    } catch (error) {
+      void response.body?.cancel().catch(() => {})
+      throw error
+    }
     if (response.status === 401 || (response.status === 403 && !agentsDisabled)) {
       authority?.invalidate('request denied')
       const seconds = Number(response.headers.get('retry-after'))

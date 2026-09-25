@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { Permission, TenantConfig } from '@research-portal/core'
 import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
+import { retryTenantConfig } from '../api/portal-metadata.ts'
 import {
   tenantThemeVars,
   useBodyTheme,
@@ -273,7 +274,7 @@ export function TenantLayout() {
     queryKey: ['tenant-config', slug],
     queryFn: () => getTenantConfig(slug ?? ''),
     enabled: !!slug && access.can('portal.read', scope),
-    retry: false,
+    retry: retryTenantConfig,
   })
   // Routes whose page owns the full viewport height.
   const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
@@ -340,10 +341,9 @@ export function TenantLayout() {
     return <FullPageSpinner />
   }
 
-  if (
-    config?.status === 'suspended' ||
-    (error instanceof ApiError && error.code === 'portal_suspended')
-  ) {
+  // Only the refused config read is the paused screen: platform administrators still get the
+  // full config of a suspended portal, and use it under a banner.
+  if (error instanceof ApiError && error.code === 'portal_suspended') {
     return <AccessUnavailable suspended />
   }
   if (isError || !config) return <AccessUnavailable failedRead />
@@ -660,6 +660,23 @@ export function TenantLayout() {
           <div className='border-b border-line bg-surface-2'>
             <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
               Demo portal. Answers currently use the CorpusKit documentation knowledge base.
+            </p>
+          </div>
+        )}
+        {config.status === 'suspended' && (
+          <div
+            role='status'
+            className='border-b'
+            data-portal-suspended
+            style={{
+              background: 'var(--rp-warn-bg)',
+              color: 'var(--rp-warn-ink)',
+              borderColor: 'var(--rp-warn-line)',
+            }}
+          >
+            <p className='rp-shell py-2 text-sm leading-relaxed'>
+              <strong>This portal is paused.</strong>{' '}
+              Visitors see a paused screen. Only platform administrators can open it.
             </p>
           </div>
         )}

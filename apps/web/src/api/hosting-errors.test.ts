@@ -10,6 +10,7 @@ import {
   runEnrichment,
   streamDocsAsk,
   streamEstateAsk,
+  syncSource,
   uploadAdminFile,
 } from './client.ts'
 import { AdminAccessError, authorityFetch, sessionAccess } from './break-glass.ts'
@@ -164,4 +165,70 @@ Deno.test('an unmeasurable storage limit explains why content cannot be added', 
   const message = hostingErrorMessage({ error: 'usage_unavailable' })
   expect(message).toContain('cannot be checked')
   expect(message).not.toContain('usage_unavailable')
+})
+
+Deno.test('a source sync refused or stopped by hosting state explains it in the app words', async () => {
+  const original = globalThis.fetch
+  try {
+    // Refused before it starts: the read-only copy, with its code.
+    globalThis.fetch = () =>
+      Promise.resolve(Response.json({ error: 'portal_read_only' }, { status: 423 }))
+    await expect(syncSource('marine', sessionAccess, 'source-1', () => {})).rejects.toMatchObject({
+      status: 423,
+      code: 'portal_read_only',
+      message: hostingErrorMessage({ error: 'portal_read_only' }),
+    })
+    // Stopped part way by a limit: the streamed error event carries the limit copy.
+    const frames = [
+      { type: 'item', label: 'Found 3 pages' },
+      {
+        type: 'error',
+        message: 'This portal has reached its resource limit, so no more content can be added.',
+        ...resourceLimit,
+      },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
+    globalThis.fetch = () =>
+      Promise.resolve(
+        new Response(frames, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      )
+    const events: unknown[] = []
+    await syncSource('marine', sessionAccess, 'source-1', (event) => void events.push(event))
+    expect(events[0]).toEqual({ type: 'item', label: 'Found 3 pages' })
+    expect(events[1]).toMatchObject({
+      type: 'error',
+      error: 'limit_exceeded',
+      message: hostingErrorMessage(resourceLimit),
+    })
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('a request that goes stale while its denial is read releases the response body', async () => {
+  const controller = new AbortController()
+  let response!: Response
+  const failure = await authorityFetch(
+    '/api/admin/t/marine/kg/implement',
+    undefined,
+    { signal: controller.signal },
+    () => {
+      const body = JSON.stringify({ error: 'agents_disabled' })
+      response = new Response(
+        new ReadableStream({
+          pull(stream) {
+            // The request is superseded while its 403 body is being read.
+            controller.abort()
+            stream.enqueue(new TextEncoder().encode(body))
+            stream.close()
+          },
+        }, { highWaterMark: 0 }),
+        { status: 403, headers: { 'content-type': 'application/json' } },
+      )
+      return Promise.resolve(response)
+    },
+  ).then(() => undefined, (error) => error)
+  expect(failure).toBeDefined()
+  expect(failure).not.toBeInstanceOf(AdminAccessError)
+  // The caller never received the response; its body was cancelled, not left open.
+  expect(response.bodyUsed).toBe(true)
 })

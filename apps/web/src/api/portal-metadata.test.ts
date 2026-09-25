@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import { DEFAULT_PALETTES } from '@research-portal/core'
-import { readSafePortalMetadata } from './portal-metadata.ts'
+import { readSafePortalMetadata, retryTenantConfig } from './portal-metadata.ts'
 
 const palette = DEFAULT_PALETTES.corpuskit.palette
 const safe = {
@@ -76,5 +76,16 @@ Deno.test('safe metadata rejects mismatched portals and every other failed respo
   ) {
     await expect(readSafePortalMetadata(Response.json(body, { status: 423 }), 'marine'))
       .rejects.toThrow()
+  }
+})
+
+Deno.test('the portal config read retries transient failures but never an access or hosting answer', () => {
+  for (const status of [401, 403, 404, 423]) {
+    expect(retryTenantConfig(0, { status })).toBe(false)
+  }
+  for (const error of [{ status: 502 }, { status: 500 }, new TypeError('network'), null]) {
+    expect(retryTenantConfig(0, error)).toBe(true)
+    expect(retryTenantConfig(2, error)).toBe(true)
+    expect(retryTenantConfig(3, error)).toBe(false)
   }
 })
