@@ -41,6 +41,11 @@ place a decision is made. The full grant table is the `portalMinimumRoles` and
 Portal permissions evaluated against the platform scope are denied, and platform permissions
 evaluated against a portal are denied. Malformed input of any kind is denied.
 
+Content migration (`POST /api/admin/migrate`) is declared with `portal.create`, so any
+platform-admin can run it; earlier releases required `owner` (`platform.settings.write`). It still
+requires `content.write` on both the source and destination portals and changes no platform
+settings. The administration screen continues to show the migration panel to owners only.
+
 ## Portal access modes
 
 Each portal has an access mode. Existing portals are `public`.

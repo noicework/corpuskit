@@ -1,8 +1,9 @@
 # Hosting CorpusKit
 
-CorpusKit provides optional hosting capabilities for operators running portals for multiple
-organisations. These capabilities use the existing permission declarations, trusted identity
-boundary and audit log. They are disabled unless their deployment configuration is present.
+CorpusKit supports deployments serving several organisations from one Worker. The capabilities
+below configure deployment-wide credential storage and routing while keeping portal data and
+access policies scoped to each portal. Set secrets through your deployment's secret manager and
+ordinary variables through its runtime configuration.
 
 ## Operator credential
 
@@ -13,7 +14,10 @@ store. Never commit the generated value or include it in logs. `OPERATOR_ID` is 
 non-secret actor identifier, defaulting to `operator`. It must start with an ASCII letter or
 digit, contain only letters, digits, `_`, `.`, `:`, `@`, `/` or `-`, and be at most 151 characters.
 It must not contain `://`.
-An absent, empty or invalid key, or an invalid identifier, disables the credential.
+An absent, empty or invalid key, or an invalid identifier, disables the credential. When
+`OPERATOR_API_KEY` is present but unusable, or `OPERATOR_ID` is invalid, the Durable Object and
+the local server log one startup warning naming the setting (never its value), so a
+misconfiguration can be told apart from a caller presenting the wrong key.
 
 Send the credential as `Authorization: Operator <key>`. `Bearer` is reserved for portal data
 keys and does not accept an operator key. A wrong, missing or malformed operator credential
@@ -59,7 +63,8 @@ Create an email assignment with a body such as
 The list response returns the assignment identifier used for deletion. Member role changes and
 group mappings are separate routes and are not enabled for this credential.
 
-Knowledge-box connection accepts `{"endpoint":"https://example.invalid/api/v1/kb/example","token":"<token>"}`
+Knowledge-box connection accepts
+`{"endpoint":"https://<region>.rag.progress.cloud/api/v1/kb/<box-id>","token":"<token>"}`
 and validates the binding with the provider before saving it. The existing `url` field remains
 available; supply exactly one of `endpoint` or `url`.
 
@@ -84,6 +89,11 @@ actor kind `operator` and actor id `operator:<OPERATOR_ID>`, so the default is
 `operator:operator`. Credential verification failures use an anonymous actor because their
 identity is unproven. Keys are excluded from audit detail, errors and logs. Audit write failure
 fails the request rather than permitting an unaudited operation.
+
+Invalid operator credentials, including an operator key sent as `Bearer`, are limited to 60 per
+client address per minute. Further invalid attempts from that address within the window receive
+`429 rate_limited` with a `Retry-After` header and are not audited individually, so a looping
+caller cannot grow the audit log without bound. Verified operator requests are never counted.
 
 Rotate the credential by replacing `OPERATOR_API_KEY` in the runtime secret store and updating
 the caller to use the new value. Only one key is accepted; the previous key stops working as
