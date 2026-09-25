@@ -20,7 +20,7 @@ import { ROLES } from '@research-portal/core'
 import type { DurableStores } from './state.ts'
 
 Deno.test('Worker and local ingress return identical current selected-scope capabilities', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const stores = (h.object as unknown as { stores: DurableStores }).stores
     const local = new LocalIngress({
@@ -102,7 +102,7 @@ Deno.test('Worker and local ingress return identical current selected-scope capa
 })
 
 Deno.test('Worker selected snapshot preserves public access without Entra configuration', async () => {
-  const h = realHarness({ ENTRA_TENANT_ID: '' })
+  const h = await realHarness({ ENTRA_TENANT_ID: '' })
   try {
     const response = await worker.fetch(
       new Request('https://corpuskit.test/auth/me?portal=marine'),
@@ -674,7 +674,7 @@ async function principalRequest(
     headers: { 'x-corpuskit-principal': header, 'x-corpuskit-sso-admin': '1' },
   })
 }
-function realHarness(extraEnv: Record<string, string> = {}) {
+async function realHarness(extraEnv: Record<string, string> = {}, legacyBindings?: unknown) {
   const database = new DatabaseSync(':memory:')
   const storage: DurableObjectState['storage'] = {
     sql: {
@@ -720,14 +720,63 @@ function realHarness(extraEnv: Record<string, string> = {}) {
     ADMIN_PASSCODE: 'fixture',
     ...extraEnv,
   })
-  const object = new workerModule.PortalDurableObject({ storage }, harness.env)
+  if (legacyBindings) {
+    const seed = new DurableState(storage.sql, storage)
+    seed.migrate()
+    seed.put('bindings', legacyBindings)
+  }
+  let initialization: Promise<unknown> = Promise.resolve()
+  const object = new workerModule.PortalDurableObject({
+    storage,
+    blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T> {
+      const pending = callback()
+      initialization = pending
+      return pending
+    },
+  }, harness.env)
+  await initialization
   harness.env.PORTAL = { getByName: () => object }
   return { ...harness, object, database, state: new DurableState(storage.sql, storage) }
 }
 
+Deno.test('Worker startup migrates legacy binding credentials before serving requests', async () => {
+  for (const configured of [false, true]) {
+    const token = 'fixture-only-stored-credential'
+    const h = await realHarness(configured ? { BINDING_KEY: btoa('x'.repeat(32)) } : {}, {
+      marine: {
+        baseUrl: 'https://example.test/kb/marine',
+        token,
+        connectedAt: '2026-01-01T00:00:00Z',
+      },
+    })
+    try {
+      const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
+      expect(health.status).toBe(200)
+      expect((await health.json()).bindingEncryption).toEqual({
+        configured,
+        required: true,
+        writable: configured,
+      })
+      const binding = await worker.fetch(
+        new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+        h.env,
+      )
+      expect(binding.status).toBe(200)
+      const body = await binding.text()
+      expect(JSON.parse(body).status).toBe('connected')
+      expect(body).not.toContain(token)
+      const stored = h.state.get<Record<string, { token: string }>>('bindings', {})
+      if (configured) expect(stored.marine?.token).toMatch(/^enc:v1:/)
+      else expect(stored.marine?.token).toBe(token)
+    } finally {
+      h.database.close()
+    }
+  }
+})
+
 Deno.test('Worker break-glass uses trusted peer lockout and production policy with session co-attribution', async () => {
   for (const enabled of [false, true]) {
-    const h = realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
+    const h = await realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
     try {
       const session = { ...facts(), roles: ['CorpusKit.Owner'] }
       const cookie = await sessionCookie(session)
@@ -769,7 +818,7 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
 })
 
 Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling stays non-system', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     h.state.put('tenants', { disabled: ['marine', 'grains'] })
     for (const method of ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
@@ -821,8 +870,8 @@ Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling st
   }
 })
 
-Deno.test('Durable retention rolls back deleted history if its purge event cannot be written', () => {
-  const h = realHarness()
+Deno.test('Durable retention rolls back deleted history if its purge event cannot be written', async () => {
+  const h = await realHarness()
   try {
     const before = h.state.rbac.audit.read({ scope: { kind: 'platform' } })
     h.database.exec("UPDATE audit_events SET at = '2020-01-01T00:00:00.000Z'")
@@ -839,7 +888,7 @@ Deno.test('Durable retention rolls back deleted history if its purge event canno
 })
 
 Deno.test('real DO rejects invalid envelope or mismatched method facts without legacy rescue', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const session = facts()
     const requests = [
@@ -895,7 +944,7 @@ Deno.test('real DO rejects invalid envelope or mismatched method facts without l
 })
 
 Deno.test('real DO principal failures perform zero protected provider calls and require denial audit', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   const original = AragProvider.prototype.catalog
   let calls = 0
   AragProvider.prototype.catalog = (tenant) => {
@@ -958,7 +1007,7 @@ Deno.test('real DO principal failures perform zero protected provider calls and 
 })
 
 Deno.test('real DO auth/me resolves current assignments and preserves original claim age', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const session = { ...facts(), roles: [] }
     const read = async () =>
@@ -1017,7 +1066,7 @@ Deno.test('real DO auth/me resolves current assignments and preserves original c
 })
 
 Deno.test('Worker auth/me retains cookie lifetime and original age across fresh envelopes', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   const originalNow = Date.now
   try {
     const now = originalNow()
@@ -1044,7 +1093,7 @@ Deno.test('Worker auth/me retains cookie lifetime and original age across fresh 
 })
 
 Deno.test('Worker signing denials require audit before returning and concurrent DO contexts stay separate', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const session = { ...facts(), roles: ['CorpusKit.Owner'] }
     const cookie = await sessionCookie(session)
@@ -1076,7 +1125,7 @@ Deno.test('Worker signing denials require audit before returning and concurrent 
 })
 
 Deno.test('real Worker and DO fail closed on audit outages and keep anonymous public requests usable', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const response = await worker.fetch(
       new Request('https://corpuskit.test/api/t/marine/config', {

@@ -85,7 +85,10 @@ export class PortalDurableObject extends DurableObject<Env> {
         .bootstrapAdminEmails(bindings.ENTRA_ADMIN_EMAILS ?? '')
     }
     initialiseDemo(this.stores.tenants, bindings.ENVIRONMENT)
-    initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
+    ctx.blockConcurrencyWhile(async () => {
+      await this.stores.bindings.initialize()
+      await initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
+    })
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,

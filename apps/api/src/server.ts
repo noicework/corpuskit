@@ -21,6 +21,7 @@ const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
 const bindings = new BindingStore()
+await bindings.initialize()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
 const provider = new AragProvider({

@@ -237,7 +237,8 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       contentType: 'image/png',
       version: 'fixture',
     })
-    f.stores.bindings.set('a', {
+    await f.stores.bindings.initialize()
+    await f.stores.bindings.set('a', {
       baseUrl: 'https://example.test/kb/a',
       token: 'fixture',
       kbId: 'a',
@@ -471,6 +472,7 @@ export function sessionFor(
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
 export function createEnforcementFixture(
   options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> & {
+    bindingKey?: string
     breakGlassPolicy?: BreakGlassPolicy
     /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
     identityConfigured?: boolean
@@ -504,7 +506,9 @@ export function createEnforcementFixture(
   }
   const state = new DurableState(sql, database, now)
   state.migrate()
-  const durable = durableStores(state, {})
+  const durable = durableStores(state, {
+    BINDING_KEY: options.bindingKey ?? btoa('x'.repeat(32)),
+  })
   const stores = {
     ...durable,
     ...(ownedAdapter === 'local'
@@ -636,6 +640,7 @@ export function createEnforcementFixture(
       now,
     }),
     async requestAs(session: TrustedSessionFacts | null, path: string, init?: RequestInit) {
+      await stores.bindings.initialize()
       const request = new Request(`http://localhost${path}`, init)
       contexts.set(request, await contextFor(session))
       try {
@@ -977,7 +982,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
         generatedAt: '2026-09-12T00:00:00Z',
         data: { title: 'Seeded research' },
       })
-      fixture.stores.bindings.set('a', {
+      await fixture.stores.bindings.initialize()
+      await fixture.stores.bindings.set('a', {
         baseUrl: 'https://example.test/kb/a',
         token: 'fixture-token',
         kbId: 'a',

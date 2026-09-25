@@ -271,7 +271,7 @@ Deno.test('directory and estate fan-out exclude every hidden portal without pois
   }
 })
 
-function readFixture() {
+async function readFixture() {
   const calls: string[] = []
   const management = {
     thumbnailResponse: () => {
@@ -341,7 +341,11 @@ function readFixture() {
       { id: 'format', title: 'Format', multiple: false, labels: ['article'] },
     ])
   for (const slug of ['a', 'public-a', 'authenticated-a']) {
-    f.stores.bindings.set(slug, { baseUrl: 'https://example.test/kb/research', token: 'fixture' })
+    await f.stores.bindings.initialize()
+    await f.stores.bindings.set(slug, {
+      baseUrl: 'https://example.test/kb/research',
+      token: 'fixture',
+    })
     for (const kind of ['logo', 'hero', 'font-heading', 'font-body'] as const) {
       f.stores.branding.put(slug, kind, {
         bytes: new TextEncoder().encode(kind),
@@ -390,7 +394,7 @@ const reads = [
 Deno.test('every tenant read independently enforces public, configured-tenant and scoped roles', async (t) => {
   for (const [path, query, expected, dispatch] of reads) {
     await t.step(path, async () => {
-      const f = readFixture()
+      const f = await readFixture()
       try {
         const scenarios: [string, TrustedSessionFacts | null, boolean][] = [
           ['public-a', null, true],
@@ -451,7 +455,7 @@ class SharedCache {
 }
 
 Deno.test('shared caches cannot replay bytes across revocation or mutable portal modes; HEAD and validators reauthorise', async () => {
-  const f = readFixture()
+  const f = await readFixture()
   try {
     const cache = new SharedCache()
     for (
@@ -548,7 +552,7 @@ Deno.test('shared caches cannot replay bytes across revocation or mutable portal
 })
 
 Deno.test('invalid explicit config credentials cannot return safe metadata; the projection needs no audit', async () => {
-  const f = readFixture()
+  const f = await readFixture()
   try {
     for (
       const headers of [{ authorization: 'Bearer invalid' }, {

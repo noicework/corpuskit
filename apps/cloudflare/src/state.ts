@@ -8,9 +8,17 @@ import {
   TenantConfigSchema,
   type TenantSummary,
 } from '@research-portal/core'
-import { envBindings, type KbBinding, regionalBase } from '@research-portal/retrieval'
+import { envBindings, type KbBinding } from '@research-portal/retrieval'
 import type { BrandingAsset, BrandingAssetStore, BrandingKind } from '../../api/src/app.ts'
-import type { BindingStoreApi } from '../../api/src/bindings.ts'
+import {
+  type BindingEncryptionStatus,
+  type BindingRecords,
+  bindingRecords,
+  type BindingStoreApi,
+  ownBinding,
+  prepareBindings,
+} from '../../api/src/bindings.ts'
+import { BindingCipher, BindingCryptoError } from '../../api/src/binding-crypto.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
@@ -373,6 +381,7 @@ export class DurableState {
     try {
       return JSON.parse(row.value) as T
     } catch (error) {
+      if (key === 'bindings') throw new BindingCryptoError('binding_storage_invalid')
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
       if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
@@ -681,50 +690,90 @@ export function stringEnv(env: object): Record<string, string | undefined> {
 
 export class DurableBindingStore implements BindingStoreApi {
   private readonly demo: Record<string, KbBinding>
+  private readonly cipher: BindingCipher
+  private connected: BindingRecords = {}
+  private initialized: boolean
+  private initialization?: Promise<void>
+  private readonly zone?: string
 
   constructor(private readonly state: DurableState, env: Record<string, string | undefined>) {
     this.demo = envBindings(env)
-    const connected = this.connected()
-    const zone = env.ARAG_ZONE
-    if (!zone) return
-    let changed = false
-    for (const entry of Object.values(connected)) {
-      if (!entry.baseUrl && entry.kbId) {
-        entry.baseUrl = `${regionalBase(zone)}/kb/${entry.kbId}`
-        changed = true
-      }
-    }
-    if (changed) this.state.put('bindings', connected)
+    this.cipher = new BindingCipher(env.BINDING_KEY)
+    this.zone = env.ARAG_ZONE
+    const stored = this.stored()
+    this.initialized = !this.cipher.configured &&
+      Object.values(stored).every((entry) => !entry.token.startsWith('enc:'))
+    if (this.initialized) this.connected = structuredClone(stored)
   }
 
-  private connected(): Record<string, KbBinding & { connectedAt: string }> {
-    return this.state.get('bindings', {})
+  private stored(): BindingRecords {
+    return bindingRecords(this.state.get('bindings', {}), this.zone)
+  }
+
+  initialize(): Promise<void> {
+    if (this.initialized) return Promise.resolve()
+    return this.initialization ??= this.initializeBindings()
+  }
+
+  private async initializeBindings(): Promise<void> {
+    const prepared = await prepareBindings(this.stored(), this.cipher)
+    if (prepared.changed) this.state.put('bindings', prepared.stored)
+    this.connected = prepared.connected
+    this.initialized = true
+  }
+
+  encryptionStatus(): BindingEncryptionStatus {
+    return { configured: this.cipher.configured, required: true, writable: this.cipher.configured }
+  }
+
+  assertWritable(): void {
+    if (!this.cipher.configured) throw new BindingCryptoError('binding_key_missing')
+    this.assertInitialized()
+  }
+
+  private assertInitialized(): void {
+    if (!this.initialized) throw new BindingCryptoError('binding_not_initialized')
   }
 
   get(slug: string): KbBinding | undefined {
-    return this.connected()[slug] ?? this.demo[slug]
+    this.assertInitialized()
+    const binding = ownBinding(this.connected, slug) ?? ownBinding(this.demo, slug)
+    return binding ? { ...binding } : undefined
   }
 
   isDemo(slug: string): boolean {
-    return !this.connected()[slug] && Boolean(this.demo[slug])
+    this.assertInitialized()
+    return !ownBinding(this.connected, slug) && Boolean(ownBinding(this.demo, slug))
   }
 
-  set(slug: string, binding: KbBinding): void {
-    const connected = this.connected()
-    connected[slug] = { ...binding, connectedAt: new Date().toISOString() }
-    this.state.put('bindings', connected)
+  set(slug: string, binding: KbBinding): Promise<void> {
+    this.assertWritable()
+    const entry = { ...binding, connectedAt: new Date().toISOString() }
+    return this.cipher.seal(slug, entry.token).then((token) => {
+      // Crypto finishes before entering the synchronous mutation/audit transaction.
+      this.state.localMutation('bindings.set', [slug], () => {
+        this.state.put('bindings', { ...this.stored(), [slug]: { ...entry, token } })
+      })
+      // A failed append or commit must leave the decrypted cache untouched as well.
+      this.connected = { ...this.connected, [slug]: entry }
+    })
   }
 
   remove(slug: string): void {
-    const connected = this.connected()
-    delete connected[slug]
-    this.state.put('bindings', connected)
+    this.assertInitialized()
+    this.state.localMutation('bindings.remove', [slug], () => {
+      const stored = this.stored()
+      delete stored[slug]
+      this.state.put('bindings', stored)
+    })
+    delete this.connected[slug]
   }
 
   status(slug: string): KnowledgeBoxStatus {
-    const connected = this.connected()[slug]
+    this.assertInitialized()
+    const connected = ownBinding(this.connected, slug)
     if (connected) return { slug, status: 'connected', kbId: truncate(displayId(connected)) }
-    const demo = this.demo[slug]
+    const demo = ownBinding(this.demo, slug)
     if (demo) return { slug, status: 'demo', kbId: truncate(displayId(demo)) }
     return { slug, status: 'none' }
   }
@@ -1628,7 +1677,7 @@ export function durableStores(
     audit: state.rbac.audit,
     assignments: state.rbac.assignments,
     locks: state.rbac.locks,
-    bindings: state.auditedStore('bindings', new DurableBindingStore(state, env)),
+    bindings: new DurableBindingStore(state, env),
     tenants: state.auditedStore('tenants', new DurableTenantStore(state)),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),

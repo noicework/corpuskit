@@ -646,7 +646,8 @@ describe('independent admin route permission matrix', () => {
             generatedAt: '2026-09-12T00:00:00Z',
             data: { title: 'Seeded research' },
           })
-          fixture.stores.bindings.set('a', {
+          await fixture.stores.bindings.initialize()
+          await fixture.stores.bindings.set('a', {
             baseUrl: 'https://example.test/kb/a',
             token: 'fixture-token',
             kbId: 'a',

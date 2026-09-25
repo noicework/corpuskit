@@ -91,6 +91,7 @@ import { publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { type NewTenantInput, TenantStore, type TenantStoreApi, tenantSummary } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
+import { BindingCryptoError } from './binding-crypto.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
 import { GENERATE_SCHEMAS } from './generate-schemas.ts'
 import {
@@ -1573,6 +1574,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   )
 
   app.onError((err, c) => {
+    if (err instanceof BindingCryptoError) return c.json({ error: err.code }, err.status)
     if (err instanceof AuthorisationError) {
       if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
       if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
@@ -1804,6 +1806,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
       {
         ok: web,
         web,
+        ...(bindings.encryptionStatus().required
+          ? { bindingEncryption: bindings.encryptionStatus() }
+          : {}),
         version: stamp(opts.buildSha ?? process.env.BUILD_SHA) ?? 'dev',
         // The bundle actually served, so a stale build is visible (D1-21).
         ...(builtAt ? { builtAt } : {}),
@@ -3649,6 +3654,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return {
           tenant: summary,
           knowledgeBox: bindings.status(summary.slug),
+          bindingEncryption: bindings.encryptionStatus(),
           resourceCount,
           custom: tenants.isCustom(summary.slug),
           disabled: tenants.isDisabled(summary.slug),
@@ -3831,6 +3837,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box/create'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    bindings.assertWritable()
     if (!accountOpsAvailable()) {
       return c.json({
         error: 'account_credentials_missing',
@@ -3847,12 +3854,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         kbSlug,
         parsed.data.title ?? `${config.branding.productName}`,
       )
-      bindings.set(config.slug, binding)
+      await bindings.set(config.slug, binding)
       opts.invalidate?.(config.slug)
       return c.json({ ok: true, status: bindings.status(config.slug) })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'creation failed'
-      return c.json({ error: 'creation_failed', message }, 502)
+      if (err instanceof BindingCryptoError) throw err
+      return c.json({ error: 'creation_failed', message: 'Knowledge box creation failed.' }, 502)
     }
   })
 
@@ -4907,6 +4914,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    bindings.assertWritable()
     const raw = await c.req.json().catch(() => null) as
       | { url?: unknown; token?: unknown }
       | null
@@ -4943,7 +4951,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         : `Could not reach this knowledge box (${status || 'network error'}).`
       return c.json({ error: 'verification_failed', message }, 400)
     }
-    bindings.set(config.slug, candidate)
+    await bindings.set(config.slug, candidate)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug), resourceCount })
   })

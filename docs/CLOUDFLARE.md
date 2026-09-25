@@ -69,6 +69,11 @@ Only Worker-relevant values are read at runtime:
 - `ENTRA_CLIENT_SECRET`
 - `ENTRA_ADMIN_EMAILS` as an optional break-glass allowlist
 - `SESSION_SECRET`, a random value of at least 32 bytes
+- `BINDING_KEY`, standard base64 of 32 random bytes, seals persisted knowledge-box tokens
+  with AES-256-GCM. Required for new or replacement bindings; existing plaintext records remain
+  readable without it. See [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption)
+  for migration, readiness and key recovery constraints. The secret upload task includes this
+  value when configured; it never generates or rotates it.
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_DOMAINS_TOKEN`, optional credentials for
   automatically attaching a safe `<slug>.corpuskit.org` custom domain when an administrator
   creates a portal
