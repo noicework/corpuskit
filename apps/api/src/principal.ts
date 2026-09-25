@@ -1,6 +1,6 @@
+import { OperatorIdSchema } from '@research-portal/core'
 import { z } from 'zod'
 import type { VerifiedAssignmentSession } from './assignments.ts'
-import { OperatorIdSchema } from './operator.ts'
 
 /** Only passed by trusted ingress methods, never decoded from request headers. */
 export interface TrustedSessionFacts extends VerifiedAssignmentSession {

@@ -48,15 +48,17 @@ export const ScopeSchema = z.discriminatedUnion('kind', [
 ])
 export type Scope = z.infer<typeof ScopeSchema>
 
+/**
+ * The single definition of a hosting operator's actor label, shared by configuration, the signed
+ * principal envelope and this core. Leaves room for the `operator:` prefix in audit actor ids.
+ */
+export const OperatorIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,150}$/)
+  .refine((id) => !id.includes('://'))
+
 /** Shape validation only. Trusted adapters must verify the identity before using this core. */
 export const PrincipalSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('anonymous') }).strict(),
-  z.object({
-    kind: z.literal('operator'),
-    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,150}$/).refine((id) =>
-      !id.includes('://')
-    ),
-  }).strict(),
+  z.object({ kind: z.literal('operator'), id: OperatorIdSchema }).strict(),
   z.object({
     kind: z.literal('user'),
     tenantId: z.string().min(1),
