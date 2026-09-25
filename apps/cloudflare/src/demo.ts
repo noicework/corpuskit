@@ -45,6 +45,12 @@ export const DEMO_TENANT = TenantConfigSchema.parse({
   relationTypes: ['provides', 'uses', 'supports', 'organises', 'evaluates'],
 })
 
+/**
+ * On a demo Worker, seed the demo portal whenever it has no portal record, and pause the two
+ * showcase portals. Removing the demo portal there is therefore undone on the next start: the one
+ * exception to slug retirement (docs/HOSTING.md). The seeded portal starts clean, because the seed
+ * clears whatever the removed portal left stored under the slug.
+ */
 export function initialiseDemo(
   tenants: Pick<DurableTenantStore, 'get' | 'seed' | 'setDisabled'>,
   environment: string | undefined,

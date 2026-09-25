@@ -33,7 +33,8 @@ export const ACMD_DEMO_TENANT = TenantConfigSchema.parse({
 /**
  * Seed only this demo; later appearance edits or a dedicated KB are preserved. The shared
  * binding is copied only when the store can seal new credentials, and never over, or from,
- * a stored binding that is unavailable.
+ * a stored binding that is unavailable. A removed ACMD portal is seeded again on the next start
+ * and starts clean, as the demo portal does (see `initialiseDemo`).
  */
 export async function initialiseAcmdDemo(
   tenants: Pick<DurableTenantStore, 'get' | 'seed'>,

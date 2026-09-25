@@ -556,6 +556,16 @@ slug for the same name (`acme`, then `acme-2`). It also passes over a slug that 
 rows, group mappings or data keys on record, which covers portals deleted before slugs were
 retired. So a new portal, whoever creates it, never inherits access or data from a removed one.
 
+The one exception is a demo Worker (`ENVIRONMENT=demo`), which seeds its own `demo` and `acmd`
+portals whenever they have no portal record. Deleting either one there is undone on the next
+start: the portal comes back under the same slug with its seeded configuration, and the slug
+stays retired, so `POST /api/admin/tenants` still passes over it. The seed first clears every
+record the removed portal left stored under the slug (sources, enrichments and cached questions,
+insights, suggestions, knowledge graph proposals, research sessions, investigations, watches,
+branding and routing decisions), so the seeded portal starts empty. Its members, group mappings
+and data keys were already revoked when it was deleted; the revoked key records and its audit
+events stay on record. No other Worker seeds portals.
+
 ### In the web app
 
 - Signed-in users of a read-only portal see a banner saying so under the navigation.

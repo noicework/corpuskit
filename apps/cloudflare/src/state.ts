@@ -647,6 +647,41 @@ export class DurableState {
       Date.now(),
     )
   }
+
+  /**
+   * Delete the records a removed portal leaves stored under its slug: sources, enrichments and
+   * cached questions, insights, suggestions, knowledge graph proposals, research sessions,
+   * investigations, watches (current and pre-phase), branding assets and routing decisions.
+   * Removal itself already took the portal's binding and lifecycle records and revoked its access;
+   * the revoked data keys and the audit events stay on record.
+   */
+  clearPortalRecords(slug: string): void {
+    this.guardLocalWrite()
+    const underPrefix = (table: string, prefix: string) =>
+      this.sql.exec(
+        `DELETE FROM ${table} WHERE key >= ? AND key < ?`,
+        prefix,
+        prefixUpperBound(prefix),
+      )
+    underPrefix('state', `research-v2:${encodeStorageIdentifier(slug)}:`)
+    this.sql.exec('DELETE FROM enrichment_records WHERE tenant_slug = ?', slug)
+    this.sql.exec('DELETE FROM routing_records WHERE tenant_slug = ?', slug)
+    const proposals = this.get<Record<string, unknown>>('kg-proposals', {})
+    if (Object.hasOwn(proposals, slug)) {
+      delete proposals[slug]
+      this.put('kg-proposals', proposals)
+    }
+    // The remaining keys hold a sanitised slug. A slug that sanitising would change shares them
+    // with another slug, so they are left for that portal.
+    const plain = legacySegment(slug)
+    if (!plain) return
+    for (const kind of ['sources', 'enrichments', 'insights', 'suggestions', 'watches']) {
+      this.sql.exec('DELETE FROM state WHERE key = ?', key(kind, plain))
+    }
+    underPrefix('state', `session:${plain}:`)
+    underPrefix('state', `investigation:${plain}:`)
+    underPrefix('branding_assets', `${key('branding', plain)}:`)
+  }
 }
 
 /**
@@ -739,11 +774,18 @@ export class DurableTenantStore implements TenantStoreApi {
     this.state.put('tenants', value)
   }
 
-  /** Seed a tenant copied from the small platform registry into its tenant DO. */
+  /**
+   * Seed a portal a demo Worker provisions for itself (`initialiseDemo`, `initialiseAcmdDemo`).
+   * This is the one path that takes a retired slug again, so a demo portal removed by an
+   * administrator comes back on the next start. A seeded slug with no portal record starts clean:
+   * whatever a removed portal left stored under it is cleared first. The slug stays retired.
+   */
   seed(config: TenantConfig): void {
     if (tenantConfig(config.slug)) return
     const data = this.load()
-    data.custom[config.slug] = TenantConfigSchema.parse(config)
+    const parsed = TenantConfigSchema.parse(config)
+    if (!Object.hasOwn(data.custom, config.slug)) this.state.clearPortalRecords(config.slug)
+    data.custom[config.slug] = parsed
     this.save(data)
   }
 
