@@ -2130,6 +2130,46 @@ describe('appearance (typography, shape, branding fonts)', () => {
     expect((await patch(app, { paletteId: 'neon' })).status).toBe(400)
   })
 
+  const configOf = async (app: ReturnType<typeof buildApp>, slug = 'marine') =>
+    TenantConfigSchema.parse(await (await app.request(`/api/t/${slug}/config`)).json())
+  const patchSlug = (app: ReturnType<typeof buildApp>, slug: string, body: unknown) =>
+    app.request(`/api/admin/tenants/${slug}`, {
+      method: 'PATCH',
+      headers: { 'x-admin-passcode': passcode, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('serves the showcase portals with the regional discovery band and new portals without it', async () => {
+    const tenants = freshTenants()
+    const created = tenants.add({ name: 'Estuary notes' })
+    const app = buildApp({ provider: new StubProvider(), tenants, adminPasscode: passcode })
+    expect((await configOf(app, 'marine')).regionalDiscovery).toBe(true)
+    expect((await configOf(app, 'grains')).regionalDiscovery).toBe(true)
+    expect((await configOf(app, created.slug)).regionalDiscovery).toBeUndefined()
+  })
+
+  it('turns the regional discovery band on and off, alone or with other settings', async () => {
+    const tenants = freshTenants()
+    const created = tenants.add({ name: 'Estuary notes' })
+    const app = buildApp({ provider: new StubProvider(), tenants, adminPasscode: passcode })
+    expect((await patchSlug(app, created.slug, { regionalDiscovery: true })).status).toBe(200)
+    expect((await configOf(app, created.slug)).regionalDiscovery).toBe(true)
+    expect((await patchSlug(app, 'marine', { regionalDiscovery: false })).status).toBe(200)
+    expect((await configOf(app, 'marine')).regionalDiscovery).toBe(false)
+    const combined = await patchSlug(app, 'marine', {
+      regionalDiscovery: true,
+      searchPlaceholder: 'Search southern waters',
+      shape: 'soft',
+    })
+    expect(combined.status).toBe(200)
+    const config = await configOf(app, 'marine')
+    expect(config.regionalDiscovery).toBe(true)
+    expect(config.searchPlaceholder).toBe('Search southern waters')
+    expect(config.branding.shape).toBe('soft')
+    expect((config.branding as Record<string, unknown>).regionalDiscovery).toBeUndefined()
+    expect((await patchSlug(app, 'marine', { regionalDiscovery: 'yes' })).status).toBe(400)
+  })
+
   it('stores an uploaded heading font, exposes its URL and serves it back', async () => {
     const app = appearanceApp()
     const bytes = new Uint8Array([0x77, 0x4f, 0x46, 0x32])

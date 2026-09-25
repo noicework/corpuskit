@@ -99,6 +99,8 @@ const grains: TenantConfig = TenantConfigSchema.parse({
     { id: 'region', label: 'Growing region', colour: '#26a69a' },
   ],
   relationTypes: ['studies', 'affects', 'conducted-in', 'funded-by', 'collaborates-with'],
+  // The collection is organised by Australian state, so Explore opens a way in by region.
+  regionalDiscovery: true,
 })
 
 const marine: TenantConfig = TenantConfigSchema.parse({
@@ -158,8 +160,13 @@ const marine: TenantConfig = TenantConfigSchema.parse({
     { id: 'location', label: 'Location', colour: '#f6bf26' },
   ],
   relationTypes: ['studies', 'infects', 'located-in', 'funded-by', 'assesses'],
+  // The collection is organised by Australian state, so Explore opens a way in by region.
+  regionalDiscovery: true,
 })
 
+// Neither store persists a seeded portal's configuration: both read it from here on every
+// request and merge only the stored overrides over it, so a change to a seed reaches existing
+// deployments on the next deploy, and a field an override sets explicitly still wins.
 const tenantsBySlug: Record<string, TenantConfig> = {
   marine,
   grains,
@@ -206,6 +213,8 @@ export interface TenantPatch {
   suggestedQuestions?: TenantConfig['suggestedQuestions']
   searchPlaceholder?: string
   assessmentHeading?: string
+  /** Whether Explore shows the regional discovery band (opt-in). */
+  regionalDiscovery?: boolean
   branding?: TenantConfig['branding']
   /** Portal-managed behaviour settings (system prompt, image grounding). */
   prompts?: { ask?: string; images?: boolean }

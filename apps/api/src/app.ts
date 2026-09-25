@@ -117,7 +117,13 @@ import {
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicErrorMessage, publicSseEvent } from './public-error.ts'
-import { type NewTenantInput, TenantStore, type TenantStoreApi, tenantSummary } from './tenants.ts'
+import {
+  type NewTenantInput,
+  type TenantPatch,
+  TenantStore,
+  type TenantStoreApi,
+  tenantSummary,
+} from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
@@ -759,7 +765,14 @@ const renameTenantSchema = z.object({
   density: DensityIdSchema.optional(),
   paletteId: PaletteChoiceSchema.optional(),
   searchPlaceholder: z.string().min(3).max(120).optional(),
+  /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
+  regionalDiscovery: z.boolean().optional(),
 }).strict()
+/** Portal settings this route writes as behaviour; every other field is appearance. */
+const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
+  'searchPlaceholder',
+  'regionalDiscovery',
+])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
   includeSummaries: z.boolean().optional(),
@@ -4262,33 +4275,35 @@ export function buildApp(opts: BuildAppOptions): Hono {
       )
     ).map((action) => action.action) ?? []
     if (fields.length) await authoriseSubActions(c, actions)
-    const appearanceFields = fields.filter((field) => field !== 'searchPlaceholder')
-    if (parsed.data.searchPlaceholder && appearanceFields.length) {
-      const { name, searchPlaceholder, ...branding } = parsed.data
+    const { name, searchPlaceholder, regionalDiscovery, ...branding } = parsed.data
+    const behaviour: TenantPatch = {
+      ...(searchPlaceholder ? { searchPlaceholder } : {}),
+      ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+    }
+    const behaviourFields = Object.keys(behaviour)
+    const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))
+    if (behaviourFields.length && appearanceFields.length) {
       await subAction(c, '/api/admin/tenants/:slug', 'tenant.appearance.update', () =>
         subAction(c, '/api/admin/tenants/:slug', 'tenant.behaviour.update', () =>
           tenants.patch(config.slug, {
-            searchPlaceholder,
+            ...behaviour,
             branding: { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
-          }), { changedFields: 'searchPlaceholder' }), {
+          }), { changedFields: behaviourFields.join(',') }), {
         changedFields: appearanceFields.join(','),
       })
       return c.json({ ok: true })
     }
-    if (parsed.data.searchPlaceholder) {
+    if (behaviourFields.length) {
       await subAction(
         c,
         '/api/admin/tenants/:slug',
         'tenant.behaviour.update',
         () =>
-          tenants.patch(config.slug, { searchPlaceholder: parsed.data.searchPlaceholder }),
-        { changedFields: 'searchPlaceholder' },
+          tenants.patch(config.slug, behaviour),
+        { changedFields: behaviourFields.join(',') },
       )
     }
-    const changedFields = Object.keys(parsed.data).filter((field) =>
-      field !== 'searchPlaceholder'
-    )
-    if (changedFields.length) {
+    if (appearanceFields.length) {
       await subAction(
         c,
         '/api/admin/tenants/:slug',
@@ -4305,7 +4320,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             density: parsed.data.density,
             paletteId: parsed.data.paletteId,
           }),
-        { changedFields: changedFields.join(',') },
+        { changedFields: appearanceFields.join(',') },
       )
     }
     return c.json({ ok: true })

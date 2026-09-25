@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { TenantConfigSchema } from './index.ts'
+import { showsRegionalDiscovery, TenantConfigSchema } from './index.ts'
 
 const legacy = {
   slug: 'a',
@@ -24,5 +24,16 @@ Deno.test('tenant access mode defaults only absent or undefined legacy fields', 
   }
   for (const accessMode of [null, '', 'Public', 'private', false, {}, []]) {
     expect(TenantConfigSchema.safeParse({ ...legacy, accessMode }).success).toBe(false)
+  }
+})
+
+Deno.test('the regional discovery band is opt-in: hidden when absent or false, shown only when true', () => {
+  expect(showsRegionalDiscovery(TenantConfigSchema.parse(legacy))).toBe(false)
+  expect(showsRegionalDiscovery(TenantConfigSchema.parse({ ...legacy, regionalDiscovery: false })))
+    .toBe(false)
+  expect(showsRegionalDiscovery(TenantConfigSchema.parse({ ...legacy, regionalDiscovery: true })))
+    .toBe(true)
+  for (const regionalDiscovery of ['true', 1, null]) {
+    expect(TenantConfigSchema.safeParse({ ...legacy, regionalDiscovery }).success).toBe(false)
   }
 })

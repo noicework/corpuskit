@@ -1,6 +1,10 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
-import { DEFAULT_RESEARCH_ENRICHMENT, type Enrichment } from '@research-portal/core'
+import {
+  DEFAULT_RESEARCH_ENRICHMENT,
+  type Enrichment,
+  showsRegionalDiscovery,
+} from '@research-portal/core'
 import {
   DurableEnrichmentStore,
   DurableRoutingLog,
@@ -550,6 +554,52 @@ Deno.test('Durable corrupt policy never exposes seed fallback and survives unrel
       restarted.migrate()
       expect(() => new DurableTenantStore(restarted, 'corpuskit.org').get('marine')).toThrow()
     }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable showcase portals keep the regional band on state stored before it was opt-in', () => {
+  const sql = new TestSqlStorage()
+  try {
+    let state = new DurableState(sql, sql)
+    state.migrate()
+    // What a deployment holds from before the band was opt-in: overrides on the seeded portals,
+    // a stale stored copy under a seeded slug, and a runtime portal, none carrying the field.
+    const stale = { ...tenantConfig('grains')!, searchPlaceholder: 'Stored copy' }
+    delete stale.regionalDiscovery
+    const runtime = { ...tenantConfig('marine')!, slug: 'runtime' }
+    delete runtime.regionalDiscovery
+    state.put('tenants', {
+      custom: { grains: stale, runtime },
+      overrides: {
+        grains: { searchPlaceholder: 'Search the stored grains portal' },
+        marine: { branding: { ...tenantConfig('marine')!.branding, shape: 'soft' } },
+      },
+      disabled: [],
+      retired: [],
+    })
+    for (let restart = 0; restart < 2; restart++) {
+      state = new DurableState(sql, sql)
+      state.migrate()
+      const store = new DurableTenantStore(state, 'corpuskit.org')
+      expect(store.get('grains')?.regionalDiscovery).toBe(true)
+      expect(store.get('grains')?.searchPlaceholder).toBe('Search the stored grains portal')
+      expect(store.get('marine')?.regionalDiscovery).toBe(true)
+      expect(store.get('marine')?.branding.shape).toBe('soft')
+      expect(showsRegionalDiscovery(store.get('runtime')!)).toBe(false)
+    }
+    const store = new DurableTenantStore(state, 'corpuskit.org')
+    store.patch('grains', { regionalDiscovery: false })
+    store.patch('runtime', { regionalDiscovery: true })
+    const restarted = new DurableState(sql, sql)
+    restarted.migrate()
+    const reloaded = new DurableTenantStore(restarted, 'corpuskit.org')
+    expect(reloaded.get('grains')?.regionalDiscovery).toBe(false)
+    expect(reloaded.get('marine')?.regionalDiscovery).toBe(true)
+    expect(reloaded.get('runtime')?.regionalDiscovery).toBe(true)
+    const created = reloaded.add({ name: 'Estuary notes' })
+    expect(showsRegionalDiscovery(reloaded.get(created.slug)!)).toBe(false)
   } finally {
     sql.database.close()
   }

@@ -532,6 +532,30 @@ describe('explore page', () => {
       await page.close()
     }
   })
+
+  it('opens a way in by region only on a portal that opts in', async () => {
+    // The showcase portals are organised by Australian state and opt in; a new portal does not.
+    const created = server.tenants.add({ name: 'Estuary notes' })
+    for (
+      const [slug, shown] of [['marine', true], ['grains', true], [created.slug, false]] as const
+    ) {
+      const page = await browser.newPage(`${server.url}/t/${slug}`)
+      try {
+        // The hero heading renders in the same pass as the band, from the same config.
+        await page.waitForSelector('main h1', { timeout: 15_000 })
+        const band = await page.evaluate(() => ({
+          heading: [...document.querySelectorAll('main h2')].some((node) =>
+            node.textContent?.trim() === 'Explore by region'
+          ),
+          regions: document.querySelectorAll('ul[aria-label="Regions"] li').length,
+        }))
+        expect({ slug, heading: band.heading, listed: band.regions > 0 })
+          .toEqual({ slug, heading: shown, listed: shown })
+      } finally {
+        await page.close()
+      }
+    }
+  })
 })
 
 describe('Ask and Tools navigation', () => {

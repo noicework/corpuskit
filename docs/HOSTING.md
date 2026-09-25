@@ -171,7 +171,7 @@ The current allowlist is:
 | Purpose | Method and route |
 |---|---|
 | Create a portal | `POST /api/admin/tenants` |
-| Update portal appearance and search prompt | `PATCH /api/admin/tenants/:slug` |
+| Update portal appearance, search prompt and regional discovery band | `PATCH /api/admin/tenants/:slug` |
 | Connect or disconnect a knowledge box | `POST`, `DELETE /api/admin/t/:slug/knowledge-box` |
 | Change portal access mode | `PATCH /api/admin/t/:slug/access` |
 | List and create portal members | `GET`, `POST /api/admin/t/:slug/members` |
@@ -194,6 +194,12 @@ Operator-created assignments default to `entra` when `source` is omitted, as the
 other caller. An external identity can never claim an Entra assignment, so the person would never
 gain access through it, and a deployment without Entra refuses such an assignment with
 `400 {"error":"invalid_input"}`.
+
+Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, `colours`,
+`typography`, `shape`, `textScale`, `density`, `paletteId`) and the behaviour fields
+`searchPlaceholder` and `regionalDiscovery`. The regional discovery band on Explore is off unless
+a portal opts in: send `{"regionalDiscovery": true}` to show it and `{"regionalDiscovery": false}`
+to hide it again.
 
 Knowledge-box connection accepts
 `{"endpoint":"https://<region>.rag.progress.cloud/api/v1/kb/<box-id>","token":"<token>"}`
