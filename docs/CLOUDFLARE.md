@@ -150,6 +150,13 @@ start URL, the button is hidden and `/auth/external` still accepts valid handoff
 live in the existing Durable Object SQLite database and survive Worker isolate replacement.
 External identities receive authority only through local assignments with `source: "external"`.
 
+Both deployment configurations set `observability.logs.invocation_logs` to `false`, retaining
+application logs while preventing automatic request-URL logging of handoff assertions. This is
+the supported [invocation-log control](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs)
+in the pinned Wrangler version. Proxy access logs and other telemetry must also omit the assertion
+query string. The source-bound assignment migration is not safe to roll back to older code while
+external assignments remain; see [the hosting rollback note](HOSTING.md#external-sign-in-handoff).
+
 ## State and rollback
 
 Tenant configuration, bindings, sessions, investigations, watches, sources, insights,

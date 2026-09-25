@@ -18,7 +18,7 @@ Configure the same values in the Worker environment or the local server's `.env`
 | `EXTERNAL_LOGIN_ISSUER` | Exact issuer identifier, for example `https://identity.example`. |
 | `EXTERNAL_LOGIN_JWK` | JSON Ed25519 public JWK, shaped as `{"kty":"OKP","crv":"Ed25519","x":"<public key>"}`. Never supply the private key. |
 | `EXTERNAL_LOGIN_NAME` | Optional sign-in button label. Defaults to `Continue with your organisation account`. |
-| `EXTERNAL_LOGIN_START_URL` | Optional URL on the issuer that starts sign-in. Without it, the handoff endpoint remains available but the portal shows no external sign-in button. |
+| `EXTERNAL_LOGIN_START_URL` | Optional HTTPS URL on the issuer that starts sign-in; HTTP is accepted only for localhost development. Without it, the handoff endpoint remains available but the portal shows no external sign-in button. |
 | `WORKER_NAME` | Deployment-specific assertion audience and principal-envelope audience. Local development defaults to `corpuskit`. |
 | `SESSION_SECRET` | Random secret of at least 32 bytes, used to seal the normal session cookie and sign the internal principal envelope. |
 
@@ -59,6 +59,13 @@ single-use check, including across local server restarts. The signed principal e
 `401 {"error":"external_login_invalid"}`; the audit log records a safe reason code without the
 assertion, signing key or email address.
 
+Treat the assertion query parameter as a credential. The deployment configurations disable
+[Worker invocation logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs),
+which otherwise record request URLs, while keeping application logs enabled. Configure any reverse
+proxy, request tracing, access logging or telemetry export to omit the handoff query string as
+well. The handler sends `Cache-Control: no-store` and `Referrer-Policy: no-referrer` on both success
+and failure.
+
 External users receive roles only through local assignments. In the portal Members screen or
 the platform People screen, choose the external identity source when adding a person. The existing
 assignment APIs accept `source: "entra" | "external"` and return it with each assignment. For
@@ -77,6 +84,12 @@ Only a verified identity from the same source can claim a pending email assignme
 it is rewritten to that person's object id. Existing rows and requests that omit `source` use
 `entra`; an external sign-in can never claim an Entra assignment. Group mappings remain Entra-only.
 An external object-id assignment uses the `ext:<sub>` identifier and `source: "external"`.
+
+The assignment migration runs atomically and preserves existing rows as `entra`. Older binaries
+do not understand the `source` boundary and could apply external assignments to an Entra identity.
+Prefer a forward fix for this change. Do not roll back to code that ignores `source` while external
+assignment rows remain, even if external sign-in has been disabled. A code rollback does not undo
+the SQLite migration or remove those rows.
 
 `GET /auth/me` exposes the sign-in origin as `sessionProvenance` and `user.provenance`, preserving
 the existing `provenance` array that describes role grants. It also reports `entraEnabled` and
