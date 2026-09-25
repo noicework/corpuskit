@@ -508,6 +508,7 @@ export function createEnforcementFixture(
   state.migrate()
   const durable = durableStores(state, {
     BINDING_KEY: options.bindingKey ?? btoa('x'.repeat(32)),
+    PLATFORM_DOMAIN: options.platformDomain,
   })
   const stores = {
     ...durable,

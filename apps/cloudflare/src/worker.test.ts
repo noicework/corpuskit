@@ -129,7 +129,7 @@ type WorkerHandler = {
 type WorkerModule = {
   PortalDurableObject: typeof PortalDurableObject
   default: WorkerHandler
-  marketingHomeRequest(request: Request): Request
+  marketingHomeRequest(request: Request, domain: string): Request
   forwardPortalRequest(
     request: Request,
     user: AuthUser | null,
@@ -296,6 +296,7 @@ Deno.test('Worker serves the marketing app at the CorpusKit apex', async () => {
 Deno.test('Worker preserves the marketing URL query while selecting the homepage asset', () => {
   const request = workerModule.marketingHomeRequest(
     new Request('https://corpuskit.org/?campaign=launch', { method: 'HEAD' }),
+    'corpuskit.org',
   )
 
   expect(new URL(request.url).pathname).toBe('/home')
@@ -358,7 +359,7 @@ Deno.test('About asset selection preserves SPA paths and does not rewrite mutati
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
     const request = new Request('https://corpuskit.org/about/', { method })
-    expect(workerModule.marketingHomeRequest(request)).toBe(request)
+    expect(workerModule.marketingHomeRequest(request, 'corpuskit.org')).toBe(request)
   }
 })
 
@@ -439,7 +440,7 @@ Deno.test('public docs stay on the apex, preserve www canonicalisation and do no
   for (const path of paths) {
     for (const method of ['POST', 'PUT', 'DELETE']) {
       const request = new Request(`https://corpuskit.org${path}`, { method })
-      expect(workerModule.marketingHomeRequest(request)).toBe(request)
+      expect(workerModule.marketingHomeRequest(request, 'corpuskit.org')).toBe(request)
     }
   }
   const response = await worker.fetch(

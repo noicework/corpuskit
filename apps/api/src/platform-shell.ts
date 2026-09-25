@@ -1,9 +1,10 @@
-import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
-
-const PLATFORM_DOMAIN_MARKER = '__CORPUSKIT_PLATFORM_DOMAIN__'
+import {
+  getPlatformDomain,
+  PLATFORM_DOMAIN_MARKER,
+} from '../../../packages/core/src/platform-domain.ts'
 
 /** Replace the shell's non-executable configuration marker without buffering the HTML. */
-export function platformShellResponse(response: Response, domain?: string): Response {
+export function platformShellResponse(response: Response, domain: string): Response {
   const platformDomain = getPlatformDomain(domain)
   if (!response.body || !response.headers.get('content-type')?.includes('text/html')) {
     return response

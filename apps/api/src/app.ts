@@ -939,7 +939,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
   const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
-  const tenants = opts.tenants ?? new TenantStore({})
+  const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
   const insights = opts.insights ?? new InsightsStore()
   const routing = opts.routing ?? new RoutingLog()
   const sessions = opts.sessions ?? new SessionsStore()

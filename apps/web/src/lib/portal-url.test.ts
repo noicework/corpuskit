@@ -37,6 +37,21 @@ Deno.test('portalHref uses a runtime domain and keeps other deployments relative
   }
 })
 
+Deno.test('portalHref never sends a deployment to another platform domain', () => {
+  for (const currentHostname of ['research.example.org', 'grains.research.example.org']) {
+    expect(portalHref('opax', {
+      platformDomain: 'research.example.org',
+      hostname: 'opax.corpuskit.org',
+      currentHostname,
+    })).toBe('/t/opax')
+  }
+  expect(portalHref('opax', {
+    platformDomain: 'research.example.org',
+    hostname: 'opax.research.example.org.evil.test',
+    currentHostname: 'research.example.org',
+  })).toBe('/t/opax')
+})
+
 Deno.test('portalHref without valid runtime configuration or hostname stays relative', () => {
   for (
     const platformDomain of [undefined, '', '__CORPUSKIT_PLATFORM_DOMAIN__', 'https://example.org']

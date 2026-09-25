@@ -19,6 +19,7 @@ import {
   prepareBindings,
 } from '../../api/src/bindings.ts'
 import { BindingCipher, BindingCryptoError } from '../../api/src/binding-crypto.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
@@ -797,7 +798,7 @@ const DEFAULT_COLOURS = {
 }
 
 export class DurableTenantStore implements TenantStoreApi {
-  constructor(private readonly state: DurableState) {}
+  constructor(private readonly state: DurableState, private readonly platformDomain: string) {}
 
   private load(): TenantState {
     const raw = tenantRecord(this.state.get<unknown>('tenants', {}))
@@ -828,10 +829,13 @@ export class DurableTenantStore implements TenantStoreApi {
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
     const base = tenantConfig(slug) ?? custom
     if (!base) return undefined
-    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base)
+    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(data.overrides[slug])
     const { prompts: _prompts, ...configPatch } = override
-    return withPlatformHostname(TenantConfigSchema.parse({ ...base, ...configPatch }))
+    return withPlatformHostname(
+      TenantConfigSchema.parse({ ...base, ...configPatch }),
+      this.platformDomain,
+    )
   }
 
   promptsFor(slug: string): { ask?: string; images?: boolean } {
@@ -945,10 +949,10 @@ export class DurableTenantStore implements TenantStoreApi {
       entityTypes: [],
       relationTypes: [],
     })
-    const configured = withPlatformHostname(config)
-    data.custom[slug] = configured
+    // Persist and return exactly what was created: a hostname comes only from domain attachment.
+    data.custom[slug] = config
     this.save(data)
-    return configured
+    return config
   }
 
   remove(slug: string): boolean {
@@ -1678,7 +1682,10 @@ export function durableStores(
     assignments: state.rbac.assignments,
     locks: state.rbac.locks,
     bindings: new DurableBindingStore(state, env),
-    tenants: state.auditedStore('tenants', new DurableTenantStore(state)),
+    tenants: state.auditedStore(
+      'tenants',
+      new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN)),
+    ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
     watches: state.auditedStore('watches', new DurableWatchStore(state)),

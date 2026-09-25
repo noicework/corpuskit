@@ -12,8 +12,9 @@ export function runtimePlatformDomain(): string {
 
 /**
  * Production portal navigation crosses origins only when the tenant declares
- * a working hostname. Tenants without one, plus local and preview environments,
- * retain relative routes so every portal remains reachable.
+ * a working hostname inside this deployment's platform domain. Tenants without
+ * one, hostnames belonging to another deployment, plus local and preview
+ * environments, retain relative routes so every portal remains reachable.
  */
 export function portalHref(
   slug: string,
@@ -31,6 +32,7 @@ export function portalHref(
   const platformDomain = options.platformDomain ?? runtimePlatformDomain()
   if (
     !portalHostname || !validPlatformDomain(portalHostname) ||
+    !isPlatformHostname(portalHostname, platformDomain) ||
     !isPlatformHostname(currentHostname.toLowerCase(), platformDomain)
   ) return route
   return portalHostname === currentHostname.toLowerCase()

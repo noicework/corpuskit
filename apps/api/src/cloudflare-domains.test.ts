@@ -39,7 +39,9 @@ function harness(replies: Response[]) {
 }
 
 Deno.test('portalHostnameForSlug accepts only safe non-reserved DNS labels', () => {
-  expect(portalHostnameForSlug('research-portal')).toBe('research-portal.corpuskit.org')
+  expect(portalHostnameForSlug('research-portal', 'corpuskit.org')).toBe(
+    'research-portal.corpuskit.org',
+  )
   for (
     const slug of [
       '',
@@ -56,7 +58,7 @@ Deno.test('portalHostnameForSlug accepts only safe non-reserved DNS labels', () 
       'app',
     ]
   ) {
-    expect(portalHostnameForSlug(slug)).toBeNull()
+    expect(portalHostnameForSlug(slug, 'corpuskit.org')).toBeNull()
   }
 })
 
@@ -224,5 +226,14 @@ Deno.test('Cloudflare failures never include the API token in their message', as
     expect(error).toBeInstanceOf(CloudflareDomainApiError)
     expect(String(error)).toContain('permission denied')
     expect(String(error)).not.toContain('domain-token')
+  }
+})
+
+Deno.test('every Worker configuration attaches portal hostnames to its own script', async () => {
+  for (const file of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
+    const config = JSON.parse(
+      await Deno.readTextFile(new URL(`../../../${file}`, import.meta.url)),
+    ) as { name: string; vars: { WORKER_NAME?: string } }
+    expect(config.vars.WORKER_NAME).toBe(config.name)
   }
 })

@@ -379,7 +379,7 @@ function isPublicDocsPath(pathname: string): boolean {
 }
 
 /** Select marketing documents without leaking the Assets pretty-URL redirects. */
-export function marketingHomeRequest(request: Request, domain?: string): Request {
+export function marketingHomeRequest(request: Request, domain: string): Request {
   const platformDomain = getPlatformDomain(domain)
   const url = new URL(request.url)
   if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -497,7 +497,7 @@ function authConfig(env: Env, hostname: string, platformDomain: string): Partial
  */
 export function platformHostnameLocation(
   request: Pick<Request, 'method' | 'url'>,
-  domain?: string,
+  domain: string,
 ): string | null {
   const platformDomain = getPlatformDomain(domain)
   if (request.method !== 'GET' && request.method !== 'HEAD') return null

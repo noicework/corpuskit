@@ -21,7 +21,7 @@ type WorkerHandler = {
 type WorkerModule = {
   PortalDurableObject: typeof PortalDurableObject
   default: WorkerHandler
-  marketingHomeRequest(request: Request): Request
+  marketingHomeRequest(request: Request, domain: string): Request
   forwardPortalRequest(
     request: Request,
     user: AuthUser | null,

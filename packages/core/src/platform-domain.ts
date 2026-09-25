@@ -1,4 +1,6 @@
 const DEFAULT_PLATFORM_DOMAIN = 'corpuskit.org'
+/** Placeholder in served HTML that the server replaces with the configured platform domain. */
+export const PLATFORM_DOMAIN_MARKER = '__CORPUSKIT_PLATFORM_DOMAIN__'
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 /** Validate a hostname before using it in URLs, cookies or HTML configuration. */

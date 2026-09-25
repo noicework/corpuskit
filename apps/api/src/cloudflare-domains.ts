@@ -39,7 +39,7 @@ const RESERVED_PORTAL_SLUGS = new Set([
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 /** Return the platform hostname only when the slug is safe to publish as DNS. */
-export function portalHostnameForSlug(slug: string, platformDomain?: string): string | null {
+export function portalHostnameForSlug(slug: string, platformDomain: string): string | null {
   const domain = getPlatformDomain(platformDomain)
   if (!DNS_LABEL.test(slug) || slug.length > 63) return null
   if (slug.startsWith('xn--') || RESERVED_PORTAL_SLUGS.has(slug)) return null
@@ -98,6 +98,8 @@ export class CloudflareDomainApiError extends Error {
 /**
  * Create the optional runtime domain adapter. Missing credentials deliberately
  * disable provisioning so portal creation can fall back to its relative URL.
+ * Hostnames attach to the Worker script named by `WORKER_NAME`, so that value
+ * must equal the deployment's Worker script name (it is also the signing audience).
  */
 export function createCloudflareDomainProvisioner(
   env: Record<string, string | undefined>,

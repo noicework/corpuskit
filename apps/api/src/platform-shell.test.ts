@@ -38,10 +38,11 @@ Deno.test('HTML runtime configuration handles every marker and UTF-8 chunk bound
   }
 })
 
-Deno.test('runtime shell configuration defaults on the server and preserves other bodies', async () => {
+Deno.test('runtime shell configuration uses the given domain and preserves other bodies', async () => {
   expect(
     await platformShellResponse(
       new Response(shell, { headers: { 'content-type': 'text/html' } }),
+      'corpuskit.org',
     ).text(),
   ).toContain('content="corpuskit.org"')
   for (const response of [new Response('raw'), new Response(null, { status: 204 })]) {
