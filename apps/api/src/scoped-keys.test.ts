@@ -360,7 +360,7 @@ Deno.test('external key creators use only source-bound current assignments and p
       ...f.creator,
       tenantId: 'external',
       provenance: 'external' as const,
-      oid: `ext:${'人'.repeat(127)} x`.slice(0, 132),
+      oid: `ext:${'🧬'.repeat(128)}`,
       roles: [],
       groups: [],
       groupStatus: 'absent' as const,

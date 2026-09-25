@@ -27,7 +27,7 @@ export async function resolveCreatorAuthority(
   if (
     !identifier(configuredTenantId) ||
     (creator.tenantId === 'external'
-      ? !stores.externalLoginEnabled || !/^ext:[\s\S]{1,128}$/.test(creator.oid)
+      ? !stores.externalLoginEnabled || !/^ext:[\s\S]{1,128}$/u.test(creator.oid)
       : creator.tenantId !== configuredTenantId || !identifier(creator.oid)) ||
     !identifier(creator.slug) || !Number.isSafeInteger(now) || now < 0
   ) return unproven

@@ -134,11 +134,33 @@ for (const adapter of ['local', 'durable'] as const) {
       ).toBe(true)
       expect(f.service.list().find((row) => row.source === 'entra')?.subjectId).toBe('entra-person')
       expect(f.service.change(activated.value[0]!.id, { source: 'entra' }, context).ok).toBe(false)
+      const opaque = session({ oid: `ext:${'🧬'.repeat(128)}`, email: 'opaque@example.test' })
+      expect(
+        f.service.create(
+          { ...pending, subjectId: 'opaque@example.test', source: 'external' },
+          context,
+        ).ok,
+      ).toBe(true)
+      expect(f.service.activate(opaque, context).ok).toBe(true)
+      expect(f.state.creatorEvidence('external', opaque.oid)?.oid).toBe(opaque.oid)
+      expect(
+        (await resolveEffectiveRoles(opaque, f.stores(), 'tenant-1', f.now())).effectiveRoles
+          .portalRoles,
+      ).toHaveLength(1)
+      expect(f.service.activate({ ...opaque, oid: `${opaque.oid}🧬` }, context).ok).toBe(false)
+      expect(
+        f.service.create({
+          ...pending,
+          subjectKind: 'active-oid',
+          subjectId: opaque.oid,
+          source: 'entra',
+        }, context).ok,
+      ).toBe(false)
       const roles = await resolveEffectiveRoles(session(), f.stores(), 'tenant-1', f.now())
       expect(roles.effectiveRoles).toEqual({ portalRoles: [{ slug: 'marine', role: 'curator' }] })
       expect(roles.provenance.map((grant) => grant.source)).toEqual(['local'])
       f.restart()
-      expect(f.service.list().filter((row) => row.subjectKind === 'active-oid')).toHaveLength(2)
+      expect(f.service.list().filter((row) => row.subjectKind === 'active-oid')).toHaveLength(3)
     } finally {
       f.close()
     }

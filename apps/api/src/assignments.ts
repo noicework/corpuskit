@@ -53,7 +53,7 @@ const claimLifetime = 8 * 60 * 60 * 1000
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
 const externalOid = (value: unknown): value is string =>
-  typeof value === 'string' && /^ext:[\s\S]{1,128}$/.test(value)
+  typeof value === 'string' && /^ext:[\s\S]{1,128}$/u.test(value)
 const identityOid = (tenantId: string, value: unknown): value is string =>
   tenantId === 'external' ? externalOid(value) : identifier(value)
 const sessionSource = (session: VerifiedAssignmentSession): RoleAssignment['source'] =>

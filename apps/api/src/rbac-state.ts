@@ -212,7 +212,7 @@ export class RbacState {
     if (
       !identifier(tenantId) ||
       !(tenantId === 'external'
-        ? typeof oid === 'string' && /^ext:[\s\S]{1,128}$/.test(oid)
+        ? typeof oid === 'string' && /^ext:[\s\S]{1,128}$/u.test(oid)
         : identifier(oid))
     ) return null
     const row = this.database.all<{
