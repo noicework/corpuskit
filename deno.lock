@@ -186,6 +186,7 @@
     "https://esm.sh/react-dom@18.3.1": "3352732344c5b11264f40d467ac8be1124cf462b05bf691864663b7887c20003",
     "https://esm.sh/react-dom@18.3.1/X-ZHJlYWN0QDE4LjMuMQ/denonext/react-dom.mjs": "26138c169a69a085aad47d9ad7b9c76354e41d6a84b3694bce126f3f1101c34c",
     "https://esm.sh/react-dom@18.3.1/client": "21721a0da8572c9017131699230e73bd29b31cae9763948f5a7e3966315d07a2",
+    "https://esm.sh/react-dom@18.3.1/denonext/client.mjs": "d68545ce29e9d2dd03261912eaf97e5f81469e9a9a7edcab3a91da6093d17606",
     "https://esm.sh/react-dom@18.3.1/denonext/react-dom.mjs": "4ab8347fbe57895464f248300ab4bc23063b92fc6aaa1679255187d0d3b4d4a6",
     "https://esm.sh/react-router-dom@7.1.1/X-ZHJlYWN0LWRvbUAxOC4zLjEscmVhY3RAMTguMy4x/denonext/react-router-dom.mjs": "a0837f74de83c61a0abee6e1ce08d3d2a0264cef57526197ecd2e77af427e19d",
     "https://esm.sh/react-router-dom@7.1.1?deps=react@18.3.1,react-dom@18.3.1": "9b027751a84b0084b987bffee543d4ee4dd9bc42586d5c72af033a4b9cd16d02",

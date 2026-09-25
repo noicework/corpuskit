@@ -1,5 +1,6 @@
 import {
   AccessModeSchema,
+  isSafeLifecycleNote,
   PERMISSIONS,
   PORTAL_ROLES,
   ROLES,
@@ -9,7 +10,7 @@ import {
 import { DECLARATIONS } from './permissions.ts'
 
 export type AuditActor = {
-  kind: 'anonymous' | 'user' | 'break-glass' | 'key' | 'legacy-key' | 'system'
+  kind: 'anonymous' | 'user' | 'operator' | 'break-glass' | 'key' | 'legacy-key' | 'system'
   id?: string
   label?: string
 }
@@ -86,7 +87,9 @@ export function canonicalAuditFilters(filters: AuditQueryFilters): AuditQueryFil
     const value = filters[name]
     if (value === undefined) continue
     const valid = name === 'actorKind'
-      ? ['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(value)
+      ? ['anonymous', 'user', 'operator', 'break-glass', 'key', 'legacy-key', 'system'].includes(
+        value,
+      )
       : name === 'outcome'
       ? ['intent', 'success', 'denied', 'failure', 'uncertain'].includes(value)
       : name === 'action'
@@ -137,6 +140,7 @@ export class AuditWriteError extends Error {
 const codes = [
   'unauthorised',
   'forbidden',
+  'operator_not_allowed',
   'invalid_input',
   'last_owner',
   'email_conflict',
@@ -157,12 +161,34 @@ const member = (values: readonly string[]): Validator => (value): value is strin
   typeof value === 'string' && values.includes(value)
 const count: Validator = (value): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const flag: Validator = (value): value is boolean => typeof value === 'boolean'
 const id: Validator = (value): value is string =>
-  typeof value === 'string' && identifier.test(value) && !value.includes('://')
+  typeof value === 'string' &&
+  ((identifier.test(value) && !value.includes('://')) || /^ext:[\s\S]{1,128}$/u.test(value))
 const declaredFields = DECLARATIONS.flatMap((item) =>
   item.subActions?.flatMap((action) => action.fields ?? []) ?? []
 )
 const fields = {
+  externalReason: member([
+    'configuration',
+    'encoding',
+    'header',
+    'signature',
+    'claims',
+    'issuer',
+    'audience',
+    'lifetime',
+    'email',
+    'replay',
+    'storage',
+    'session',
+  ]),
+  lifecycleStatus: member(['active', 'read_only', 'suspended']),
+  maxResources: count,
+  maxBytes: count,
+  asksPerDay: count,
+  agentsEnabled: flag,
+  note: isSafeLifecycleNote,
   previousAccessMode: member(AccessModeSchema.options),
   accessMode: member(AccessModeSchema.options),
   keyRole: member(PORTAL_ROLES),
@@ -202,6 +228,17 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'auth.external.denied': ['externalReason', 'count'],
+  'portal.lifecycle.update': [
+    'permission',
+    'lifecycleStatus',
+    'maxResources',
+    'maxBytes',
+    'asksPerDay',
+    'agentsEnabled',
+    'note',
+    'code',
+  ],
   'local.mutation': ['permission', 'operation', 'mutation', 'sessionOid', 'sessionTenantId'],
   'assignment.create': ['role', 'subjectKind'],
   'assignment.update': ['role', 'previousRole', 'subjectKind'],
@@ -371,7 +408,7 @@ export function validateAuditEvent(event: AuditEvent): void {
       ![event.id, event.request_id, event.target_kind].every(id) ||
       (event.actor_id !== null && !id(event.actor_id)) ||
       (event.target_id !== null && !id(event.target_id)) ||
-      !['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(
+      !['anonymous', 'user', 'operator', 'break-glass', 'key', 'legacy-key', 'system'].includes(
         event.actor_kind,
       ) ||
       !['intent', 'success', 'denied', 'failure', 'uncertain'].includes(event.outcome) ||

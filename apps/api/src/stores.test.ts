@@ -596,23 +596,25 @@ Deno.test('readJsonSafe quarantines a corrupted file and returns the fallback', 
 
 // --- Corruption handling at the store level (BindingStore) ------------------
 
-Deno.test('BindingStore quarantines a corrupted bindings file and falls back to demo bindings', () => {
+Deno.test('BindingStore rejects corrupted credentials without falling back to an environment box', async () => {
   const tmp = Deno.makeTempDirSync()
   const bindingsPath = join(tmp, 'bindings.json')
   writeFileSync(bindingsPath, '{"grains": truncated')
-  const store = new BindingStore({
-    ARAG_ZONE: 'us1',
-    ARAG_KB_GRAINS: 'demo-kb-id',
-    ARAG_KB_GRAINS_TOKEN: 'demo-token',
-    BINDINGS_PATH: bindingsPath,
-  })
-  // Reverts to the seeded demo binding rather than throwing or losing state.
-  expect(store.isDemo('grains')).toEqual(true)
-  expect(store.get('grains')?.kbId).toEqual('demo-kb-id')
-  // The truncated file was moved aside, not silently overwritten in place.
-  expect(existsSync(bindingsPath)).toEqual(false)
-  const quarantined = [...Deno.readDirSync(tmp)].find((e) =>
-    e.name.startsWith('bindings.json.corrupt-')
-  )
-  expect(quarantined).toBeDefined()
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    const store = new BindingStore({
+      ARAG_ZONE: 'us1',
+      ARAG_KB_GRAINS: 'demo-kb-id',
+      ARAG_KB_GRAINS_TOKEN: 'demo-token',
+      BINDINGS_PATH: bindingsPath,
+    })
+    await store.initialize()
+    expect(() => store.get('grains')).toThrow('binding_storage_invalid')
+    expect(store.status('grains').status).toBe('unavailable')
+    expect(readFileSync(bindingsPath, 'utf8')).toEqual('{"grains": truncated')
+  } finally {
+    console.warn = warn
+    Deno.removeSync(tmp, { recursive: true })
+  }
 })

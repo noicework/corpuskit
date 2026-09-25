@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { workerSecrets } from './upload-secrets.ts'
+import { missingWorkerSecrets, unsafeWorkerSecrets, workerSecrets } from './upload-secrets.ts'
 
 Deno.test('Worker secret upload excludes account provisioning credentials', () => {
   const values = workerSecrets(`
@@ -10,6 +10,8 @@ ARAG_KB_MARINE=box-id
 ARAG_KB_MARINE_TOKEN="box-token"
 ENTRA_CLIENT_SECRET=client-secret
 SESSION_SECRET=session-secret
+BINDING_KEY=test-only-key
+PLATFORM_DOMAIN=research.example
 CLOUDFLARE_ACCOUNT_ID=cloudflare-account-id
 CLOUDFLARE_DOMAINS_TOKEN=domain-token
 `)
@@ -20,7 +22,139 @@ CLOUDFLARE_DOMAINS_TOKEN=domain-token
     ARAG_KB_MARINE_TOKEN: 'box-token',
     ENTRA_CLIENT_SECRET: 'client-secret',
     SESSION_SECRET: 'session-secret',
+    BINDING_KEY: 'test-only-key',
     CLOUDFLARE_ACCOUNT_ID: 'cloudflare-account-id',
     CLOUDFLARE_DOMAINS_TOKEN: 'domain-token',
+  })
+})
+
+Deno.test('Worker secret upload never sends the sealing opt-in with the binding key', () => {
+  // Opting in to seal stored plaintext is a separate step taken after a release is verified.
+  expect(workerSecrets('BINDING_KEY=test-only-key\nBINDING_KEY_MIGRATE=true')).toEqual({
+    BINDING_KEY: 'test-only-key',
+  })
+})
+
+Deno.test('Worker secret allowlist includes an optional operator key without non-secret labels', () => {
+  const fixture = btoa('operator-test-fixture-only-32bytes').replace(/=+$/g, '')
+  expect(workerSecrets(`OPERATOR_API_KEY=${fixture}\nOPERATOR_ID=hosting-test`)).toEqual({
+    OPERATOR_API_KEY: fixture,
+  })
+  expect(workerSecrets('OPERATOR_API_KEY=\nOPERATOR_ID=hosting-test')).toEqual({})
+})
+
+Deno.test('Worker secret upload includes external sign-in configuration but excludes private keys', () => {
+  const values = workerSecrets(`
+EXTERNAL_LOGIN_ISSUER=https://identity.example
+EXTERNAL_LOGIN_JWK='{"kty":"OKP","crv":"Ed25519","x":"public-key"}'
+EXTERNAL_LOGIN_NAME=Organisation account
+EXTERNAL_LOGIN_START_URL=https://identity.example/start
+EXTERNAL_LOGIN_PRIVATE_JWK=must-not-upload
+`)
+  expect(values).toEqual({
+    EXTERNAL_LOGIN_ISSUER: 'https://identity.example',
+    EXTERNAL_LOGIN_JWK: '{"kty":"OKP","crv":"Ed25519","x":"public-key"}',
+    EXTERNAL_LOGIN_NAME: 'Organisation account',
+    EXTERNAL_LOGIN_START_URL: 'https://identity.example/start',
+  })
+})
+
+const baseSecrets = {
+  ARAG_ZONE: 'aws-ap-southeast-2-1',
+  ARAG_KB_MARINE: 'box-id',
+  ARAG_KB_MARINE_TOKEN: 'box-token',
+  SESSION_SECRET: 'session-secret',
+}
+
+Deno.test('Worker secret upload accepts Entra, external-only, or combined sign-in', () => {
+  const external = {
+    EXTERNAL_LOGIN_ISSUER: 'https://identity.example',
+    EXTERNAL_LOGIN_JWK: '{"kty":"OKP","crv":"Ed25519","x":"public-key"}',
+  }
+  for (
+    const identity of [
+      { ENTRA_CLIENT_SECRET: 'client-secret' },
+      external,
+      { ...external, ENTRA_CLIENT_SECRET: 'client-secret' },
+    ]
+  ) {
+    expect(missingWorkerSecrets({ ...baseSecrets, ...identity })).toEqual([])
+  }
+})
+
+Deno.test('Worker secret upload rejects absent or partial external-only configuration', () => {
+  const configurations: Record<string, string>[] = [
+    {},
+    { EXTERNAL_LOGIN_ISSUER: 'https://identity.example' },
+    { EXTERNAL_LOGIN_JWK: 'public-key' },
+  ]
+  for (const identity of configurations) {
+    expect(missingWorkerSecrets({ ...baseSecrets, ...identity })).toEqual([
+      'ENTRA_CLIENT_SECRET or EXTERNAL_LOGIN_ISSUER + EXTERNAL_LOGIN_JWK',
+    ])
+  }
+})
+
+Deno.test('Worker secret upload retains session, zone and knowledge-box prerequisites', () => {
+  expect(missingWorkerSecrets({ ENTRA_CLIENT_SECRET: 'client-secret' })).toEqual([
+    'ARAG_ZONE',
+    'SESSION_SECRET',
+    'ARAG_KB_<SLUG> + token',
+  ])
+})
+
+Deno.test('Worker secret upload refuses an external sign-in key that is not an Ed25519 public JWK', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
+  expect(privateJwk.d).toBeDefined()
+  const message = 'EXTERNAL_LOGIN_JWK must be an Ed25519 public JWK without private key material'
+  expect(unsafeWorkerSecrets({ ...baseSecrets })).toEqual([])
+  expect(unsafeWorkerSecrets({ EXTERNAL_LOGIN_JWK: JSON.stringify(publicJwk) })).toEqual([])
+  expect(
+    unsafeWorkerSecrets({
+      EXTERNAL_LOGIN_JWK:
+        '{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWqFVT1RJXsGFiLKXMhzSk2YuOw"}',
+    }),
+  ).toEqual([])
+  for (
+    const value of [
+      JSON.stringify(privateJwk),
+      JSON.stringify({ kty: 'OKP', crv: 'Ed25519', x: publicJwk.x, d: '' }),
+      JSON.stringify({ ...publicJwk, crv: 'X25519' }),
+      JSON.stringify({ ...publicJwk, kty: 'EC' }),
+      JSON.stringify({ kty: 'OKP', crv: 'Ed25519' }),
+      JSON.stringify({ kty: 'OKP', crv: 'Ed25519', x: 'public-key' }),
+      JSON.stringify([publicJwk]),
+      'public-key',
+      '',
+    ]
+  ) {
+    const unsafe = unsafeWorkerSecrets({ ...baseSecrets, EXTERNAL_LOGIN_JWK: value })
+    expect(unsafe).toEqual([message])
+    // The refusal names the setting only; it never echoes key material.
+    if (value.length > 2) expect(unsafe.join()).not.toContain(value)
+    if (privateJwk.d) expect(unsafe.join()).not.toContain(privateJwk.d)
+  }
+})
+
+Deno.test('Worker secret upload carries every hosting hook value together, and no labels or private keys', () => {
+  const operatorKey = btoa('operator-test-fixture-only-32bytes').replace(/=+$/g, '')
+  const values = workerSecrets(`
+SESSION_SECRET=session-secret
+BINDING_KEY=test-only-key
+PLATFORM_DOMAIN=research.example
+OPERATOR_API_KEY=${operatorKey}
+OPERATOR_ID=hosting-test
+EXTERNAL_LOGIN_ISSUER=https://identity.example
+EXTERNAL_LOGIN_JWK='{"kty":"OKP","crv":"Ed25519","x":"public-key"}'
+EXTERNAL_LOGIN_PRIVATE_JWK=must-not-upload
+`)
+  expect(values).toEqual({
+    SESSION_SECRET: 'session-secret',
+    BINDING_KEY: 'test-only-key',
+    OPERATOR_API_KEY: operatorKey,
+    EXTERNAL_LOGIN_ISSUER: 'https://identity.example',
+    EXTERNAL_LOGIN_JWK: '{"kty":"OKP","crv":"Ed25519","x":"public-key"}',
   })
 })

@@ -7,6 +7,7 @@ import {
   TenantConfigSchema,
   type TenantSummary,
 } from '@research-portal/core'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { type OwnedMutationBoundary, ownedWrite } from './stores.ts'
 
 // ---------------------------------------------------------------------------
@@ -16,20 +17,22 @@ import { type OwnedMutationBoundary, ownedWrite } from './stores.ts'
 // no SQLite or embedded databases unless absolutely unavoidable).
 // ---------------------------------------------------------------------------
 
-const PLATFORM_HOSTNAMES: Readonly<Record<string, string>> = {
-  marine: 'marine.corpuskit.org',
-  grains: 'grains.corpuskit.org',
-  opax: 'opax.corpuskit.org',
-}
+/** The public showcase domain, where these portal hostnames were attached by hand. */
+const LEGACY_PLATFORM_DOMAIN = 'corpuskit.org'
+const LEGACY_PLATFORM_SLUGS: ReadonlySet<string> = new Set(['marine', 'grains', 'opax'])
 
 /**
- * Compatibility for portals whose custom domains pre-date persisted hostname
+ * Compatibility for showcase portals whose hostnames pre-date persisted hostname
  * metadata. OPAX was created at runtime, so its stored config needs the same
- * read-time upgrade as the two seeded portals.
+ * read-time upgrade as the two seeded portals. The upgrade applies only on the
+ * showcase domain: another deployment never links to showcase hostnames, and a
+ * portal it creates always gets a hostname through domain attachment instead.
+ * Stores apply this when reading and never persist its result.
  */
-export function withPlatformHostname(config: TenantConfig): TenantConfig {
-  const hostname = config.hostname ?? PLATFORM_HOSTNAMES[config.slug]
-  return hostname ? { ...config, hostname } : config
+export function withPlatformHostname(config: TenantConfig, platformDomain: string): TenantConfig {
+  if (config.hostname || platformDomain !== LEGACY_PLATFORM_DOMAIN) return config
+  if (!LEGACY_PLATFORM_SLUGS.has(config.slug)) return config
+  return { ...config, hostname: `${config.slug}.${LEGACY_PLATFORM_DOMAIN}` }
 }
 
 export function tenantSummary(config: TenantConfig): TenantSummary {
@@ -52,7 +55,6 @@ export function tenantSummary(config: TenantConfig): TenantSummary {
 
 const grains: TenantConfig = TenantConfigSchema.parse({
   slug: 'grains',
-  hostname: PLATFORM_HOSTNAMES.grains,
   branding: {
     productName: 'Dryland Cropping Research Portal',
     organisation: 'Dryland Cropping Research Alliance',
@@ -101,7 +103,6 @@ const grains: TenantConfig = TenantConfigSchema.parse({
 
 const marine: TenantConfig = TenantConfigSchema.parse({
   slug: 'marine',
-  hostname: PLATFORM_HOSTNAMES.marine,
   branding: {
     productName: 'Southern Waters Research Portal',
     organisation: 'Southern Waters Research Institute',
@@ -164,13 +165,13 @@ const tenantsBySlug: Record<string, TenantConfig> = {
   grains,
 }
 
+/** A seeded portal's configuration; stores add the deployment's hostname when they read it. */
 export function tenantConfig(slug: string): TenantConfig | undefined {
-  const config = tenantsBySlug[slug]
-  return config ? withPlatformHostname(config) : undefined
+  return Object.hasOwn(tenantsBySlug, slug) ? tenantsBySlug[slug] : undefined
 }
 
 export function tenantSummaries(): TenantSummary[] {
-  return Object.values(tenantsBySlug).map((tenant) => tenantSummary(withPlatformHostname(tenant)))
+  return Object.values(tenantsBySlug).map(tenantSummary)
 }
 
 /** Registry identifiers without projecting portal metadata. */
@@ -228,17 +229,31 @@ export function validateTenantPatch(value: unknown): TenantPatch {
   return patch as TenantPatch
 }
 
+/** Slugs recorded as retired, from a persisted `retired` list. Anything else reads as none. */
+export function retiredSlugs(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((slug): slug is string => typeof slug === 'string')
+    : []
+}
+
 export class TenantStore {
   private custom: Record<string, unknown> = {}
   /** Analysis-derived overrides, applicable to seeded portals too. */
   private overrides: Record<string, unknown> = {}
   private disabled = new Set<string>()
+  /**
+   * Slugs of removed portals. Grants, keys and research records are keyed by slug, so a new
+   * portal never takes one of these and cannot inherit what the removed portal left behind.
+   */
+  private retired = new Set<string>()
   private readonly path: string
+  private readonly platformDomain: string
 
   private committed!: {
     custom: Record<string, unknown>
     overrides: Record<string, unknown>
     disabled: string[]
+    retired: string[]
   }
 
   constructor(
@@ -246,6 +261,7 @@ export class TenantStore {
     private readonly boundary?: OwnedMutationBoundary,
   ) {
     this.path = env.TENANTS_PATH ?? './data/tenants.json'
+    this.platformDomain = getPlatformDomain(env.PLATFORM_DOMAIN)
     let raw: Record<string, unknown>
     try {
       raw = tenantRecord(JSON.parse(readFileSync(this.path, 'utf8')))
@@ -259,6 +275,7 @@ export class TenantStore {
     if (Array.isArray(raw.disabled)) {
       this.disabled = new Set(raw.disabled.filter((s): s is string => typeof s === 'string'))
     }
+    this.retired = new Set(retiredSlugs(raw.retired))
     this.committed = structuredClone(this.snapshot())
   }
 
@@ -270,10 +287,13 @@ export class TenantStore {
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
     const base = tenantsBySlug[slug] ?? custom
     if (!base) return undefined
-    if (!Object.hasOwn(this.overrides, slug)) return withPlatformHostname(base)
+    if (!Object.hasOwn(this.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(this.overrides[slug])
     const { prompts: _prompts, ...configPatch } = override
-    return withPlatformHostname(TenantConfigSchema.parse({ ...base, ...configPatch }))
+    return withPlatformHostname(
+      TenantConfigSchema.parse({ ...base, ...configPatch }),
+      this.platformDomain,
+    )
   }
 
   /** App-side settings that never reach the public config payload. */
@@ -290,6 +310,11 @@ export class TenantStore {
 
   isDisabled(slug: string): boolean {
     return this.disabled.has(slug)
+  }
+
+  /** A removed portal's slug, which no new portal may take. */
+  isRetired(slug: string): boolean {
+    return this.retired.has(slug)
   }
 
   setDisabled(slug: string, disabled: boolean): void {
@@ -365,11 +390,17 @@ export class TenantStore {
     return all
   }
 
-  add(input: NewTenantInput): TenantConfig {
+  /**
+   * Create a portal under the first free slug made from its name. A slug is taken while a portal
+   * holds it, once it has been retired, or when `unavailable` says so.
+   */
+  add(input: NewTenantInput, unavailable?: (slug: string) => boolean): TenantConfig {
     const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!base) throw new Error('The portal name must contain letters or numbers')
     let slug = base
-    for (let i = 2; this.get(slug); i++) slug = `${base}-${i}`
+    for (let i = 2; this.get(slug) || this.retired.has(slug) || unavailable?.(slug); i++) {
+      slug = `${base}-${i}`
+    }
     const config = TenantConfigSchema.parse({
       slug,
       branding: {
@@ -384,17 +415,19 @@ export class TenantStore {
       entityTypes: [],
       relationTypes: [],
     })
-    const configured = withPlatformHostname(config)
-    this.custom[slug] = configured
+    // Persist and return exactly what was created: a hostname comes only from domain attachment.
+    this.custom[slug] = config
     this.persist()
-    return configured
+    return config
   }
 
+  /** Remove a portal created in the app and retire its slug in the same write. */
   remove(slug: string): boolean {
     if (!this.isCustom(slug)) return false
     delete this.custom[slug]
     delete this.overrides[slug]
     this.disabled.delete(slug)
+    this.retired.add(slug)
     this.persist()
     return true
   }
@@ -408,6 +441,7 @@ export class TenantStore {
       this.custom = before.custom
       this.overrides = before.overrides
       this.disabled = new Set(before.disabled)
+      this.retired = new Set(before.retired)
       throw error
     }
   }
@@ -417,6 +451,7 @@ export class TenantStore {
       custom: this.custom,
       overrides: this.overrides,
       disabled: [...this.disabled],
+      retired: [...this.retired],
     }
   }
 }

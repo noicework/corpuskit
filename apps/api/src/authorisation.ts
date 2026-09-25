@@ -7,6 +7,7 @@ import {
   PermissionSchema,
   type PortalPolicy,
   PortalPolicySchema,
+  PrincipalSchema,
   type Scope,
   ScopeSchema,
 } from '@research-portal/core'
@@ -19,7 +20,7 @@ import {
   createAuditEvent,
 } from './audit.ts'
 import type { BreakGlassService } from './break-glass.ts'
-import type { SubAction } from './permissions.ts'
+import type { Declaration, SubAction } from './permissions.ts'
 import { type TrustedSessionFacts, validSessionFacts } from './principal.ts'
 import { type ResearchOwner, researchOwnerValue } from './research-owner.ts'
 import {
@@ -39,6 +40,7 @@ import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 export const UNCONFIGURED_TENANT_ID = 'identity-unconfigured'
 
 export type RequestAuthority =
+  | { kind: 'operator'; id: string; actor: AuditActor; provenanceSession: null }
   | { kind: 'anonymous'; actor: AuditActor; provenanceSession: null }
   | {
     kind: 'session'
@@ -106,6 +108,7 @@ function refuse(
   permission?: unknown,
   status: 401 | 403 = actor.kind === 'anonymous' ? 401 : 403,
   retryAfter?: number,
+  code = status === 401 ? 'unauthorised' : 'forbidden',
 ): never {
   if (state.failure) throw state.failure
   try {
@@ -120,7 +123,7 @@ function refuse(
           target: { kind: 'request' },
           outcome: 'denied',
           detail: {
-            code: status === 401 ? 'unauthorised' : 'forbidden',
+            code,
             ...(PermissionSchema.safeParse(permission).success ? { permission } : {}),
             ...(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(
                 state.request.method,
@@ -132,7 +135,7 @@ function refuse(
       )
       state.context.denialAudited = true
     }
-    state.failure = new AuthorisationError(status, undefined, retryAfter)
+    state.failure = new AuthorisationError(status, code, retryAfter)
   } catch {
     state.failure = new AuditWriteError()
   }
@@ -162,7 +165,11 @@ async function select(
   const scope: Scope = slug ? { kind: 'portal', slug } : { kind: 'platform' }
   const session = context.session
   const sessionValid = session !== null && validSessionFacts(session, (deps.now ?? Date.now)()) &&
-    identifier(session.tenantId) && identifier(session.oid)
+    identifier(session.tenantId) &&
+    (session.tenantId === 'external'
+      ? deps.externalLoginEnabled === true && session.provenance === 'external' &&
+        /^ext:[\s\S]{1,128}$/u.test(session.oid)
+      : identifier(session.oid))
   if (!identifier(deps.configuredTenantId) || (session !== null && !sessionValid)) {
     refuse(state, { kind: 'anonymous' }, scope)
   }
@@ -174,7 +181,19 @@ async function select(
   const hasPasscode = request.headers.has('x-admin-passcode')
   if (hasBearer && hasPasscode) refuse(state, actor, scope)
   let authority: RequestAuthority
-  if (hasBearer) {
+  if (context.operator !== undefined) {
+    const operator = PrincipalSchema.safeParse({ kind: 'operator', ...context.operator })
+    if (
+      !operator.success || operator.data.kind !== 'operator' || hasBearer || hasPasscode ||
+      provenanceSession !== null
+    ) refuse(state, actor, scope, undefined, 401)
+    authority = {
+      kind: 'operator',
+      id: operator.data.id,
+      actor: { kind: 'operator', id: `operator:${operator.data.id}` },
+      provenanceSession: null,
+    }
+  } else if (hasBearer) {
     const header = request.headers.get('authorization')!
     const token = /^Bearer ([A-Za-z0-9_-]+)$/i.exec(header)?.[1]
     if (!token || !slug) refuse(state, actor, scope)
@@ -228,7 +247,9 @@ async function select(
       session: provenanceSession,
       provenanceSession,
       actor,
-      effectiveRoles: provenanceSession.tenantId === deps.configuredTenantId
+      effectiveRoles: (provenanceSession.tenantId === deps.configuredTenantId ||
+          (deps.externalLoginEnabled && provenanceSession.tenantId === 'external' &&
+            provenanceSession.provenance === 'external'))
         ? roles.data
         : { portalRoles: [] },
     }
@@ -289,6 +310,12 @@ function principalFor(
   scope: Scope,
   policy: PortalPolicy | undefined,
 ) {
+  if (authority.kind === 'operator') {
+    return normalisePrincipal({ kind: 'operator', id: authority.id }, {
+      platformRole: 'platform-admin',
+      portalRoles: [],
+    }, policy)
+  }
   if (authority.kind === 'key') {
     if (scope.kind !== 'portal' || scope.slug !== authority.slug) return null
     return normalisePrincipal({
@@ -334,6 +361,31 @@ export function evaluateOperation(
     authorize(principal, permission, scope)
 }
 
+/** Operator credentials are restricted to explicitly opted-in administrative HTTP routes. */
+export function authoriseOperatorRoute(
+  authority: RequestAuthority,
+  declaration: Declaration | undefined,
+): void {
+  if (authority.kind !== 'operator') return
+  const state = stateFor(authority)
+  if (
+    !declaration || declaration.kind !== 'http' || !declaration.path.startsWith('/api/admin/') ||
+    declaration.operator !== true || declaration.scope === 'public'
+  ) {
+    const slug = /^\/api\/(?:admin\/)?t\/([A-Za-z0-9_-]{1,64})\//
+      .exec(new URL(state.request.url).pathname)?.[1]
+    refuse(
+      state,
+      authority.actor,
+      slug ? { kind: 'portal', slug } : { kind: 'platform' },
+      declaration?.permission,
+      403,
+      undefined,
+      'operator_not_allowed',
+    )
+  }
+}
+
 /** Throw before dispatch on refusal; successful privileged completion remains caller-owned. */
 export function authoriseOperation(
   authority: RequestAuthority,
@@ -377,19 +429,7 @@ export function authoriseNewPortalDomain(authority: RequestAuthority, slugInput:
     if (error instanceof AuditWriteError || error instanceof AuthorisationError) throw error
     return refuse(state, authority.actor, scope, 'domains.write')
   }
-  const principal = authority.kind === 'session'
-    ? normalisePrincipal({
-      kind: 'user',
-      tenantId: authority.session.tenantId,
-      oid: authority.session.oid,
-    }, authority.effectiveRoles)
-    : authority.kind === 'break-glass'
-    ? normalisePrincipal({
-      kind: 'user',
-      tenantId: state.deps.configuredTenantId,
-      oid: 'break-glass',
-    }, { platformRole: 'owner', portalRoles: [] })
-    : normalisePrincipal({ kind: 'anonymous' }, { portalRoles: [] })
+  const principal = principalFor(authority, state, scope, undefined)
   if (!authorize(principal, 'domains.write', scope)) {
     return refuse(state, authority.actor, scope, 'domains.write')
   }
@@ -423,7 +463,11 @@ export function researchOwner(
   const scope: Scope = { kind: 'portal', slug: policy.slug }
   if (authority.kind === 'key') refuse(state, authority.actor, scope)
   const session = authority.provenanceSession
-  if (session?.tenantId === state.deps.configuredTenantId) {
+  if (
+    session && (session.tenantId === state.deps.configuredTenantId ||
+      (state.deps.externalLoginEnabled && session.tenantId === 'external' &&
+        session.provenance === 'external'))
+  ) {
     try {
       return researchOwnerValue({ kind: 'user', tenantId: session.tenantId, oid: session.oid })
     } catch {

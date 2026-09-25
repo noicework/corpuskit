@@ -120,7 +120,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
       <form onSubmit={onConnect} className='mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2'>
         <div className='min-w-0'>
           <label htmlFor={`kb-id-${slug}`} className='mb-1.5 block text-sm font-medium text-ink'>
-            {knowledgeBox.status === 'connected'
+            {knowledgeBox.status === 'connected' || knowledgeBox.status === 'unavailable'
               ? 'Replace with knowledge box endpoint'
               : 'Knowledge box API endpoint'}
           </label>
@@ -164,7 +164,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
           >
             {busy ? 'Working...' : 'Verify and connect'}
           </button>
-          {knowledgeBox.status === 'connected' && (
+          {(knowledgeBox.status === 'connected' || knowledgeBox.status === 'unavailable') && (
             <button
               type='button'
               disabled={busy || pending}
@@ -178,7 +178,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
                 maxWidth: '100%',
               }}
             >
-              Revert to demo box
+              {knowledgeBox.status === 'unavailable' ? 'Disconnect' : 'Revert to demo box'}
             </button>
           )}
         </div>

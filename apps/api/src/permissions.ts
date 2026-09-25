@@ -20,6 +20,7 @@ export interface Declaration {
   readonly aggregate?: 'authorised-portals'
   readonly safeMetadata?: true
   readonly owned?: 'research'
+  readonly operator?: true
   readonly action: 'request.privileged' | 'local.mutation'
   readonly target: { readonly kind: 'request' | 'tool'; readonly param?: string }
   readonly subActions?: readonly SubAction[]
@@ -34,7 +35,7 @@ function entry(
   extra: Partial<
     Pick<
       Declaration,
-      'reason' | 'subActions' | 'detailFields' | 'aggregate' | 'safeMetadata' | 'owned'
+      'reason' | 'subActions' | 'detailFields' | 'aggregate' | 'safeMetadata' | 'owned' | 'operator'
     >
   > = {},
 ): Declaration {
@@ -67,7 +68,22 @@ function entry(
 
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
+    operator: true,
+  }),
+  entry('http', 'PUT', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
+    operator: true,
+    subActions: [{
+      action: 'portal.lifecycle.update',
+      permission: 'portal.create',
+      scope: 'platform',
+    }],
+  }),
+  entry('http', 'GET', '/api/admin/t/:slug/usage', 'portal.create', 'platform', {
+    operator: true,
+  }),
   entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
+    operator: true,
     subActions: [{
       action: 'tenant.access.update',
       permission: 'behaviour.write',
@@ -88,13 +104,23 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   ]),
   ...['members', 'groups'].flatMap((family) => [
     ...['GET', 'POST'].map((method) =>
-      entry('http', method, `/api/admin/t/:slug/${family}`, 'members.manage', 'portal')
+      entry('http', method, `/api/admin/t/:slug/${family}`, 'members.manage', 'portal', {
+        ...(family === 'members' ? { operator: true } : {}),
+      })
     ),
     ...['PATCH', 'DELETE'].map((method) =>
-      entry('http', method, `/api/admin/t/:slug/${family}/:id`, 'members.manage', 'portal')
+      entry('http', method, `/api/admin/t/:slug/${family}/:id`, 'members.manage', 'portal', {
+        ...(family === 'members' && method === 'DELETE' ? { operator: true } : {}),
+      })
     ),
   ]),
   ...([
+    ['lifecycle', ['set'], 'portal.create', 'platform'],
+    ['lifecycle', ['remove'], 'portal.delete', 'platform'],
+    ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],
+    ['lifecycle', ['touch'], 'portal.read', 'portal'],
+    ['lifecycle', ['reserveAdd', 'settleAdd', 'forgetResource'], 'content.write', 'portal'],
+    ['lifecycle', ['resetCapacity'], 'bindings.write', 'portal'],
     ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
     ['tenants', ['remove'], 'portal.delete', 'platform'],
@@ -262,8 +288,11 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/t/:slug/followups', 'portal.generate', 'portal'),
   // D13: the estate overview is a platform-admin read, not an owner-only settings write.
   entry('http', 'GET', '/api/admin/overview', 'portal.create', 'platform'),
-  entry('http', 'DELETE', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
+  entry('http', 'DELETE', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'POST', '/api/admin/tenants', 'portal.create', 'platform', {
+    operator: true,
     subActions: [
       { action: 'tenant.domain.attach', permission: 'domains.write', scope: 'portal' },
       { action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' },
@@ -273,7 +302,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     subActions: [{ action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' }],
   }),
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box/create', 'bindings.write', 'portal'),
-  entry('http', 'GET', '/api/admin/t/:slug/counters', 'content.write', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/counters', 'content.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/recent', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/link', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/text', 'content.write', 'portal'),
@@ -282,6 +313,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/enable', 'behaviour.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/analyse', 'behaviour.write', 'portal'),
   entry('http', 'PATCH', '/api/admin/tenants/:slug', 'appearance.write', 'portal', {
+    operator: true,
     subActions: [
       {
         action: 'tenant.appearance.update',
@@ -338,7 +370,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/enrichments/run', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/questions/run', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/enrich', 'enrichments.write', 'portal'),
-  entry('http', 'POST', '/api/admin/t/:slug/branding/:kind', 'appearance.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/branding/:kind', 'appearance.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),
   entry('http', 'PUT', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/search-configs', 'behaviour.write', 'portal'),
@@ -357,14 +391,17 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'PATCH', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),
   entry('http', 'DELETE', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources/:id/sync', 'content.write', 'portal'),
-  entry('http', 'POST', '/api/admin/migrate', 'platform.settings.write', 'platform', {
+  entry('http', 'POST', '/api/admin/migrate', 'portal.create', 'platform', {
+    operator: true,
     detailFields: ['from', 'to'],
     subActions: [
       { action: 'migration.source', permission: 'content.write', scope: 'portal' },
       { action: 'migration.destination', permission: 'content.write', scope: 'portal' },
     ],
   }),
-  entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'POST', '/api/t/:slug/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/docs/ask', 'portal.ask', 'portal'),
   entry('http', 'GET', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal'),
@@ -396,6 +433,90 @@ export function declarationFor(method: string, path: string): Declaration {
   return declaration
 }
 
+/**
+ * Hosting read-only mode refuses every portal operation that changes content or configuration.
+ * Any non-read portal route or tool counts unless it is exempt here, so a new one is refused by
+ * default. Exempt: asking and a user's own research artefacts; revoking access (removing a
+ * member, a group mapping or an MCP key); `disable` and `enable`, which keep their own meaning;
+ * and the access mode, where the handler accepts only a change that makes the portal more
+ * restrictive (`isAccessTightening`).
+ */
+const READ_ONLY_EXEMPT_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.watch',
+])
+const READ_ONLY_EXEMPT_ROUTES: ReadonlySet<string> = new Set([
+  'DELETE /api/admin/t/:slug/members/:id',
+  'DELETE /api/admin/t/:slug/groups/:id',
+  'DELETE /api/t/:slug/mcp/keys/:id',
+  'PATCH /api/admin/t/:slug/access',
+  'POST /api/admin/t/:slug/disable',
+  'POST /api/admin/t/:slug/enable',
+])
+export function mutatesPortal(
+  declaration: Pick<Declaration, 'kind' | 'method' | 'path' | 'permission' | 'scope'>,
+): boolean {
+  if (declaration.scope !== 'portal') return false
+  if (declaration.kind !== 'http' && declaration.kind !== 'mcp') return false
+  if (declaration.method === 'GET' || declaration.method === 'HEAD') return false
+  if (READ_ONLY_EXEMPT_PERMISSIONS.has(declaration.permission)) return false
+  return !READ_ONLY_EXEMPT_ROUTES.has(`${declaration.method} ${declaration.path}`)
+}
+
+const ACCESS_ORDER = ['public', 'authenticated', 'restricted'] as const
+/** Whether an access-mode change keeps the portal at least as restrictive as it was. */
+export function isAccessTightening(
+  from: typeof ACCESS_ORDER[number],
+  to: typeof ACCESS_ORDER[number],
+): boolean {
+  return ACCESS_ORDER.indexOf(to) >= ACCESS_ORDER.indexOf(from)
+}
+
+/**
+ * How a portal route or tool meets the hosting daily ask limit (`asksPerDay`):
+ * - `count`: it answers a question with a paid model call, so each call counts as one ask and
+ *   is refused once the day's asks are spent.
+ * - `gate`: it makes a paid model call that only accompanies an ask already counted (routing,
+ *   sub-questions, source verdicts, follow-up suggestions). It does not count, but it is
+ *   refused once the day's asks are spent.
+ * Every non-read portal route or tool with the ask or generate permission counts unless it is
+ * listed here, so a new one is limited by default.
+ */
+export type AskUse = 'count' | 'gate'
+const ASK_FREE_ROUTES: ReadonlySet<string> = new Set([
+  // A user's own saved research and answer feedback make no model call.
+  'PUT /api/t/:slug/sessions/:id',
+  'DELETE /api/t/:slug/sessions/:id',
+  'POST /api/t/:slug/feedback',
+])
+const ASK_GATED_ROUTES: ReadonlySet<string> = new Set([
+  'POST /api/t/:slug/route',
+  'POST /api/t/:slug/subqueries',
+  'POST /api/t/:slug/verdicts',
+  'POST /api/t/:slug/followups',
+])
+/** Paid answers declared under another permission. */
+const ASK_COUNTED_ROUTES: ReadonlySet<string> = new Set([
+  'POST /api/t/:slug/investigations/:id/synthesise',
+])
+export function askUse(
+  declaration: Pick<Declaration, 'kind' | 'method' | 'path' | 'permission' | 'scope'>,
+): AskUse | null {
+  if (declaration.scope !== 'portal') return null
+  if (declaration.kind !== 'http' && declaration.kind !== 'mcp') return null
+  if (declaration.method === 'GET' || declaration.method === 'HEAD') return null
+  const key = `${declaration.method} ${declaration.path}`
+  if (ASK_GATED_ROUTES.has(key)) return 'gate'
+  if (ASK_COUNTED_ROUTES.has(key)) return 'count'
+  if (ASK_FREE_ROUTES.has(key)) return null
+  return declaration.permission === 'portal.ask' || declaration.permission === 'portal.generate'
+    ? 'count'
+    : null
+}
+
 /** Called while registering each concrete handler, retaining Hono's literal path inference. */
 export function declaredRoute<P extends string>(method: string, path: P): P {
   declarationFor(method, path)
@@ -422,7 +543,7 @@ export function declaredSubAction<T>(
   return run(declaration)
 }
 export function isPrivileged(declaration: Declaration, actor?: AuditActor): boolean {
-  return actor?.kind === 'break-glass' ||
+  return actor?.kind === 'operator' || actor?.kind === 'break-glass' ||
     (declaration.permission !== 'portal.read' && declaration.permission !== 'portal.ask')
 }
 
@@ -456,6 +577,15 @@ export function assertDeclarationInventory(
   const keys = declarations.map((item) => `${item.kind} ${item.method} ${item.path}`)
   if (new Set(keys).size !== keys.length) throw new Error('Duplicate permission declaration')
   for (const item of declarations) {
+    if (
+      item.operator !== undefined && (
+        item.operator !== true || item.kind !== 'http' || !item.path.startsWith('/api/admin/') ||
+        item.scope === 'public' ||
+        ['portal.delete', 'platform.members.manage', 'platform.settings.write'].includes(
+          item.permission,
+        )
+      )
+    ) throw new Error('Invalid operator permission declaration')
     if (item.scope === 'public' && !item.reason?.trim()) throw new Error('Missing public reason')
     const names = item.subActions?.map((action) => action.action) ?? []
     if (new Set(names).size !== names.length) throw new Error('Duplicate sub-action declaration')

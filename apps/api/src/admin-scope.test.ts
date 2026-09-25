@@ -395,6 +395,7 @@ Deno.test('domain and binding delete bodies cannot redirect targets; detach fail
       },
     })
     try {
+      fixture.stores.tenants.patch('a', { hostname: 'a.corpuskit.org' })
       const owner = fixture.sessionFor('owner')
       if (mode === 'body') {
         for (const path of ['/api/admin/tenants/a', '/api/admin/t/a/knowledge-box']) {

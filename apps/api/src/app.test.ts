@@ -20,7 +20,12 @@ import {
   TenantConfigSchema,
 } from '@research-portal/core'
 import { AragApiError, type AragProvider, type RetrievalProvider } from '@research-portal/retrieval'
-import { buildApp as buildRawApp, type BuildAppOptions, type PortalRequestContext } from './app.ts'
+import {
+  buildApp as buildRawApp,
+  type BuildAppOptions,
+  type PortalRequestContext,
+  STORED_FILE_POLICY,
+} from './app.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import {
@@ -343,6 +348,9 @@ describe('independent admin route permission matrix', () => {
   }</p><a href="https://example.test/article">Article</a></main></html>`
   // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
   const rows: [string, string, Permission, unknown?][] = [
+    ['GET', 'lifecycle', 'portal.create'],
+    ['PUT', 'lifecycle', 'portal.create', { status: 'read_only', limits: { asksPerDay: 5 } }],
+    ['GET', 'usage', 'portal.create'],
     ['GET', 'extraction/methods', 'content.write'],
     ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
     ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
@@ -417,7 +425,7 @@ describe('independent admin route permission matrix', () => {
     ['PATCH', 'sources/:id', 'content.write', { auto: false }],
     ['DELETE', 'sources/:id', 'content.write'],
     ['POST', 'sources/:id/sync', 'content.write', {}],
-    ['POST', '/api/admin/migrate', 'platform.settings.write', { from: 'a', to: 'b' }],
+    ['POST', '/api/admin/migrate', 'portal.create', { from: 'a', to: 'b' }],
     ['POST', 'knowledge-box', 'bindings.write', {
       url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
       token: 'fixture-service-account-token',
@@ -549,6 +557,7 @@ describe('independent admin route permission matrix', () => {
           listResources: () => [resourceOne],
           labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
           counters: () => ({ resources: 1 }),
+          resourceCount: () => 1,
           recentResources: () => [resourceOne],
           createText: () => ({ id: 'created' }),
           createLink: () => ({ id: 'created' }),
@@ -582,7 +591,7 @@ describe('independent admin route permission matrix', () => {
           invalidate: () => undefined,
           listSearchConfigs: () => ['portal-search'],
           ensureSearchConfigs: () => ['portal-search'],
-          ingestDocumentation: () => ({ created: 1 }),
+          ingestDocumentation: () => ({ created: ['page'], updated: [], failed: [] }),
           corpusHealth: () => ({ total: 1, failed: 0 }),
           purgeFailedResources: () => ({ deleted: 1 }),
           resourceFull: () => ({
@@ -646,7 +655,8 @@ describe('independent admin route permission matrix', () => {
             generatedAt: '2026-09-12T00:00:00Z',
             data: { title: 'Seeded research' },
           })
-          fixture.stores.bindings.set('a', {
+          await fixture.stores.bindings.initialize()
+          await fixture.stores.bindings.set('a', {
             baseUrl: 'https://example.test/kb/a',
             token: 'fixture-token',
             kbId: 'a',
@@ -748,7 +758,11 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'insights') {
                 expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
-              else throw new Error(`Missing positive assertion for ${template}`)
+              else if (suffix === 'lifecycle') {
+                expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+              } else if (suffix === 'usage') {
+                expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
+              } else throw new Error(`Missing positive assertion for ${template}`)
             } else {
               expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
               if (suffix === 'disable' || suffix === 'enable') {
@@ -1078,9 +1092,10 @@ describe('portal domain lifecycle', () => {
     expect(tenants.get('removal-retry')).toBeDefined()
   })
 
-  it('upgrades the existing OPAX runtime config to its configured hostname', () => {
+  it('upgrades the existing OPAX runtime config to its showcase hostname on read only', () => {
     const tenants = freshTenants()
-    expect(tenants.add({ name: 'OPAX' }).hostname).toBe('opax.corpuskit.org')
+    expect(tenants.add({ name: 'OPAX' }).hostname).toBeUndefined()
+    expect(tenants.get('opax')?.hostname).toBe('opax.corpuskit.org')
     expect(tenants.list().find((tenant) => tenant.slug === 'opax')?.hostname).toBe(
       'opax.corpuskit.org',
     )
@@ -1118,6 +1133,7 @@ describe('GET /api/t/:slug/resources/:id/thumbnail', () => {
     expect(response.headers.get('content-length')).toBe('3')
     expect(response.headers.get('etag')).toBe('"thumb-v1"')
     expect(response.headers.get('last-modified')).toBe('Mon, 31 Aug 2026 00:00:00 GMT')
+    expect(response.headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 })
@@ -2146,6 +2162,43 @@ describe('appearance (typography, shape, branding fonts)', () => {
       body: new Uint8Array([1, 2, 3]),
     })
     expect(response.status).toBe(415)
+  })
+
+  it('serves a branding file kept on disk sandboxed as a download', async () => {
+    const brandingPath = `${Deno.makeTempDirSync()}/branding`
+    Deno.mkdirSync(brandingPath)
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/admin/people")</script></svg>'
+    Deno.writeTextFileSync(`${brandingPath}/marine-logo.svg`, svg)
+    const app = buildApp({ provider: new StubProvider(), tenants: freshTenants(), brandingPath })
+    const served = await app.request('/api/t/marine/branding/logo')
+    expect(served.status).toBe(200)
+    expect(served.headers.get('content-type')).toBe('image/svg+xml')
+    expect(served.headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
+    expect(served.headers.get('content-disposition')).toBe('attachment')
+    expect(served.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(await served.text()).toBe(svg)
+  })
+
+  it('refuses an SVG logo upload and writes nothing to disk', async () => {
+    const brandingPath = `${Deno.makeTempDirSync()}/branding`
+    const app = buildApp({
+      provider: new StubProvider(),
+      tenants: freshTenants(),
+      adminPasscode: passcode,
+      brandingPath,
+    })
+    const response = await app.request('/api/admin/t/marine/branding/logo', {
+      method: 'POST',
+      headers: { 'x-admin-passcode': passcode, 'content-type': 'image/svg+xml' },
+      body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    })
+    expect(response.status).toBe(415)
+    expect(await response.json()).toEqual({
+      error: 'unsupported_type',
+      message: 'Use PNG, JPEG or WebP.',
+    })
+    expect(() => Deno.statSync(`${brandingPath}/marine-logo.svg`)).toThrow(Deno.errors.NotFound)
   })
 
   it('rejects an unknown branding kind', async () => {

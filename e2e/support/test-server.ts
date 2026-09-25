@@ -38,6 +38,7 @@ export interface TestServer {
     subject: string,
     role: Role | null,
     kind?: 'active-oid' | 'pending-email' | 'group',
+    source?: 'entra' | 'external',
   ) => void
   setAccessMode: (slug: string, mode: AccessMode) => void
   setGroupCapability: (enabled: boolean) => void
@@ -68,6 +69,8 @@ export function startTestServer(options: {
   identity?: { role: Role; slug?: string }
   emergencyFixture?: { directory: string; state: EmergencyFixtureState }
   componentFixture?: { directory: string }
+  loginEnv?: Record<string, string>
+  componentHtml?: string
 } = {}): TestServer {
   const directory = Deno.makeTempDirSync({ prefix: 'rbac-e2e-' })
   // Legacy JSON stores capture DATA_DIR at module load. Override only their
@@ -82,6 +85,7 @@ export function startTestServer(options: {
     ENTRA_TENANT_ID: 'tenant-1',
     WORKER_NAME: 'corpuskit',
     ENVIRONMENT: 'test',
+    ...options.loginEnv,
     ...(options.breakGlass ? { ADMIN_PASSCODE: 'fixture-emergency-only' } : {}),
   }
   const { database, rbac } = openLocalRbac(env)
@@ -117,9 +121,11 @@ export function startTestServer(options: {
       subjectId,
       role,
       subjectKind = 'active-oid',
+      source = 'entra',
     ) => {
       const existing = service.list().find((row) =>
         row.subjectId === subjectId &&
+        row.source === source &&
         row.subjectKind === subjectKind && JSON.stringify(row.scope) === JSON.stringify(scope)
       )
       const result = existing
@@ -128,7 +134,7 @@ export function startTestServer(options: {
           : service.change(existing.id, { role }, seedContext)
         : role === null
         ? { ok: true }
-        : service.create({ scope, subjectId, subjectKind, role }, seedContext)
+        : service.create({ scope, subjectId, subjectKind, role, source }, seedContext)
       if (!result.ok) throw new Error('Fixture assignment rejected')
     }
     for (const oid of ['fixture-owner-one', 'fixture-owner-two']) {
@@ -272,7 +278,7 @@ export function startTestServer(options: {
           })
         }
         return new Response(
-          Deno.readTextFileSync(`${WEB_DIST}/index.html`)
+          options.componentHtml ?? Deno.readTextFileSync(`${WEB_DIST}/index.html`)
             .replace(/src="\/app\.js[^"]*"/, 'src="/__test/rbac-component.js"'),
           {
             headers: { 'content-type': 'text/html', 'cache-control': 'no-store' },

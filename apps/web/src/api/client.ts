@@ -50,6 +50,7 @@ import {
 } from '@research-portal/core'
 import { z } from 'zod'
 import { noteAskBudget } from '../lib/ask-budget.ts'
+import { errorCode, hostingErrorMessage } from './hosting-errors.ts'
 
 /**
  * Typed error thrown by every helper below. Carries the HTTP status so callers
@@ -59,6 +60,7 @@ export class ApiError extends Error {
   status: number
   /** Seconds the server asked us to wait (a 429's Retry-After), when it said. */
   retryAfterSec?: number
+  code?: string
 
   constructor(status: number, message: string, retryAfterSec?: number) {
     super(message)
@@ -86,9 +88,17 @@ export function retryAfterOf(res: Response): number | undefined {
 }
 
 /** An ApiError for a failed ask-class response: a 429 carries the shared copy and its Retry-After. */
-export function askError(res: Response, fallback: string): ApiError {
+export async function askError(res: Response, fallback: string): Promise<ApiError> {
+  const body: unknown = await res.json().catch(() => null)
+  assertResponseCurrent(res)
+  const hostingMessage = hostingErrorMessage(body)
+  if (hostingMessage) {
+    const error = new ApiError(res.status, hostingMessage, retryAfterOf(res))
+    error.code = errorCode(body)
+    return error
+  }
   if (res.status === 429) return new ApiError(429, RATE_LIMIT_MESSAGE, retryAfterOf(res))
-  return new ApiError(res.status, res.statusText || fallback)
+  return new ApiError(res.status, friendlyError(body, res.statusText || fallback))
 }
 
 /** Human-readable fallbacks for the API's machine error codes. */
@@ -106,6 +116,8 @@ const ERROR_COPY: Record<string, string> = {
 }
 
 function friendlyError(body: unknown, fallback: string): string {
+  const hostingMessage = hostingErrorMessage(body)
+  if (hostingMessage) return hostingMessage
   if (body && typeof body === 'object') {
     const record = body as { message?: unknown; error?: unknown }
     if (typeof record.message === 'string' && record.message.trim()) return record.message
@@ -141,7 +153,9 @@ export async function request<T>(
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null)
     assertResponseCurrent(res)
-    throw new ApiError(res.status, friendlyError(body, res.statusText || 'Request failed'))
+    const error = new ApiError(res.status, friendlyError(body, res.statusText || 'Request failed'))
+    error.code = errorCode(body)
+    throw error
   }
 
   return (await res.json()) as T
@@ -151,8 +165,10 @@ export function getTenants(): Promise<TenantSummary[]> {
   return request<TenantSummary[]>('/api/tenants')
 }
 
-export function getTenantConfig(slug: string): Promise<TenantConfig> {
-  return request<TenantConfig>(`/api/t/${encodeURIComponent(slug)}/config`)
+export function getTenantConfig(
+  slug: string,
+): Promise<TenantConfig & { status?: 'active' | 'read_only' | 'suspended' }> {
+  return request(`/api/t/${encodeURIComponent(slug)}/config`)
 }
 
 export function searchTenant(slug: string, query: string): Promise<SearchResults> {
@@ -227,7 +243,7 @@ export async function streamDocsAsk(
     signal,
   }, options)
   if (!res.ok || !res.body) {
-    throw new ApiError(res.status, res.statusText || 'The help assistant is unavailable')
+    throw await askError(res, 'The help assistant is unavailable')
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -413,7 +429,7 @@ export async function streamAsk(
   }, options)
   assertResponseCurrent(res)
   noteAskBudget(res)
-  if (!res.ok || !res.body) throw askError(res, 'The answer service is unavailable')
+  if (!res.ok || !res.body) throw await askError(res, 'The answer service is unavailable')
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -480,13 +496,13 @@ export async function adminRequest<T>(
   const body: unknown = await res.json().catch(() => null)
   assertResponseCurrent(res)
   if (!res.ok) {
-    const message = body && typeof body === 'object' && 'message' in body &&
+    const fallback = body && typeof body === 'object' && 'message' in body &&
         typeof body.message === 'string'
       ? body.message
       : body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
       ? body.error
       : 'Request failed'
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, friendlyError(body, fallback))
   }
   return body as T
 }
@@ -967,7 +983,7 @@ export async function implementKg(
         typeof body.message === 'string'
       ? body.message
       : 'Implementation failed to start'
-    throw new ApiError(res.status, message)
+    throw new ApiError(res.status, friendlyError(body, message))
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -1288,7 +1304,7 @@ export async function streamEstateAsk(
     signal,
   }, options)
   if (!res.ok || !res.body) {
-    throw new ApiError(res.status, res.statusText || 'The answer service is unavailable')
+    throw await askError(res, 'The answer service is unavailable')
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -1446,7 +1462,8 @@ export type SourceSyncEvent =
   // `deferred` counts pages left un-synced this run (e.g. the knowledge box
   // was busy) - they are picked up automatically on the next sync.
   | { type: 'done'; added: number; deferred?: number }
-  | { type: 'error'; message: string }
+  // A hosting refusal also carries its code (`error`) and detail.
+  | { type: 'error'; message: string; error?: string }
 
 export async function syncSource(
   slug: string,
@@ -1461,7 +1478,13 @@ export async function syncSource(
     { method: 'POST', headers: {} },
     options,
   )
-  if (!res.ok || !res.body) throw new ApiError(res.status, 'The sync failed to start')
+  if (!res.ok || !res.body) {
+    const body: unknown = await res.json().catch(() => null)
+    assertResponseCurrent(res)
+    const error = new ApiError(res.status, hostingErrorMessage(body) ?? 'The sync failed to start')
+    error.code = errorCode(body)
+    throw error
+  }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -1471,7 +1494,10 @@ export async function syncSource(
     if (!line) return
     const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
     try {
-      onEvent(JSON.parse(data) as SourceSyncEvent)
+      const event = JSON.parse(data) as SourceSyncEvent
+      // A sync stopped by a portal limit, read-only or pause is explained in the app's words.
+      const hosting = event.type === 'error' ? hostingErrorMessage(event) : undefined
+      onEvent(event.type === 'error' && hosting ? { ...event, message: hosting } : event)
     } catch {
       // A truncated trailing frame (dropped connection) is not an event.
     }
@@ -1792,7 +1818,10 @@ export async function saveGraphStrategy(
         Array.isArray((body as { problems: unknown }).problems)
       ? (body as { problems: string[] }).problems.join(' ')
       : ''
-    throw new ApiError(res.status, problems || 'The strategy could not be saved')
+    throw new ApiError(
+      res.status,
+      friendlyError(body, problems || 'The strategy could not be saved'),
+    )
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -1945,19 +1974,7 @@ export async function runEnrichment(
     options,
   )
   if (!res.ok || !res.body) {
-    let message = res.statusText || 'Enrichment run failed'
-    try {
-      const parsed: unknown = await res.json()
-      if (
-        parsed && typeof parsed === 'object' && 'error' in parsed &&
-        typeof parsed.error === 'string'
-      ) {
-        message = parsed.error
-      }
-    } catch {
-      // Body was not JSON - keep statusText.
-    }
-    throw new ApiError(res.status, message)
+    throw await askError(res, 'Enrichment run failed')
   }
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -2022,7 +2039,7 @@ export async function routeIntent(
   }, options)
   assertResponseCurrent(res)
   noteAskBudget(res)
-  if (!res.ok) throw askError(res, 'Routing is unavailable')
+  if (!res.ok) throw await askError(res, 'Routing is unavailable')
   return (await res.json()) as RouteDecision
 }
 

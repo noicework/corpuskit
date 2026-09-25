@@ -61,6 +61,10 @@ The task filters `.env` through an allowlist before calling Wrangler, uses a mod
 file and removes it immediately. It deliberately refuses to upload the ARAG account provisioning
 credentials.
 
+The allowlist includes the optional `BINDING_KEY` and `OPERATOR_API_KEY` secrets and the optional
+external sign-in settings. Configure `OPERATOR_ID` as a Worker variable when a custom actor label
+is needed; the default is `operator`.
+
 Only Worker-relevant values are read at runtime:
 
 - `ARAG_ZONE`
@@ -69,11 +73,43 @@ Only Worker-relevant values are read at runtime:
 - `ENTRA_CLIENT_SECRET`
 - `ENTRA_ADMIN_EMAILS` as an optional break-glass allowlist
 - `SESSION_SECRET`, a random value of at least 32 bytes
+- `BINDING_KEY`, standard base64 of 32 random bytes, seals persisted knowledge-box tokens
+  with AES-256-GCM. Required for new or replacement bindings; existing plaintext records remain
+  readable without it. A malformed value makes every API request answer 503
+  `binding_key_invalid`; a stored binding the key cannot open is reported `unavailable` and can
+  be replaced or disconnected. See
+  [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption) for migration,
+  readiness signals and key recovery. The secret upload task includes this value when
+  configured; it never generates or rotates it.
+- `BINDING_KEY_MIGRATE`, set to `true` to seal tokens already stored as plaintext at the next
+  start. Set it with `wrangler secret put` only after a release that understands sealed tokens
+  has passed verification; the secret upload task never sends it. See
+  [turning on encryption for existing bindings](HOSTING.md#turning-on-encryption-for-existing-bindings).
+- `OPERATOR_API_KEY`, optional hosting automation credential containing at least 32 random bytes
+  encoded as unpadded base64url. Set the optional non-secret `OPERATOR_ID` variable to label its
+  audit actor; it defaults to `operator`. See [Hosting CorpusKit](HOSTING.md#operator-credential)
+  for the route allowlist, authentication boundary and rotation procedure.
+- `EXTERNAL_LOGIN_ISSUER` and `EXTERNAL_LOGIN_JWK`, optional external sign-in issuer and Ed25519
+  public JWK; configure both to enable the handoff
+- `EXTERNAL_LOGIN_NAME` and `EXTERNAL_LOGIN_START_URL`, optional external sign-in button label
+  and issuer start URL
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_DOMAINS_TOKEN`, optional credentials for
-  automatically attaching a safe `<slug>.corpuskit.org` custom domain when an administrator
+  automatically attaching a safe `<slug>.<PLATFORM_DOMAIN>` custom domain when an administrator
   creates a portal
 
 Do not upload account provisioning credentials (`ARAG_ACCOUNT`, `ARAG_NUA_KEY`) to the Worker.
+External sign-in configuration is included in the allowlisted upload. An external-only deployment
+can supply both `EXTERNAL_LOGIN_ISSUER` and `EXTERNAL_LOGIN_JWK` instead of
+`ENTRA_CLIENT_SECRET`; `SESSION_SECRET` is still required. The issuer's private signing key must
+stay with the issuer and is never uploaded to CorpusKit: the upload refuses an
+`EXTERNAL_LOGIN_JWK` that is not an Ed25519 public JWK, including one that carries private key
+material.
+
+`PLATFORM_DOMAIN` is an ordinary Worker runtime variable, defaulting to `corpuskit.org`. It controls
+automatic portal hostnames, the platform redirect, shared cookie scope and the runtime domain
+injected into the SPA shell. Set it in the target Worker's vars rather than the secret upload
+task. Configure routes, domain-token zone permissions and the identity redirect URI consistently.
+See [configurable platform domain](HOSTING.md#configurable-platform-domain).
 
 ## Portal custom domains
 
@@ -84,13 +120,16 @@ credentials are configured, the admin create route then:
 1. validates the generated slug as a public DNS label and rejects reserved infrastructure names;
 2. looks up the exact hostname with
    [`GET /accounts/{account_id}/workers/domains`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/list/);
-3. attaches it to the `corpuskit` Worker with
+3. attaches it to the Worker script named by `WORKER_NAME` (default `corpuskit`; it must equal the
+   script `name` in the Wrangler configuration) with
    [`PUT /accounts/{account_id}/workers/domains`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/update/)
-   when it is absent; and
+   when it is absent, letting Cloudflare place it in the account zone that contains the hostname,
+   and rejects a result for another hostname, Worker or zone; and
 4. stores the hostname on the tenant only after Cloudflare confirms it.
 
 Cloudflare creates the DNS record and TLS certificate for a Worker Custom Domain. Repeating create
-is a no-op when the hostname is already attached to the `corpuskit` Worker. Removing a custom
+is a no-op when the hostname is already attached to the configured Worker. `PLATFORM_DOMAIN` can
+be a subdomain, such as `research.example.org` within the `example.org` zone. Removing a custom
 portal looks up the domain and calls
 [`DELETE /accounts/{account_id}/workers/domains/{domain_id}`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/delete/)
 before deleting the tenant. If create
@@ -100,10 +139,10 @@ be retried without leaving an attached orphan domain.
 
 Create a dedicated API token named for portal-domain provisioning. Do not reuse the CI deployment
 token or a Global API Key. Restrict it to the CorpusKit Cloudflare account and the
-`corpuskit.org` zone with exactly:
+zone containing `PLATFORM_DOMAIN` (default `corpuskit.org`) with exactly:
 
 - Account - Workers Scripts - Edit (`Workers Scripts Write` in the API reference).
-- Zone - DNS - Edit, limited to the single `corpuskit.org` zone.
+- Zone - DNS - Edit, limited to that single platform zone.
 
 Put the token in `.env` as `CLOUDFLARE_DOMAINS_TOKEN` and the target account identifier as
 `CLOUDFLARE_ACCOUNT_ID`, then rerun `deno task secrets:cloudflare`. Both are uploaded through the
@@ -128,11 +167,39 @@ are versioned in `wrangler.jsonc`; only its client credential is a Worker secret
 Rotate the Entra client credential before expiry, update `ENTRA_CLIENT_SECRET` with Wrangler, then
 revoke the old credential. Rotating `SESSION_SECRET` signs every current session out.
 
+## External sign-in
+
+The optional [external sign-in handoff](HOSTING.md#external-sign-in-handoff) accepts an Ed25519
+assertion from a configured issuer and creates the same encrypted session cookie. It works with
+or without Entra. Set `EXTERNAL_LOGIN_ISSUER`, `EXTERNAL_LOGIN_JWK` and `SESSION_SECRET`, and
+set `WORKER_NAME` to the exact deployment audience expected by the issuer. The external settings
+may be Worker variables or use the allowlisted `.env` upload; the JWK contains only the public key.
+
+Set `EXTERNAL_LOGIN_START_URL` to show the external button on the portal sign-in gate; an
+external-only deployment needs it, or people have no way to begin sign-in from the portal. The
+button adds the current portal path as `returnTo` for the issuer to pass back. The optional
+`EXTERNAL_LOGIN_NAME` label defaults to `Continue with your organisation account`. Without a
+start URL, the button is hidden and `/auth/external` still accepts valid handoffs. The issuer has
+obligations of its own; read
+[issuer responsibilities](HOSTING.md#issuer-responsibilities) before connecting one. Replay records
+live in the existing Durable Object SQLite database and survive Worker isolate replacement.
+External identities receive authority only through local assignments with `source: "external"`.
+
+Both deployment configurations set `observability.logs.invocation_logs` to `false`, retaining
+application logs while preventing automatic request-URL logging of handoff assertions. This is
+the supported [invocation-log control](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs)
+in the pinned Wrangler version. Proxy access logs and other telemetry must also omit the assertion
+query string. The source-bound assignment migration is not safe to roll back to older code while
+external assignments remain; see [the hosting rollback note](HOSTING.md#rollback).
+
 ## State and rollback
 
 Tenant configuration, bindings, sessions, investigations, watches, sources, insights,
-suggestions, enrichments and branding assets live in the `PortalDurableObject` SQLite database.
-The first Worker migration is tagged `v1`; future schema changes must add a new migration tag.
+suggestions, enrichments, branding assets and each portal's hosting lifecycle (status, limits,
+ask counts and capacity ledger; see [lifecycle storage](HOSTING.md#storage)) live in the
+`PortalDurableObject` SQLite database. The first Worker migration is tagged `v1`; future schema changes must add a new
+migration tag. The hosting lifecycle uses the existing `state` table, so it needs no new
+migration, secret or variable.
 
 Cloudflare keeps Worker versions and deployments. Roll code back with a Cloudflare deployment
 rollback; never delete the Durable Object namespace during rollback, because it owns production
@@ -166,6 +233,9 @@ a published release that is running verification; let it verify or recover.
 Code rollback preserves current Durable Object state, not a historical database snapshot. Cloudflare
 [does not permit rollback across a Durable Object class lifecycle change](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/),
 and old code may not understand newly written data. Releases that change class migrations, storage
-schemas or resource bindings need an explicitly reviewed compatibility/recovery plan. This safety
-mechanism is for compatible code releases, including the citation-provider fix; it is not a database
-backup or schema reversal mechanism.
+schemas or resource bindings need an explicitly reviewed compatibility/recovery plan. Sealed
+knowledge-box tokens are one such format: a version that sealed stored tokens as it started would
+have them sealed by its own verification probe, before any rollback. Stored tokens are therefore
+sealed only by an explicit `BINDING_KEY_MIGRATE` step, taken once the release has verified. This
+safety mechanism is for compatible code releases, including the citation-provider fix; it is not a
+database backup or schema reversal mechanism.

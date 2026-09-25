@@ -75,6 +75,45 @@ Deno.test('audit pages reject malformed envelopes, scope leaks and contradictory
     parseAuditPage(continued, scope, { cursor: cursor('22222222-2222-4222-8222-222222222222') })
   ).toThrow(AuditError)
 })
+Deno.test('operator audit records round-trip through parsing, actor filters and JSON export', async () => {
+  const operatorRow = {
+    ...row,
+    actor_kind: 'operator',
+    actor_id: 'operator:fixture-hosting',
+    action: 'request.privileged',
+    detail_json: '{"permission":"bindings.write","method":"POST"}',
+  }
+  const operatorPage = { ...page(), items: [operatorRow] }
+  const query = { actorKind: 'operator' as const, actorId: 'operator:fixture-hosting' }
+  const params = auditQuery(query)
+  expect(params.get('actorKind')).toBe('operator')
+  expect(params.get('actorId')).toBe('operator:fixture-hosting')
+  expect(parseAuditPage(operatorPage, scope, query).items).toEqual([operatorRow])
+  expect(() => parseAuditPage(operatorPage, scope, { actorKind: 'user' })).toThrow(AuditError)
+  expect(() => parseAuditPage(operatorPage, scope, { actorId: 'operator:another-host' })).toThrow(
+    AuditError,
+  )
+  const original = globalThis.fetch
+  try {
+    const controller = authority(['portal.read', 'audit.read', 'audit.export'])
+    const paths: string[] = []
+    globalThis.fetch = (input) => {
+      const url = new URL(String(input), 'https://fixture.test')
+      paths.push(url.pathname)
+      expect(url.searchParams.get('actorKind')).toBe('operator')
+      expect(url.searchParams.get('actorId')).toBe('operator:fixture-hosting')
+      return Promise.resolve(Response.json(operatorPage))
+    }
+    expect((await listAudit(scope, query, { authority: controller })).items).toEqual([operatorRow])
+    const exported = await exportAuditPage(scope, query, 'json', undefined, {
+      authority: controller,
+    })
+    expect(JSON.parse(new TextDecoder().decode(exported.bytes))).toEqual(operatorPage)
+    expect(paths).toEqual(['/api/admin/t/marine/audit', '/api/admin/t/marine/audit/export'])
+  } finally {
+    globalThis.fetch = original
+  }
+})
 function authority(permissions = ['portal.read', 'audit.read']) {
   const controller = new AuthorityController(() => 'fixture')
   controller.setSession({

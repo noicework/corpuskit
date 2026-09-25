@@ -146,7 +146,27 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
   expect(new Set(keys).size).toBe(keys.length)
   expect(declarations.filter((d) => d.kind === 'http').map((d) => `${d.method} ${d.path}`).sort())
     .toEqual(keys)
+  const operatorRoutes = new Set([
+    'POST /api/admin/tenants',
+    'PATCH /api/admin/tenants/:slug',
+    'POST /api/admin/t/:slug/knowledge-box',
+    'DELETE /api/admin/t/:slug/knowledge-box',
+    'PATCH /api/admin/t/:slug/access',
+    'GET /api/admin/t/:slug/members',
+    'POST /api/admin/t/:slug/members',
+    'DELETE /api/admin/t/:slug/members/:id',
+    'GET /api/admin/t/:slug/counters',
+    'POST /api/admin/t/:slug/branding/:kind',
+    'POST /api/admin/migrate',
+    'GET /api/admin/t/:slug/lifecycle',
+    'PUT /api/admin/t/:slug/lifecycle',
+    'GET /api/admin/t/:slug/usage',
+  ])
   for (const row of rows) {
+    expect(
+      declarations.find((d) => d.kind === 'http' && d.method === row.method && d.path === row.path)
+        ?.operator === true,
+    ).toBe(operatorRoutes.has(`${row.method} ${row.path}`))
     expect(
       declarations.find((d) => d.kind === 'http' && d.method === row.method && d.path === row.path)
         ?.permission,
@@ -237,7 +257,8 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       contentType: 'image/png',
       version: 'fixture',
     })
-    f.stores.bindings.set('a', {
+    await f.stores.bindings.initialize()
+    await f.stores.bindings.set('a', {
       baseUrl: 'https://example.test/kb/a',
       token: 'fixture',
       kbId: 'a',
@@ -470,11 +491,19 @@ export function sessionFor(
 
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
 export function createEnforcementFixture(
-  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> & {
-    breakGlassPolicy?: BreakGlassPolicy
-    /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
-    identityConfigured?: boolean
-  } = {},
+  options:
+    & Pick<
+      BuildAppOptions,
+      'management' | 'domainProvisioner' | 'platformDomain' | 'lifecycle' | 'rateLimitAskPerMin'
+    >
+    & {
+      bindingKey?: string
+      /** Binding records already in storage when the stores start, as after a restart. */
+      storedBindings?: Record<string, unknown>
+      breakGlassPolicy?: BreakGlassPolicy
+      /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
+      identityConfigured?: boolean
+    } = {},
   ownedAdapter: 'durable' | 'local' = 'durable',
 ) {
   const directory = Deno.makeTempDirSync({ prefix: 'enforcement-' })
@@ -504,7 +533,11 @@ export function createEnforcementFixture(
   }
   const state = new DurableState(sql, database, now)
   state.migrate()
-  const durable = durableStores(state, {})
+  if (options.storedBindings) state.put('bindings', options.storedBindings)
+  const durable = durableStores(state, {
+    BINDING_KEY: options.bindingKey ?? btoa('x'.repeat(32)),
+    PLATFORM_DOMAIN: options.platformDomain,
+  })
   const stores = {
     ...durable,
     ...(ownedAdapter === 'local'
@@ -584,7 +617,11 @@ export function createEnforcementFixture(
       actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
     }
   }
-  const { identityConfigured: _identityConfigured, ...appOptions } = options
+  const {
+    identityConfigured: _identityConfigured,
+    storedBindings: _storedBindings,
+    ...appOptions
+  } = options
   const app = buildApp({
     ...stores,
     ...appOptions,
@@ -597,7 +634,7 @@ export function createEnforcementFixture(
       options.breakGlassPolicy ?? { environment: 'production' },
     ),
     brandingPath: `${directory}/branding`,
-    rateLimitAskPerMin: 0,
+    rateLimitAskPerMin: options.rateLimitAskPerMin ?? 0,
     rateLimitEstatePerMin: 0,
     rateLimitMcpAuthPerMin: 0,
   })
@@ -636,6 +673,7 @@ export function createEnforcementFixture(
       now,
     }),
     async requestAs(session: TrustedSessionFacts | null, path: string, init?: RequestInit) {
+      await stores.bindings.initialize()
       const request = new Request(`http://localhost${path}`, init)
       contexts.set(request, await contextFor(session))
       try {
@@ -726,6 +764,9 @@ const html = `<html><title>Research</title><main><p>${
 }</p><a href="https://example.test/article">Article</a></main></html>`
 // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
 export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
+  ['GET', 'lifecycle', 'portal.create'],
+  ['PUT', 'lifecycle', 'portal.create', { status: 'active', limits: null }],
+  ['GET', 'usage', 'portal.create'],
   ['GET', 'extraction/methods', 'content.write'],
   ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
   ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
@@ -800,7 +841,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['PATCH', 'sources/:id', 'content.write', { auto: false }],
   ['DELETE', 'sources/:id', 'content.write'],
   ['POST', 'sources/:id/sync', 'content.write', {}],
-  ['POST', '/api/admin/migrate', 'platform.settings.write', { from: 'a', to: 'b' }],
+  ['POST', '/api/admin/migrate', 'portal.create', { from: 'a', to: 'b' }],
   ['POST', 'knowledge-box', 'bindings.write', {
     url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
     token: 'fixture-service-account-token',
@@ -880,6 +921,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       listResources: () => [matrixResource],
       labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
       counters: () => ({ resources: 1 }),
+      resourceCount: () => 1,
       recentResources: () => [matrixResource],
       createText: () => ({ id: 'created' }),
       createLink: () => ({ id: 'created' }),
@@ -913,7 +955,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       invalidate: () => undefined,
       listSearchConfigs: () => ['portal-search'],
       ensureSearchConfigs: () => ['portal-search'],
-      ingestDocumentation: () => ({ created: 1 }),
+      ingestDocumentation: () => ({ created: ['page'], updated: [], failed: [] }),
       corpusHealth: () => ({ total: 1, failed: 0 }),
       purgeFailedResources: () => ({ deleted: 1 }),
       resourceFull: () => ({
@@ -977,7 +1019,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
         generatedAt: '2026-09-12T00:00:00Z',
         data: { title: 'Seeded research' },
       })
-      fixture.stores.bindings.set('a', {
+      await fixture.stores.bindings.initialize()
+      await fixture.stores.bindings.set('a', {
         baseUrl: 'https://example.test/kb/a',
         token: 'fixture-token',
         kbId: 'a',
@@ -1077,7 +1120,11 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'insights') {
             expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
           } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
-          else throw new Error(`Missing positive assertion for ${template}`)
+          else if (suffix === 'lifecycle') {
+            expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+          } else if (suffix === 'usage') {
+            expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
+          } else throw new Error(`Missing positive assertion for ${template}`)
         } else {
           expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
           if (suffix === 'disable' || suffix === 'enable') {

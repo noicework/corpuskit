@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { TenantConfig } from '@research-portal/core'
 import type { AuthUser } from '../api/auth.ts'
-import { microsoftLoginUrl } from '../api/auth.ts'
+import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { useAccess } from './AccessProvider.tsx'
 import { roleLabel } from './account-menu-behaviour.ts'
 
@@ -13,6 +13,12 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
       .productName ?? access.slug
   const session = access.state.session
   const user = session?.user
+  const external = session?.sessionProvenance === 'external' || user?.provenance === 'external'
+  const signInAgain = external
+    ? session?.externalLogin && externalLoginUrl(session.externalLogin.startUrl)
+    : session?.entraEnabled !== false
+    ? microsoftLoginUrl()
+    : undefined
   const portalRole = roleLabel(session?.portalAccess?.effectiveRole)
   const platformRole = roleLabel(session?.effectiveRoles.platformRole)
   const sources = [
@@ -120,27 +126,32 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
                     </p>
                   )}
                   {sources.length > 0 && <p>Access source: {sources.join(', ')}</p>}
+                  {external && <p>Signed in through the external identity provider.</p>}
+                  {!external && (
+                    <p>
+                      {claimAge == null
+                        ? 'Entra claim age unavailable'
+                        : `Entra claims checked ${
+                          claimAge < 60
+                            ? 'less than a minute'
+                            : claimAge < 3600
+                            ? `${Math.floor(claimAge / 60)} minutes`
+                            : `${Math.floor(claimAge / 3600)} hours`
+                        } ago.`}
+                    </p>
+                  )}
                   <p>
-                    {claimAge == null
-                      ? 'Entra claim age unavailable'
-                      : `Entra claims checked ${
-                        claimAge < 60
-                          ? 'less than a minute'
-                          : claimAge < 3600
-                          ? `${Math.floor(claimAge / 60)} minutes`
-                          : `${Math.floor(claimAge / 3600)} hours`
-                      } ago.`}
+                    {!external && 'Entra access updates when you sign in again. '}
+                    Local assignments are checked on each request.
                   </p>
-                  <p>
-                    Entra access updates when you sign in again. Local assignments are checked on
-                    each request.
-                  </p>
-                  <a
-                    href={microsoftLoginUrl()}
-                    className='rp-focus text-[var(--rp-accent-fg)] underline'
-                  >
-                    Sign in again
-                  </a>
+                  {signInAgain && (
+                    <a
+                      href={signInAgain}
+                      className='rp-focus text-[var(--rp-accent-fg)] underline'
+                    >
+                      Sign in again
+                    </a>
+                  )}
                 </section>
                 <a
                   href='/auth/logout'
@@ -153,19 +164,30 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
             )
             : (
               <>
-                <a
-                  href={microsoftLoginUrl()}
-                  className='rp-focus flex w-full items-center justify-center gap-3 px-5 py-3.5 text-base font-semibold text-[var(--rp-on-primary)] transition-opacity duration-150 hover:opacity-90'
-                  style={{ backgroundColor: 'var(--rp-primary)' }}
-                >
-                  <svg viewBox='0 0 21 21' aria-hidden='true' className='h-5 w-5'>
-                    <rect x='0' y='0' width='9.5' height='9.5' fill='#f25022' />
-                    <rect x='11.5' y='0' width='9.5' height='9.5' fill='#7fba00' />
-                    <rect x='0' y='11.5' width='9.5' height='9.5' fill='#00a4ef' />
-                    <rect x='11.5' y='11.5' width='9.5' height='9.5' fill='#ffb900' />
-                  </svg>
-                  Sign in with Microsoft
-                </a>
+                {session?.entraEnabled !== false && (
+                  <a
+                    href={microsoftLoginUrl()}
+                    className='rp-focus flex w-full items-center justify-center gap-3 px-5 py-3.5 text-base font-semibold text-[var(--rp-on-primary)] transition-opacity duration-150 hover:opacity-90'
+                    style={{ backgroundColor: 'var(--rp-primary)' }}
+                  >
+                    <svg viewBox='0 0 21 21' aria-hidden='true' className='h-5 w-5'>
+                      <rect x='0' y='0' width='9.5' height='9.5' fill='#f25022' />
+                      <rect x='11.5' y='0' width='9.5' height='9.5' fill='#7fba00' />
+                      <rect x='0' y='11.5' width='9.5' height='9.5' fill='#00a4ef' />
+                      <rect x='11.5' y='11.5' width='9.5' height='9.5' fill='#ffb900' />
+                    </svg>
+                    Sign in with Microsoft
+                  </a>
+                )}
+                {session?.externalLogin && (
+                  <a
+                    href={externalLoginUrl(session.externalLogin.startUrl)}
+                    className='rp-btn rp-btn-outline mt-3 w-full whitespace-normal text-center'
+                    data-external-login
+                  >
+                    {session.externalLogin.name}
+                  </a>
+                )}
 
                 <p className='mt-4 text-sm leading-relaxed text-ink-2'>
                   {access.state.status === 'unavailable'

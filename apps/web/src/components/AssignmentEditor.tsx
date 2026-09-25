@@ -55,6 +55,9 @@ function Editor(
   const [form, setForm] = useState<'new' | RoleAssignment | null>(null)
   const [subjectKind, setSubjectKind] = useState<'active-oid' | 'pending-email'>('pending-email')
   const [subjectId, setSubjectId] = useState('')
+  // Without Entra sign-in no Entra identity can claim a row, so start from the external source.
+  const defaultSource = access.state.session?.entraEnabled === false ? 'external' : 'entra'
+  const [source, setSource] = useState<'entra' | 'external'>(defaultSource)
   const [role, setRole] = useState<Role>(scope.kind === 'portal' ? 'viewer' : 'platform-admin')
   const [confirmation, setConfirmation] = useState<
     { kind: 'remove'; row: RoleAssignment } | { kind: 'owner' } | null
@@ -62,6 +65,10 @@ function Editor(
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const group = family === 'groups'
+  // Identity sources matter only once external sign-in is configured or an external row exists.
+  const sources = !group &&
+    (access.state.session?.externalLoginEnabled === true ||
+      items.some((row) => row.source === 'external'))
   const allowed = roles.filter((value) =>
     (scope.kind === 'portal' ? [...PORTAL_ROLES] as Role[] : [...PLATFORM_ROLES] as Role[])
       .includes(value)
@@ -143,7 +150,7 @@ function Editor(
         ? onCreate(
           group
             ? { subjectId: subjectId.trim(), role }
-            : { subjectKind, subjectId: subjectId.trim(), role },
+            : { subjectKind, subjectId: subjectId.trim(), role, ...(sources ? { source } : {}) },
         )
         : onChange((form as RoleAssignment).id, role)
     )
@@ -190,9 +197,19 @@ function Editor(
                   ? canEdit ? 'Group object ID' : 'Inactive group mapping'
                   : 'Active object ID'}
               </p>
+              {!group && sources && (
+                <p className='mt-1 text-sm text-ink-2' data-assignment-source={row.source}>
+                  Identity source:{' '}
+                  {row.source === 'external' ? 'External account' : 'Microsoft Entra'}
+                </p>
+              )}
               {row.subjectKind === 'pending-email' && (
                 <p className='mt-1 text-sm text-ink-2'>
-                  This assignment activates when the matching organisation account signs in.
+                  This assignment activates when the matching {!sources
+                    ? 'organisation'
+                    : row.source === 'external'
+                    ? 'external'
+                    : 'Microsoft Entra'} account signs in.
                 </p>
               )}
               {row.emailProvenance && row.subjectKind !== 'pending-email' && (
@@ -238,6 +255,7 @@ function Editor(
           onClick={() => {
             setForm('new')
             setSubjectId('')
+            setSource(defaultSource)
             setRole(scope.kind === 'portal' ? 'viewer' : 'platform-admin')
             setError(null)
           }}
@@ -275,6 +293,24 @@ function Editor(
                     </select>
                   </label>
                 )}
+                {!group && sources && (
+                  <label className='block text-sm' htmlFor={`${id}-source`}>
+                    Identity source<select
+                      id={`${id}-source`}
+                      data-assignment-source-input
+                      className='rp-input mt-2 w-full text-base'
+                      value={source}
+                      onChange={(e) => setSource(e.target.value as typeof source)}
+                      aria-describedby={`${id}-source-help`}
+                    >
+                      <option value='entra'>Microsoft Entra</option>
+                      <option value='external'>External account</option>
+                    </select>
+                    <span id={`${id}-source-help`} className='mt-2 block text-ink-2'>
+                      Choose how this person signs in. Access stays bound to this identity source.
+                    </span>
+                  </label>
+                )}
                 <label className='block text-sm' htmlFor={`${id}-subject`}>
                   {group
                     ? 'Group object ID'
@@ -287,7 +323,11 @@ function Editor(
                     data-assignment-subject
                     className='rp-input mt-2 w-full text-base'
                     required
-                    maxLength={subjectKind === 'pending-email' && !group ? 254 : 160}
+                    maxLength={subjectKind === 'pending-email' && !group
+                      ? 254
+                      : source === 'external' && !group
+                      ? 260
+                      : 160}
                     type={subjectKind === 'pending-email' && !group ? 'email' : 'text'}
                     value={subjectId}
                     onChange={(e) => setSubjectId(e.target.value)}

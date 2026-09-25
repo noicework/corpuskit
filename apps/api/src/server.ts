@@ -1,3 +1,8 @@
+import {
+  externalLoginConfig,
+  externalLoginConfigured,
+  ExternalLoginReplayStore,
+} from './external-login.ts'
 import { serveStatic } from 'hono/deno'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
@@ -14,6 +19,8 @@ import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
+import { platformShellResponse } from './platform-shell.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 
 loadRootEnv()
 
@@ -21,6 +28,7 @@ const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
 const bindings = new BindingStore()
+await bindings.initialize()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
 const provider = new AragProvider({
@@ -36,7 +44,12 @@ const { database, rbac } = openLocalRbac(process.env)
 const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
 const tenants = owned.tenants!
 const { watches } = owned
-const ingress = new LocalIngress({ rbac, tenants, env: process.env })
+const ingress = new LocalIngress({
+  rbac,
+  tenants,
+  env: process.env,
+  externalReplays: new ExternalLoginReplayStore(database),
+})
 
 // Documentation readiness: probe every bound portal's documentation-scoped
 // search at boot and report it on /api/health, so a portal provisioned
@@ -46,7 +59,8 @@ const docsHealth = new DocsHealth({
     tenants.list().map((t) => tenants.get(t.slug)).filter((t): t is NonNullable<typeof t> =>
       t !== undefined
     ),
-  isBound: (slug) => bindings.get(slug) !== undefined,
+  // A withheld (unavailable) credential is not probed; the admin overview reports it.
+  isBound: (slug) => ['connected', 'demo'].includes(bindings.status(slug).status),
   provider,
 })
 
@@ -70,7 +84,9 @@ const webBuild = webBuildStamp()
 const app = buildApp({
   ...owned,
   rbac,
-  configuredTenantId: process.env.ENTRA_TENANT_ID,
+  configuredTenantId: process.env.ENTRA_TENANT_ID ||
+    (externalLoginConfigured(externalLoginConfig(process.env)) ? 'external' : undefined),
+  externalLoginEnabled: externalLoginConfigured(externalLoginConfig(process.env)),
   audience: process.env.WORKER_NAME ?? 'corpuskit',
   provider,
   tenants,
@@ -89,7 +105,7 @@ const app = buildApp({
   webBuild,
 })
 
-startScheduler(provider, tenants, sources, watches, enrichments, rbac, process.env)
+startScheduler(provider, tenants, sources, watches, enrichments, rbac, process.env, owned.lifecycle)
 // Off the listen path: the probe is a live retrieval call per portal.
 setTimeout(() => void docsHealth.check(), 3_000)
 
@@ -164,4 +180,9 @@ app.get(
   }),
 )
 
-Deno.serve({ port }, (request, info) => ingress.handle(request, (clean) => app.fetch(clean), info))
+const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
+Deno.serve({ port }, async (request, info) =>
+  platformShellResponse(
+    await ingress.handle(request, (clean) => app.fetch(clean), info),
+    platformDomain,
+  ))

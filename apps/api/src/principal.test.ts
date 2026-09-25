@@ -189,3 +189,66 @@ Deno.test('identity sanitation removes all case-insensitive principal and legacy
   expect([...cleaned.keys()]).toEqual(['content-type', 'x-admin-passcode'])
   expect(headers.has('x-corpuskit-principal')).toBe(true)
 })
+
+Deno.test('principal codec keeps operator and external identity kinds apart', async () => {
+  const hosting = {
+    ...config,
+    tenantId: '',
+    operatorId: 'hosting-test',
+    externalLoginEnabled: true,
+  }
+  const external = {
+    v: 1 as const,
+    aud: 'corpuskit',
+    tid: 'external',
+    oid: 'ext:person-1',
+    email: 'person@example.test',
+    name: '',
+    roles: [] as string[],
+    groups: [] as string[],
+    iat: payload.iat,
+  }
+  const operator = { v: 1 as const, kind: 'operator' as const, aud: 'corpuskit', iat: payload.iat }
+  // Both kinds verify side by side, each as itself.
+  for (const envelope of [external, { ...external, kind: 'session' as const }]) {
+    const verified = await verifyPrincipal(independentSign(envelope), hosting, now)
+    expect(verified).toEqual({ kind: 'verified', envelope })
+  }
+  expect(
+    await verifyPrincipal(independentSign({ ...operator, id: 'hosting-test' }), hosting, now),
+  ).toEqual({ kind: 'verified', envelope: { ...operator, id: 'hosting-test' } })
+  // Each needs its own configuration; enabling one never admits the other.
+  expect(
+    await verifyPrincipal(
+      independentSign(external),
+      { ...hosting, externalLoginEnabled: false },
+      now,
+    ),
+  ).toMatchObject({ kind: 'rejected', code: 'tenant' })
+  expect(
+    await verifyPrincipal(
+      independentSign({ ...operator, id: 'hosting-test' }),
+      { ...hosting, operatorId: undefined },
+      now,
+    ),
+  ).toMatchObject({ kind: 'rejected', code: 'configuration' })
+  // An operator envelope naming the external identity is not the configured operator.
+  expect(
+    await verifyPrincipal(independentSign({ ...operator, id: 'ext:person-1' }), hosting, now),
+  ).toMatchObject({ kind: 'rejected', code: 'configuration' })
+  // Hybrids of the two shapes are refused before any identity is considered.
+  for (
+    const hybrid of [
+      { ...external, kind: 'operator' },
+      { ...external, kind: 'operator', id: 'hosting-test' },
+      { ...operator, id: 'hosting-test', tid: 'external' },
+      { ...operator, id: 'hosting-test', oid: 'ext:person-1', roles: [], groups: [] },
+    ]
+  ) {
+    expect(await verifyPrincipal(independentSign(hybrid), hosting, now)).toMatchObject({
+      kind: 'rejected',
+      code: 'schema',
+    })
+    await expect(signPrincipal(hybrid as never, secret)).rejects.toThrow('schema')
+  }
+})

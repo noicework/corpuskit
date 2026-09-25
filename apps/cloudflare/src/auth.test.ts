@@ -12,7 +12,11 @@ const encode = (value: Uint8Array) =>
   btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 
 /** Exercise the actual signed callback, cookie sealing and cookie reader. */
-async function signedLogin(extra: Record<string, unknown>) {
+async function signedLogin(
+  extra: Record<string, unknown>,
+  settings: AuthConfig = config,
+  loginUrl = 'https://corpuskit.test/auth/login',
+) {
   const pair = await crypto.subtle.generateKey(
     {
       name: 'RSASSA-PKCS1-v1_5',
@@ -42,9 +46,9 @@ async function signedLogin(extra: Record<string, unknown>) {
       const claims = encode(
         new TextEncoder().encode(
           JSON.stringify({
-            aud: config.clientId,
+            aud: settings.clientId,
             iss: 'https://issuer.test',
-            tid: config.tenantId,
+            tid: settings.tenantId,
             oid: 'verified-oid',
             nonce,
             iat: Math.floor(Date.now() / 1000) - 60,
@@ -63,28 +67,28 @@ async function signedLogin(extra: Record<string, unknown>) {
     throw new Error('Unexpected fixture request')
   }
   try {
-    const login =
-      (await handleAuthRequest(new Request('https://corpuskit.test/auth/login'), config))!
+    const login = (await handleAuthRequest(new Request(loginUrl), settings))!
     const location = new URL(login.headers.get('location')!)
     nonce = location.searchParams.get('nonce')!
     const callback = (await handleAuthRequest(
       new Request(
-        `https://corpuskit.test/auth/callback?code=test&state=${
+        `${new URL(loginUrl).origin}/auth/callback?code=test&state=${
           location.searchParams.get('state')
         }`,
         { headers: { cookie: login.headers.get('set-cookie')!.split(';')[0]! } },
       ),
-      config,
+      settings,
     ))!
     const sessionCookie = callback.headers.getSetCookie().find((value) =>
       value.startsWith('__Secure-corpuskit_session=')
     )?.split(';')[0]
     return {
+      login,
       callback,
       user: sessionCookie
         ? await authUser(
           new Request('https://corpuskit.test', { headers: { cookie: sessionCookie } }),
-          config,
+          settings,
         )
         : null,
     }
@@ -188,6 +192,35 @@ Deno.test('/auth/logout clears a session across every corpuskit.org portal', asy
     { ...config, cookieDomain: 'corpuskit.org' },
   )
   expect(response?.headers.get('set-cookie')).toContain('Domain=corpuskit.org')
+})
+
+Deno.test('login cookies and cross-portal returns use only the configured platform domain', async () => {
+  const settings = { ...config, cookieDomain: 'research.example.org' }
+  for (
+    const [returnTo, expected] of [
+      [
+        'https://marine.research.example.org/t/marine',
+        'https://marine.research.example.org/t/marine',
+      ],
+      ['https://marine.corpuskit.org/t/marine', 'https://research.example.org/'],
+      ['https://research.example.org.evil.test/', 'https://research.example.org/'],
+      ['https://notresearch.example.org/', 'https://research.example.org/'],
+      ['http://marine.research.example.org/', 'https://research.example.org/'],
+    ]
+  ) {
+    const { login, callback } = await signedLogin(
+      {},
+      settings,
+      `https://research.example.org/auth/login?returnTo=${encodeURIComponent(returnTo!)}`,
+    )
+    expect(login.headers.get('set-cookie')).toContain('Domain=research.example.org')
+    expect(callback.status).toBe(302)
+    expect(callback.headers.get('location')).toBe(expected)
+    for (const cookie of callback.headers.getSetCookie()) {
+      expect(cookie).toContain('Domain=research.example.org')
+      expect(cookie).not.toContain('Domain=corpuskit.org')
+    }
+  }
 })
 
 Deno.test('80 UUID groups sign in within the cookie budget and auth/me reports overage', async () => {

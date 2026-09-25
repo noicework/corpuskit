@@ -2,13 +2,27 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 
 import { DurableObject } from 'cloudflare:workers'
+import {
+  ExternalFailureAudit,
+  externalLoginConfig,
+  externalLoginConfigured,
+  type ExternalLoginFailure,
+  externalLoginPresentation,
+  ExternalLoginReplayStore,
+} from '../../api/src/external-login.ts'
 import { docPageById } from '../../../packages/core/src/docs.ts'
+import {
+  getPlatformDomain,
+  isPlatformHostname,
+} from '../../../packages/core/src/platform-domain.ts'
+import { platformShellResponse } from '../../api/src/platform-shell.ts'
+import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
 import {
   PRINCIPAL_HEADER,
-  type PrincipalEnvelope,
+  type SessionEnvelope,
   signPrincipal,
   stripIdentityHeaders,
   type TrustedSessionFacts,
@@ -18,6 +32,16 @@ import {
 import { coarseAdminEligibility, resolveEffectiveRoles } from '../../api/src/assignments.ts'
 import { buildUiAccessSnapshot } from '../../api/src/ui-access.ts'
 import { KeyPortalSlugSchema } from '../../api/src/scoped-key-record.ts'
+import {
+  authenticateOperator,
+  configuredOperatorId,
+  hasOperatorScheme,
+  type OperatorAuthentication,
+  operatorConfigurationWarning,
+  operatorEnvelope,
+  operatorFailureLimiter,
+  operatorRequestContext,
+} from '../../api/src/operator.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
 import type { BreakGlassService } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
@@ -28,6 +52,7 @@ import {
   type AuthUser,
   authUser,
   handleAuthRequest,
+  sessionAuthConfigured,
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
@@ -38,7 +63,6 @@ import {
 } from '../../api/src/cloudflare-domains.ts'
 
 const PORTAL_OBJECT_NAME = 'production'
-const PLATFORM_DOMAIN = 'corpuskit.org'
 // The same set the API's own middleware sends; here it reaches the app shell,
 // static assets and every response the Worker composes itself.
 const SECURITY_HEADERS: Record<string, string> = {
@@ -67,14 +91,21 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly bindings: Record<string, string | undefined>
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
   private readonly breakGlass: BreakGlassService
+  private readonly operatorFailures = operatorFailureLimiter()
+  private readonly externalReplays: ExternalLoginReplayStore
+  private readonly externalFailures: ExternalFailureAudit
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
     const state = new DurableState(ctx.storage.sql, ctx.storage)
     state.migrate()
+    this.externalReplays = new ExternalLoginReplayStore(state.rbacDatabase)
     const bindings = stringEnv(env)
     this.bindings = bindings
+    const operatorWarning = operatorConfigurationWarning(bindings)
+    if (operatorWarning) console.warn(operatorWarning)
     this.stores = durableStores(state, bindings)
+    this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
       passcode: bindings.ADMIN_PASSCODE,
       environment: bindings.ENVIRONMENT,
@@ -85,19 +116,32 @@ export class PortalDurableObject extends DurableObject<Env> {
         .bootstrapAdminEmails(bindings.ENTRA_ADMIN_EMAILS ?? '')
     }
     initialiseDemo(this.stores.tenants, bindings.ENVIRONMENT)
-    initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
+    ctx.blockConcurrencyWhile(async () => {
+      // A rejection here would reset the object on every request. Binding start-up withholds
+      // records it cannot open instead of failing, so only the optional demo seed can throw.
+      await this.stores.bindings.initialize()
+      try {
+        await initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
+      } catch {
+        console.error('Demo portal seeding failed')
+      }
+    })
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
     })
     this.app = buildApp({
       rbac: this.stores.rbac,
-      configuredTenantId: bindings.ENTRA_TENANT_ID,
+      configuredTenantId: bindings.ENTRA_TENANT_ID ||
+        (externalLoginConfigured(externalLoginConfig(bindings)) ? 'external' : undefined),
+      externalLoginEnabled: externalLoginConfigured(externalLoginConfig(bindings)),
       audience: bindings.WORKER_NAME,
       provider: this.provider,
       management: this.provider,
       bindings: this.stores.bindings,
+      platformDomain: bindings.PLATFORM_DOMAIN,
       tenants: this.stores.tenants,
+      lifecycle: this.stores.lifecycle,
       insights: this.stores.insights,
       sessions: this.stores.sessions,
       watches: this.stores.watches,
@@ -136,21 +180,33 @@ export class PortalDurableObject extends DurableObject<Env> {
       sessionSecret: this.bindings.SESSION_SECRET ?? '',
       audience: this.bindings.WORKER_NAME ?? '',
       tenantId: this.bindings.ENTRA_TENANT_ID ?? '',
+      operatorId: configuredOperatorId(this.bindings),
+      externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
     })
     if (result.kind === 'rejected') throw new InvalidPrincipal()
     const session = context.session ?? null
+    const envelope = result.kind === 'verified' ? result.envelope : null
+    if (envelope?.kind === 'operator') {
+      if (
+        session || request.headers.has('authorization') || request.headers.has('x-admin-passcode')
+      ) {
+        throw new InvalidPrincipal()
+      }
+      return operatorRequestContext(envelope.id, crypto.randomUUID(), context.clientIp)
+    }
     if (
-      result.kind === 'anonymous' ? session !== null : !validSessionFacts(session) ||
-        session.tenantId !== result.envelope.tid || session.oid !== result.envelope.oid ||
-        (session.email ?? '') !== result.envelope.email ||
-        JSON.stringify(session.roles) !== JSON.stringify(result.envelope.roles) ||
-        JSON.stringify(session.groups) !== JSON.stringify(result.envelope.groups)
+      envelope === null ? session !== null : !validSessionFacts(session) ||
+        session.tenantId !== envelope.tid || session.oid !== envelope.oid ||
+        (session.email ?? '') !== envelope.email ||
+        JSON.stringify(session.roles) !== JSON.stringify(envelope.roles) ||
+        JSON.stringify(session.groups) !== JSON.stringify(envelope.groups)
     ) throw new InvalidPrincipal()
     const requestId = crypto.randomUUID()
     if (session) {
       const activation = this.stores.rbac.assignmentService(
-        session.tenantId,
+        this.bindings.ENTRA_TENANT_ID || 'external',
         this.bindings.WORKER_NAME,
+        externalLoginConfigured(externalLoginConfig(this.bindings)),
       ).activate(session, { requestId, actor: { kind: 'user', id: session.oid } })
       if (!activation.ok && activation.code === 'invalid_principal') throw new InvalidPrincipal()
     }
@@ -158,20 +214,21 @@ export class PortalDurableObject extends DurableObject<Env> {
       rbac: this.stores.rbac,
       tenants: this.stores.tenants,
       audience: this.bindings.WORKER_NAME ?? '',
-    }, this.bindings.ENTRA_TENANT_ID ?? '')
+      externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
+    }, this.bindings.ENTRA_TENANT_ID || 'external')
     return {
       requestId,
       session,
       clientIp: context.clientIp,
       ...resolution,
       coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
-      user: result.kind === 'verified'
+      user: envelope
         ? {
-          id: result.envelope.oid,
-          tenantId: result.envelope.tid,
-          email: result.envelope.email,
-          name: result.envelope.name,
-          roles: result.envelope.roles,
+          id: envelope.oid,
+          tenantId: envelope.tid,
+          email: envelope.email,
+          name: envelope.name,
+          roles: envelope.roles,
         }
         : null,
     }
@@ -180,6 +237,10 @@ export class PortalDurableObject extends DurableObject<Env> {
   async handleTrustedRequest(request: Request, context: TrustedRequestContext): Promise<Response> {
     try {
       const principal = await this.requestPrincipal(request, context)
+      if (principal.operator && !new URL(request.url).pathname.startsWith('/api/')) {
+        await this.auditDenial(request, 403, principal, 'operator_not_allowed')
+        return json({ error: 'operator_not_allowed' }, 403)
+      }
       if (new URL(request.url).pathname.startsWith('/__corpuskit/')) {
         return json({ error: 'not_found' }, 404)
       }
@@ -198,17 +259,35 @@ export class PortalDurableObject extends DurableObject<Env> {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
+        // Deployment-wide sign-in availability; hostname-specific settings do not change it.
+        const signIn = {
+          clientId: this.bindings.ENTRA_CLIENT_ID,
+          clientSecret: this.bindings.ENTRA_CLIENT_SECRET,
+          tenantId: this.bindings.ENTRA_TENANT_ID,
+          sessionSecret: this.bindings.SESSION_SECRET,
+          externalLogin: externalLoginConfig(this.bindings),
+        }
         return json({
           ...buildUiAccessSnapshot({
+            externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
             session: principal.session,
             effectiveRoles: principal.effectiveRoles,
             configuredTenantId: this.bindings.ENTRA_TENANT_ID ?? '',
             selectedSlug,
             tenant,
           }),
+          enabled: sessionAuthConfigured(signIn),
+          entraEnabled: authConfigured(signIn),
+          externalLogin: externalLoginPresentation(externalLoginConfig(this.bindings)),
+          externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
+          sessionProvenance: principal.session ? principal.session.provenance ?? 'entra' : null,
           authenticated: principal.session !== null,
           user: principal.user
-            ? { ...principal.user, isAdmin: principal.coarseAdminEligible }
+            ? {
+              ...principal.user,
+              provenance: principal.session?.provenance ?? 'entra',
+              isAdmin: principal.coarseAdminEligible,
+            }
             : null,
           effectiveRoles: principal.effectiveRoles,
           provenance: principal.provenance,
@@ -251,21 +330,53 @@ export class PortalDurableObject extends DurableObject<Env> {
     request: Request,
     status: 401 | 403,
     principal?: PortalRequestContext,
+    code?: 'operator_not_allowed',
   ): Promise<void> {
     appendAudit(
       this.stores.audit,
       createAuditEvent({
         requestId: principal?.requestId ?? crypto.randomUUID(),
-        actor: principal?.session
+        actor: principal?.operator
+          ? { kind: 'operator', id: `operator:${principal.operator.id}` }
+          : principal?.session
           ? { kind: 'user', id: principal.session.oid }
           : { kind: 'anonymous' },
         action: 'request.denied',
         scope: { kind: 'platform' },
         target: { kind: 'request' },
         outcome: 'denied',
-        detail: { code: status === 401 ? 'unauthorised' : 'forbidden', method: request.method },
+        detail: {
+          code: code ?? (status === 401 ? 'unauthorised' : 'forbidden'),
+          method: request.method,
+        },
       }),
     )
+  }
+
+  /**
+   * Worker RPC for an operator credential the Worker refused. The Worker sends only the method
+   * and URL. Past the per-address limit the refusal is answered with 429 and not audited again.
+   */
+  async auditOperatorFailure(
+    request: Request,
+    clientIp?: string,
+  ): Promise<{ limited: false } | { limited: true; retryAfterSec: number }> {
+    const { allowed, retryAfterSec } = this.operatorFailures.check(clientIp ?? 'unknown')
+    if (!allowed) return { limited: true, retryAfterSec }
+    await this.auditDenial(request, 401)
+    return { limited: false }
+  }
+
+  async consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean> {
+    return this.externalReplays.consume(key, expiresAt)
+  }
+
+  /**
+   * Worker RPC for a refused external sign-in. At most one record per client address a minute;
+   * the rest are counted onto the next record (see `ExternalFailureAudit`).
+   */
+  async auditExternalFailure(reason: ExternalLoginFailure, clientIp?: string): Promise<void> {
+    this.externalFailures.record(reason, clientIp ?? 'unknown')
   }
 
   async maintenance(): Promise<void> {
@@ -292,23 +403,39 @@ export default {
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
-  const hostnameLocation = platformHostnameLocation(request)
+  let platformDomain: string
+  try {
+    platformDomain = getPlatformDomain(stringEnv(env).PLATFORM_DOMAIN)
+  } catch {
+    return json({ error: 'platform_domain_invalid' }, 503)
+  }
+  // Explicit hosting credentials are handled before redirects, sessions or static assets.
+  const operator = await authenticateOperator(request, stringEnv(env))
+  if (operator.kind !== 'absent') {
+    return forwardTrusted(request, env, authConfig(env, url.hostname, platformDomain), operator)
+  }
+  const hostnameLocation = platformHostnameLocation(request, platformDomain)
   if (hostnameLocation) {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
   }
 
-  const auth = authConfig(env, url.hostname)
+  const auth = authConfig(env, url.hostname, platformDomain)
 
   if (url.pathname === '/auth/me' && request.method === 'GET') {
-    return forwardTrusted(request, env, auth)
+    return forwardTrusted(request, env, auth, operator)
   }
 
   if (url.pathname.startsWith('/auth/')) {
-    if (!authConfigured(auth)) {
+    if (!sessionAuthConfigured(auth) && url.pathname !== '/auth/external') {
       return json({ error: 'microsoft_sign_in_not_configured' }, 503)
     }
-    const response = (await handleAuthRequest(request, auth)) ?? json({ error: 'not_found' }, 404)
-    if (response.status === 401 || response.status === 403) {
+    const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
+    const response = (await handleAuthRequest(request, auth, {
+      consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
+      auditFailure: (reason) =>
+        stub.auditExternalFailure(reason, request.headers.get('cf-connecting-ip') ?? undefined),
+    })) ?? json({ error: 'not_found' }, 404)
+    if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
       try {
         await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
       } catch {
@@ -324,7 +451,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname.startsWith('/api/')) {
-    return forwardTrusted(request, env, auth)
+    return forwardTrusted(request, env, auth, operator)
   }
 
   // The shared asset bundle is also bound to tenant hosts. Keep the marketing
@@ -332,7 +459,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (
     (['/about', '/about/', '/about.html'].includes(url.pathname) ||
       isPublicDocsPath(url.pathname)) &&
-    url.hostname !== PLATFORM_DOMAIN
+    url.hostname !== platformDomain
   ) {
     return plain('Not found', 404)
   }
@@ -348,7 +475,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     return plain('Not found', 404)
   }
 
-  const asset = await env.ASSETS.fetch(marketingHomeRequest(request))
+  const asset = platformShellResponse(
+    await env.ASSETS.fetch(marketingHomeRequest(request, platformDomain)),
+    platformDomain,
+  )
   // Assets answers every unknown path with the app shell and a 200. Keep
   // the shell, so a person still sees the app's own not-found page, but say
   // 404: a scanner learns nothing and a crawler does not index the typo.
@@ -362,18 +492,19 @@ function isPublicDocsPath(pathname: string): boolean {
 }
 
 /** Select marketing documents without leaking the Assets pretty-URL redirects. */
-export function marketingHomeRequest(request: Request): Request {
+export function marketingHomeRequest(request: Request, domain: string): Request {
+  const platformDomain = getPlatformDomain(domain)
   const url = new URL(request.url)
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return request
   }
 
   if (
-    url.hostname === PLATFORM_DOMAIN &&
+    url.hostname === platformDomain &&
     ['/about', '/about/', '/about.html'].includes(url.pathname)
   ) {
     url.pathname = '/about'
-  } else if (url.hostname === PLATFORM_DOMAIN && isPublicDocsPath(url.pathname)) {
+  } else if (url.hostname === platformDomain && isPublicDocsPath(url.pathname)) {
     const id = /^\/docs\/([a-z0-9-]+)(?:\.html)?\/?$/.exec(url.pathname)?.[1]
     // Unknown paths deliberately serve the overview. Ask Assets for its
     // canonical directory/extensionless URL to avoid pretty-URL redirects.
@@ -401,16 +532,29 @@ export async function forwardPortalRequest(
   request: Request,
   user: AuthUser | null,
   env: Env,
+  credential?: OperatorAuthentication,
 ): Promise<Request> {
   const headers = stripIdentityHeaders(request.headers)
-  if (user) {
-    const bindings = stringEnv(env)
+  const bindings = stringEnv(env)
+  const operator = credential ?? await authenticateOperator(request, bindings)
+  if (operator.kind === 'rejected') throw new InvalidOperator()
+  if (operator.kind === 'verified') {
+    headers.delete('authorization')
+    headers.delete('cookie')
+    headers.set(
+      PRINCIPAL_HEADER,
+      await signPrincipal(
+        operatorEnvelope(operator.id, bindings.WORKER_NAME ?? ''),
+        bindings.SESSION_SECRET ?? '',
+      ),
+    )
+  } else if (user) {
     if (!validSessionFacts(user.sessionFacts)) throw new InvalidPrincipal()
     headers.set(
       PRINCIPAL_HEADER,
       await signPrincipal({
         v: 1,
-        aud: bindings.WORKER_NAME as PrincipalEnvelope['aud'],
+        aud: bindings.WORKER_NAME as SessionEnvelope['aud'],
         tid: user.tenantId,
         oid: user.id,
         email: user.email,
@@ -425,38 +569,71 @@ export async function forwardPortalRequest(
 }
 
 class InvalidPrincipal extends Error {}
+class InvalidOperator extends Error {}
+
+/** Refusals reach the Durable Object's audit without headers, so no credential can travel. */
+function refusalRecord(request: Request): Request {
+  try {
+    return new Request(request.url, { method: request.method })
+  } catch {
+    // A method the constructor refuses to set directly is kept by a header-free copy.
+    return new Request(request, { headers: new Headers() })
+  }
+}
 
 async function forwardTrusted(
   request: Request,
   env: Env,
   auth: Partial<AuthConfig>,
+  operator: OperatorAuthentication,
 ): Promise<Response> {
+  // A malformed key is a deployment fault, not a data fault: say so on every portal request,
+  // health included, rather than letting stored credentials look lost or be replaced.
+  if (bindingKeyState(stringEnv(env).BINDING_KEY) === 'invalid') {
+    return json({ error: 'binding_key_invalid' }, 503)
+  }
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
-  const user = authConfigured(auth) ? await authUser(request, auth) : null
+  // An operator credential is the whole authority: no session cookie is read beside it.
+  const user = !hasOperatorScheme(request) && sessionAuthConfigured(auth)
+    ? await authUser(request, auth)
+    : null
+  const clientIp = request.headers.get('cf-connecting-ip') ?? undefined
   let forwarded: Request
   try {
-    forwarded = await forwardPortalRequest(request, user, env)
-  } catch {
+    forwarded = await forwardPortalRequest(request, user, env, operator)
+  } catch (error) {
+    const refused = refusalRecord(request)
     try {
-      await stub.auditDenial(request, 401)
+      if (error instanceof InvalidOperator) {
+        const outcome = await stub.auditOperatorFailure(refused, clientIp)
+        if (outcome.limited) {
+          return json({ error: 'rate_limited' }, 429, {
+            'retry-after': String(outcome.retryAfterSec),
+          })
+        }
+      } else {
+        await stub.auditDenial(refused, 401)
+      }
     } catch {
       return json({ error: 'audit_write_failed' }, 500)
     }
-    return json({ error: 'invalid_principal' }, 401)
+    return json({
+      error: error instanceof InvalidOperator ? 'invalid_operator' : 'invalid_principal',
+    }, 401)
   }
   try {
     return await stub.handleTrustedRequest(forwarded, {
       session: user?.sessionFacts ?? null,
-      clientIp: request.headers.get('cf-connecting-ip') ?? undefined,
+      clientIp,
     })
   } catch {
     return json({ error: 'internal_error' }, 500)
   }
 }
 
-function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
+function authConfig(env: Env, hostname: string, platformDomain: string): Partial<AuthConfig> {
   const values = stringEnv(env)
-  const onPlatformDomain = hostname === PLATFORM_DOMAIN || hostname.endsWith(`.${PLATFORM_DOMAIN}`)
+  const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
   return {
     clientId: values.ENTRA_CLIENT_ID,
     clientSecret: values.ENTRA_CLIENT_SECRET,
@@ -468,7 +645,8 @@ function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
       ? `https://${hostname}/auth/callback`
       : values.ENTRA_REDIRECT_URI,
     adminEmails: values.ENTRA_ADMIN_EMAILS,
-    cookieDomain: onPlatformDomain ? PLATFORM_DOMAIN : undefined,
+    externalLogin: externalLoginConfig(values),
+    cookieDomain: onPlatformDomain ? platformDomain : undefined,
   }
 }
 
@@ -479,19 +657,21 @@ function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
  */
 export function platformHostnameLocation(
   request: Pick<Request, 'method' | 'url'>,
+  domain: string,
 ): string | null {
+  const platformDomain = getPlatformDomain(domain)
   if (request.method !== 'GET' && request.method !== 'HEAD') return null
   const url = new URL(request.url)
   const hostname = url.hostname.toLowerCase()
 
-  if (hostname === `www.${PLATFORM_DOMAIN}`) {
-    return `https://${PLATFORM_DOMAIN}${url.pathname}${url.search}`
+  if (hostname === `www.${platformDomain}`) {
+    return `https://${platformDomain}${url.pathname}${url.search}`
   }
 
-  const suffix = `.${PLATFORM_DOMAIN}`
+  const suffix = `.${platformDomain}`
   if (!hostname.endsWith(suffix)) return null
   const slug = hostname.slice(0, -suffix.length)
-  if (portalHostnameForSlug(slug) !== hostname || url.pathname !== '/') return null
+  if (portalHostnameForSlug(slug, platformDomain) !== hostname || url.pathname !== '/') return null
   return `/t/${slug}${url.search}`
 }
 
@@ -540,9 +720,9 @@ function withSecurityHeaders(response: Response): Response {
   })
 }
 
-function json(value: unknown, status: number): Response {
+function json(value: unknown, status: number, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers },
   })
 }

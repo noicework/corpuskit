@@ -1148,8 +1148,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
                 )!
                 const transfer = new DataTransfer()
                 transfer.items.add(
-                  new File(['fixture-file'], kind.startsWith('font') ? 'test.woff2' : 'test.svg', {
-                    type: 'image/svg+xml',
+                  new File(['fixture-file'], kind.startsWith('font') ? 'test.woff2' : 'test.png', {
+                    type: 'image/png',
                   }),
                 )
                 input.files = transfer.files
@@ -1160,7 +1160,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             await explicitAction(upload, `upload-${kind}`)
             expect(brandingUploads.at(-1)).toEqual({
               path: `/api/admin/t/alpha/branding/${kind}`,
-              contentType: kind.startsWith('font') ? 'font/woff2' : 'image/svg+xml',
+              contentType: kind.startsWith('font') ? 'font/woff2' : 'image/png',
               bytes: 12,
             })
             await page!.evaluate((kind) => {

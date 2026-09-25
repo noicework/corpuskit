@@ -751,3 +751,90 @@ describe('RBAC catalogue and schema contracts', () => {
     ) expect(AuthorisationPrincipalSchema.safeParse(invalid).success).toBe(false)
   })
 })
+
+describe('operator principals', () => {
+  const operator = { kind: 'operator', id: 'automation' }
+  const roles = { platformRole: 'platform-admin', portalRoles: [] }
+
+  it('holds platform-admin authority for every portal without implicit or assigned roles', () => {
+    const principal = normalisePrincipal(operator, roles, publicPolicy)
+    expect(principal).toEqual({
+      identity: operator,
+      effectiveRoles: roles,
+      portalPolicy: publicPolicy,
+    })
+    expect(authorize(principal, 'portal.create', platform)).toBe(true)
+    for (
+      const permission of ['bindings.write', 'members.manage', 'domains.write', 'content.write']
+    ) {
+      expect(authorize(principal, permission, alpha), permission).toBe(true)
+    }
+    for (
+      const permission of ['portal.delete', 'platform.members.manage', 'platform.settings.write']
+    ) {
+      expect(authorize(principal, permission, platform), permission).toBe(false)
+    }
+  })
+
+  it('rejects elevated, missing and portal-scoped operator roles rather than downgrading them', () => {
+    for (
+      const effectiveRoles of [
+        { platformRole: 'owner', portalRoles: [] },
+        { portalRoles: [] },
+        { ...roles, portalRoles: [{ slug: 'alpha', role: 'portal-admin' }] },
+      ]
+    ) {
+      expect(normalisePrincipal(operator, effectiveRoles)).toBeNull()
+      for (const permission of PERMISSIONS) {
+        for (const scope of [alpha, platform]) {
+          expect(authorize({ identity: operator, effectiveRoles }, permission, scope)).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('validates a bounded audit-safe operator identifier and excludes session fields', () => {
+    expect(PrincipalSchema.parse(operator)).toEqual(operator)
+    for (
+      const invalid of [
+        { kind: 'operator', id: '' },
+        { kind: 'operator', id: 'a'.repeat(152) },
+        { kind: 'operator', id: 'https://example.test' },
+        { kind: 'operator', id: 'line\nbreak' },
+        { ...operator, oid: 'user' },
+      ]
+    ) expect(PrincipalSchema.safeParse(invalid).success).toBe(false)
+  })
+})
+
+Deno.test('external identities need explicit local authority on authenticated portals', () => {
+  const identity = { kind: 'user', tenantId: 'external', oid: 'ext:person' }
+  for (const configuredTenantId of ['tenant-a', 'external']) {
+    const policy = { slug: 'alpha', accessMode: 'authenticated', configuredTenantId }
+    const unassigned = normalisePrincipal(identity, noRoles, policy)
+    expect(authorize(unassigned, 'portal.read', alpha)).toBe(false)
+    const assigned = normalisePrincipal(identity, {
+      portalRoles: [{ slug: 'alpha', role: 'viewer' }],
+    }, policy)
+    expect(authorize(assigned, 'portal.read', alpha)).toBe(true)
+  }
+})
+
+Deno.test('external identities and operator principals stay distinct kinds', () => {
+  const external = { kind: 'user', tenantId: 'external', oid: 'ext:automation' }
+  expect(PrincipalSchema.parse(external)).toEqual(external)
+  // An external identity never parses as an operator, and an operator carries no identity fields.
+  for (
+    const invalid of [
+      { kind: 'operator', id: 'automation', tenantId: 'external' },
+      { kind: 'operator', id: 'automation', oid: 'ext:automation' },
+      { kind: 'operator', tenantId: 'external', oid: 'ext:automation' },
+    ]
+  ) expect(PrincipalSchema.safeParse(invalid).success).toBe(false)
+  // Assigned platform authority on an external user is a user grant, not the operator's.
+  const assigned = normalisePrincipal(external, {
+    platformRole: 'platform-admin',
+    portalRoles: [],
+  })
+  expect(assigned?.identity).toEqual(external)
+})

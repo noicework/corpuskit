@@ -153,7 +153,7 @@ function UploadCard({
         <input
           type='file'
           data-branding-upload={kind}
-          accept='image/png,image/jpeg,image/webp,image/svg+xml'
+          accept='image/png,image/jpeg,image/webp'
           className='sr-only'
           disabled={busy}
           onChange={(e) => void onChoose(e)}
@@ -941,7 +941,7 @@ function AppearancePanelContent({
             slug={slug}
             kind='logo'
             title='Logo'
-            guidance='PNG or SVG with transparency works best - shown in the header at 28px tall.'
+            guidance='PNG or WebP with transparency works best - shown in the header at 28px tall.'
             onUploaded={onUploaded}
           />
           <UploadCard

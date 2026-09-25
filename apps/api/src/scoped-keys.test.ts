@@ -352,3 +352,57 @@ Deno.test('scoped key creator downgrade, removal, expiry and revocation apply on
     f.close()
   }
 })
+
+Deno.test('external key creators use only source-bound current assignments and preserve opaque identifiers', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const session = {
+      ...f.creator,
+      tenantId: 'external',
+      provenance: 'external' as const,
+      oid: `ext:${'🧬'.repeat(128)}`,
+      roles: [],
+      groups: [],
+      groupStatus: 'absent' as const,
+    }
+    const service = f.rbac.assignmentService(f.tenantId, f.audience, true)
+    const assigned = service.create({
+      subjectKind: 'active-oid',
+      subjectId: session.oid,
+      source: 'external',
+      role: 'curator',
+      scope: { kind: 'portal', slug: 'a' },
+    }, { requestId: 'external-key', actor: { kind: 'system' } })
+    expect(assigned.ok).toBe(true)
+    expect(service.observeSession(session)).toBe(true)
+    const deps = {
+      keys: f.stores.mcpKeys,
+      creatorStores: { rbac: f.rbac, audience: f.audience, externalLoginEnabled: true },
+      configuredTenantId: f.tenantId,
+      externalLoginEnabled: true,
+      now: f.now,
+    }
+    const input = { slug: 'a', label: 'External research', role: 'analyst' }
+    await expect(issueScopedKey(input, session, { ...deps, externalLoginEnabled: false })).rejects
+      .toThrow('forbidden')
+    const prepared = await issueScopedKey(input, session, deps)
+    prepared.commit()
+    expect(f.stores.mcpKeys.list('a').find((row) => row.id === prepared.credential.id)?.creator)
+      .toEqual({ tenantId: 'external', oid: session.oid })
+    expect(await verifyScopedKey(prepared.key, 'a', deps)).toMatchObject({ role: 'analyst' })
+    expect(
+      await verifyScopedKey(prepared.key, 'a', {
+        ...deps,
+        creatorStores: { ...deps.creatorStores, externalLoginEnabled: false },
+      }),
+    ).toBeNull()
+    const delayed = await issueScopedKey(input, session, deps)
+    if (assigned.ok) {
+      service.remove(assigned.value.id, { requestId: 'remove-external', actor: { kind: 'system' } })
+    }
+    expect(() => delayed.commit()).toThrow('forbidden')
+    expect(await verifyScopedKey(prepared.key, 'a', deps)).toBeNull()
+  } finally {
+    f.close()
+  }
+})

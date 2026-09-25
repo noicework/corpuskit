@@ -1,4 +1,5 @@
 import { currentAuthority, type RequestContext } from './access-lifecycle.ts'
+import { errorCode } from './hosting-errors.ts'
 
 interface ResponseLifecycle {
   assertCurrent(): void
@@ -155,7 +156,16 @@ export async function authorityFetch(
       void response.body?.cancel().catch(() => {})
       throw error
     }
-    if (response.status === 401 || response.status === 403) {
+    // An explicit disabled-agent policy is not a loss of the signed-in user's authority.
+    const agentsDisabled = response.status === 403 &&
+      errorCode(await response.clone().json().catch(() => null)) === 'agents_disabled'
+    try {
+      lifecycle.assertCurrent()
+    } catch (error) {
+      void response.body?.cancel().catch(() => {})
+      throw error
+    }
+    if (response.status === 401 || (response.status === 403 && !agentsDisabled)) {
       authority?.invalidate('request denied')
       const seconds = Number(response.headers.get('retry-after'))
       void response.body?.cancel().catch(() => {})

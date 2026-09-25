@@ -11,6 +11,7 @@ import { DECLARATIONS } from './permissions.ts'
 import type { RbacDatabase } from './rbac-state.ts'
 import { InvestigationStore, McpKeyStore, SessionsStore, WatchStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
+import { FileLifecycleStore } from './lifecycle-store.ts'
 
 interface RequestMutation {
   input: Omit<AuditInput, 'outcome'>
@@ -96,7 +97,10 @@ export function localOwnedStores(
           },
         }),
       )
-      if (operation.name === 'tenants.patch' && context.input.action === 'tenant.access.update') {
+      if (
+        (operation.name === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
+        (operation.name === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update')
+      ) {
         appendAudit(audit, createAuditEvent({ ...context.input, outcome: 'success' }))
       }
     },
@@ -126,6 +130,7 @@ export function localOwnedStores(
     })
   return {
     localMutations,
+    lifecycle: wrap('lifecycle', new FileLifecycleStore(dataDir, boundary)),
     ...(tenantEnv ? { tenants: wrap('tenants', new TenantStore(tenantEnv, boundary)) } : {}),
     sessions: wrap('sessions', new SessionsStore(dataDir, boundary)),
     watches: wrap('watches', new WatchStore(dataDir, boundary)),

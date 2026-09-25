@@ -1,10 +1,28 @@
+import {
+  type AuthConfig,
+  authConfigured,
+  authUser,
+  handleAuthRequest,
+  sessionAuthConfigured,
+} from '../../cloudflare/src/auth.ts'
+import {
+  ExternalFailureAudit,
+  externalLoginConfig,
+  externalLoginConfigured,
+  externalLoginPresentation,
+  type ExternalLoginReplayStore,
+} from './external-login.ts'
 import type { PortalRequestContext } from './app.ts'
-import { coarseAdminEligibility, resolveEffectiveRoles } from './assignments.ts'
-import { appendAudit, createAuditEvent } from './audit.ts'
+import {
+  coarseAdminEligibility,
+  resolveEffectiveRoles,
+  type RoleResolution,
+} from './assignments.ts'
+import { appendAudit, type AuditActor, createAuditEvent } from './audit.ts'
 import { type BreakGlassService } from './break-glass.ts'
 import {
   PRINCIPAL_HEADER,
-  type PrincipalEnvelope,
+  type SessionEnvelope,
   signPrincipal,
   stripIdentityHeaders,
   type TrustedSessionFacts,
@@ -15,14 +33,27 @@ import type { RbacState } from './rbac-state.ts'
 import type { TenantStoreApi } from './tenants.ts'
 import { buildUiAccessSnapshot } from './ui-access.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
+import {
+  authenticateOperator,
+  configuredOperatorId,
+  operatorConfigurationWarning,
+  operatorEnvelope,
+  operatorFailureLimiter,
+  operatorRequestContext,
+} from './operator.ts'
 
 interface LocalIngressOptions {
   rbac: RbacState
   tenants: { list(): { slug: string }[] } & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled'>>
+  externalReplays?: ExternalLoginReplayStore
   env: Record<string, string | undefined>
 }
 type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
+/** The TCP peer, which keys the per-address failure limits. */
+const peerAddress = (info?: PeerInfo) =>
+  info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
 class InvalidLocalPrincipal extends Error {}
+class InvalidOperatorCredential extends Error {}
 
 /** Trusted local adapter. Session fixtures are in-process arguments, never HTTP input. */
 export class LocalIngress {
@@ -30,11 +61,18 @@ export class LocalIngress {
   private readonly secret: string
   private readonly audience: string
   private readonly tenantId: string
+  private readonly auth: AuthConfig
+  private readonly externalEnabled: boolean
   readonly breakGlassEnabled: boolean
   readonly breakGlass: BreakGlassService
+  private readonly operatorFailures = operatorFailureLimiter()
+  private readonly externalFailures: ExternalFailureAudit
 
   constructor(private readonly options: LocalIngressOptions) {
     const { env, rbac } = options
+    this.externalFailures = new ExternalFailureAudit(rbac.audit)
+    const operatorWarning = operatorConfigurationWarning(env)
+    if (operatorWarning) console.warn(operatorWarning)
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -49,14 +87,24 @@ export class LocalIngress {
         (byte) => byte.toString(16).padStart(2, '0'),
       ).join('')
     this.audience = env.WORKER_NAME ?? 'corpuskit'
-    this.tenantId = env.ENTRA_TENANT_ID ?? ''
+    this.externalEnabled = externalLoginConfigured(externalLoginConfig(env))
+    this.tenantId = env.ENTRA_TENANT_ID || (this.externalEnabled ? 'external' : '')
+    this.auth = {
+      clientId: env.ENTRA_CLIENT_ID ?? '',
+      clientSecret: env.ENTRA_CLIENT_SECRET ?? '',
+      tenantId: env.ENTRA_TENANT_ID ?? '',
+      sessionSecret: this.secret,
+      redirectUri: env.ENTRA_REDIRECT_URI,
+      adminEmails: env.ENTRA_ADMIN_EMAILS,
+      externalLogin: { ...externalLoginConfig(env), audience: this.audience },
+    }
     this.breakGlass = rbac.breakGlassService({
       passcode: env.ADMIN_PASSCODE,
       environment: env.ENVIRONMENT,
       explicitFlag: env.ADMIN_BREAK_GLASS,
     })
     this.breakGlassEnabled = this.breakGlass.enabled
-    if (this.tenantId) {
+    if (env.ENTRA_TENANT_ID) {
       rbac.assignmentService(this.tenantId, this.audience)
         .bootstrapAdminEmails(env.ENTRA_ADMIN_EMAILS ?? '')
     }
@@ -73,23 +121,67 @@ export class LocalIngress {
   ): Promise<Response> {
     const requestId = crypto.randomUUID()
     const { rbac } = this.options
-    const denial = (status: 401 | 403) =>
+    let operator: { id: string } | undefined
+    const actor = (): AuditActor =>
+      operator ? { kind: 'operator', id: `operator:${operator.id}` } : { kind: 'anonymous' }
+    const denial = (status: 401 | 403, code = status === 401 ? 'unauthorised' : 'forbidden') =>
       appendAudit(
         rbac.audit,
         createAuditEvent({
           requestId,
-          actor: { kind: 'anonymous' },
+          actor: actor(),
           action: 'request.denied',
           scope: { kind: 'platform' },
           target: { kind: 'request' },
           outcome: 'denied',
-          detail: { code: status === 401 ? 'unauthorised' : 'forbidden', method: request.method },
+          detail: { code, method: request.method },
         }),
       )
     try {
+      const path = new URL(request.url).pathname
       const headers = stripIdentityHeaders(request.headers)
+      // As in the Worker, an explicit operator credential is decided before sign-in routes or
+      // sessions: it is the whole authority, and no session cookie is read beside it.
+      const credential = await authenticateOperator(request, this.options.env)
+      if (credential.kind === 'rejected') throw new InvalidOperatorCredential()
+      if (credential.kind === 'verified') {
+        operator = { id: credential.id }
+        if (headers.has('x-admin-passcode')) throw new InvalidOperatorCredential()
+        session = null
+        headers.delete('authorization')
+        headers.delete('cookie')
+        try {
+          headers.set(
+            PRINCIPAL_HEADER,
+            await signPrincipal(operatorEnvelope(operator.id, this.audience), this.secret),
+          )
+        } catch {
+          throw new InvalidLocalPrincipal()
+        }
+      } else {
+        // Only the external handoff and sign-out are served locally; the Entra flow is unchanged.
+        if (path === '/auth/external' || path === '/auth/logout') {
+          return (await handleAuthRequest(request, this.auth, {
+            consume: (key, expiresAt) => {
+              if (!this.options.externalReplays) throw new Error('Replay store unavailable')
+              return this.options.externalReplays.consume(key, expiresAt)
+            },
+            auditFailure: (reason) => this.externalFailures.record(reason, peerAddress(info)),
+          })) ?? Response.json({ error: 'not_found' }, { status: 404 })
+        }
+        // The local server reads only the sessions it can issue: external handoff cookies.
+        if (!session && this.externalEnabled && sessionAuthConfigured(this.auth)) {
+          const user = await authUser(request, this.auth)
+          if (user?.sessionFacts.provenance === 'external') session = user.sessionFacts
+        }
+      }
       if (session) {
-        if (!validSessionFacts(session) || session.tenantId !== this.tenantId) {
+        if (
+          !validSessionFacts(session) ||
+          (session.tenantId === 'external'
+            ? !this.externalEnabled
+            : session.tenantId !== this.tenantId)
+        ) {
           throw new InvalidLocalPrincipal()
         }
         try {
@@ -97,7 +189,7 @@ export class LocalIngress {
             PRINCIPAL_HEADER,
             await signPrincipal({
               v: 1,
-              aud: this.audience as PrincipalEnvelope['aud'],
+              aud: this.audience as SessionEnvelope['aud'],
               tid: session.tenantId,
               oid: session.oid,
               email: session.email ?? '',
@@ -115,41 +207,58 @@ export class LocalIngress {
         sessionSecret: this.secret,
         audience: this.audience,
         tenantId: this.tenantId,
+        operatorId: configuredOperatorId(this.options.env),
+        externalLoginEnabled: this.externalEnabled,
       })
       if (verified.kind === 'rejected') throw new InvalidLocalPrincipal()
       if (session) {
-        const result = rbac.assignmentService(this.tenantId, this.audience).activate(session, {
-          requestId,
-          actor: { kind: 'user', id: session.oid },
-        })
+        const result = rbac.assignmentService(this.tenantId, this.audience, this.externalEnabled)
+          .activate(session, {
+            requestId,
+            actor: { kind: 'user', id: session.oid },
+          })
         if (!result.ok && result.code === 'invalid_principal') throw new InvalidLocalPrincipal()
       }
-      const resolution = await resolveEffectiveRoles(session, {
-        rbac,
-        tenants: this.options.tenants,
-        audience: this.audience,
-      }, this.tenantId)
-      const principal: PortalRequestContext = {
-        requestId,
-        session,
-        ...resolution,
-        clientIp: info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : undefined,
-        coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
-        user: verified.kind === 'verified'
-          ? {
-            id: verified.envelope.oid,
-            tenantId: verified.envelope.tid,
-            email: verified.envelope.email,
-            name: verified.envelope.name,
-            roles: verified.envelope.roles,
-          }
-          : null,
+      const clientIp = info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : undefined
+      let principal: PortalRequestContext
+      let resolution: RoleResolution | undefined
+      if (operator) {
+        if (verified.kind !== 'verified' || verified.envelope.kind !== 'operator') {
+          throw new InvalidLocalPrincipal()
+        }
+        principal = operatorRequestContext(verified.envelope.id, requestId, clientIp)
+        if (!path.startsWith('/api/')) {
+          denial(403, 'operator_not_allowed')
+          return Response.json({ error: 'operator_not_allowed' }, { status: 403 })
+        }
+      } else {
+        resolution = await resolveEffectiveRoles(session, {
+          rbac,
+          tenants: this.options.tenants,
+          audience: this.audience,
+          externalLoginEnabled: this.externalEnabled,
+        }, this.tenantId)
+        principal = {
+          requestId,
+          session,
+          ...resolution,
+          clientIp,
+          coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
+          user: verified.kind === 'verified' && verified.envelope.kind !== 'operator'
+            ? {
+              id: verified.envelope.oid,
+              tenantId: verified.envelope.tid,
+              email: verified.envelope.email,
+              name: verified.envelope.name,
+              roles: verified.envelope.roles,
+            }
+            : null,
+        }
       }
-      const path = new URL(request.url).pathname
       if (path.startsWith('/__corpuskit/')) {
         return Response.json({ error: 'not_found' }, { status: 404 })
       }
-      if (path === '/auth/me' && request.method === 'GET') {
+      if (resolution && path === '/auth/me' && request.method === 'GET') {
         const selections = new URL(request.url).searchParams.getAll('portal')
         const selectedSlug = selections.length === 1 ? selections[0] : undefined
         const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
@@ -166,15 +275,25 @@ export class LocalIngress {
         }
         return Response.json({
           ...buildUiAccessSnapshot({
+            externalLoginEnabled: this.externalEnabled,
             session,
             effectiveRoles: resolution.effectiveRoles,
             configuredTenantId: this.tenantId,
             selectedSlug,
             tenant,
           }),
+          enabled: sessionAuthConfigured(this.auth),
+          entraEnabled: authConfigured(this.auth),
+          externalLogin: externalLoginPresentation(this.auth.externalLogin),
+          externalLoginEnabled: this.externalEnabled,
+          sessionProvenance: session ? session.provenance ?? 'entra' : null,
           authenticated: session !== null,
           user: principal.user
-            ? { ...principal.user, isAdmin: principal.coarseAdminEligible }
+            ? {
+              ...principal.user,
+              provenance: session?.provenance ?? 'entra',
+              isAdmin: principal.coarseAdminEligible,
+            }
             : null,
           effectiveRoles: resolution.effectiveRoles,
           provenance: resolution.provenance,
@@ -198,7 +317,7 @@ export class LocalIngress {
             rbac.audit,
             createAuditEvent({
               requestId,
-              actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
+              actor: operator ? actor() : session ? { kind: 'user', id: session.oid } : actor(),
               action: 'request.denied',
               scope: { kind: 'platform' },
               target: { kind: 'request' },
@@ -215,14 +334,27 @@ export class LocalIngress {
         this.contexts.delete(forwarded)
       }
     } catch (error) {
-      if (error instanceof InvalidLocalPrincipal) {
+      if (error instanceof InvalidLocalPrincipal || error instanceof InvalidOperatorCredential) {
+        if (error instanceof InvalidOperatorCredential) {
+          const { allowed, retryAfterSec } = this.operatorFailures.check(peerAddress(info))
+          if (!allowed) {
+            return Response.json({ error: 'rate_limited' }, {
+              status: 429,
+              headers: { 'retry-after': String(retryAfterSec) },
+            })
+          }
+        }
         try {
           denial(401)
         } catch {
           console.error('Local ingress audit write failed')
           return Response.json({ error: 'audit_write_failed' }, { status: 500 })
         }
-        return Response.json({ error: 'invalid_principal' }, { status: 401 })
+        return Response.json({
+          error: error instanceof InvalidOperatorCredential
+            ? 'invalid_operator'
+            : 'invalid_principal',
+        }, { status: 401 })
       }
       console.error('Local trusted request failed')
       return Response.json({ error: 'internal_error' }, { status: 500 })

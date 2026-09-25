@@ -21,6 +21,7 @@ interface DurableObjectSqlStorage {
 }
 
 interface DurableObjectState {
+  blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>
   storage: {
     sql: DurableObjectSqlStorage
     transactionSync<T>(callback: () => T): T
@@ -37,6 +38,15 @@ interface DurableObjectStub extends Fetcher {
     context: import('./worker.ts').TrustedRequestContext,
   ): Promise<import('../../api/src/app.ts').PortalRequestContext>
   auditDenial(request: Request, status: 401 | 403): Promise<void>
+  auditOperatorFailure(
+    request: Request,
+    clientIp?: string,
+  ): Promise<{ limited: false } | { limited: true; retryAfterSec: number }>
+  consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean>
+  auditExternalFailure(
+    reason: import('../../api/src/external-login.ts').ExternalLoginFailure,
+    clientIp?: string,
+  ): Promise<void>
   maintenance(): Promise<void>
 }
 

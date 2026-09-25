@@ -3,14 +3,15 @@ import {
   type Enrichment,
   type KgProposal,
   KgProposalSchema,
-  type KnowledgeBoxStatus,
   type TenantConfig,
   TenantConfigSchema,
   type TenantSummary,
 } from '@research-portal/core'
-import { envBindings, type KbBinding, regionalBase } from '@research-portal/retrieval'
 import type { BrandingAsset, BrandingAssetStore, BrandingKind } from '../../api/src/app.ts'
-import type { BindingStoreApi } from '../../api/src/bindings.ts'
+import { type BindingStoreApi, SealedBindingStore } from '../../api/src/bindings.ts'
+import { BindingCryptoError } from '../../api/src/binding-crypto.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
+import { PortalLifecycleStore } from '../../api/src/lifecycle-store.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
@@ -40,6 +41,7 @@ import type {
 } from '../../api/src/stores.ts'
 import {
   type NewTenantInput,
+  retiredSlugs,
   tenantConfig,
   type TenantPatch,
   tenantRecord,
@@ -197,7 +199,10 @@ export class DurableState {
             },
           }),
         )
-        if (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') {
+        if (
+          (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
+          (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update')
+        ) {
           appendAudit(this.rbac.audit, createAuditEvent({ ...context.input, outcome: 'success' }))
         }
         return result
@@ -373,6 +378,10 @@ export class DurableState {
     try {
       return JSON.parse(row.value) as T
     } catch (error) {
+      if (key === 'bindings') throw new BindingCryptoError('binding_storage_invalid')
+      if (/^portal-(?:lifecycle|asks|capacity):/.test(key)) {
+        throw new Error('Invalid persisted portal lifecycle')
+      }
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
       if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
@@ -638,6 +647,41 @@ export class DurableState {
       Date.now(),
     )
   }
+
+  /**
+   * Delete the records a removed portal leaves stored under its slug: sources, enrichments and
+   * cached questions, insights, suggestions, knowledge graph proposals, research sessions,
+   * investigations, watches (current and pre-phase), branding assets and routing decisions.
+   * Removal itself already took the portal's binding and lifecycle records and revoked its access;
+   * the revoked data keys and the audit events stay on record.
+   */
+  clearPortalRecords(slug: string): void {
+    this.guardLocalWrite()
+    const underPrefix = (table: string, prefix: string) =>
+      this.sql.exec(
+        `DELETE FROM ${table} WHERE key >= ? AND key < ?`,
+        prefix,
+        prefixUpperBound(prefix),
+      )
+    underPrefix('state', `research-v2:${encodeStorageIdentifier(slug)}:`)
+    this.sql.exec('DELETE FROM enrichment_records WHERE tenant_slug = ?', slug)
+    this.sql.exec('DELETE FROM routing_records WHERE tenant_slug = ?', slug)
+    const proposals = this.get<Record<string, unknown>>('kg-proposals', {})
+    if (Object.hasOwn(proposals, slug)) {
+      delete proposals[slug]
+      this.put('kg-proposals', proposals)
+    }
+    // The remaining keys hold a sanitised slug. A slug that sanitising would change shares them
+    // with another slug, so they are left for that portal.
+    const plain = legacySegment(slug)
+    if (!plain) return
+    for (const kind of ['sources', 'enrichments', 'insights', 'suggestions', 'watches']) {
+      this.sql.exec('DELETE FROM state WHERE key = ?', key(kind, plain))
+    }
+    underPrefix('state', `session:${plain}:`)
+    underPrefix('state', `investigation:${plain}:`)
+    underPrefix('branding_assets', `${key('branding', plain)}:`)
+  }
 }
 
 /**
@@ -679,65 +723,31 @@ export function stringEnv(env: object): Record<string, string | undefined> {
   return result
 }
 
-export class DurableBindingStore implements BindingStoreApi {
-  private readonly demo: Record<string, KbBinding>
-
-  constructor(private readonly state: DurableState, env: Record<string, string | undefined>) {
-    this.demo = envBindings(env)
-    const connected = this.connected()
-    const zone = env.ARAG_ZONE
-    if (!zone) return
-    let changed = false
-    for (const entry of Object.values(connected)) {
-      if (!entry.baseUrl && entry.kbId) {
-        entry.baseUrl = `${regionalBase(zone)}/kb/${entry.kbId}`
-        changed = true
-      }
-    }
-    if (changed) this.state.put('bindings', connected)
-  }
-
-  private connected(): Record<string, KbBinding & { connectedAt: string }> {
-    return this.state.get('bindings', {})
-  }
-
-  get(slug: string): KbBinding | undefined {
-    return this.connected()[slug] ?? this.demo[slug]
-  }
-
-  isDemo(slug: string): boolean {
-    return !this.connected()[slug] && Boolean(this.demo[slug])
-  }
-
-  set(slug: string, binding: KbBinding): void {
-    const connected = this.connected()
-    connected[slug] = { ...binding, connectedAt: new Date().toISOString() }
-    this.state.put('bindings', connected)
-  }
-
-  remove(slug: string): void {
-    const connected = this.connected()
-    delete connected[slug]
-    this.state.put('bindings', connected)
-  }
-
-  status(slug: string): KnowledgeBoxStatus {
-    const connected = this.connected()[slug]
-    if (connected) return { slug, status: 'connected', kbId: truncate(displayId(connected)) }
-    const demo = this.demo[slug]
-    if (demo) return { slug, status: 'demo', kbId: truncate(displayId(demo)) }
-    return { slug, status: 'none' }
+/** Credentials in the `bindings` state row; writes share the local mutation audit transaction. */
+export class DurableBindingStore extends SealedBindingStore implements BindingStoreApi {
+  constructor(state: DurableState, env: Record<string, string | undefined>) {
+    super(
+      {
+        read: () => state.get<unknown>('bindings', undefined),
+        write: (records, change) => {
+          const put = () => state.put('bindings', records)
+          // Migration runs at start-up, outside any request, like the other store upgrades.
+          if (change.operation === 'bindings.migrate') put()
+          else state.localMutation(change.operation, [change.slug], put)
+        },
+      },
+      env,
+      true,
+    )
   }
 }
-
-const displayId = (binding: KbBinding) =>
-  binding.kbId ?? binding.baseUrl.split('/').pop() ?? binding.baseUrl
-const truncate = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…` : id)
 
 interface TenantState {
   custom: Record<string, unknown>
   overrides: Record<string, unknown>
   disabled: string[]
+  /** Slugs of removed portals; see `TenantStore`. */
+  retired: string[]
 }
 
 const DEFAULT_COLOURS = {
@@ -748,7 +758,7 @@ const DEFAULT_COLOURS = {
 }
 
 export class DurableTenantStore implements TenantStoreApi {
-  constructor(private readonly state: DurableState) {}
+  constructor(private readonly state: DurableState, private readonly platformDomain: string) {}
 
   private load(): TenantState {
     const raw = tenantRecord(this.state.get<unknown>('tenants', {}))
@@ -756,6 +766,7 @@ export class DurableTenantStore implements TenantStoreApi {
       custom: Object.hasOwn(raw, 'custom') ? tenantRecord(raw.custom) : {},
       overrides: Object.hasOwn(raw, 'overrides') ? tenantRecord(raw.overrides) : {},
       disabled: Array.isArray(raw.disabled) ? raw.disabled : [],
+      retired: retiredSlugs(raw.retired),
     }
   }
 
@@ -763,11 +774,18 @@ export class DurableTenantStore implements TenantStoreApi {
     this.state.put('tenants', value)
   }
 
-  /** Seed a tenant copied from the small platform registry into its tenant DO. */
+  /**
+   * Seed a portal a demo Worker provisions for itself (`initialiseDemo`, `initialiseAcmdDemo`).
+   * This is the one path that takes a retired slug again, so a demo portal removed by an
+   * administrator comes back on the next start. A seeded slug with no portal record starts clean:
+   * whatever a removed portal left stored under it is cleared first. The slug stays retired.
+   */
   seed(config: TenantConfig): void {
     if (tenantConfig(config.slug)) return
     const data = this.load()
-    data.custom[config.slug] = TenantConfigSchema.parse(config)
+    const parsed = TenantConfigSchema.parse(config)
+    if (!Object.hasOwn(data.custom, config.slug)) this.state.clearPortalRecords(config.slug)
+    data.custom[config.slug] = parsed
     this.save(data)
   }
 
@@ -779,10 +797,13 @@ export class DurableTenantStore implements TenantStoreApi {
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
     const base = tenantConfig(slug) ?? custom
     if (!base) return undefined
-    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base)
+    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(data.overrides[slug])
     const { prompts: _prompts, ...configPatch } = override
-    return withPlatformHostname(TenantConfigSchema.parse({ ...base, ...configPatch }))
+    return withPlatformHostname(
+      TenantConfigSchema.parse({ ...base, ...configPatch }),
+      this.platformDomain,
+    )
   }
 
   promptsFor(slug: string): { ask?: string; images?: boolean } {
@@ -800,6 +821,10 @@ export class DurableTenantStore implements TenantStoreApi {
 
   isDisabled(slug: string): boolean {
     return this.load().disabled.includes(slug)
+  }
+
+  isRetired(slug: string): boolean {
+    return this.load().retired.includes(slug)
   }
 
   setDisabled(slug: string, disabled: boolean): void {
@@ -876,12 +901,16 @@ export class DurableTenantStore implements TenantStoreApi {
     return rows
   }
 
-  add(input: NewTenantInput): TenantConfig {
+  add(input: NewTenantInput, unavailable?: (slug: string) => boolean): TenantConfig {
     const data = this.load()
     const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!base) throw new Error('The portal name must contain letters or numbers')
     let slug = base
-    for (let index = 2; this.get(slug); index += 1) slug = `${base}-${index}`
+    for (
+      let index = 2;
+      this.get(slug) || data.retired.includes(slug) || unavailable?.(slug);
+      index += 1
+    ) slug = `${base}-${index}`
     const config = TenantConfigSchema.parse({
       slug,
       branding: {
@@ -896,10 +925,10 @@ export class DurableTenantStore implements TenantStoreApi {
       entityTypes: [],
       relationTypes: [],
     })
-    const configured = withPlatformHostname(config)
-    data.custom[slug] = configured
+    // Persist and return exactly what was created: a hostname comes only from domain attachment.
+    data.custom[slug] = config
     this.save(data)
-    return configured
+    return config
   }
 
   remove(slug: string): boolean {
@@ -908,6 +937,7 @@ export class DurableTenantStore implements TenantStoreApi {
     delete data.custom[slug]
     delete data.overrides[slug]
     data.disabled = data.disabled.filter((item) => item !== slug)
+    if (!data.retired.includes(slug)) data.retired.push(slug)
     this.save(data)
     return true
   }
@@ -1601,6 +1631,7 @@ export class DurableRoutingLog implements RoutingLogApi {
 }
 
 export interface DurableStores extends RbacStores {
+  lifecycle: PortalLifecycleStore
   localMutations: LocalMutationScope
   rbac: RbacState
   bindings: DurableBindingStore
@@ -1623,13 +1654,17 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
     localMutations: state.localMutations,
     rbac: state.rbac,
     audit: state.rbac.audit,
     assignments: state.rbac.assignments,
     locks: state.rbac.locks,
-    bindings: state.auditedStore('bindings', new DurableBindingStore(state, env)),
-    tenants: state.auditedStore('tenants', new DurableTenantStore(state)),
+    bindings: new DurableBindingStore(state, env),
+    tenants: state.auditedStore(
+      'tenants',
+      new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN)),
+    ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
     watches: state.auditedStore('watches', new DurableWatchStore(state)),

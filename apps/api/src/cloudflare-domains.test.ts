@@ -39,7 +39,9 @@ function harness(replies: Response[]) {
 }
 
 Deno.test('portalHostnameForSlug accepts only safe non-reserved DNS labels', () => {
-  expect(portalHostnameForSlug('research-portal')).toBe('research-portal.corpuskit.org')
+  expect(portalHostnameForSlug('research-portal', 'corpuskit.org')).toBe(
+    'research-portal.corpuskit.org',
+  )
   for (
     const slug of [
       '',
@@ -56,7 +58,7 @@ Deno.test('portalHostnameForSlug accepts only safe non-reserved DNS labels', () 
       'app',
     ]
   ) {
-    expect(portalHostnameForSlug(slug)).toBeNull()
+    expect(portalHostnameForSlug(slug, 'corpuskit.org')).toBeNull()
   }
 })
 
@@ -68,11 +70,106 @@ Deno.test('createCloudflareDomainProvisioner requires both Worker secrets', () =
   })).toBeNull()
 })
 
+Deno.test('hostname automation attaches a non-apex platform hostname to the configured Worker', async () => {
+  const hostname = portalHostnameForSlug('research-portal', 'research.example.org')!
+  expect(hostname).toBe('research-portal.research.example.org')
+  const requests: Request[] = []
+  const provisioner = createCloudflareDomainProvisioner({
+    CLOUDFLARE_ACCOUNT_ID: 'account-id',
+    CLOUDFLARE_DOMAINS_TOKEN: 'domain-token',
+    PLATFORM_DOMAIN: 'research.example.org',
+    WORKER_NAME: 'research-portals',
+  }, (input, init) => {
+    const request = new Request(input, init)
+    requests.push(request)
+    return Promise.resolve(response(
+      request.method === 'GET' ? [] : {
+        ...domain(hostname, 'research-portals'),
+        zone_name: 'example.org',
+      },
+    ))
+  })!
+  await expect(provisioner.attach(hostname)).resolves.toEqual({ hostname, created: true })
+  expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+    '/client/v4/accounts/account-id/workers/domains',
+    '/client/v4/accounts/account-id/workers/domains',
+  ])
+  expect(new URL(requests[0]!.url).searchParams.has('zone_name')).toBe(false)
+  // Cloudflare resolves the containing zone, so no zone lookup or extra token permission.
+  expect(await requests[1]!.json()).toEqual({ hostname, service: 'research-portals' })
+})
+
+Deno.test('hostname automation rejects malformed domains and hostnames before calling Cloudflare', async () => {
+  expect(() => portalHostnameForSlug('marine', 'example.org/path')).toThrow(
+    'Invalid PLATFORM_DOMAIN',
+  )
+  expect(() =>
+    createCloudflareDomainProvisioner({
+      CLOUDFLARE_ACCOUNT_ID: 'account-id',
+      CLOUDFLARE_DOMAINS_TOKEN: 'domain-token',
+      PLATFORM_DOMAIN: 'example.org; Domain=other.test',
+    }, () => {
+      throw new Error('Network must not be called')
+    })
+  ).toThrow('Invalid PLATFORM_DOMAIN')
+  const longDomain = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(58)}`
+  expect(portalHostnameForSlug('marine', longDomain)).toBeNull()
+  const { provisioner, requests } = harness([])
+  for (const hostname of ['marine.example.org/path', 'marine.example.org?zone_name=x', '']) {
+    await expect(provisioner.attach(hostname)).rejects.toBeInstanceOf(CloudflareDomainApiError)
+    await expect(provisioner.detach(hostname)).rejects.toBeInstanceOf(CloudflareDomainApiError)
+  }
+  expect(requests).toHaveLength(0)
+})
+
+Deno.test('attach rejects a result in a zone that does not contain the hostname', async () => {
+  const hostname = 'marine.research.example.org'
+  for (
+    const zoneName of ['other.example.org', 'ample.org', 'marine.research.example.org.evil', '']
+  ) {
+    const { provisioner } = harness([
+      response([]),
+      response({ ...domain(hostname), zone_name: zoneName }),
+    ])
+    await expect(provisioner.attach(hostname)).rejects.toThrow(
+      'Cloudflare attached an unexpected zone',
+    )
+  }
+})
+
+Deno.test('an explicit zone hint is sent on lookup and attach and must match the result', async () => {
+  const hostname = 'marine.research.example.org'
+  const requests: Request[] = []
+  let attachedZone = 'example.org'
+  const provisioner = new CloudflareDomainProvisioner({
+    accountId: 'account-id',
+    apiToken: 'test-only-token',
+    zoneName: 'Example.org',
+  }, (input, init) => {
+    const request = new Request(input, init)
+    requests.push(request)
+    return Promise.resolve(response(
+      request.method === 'GET' ? [] : { ...domain(hostname), zone_name: attachedZone },
+    ))
+  })
+  await expect(provisioner.attach(hostname)).resolves.toEqual({ hostname, created: true })
+  expect(new URL(requests[0]!.url).searchParams.get('zone_name')).toBe('example.org')
+  expect(await requests[1]!.json()).toEqual({
+    hostname,
+    service: 'corpuskit',
+    zone_name: 'example.org',
+  })
+  attachedZone = 'research.example.org'
+  await expect(provisioner.attach(hostname)).rejects.toThrow(
+    'Cloudflare attached an unexpected zone',
+  )
+})
+
 Deno.test('attach is an idempotent no-op when the domain already belongs to CorpusKit', async () => {
   const existing = domain('new-portal.corpuskit.org')
   const { provisioner, requests } = harness([response([existing])])
 
-  await expect(provisioner.attach(existing.hostname)).resolves.toEqual({
+  await expect(provisioner.attach(existing.hostname.toUpperCase())).resolves.toEqual({
     hostname: existing.hostname,
     created: false,
   })
@@ -87,13 +184,11 @@ Deno.test('attach uses the current Workers custom-domain request shape', async (
   const { provisioner, requests } = harness([response([]), response(created)])
 
   await expect(provisioner.attach(hostname)).resolves.toEqual({ hostname, created: true })
-  expect(requests[1]?.method).toBe('PUT')
-  expect(requests[1]?.headers.get('authorization')).toBe('Bearer domain-token')
-  expect(await requests[1]!.json()).toEqual({
-    hostname,
-    service: 'corpuskit',
-    zone_name: 'corpuskit.org',
-  })
+  const attach = requests.at(-1)!
+  expect(attach.method).toBe('PUT')
+  expect(attach.headers.get('authorization')).toBe('Bearer domain-token')
+  expect(new URL(attach.url).pathname).toBe('/client/v4/accounts/account-id/workers/domains')
+  expect(await attach.json()).toEqual({ hostname, service: 'corpuskit' })
 })
 
 Deno.test('attach refuses to take over a domain owned by another Worker', async () => {
@@ -131,5 +226,14 @@ Deno.test('Cloudflare failures never include the API token in their message', as
     expect(error).toBeInstanceOf(CloudflareDomainApiError)
     expect(String(error)).toContain('permission denied')
     expect(String(error)).not.toContain('domain-token')
+  }
+})
+
+Deno.test('every Worker configuration attaches portal hostnames to its own script', async () => {
+  for (const file of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
+    const config = JSON.parse(
+      await Deno.readTextFile(new URL(`../../../${file}`, import.meta.url)),
+    ) as { name: string; vars: { WORKER_NAME?: string } }
+    expect(config.vars.WORKER_NAME).toBe(config.name)
   }
 })

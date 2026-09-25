@@ -1,4 +1,5 @@
 import { type DocPage, docPagesByCategory } from '../../../packages/core/src/docs.ts'
+import { PLATFORM_DOMAIN_MARKER } from '../../../packages/core/src/platform-domain.ts'
 import { escapeHtml as e, headingIds, renderMarkdown } from './docs-markdown.ts'
 
 const groups = docPagesByCategory()
@@ -70,7 +71,8 @@ function content(page?: DocPage): string {
 export function renderDocsPage(template: string, page?: DocPage): string {
   const title = page?.title ?? 'Documentation'
   const description = page?.summary ?? overview
-  const canonical = `https://corpuskit.org${page ? pageLink(page) : '/docs'}`
+  // The server fills in the deployment's platform domain when it serves the page.
+  const canonical = `https://${PLATFORM_DOMAIN_MARKER}${page ? pageLink(page) : '/docs'}`
   const main = `<main id="main" class="section-shell docs-main">
     <section class="intro" aria-labelledby="docs-title">
       ${page ? '<a class="docs-eyebrow" href="/docs">Documentation</a>' : ''}

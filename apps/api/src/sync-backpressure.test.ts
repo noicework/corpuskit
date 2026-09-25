@@ -20,6 +20,9 @@ Deno.env.set('DATA_DIR', dir)
 
 const { syncSource, runAutoSyncs } = await import('./scheduler.ts')
 const { SourceStore } = await import('./stores.ts')
+const { PortalLifecycleStore } = await import('./lifecycle-store.ts')
+const { guardManagement } = await import('./lifecycle-management.ts')
+const { PortalLifecycleError } = await import('./lifecycle-error.ts')
 
 const TENANT: TenantConfig = {
   accessMode: 'public',
@@ -168,3 +171,77 @@ Deno.test(
     })
   },
 )
+
+/** A box that holds `count` resources and counts every /counters read the guard makes. */
+function countedBox() {
+  const state = { count: 0, counted: 0, created: [] as string[] }
+  const raw = {
+    resourceCount: () => {
+      state.counted++
+      return Promise.resolve(state.count)
+    },
+    createText: (_tenant: TenantConfig, input: { originUrl?: string }) => {
+      state.created.push(input.originUrl ?? '')
+      return Promise.resolve({ id: `id-${state.created.length}` })
+    },
+  }
+  return { state, raw: raw as unknown as AragProvider }
+}
+
+Deno.test('a sync stops at a full portal once, keeps what it added and names the limit', async () => {
+  await withFetchDouble(async () => {
+    const portal: TenantConfig = { ...TENANT, slug: 'lifecycle-full' }
+    const sources = new SourceStore()
+    const source = sources.add(portal.slug, SOURCE_URL, true)
+    const lifecycle = new PortalLifecycleStore()
+    lifecycle.set(portal.slug, { status: 'active', limits: { maxResources: 1 } })
+    const { state, raw } = countedBox()
+    const labels: string[] = []
+    const failure = await syncSource(
+      guardManagement(raw, lifecycle),
+      sources,
+      portal,
+      source,
+      (label) => void labels.push(label),
+    ).then(() => undefined, (error) => error)
+    expect(failure).toBeInstanceOf(PortalLifecycleError)
+    expect(failure.body).toMatchObject({ error: 'limit_exceeded', limit: 'maxResources' })
+    // One page added, one refused, and the third never fetched or counted.
+    expect(state.created).toEqual([PAGE_URLS[0]])
+    expect(state.counted).toBe(2)
+    expect(labels.filter((label) => /resource limit/.test(label))).toHaveLength(1)
+    expect(labels.some((label) => /platform rejected it/.test(label))).toBe(false)
+    expect(labels.some((label) => /Sync complete/.test(label))).toBe(false)
+    // The page it did add is recorded, so the next sync does not add it twice.
+    const [persisted] = sources.list(portal.slug)
+    expect(persisted?.synced).toEqual([PAGE_URLS[0]])
+  })
+})
+
+Deno.test('a scheduled pass records a hosting refusal on the source and moves on', async () => {
+  await withFetchDouble(async () => {
+    const full: TenantConfig = { ...TENANT, slug: 'lifecycle-limited' }
+    const other: TenantConfig = { ...TENANT, slug: 'lifecycle-open' }
+    const sources = new SourceStore()
+    sources.add(full.slug, SOURCE_URL, true)
+    // Discovery of this one would fail loudly, so the test also proves it is never tried.
+    sources.add(full.slug, `${SOURCE_URL}?second`, true)
+    sources.add(other.slug, SOURCE_URL, true)
+    const lifecycle = new PortalLifecycleStore()
+    lifecycle.set(full.slug, { status: 'active', limits: { maxResources: 0 } })
+    const { state, raw } = countedBox()
+    const tenants = {
+      list: () => [full, other].map((t) => ({ slug: t.slug, name: t.branding.productName })),
+      get: (slug: string) => [full, other].find((t) => t.slug === slug),
+      // deno-lint-ignore no-explicit-any
+    } as any
+    await runAutoSyncs(guardManagement(raw, lifecycle), tenants, sources)
+    const [refused, second] = sources.list(full.slug)
+    expect(refused?.lastStatus).toBe('error')
+    expect(refused?.lastError).toMatch(/resource limit/)
+    // The full portal's other source is not tried; the next portal still syncs.
+    expect(second?.lastSync).toBeFalsy()
+    expect(sources.list(other.slug)[0]?.lastStatus).toBe('ok')
+    expect(state.created).toHaveLength(PAGE_URLS.length)
+  })
+})

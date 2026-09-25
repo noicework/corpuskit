@@ -19,6 +19,8 @@ import { McpKeyStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
+import { PortalLifecycleStore } from './lifecycle-store.ts'
+import { lifecycleToolGuard } from './lifecycle-policy.ts'
 import { sessionFor } from './enforcement-fixture.ts'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { LocalIngress } from './local-ingress.ts'
@@ -1526,6 +1528,105 @@ Deno.test('a migrated legacy key is a fixed viewer key on its portal until revok
       legacy: true,
       inactiveReason: 'revoked',
     })
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('MCP answers count toward the daily ask limit while searches and read-only portals do not', async () => {
+  const lifecycle = new PortalLifecycleStore()
+  const test = harness(60, { lifecycle })
+  const issued = await mint(test)
+  lifecycle.set('marine', { status: 'read_only', limits: { asksPerDay: 1 } })
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = await mcpRequest(test, 'marine', issued.key, {
+      jsonrpc: '2.0',
+      id: name,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    })
+    expect(response.status).toBe(200)
+    return (await response.json()).result
+  }
+  expect((await call('search_corpus', { query: 'Research' })).isError).not.toBe(true)
+  expect((await call('answer_question', { question: 'What is stock health?' })).isError).not.toBe(
+    true,
+  )
+  const refused = await call('answer_question', { question: 'And the trend?' })
+  expect(refused.isError).toBe(true)
+  expect(refused.structuredContent).toMatchObject({ error: 'ask_quota_exceeded', limit: 1 })
+  expect(lifecycle.usage('marine').asksToday).toBe(1)
+  // A suspended portal refuses the key before any tool runs.
+  lifecycle.set('marine', { status: 'suspended', limits: null })
+  const paused = await mcpRequest(test, 'marine', issued.key, {
+    jsonrpc: '2.0',
+    id: 'paused',
+    method: 'tools/call',
+    params: { name: 'search_corpus', arguments: { query: 'Research' } },
+  })
+  expect(paused.status).toBe(423)
+  expect(await paused.json()).toEqual({ error: 'portal_suspended' })
+})
+
+Deno.test('each MCP tool call is checked on its own for suspension and the daily ask limit', async () => {
+  const f = createEnforcementFixture()
+  const lifecycle = new PortalLifecycleStore(undefined, f.now)
+  try {
+    // The tool callback as buildApp wires it, called without the transport route in front.
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const request = new Request('http://localhost/api/t/a/mcp', rpcInit(rpcBody(name, args)))
+      const context = await f.contextFor(f.sessionFor('viewer'))
+      const authority = await selectRequestAuthority(request, context, f.authorityDependencies())
+      const server = createMcpServer({
+        provider: f.provider,
+        keys: f.stores.mcpKeys,
+        tenant: (slug) => f.stores.tenants.get(slug),
+        audit: f.rbac.audit,
+        authorityDependencies: f.authorityDependencies(),
+        beforeTool: lifecycleToolGuard(lifecycle, f.now),
+      })
+      await server.connected
+      try {
+        const response = await server.transport.handleRequest(request, {
+          authInfo: {
+            token: 'verified',
+            clientId: 'viewer',
+            scopes: [],
+            extra: {
+              authority,
+              slug: 'a',
+              tenant: 'a',
+              auditContext: {
+                requestId: context.requestId,
+                actor: authority.actor,
+                slug: 'a',
+                mandatoryFailure: undefined,
+              },
+            },
+          },
+        })
+        return (await response.json()).result
+      } finally {
+        await server.transport.close()
+      }
+    }
+    lifecycle.set('a', { status: 'suspended', limits: null })
+    for (const [name, args] of toolsToCall) {
+      const before = f.providerCalls.length
+      const paused = await call(name, args)
+      expect(paused.isError, name).toBe(true)
+      expect(paused.structuredContent, name).toEqual({ error: 'portal_suspended' })
+      f.assertNoProtectedDispatch(before)
+    }
+    lifecycle.set('a', { status: 'read_only', limits: { asksPerDay: 0 } })
+    const before = f.providerCalls.length
+    const spent = await call('answer_question', { question: 'Explain the evidence' })
+    expect(spent.isError).toBe(true)
+    expect(spent.structuredContent).toMatchObject({ error: 'ask_quota_exceeded', limit: 0 })
+    f.assertNoProtectedDispatch(before)
+    // Searching a read-only portal is not an ask and is not refused.
+    expect((await call('search_corpus', { query: 'Research' })).isError).not.toBe(true)
+    expect(lifecycle.usage('a', 'UTC', f.now()).asksToday).toBe(0)
   } finally {
     f.close()
   }

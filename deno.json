@@ -48,11 +48,12 @@
       "apps/web/dist/",
       "apps/web/public/",
       "worker-configuration.d.ts",
-      ".claude/"
+      ".claude/",
+      ".planning/"
     ]
   },
   "lint": {
-    "exclude": ["apps/web/dist/", "worker-configuration.d.ts", ".claude/"],
+    "exclude": ["apps/web/dist/", "worker-configuration.d.ts", ".claude/", ".planning/"],
     "rules": {
       "exclude": ["require-await"]
     }
