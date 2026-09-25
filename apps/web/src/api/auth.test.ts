@@ -113,6 +113,9 @@ Deno.test('auth snapshots validate external login links and session provenance',
   expect(session.sessionProvenance).toBe('external')
   expect(session.user?.provenance).toBe('external')
   expect(parseAuthSession(good, 'marine').externalLogin).toBeNull()
+  expect(parseAuthSession(good, 'marine').externalLoginEnabled).toBeUndefined()
+  expect(parseAuthSession({ ...good, externalLoginEnabled: true }, 'marine').externalLoginEnabled)
+    .toBe(true)
   expect(
     parseAuthSession({
       ...good,

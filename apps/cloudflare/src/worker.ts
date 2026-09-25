@@ -226,6 +226,7 @@ export class PortalDurableObject extends DurableObject<Env> {
           enabled: sessionAuthConfigured(authConfig(this.bindings, '')),
           entraEnabled: authConfigured(authConfig(this.bindings, '')),
           externalLogin: externalLoginPresentation(externalLoginConfig(this.bindings)),
+          externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
           sessionProvenance: principal.session ? principal.session.provenance ?? 'entra' : null,
           authenticated: principal.session !== null,
           user: principal.user

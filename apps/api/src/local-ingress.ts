@@ -226,6 +226,7 @@ export class LocalIngress {
           enabled: sessionAuthConfigured(this.auth),
           entraEnabled: authConfigured(this.auth),
           externalLogin: externalLoginPresentation(this.auth.externalLogin),
+          externalLoginEnabled: this.externalEnabled,
           sessionProvenance: session ? session.provenance ?? 'entra' : null,
           authenticated: session !== null,
           user: principal.user

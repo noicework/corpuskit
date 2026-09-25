@@ -261,6 +261,38 @@ Deno.test('member form creates separate Entra and external assignments for the s
   }
 })
 
+Deno.test('member form keeps its original fields when external sign-in is not configured', async () => {
+  const fixture = await buildFixture()
+  const server = startTestServer({
+    componentFixture: fixture,
+    componentHtml,
+    identity: { role: 'portal-admin' },
+    loginEnv: entraEnv,
+  })
+  const browser = await launch()
+  const page = await browser.newPage(`${server.url}/__test/rbac-component?view=members`)
+  try {
+    await page.waitForSelector('[data-assignment-editor]')
+    await click(page, 'Add member')
+    await page.waitForSelector('[data-assignment-editor] form')
+    expect(
+      await page.evaluate(() => ({
+        sourceInput: !!document.querySelector('[data-assignment-source-input]'),
+        sourceLabels: document.querySelectorAll('[data-assignment-source]').length,
+        firstSelect: [...document.querySelectorAll('form select option')].map((option) =>
+          option.getAttribute('value')
+        ).slice(0, 2),
+      })),
+    ).toEqual({ sourceInput: false, sourceLabels: 0, firstSelect: ['pending-email', 'active-oid'] })
+    expect(server.providerCalls).toEqual([])
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
+    await fixture.close()
+  }
+})
+
 Deno.test('external local assignment opens the portal and preserves profile sign-out', async () => {
   const fixture = await buildFixture()
   const server = startTestServer({

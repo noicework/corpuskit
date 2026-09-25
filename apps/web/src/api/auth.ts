@@ -37,6 +37,7 @@ const snapshotSchema = z.object({
       }
     }),
   }).strict().nullable().default(null),
+  externalLoginEnabled: z.boolean().optional(),
   sessionProvenance: z.enum(['entra', 'external']).nullable().optional(),
   authenticated: z.boolean(),
   user: z.object({

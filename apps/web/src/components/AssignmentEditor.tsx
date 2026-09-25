@@ -63,6 +63,10 @@ function Editor(
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const group = family === 'groups'
+  // Identity sources matter only once external sign-in is configured or an external row exists.
+  const sources = !group &&
+    (access.state.session?.externalLoginEnabled === true ||
+      items.some((row) => row.source === 'external'))
   const allowed = roles.filter((value) =>
     (scope.kind === 'portal' ? [...PORTAL_ROLES] as Role[] : [...PLATFORM_ROLES] as Role[])
       .includes(value)
@@ -144,7 +148,7 @@ function Editor(
         ? onCreate(
           group
             ? { subjectId: subjectId.trim(), role }
-            : { subjectKind, subjectId: subjectId.trim(), role, source },
+            : { subjectKind, subjectId: subjectId.trim(), role, ...(sources ? { source } : {}) },
         )
         : onChange((form as RoleAssignment).id, role)
     )
@@ -191,7 +195,7 @@ function Editor(
                   ? canEdit ? 'Group object ID' : 'Inactive group mapping'
                   : 'Active object ID'}
               </p>
-              {!group && (
+              {!group && sources && (
                 <p className='mt-1 text-sm text-ink-2' data-assignment-source={row.source}>
                   Identity source:{' '}
                   {row.source === 'external' ? 'External account' : 'Microsoft Entra'}
@@ -199,8 +203,11 @@ function Editor(
               )}
               {row.subjectKind === 'pending-email' && (
                 <p className='mt-1 text-sm text-ink-2'>
-                  This assignment activates when the matching{' '}
-                  {row.source === 'external' ? 'external' : 'Microsoft Entra'} account signs in.
+                  This assignment activates when the matching {!sources
+                    ? 'organisation'
+                    : row.source === 'external'
+                    ? 'external'
+                    : 'Microsoft Entra'} account signs in.
                 </p>
               )}
               {row.emailProvenance && row.subjectKind !== 'pending-email' && (
@@ -272,6 +279,19 @@ function Editor(
             {form === 'new' && (
               <>
                 {!group && (
+                  <label className='block text-sm' htmlFor={`${id}-kind`}>
+                    Assign by<select
+                      id={`${id}-kind`}
+                      className='rp-input mt-2 w-full text-base'
+                      value={subjectKind}
+                      onChange={(e) => setSubjectKind(e.target.value as typeof subjectKind)}
+                    >
+                      <option value='pending-email'>Email</option>
+                      <option value='active-oid'>Object ID</option>
+                    </select>
+                  </label>
+                )}
+                {!group && sources && (
                   <label className='block text-sm' htmlFor={`${id}-source`}>
                     Identity source<select
                       id={`${id}-source`}
@@ -289,19 +309,6 @@ function Editor(
                     </span>
                   </label>
                 )}
-                {!group && (
-                  <label className='block text-sm' htmlFor={`${id}-kind`}>
-                    Assign by<select
-                      id={`${id}-kind`}
-                      className='rp-input mt-2 w-full text-base'
-                      value={subjectKind}
-                      onChange={(e) => setSubjectKind(e.target.value as typeof subjectKind)}
-                    >
-                      <option value='pending-email'>Email</option>
-                      <option value='active-oid'>Object ID</option>
-                    </select>
-                  </label>
-                )}
                 <label className='block text-sm' htmlFor={`${id}-subject`}>
                   {group
                     ? 'Group object ID'
@@ -314,7 +321,11 @@ function Editor(
                     data-assignment-subject
                     className='rp-input mt-2 w-full text-base'
                     required
-                    maxLength={subjectKind === 'pending-email' && !group ? 254 : 160}
+                    maxLength={subjectKind === 'pending-email' && !group
+                      ? 254
+                      : source === 'external' && !group
+                      ? 260
+                      : 160}
                     type={subjectKind === 'pending-email' && !group ? 'email' : 'text'}
                     value={subjectId}
                     onChange={(e) => setSubjectId(e.target.value)}

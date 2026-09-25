@@ -76,7 +76,8 @@ External users receive roles only through local assignments. The `authenticated`
 admits signed-in users of the configured Entra tenant only, so on an `authenticated` or
 `restricted` portal an external identity sees only what is assigned to it; a `public` portal
 remains readable by everyone. In the portal Members screen or
-the platform People screen, choose the external identity source when adding a person. The existing
+the platform People screen, choose the external identity source when adding a person; the choice
+and each row's source appear once external sign-in is configured or an external row exists. The existing
 assignment APIs accept `source: "entra" | "external"` and return it with each assignment. For
 example, `POST /api/admin/t/:slug/members` accepts:
 
@@ -101,6 +102,7 @@ assignment rows remain, even if external sign-in has been disabled. A code rollb
 the SQLite migration or remove those rows.
 
 `GET /auth/me` exposes the sign-in origin as `sessionProvenance` and `user.provenance`, preserving
-the existing `provenance` array that describes role grants. It also reports `entraEnabled` and
+the existing `provenance` array that describes role grants. It also reports `entraEnabled`,
+`externalLoginEnabled` (issuer and key are both set) and
 `externalLogin: { "name": "...", "startUrl": "..." }` when the external button is configured,
 or `externalLogin: null` otherwise. Existing Entra sign-in and its session flow remain unchanged.
