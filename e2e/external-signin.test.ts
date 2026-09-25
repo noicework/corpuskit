@@ -266,6 +266,49 @@ Deno.test('member form creates separate Entra and external assignments for the s
   }
 })
 
+Deno.test('member form starts from the external source when Entra sign-in is off', async () => {
+  const fixture = await buildFixture()
+  const server = startTestServer({
+    componentFixture: fixture,
+    componentHtml,
+    identity: { role: 'portal-admin' },
+    loginEnv: externalEnv,
+  })
+  const browser = await launch()
+  const page = await browser.newPage(`${server.url}/__test/rbac-component?view=members`)
+  try {
+    await page.waitForSelector('[data-assignment-editor]')
+    await click(page, 'Add member')
+    await page.waitForSelector('[data-assignment-source-input]')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector<HTMLSelectElement>('[data-assignment-source-input]')?.value
+      ),
+    ).toBe('external')
+    await input(page, '[data-assignment-subject]', 'reader@example.org')
+    await click(page, 'Add member')
+    await page.waitForFunction(() =>
+      !document.querySelector('[data-assignment-editor] form') &&
+      document.body.textContent?.includes('reader@example.org')
+    )
+    expect(
+      await page.evaluate(() =>
+        [...document.querySelectorAll('[data-assignment-id]')]
+          .filter((row) => row.querySelector('p')?.textContent === 'reader@example.org')
+          .map((row) =>
+            row.querySelector('[data-assignment-source]')?.getAttribute('data-assignment-source')
+          )
+      ),
+    ).toEqual(['external'])
+    expect(server.providerCalls).toEqual([])
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
+    await fixture.close()
+  }
+})
+
 Deno.test('member form keeps its original fields when external sign-in is not configured', async () => {
   const fixture = await buildFixture()
   const server = startTestServer({

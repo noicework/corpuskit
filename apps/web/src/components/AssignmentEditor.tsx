@@ -55,7 +55,9 @@ function Editor(
   const [form, setForm] = useState<'new' | RoleAssignment | null>(null)
   const [subjectKind, setSubjectKind] = useState<'active-oid' | 'pending-email'>('pending-email')
   const [subjectId, setSubjectId] = useState('')
-  const [source, setSource] = useState<'entra' | 'external'>('entra')
+  // Without Entra sign-in no Entra identity can claim a row, so start from the external source.
+  const defaultSource = access.state.session?.entraEnabled === false ? 'external' : 'entra'
+  const [source, setSource] = useState<'entra' | 'external'>(defaultSource)
   const [role, setRole] = useState<Role>(scope.kind === 'portal' ? 'viewer' : 'platform-admin')
   const [confirmation, setConfirmation] = useState<
     { kind: 'remove'; row: RoleAssignment } | { kind: 'owner' } | null
@@ -253,7 +255,7 @@ function Editor(
           onClick={() => {
             setForm('new')
             setSubjectId('')
-            setSource('entra')
+            setSource(defaultSource)
             setRole(scope.kind === 'portal' ? 'viewer' : 'platform-admin')
             setError(null)
           }}
