@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { workerSecrets } from './upload-secrets.ts'
+import { missingWorkerSecrets, workerSecrets } from './upload-secrets.ts'
 
 Deno.test('Worker secret upload excludes account provisioning credentials', () => {
   const values = workerSecrets(`
@@ -23,4 +23,64 @@ CLOUDFLARE_DOMAINS_TOKEN=domain-token
     CLOUDFLARE_ACCOUNT_ID: 'cloudflare-account-id',
     CLOUDFLARE_DOMAINS_TOKEN: 'domain-token',
   })
+})
+
+Deno.test('Worker secret upload includes external sign-in configuration but excludes private keys', () => {
+  const values = workerSecrets(`
+EXTERNAL_LOGIN_ISSUER=https://identity.example
+EXTERNAL_LOGIN_JWK='{"kty":"OKP","crv":"Ed25519","x":"public-key"}'
+EXTERNAL_LOGIN_NAME=Organisation account
+EXTERNAL_LOGIN_START_URL=https://identity.example/start
+EXTERNAL_LOGIN_PRIVATE_JWK=must-not-upload
+`)
+  expect(values).toEqual({
+    EXTERNAL_LOGIN_ISSUER: 'https://identity.example',
+    EXTERNAL_LOGIN_JWK: '{"kty":"OKP","crv":"Ed25519","x":"public-key"}',
+    EXTERNAL_LOGIN_NAME: 'Organisation account',
+    EXTERNAL_LOGIN_START_URL: 'https://identity.example/start',
+  })
+})
+
+const baseSecrets = {
+  ARAG_ZONE: 'aws-ap-southeast-2-1',
+  ARAG_KB_MARINE: 'box-id',
+  ARAG_KB_MARINE_TOKEN: 'box-token',
+  SESSION_SECRET: 'session-secret',
+}
+
+Deno.test('Worker secret upload accepts Entra, external-only, or combined sign-in', () => {
+  const external = {
+    EXTERNAL_LOGIN_ISSUER: 'https://identity.example',
+    EXTERNAL_LOGIN_JWK: '{"kty":"OKP","crv":"Ed25519","x":"public-key"}',
+  }
+  for (
+    const identity of [
+      { ENTRA_CLIENT_SECRET: 'client-secret' },
+      external,
+      { ...external, ENTRA_CLIENT_SECRET: 'client-secret' },
+    ]
+  ) {
+    expect(missingWorkerSecrets({ ...baseSecrets, ...identity })).toEqual([])
+  }
+})
+
+Deno.test('Worker secret upload rejects absent or partial external-only configuration', () => {
+  const configurations: Record<string, string>[] = [
+    {},
+    { EXTERNAL_LOGIN_ISSUER: 'https://identity.example' },
+    { EXTERNAL_LOGIN_JWK: 'public-key' },
+  ]
+  for (const identity of configurations) {
+    expect(missingWorkerSecrets({ ...baseSecrets, ...identity })).toEqual([
+      'ENTRA_CLIENT_SECRET or EXTERNAL_LOGIN_ISSUER + EXTERNAL_LOGIN_JWK',
+    ])
+  }
+})
+
+Deno.test('Worker secret upload retains session, zone and knowledge-box prerequisites', () => {
+  expect(missingWorkerSecrets({ ENTRA_CLIENT_SECRET: 'client-secret' })).toEqual([
+    'ARAG_ZONE',
+    'SESSION_SECRET',
+    'ARAG_KB_<SLUG> + token',
+  ])
 })

@@ -69,11 +69,19 @@ Only Worker-relevant values are read at runtime:
 - `ENTRA_CLIENT_SECRET`
 - `ENTRA_ADMIN_EMAILS` as an optional break-glass allowlist
 - `SESSION_SECRET`, a random value of at least 32 bytes
+- `EXTERNAL_LOGIN_ISSUER` and `EXTERNAL_LOGIN_JWK`, optional external sign-in issuer and Ed25519
+  public JWK; configure both to enable the handoff
+- `EXTERNAL_LOGIN_NAME` and `EXTERNAL_LOGIN_START_URL`, optional external sign-in button label
+  and issuer start URL
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_DOMAINS_TOKEN`, optional credentials for
   automatically attaching a safe `<slug>.corpuskit.org` custom domain when an administrator
   creates a portal
 
 Do not upload account provisioning credentials (`ARAG_ACCOUNT`, `ARAG_NUA_KEY`) to the Worker.
+External sign-in configuration is included in the allowlisted upload. An external-only deployment
+can supply both `EXTERNAL_LOGIN_ISSUER` and `EXTERNAL_LOGIN_JWK` instead of
+`ENTRA_CLIENT_SECRET`; `SESSION_SECRET` is still required. The issuer's private signing key must
+stay with the issuer and is never uploaded to CorpusKit.
 
 ## Portal custom domains
 
@@ -127,6 +135,20 @@ are versioned in `wrangler.jsonc`; only its client credential is a Worker secret
 
 Rotate the Entra client credential before expiry, update `ENTRA_CLIENT_SECRET` with Wrangler, then
 revoke the old credential. Rotating `SESSION_SECRET` signs every current session out.
+
+## External sign-in
+
+The optional [external sign-in handoff](HOSTING.md#external-sign-in-handoff) accepts an Ed25519
+assertion from a configured issuer and creates the same encrypted session cookie. It works with
+or without Entra. Set `EXTERNAL_LOGIN_ISSUER`, `EXTERNAL_LOGIN_JWK` and `SESSION_SECRET`, and
+set `WORKER_NAME` to the exact deployment audience expected by the issuer. The external settings
+may be Worker variables or use the allowlisted `.env` upload; the JWK contains only the public key.
+
+Set `EXTERNAL_LOGIN_START_URL` to show the external button on the portal sign-in gate. The optional
+`EXTERNAL_LOGIN_NAME` label defaults to `Continue with your organisation account`. Without a
+start URL, the button is hidden and `/auth/external` still accepts valid handoffs. Replay records
+live in the existing Durable Object SQLite database and survive Worker isolate replacement.
+External identities receive authority only through local assignments with `source: "external"`.
 
 ## State and rollback
 

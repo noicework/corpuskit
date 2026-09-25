@@ -1,4 +1,4 @@
-const REQUIRED = ['ARAG_ZONE', 'ENTRA_CLIENT_SECRET', 'SESSION_SECRET']
+const REQUIRED = ['ARAG_ZONE', 'SESSION_SECRET']
 
 export function workerSecrets(source: string): Record<string, string> {
   const parsed = parseDotEnv(source)
@@ -7,10 +7,27 @@ export function workerSecrets(source: string): Record<string, string> {
   )
 }
 
+export function missingWorkerSecrets(secrets: Record<string, string>): string[] {
+  const missing = REQUIRED.filter((name) => !secrets[name])
+  if (
+    !secrets.ENTRA_CLIENT_SECRET &&
+    !(secrets.EXTERNAL_LOGIN_ISSUER && secrets.EXTERNAL_LOGIN_JWK)
+  ) {
+    missing.push('ENTRA_CLIENT_SECRET or EXTERNAL_LOGIN_ISSUER + EXTERNAL_LOGIN_JWK')
+  }
+  const hasKnowledgeBox = Object.keys(secrets).some((name) =>
+    /^ARAG_KB_[A-Z0-9]+$/.test(name) && secrets[`${name}_TOKEN`]
+  )
+  if (!hasKnowledgeBox) missing.push('ARAG_KB_<SLUG> + token')
+  return missing
+}
+
 function isWorkerSecret(name: string): boolean {
   return name === 'ARAG_ZONE' || name === 'ADMIN_PASSCODE' ||
     name === 'ENTRA_CLIENT_SECRET' || name === 'ENTRA_ADMIN_EMAILS' ||
-    name === 'SESSION_SECRET' || name === 'RATE_LIMIT_ASK_PER_MIN' ||
+    name === 'SESSION_SECRET' || name === 'EXTERNAL_LOGIN_ISSUER' ||
+    name === 'EXTERNAL_LOGIN_JWK' || name === 'EXTERNAL_LOGIN_NAME' ||
+    name === 'EXTERNAL_LOGIN_START_URL' || name === 'RATE_LIMIT_ASK_PER_MIN' ||
     name === 'RATE_LIMIT_ESTATE_PER_MIN' || name === 'CLOUDFLARE_ACCOUNT_ID' ||
     name === 'CLOUDFLARE_DOMAINS_TOKEN' || /^ARAG_KB_[A-Z0-9_]+$/.test(name)
 }
@@ -40,13 +57,9 @@ function parseDotEnv(source: string): Record<string, string> {
 if (import.meta.main) {
   const source = await Deno.readTextFile('.env')
   const secrets = workerSecrets(source)
-  const missing = REQUIRED.filter((name) => !secrets[name])
-  const hasKnowledgeBox = Object.keys(secrets).some((name) =>
-    /^ARAG_KB_[A-Z0-9]+$/.test(name) && secrets[`${name}_TOKEN`]
-  )
-  if (missing.length || !hasKnowledgeBox) {
-    const details = [...missing, ...(!hasKnowledgeBox ? ['ARAG_KB_<SLUG> + token'] : [])]
-    throw new Error(`Refusing incomplete production secret upload: ${details.join(', ')}`)
+  const missing = missingWorkerSecrets(secrets)
+  if (missing.length) {
+    throw new Error(`Refusing incomplete production secret upload: ${missing.join(', ')}`)
   }
 
   await Deno.mkdir('.wrangler', { recursive: true })
