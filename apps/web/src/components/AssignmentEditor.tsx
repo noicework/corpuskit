@@ -55,6 +55,7 @@ function Editor(
   const [form, setForm] = useState<'new' | RoleAssignment | null>(null)
   const [subjectKind, setSubjectKind] = useState<'active-oid' | 'pending-email'>('pending-email')
   const [subjectId, setSubjectId] = useState('')
+  const [source, setSource] = useState<'entra' | 'external'>('entra')
   const [role, setRole] = useState<Role>(scope.kind === 'portal' ? 'viewer' : 'platform-admin')
   const [confirmation, setConfirmation] = useState<
     { kind: 'remove'; row: RoleAssignment } | { kind: 'owner' } | null
@@ -143,7 +144,7 @@ function Editor(
         ? onCreate(
           group
             ? { subjectId: subjectId.trim(), role }
-            : { subjectKind, subjectId: subjectId.trim(), role },
+            : { subjectKind, subjectId: subjectId.trim(), role, source },
         )
         : onChange((form as RoleAssignment).id, role)
     )
@@ -190,9 +191,16 @@ function Editor(
                   ? canEdit ? 'Group object ID' : 'Inactive group mapping'
                   : 'Active object ID'}
               </p>
+              {!group && (
+                <p className='mt-1 text-sm text-ink-2' data-assignment-source={row.source}>
+                  Identity source:{' '}
+                  {row.source === 'external' ? 'External account' : 'Microsoft Entra'}
+                </p>
+              )}
               {row.subjectKind === 'pending-email' && (
                 <p className='mt-1 text-sm text-ink-2'>
-                  This assignment activates when the matching organisation account signs in.
+                  This assignment activates when the matching{' '}
+                  {row.source === 'external' ? 'external' : 'Microsoft Entra'} account signs in.
                 </p>
               )}
               {row.emailProvenance && row.subjectKind !== 'pending-email' && (
@@ -238,6 +246,7 @@ function Editor(
           onClick={() => {
             setForm('new')
             setSubjectId('')
+            setSource('entra')
             setRole(scope.kind === 'portal' ? 'viewer' : 'platform-admin')
             setError(null)
           }}
@@ -262,6 +271,24 @@ function Editor(
             <legend className='sr-only'>Assignment for {scopeName}</legend>
             {form === 'new' && (
               <>
+                {!group && (
+                  <label className='block text-sm' htmlFor={`${id}-source`}>
+                    Identity source<select
+                      id={`${id}-source`}
+                      data-assignment-source-input
+                      className='rp-input mt-2 w-full text-base'
+                      value={source}
+                      onChange={(e) => setSource(e.target.value as typeof source)}
+                      aria-describedby={`${id}-source-help`}
+                    >
+                      <option value='entra'>Microsoft Entra</option>
+                      <option value='external'>External account</option>
+                    </select>
+                    <span id={`${id}-source-help`} className='mt-2 block text-ink-2'>
+                      Choose how this person signs in. Access stays bound to this identity source.
+                    </span>
+                  </label>
+                )}
                 {!group && (
                   <label className='block text-sm' htmlFor={`${id}-kind`}>
                     Assign by<select
