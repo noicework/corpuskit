@@ -2,6 +2,7 @@ import { PortalRoleSchema } from '@research-portal/core'
 import { z } from 'zod'
 
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/)
+const externalOid = z.string().regex(/^ext:[\s\S]{1,128}$/)
 // Keep local filenames and Durable keys collision-free without lossy sanitisation.
 export const KeyPortalSlugSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 export const KeyTimeSchema = z.string().refine((value) => {
@@ -12,7 +13,7 @@ export const KeyTimeSchema = z.string().refine((value) => {
 const legacyShape = {
   id: identifier,
   tenant: KeyPortalSlugSchema,
-  issuerUserId: identifier,
+  issuerUserId: z.union([identifier, externalOid]),
   label: z.string().min(1).max(80).refine((value) =>
     [...value].every((character) =>
       character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127
@@ -33,7 +34,12 @@ export const ScopedKeyRecordSchema = z.object({
   v: z.literal(1),
   role: PortalRoleSchema,
   expiresAt: KeyTimeSchema.nullable(),
-  creator: z.object({ tenantId: identifier, oid: identifier }).strict().nullable(),
+  creator: z.object({ tenantId: identifier, oid: z.union([identifier, externalOid]) }).strict()
+    .refine((identity) =>
+      identity.tenantId === 'external'
+        ? externalOid.safeParse(identity.oid).success
+        : identifier.safeParse(identity.oid).success
+    ).nullable(),
   provenance: z.enum(['verified-session', 'legacy-unproven']),
 }).strict().refine(
   (record) =>
