@@ -67,6 +67,12 @@ const entraEnv = {
   ENTRA_CLIENT_ID: 'fixture-client',
   ENTRA_CLIENT_SECRET: 'fixture-only',
 }
+// The portal passes its current path, never the query string, for the issuer to echo back.
+const externalStart = (returnTo = '/__test/rbac-component') => {
+  const url = new URL(externalEnv.EXTERNAL_LOGIN_START_URL)
+  url.searchParams.set('returnTo', returnTo)
+  return url.href
+}
 
 async function click(page: Page, label: string) {
   await page.evaluate((label) => {
@@ -146,11 +152,9 @@ Deno.test('external sign-in gate follows runtime configuration and fits desktop 
         expect(links.some((link) => link.text === 'Sign in with Microsoft')).toBe(
           scenario.microsoft,
         )
-        expect(links.filter((link) => link.href === externalEnv.EXTERNAL_LOGIN_START_URL)).toEqual(
-          scenario.label
-            ? [{ text: scenario.label, href: externalEnv.EXTERNAL_LOGIN_START_URL }]
-            : [],
-        )
+        expect(
+          links.filter((link) => link.href?.startsWith(externalEnv.EXTERNAL_LOGIN_START_URL)),
+        ).toEqual(scenario.label ? [{ text: scenario.label, href: externalStart() }] : [])
         for (const width of [1440, 390]) {
           await page.setViewportSize({ width, height: 900 })
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
@@ -176,10 +180,11 @@ Deno.test('external sign-in gate follows runtime configuration and fits desktop 
         if (scenario.label) {
           await page.waitForSelector('[data-external-login]')
           expect(
-            await page.evaluate(() =>
-              document.querySelector('[data-external-login]')?.textContent?.trim()
-            ),
-          ).toBe(scenario.label)
+            await page.evaluate(() => {
+              const link = document.querySelector('[data-external-login]')
+              return { text: link?.textContent?.trim(), href: link?.getAttribute('href') }
+            }),
+          ).toEqual({ text: scenario.label, href: externalStart() })
         }
         expect(server.providerCalls).toEqual([])
       } finally {
@@ -339,7 +344,7 @@ Deno.test('external local assignment opens the portal and preserves profile sign
     expect(profile.text).toContain('Local assignment')
     expect(profile.text).not.toContain('Entra claims')
     expect(profile.links).toEqual([
-      { text: 'Sign in again', href: externalEnv.EXTERNAL_LOGIN_START_URL },
+      { text: 'Sign in again', href: externalStart() },
       { text: 'Sign out', href: '/auth/logout' },
     ])
     await page.evaluate(() =>

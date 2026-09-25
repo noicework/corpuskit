@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { AuthSessionError, getAuthSession, parseAuthSession } from './auth.ts'
+import { AuthSessionError, externalLoginUrl, getAuthSession, parseAuthSession } from './auth.ts'
 
 export function sessionFixture(slug = 'marine', id: string | null = 'one') {
   return {
@@ -137,4 +137,16 @@ Deno.test('auth snapshots validate external login links and session provenance',
       }, 'marine')
     ).toThrow(AuthSessionError)
   }
+})
+
+Deno.test('external sign-in links carry only the return path to the issuer', () => {
+  expect(externalLoginUrl('https://identity.example/start', '/t/marine')).toBe(
+    'https://identity.example/start?returnTo=%2Ft%2Fmarine',
+  )
+  // Existing issuer parameters are kept and a configured returnTo is replaced, not duplicated.
+  const url = new URL(
+    externalLoginUrl('https://identity.example/start?portal=marine&returnTo=/elsewhere', '/admin'),
+  )
+  expect(url.origin + url.pathname).toBe('https://identity.example/start')
+  expect([...url.searchParams]).toEqual([['portal', 'marine'], ['returnTo', '/admin']])
 })

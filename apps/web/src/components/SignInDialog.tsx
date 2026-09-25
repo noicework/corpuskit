@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { TenantConfig } from '@research-portal/core'
 import type { AuthUser } from '../api/auth.ts'
-import { microsoftLoginUrl } from '../api/auth.ts'
+import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { useAccess } from './AccessProvider.tsx'
 import { roleLabel } from './account-menu-behaviour.ts'
 
@@ -15,7 +15,7 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
   const user = session?.user
   const external = session?.sessionProvenance === 'external' || user?.provenance === 'external'
   const signInAgain = external
-    ? session?.externalLogin?.startUrl
+    ? session?.externalLogin && externalLoginUrl(session.externalLogin.startUrl)
     : session?.entraEnabled !== false
     ? microsoftLoginUrl()
     : undefined
@@ -181,7 +181,7 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
                 )}
                 {session?.externalLogin && (
                   <a
-                    href={session.externalLogin.startUrl}
+                    href={externalLoginUrl(session.externalLogin.startUrl)}
                     className='rp-btn rp-btn-outline mt-3 w-full whitespace-normal text-center'
                     data-external-login
                   >

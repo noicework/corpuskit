@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { type Branding, BrandingSchema, DEFAULT_PALETTES } from '@research-portal/core'
 import { Link } from 'react-router-dom'
 import { useAccess } from './AccessProvider.tsx'
-import { microsoftLoginUrl } from '../api/auth.ts'
+import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 
 const safeMetadataSchema = z.object({
@@ -172,7 +172,7 @@ export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean
             ? (
               <a
                 className='rp-btn rp-btn-outline whitespace-normal text-center'
-                href={state.session.externalLogin.startUrl}
+                href={externalLoginUrl(state.session.externalLogin.startUrl)}
                 data-external-login
               >
                 {state.session.externalLogin.name}

@@ -7,7 +7,7 @@ import { Skeleton } from '../components/ui.tsx'
 import { AddPortal } from './admin/AddPortal.tsx'
 import { MigratePanel } from './admin/MigratePanel.tsx'
 import { PortalRow } from './admin/PortalRow.tsx'
-import { microsoftLoginUrl } from '../api/auth.ts'
+import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import {
   EmergencyAccessProvider,
   usePermissionAdminAccess,
@@ -92,7 +92,7 @@ export function OverviewAccess(
         )}
         {!overview.sessionAllowed && overview.auth?.externalLogin && (
           <a
-            href={overview.auth.externalLogin.startUrl}
+            href={externalLoginUrl(overview.auth.externalLogin.startUrl, returnTo)}
             className='rp-btn rp-btn-outline whitespace-normal text-center'
             data-external-login
           >

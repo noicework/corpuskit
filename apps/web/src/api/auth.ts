@@ -193,3 +193,13 @@ export async function getAuthSession(
 export function microsoftLoginUrl(returnTo = `${location.pathname}${location.search}`): string {
   return `/auth/login?returnTo=${encodeURIComponent(returnTo)}`
 }
+
+/**
+ * The issuer may echo `returnTo` back in its handoff, where the portal validates it again. Only
+ * the path is shared with the issuer, never the query string.
+ */
+export function externalLoginUrl(startUrl: string, returnTo = location.pathname): string {
+  const url = new URL(startUrl)
+  url.searchParams.set('returnTo', returnTo)
+  return url.href
+}
