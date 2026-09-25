@@ -3,7 +3,7 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import {
-  auditExternalLoginFailure,
+  ExternalFailureAudit,
   externalLoginConfig,
   externalLoginConfigured,
   type ExternalLoginFailure,
@@ -93,6 +93,7 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
   private readonly externalReplays: ExternalLoginReplayStore
+  private readonly externalFailures: ExternalFailureAudit
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -104,6 +105,7 @@ export class PortalDurableObject extends DurableObject<Env> {
     const operatorWarning = operatorConfigurationWarning(bindings)
     if (operatorWarning) console.warn(operatorWarning)
     this.stores = durableStores(state, bindings)
+    this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
       passcode: bindings.ADMIN_PASSCODE,
       environment: bindings.ENVIRONMENT,
@@ -369,8 +371,12 @@ export class PortalDurableObject extends DurableObject<Env> {
     return this.externalReplays.consume(key, expiresAt)
   }
 
-  async auditExternalFailure(reason: ExternalLoginFailure): Promise<void> {
-    auditExternalLoginFailure(this.stores.audit, reason)
+  /**
+   * Worker RPC for a refused external sign-in. At most one record per client address a minute;
+   * the rest are counted onto the next record (see `ExternalFailureAudit`).
+   */
+  async auditExternalFailure(reason: ExternalLoginFailure, clientIp?: string): Promise<void> {
+    this.externalFailures.record(reason, clientIp ?? 'unknown')
   }
 
   async maintenance(): Promise<void> {
@@ -426,7 +432,8 @@ async function route(request: Request, env: Env): Promise<Response> {
     const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
     const response = (await handleAuthRequest(request, auth, {
       consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
-      auditFailure: (reason) => stub.auditExternalFailure(reason),
+      auditFailure: (reason) =>
+        stub.auditExternalFailure(reason, request.headers.get('cf-connecting-ip') ?? undefined),
     })) ?? json({ error: 'not_found' }, 404)
     if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
       try {

@@ -6,7 +6,7 @@ import {
   sessionAuthConfigured,
 } from '../../cloudflare/src/auth.ts'
 import {
-  auditExternalLoginFailure,
+  ExternalFailureAudit,
   externalLoginConfig,
   externalLoginConfigured,
   externalLoginPresentation,
@@ -49,6 +49,9 @@ interface LocalIngressOptions {
   env: Record<string, string | undefined>
 }
 type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
+/** The TCP peer, which keys the per-address failure limits. */
+const peerAddress = (info?: PeerInfo) =>
+  info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
 class InvalidLocalPrincipal extends Error {}
 class InvalidOperatorCredential extends Error {}
 
@@ -63,9 +66,11 @@ export class LocalIngress {
   readonly breakGlassEnabled: boolean
   readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
+  private readonly externalFailures: ExternalFailureAudit
 
   constructor(private readonly options: LocalIngressOptions) {
     const { env, rbac } = options
+    this.externalFailures = new ExternalFailureAudit(rbac.audit)
     const operatorWarning = operatorConfigurationWarning(env)
     if (operatorWarning) console.warn(operatorWarning)
     const configuredSecret = env.SESSION_SECRET
@@ -161,7 +166,7 @@ export class LocalIngress {
               if (!this.options.externalReplays) throw new Error('Replay store unavailable')
               return this.options.externalReplays.consume(key, expiresAt)
             },
-            auditFailure: (reason) => auditExternalLoginFailure(rbac.audit, reason),
+            auditFailure: (reason) => this.externalFailures.record(reason, peerAddress(info)),
           })) ?? Response.json({ error: 'not_found' }, { status: 404 })
         }
         // The local server reads only the sessions it can issue: external handoff cookies.
@@ -331,8 +336,7 @@ export class LocalIngress {
     } catch (error) {
       if (error instanceof InvalidLocalPrincipal || error instanceof InvalidOperatorCredential) {
         if (error instanceof InvalidOperatorCredential) {
-          const peer = info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
-          const { allowed, retryAfterSec } = this.operatorFailures.check(peer)
+          const { allowed, retryAfterSec } = this.operatorFailures.check(peerAddress(info))
           if (!allowed) {
             return Response.json({ error: 'rate_limited' }, {
               status: 429,

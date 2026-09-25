@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
 import type { SqlExecutor } from './rbac-state.ts'
+import { SlidingWindowLimiter } from './rate-limit.ts'
 
 export interface ExternalLoginConfig {
   issuer?: string
@@ -238,7 +239,15 @@ export class ExternalLoginReplayStore {
   }
 }
 
-export function auditExternalLoginFailure(audit: AuditStore, reason: ExternalLoginFailure): void {
+/**
+ * `count`, when present, is how many failed external sign-ins were refused without a record of
+ * their own since the previous `auth.external.denied` record (see `ExternalFailureAudit`).
+ */
+export function auditExternalLoginFailure(
+  audit: AuditStore,
+  reason: ExternalLoginFailure,
+  unrecorded = 0,
+): void {
   appendAudit(
     audit,
     createAuditEvent({
@@ -248,7 +257,43 @@ export function auditExternalLoginFailure(audit: AuditStore, reason: ExternalLog
       scope: { kind: 'platform' },
       target: { kind: 'session' },
       outcome: 'denied',
-      detail: { externalReason: reason },
+      detail: { externalReason: reason, ...(unrecorded > 0 ? { count: unrecorded } : {}) },
     }),
   )
+}
+
+/** Failed external sign-ins recorded per client address per window; the rest are counted. */
+export const EXTERNAL_FAILURE_AUDIT_LIMIT = 1
+export const EXTERNAL_FAILURE_AUDIT_WINDOW_MS = 60_000
+
+/**
+ * Caps the audit records that failed external sign-ins can write, the way invalid operator
+ * credentials are capped: a per-client-address sliding window. Each address writes at most one
+ * `auth.external.denied` record a minute. Further failures from it inside that minute write
+ * nothing and are only counted, and the next record written, from any address, carries that
+ * count as `count`. Repeated bad handoffs therefore cannot grow the audit log without bound, and
+ * the log still says how many there were. The response is the same 401 either way, and
+ * successful sign-ins never pass through here. Addresses are never written to the log.
+ */
+export class ExternalFailureAudit {
+  private readonly limiter: SlidingWindowLimiter
+  private unrecorded = 0
+
+  constructor(private readonly audit: AuditStore, now?: () => number) {
+    this.limiter = new SlidingWindowLimiter({
+      limit: EXTERNAL_FAILURE_AUDIT_LIMIT,
+      windowMs: EXTERNAL_FAILURE_AUDIT_WINDOW_MS,
+      now,
+    })
+  }
+
+  /** Throws `AuditWriteError` when a record is due and cannot be written; the count is kept. */
+  record(reason: ExternalLoginFailure, clientAddress = 'unknown'): void {
+    if (!this.limiter.check(clientAddress).allowed) {
+      this.unrecorded = Math.min(this.unrecorded + 1, Number.MAX_SAFE_INTEGER)
+      return
+    }
+    auditExternalLoginFailure(this.audit, reason, this.unrecorded)
+    this.unrecorded = 0
+  }
 }

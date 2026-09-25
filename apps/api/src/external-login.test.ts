@@ -2,13 +2,16 @@ import { expect } from '@std/expect'
 import { type AuthConfig, authUser, handleAuthRequest } from '../../cloudflare/src/auth.ts'
 import {
   auditExternalLoginFailure,
+  EXTERNAL_FAILURE_AUDIT_WINDOW_MS,
   EXTERNAL_LOGIN_FAILURES,
+  ExternalFailureAudit,
   externalLoginConfigured,
   externalLoginPresentation,
   ExternalLoginReplayStore,
   externalReturnTo,
   verifyExternalAssertion,
 } from './external-login.ts'
+import { AuditWriteError } from './audit.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import { LocalIngress } from './local-ingress.ts'
@@ -193,6 +196,91 @@ Deno.test('every external failure reason is accepted by the audit log', () => {
       rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
         .map((event) => JSON.parse(event.detail_json).externalReason).sort(),
     ).toEqual([...EXTERNAL_LOGIN_FAILURES].sort())
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('failed external sign-ins write one record per address a minute and count the rest', () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    let clock = Date.UTC(2026, 8, 25)
+    const failures = new ExternalFailureAudit(rbac.audit, () => clock)
+    const records = () =>
+      rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
+        .map((event) => JSON.parse(event.detail_json))
+    for (let attempt = 0; attempt < 25; attempt++) failures.record('signature', '192.0.2.10')
+    expect(records()).toEqual([{ externalReason: 'signature' }])
+    // Another address has its own window; its record carries the failures not written so far.
+    failures.record('replay', '198.51.100.20')
+    expect(records()).toHaveLength(2)
+    expect(records()).toContainEqual({ externalReason: 'replay', count: 24 })
+    // Inside the first address's minute a failure is counted, not written.
+    clock += EXTERNAL_FAILURE_AUDIT_WINDOW_MS - 1_000
+    failures.record('lifetime', '192.0.2.10')
+    expect(records()).toHaveLength(2)
+    clock += 2_000
+    failures.record('lifetime', '192.0.2.10')
+    expect(records()).toHaveLength(3)
+    expect(records()).toContainEqual({ externalReason: 'lifetime', count: 1 })
+    // A record that cannot be written fails the request and keeps the count for the next one.
+    failures.record('issuer', '192.0.2.10')
+    db.exec(
+      "CREATE TRIGGER fail_external_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+    )
+    expect(() => failures.record('audience', '203.0.113.30')).toThrow(AuditWriteError)
+    db.exec('DROP TRIGGER fail_external_audit')
+    failures.record('audience', '203.0.113.40')
+    expect(records()).toHaveLength(4)
+    expect(records()).toContainEqual({ externalReason: 'audience', count: 1 })
+    // Client addresses are never written to the log.
+    expect(JSON.stringify(rbac.audit.read({ scope: { kind: 'platform' } }))).not.toMatch(
+      /192\.0\.2|198\.51\.100|203\.0\.113/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('local ingress caps failed handoff records per peer and never limits a valid sign-in', async () => {
+  const { config, mint } = await fixture()
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const ingress = new LocalIngress({
+      rbac,
+      tenants: { list: () => [] },
+      env: {
+        SESSION_SECRET: secret,
+        WORKER_NAME: 'portal-deployment',
+        EXTERNAL_LOGIN_ISSUER: config.externalLogin!.issuer,
+        EXTERNAL_LOGIN_JWK: config.externalLogin!.jwk,
+      },
+      externalReplays: new ExternalLoginReplayStore(db),
+    })
+    const peer = (hostname: string) => ({
+      remoteAddr: { transport: 'tcp' as const, hostname, port: 40_000 },
+    })
+    const send = (assertion: string, hostname: string) =>
+      ingress.handle(request(assertion), () => new Response('unexpected'), peer(hostname))
+    const records = () =>
+      rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
+        .map((event) => JSON.parse(event.detail_json))
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const refused = await send('not-a-signed-assertion', '192.0.2.10')
+      expect(refused.status).toBe(401)
+      expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
+    }
+    expect(records()).toEqual([{ externalReason: 'encoding' }])
+    const signedIn = await send(await mint(), '192.0.2.10')
+    expect(signedIn.status).toBe(303)
+    const elsewhere = await send('not-a-signed-assertion', '198.51.100.20')
+    expect(elsewhere.status).toBe(401)
+    expect(records()).toHaveLength(2)
+    expect(records()).toContainEqual({ externalReason: 'encoding', count: 9 })
   } finally {
     db.close()
   }

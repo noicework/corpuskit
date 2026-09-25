@@ -1685,6 +1685,37 @@ Deno.test('Worker refuses external handoffs, cookies and envelopes once the issu
   }
 })
 
+Deno.test('Worker caps failed handoff audit records per client address in the Durable Object', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const h = await realHarness({
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  })
+  const handoff = (address: string) =>
+    worker.fetch(
+      new Request('https://corpuskit.test/auth/external?assertion=not-a-signed-assertion', {
+        headers: { 'cf-connecting-ip': address },
+      }),
+      h.env,
+    )
+  const records = () =>
+    h.state.rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
+      .map((event) => JSON.parse(event.detail_json))
+  try {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const refused = await handoff('192.0.2.10')
+      expect(refused.status).toBe(401)
+      expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
+    }
+    expect(records()).toEqual([{ externalReason: 'encoding' }])
+    expect((await handoff('198.51.100.20')).status).toBe(401)
+    expect(records()).toHaveLength(2)
+    expect(records()).toContainEqual({ externalReason: 'encoding', count: 5 })
+  } finally {
+    h.database.close()
+  }
+})
+
 // Operator credential (hosting automation) combined with external sign-in and Entra sign-in.
 const hostingOperatorKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
 

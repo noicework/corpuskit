@@ -587,9 +587,20 @@ reused in another Worker isolate. The local server uses the RBAC SQLite database
 single-use check, including across local server restarts. The signed principal envelope accepts
 `tid: "external"` only while the feature is configured. Verification failures return only
 `401 {"error":"external_login_invalid"}`; the audit log records a safe reason code without the
-assertion, signing key or email address, as the `auth.external.denied` action with one
+assertion, signing key or email address, as the `auth.external.denied` action with an
 `externalReason` field. As for every audited denial, if that record cannot be written the request
 fails with `500 {"error":"audit_write_failed"}`, and no session is issued either way.
+
+These records are capped per client address, as
+[invalid operator credentials](#operator-credential) are: each address writes at most one
+`auth.external.denied` record a minute. Further failures from that address within the minute
+receive the same `401` but are only counted, and the next record written, from any address,
+carries that number in a `count` field: the failures refused without a record of their own since
+the previous record. A looping caller therefore cannot grow the audit log without bound, while the
+log still shows how many attempts failed. The client address is `CF-Connecting-IP` on Cloudflare
+and the TCP peer on the local server. It only keys the limit and is never written to the log.
+Successful sign-ins are never limited. The limit lives in the Durable Object's or the local server
+process's memory, so a restart starts it afresh.
 
 `GET /auth/me` exposes the sign-in origin as `sessionProvenance` and `user.provenance`, preserving
 the existing `provenance` array that describes role grants. It also reports `entraEnabled`,

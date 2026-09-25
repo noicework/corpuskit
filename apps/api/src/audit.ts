@@ -228,7 +228,7 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
-  'auth.external.denied': ['externalReason'],
+  'auth.external.denied': ['externalReason', 'count'],
   'portal.lifecycle.update': [
     'permission',
     'lifecycleStatus',
