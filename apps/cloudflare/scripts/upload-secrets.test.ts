@@ -27,3 +27,11 @@ CLOUDFLARE_DOMAINS_TOKEN=domain-token
     CLOUDFLARE_DOMAINS_TOKEN: 'domain-token',
   })
 })
+
+Deno.test('Worker secret allowlist includes an optional operator key without non-secret labels', () => {
+  const fixture = btoa('operator-test-fixture-only-32bytes').replace(/=+$/g, '')
+  expect(workerSecrets(`OPERATOR_API_KEY=${fixture}\nOPERATOR_ID=hosting-test`)).toEqual({
+    OPERATOR_API_KEY: fixture,
+  })
+  expect(workerSecrets('OPERATOR_API_KEY=\nOPERATOR_ID=hosting-test')).toEqual({})
+})

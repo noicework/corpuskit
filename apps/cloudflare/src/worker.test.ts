@@ -7,7 +7,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState } from './state.ts'
 import { BindingCipher } from '../../api/src/binding-crypto.ts'
 import {
-  type PrincipalEnvelope,
+  type SessionEnvelope,
   signPrincipal,
   type TrustedSessionFacts,
   verifyPrincipal,
@@ -702,6 +702,9 @@ function workerHarness(
           auditDenial() {
             return Promise.resolve()
           },
+          auditOperatorFailure() {
+            return Promise.resolve({ limited: false as const })
+          },
           requestPrincipal() {
             return Promise.resolve({
               requestId: 'fixture',
@@ -768,7 +771,7 @@ async function sessionCookie(session: TrustedSessionFacts): Promise<string> {
 async function principalRequest(
   path = '/auth/me',
   session = facts(),
-  extra: Partial<PrincipalEnvelope> = {},
+  extra: Partial<SessionEnvelope> = {},
 ) {
   const header = await signPrincipal({
     v: 1,

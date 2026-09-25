@@ -48,9 +48,17 @@ export const ScopeSchema = z.discriminatedUnion('kind', [
 ])
 export type Scope = z.infer<typeof ScopeSchema>
 
+/**
+ * The single definition of a hosting operator's actor label, shared by configuration, the signed
+ * principal envelope and this core. Leaves room for the `operator:` prefix in audit actor ids.
+ */
+export const OperatorIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,150}$/)
+  .refine((id) => !id.includes('://'))
+
 /** Shape validation only. Trusted adapters must verify the identity before using this core. */
 export const PrincipalSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('anonymous') }).strict(),
+  z.object({ kind: z.literal('operator'), id: OperatorIdSchema }).strict(),
   z.object({
     kind: z.literal('user'),
     tenantId: z.string().min(1),
@@ -96,6 +104,19 @@ export const AuthorisationPrincipalSchema = z.object({
   effectiveRoles: EffectiveRolesSchema,
   portalPolicy: PortalPolicySchema.optional(),
 }).strict().superRefine((principal, context) => {
+  if (principal.identity.kind === 'operator') {
+    if (
+      principal.effectiveRoles.platformRole !== 'platform-admin' ||
+      principal.effectiveRoles.portalRoles.length !== 0
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['effectiveRoles'],
+        message: 'Operator authority must be platform-admin without portal assignments',
+      })
+    }
+    return
+  }
   if (principal.identity.kind !== 'anonymous') return
   const { platformRole, portalRoles } = principal.effectiveRoles
   const grant = portalRoles[0]
@@ -136,7 +157,7 @@ export function normalisePrincipal(
     (roles.platformRole !== undefined || roles.portalRoles.length !== 0)
   ) return null
 
-  const implicitViewer = policy !== undefined &&
+  const implicitViewer = rawIdentity.kind !== 'operator' && policy !== undefined &&
     (policy.accessMode === 'public' ||
       (policy.accessMode === 'authenticated' && rawIdentity.kind === 'user' &&
         rawIdentity.tenantId === policy.configuredTenantId))

@@ -9,7 +9,7 @@ import {
 import { DECLARATIONS } from './permissions.ts'
 
 export type AuditActor = {
-  kind: 'anonymous' | 'user' | 'break-glass' | 'key' | 'legacy-key' | 'system'
+  kind: 'anonymous' | 'user' | 'operator' | 'break-glass' | 'key' | 'legacy-key' | 'system'
   id?: string
   label?: string
 }
@@ -86,7 +86,9 @@ export function canonicalAuditFilters(filters: AuditQueryFilters): AuditQueryFil
     const value = filters[name]
     if (value === undefined) continue
     const valid = name === 'actorKind'
-      ? ['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(value)
+      ? ['anonymous', 'user', 'operator', 'break-glass', 'key', 'legacy-key', 'system'].includes(
+        value,
+      )
       : name === 'outcome'
       ? ['intent', 'success', 'denied', 'failure', 'uncertain'].includes(value)
       : name === 'action'
@@ -137,6 +139,7 @@ export class AuditWriteError extends Error {
 const codes = [
   'unauthorised',
   'forbidden',
+  'operator_not_allowed',
   'invalid_input',
   'last_owner',
   'email_conflict',
@@ -371,7 +374,7 @@ export function validateAuditEvent(event: AuditEvent): void {
       ![event.id, event.request_id, event.target_kind].every(id) ||
       (event.actor_id !== null && !id(event.actor_id)) ||
       (event.target_id !== null && !id(event.target_id)) ||
-      !['anonymous', 'user', 'break-glass', 'key', 'legacy-key', 'system'].includes(
+      !['anonymous', 'user', 'operator', 'break-glass', 'key', 'legacy-key', 'system'].includes(
         event.actor_kind,
       ) ||
       !['intent', 'success', 'denied', 'failure', 'uncertain'].includes(event.outcome) ||

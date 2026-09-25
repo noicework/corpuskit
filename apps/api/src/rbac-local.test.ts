@@ -42,6 +42,7 @@ Deno.test('local RBAC reopens audit, assignments, lockouts, evidence and durable
     }])
     expect(db.all('SELECT name, completed_at FROM rbac_migrations ORDER BY name')).toEqual([
       { name: 'rbac-audit-actors-v2', completed_at: 10 },
+      { name: 'rbac-audit-actors-v3', completed_at: 10 },
       { name: 'rbac-audit-order-v1', completed_at: 10 },
       { name: 'rbac-schema-v1', completed_at: 10 },
     ])

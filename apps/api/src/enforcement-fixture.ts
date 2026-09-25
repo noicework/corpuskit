@@ -146,7 +146,24 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
   expect(new Set(keys).size).toBe(keys.length)
   expect(declarations.filter((d) => d.kind === 'http').map((d) => `${d.method} ${d.path}`).sort())
     .toEqual(keys)
+  const operatorRoutes = new Set([
+    'POST /api/admin/tenants',
+    'PATCH /api/admin/tenants/:slug',
+    'POST /api/admin/t/:slug/knowledge-box',
+    'DELETE /api/admin/t/:slug/knowledge-box',
+    'PATCH /api/admin/t/:slug/access',
+    'GET /api/admin/t/:slug/members',
+    'POST /api/admin/t/:slug/members',
+    'DELETE /api/admin/t/:slug/members/:id',
+    'GET /api/admin/t/:slug/counters',
+    'POST /api/admin/t/:slug/branding/:kind',
+    'POST /api/admin/migrate',
+  ])
   for (const row of rows) {
+    expect(
+      declarations.find((d) => d.kind === 'http' && d.method === row.method && d.path === row.path)
+        ?.operator === true,
+    ).toBe(operatorRoutes.has(`${row.method} ${row.path}`))
     expect(
       declarations.find((d) => d.kind === 'http' && d.method === row.method && d.path === row.path)
         ?.permission,
@@ -813,7 +830,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['PATCH', 'sources/:id', 'content.write', { auto: false }],
   ['DELETE', 'sources/:id', 'content.write'],
   ['POST', 'sources/:id/sync', 'content.write', {}],
-  ['POST', '/api/admin/migrate', 'platform.settings.write', { from: 'a', to: 'b' }],
+  ['POST', '/api/admin/migrate', 'portal.create', { from: 'a', to: 'b' }],
   ['POST', 'knowledge-box', 'bindings.write', {
     url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
     token: 'fixture-service-account-token',

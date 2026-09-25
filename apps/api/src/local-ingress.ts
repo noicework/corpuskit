@@ -1,10 +1,14 @@
 import type { PortalRequestContext } from './app.ts'
-import { coarseAdminEligibility, resolveEffectiveRoles } from './assignments.ts'
-import { appendAudit, createAuditEvent } from './audit.ts'
+import {
+  coarseAdminEligibility,
+  resolveEffectiveRoles,
+  type RoleResolution,
+} from './assignments.ts'
+import { appendAudit, type AuditActor, createAuditEvent } from './audit.ts'
 import { type BreakGlassService } from './break-glass.ts'
 import {
   PRINCIPAL_HEADER,
-  type PrincipalEnvelope,
+  type SessionEnvelope,
   signPrincipal,
   stripIdentityHeaders,
   type TrustedSessionFacts,
@@ -15,6 +19,14 @@ import type { RbacState } from './rbac-state.ts'
 import type { TenantStoreApi } from './tenants.ts'
 import { buildUiAccessSnapshot } from './ui-access.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
+import {
+  authenticateOperator,
+  configuredOperatorId,
+  operatorConfigurationWarning,
+  operatorEnvelope,
+  operatorFailureLimiter,
+  operatorRequestContext,
+} from './operator.ts'
 
 interface LocalIngressOptions {
   rbac: RbacState
@@ -23,6 +35,7 @@ interface LocalIngressOptions {
 }
 type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
 class InvalidLocalPrincipal extends Error {}
+class InvalidOperatorCredential extends Error {}
 
 /** Trusted local adapter. Session fixtures are in-process arguments, never HTTP input. */
 export class LocalIngress {
@@ -32,9 +45,12 @@ export class LocalIngress {
   private readonly tenantId: string
   readonly breakGlassEnabled: boolean
   readonly breakGlass: BreakGlassService
+  private readonly operatorFailures = operatorFailureLimiter()
 
   constructor(private readonly options: LocalIngressOptions) {
     const { env, rbac } = options
+    const operatorWarning = operatorConfigurationWarning(env)
+    if (operatorWarning) console.warn(operatorWarning)
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -73,22 +89,40 @@ export class LocalIngress {
   ): Promise<Response> {
     const requestId = crypto.randomUUID()
     const { rbac } = this.options
-    const denial = (status: 401 | 403) =>
+    let operator: { id: string } | undefined
+    const actor = (): AuditActor =>
+      operator ? { kind: 'operator', id: `operator:${operator.id}` } : { kind: 'anonymous' }
+    const denial = (status: 401 | 403, code = status === 401 ? 'unauthorised' : 'forbidden') =>
       appendAudit(
         rbac.audit,
         createAuditEvent({
           requestId,
-          actor: { kind: 'anonymous' },
+          actor: actor(),
           action: 'request.denied',
           scope: { kind: 'platform' },
           target: { kind: 'request' },
           outcome: 'denied',
-          detail: { code: status === 401 ? 'unauthorised' : 'forbidden', method: request.method },
+          detail: { code, method: request.method },
         }),
       )
     try {
       const headers = stripIdentityHeaders(request.headers)
-      if (session) {
+      const credential = await authenticateOperator(request, this.options.env)
+      if (credential.kind === 'rejected') throw new InvalidOperatorCredential()
+      if (credential.kind === 'verified') {
+        operator = { id: credential.id }
+        if (headers.has('x-admin-passcode')) throw new InvalidOperatorCredential()
+        session = null
+        headers.delete('authorization')
+        try {
+          headers.set(
+            PRINCIPAL_HEADER,
+            await signPrincipal(operatorEnvelope(operator.id, this.audience), this.secret),
+          )
+        } catch {
+          throw new InvalidLocalPrincipal()
+        }
+      } else if (session) {
         if (!validSessionFacts(session) || session.tenantId !== this.tenantId) {
           throw new InvalidLocalPrincipal()
         }
@@ -97,7 +131,7 @@ export class LocalIngress {
             PRINCIPAL_HEADER,
             await signPrincipal({
               v: 1,
-              aud: this.audience as PrincipalEnvelope['aud'],
+              aud: this.audience as SessionEnvelope['aud'],
               tid: session.tenantId,
               oid: session.oid,
               email: session.email ?? '',
@@ -115,6 +149,7 @@ export class LocalIngress {
         sessionSecret: this.secret,
         audience: this.audience,
         tenantId: this.tenantId,
+        operatorId: configuredOperatorId(this.options.env),
       })
       if (verified.kind === 'rejected') throw new InvalidLocalPrincipal()
       if (session) {
@@ -124,32 +159,46 @@ export class LocalIngress {
         })
         if (!result.ok && result.code === 'invalid_principal') throw new InvalidLocalPrincipal()
       }
-      const resolution = await resolveEffectiveRoles(session, {
-        rbac,
-        tenants: this.options.tenants,
-        audience: this.audience,
-      }, this.tenantId)
-      const principal: PortalRequestContext = {
-        requestId,
-        session,
-        ...resolution,
-        clientIp: info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : undefined,
-        coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
-        user: verified.kind === 'verified'
-          ? {
-            id: verified.envelope.oid,
-            tenantId: verified.envelope.tid,
-            email: verified.envelope.email,
-            name: verified.envelope.name,
-            roles: verified.envelope.roles,
-          }
-          : null,
-      }
+      const clientIp = info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : undefined
       const path = new URL(request.url).pathname
+      let principal: PortalRequestContext
+      let resolution: RoleResolution | undefined
+      if (operator) {
+        if (verified.kind !== 'verified' || verified.envelope.kind !== 'operator') {
+          throw new InvalidLocalPrincipal()
+        }
+        principal = operatorRequestContext(verified.envelope.id, requestId, clientIp)
+        if (!path.startsWith('/api/')) {
+          denial(403, 'operator_not_allowed')
+          return Response.json({ error: 'operator_not_allowed' }, { status: 403 })
+        }
+      } else {
+        resolution = await resolveEffectiveRoles(session, {
+          rbac,
+          tenants: this.options.tenants,
+          audience: this.audience,
+        }, this.tenantId)
+        principal = {
+          requestId,
+          session,
+          ...resolution,
+          clientIp,
+          coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
+          user: verified.kind === 'verified' && verified.envelope.kind !== 'operator'
+            ? {
+              id: verified.envelope.oid,
+              tenantId: verified.envelope.tid,
+              email: verified.envelope.email,
+              name: verified.envelope.name,
+              roles: verified.envelope.roles,
+            }
+            : null,
+        }
+      }
       if (path.startsWith('/__corpuskit/')) {
         return Response.json({ error: 'not_found' }, { status: 404 })
       }
-      if (path === '/auth/me' && request.method === 'GET') {
+      if (resolution && path === '/auth/me' && request.method === 'GET') {
         const selections = new URL(request.url).searchParams.getAll('portal')
         const selectedSlug = selections.length === 1 ? selections[0] : undefined
         const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
@@ -198,7 +247,7 @@ export class LocalIngress {
             rbac.audit,
             createAuditEvent({
               requestId,
-              actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
+              actor: operator ? actor() : session ? { kind: 'user', id: session.oid } : actor(),
               action: 'request.denied',
               scope: { kind: 'platform' },
               target: { kind: 'request' },
@@ -215,14 +264,28 @@ export class LocalIngress {
         this.contexts.delete(forwarded)
       }
     } catch (error) {
-      if (error instanceof InvalidLocalPrincipal) {
+      if (error instanceof InvalidLocalPrincipal || error instanceof InvalidOperatorCredential) {
+        if (error instanceof InvalidOperatorCredential) {
+          const peer = info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
+          const { allowed, retryAfterSec } = this.operatorFailures.check(peer)
+          if (!allowed) {
+            return Response.json({ error: 'rate_limited' }, {
+              status: 429,
+              headers: { 'retry-after': String(retryAfterSec) },
+            })
+          }
+        }
         try {
           denial(401)
         } catch {
           console.error('Local ingress audit write failed')
           return Response.json({ error: 'audit_write_failed' }, { status: 500 })
         }
-        return Response.json({ error: 'invalid_principal' }, { status: 401 })
+        return Response.json({
+          error: error instanceof InvalidOperatorCredential
+            ? 'invalid_operator'
+            : 'invalid_principal',
+        }, { status: 401 })
       }
       console.error('Local trusted request failed')
       return Response.json({ error: 'internal_error' }, { status: 500 })

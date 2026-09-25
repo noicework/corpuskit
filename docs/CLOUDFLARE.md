@@ -61,6 +61,9 @@ The task filters `.env` through an allowlist before calling Wrangler, uses a mod
 file and removes it immediately. It deliberately refuses to upload the ARAG account provisioning
 credentials.
 
+The allowlist includes the optional `OPERATOR_API_KEY` secret. Configure `OPERATOR_ID` as a Worker
+variable when a custom actor label is needed; the default is `operator`.
+
 Only Worker-relevant values are read at runtime:
 
 - `ARAG_ZONE`
@@ -77,6 +80,10 @@ Only Worker-relevant values are read at runtime:
   [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption) for migration,
   readiness signals and key recovery. The secret upload task includes this value when
   configured; it never generates or rotates it.
+- `OPERATOR_API_KEY`, optional hosting automation credential containing at least 32 random bytes
+  encoded as unpadded base64url. Set the optional non-secret `OPERATOR_ID` variable to label its
+  audit actor; it defaults to `operator`. See [Hosting CorpusKit](HOSTING.md#operator-credential)
+  for the route allowlist, authentication boundary and rotation procedure.
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_DOMAINS_TOKEN`, optional credentials for
   automatically attaching a safe `<slug>.<PLATFORM_DOMAIN>` custom domain when an administrator
   creates a portal

@@ -417,7 +417,7 @@ describe('independent admin route permission matrix', () => {
     ['PATCH', 'sources/:id', 'content.write', { auto: false }],
     ['DELETE', 'sources/:id', 'content.write'],
     ['POST', 'sources/:id/sync', 'content.write', {}],
-    ['POST', '/api/admin/migrate', 'platform.settings.write', { from: 'a', to: 'b' }],
+    ['POST', '/api/admin/migrate', 'portal.create', { from: 'a', to: 'b' }],
     ['POST', 'knowledge-box', 'bindings.write', {
       url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
       token: 'fixture-service-account-token',
