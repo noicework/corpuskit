@@ -357,7 +357,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'PATCH', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),
   entry('http', 'DELETE', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources/:id/sync', 'content.write', 'portal'),
-  entry('http', 'POST', '/api/admin/migrate', 'platform.settings.write', 'platform', {
+  entry('http', 'POST', '/api/admin/migrate', 'portal.create', 'platform', {
     detailFields: ['from', 'to'],
     subActions: [
       { action: 'migration.source', permission: 'content.write', scope: 'portal' },
