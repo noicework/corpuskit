@@ -12,7 +12,9 @@ import {
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
 import { LocalIngress } from './local-ingress.ts'
-import { signPrincipal, verifyPrincipal } from './principal.ts'
+import { signPrincipal, type TrustedSessionFacts, verifyPrincipal } from './principal.ts'
+import { authoriseOperation, selectRequestAuthority } from './authorisation.ts'
+import { createEnforcementFixture } from './enforcement-fixture.ts'
 
 const secret = 'test-session-key-with-at-least-32-bytes'
 const encode = (value: Uint8Array) =>
@@ -410,6 +412,62 @@ Deno.test('external principal envelopes require explicit configuration and never
         externalLoginEnabled: true,
       }),
     ).toMatchObject({ kind: 'rejected' })
+  }
+})
+
+Deno.test('authority selection refuses external sessions unless external sign-in is configured', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const external: TrustedSessionFacts = {
+      verified: true,
+      provenance: 'external',
+      tenantId: 'external',
+      oid: 'ext:person-1',
+      email: 'person@example.test',
+      roles: [],
+      groups: [],
+      groupStatus: 'absent',
+      claimIssuedAt: f.now() - 60_000,
+      createdAt: f.now() - 30_000,
+      expiresAt: f.now() + 3600_000,
+    }
+    const policy = { slug: 'a', accessMode: 'restricted', configuredTenantId: f.tenantId }
+    const select = async (externalLoginEnabled: boolean | undefined) => {
+      const context = await f.contextFor(external)
+      // A resolved grant must still not carry the session once the feature is off.
+      context.effectiveRoles = { portalRoles: [{ slug: 'a', role: 'viewer' }] }
+      const authority = selectRequestAuthority(
+        new Request('http://local/api/t/a/search'),
+        context,
+        { ...f.authorityDependencies(), externalLoginEnabled },
+      )
+      return { context, authority }
+    }
+    for (const disabled of [false, undefined]) {
+      const { context, authority } = await select(disabled)
+      await expect(authority).rejects.toThrow('unauthorised')
+      expect(context.denialAudited).toBe(true)
+    }
+    const enabled = await (await select(true)).authority
+    expect(enabled.kind).toBe('session')
+    expect(authoriseOperation(enabled, 'portal.read', { kind: 'portal', slug: 'a' }, policy)).toBe(
+      true,
+    )
+    // The external tenant marker never stands in for an Entra session, or the reverse.
+    for (
+      const session of [{ ...external, provenance: 'entra' as const }, { ...external, oid: 'x' }]
+    ) {
+      const context = await f.contextFor(null)
+      context.session = session
+      await expect(
+        selectRequestAuthority(new Request('http://local/api/t/a/search'), context, {
+          ...f.authorityDependencies(),
+          externalLoginEnabled: true,
+        }),
+      ).rejects.toThrow('unauthorised')
+    }
+  } finally {
+    f.close()
   }
 })
 
