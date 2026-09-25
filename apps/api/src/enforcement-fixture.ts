@@ -471,7 +471,7 @@ export function sessionFor(
 
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
 export function createEnforcementFixture(
-  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> & {
+  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner' | 'platformDomain'> & {
     bindingKey?: string
     breakGlassPolicy?: BreakGlassPolicy
     /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */

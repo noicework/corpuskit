@@ -92,6 +92,7 @@ import { type NewTenantInput, TenantStore, type TenantStoreApi, tenantSummary } 
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
 import { GENERATE_SCHEMAS } from './generate-schemas.ts'
 import {
@@ -861,6 +862,7 @@ export interface BuildAppOptions {
   /** The live provider's management surface; absent in tests. */
   management?: AragProvider
   bindings?: BindingStoreApi
+  platformDomain?: string
   insights?: InsightsStoreApi
   sessions?: SessionsStoreApi
   /** Source registry; shared with startScheduler in server.ts so a scheduled sync and a
@@ -936,6 +938,7 @@ export function researchOwner(c: Context): Promise<ResearchOwner> {
 export function buildApp(opts: BuildAppOptions): Hono {
   const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
+  const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
   const tenants = opts.tenants ?? new TenantStore({})
   const insights = opts.insights ?? new InsightsStore()
   const routing = opts.routing ?? new RoutingLog()
@@ -3687,7 +3690,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!KeyPortalSlugSchema.safeParse(newSlug).success) {
       return c.json({ error: 'invalid_request' }, 400)
     }
-    const newHostname = portalHostnameForSlug(newSlug)
+    const newHostname = portalHostnameForSlug(newSlug, platformDomain)
     if (newHostname && domains) {
       await portalSubAction(c, 'tenant.domain.attach', newSlug, true)
       await portalSubAction(c, 'tenant.domain.detach', newSlug, true)
@@ -3705,7 +3708,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
 
-      const hostname = portalHostnameForSlug(config.slug)
+      const hostname = portalHostnameForSlug(config.slug, platformDomain)
       if (!hostname) {
         return c.json({
           ok: true,

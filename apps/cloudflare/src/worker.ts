@@ -3,6 +3,11 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import { docPageById } from '../../../packages/core/src/docs.ts'
+import {
+  getPlatformDomain,
+  isPlatformHostname,
+} from '../../../packages/core/src/platform-domain.ts'
+import { platformShellResponse } from '../../api/src/platform-shell.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
@@ -38,7 +43,6 @@ import {
 } from '../../api/src/cloudflare-domains.ts'
 
 const PORTAL_OBJECT_NAME = 'production'
-const PLATFORM_DOMAIN = 'corpuskit.org'
 // The same set the API's own middleware sends; here it reaches the app shell,
 // static assets and every response the Worker composes itself.
 const SECURITY_HEADERS: Record<string, string> = {
@@ -100,6 +104,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       provider: this.provider,
       management: this.provider,
       bindings: this.stores.bindings,
+      platformDomain: bindings.PLATFORM_DOMAIN,
       tenants: this.stores.tenants,
       insights: this.stores.insights,
       sessions: this.stores.sessions,
@@ -295,12 +300,18 @@ export default {
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
-  const hostnameLocation = platformHostnameLocation(request)
+  let platformDomain: string
+  try {
+    platformDomain = getPlatformDomain(stringEnv(env).PLATFORM_DOMAIN)
+  } catch {
+    return json({ error: 'platform_domain_invalid' }, 503)
+  }
+  const hostnameLocation = platformHostnameLocation(request, platformDomain)
   if (hostnameLocation) {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
   }
 
-  const auth = authConfig(env, url.hostname)
+  const auth = authConfig(env, url.hostname, platformDomain)
 
   if (url.pathname === '/auth/me' && request.method === 'GET') {
     return forwardTrusted(request, env, auth)
@@ -335,7 +346,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (
     (['/about', '/about/', '/about.html'].includes(url.pathname) ||
       isPublicDocsPath(url.pathname)) &&
-    url.hostname !== PLATFORM_DOMAIN
+    url.hostname !== platformDomain
   ) {
     return plain('Not found', 404)
   }
@@ -351,7 +362,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     return plain('Not found', 404)
   }
 
-  const asset = await env.ASSETS.fetch(marketingHomeRequest(request))
+  const asset = platformShellResponse(
+    await env.ASSETS.fetch(marketingHomeRequest(request, platformDomain)),
+    platformDomain,
+  )
   // Assets answers every unknown path with the app shell and a 200. Keep
   // the shell, so a person still sees the app's own not-found page, but say
   // 404: a scanner learns nothing and a crawler does not index the typo.
@@ -365,18 +379,19 @@ function isPublicDocsPath(pathname: string): boolean {
 }
 
 /** Select marketing documents without leaking the Assets pretty-URL redirects. */
-export function marketingHomeRequest(request: Request): Request {
+export function marketingHomeRequest(request: Request, domain?: string): Request {
+  const platformDomain = getPlatformDomain(domain)
   const url = new URL(request.url)
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return request
   }
 
   if (
-    url.hostname === PLATFORM_DOMAIN &&
+    url.hostname === platformDomain &&
     ['/about', '/about/', '/about.html'].includes(url.pathname)
   ) {
     url.pathname = '/about'
-  } else if (url.hostname === PLATFORM_DOMAIN && isPublicDocsPath(url.pathname)) {
+  } else if (url.hostname === platformDomain && isPublicDocsPath(url.pathname)) {
     const id = /^\/docs\/([a-z0-9-]+)(?:\.html)?\/?$/.exec(url.pathname)?.[1]
     // Unknown paths deliberately serve the overview. Ask Assets for its
     // canonical directory/extensionless URL to avoid pretty-URL redirects.
@@ -457,9 +472,9 @@ async function forwardTrusted(
   }
 }
 
-function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
+function authConfig(env: Env, hostname: string, platformDomain: string): Partial<AuthConfig> {
   const values = stringEnv(env)
-  const onPlatformDomain = hostname === PLATFORM_DOMAIN || hostname.endsWith(`.${PLATFORM_DOMAIN}`)
+  const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
   return {
     clientId: values.ENTRA_CLIENT_ID,
     clientSecret: values.ENTRA_CLIENT_SECRET,
@@ -471,7 +486,7 @@ function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
       ? `https://${hostname}/auth/callback`
       : values.ENTRA_REDIRECT_URI,
     adminEmails: values.ENTRA_ADMIN_EMAILS,
-    cookieDomain: onPlatformDomain ? PLATFORM_DOMAIN : undefined,
+    cookieDomain: onPlatformDomain ? platformDomain : undefined,
   }
 }
 
@@ -482,19 +497,21 @@ function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
  */
 export function platformHostnameLocation(
   request: Pick<Request, 'method' | 'url'>,
+  domain?: string,
 ): string | null {
+  const platformDomain = getPlatformDomain(domain)
   if (request.method !== 'GET' && request.method !== 'HEAD') return null
   const url = new URL(request.url)
   const hostname = url.hostname.toLowerCase()
 
-  if (hostname === `www.${PLATFORM_DOMAIN}`) {
-    return `https://${PLATFORM_DOMAIN}${url.pathname}${url.search}`
+  if (hostname === `www.${platformDomain}`) {
+    return `https://${platformDomain}${url.pathname}${url.search}`
   }
 
-  const suffix = `.${PLATFORM_DOMAIN}`
+  const suffix = `.${platformDomain}`
   if (!hostname.endsWith(suffix)) return null
   const slug = hostname.slice(0, -suffix.length)
-  if (portalHostnameForSlug(slug) !== hostname || url.pathname !== '/') return null
+  if (portalHostnameForSlug(slug, platformDomain) !== hostname || url.pathname !== '/') return null
   return `/t/${slug}${url.search}`
 }
 

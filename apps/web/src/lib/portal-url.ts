@@ -1,8 +1,13 @@
-const PLATFORM_DOMAIN = 'corpuskit.org'
+import {
+  isPlatformHostname,
+  validPlatformDomain,
+} from '../../../../packages/core/src/platform-domain.ts'
 
-function isPlatformHostname(hostname: string): boolean {
-  return hostname === PLATFORM_DOMAIN || hostname === `www.${PLATFORM_DOMAIN}` ||
-    hostname.endsWith(`.${PLATFORM_DOMAIN}`)
+/** The server supplies this value for each HTML response, before the bundle runs. */
+export function runtimePlatformDomain(): string {
+  return globalThis.document?.querySelector<HTMLMetaElement>(
+    'meta[name="corpuskit-platform-domain"]',
+  )?.content ?? ''
 }
 
 /**
@@ -16,13 +21,18 @@ export function portalHref(
     hostname?: string
     suffix?: string
     currentHostname?: string
+    platformDomain?: string
   } = {},
 ): string {
   const suffix = options.suffix ?? ''
   const route = `/t/${encodeURIComponent(slug)}${suffix}`
   const currentHostname = options.currentHostname ?? globalThis.location?.hostname ?? ''
   const portalHostname = options.hostname?.toLowerCase()
-  if (!portalHostname || !isPlatformHostname(currentHostname.toLowerCase())) return route
+  const platformDomain = options.platformDomain ?? runtimePlatformDomain()
+  if (
+    !portalHostname || !validPlatformDomain(portalHostname) ||
+    !isPlatformHostname(currentHostname.toLowerCase(), platformDomain)
+  ) return route
   return portalHostname === currentHostname.toLowerCase()
     ? route
     : `https://${portalHostname}${route}`

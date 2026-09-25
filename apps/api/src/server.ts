@@ -14,6 +14,8 @@ import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
+import { platformShellResponse } from './platform-shell.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 
 loadRootEnv()
 
@@ -165,4 +167,9 @@ app.get(
   }),
 )
 
-Deno.serve({ port }, (request, info) => ingress.handle(request, (clean) => app.fetch(clean), info))
+const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
+Deno.serve({ port }, async (request, info) =>
+  platformShellResponse(
+    await ingress.handle(request, (clean) => app.fetch(clean), info),
+    platformDomain,
+  ))

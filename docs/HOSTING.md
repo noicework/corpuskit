@@ -39,3 +39,27 @@ Keep the key available with your protected backups. Changing or losing it preven
 sealed tokens from being decrypted. This release does not provide automatic key rotation or
 re-encryption under a replacement key. A code rollback must understand the sealed format; do not
 roll back to a version that treats sealed tokens as plaintext.
+
+## Configurable platform domain
+
+Set the runtime `PLATFORM_DOMAIN` variable to the deployment's platform hostname, such as
+`research.example`. It defaults to `corpuskit.org`. Use a DNS hostname without a scheme, path or
+port. Invalid values are rejected. This value is independent of the Worker name.
+
+Automatic portal hostnames use `<slug>.<PLATFORM_DOMAIN>`. The platform redirect, platform links
+in the SPA and shared session-cookie scope derive from the same value. The server injects the
+domain into the HTML shell at runtime before the SPA loads, so a single web bundle can serve
+different deployments without a rebuild. Custom hostnames outside the platform domain retain
+host-only cookies; lookalike suffixes are never included in the platform cookie scope.
+
+Configure Worker routes, the domain automation token's zone permissions and the identity
+provider's redirect URI for your chosen domain. Changing this variable does not create DNS
+routes or rewrite explicitly assigned portal hostnames. Existing sessions on the previous
+domain do not transfer to a different domain.
+
+The platform domain may be a Cloudflare zone apex or a subdomain of one. Hostname automation
+attaches each new hostname to `WORKER_NAME` (default `corpuskit`) and lets Cloudflare place it in
+the account zone that contains it, then rejects a result for any other hostname, Worker or zone.
+Its token needs DNS Edit for that zone and Workers Scripts Edit for the account. Explicitly
+malformed `PLATFORM_DOMAIN` configuration returns HTTP 503 `platform_domain_invalid` at the Worker
+boundary.

@@ -172,6 +172,116 @@ Deno.test('Worker keeps the apex canonical when www is requested', async () => {
   expect(response.headers.get('location')).toBe('https://corpuskit.org/why?ref=www')
 })
 
+Deno.test('Worker redirects and serves platform documents using a non-default domain', async () => {
+  for (
+    const [input, status, location, path] of [
+      [
+        'https://www.research.example.org/docs/?q=1',
+        308,
+        'https://research.example.org/docs/?q=1',
+        '',
+      ],
+      ['https://marine.research.example.org/?q=1', 308, '/t/marine?q=1', ''],
+      ['https://research.example.org/about/', 200, null, '/about'],
+      ['https://research.example.org/docs/', 200, null, '/docs/'],
+      ['https://corpuskit.org/about/', 404, null, ''],
+      ['https://marine.research.example.org/about/', 404, null, ''],
+    ] as const
+  ) {
+    const harness = workerHarness()
+    Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+    const response = await worker.fetch(new Request(input), harness.env)
+    expect(response.status).toBe(status)
+    expect(response.headers.get('location')).toBe(location)
+    expect(harness.assetRequests.map((request) => new URL(request.url).pathname))
+      .toEqual(path ? [path] : [])
+    await response.body?.cancel()
+  }
+})
+
+Deno.test('Worker domain redirects reject unrelated, nested and reserved hostnames and mutations', async () => {
+  for (
+    const hostname of [
+      'marine.corpuskit.org',
+      'notresearch.example.org',
+      'research.example.org.evil.test',
+      'marine.nested.research.example.org',
+      'admin.research.example.org',
+    ]
+  ) {
+    const harness = workerHarness()
+    Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+    const response = await worker.fetch(new Request(`https://${hostname}/`), harness.env)
+    expect(response.headers.get('location')).toBeNull()
+    await response.body?.cancel()
+  }
+  const harness = workerHarness()
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  const response = await worker.fetch(
+    new Request('https://marine.research.example.org/', { method: 'POST' }),
+    harness.env,
+  )
+  expect(response.status).toBe(405)
+  expect(response.headers.get('location')).toBeNull()
+})
+
+Deno.test('Worker injects domain configuration per HTML response without changing the bundle', async () => {
+  const shell =
+    '<head><meta name="corpuskit-platform-domain" content="__CORPUSKIT_PLATFORM_DOMAIN__"></head>'
+  const harness = workerHarness({
+    assets: () =>
+      new Response(shell, {
+        headers: { 'content-type': 'text/html', etag: 'static-body' },
+      }),
+  })
+  for (const domain of [undefined, 'research.example.org', 'other.example.org']) {
+    Object.assign(harness.env, { PLATFORM_DOMAIN: domain })
+    const response = await worker.fetch(
+      new Request('https://research.example.org/t/marine'),
+      harness.env,
+    )
+    expect(await response.text()).toContain(`content="${domain ?? 'corpuskit.org'}"`)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('etag')).toBeNull()
+  }
+})
+
+Deno.test('Worker cookies share only the configured platform domain', async () => {
+  for (
+    const hostname of [
+      'research.example.org',
+      'marine.research.example.org',
+      'corpuskit.org',
+      'research.example.org.evil.test',
+    ]
+  ) {
+    const harness = workerHarness()
+    Object.assign(harness.env, {
+      PLATFORM_DOMAIN: 'research.example.org',
+      ENTRA_CLIENT_SECRET: 'test-only-client-secret',
+    })
+    const response = await worker.fetch(new Request(`https://${hostname}/auth/logout`), harness.env)
+    expect(response.status).toBe(302)
+    const cookie = response.headers.get('set-cookie')!
+    expect(cookie).toContain('Max-Age=0')
+    if (['research.example.org', 'marine.research.example.org'].includes(hostname)) {
+      expect(cookie).toContain('Domain=research.example.org')
+    } else expect(cookie).not.toContain('Domain=')
+    expect(cookie).not.toContain('Domain=corpuskit.org')
+  }
+})
+
+Deno.test('Worker rejects invalid platform configuration without forwarding or exposing it', async () => {
+  const harness = workerHarness()
+  const malformed = 'invalid.example.org"><script>alert(1)</script>'
+  Object.assign(harness.env, { PLATFORM_DOMAIN: malformed })
+  const response = await worker.fetch(new Request('https://corpuskit.org/'), harness.env)
+  expect(response.status).toBe(503)
+  expect(await response.json()).toEqual({ error: 'platform_domain_invalid' })
+  expect(harness.assetRequests).toHaveLength(0)
+  expect(harness.portalRequests).toHaveLength(0)
+})
+
 Deno.test('Worker serves the marketing app at the CorpusKit apex', async () => {
   const harness = workerHarness()
   const response = await worker.fetch(new Request('https://corpuskit.org/'), harness.env)

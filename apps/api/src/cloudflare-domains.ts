@@ -1,5 +1,9 @@
+import {
+  getPlatformDomain,
+  validPlatformDomain,
+} from '../../../packages/core/src/platform-domain.ts'
+
 const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4'
-const PORTAL_ZONE = 'corpuskit.org'
 const WORKER_SERVICE = 'corpuskit'
 
 const RESERVED_PORTAL_SLUGS = new Set([
@@ -35,10 +39,21 @@ const RESERVED_PORTAL_SLUGS = new Set([
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 /** Return the platform hostname only when the slug is safe to publish as DNS. */
-export function portalHostnameForSlug(slug: string): string | null {
+export function portalHostnameForSlug(slug: string, platformDomain?: string): string | null {
+  const domain = getPlatformDomain(platformDomain)
   if (!DNS_LABEL.test(slug) || slug.length > 63) return null
   if (slug.startsWith('xn--') || RESERVED_PORTAL_SLUGS.has(slug)) return null
-  return `${slug}.${PORTAL_ZONE}`
+  const hostname = `${slug}.${domain}`
+  return hostname.length <= 253 ? hostname : null
+}
+
+/** Normalise a hostname before it reaches the Cloudflare API or a stored tenant. */
+function validHostname(hostname: string): string {
+  const normalised = hostname.trim().toLowerCase()
+  if (!validPlatformDomain(normalised)) {
+    throw new CloudflareDomainApiError('Invalid portal hostname', 400)
+  }
+  return normalised
 }
 
 export interface PortalDomainProvisioner {
@@ -91,44 +106,60 @@ export function createCloudflareDomainProvisioner(
   const accountId = env.CLOUDFLARE_ACCOUNT_ID?.trim()
   const apiToken = env.CLOUDFLARE_DOMAINS_TOKEN?.trim()
   if (!accountId || !apiToken) return null
-  return new CloudflareDomainProvisioner({ accountId, apiToken }, fetcher)
+  getPlatformDomain(env.PLATFORM_DOMAIN)
+  return new CloudflareDomainProvisioner({
+    accountId,
+    apiToken,
+    service: env.WORKER_NAME,
+  }, fetcher)
 }
 
 export class CloudflareDomainProvisioner implements PortalDomainProvisioner {
-  private readonly zoneName: string
+  private readonly zoneName?: string
   private readonly service: string
 
   constructor(
     private readonly config: CloudflareDomainConfig,
     private readonly fetcher: typeof fetch = globalThis.fetch,
   ) {
-    this.zoneName = config.zoneName ?? PORTAL_ZONE
+    this.zoneName = config.zoneName === undefined ? undefined : validHostname(config.zoneName)
     this.service = config.service ?? WORKER_SERVICE
   }
 
   async attach(hostname: string): Promise<{ hostname: string; created: boolean }> {
+    hostname = validHostname(hostname)
     const existing = await this.find(hostname)
     if (existing) {
       this.assertOwnedByService(existing)
       return { hostname: existing.hostname, created: false }
     }
 
+    // Without an explicit zone, Cloudflare attaches the hostname to the account zone that
+    // contains it, so a platform domain may be a zone apex or a subdomain of one.
     const domain = await this.request<CloudflareDomain>('/workers/domains', {
       method: 'PUT',
       body: JSON.stringify({
         hostname,
         service: this.service,
-        zone_name: this.zoneName,
+        ...(this.zoneName ? { zone_name: this.zoneName } : {}),
       }),
     })
-    if (domain.hostname.toLowerCase() !== hostname.toLowerCase()) {
+    if (domain.hostname.toLowerCase() !== hostname) {
       throw new CloudflareDomainApiError('Cloudflare attached an unexpected hostname', 502)
+    }
+    const zone = typeof domain.zone_name === 'string' ? domain.zone_name.toLowerCase() : ''
+    if (
+      !zone || (hostname !== zone && !hostname.endsWith(`.${zone}`)) ||
+      (this.zoneName !== undefined && zone !== this.zoneName)
+    ) {
+      throw new CloudflareDomainApiError('Cloudflare attached an unexpected zone', 502)
     }
     this.assertOwnedByService(domain)
     return { hostname: domain.hostname.toLowerCase(), created: true }
   }
 
   async detach(hostname: string): Promise<{ hostname: string; removed: boolean }> {
+    hostname = validHostname(hostname)
     const existing = await this.find(hostname)
     if (!existing) return { hostname, removed: false }
     this.assertOwnedByService(existing)
@@ -143,11 +174,10 @@ export class CloudflareDomainProvisioner implements PortalDomainProvisioner {
   private async find(hostname: string): Promise<CloudflareDomain | null> {
     const query = new URLSearchParams({
       hostname,
-      zone_name: this.zoneName,
+      ...(this.zoneName ? { zone_name: this.zoneName } : {}),
     })
     const domains = await this.request<CloudflareDomain[]>(`/workers/domains?${query}`)
-    return domains.find((domain) => domain.hostname.toLowerCase() === hostname.toLowerCase()) ??
-      null
+    return domains.find((domain) => domain.hostname.toLowerCase() === hostname) ?? null
   }
 
   private assertOwnedByService(domain: CloudflareDomain): void {
