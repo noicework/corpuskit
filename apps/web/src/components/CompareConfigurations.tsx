@@ -129,7 +129,8 @@ export function CompareConfigurations(
       .then(() => update((c) => ({ ...c, pending: false, seconds: (Date.now() - started) / 1000 })))
       .catch((err) => {
         if (controller.signal.aborted) return
-        const rateLimited = err instanceof ApiError && err.status === 429
+        const rateLimited = err instanceof ApiError && err.status === 429 &&
+          err.code !== 'ask_quota_exceeded'
         update((c) => ({
           ...c,
           pending: false,

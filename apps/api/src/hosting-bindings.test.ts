@@ -201,12 +201,23 @@ Deno.test('a binding sealed under another key is withheld per portal and recover
     expect(other.status).toBe(200)
     expect((await other.json()).status).toBe('none')
     expect(f.state.get<Record<string, { token: string }>>('bindings', {}).a?.token).toBe(sealed)
+    // Hosting state stays readable; usage needs the box, so it names the withheld binding.
+    const lifecycle = await f.requestAs(admin, '/api/admin/t/a/lifecycle')
+    expect(lifecycle.status).toBe(200)
+    expect((await lifecycle.json()).status).toBe('active')
+    const usage = await f.requestAs(admin, '/api/admin/t/a/usage')
+    expect(usage.status).toBe(503)
+    expect(await usage.json()).toEqual({ error: 'binding_unavailable' })
+    f.stores.lifecycle.reserveAdd('a', { observed: 0, bytes: 1 })
+    expect(f.stores.lifecycle.hasCapacityLedger('a')).toBe(true)
 
     globalThis.fetch = () => Promise.resolve(Response.json({ resources: 3 }))
     const replaced = await f.requestAs(admin, '/api/admin/t/a/knowledge-box', connect)
     expect(replaced.status).toBe(200)
     expect((await replaced.json()).status.status).toBe('connected')
     expect(f.stores.bindings.get('a')?.token).toBe(token)
+    // The withheld record named no box, so its replacement starts a fresh capacity ledger.
+    expect(f.stores.lifecycle.hasCapacityLedger('a')).toBe(false)
     const removed = await f.requestAs(admin, '/api/admin/t/a/knowledge-box', { method: 'DELETE' })
     expect(removed.status).toBe(200)
     expect((await removed.json()).status.status).toBe('none')

@@ -2532,7 +2532,7 @@ export function AskPage() {
           ...existing,
           pending: false,
           error: thrown.message,
-          rateLimited: true,
+          rateLimited: thrown.code !== 'ask_quota_exceeded',
           retryAfterSec: thrown.retryAfterSec,
         }))
       } else {

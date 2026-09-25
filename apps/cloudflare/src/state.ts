@@ -11,6 +11,7 @@ import type { BrandingAsset, BrandingAssetStore, BrandingKind } from '../../api/
 import { type BindingStoreApi, SealedBindingStore } from '../../api/src/bindings.ts'
 import { BindingCryptoError } from '../../api/src/binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
+import { PortalLifecycleStore } from '../../api/src/lifecycle-store.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
@@ -197,7 +198,10 @@ export class DurableState {
             },
           }),
         )
-        if (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') {
+        if (
+          (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
+          (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update')
+        ) {
           appendAudit(this.rbac.audit, createAuditEvent({ ...context.input, outcome: 'success' }))
         }
         return result
@@ -374,6 +378,9 @@ export class DurableState {
       return JSON.parse(row.value) as T
     } catch (error) {
       if (key === 'bindings') throw new BindingCryptoError('binding_storage_invalid')
+      if (/^portal-(?:lifecycle|asks|capacity):/.test(key)) {
+        throw new Error('Invalid persisted portal lifecycle')
+      }
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
       if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
@@ -1569,6 +1576,7 @@ export class DurableRoutingLog implements RoutingLogApi {
 }
 
 export interface DurableStores extends RbacStores {
+  lifecycle: PortalLifecycleStore
   localMutations: LocalMutationScope
   rbac: RbacState
   bindings: DurableBindingStore
@@ -1591,6 +1599,7 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
     localMutations: state.localMutations,
     rbac: state.rbac,
     audit: state.rbac.audit,

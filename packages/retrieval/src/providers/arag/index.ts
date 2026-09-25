@@ -1438,6 +1438,16 @@ export class AragProvider implements RetrievalProvider {
     }
   }
 
+  /** The knowledge box's resource count, refusing a response that does not carry one. */
+  async resourceCount(tenant: TenantConfig): Promise<number> {
+    const raw = await this.client(tenant).getJson<{ resources?: unknown }>('/counters')
+    const count = raw?.resources
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error('Knowledge box resource count is unavailable')
+    }
+    return count
+  }
+
   async recentResources(tenant: TenantConfig, limit = 12): Promise<RecentResource[]> {
     const raw = await this.client(tenant).getJson<{
       resources?: Record<string, RawResource & { created?: string }>
@@ -3419,6 +3429,11 @@ export class AragProvider implements RetrievalProvider {
   async ingestDocumentation(
     tenant: TenantConfig,
     pages: DocPage[] = DOC_PAGES,
+    admission?: {
+      /** Admit one new page; the returned callback reports whether the write created it. */
+      beforeCreate(): Promise<(outcome: { created: boolean; id?: string }) => void>
+      beforeUpdate(): void
+    },
   ): Promise<{ created: string[]; updated: string[]; failed: { id: string; error: string }[] }> {
     const client = this.client(tenant)
     const created: string[] = []
@@ -3436,11 +3451,40 @@ export class AragProvider implements RetrievalProvider {
         texts: { body: { body: markdown, format: 'MARKDOWN' } },
         usermetadata: { classifications },
       }
+      let settle: ((outcome: { created: boolean; id?: string }) => void) | undefined
+      if (admission) {
+        // Resolve existing documentation before capacity admission. Updating a page
+        // consumes no new resource slot and must never fall back to creating one.
+        let existingId: string | undefined
+        try {
+          const existing = await client.getJson<{ id?: string; uuid?: string }>(`/slug/${slug}`)
+          existingId = existing.id ?? existing.uuid
+          if (!existingId) throw new Error('Could not resolve documentation resource')
+        } catch (error) {
+          if (!(error instanceof AragApiError) || error.status !== 404) throw error
+        }
+        if (existingId) {
+          admission.beforeUpdate()
+          await withBackpressureRetry(() =>
+            client.patchJson(`/resource/${existingId}`, {
+              title: page.title,
+              origin: { url: docResourceOrigin(page.id) },
+              texts: { body: { body: markdown, format: 'MARKDOWN' } },
+              usermetadata: { classifications },
+            })
+          )
+          updated.push(page.id)
+          continue
+        }
+        settle = await admission.beforeCreate()
+      }
+      let response: { uuid?: string } | undefined
       try {
-        await withBackpressureRetry(() => client.postJson('/resources', createBody))
-        created.push(page.id)
-        continue
+        response = await withBackpressureRetry(() =>
+          client.postJson<{ uuid?: string }>('/resources', createBody)
+        ) ?? {}
       } catch (err) {
+        settle?.({ created: false })
         // A slug clash (or another write conflict) means the page already
         // exists - update it in place so ingestion is idempotent by page id.
         const status = err instanceof AragApiError ? err.status : 0
@@ -3449,6 +3493,11 @@ export class AragProvider implements RetrievalProvider {
           failed.push({ id: page.id, error: err instanceof Error ? err.message : 'create failed' })
           continue
         }
+      }
+      if (response) {
+        settle?.({ created: true, ...(response.uuid ? { id: response.uuid } : {}) })
+        created.push(page.id)
+        continue
       }
       try {
         const existing = await client.getJson<{ id?: string; uuid?: string }>(`/slug/${slug}`)

@@ -186,13 +186,16 @@ application logs while preventing automatic request-URL logging of handoff asser
 the supported [invocation-log control](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs)
 in the pinned Wrangler version. Proxy access logs and other telemetry must also omit the assertion
 query string. The source-bound assignment migration is not safe to roll back to older code while
-external assignments remain; see [the hosting rollback note](HOSTING.md#external-sign-in-handoff).
+external assignments remain; see [the hosting rollback note](HOSTING.md#rollback).
 
 ## State and rollback
 
 Tenant configuration, bindings, sessions, investigations, watches, sources, insights,
-suggestions, enrichments and branding assets live in the `PortalDurableObject` SQLite database.
-The first Worker migration is tagged `v1`; future schema changes must add a new migration tag.
+suggestions, enrichments, branding assets and each portal's hosting lifecycle (status, limits,
+ask counts and capacity ledger; see [lifecycle storage](HOSTING.md#storage)) live in the
+`PortalDurableObject` SQLite database. The first Worker migration is tagged `v1`; future schema changes must add a new
+migration tag. The hosting lifecycle uses the existing `state` table, so it needs no new
+migration, secret or variable.
 
 Cloudflare keeps Worker versions and deployments. Roll code back with a Cloudflare deployment
 rollback; never delete the Durable Object namespace during rollback, because it owns production

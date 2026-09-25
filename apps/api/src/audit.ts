@@ -1,5 +1,6 @@
 import {
   AccessModeSchema,
+  isSafeLifecycleNote,
   PERMISSIONS,
   PORTAL_ROLES,
   ROLES,
@@ -160,6 +161,7 @@ const member = (values: readonly string[]): Validator => (value): value is strin
   typeof value === 'string' && values.includes(value)
 const count: Validator = (value): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const flag: Validator = (value): value is boolean => typeof value === 'boolean'
 const id: Validator = (value): value is string =>
   typeof value === 'string' &&
   ((identifier.test(value) && !value.includes('://')) || /^ext:[\s\S]{1,128}$/u.test(value))
@@ -181,6 +183,12 @@ const fields = {
     'storage',
     'session',
   ]),
+  lifecycleStatus: member(['active', 'read_only', 'suspended']),
+  maxResources: count,
+  maxBytes: count,
+  asksPerDay: count,
+  agentsEnabled: flag,
+  note: isSafeLifecycleNote,
   previousAccessMode: member(AccessModeSchema.options),
   accessMode: member(AccessModeSchema.options),
   keyRole: member(PORTAL_ROLES),
@@ -221,6 +229,16 @@ const fields = {
 type Field = keyof typeof fields
 const actionFields = {
   'auth.external.denied': ['externalReason'],
+  'portal.lifecycle.update': [
+    'permission',
+    'lifecycleStatus',
+    'maxResources',
+    'maxBytes',
+    'asksPerDay',
+    'agentsEnabled',
+    'note',
+    'code',
+  ],
   'local.mutation': ['permission', 'operation', 'mutation', 'sessionOid', 'sessionTenantId'],
   'assignment.create': ['role', 'subjectKind'],
   'assignment.update': ['role', 'previousRole', 'subjectKind'],

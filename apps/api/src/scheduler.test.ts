@@ -29,6 +29,7 @@ import { createAuditEvent, redactAuditDetail } from './audit.ts'
 
 const dir = await Deno.makeTempDir()
 Deno.env.set('DATA_DIR', dir)
+const { PortalLifecycleStore } = await import('./lifecycle-store.ts')
 
 const { sessionFor } = await import('./enforcement-fixture.ts')
 const watchContext = () => ({
@@ -54,6 +55,133 @@ const { TenantStore } = await import('./tenants.ts')
 
 const freshTenants = () =>
   new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` })
+
+Deno.test('maintenance skips read-only content jobs, agent runs when agents are disabled, and all suspended portal jobs', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const lifecycle = new PortalLifecycleStore()
+    for (
+      const [status, limits, jobs] of [
+        ['read_only', null, ['sync', 'enrichment']],
+        ['suspended', null, ['sync', 'watch', 'enrichment']],
+        ['active', { agentsEnabled: false }, ['enrichment']],
+      ] as const
+    ) {
+      const tenants = freshTenants()
+      for (const tenant of tenants.list()) lifecycle.set(tenant.slug, { status, limits })
+      let providerCalls = 0
+      const management = new Proxy({}, {
+        get() {
+          return () => {
+            providerCalls++
+            throw new Error('Unexpected provider call')
+          }
+        },
+      }) as AragProvider
+      const stores = {
+        rbac,
+        tenants,
+        lifecycle,
+        sources: {
+          list: () => {
+            throw new Error('Unexpected source access')
+          },
+        } as unknown as InstanceType<typeof SourceStore>,
+        watches: {
+          list: () => {
+            throw new Error('Unexpected watch access')
+          },
+        } as unknown as InstanceType<typeof WatchStore>,
+        enrichments: {
+          get: () => {
+            throw new Error('Unexpected enrichment access')
+          },
+        } as unknown as InstanceType<typeof EnrichmentStore>,
+      }
+      await runSystemMaintenance(management, stores, undefined, [...jobs], false)
+      expect(providerCalls).toBe(0)
+    }
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('a scheduled generation run stops before its next model call once its portal is paused, read-only or has agents disabled', async () => {
+  const corpus = 8
+  const changeAt = 5
+  const text = 'The survey found that the northern reef recovered within two seasons. '.repeat(8)
+  for (
+    const change of [
+      { status: 'suspended', limits: null },
+      { status: 'read_only', limits: null },
+      { status: 'active', limits: { agentsEnabled: false } },
+    ] as const
+  ) {
+    const db = new LocalRbacDatabase(':memory:')
+    try {
+      const rbac = new RbacState(db)
+      rbac.migrate()
+      const tenants = freshTenants()
+      for (const t of tenants.list()) if (t.slug !== 'marine') tenants.setDisabled(t.slug, true)
+      const lifecycle = new PortalLifecycleStore()
+      const enrichments = new EnrichmentStore(Deno.makeTempDirSync())
+      let calls = 0
+      let writtenAtChange = -1
+      const management = {
+        listResources: () =>
+          Promise.resolve(
+            Array.from({ length: corpus }, (_, index) => ({
+              id: `doc-${index + 1}`,
+              title: `Report ${index + 1}`,
+              summary: `What report ${index + 1} found.`,
+            })),
+          ),
+        invalidate: () => {},
+        resourceContent: (_config: unknown, id: string) =>
+          Promise.resolve({
+            id,
+            title: 'Report',
+            kind: 'text',
+            texts: [{ fieldId: 'body', text }],
+          }),
+        askStructured: () => {
+          calls++
+          if (calls === changeAt) {
+            writtenAtChange = enrichments.count('marine')
+            lifecycle.set('marine', change)
+          }
+          return Promise.resolve({
+            object: { title: 'Northern reef recovery', summary: 'The reef recovered.' },
+          })
+        },
+      } as unknown as AragProvider
+      const stores = {
+        rbac,
+        tenants,
+        lifecycle,
+        sources: new SourceStore(),
+        watches: new WatchStore(),
+        enrichments,
+      }
+      // The pass itself has not failed: only the changed portal's run stopped.
+      await runSystemMaintenance(management, stores, undefined, ['enrichment'], false)
+      const label = JSON.stringify(change)
+      expect(calls, label).toBe(changeAt)
+      expect(writtenAtChange, label).toBeGreaterThan(0)
+      expect(enrichments.count('marine'), label).toBe(writtenAtChange)
+      // Its suggested-question pass is not started against the refusal.
+      expect(enrichments.count('marine', 'suggested-questions'), label).toBe(0)
+      const actions = rbac.audit.read({ scope: { kind: 'portal', slug: 'marine' } })
+        .map((event) => event.action)
+      expect(actions, label).toContain('maintenance.enrichment.run')
+      expect(actions, label).not.toContain('maintenance.questions.run')
+    } finally {
+      db.close()
+    }
+  }
+})
 
 Deno.test('scheduled watch mutations carry portal target and shared system correlation', async () => {
   const db = new LocalRbacDatabase(':memory:')

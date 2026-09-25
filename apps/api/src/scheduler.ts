@@ -15,11 +15,20 @@ import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
 import type { RbacState } from './rbac-state.ts'
 import { executeAudited, type LocalMutationScope } from './audit-execution.ts'
 import { DECLARATIONS } from './permissions.ts'
+import type { PortalLifecycleStore } from './lifecycle-store.ts'
+import {
+  assertAgentRunAllowed,
+  guardManagement,
+  guardPortalWrites,
+} from './lifecycle-management.ts'
+import { PortalLifecycleError } from './lifecycle-error.ts'
+import { readLifecycle } from './lifecycle-policy.ts'
 
 interface SystemJobContext {
   localMutations?: LocalMutationScope
   audit: AuditStore
   requestId: string
+  lifecycle?: PortalLifecycleStore
 }
 type SystemAction =
   | 'maintenance.source.sync'
@@ -115,6 +124,7 @@ interface MaintenanceStores {
   sources: SourceStoreApi
   watches: WatchStoreApi
   enrichments: EnrichmentStoreApi
+  lifecycle?: PortalLifecycleStore
 }
 
 export async function runSystemMaintenance(
@@ -125,13 +135,18 @@ export async function runSystemMaintenance(
   retain = true,
 ): Promise<void> {
   const days = auditRetentionDays(retentionDays)
+  const guarded = stores.lifecycle ? guardManagement(management, stores.lifecycle) : management
+  // No platform exception: a background job never writes to a suspended or read-only portal.
+  const sources = guardPortalWrites(stores.sources, stores.lifecycle)
+  const enrichments = guardPortalWrites(stores.enrichments, stores.lifecycle)
   if (retain) stores.rbac.retainAudit(days)
   for (const job of jobs) {
     await runSystemJob(stores.rbac.audit, job, (context) => {
       context.localMutations = stores.localMutations
-      if (job === 'sync') return runAutoSyncs(management, stores.tenants, stores.sources, context)
-      if (job === 'watch') return runWatches(management, stores.tenants, stores.watches, context)
-      return runAutoEnrichments(management, stores.tenants, stores.enrichments, context)
+      context.lifecycle = stores.lifecycle
+      if (job === 'sync') return runAutoSyncs(guarded, stores.tenants, sources, context)
+      if (job === 'watch') return runWatches(guarded, stores.tenants, stores.watches, context)
+      return runAutoEnrichments(guarded, stores.tenants, enrichments, context)
     })
   }
 }
@@ -193,6 +208,8 @@ export async function syncSource(
   let skipped = 0
   /** The first refusal reason seen, reported once instead of per page. */
   let rejectedReason: string | undefined
+  /** A hosting refusal (a limit, read-only or paused) that stopped this run. */
+  let refusal: PortalLifecycleError | undefined
   for (const [i, url] of fresh.entries()) {
     signal?.throwIfAborted()
     try {
@@ -246,6 +263,7 @@ export async function syncSource(
         // not be masked as "the site was awkward, skip it". Back-pressure
         // needs the outer catch's deferral, and a 401/403 means the box
         // refuses writes outright - both belong to the caller.
+        if (err instanceof PortalLifecycleError) throw err
         if (err instanceof AragApiError) {
           if (err.backpressure || err.status === 401 || err.status === 403) throw err
         }
@@ -270,6 +288,13 @@ export async function syncSource(
       added += 1
       if (added % 5 === 0) await emit(`Ingested ${added} of ${fresh.length} new pages…`)
     } catch (err) {
+      if (err instanceof PortalLifecycleError) {
+        // The portal refuses every further page the same way (its limit is reached, or it is
+        // read-only or paused): stop and say so once, keeping the pages already added.
+        refusal = err
+        await emit(err.message)
+        break
+      }
       if (err instanceof AragApiError && err.backpressure) {
         // The box's ingestion queue is full. Stop this run cleanly rather
         // than hammering it for every remaining page - they stay un-synced
@@ -304,6 +329,14 @@ export async function syncSource(
     )
   }
   signal?.throwIfAborted()
+  if (refusal) {
+    // Keep what this run got through, so the next sync neither re-adds nor re-reads it.
+    sources.update(config.slug, source.id, {
+      synced: [...known].slice(-5000),
+      itemCount: (source.itemCount ?? source.synced?.length ?? 0) + added,
+    })
+    throw refusal
+  }
   sources.update(config.slug, source.id, {
     lastSync: new Date().toISOString(),
     lastAdded: added,
@@ -348,6 +381,11 @@ export async function runWatches(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
+    // A job never acts on a portal whose hosting state it cannot read, or that is paused.
+    if (context?.lifecycle) {
+      const hosting = readLifecycle(context.lifecycle, config.slug)
+      if (!hosting || hosting.status === 'suspended') continue
+    }
     for (const watch of watches.list(config.slug)) {
       await scopedSystemAction(context, 'maintenance.watch.run', config.slug, {
         kind: 'watch',
@@ -408,7 +446,20 @@ export async function runAutoEnrichments(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
+    // Enrichment and suggested-question generators are agents: they need an active portal
+    // whose agents are enabled, and a hosting state that can be read.
+    const lifecycle = context?.lifecycle
+    if (lifecycle) {
+      const hosting = readLifecycle(lifecycle, config.slug)
+      if (!hosting || hosting.status !== 'active' || hosting.limits?.agentsEnabled === false) {
+        continue
+      }
+    }
+    // Rechecked before each model call and write, so a portal paused, made read-only or with
+    // agents disabled while its run is going stops there.
+    const proceed = lifecycle ? () => assertAgentRunAllowed(lifecycle, config.slug) : undefined
     try {
+      let refused = false
       await scopedSystemAction(context, 'maintenance.enrichment.run', config.slug, {
         kind: 'portal',
         id: config.slug,
@@ -418,10 +469,13 @@ export async function runAutoEnrichments(
           const event of runEnrichmentOverCorpus(management, enrichments, config, {
             scope: 'missing',
             limit: AUTO_ENRICH_CAP,
+            proceed,
           })
         ) {
           signal.throwIfAborted()
-          if (event.type === 'error') problem = event.message
+          // A hosting refusal stops this portal alone; the pass itself has not failed.
+          if (event.type === 'error' && event.error) refused = true
+          else if (event.type === 'error') problem = event.message
         }
         if (problem) {
           // Tenants share the platform account. Once one box says it is
@@ -430,6 +484,7 @@ export async function runAutoEnrichments(
           throw new Error('Scheduled enrichment did not complete')
         }
       })
+      if (refused) continue
       await scopedSystemAction(context, 'maintenance.questions.run', config.slug, {
         kind: 'portal',
         id: config.slug,
@@ -439,9 +494,11 @@ export async function runAutoEnrichments(
         for await (
           const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
             limit: AUTO_QUESTIONS_CAP,
+            proceed,
           })
         ) {
           signal.throwIfAborted()
+          if (event.type === 'error' && event.error) return
           if (event.type === 'error') {
             throw new Error('Scheduled suggested questions did not complete')
           }
@@ -464,8 +521,12 @@ export async function runAutoSyncs(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
+    if (context?.lifecycle && readLifecycle(context.lifecycle, config.slug)?.status !== 'active') {
+      continue
+    }
     for (const source of sources.list(config.slug)) {
       if (!source.auto) continue
+      let refused = false
       await scopedSystemAction(context, 'maintenance.source.sync', config.slug, {
         kind: 'source',
         id: source.id,
@@ -473,15 +534,26 @@ export async function runAutoSyncs(
         try {
           await syncSource(management, sources, config, source, () => {}, signal)
         } catch (err) {
+          signal.throwIfAborted()
+          if (err instanceof PortalLifecycleError) {
+            // The portal's hosting state (a limit reached, read-only or paused) refuses its
+            // other sources alike. Say so on the source and move on to the next portal; the
+            // pass itself has not failed.
+            refused = true
+            try {
+              recordSyncFailure(sources, config.slug, source, err)
+            } catch { /* A read-only or paused portal keeps its source record as it was. */ }
+            return
+          }
           // The site is unreachable, or the box refuses writes. Record the reason
           // against the source for Manage, then stop this run.
           // The internal caller must observe and audit the failed maintenance pass.
-          signal.throwIfAborted()
           recordSyncFailure(sources, config.slug, source, err)
           console.error(`[scheduler] auto-sync failed for ${config.slug}`)
           throw err
         }
       })
+      if (refused) break
     }
   }
 }
@@ -506,8 +578,9 @@ export function startScheduler(
   enrichments: EnrichmentStoreApi,
   rbac: RbacState,
   env: Record<string, string | undefined>,
+  lifecycle?: PortalLifecycleStore,
 ): () => void {
-  const stores = { rbac, tenants, sources, watches, enrichments }
+  const stores = { rbac, tenants, sources, watches, enrichments, lifecycle }
   const runDaily = () =>
     runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'])
   const runEnrichments = () =>

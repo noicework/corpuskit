@@ -1,23 +1,12 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { z } from 'zod'
-import { type Branding, BrandingSchema, DEFAULT_PALETTES } from '@research-portal/core'
+import { type Branding, DEFAULT_PALETTES } from '@research-portal/core'
 import { Link } from 'react-router-dom'
 import { useAccess } from './AccessProvider.tsx'
 import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
+import { readSafePortalMetadata } from '../api/portal-metadata.ts'
 
-const safeMetadataSchema = z.object({
-  slug: z.string(),
-  accessMode: z.enum(['public', 'authenticated', 'restricted']),
-  branding: BrandingSchema.pick({
-    productName: true,
-    organisation: true,
-    logoUrl: true,
-    colours: true,
-    paletteId: true,
-  }).extend({ logoUrl: z.string().nullable().optional().transform((value) => value ?? undefined) }),
-})
 const housePalette = DEFAULT_PALETTES.corpuskit.palette
 const houseBranding: Branding = {
   productName: 'CorpusKit',
@@ -46,27 +35,28 @@ export function ResolvedAccess({ children }: { children: ReactNode }) {
   return state.status === 'ready' ? children : <AccessUnavailable />
 }
 
-export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean }) {
+export function AccessUnavailable({ failedRead = false, suspended = false }: {
+  failedRead?: boolean
+  suspended?: boolean
+}) {
   const { state, slug, identityKey, generation, refresh, controller, safeClient } = useAccess()
   const loading = state.status === 'loading'
-  const authorityFailed = state.status === 'unavailable' || failedRead
+  const authorityFailed = state.status === 'unavailable' || (failedRead && !suspended)
   // This query retains only the D9 projection. It never stores a full config response.
   const safe = useQuery({
     queryKey: ['safe-portal-metadata', identityKey, slug, generation],
-    enabled: !!slug && state.status === 'ready' && !failedRead,
+    enabled: !!slug && state.status === 'ready' && (!failedRead || suspended),
     retry: false,
     queryFn: async ({ signal }) => {
       const response = await fetch(`/api/t/${encodeURIComponent(slug!)}/config`, {
         signal,
         cache: 'no-store',
       })
-      if (!response.ok) throw new Error('Safe metadata unavailable')
-      const value = safeMetadataSchema.parse(await response.json())
-      if (value.slug !== slug) throw new Error('Mismatched portal')
-      return value
+      return readSafePortalMetadata(response, slug!)
     },
   }, safeClient)
   const failed = authorityFailed || safe.isError
+  const paused = !loading && !failed && (suspended || safe.data?.status === 'suspended')
   const branding: Branding = safe.data ? { ...safe.data.branding, tagline: '' } : houseBranding
   const { scheme } = useViewerScheme()
   useBodyTheme(branding, scheme)
@@ -81,6 +71,8 @@ export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean
     ? 'Checking access...'
     : failed
     ? 'Access could not be checked. Try again.'
+    : paused
+    ? `${name} is paused`
     : anonymous && slug
     ? `Sign in to ${name}`
     : slug
@@ -90,7 +82,7 @@ export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean
     <div
       className='rp-tenant min-h-screen bg-app text-ink'
       style={branding ? tenantThemeVars(branding, scheme) : undefined}
-      data-access-state={loading ? 'loading' : failed ? 'failed' : 'denied'}
+      data-access-state={loading ? 'loading' : failed ? 'failed' : paused ? 'paused' : 'denied'}
       data-safe-metadata={safe.data ? 'ready' : undefined}
     >
       <header className='border-b border-line bg-surface'>
@@ -140,6 +132,8 @@ export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean
             ? 'Please wait while we check this page.'
             : failed
             ? 'Try again to check your current access.'
+            : paused
+            ? 'This portal is temporarily paused. Contact your portal administrator for help.'
             : anonymous
             ? 'Use your organisation account to continue.'
             : 'You cannot open this portal with your current account.'}
@@ -158,7 +152,8 @@ export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean
               </button>
             )
             : null}
-          {!loading && !failed && anonymous && slug && state.session?.entraEnabled !== false
+          {!loading && !failed && !paused && anonymous && slug &&
+              state.session?.entraEnabled !== false
             ? (
               <a
                 className='rp-btn rp-btn-primary whitespace-normal text-center'
@@ -168,7 +163,7 @@ export function AccessUnavailable({ failedRead = false }: { failedRead?: boolean
               </a>
             )
             : null}
-          {!loading && !failed && anonymous && slug && state.session?.externalLogin
+          {!loading && !failed && !paused && anonymous && slug && state.session?.externalLogin
             ? (
               <a
                 className='rp-btn rp-btn-outline whitespace-normal text-center'
