@@ -31,6 +31,7 @@ import {
   ownedMutationCases,
   seedOwned,
 } from '../../api/src/owned-store-fixture.ts'
+import { ACMD_DEMO_TENANT, initialiseAcmdDemo } from './acmd-demo.ts'
 
 Deno.test('Durable owned mutations roll back authoritative append and real SQL commit failures', async () => {
   for (const failure of ['append', 'commit']) {
@@ -600,6 +601,35 @@ Deno.test('Durable showcase portals keep the regional band on state stored befor
     expect(reloaded.get('runtime')?.regionalDiscovery).toBe(true)
     const created = reloaded.add({ name: 'Estuary notes' })
     expect(showsRegionalDiscovery(reloaded.get(created.slug)!)).toBe(false)
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable ACMD demo seeds unchanged and keeps its unlisted palette through the API', async () => {
+  const { stores, request, sql } = mutationFixture()
+  try {
+    await initialiseAcmdDemo(stores.tenants, stores.bindings, 'demo')
+    expect(stores.tenants.get('acmd')).toEqual(ACMD_DEMO_TENANT)
+    expect(stores.tenants.get('acmd')?.branding.paletteId).toBe('acmd')
+    expect(showsRegionalDiscovery(stores.tenants.get('acmd')!)).toBe(false)
+
+    const kept = await request('/api/admin/tenants/acmd', 'PATCH', {
+      paletteId: 'acmd',
+      shape: 'rounded',
+    })
+    expect(kept.status).toBe(200)
+    expect(stores.tenants.get('acmd')?.branding.paletteId).toBe('acmd')
+    expect(stores.tenants.get('acmd')?.branding.shape).toBe('rounded')
+
+    const refused = await request('/api/admin/tenants/marine', 'PATCH', { paletteId: 'acmd' })
+    expect(refused.status).toBe(400)
+    expect((await refused.json()).error).toBe('palette_not_available')
+    expect(stores.tenants.get('marine')?.branding.paletteId).toBe('fathom')
+
+    // A restart re-runs the seed, which leaves the edited portal alone.
+    await initialiseAcmdDemo(stores.tenants, stores.bindings, 'demo')
+    expect(stores.tenants.get('acmd')?.branding.shape).toBe('rounded')
   } finally {
     sql.database.close()
   }

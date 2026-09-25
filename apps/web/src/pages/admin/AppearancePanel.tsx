@@ -6,7 +6,7 @@ import {
   FONT_PAIRINGS,
   type Palette,
   type PaletteChoice,
-  PaletteIdSchema,
+  pickerPaletteIds,
   type ShapeId,
   type TenantConfig,
   type TextScaleId,
@@ -356,7 +356,7 @@ function ColoursSection({
             This portal's own seeded brand colours.
           </span>
         </ChoiceTile>
-        {PaletteIdSchema.options.map((id) => {
+        {pickerPaletteIds(branding.paletteId).map((id) => {
           const entry = DEFAULT_PALETTES[id]
           return (
             <ChoiceTile

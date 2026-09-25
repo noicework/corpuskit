@@ -2170,6 +2170,39 @@ describe('appearance (typography, shape, branding fonts)', () => {
     expect((await patchSlug(app, 'marine', { regionalDiscovery: 'yes' })).status).toBe(400)
   })
 
+  it('refuses to give a portal a palette made for another organisation', async () => {
+    const app = appearanceApp()
+    for (
+      const body of [{ paletteId: 'acmd' }, { paletteId: 'acmd', searchPlaceholder: 'Search' }]
+    ) {
+      const response = await patch(app, body)
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe('palette_not_available')
+    }
+    const config = await configOf(app)
+    expect(config.branding.paletteId).toBe('fathom')
+    expect(config.searchPlaceholder).not.toBe('Search')
+    // Without authority the caller learns nothing about the portal's palette.
+    const anonymous = await app.request('/api/admin/tenants/marine', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paletteId: 'acmd' }),
+    })
+    expect(anonymous.status).toBe(401)
+  })
+
+  it('lets a portal already on an unlisted palette keep it, and not return once it leaves', async () => {
+    const tenants = freshTenants()
+    // As the ACMD demo seed does: the palette is written with the portal, not through the API.
+    tenants.patchBranding('marine', { paletteId: 'acmd' })
+    const app = buildApp({ provider: new StubProvider(), tenants, adminPasscode: passcode })
+    expect((await patch(app, { paletteId: 'acmd', shape: 'soft' })).status).toBe(200)
+    expect((await configOf(app)).branding.paletteId).toBe('acmd')
+    expect((await patch(app, { paletteId: 'kiln' })).status).toBe(200)
+    expect((await patch(app, { paletteId: 'acmd' })).status).toBe(400)
+    expect((await configOf(app)).branding.paletteId).toBe('kiln')
+  })
+
   it('stores an uploaded heading font, exposes its URL and serves it back', async () => {
     const app = appearanceApp()
     const bytes = new Uint8Array([0x77, 0x4f, 0x46, 0x32])

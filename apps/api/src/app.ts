@@ -82,6 +82,7 @@ import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
 import type { RbacState } from './rbac-state.ts'
 import {
+  canAssignPalette,
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
   type Enrichment,
@@ -4275,6 +4276,17 @@ export function buildApp(opts: BuildAppOptions): Hono {
       )
     ).map((action) => action.action) ?? []
     if (fields.length) await authoriseSubActions(c, actions)
+    // Refused only after authorisation, so the answer never tells a caller who may not change
+    // this portal's appearance which palette it uses.
+    if (
+      parsed.data.paletteId &&
+      !canAssignPalette(parsed.data.paletteId, config.branding.paletteId)
+    ) {
+      return c.json({
+        error: 'palette_not_available',
+        message: 'That palette was made for another organisation and is not available here.',
+      }, 400)
+    }
     const { name, searchPlaceholder, regionalDiscovery, ...branding } = parsed.data
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),

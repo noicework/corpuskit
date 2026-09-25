@@ -1,5 +1,10 @@
 import { expect } from '@std/expect'
-import type { TenantConfig } from '@research-portal/core'
+import {
+  canAssignPalette,
+  pickerPaletteIds,
+  showsRegionalDiscovery,
+  type TenantConfig,
+} from '@research-portal/core'
 import type { KbBinding } from '@research-portal/retrieval'
 import { ACMD_DEMO_TENANT, initialiseAcmdDemo } from './acmd-demo.ts'
 
@@ -103,4 +108,13 @@ Deno.test('ACMD never replaces or copies a stored binding that is unavailable', 
     expect(f.connections.has('acmd')).toBe(false)
     expect(f.unavailable.has(withheld)).toBe(true)
   }
+})
+
+Deno.test('ACMD keeps the palette made for it, and shows no regional band', () => {
+  expect(ACMD_DEMO_TENANT.branding.paletteId).toBe('acmd')
+  expect(ACMD_DEMO_TENANT.regionalDiscovery).toBe(false)
+  expect(showsRegionalDiscovery(ACMD_DEMO_TENANT)).toBe(false)
+  // Unlisted for every other portal, but still offered to, and assignable on, its own.
+  expect(pickerPaletteIds(ACMD_DEMO_TENANT.branding.paletteId)).toContain('acmd')
+  expect(canAssignPalette('acmd', ACMD_DEMO_TENANT.branding.paletteId)).toBe(true)
 })

@@ -199,7 +199,9 @@ Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, 
 `typography`, `shape`, `textScale`, `density`, `paletteId`) and the behaviour fields
 `searchPlaceholder` and `regionalDiscovery`. The regional discovery band on Explore is off unless
 a portal opts in: send `{"regionalDiscovery": true}` to show it and `{"regionalDiscovery": false}`
-to hide it again.
+to hide it again. A palette made for one organisation (`listed: false` in
+`packages/core/src/palettes.ts`) is refused with `400 {"error":"palette_not_available"}` unless
+the portal already uses it.
 
 Knowledge-box connection accepts
 `{"endpoint":"https://<region>.rag.progress.cloud/api/v1/kb/<box-id>","token":"<token>"}`
