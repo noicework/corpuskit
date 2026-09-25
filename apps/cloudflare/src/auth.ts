@@ -1,4 +1,12 @@
 import { type TrustedSessionFacts, validSessionFacts } from '../../api/src/principal.ts'
+import {
+  type ExternalLoginConfig,
+  externalLoginConfigured,
+  ExternalLoginError,
+  type ExternalLoginFailure,
+  externalReturnTo,
+  verifyExternalAssertion,
+} from '../../api/src/external-login.ts'
 
 export interface AuthConfig {
   clientId: string
@@ -8,6 +16,7 @@ export interface AuthConfig {
   redirectUri?: string
   adminEmails?: string
   cookieDomain?: string
+  externalLogin?: ExternalLoginConfig
 }
 
 export interface AuthUser {
@@ -18,6 +27,7 @@ export interface AuthUser {
   roles: string[]
   isAdmin: boolean
   sessionFacts: TrustedSessionFacts
+  provenance?: 'entra' | 'external'
 }
 
 interface OidcState {
@@ -71,6 +81,18 @@ export function authConfigured(config: Partial<AuthConfig>): config is AuthConfi
   )
 }
 
+export function sessionAuthConfigured(config: Partial<AuthConfig>): config is AuthConfig {
+  return Boolean(
+    config.sessionSecret && textEncoder.encode(config.sessionSecret).byteLength >= 32 &&
+      (authConfigured(config) || externalLoginConfigured(config.externalLogin)),
+  )
+}
+
+export interface ExternalLoginServices {
+  consume(key: string, expiresAt: number): boolean | Promise<boolean>
+  auditFailure(reason: ExternalLoginFailure): void | Promise<void>
+}
+
 export async function authUser(request: Request, config: AuthConfig): Promise<AuthUser | null> {
   const token = cookie(request, SESSION_COOKIE)
   if (!token) return null
@@ -78,7 +100,10 @@ export async function authUser(request: Request, config: AuthConfig): Promise<Au
   if (
     !session || !validSessionFacts(session.sessionFacts) ||
     session.expiresAt !== session.sessionFacts.expiresAt ||
-    session.tenantId !== config.tenantId || session.tenantId !== session.sessionFacts.tenantId ||
+    (session.tenantId === 'external'
+      ? !externalLoginConfigured(config.externalLogin) || session.provenance !== 'external'
+      : !authConfigured(config) || session.tenantId !== config.tenantId) ||
+    session.tenantId !== session.sessionFacts.tenantId ||
     session.id !== session.sessionFacts.oid ||
     JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles)
   ) return null
@@ -89,8 +114,15 @@ export async function authUser(request: Request, config: AuthConfig): Promise<Au
 export async function handleAuthRequest(
   request: Request,
   config: AuthConfig,
+  external?: ExternalLoginServices,
 ): Promise<Response | null> {
   const url = new URL(request.url)
+  if (url.pathname === '/auth/external' && request.method === 'GET') {
+    return finishExternalLogin(url, config, external)
+  }
+  if (['/auth/login', '/auth/callback'].includes(url.pathname) && !authConfigured(config)) {
+    return json({ error: 'microsoft_sign_in_not_configured' }, 503)
+  }
   if (url.pathname === '/auth/login' && request.method === 'GET') {
     return beginLogin(url, config)
   }
@@ -113,6 +145,86 @@ export async function handleAuthRequest(
   }
   if (url.pathname.startsWith('/auth/')) return json({ error: 'not_found' }, 404)
   return null
+}
+
+async function finishExternalLogin(
+  url: URL,
+  config: AuthConfig,
+  services?: ExternalLoginServices,
+): Promise<Response> {
+  try {
+    if (!sessionAuthConfigured(config)) throw new ExternalLoginError('configuration')
+    if (!services) throw new ExternalLoginError('storage')
+    if (url.searchParams.getAll('assertion').length !== 1) throw new ExternalLoginError('encoding')
+    const claims = await verifyExternalAssertion(
+      url.searchParams.get('assertion'),
+      config.externalLogin ?? {},
+    )
+    const now = Date.now()
+    const user: AuthUser = {
+      id: `ext:${claims.sub}`,
+      tenantId: 'external',
+      email: claims.email,
+      name: claims.name ?? claims.email,
+      roles: [],
+      isAdmin: false,
+      provenance: 'external',
+      sessionFacts: {
+        verified: true,
+        provenance: 'external',
+        tenantId: 'external',
+        oid: `ext:${claims.sub}`,
+        email: claims.email,
+        roles: [],
+        groups: [],
+        groupStatus: 'absent',
+        claimIssuedAt: claims.iat * 1000,
+        createdAt: now,
+        expiresAt: now + 8 * 3600_000,
+      },
+    }
+    const session = await seal(
+      { ...user, expiresAt: user.sessionFacts.expiresAt },
+      config.sessionSecret,
+      SESSION_COOKIE,
+    )
+    if (textEncoder.encode(`${SESSION_COOKIE}=${session}`).byteLength > SESSION_COOKIE_MAX_BYTES) {
+      throw new ExternalLoginError('session')
+    }
+    // Build the complete response first, so nothing after the single-use consume can fail.
+    const success = new Response(null, {
+      status: 303,
+      headers: {
+        location: externalReturnTo(
+          url.searchParams.getAll('returnTo').length === 1
+            ? url.searchParams.get('returnTo')
+            : null,
+        ),
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'set-cookie': setCookie(SESSION_COOKIE, session, 8 * 3600, config.cookieDomain),
+      },
+    })
+    let consumed: boolean
+    try {
+      consumed = await services.consume(claims.replayKey, claims.exp * 1000)
+    } catch {
+      throw new ExternalLoginError('storage')
+    }
+    if (!consumed) throw new ExternalLoginError('replay')
+    return success
+  } catch (error) {
+    let response: Response
+    try {
+      await services?.auditFailure(error instanceof ExternalLoginError ? error.reason : 'session')
+      response = json({ error: 'external_login_invalid' }, 401)
+    } catch {
+      // The failure record is part of the request, as for every other audited denial.
+      response = json({ error: 'audit_write_failed' }, 500)
+    }
+    response.headers.set('referrer-policy', 'no-referrer')
+    return response
+  }
 }
 
 async function beginLogin(url: URL, config: AuthConfig): Promise<Response> {

@@ -597,6 +597,12 @@ function workerHarness(
               coarseAdminEligible: false,
             })
           },
+          consumeExternalAssertion() {
+            return Promise.resolve(false)
+          },
+          auditExternalFailure() {
+            return Promise.resolve()
+          },
           maintenance() {
             return Promise.resolve()
           },
@@ -674,8 +680,8 @@ async function principalRequest(
     headers: { 'x-corpuskit-principal': header, 'x-corpuskit-sso-admin': '1' },
   })
 }
-function realHarness(extraEnv: Record<string, string> = {}) {
-  const database = new DatabaseSync(':memory:')
+function realHarness(extraEnv: Record<string, string> = {}, databasePath = ':memory:') {
+  const database = new DatabaseSync(databasePath)
   const storage: DurableObjectState['storage'] = {
     sql: {
       exec<T>(query: string, ...bindings: unknown[]) {
@@ -1138,3 +1144,211 @@ async function loadWorker(): Promise<WorkerModule> {
   const moduleUrl = `data:application/typescript,${encodeURIComponent(source)}`
   return await import(moduleUrl) as WorkerModule
 }
+
+Deno.test('external handoff reaches the real Worker and durable roles across object restarts', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const key = JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey))
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const mint = async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+      part({
+        iss: 'https://issuer.example',
+        aud: 'dedicated-portal',
+        sub: 'person-1',
+        email: 'Person@Example.test',
+        email_verified: true,
+        name: 'Person',
+        iat: now - 20,
+        exp: now + 60,
+        jti: crypto.randomUUID(),
+        roles: ['CorpusKit.Owner'],
+      })
+    }`
+    return `${content}.${
+      encode(
+        new Uint8Array(
+          await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content)),
+        ),
+      )
+    }`
+  }
+  const directory = Deno.makeTempDirSync()
+  try {
+    for (const entra of [true, false]) {
+      const settings = {
+        WORKER_NAME: 'dedicated-portal',
+        EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+        EXTERNAL_LOGIN_JWK: key,
+        EXTERNAL_LOGIN_START_URL: 'https://issuer.example/start',
+        ...(entra ? {} : { ENTRA_TENANT_ID: '', ENTRA_CLIENT_ID: '', ENTRA_CLIENT_SECRET: '' }),
+      }
+      const path = `${directory}/${entra}.sqlite`
+      let h = realHarness(settings, path)
+      try {
+        h.state.rbac.assignmentService(
+          entra ? 'entra-tenant-id' : 'external',
+          'dedicated-portal',
+          true,
+        ).create({
+          subjectKind: 'pending-email',
+          subjectId: 'person@example.test',
+          source: 'external',
+          scope: { kind: 'portal', slug: 'marine' },
+          role: 'analyst',
+        }, { requestId: 'external-grant', actor: { kind: 'system' } })
+        const stores = (h.object as unknown as { stores: DurableStores }).stores
+        stores.tenants.patch('marine', { accessMode: 'restricted' })
+        const token = await mint()
+        const externalRequest = (returnTo = '/t/marine') =>
+          new Request(
+            `https://corpuskit.test/auth/external?${new URLSearchParams({
+              assertion: token,
+              returnTo,
+            })}`,
+          )
+        const response = await worker.fetch(externalRequest(), h.env)
+        expect(response.status).toBe(303)
+        expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+        const cookie = response.headers.get('set-cookie')!.split(';')[0]!
+        const authenticated = (path: string) =>
+          new Request(`https://corpuskit.test${path}`, { headers: { cookie } })
+        const me = await worker.fetch(authenticated('/auth/me?portal=marine'), h.env)
+        const body = await me.json()
+        expect(body.authenticated).toBe(true)
+        expect(body.sessionProvenance).toBe('external')
+        expect(body.user.roles).toEqual([])
+        expect(body.effectiveRoles).toEqual({ portalRoles: [{ slug: 'marine', role: 'analyst' }] })
+        expect(body.portalAccess.permissions).toContain('portal.investigate')
+        expect(body.entraEnabled).toBe(entra)
+        expect((await worker.fetch(authenticated('/api/t/marine/config'), h.env)).status).toBe(200)
+        // Authorisation and owned-store paths use the same external identity, with no provider call.
+        const trail = await worker.fetch(
+          new Request('https://corpuskit.test/api/t/marine/sessions/external-trail', {
+            method: 'PUT',
+            headers: { cookie, 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: 'external-trail',
+              title: 'External research',
+              updatedAt: new Date().toISOString(),
+              messages: [],
+            }),
+          }),
+          h.env,
+        )
+        expect(trail.status).toBe(200)
+        h.database.close()
+        h = realHarness(settings, path)
+        expect((await worker.fetch(externalRequest(), h.env)).status).toBe(401)
+        const afterRestart = await worker.fetch(authenticated('/auth/me?portal=marine'), h.env)
+        expect((await afterRestart.json()).portalAccess.available).toBe(true)
+        const rows = h.state.rbac.assignments.list(entra ? 'entra-tenant-id' : 'external')
+        expect(rows.find((row) => row.source === 'external')).toMatchObject({
+          subjectKind: 'active-oid',
+          subjectId: 'ext:person-1',
+        })
+        expect(
+          h.state.rbac.audit.read({ scope: { kind: 'platform' }, action: 'auth.external.denied' })
+            .map((event) => JSON.parse(event.detail_json)),
+        ).toEqual([{ externalReason: 'replay' }])
+      } finally {
+        h.database.close()
+      }
+    }
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('Worker refuses external handoffs, cookies and envelopes once the issuer is removed', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const mint = async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+      part({
+        iss: 'https://issuer.example',
+        aud: 'corpuskit',
+        sub: 'person-1',
+        email: 'person@example.test',
+        email_verified: true,
+        iat: now - 5,
+        exp: now + 60,
+        jti: crypto.randomUUID(),
+      })
+    }`
+    const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
+    return `${content}.${encode(new Uint8Array(signature))}`
+  }
+  const handoff = async (env: Env) =>
+    worker.fetch(
+      new Request(
+        `https://corpuskit.test/auth/external?${new URLSearchParams({
+          assertion: await mint(),
+          returnTo: '/t/marine',
+        })}`,
+      ),
+      env,
+    )
+  const enabled = realHarness({
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  })
+  const disabled = realHarness()
+  try {
+    const issued = await handoff(enabled.env)
+    expect(issued.status).toBe(303)
+    const cookie = issued.headers.get('set-cookie')!.split(';')[0]!
+    const me = (env: Env) =>
+      worker.fetch(new Request('https://corpuskit.test/auth/me', { headers: { cookie } }), env)
+    expect((await (await me(enabled.env)).json()).authenticated).toBe(true)
+    // Same session key, no external configuration: the cookie is anonymous, not an identity.
+    const ignored = await (await me(disabled.env)).json()
+    expect(ignored.authenticated).toBe(false)
+    expect(ignored.externalLogin).toBeNull()
+    const refused = await handoff(disabled.env)
+    expect(refused.status).toBe(401)
+    expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
+    expect(refused.headers.get('set-cookie')).toBeNull()
+    expect(
+      disabled.state.rbac.audit.read({
+        scope: { kind: 'platform' },
+        action: 'auth.external.denied',
+      }).map((event) => JSON.parse(event.detail_json)),
+    ).toEqual([{ externalReason: 'configuration' }])
+    // A correctly signed envelope for an external identity is refused, not downgraded.
+    const external: TrustedSessionFacts = {
+      verified: true,
+      provenance: 'external',
+      tenantId: 'external',
+      oid: 'ext:person-1',
+      email: 'person@example.test',
+      roles: [],
+      groups: [],
+      groupStatus: 'absent',
+      claimIssuedAt: Date.now() - 5_000,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 3600_000,
+    }
+    const forged = await disabled.object.handleTrustedRequest(
+      await principalRequest('/auth/me', external),
+      { session: external },
+    )
+    expect(forged.status).toBe(401)
+    expect(await forged.json()).toEqual({ error: 'invalid_principal' })
+    const accepted = await enabled.object.handleTrustedRequest(
+      await principalRequest('/auth/me', external),
+      { session: external },
+    )
+    expect((await accepted.json()).authenticated).toBe(true)
+  } finally {
+    enabled.database.close()
+    disabled.database.close()
+  }
+})
