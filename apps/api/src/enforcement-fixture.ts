@@ -473,6 +473,8 @@ export function sessionFor(
 export function createEnforcementFixture(
   options: Pick<BuildAppOptions, 'management' | 'domainProvisioner' | 'platformDomain'> & {
     bindingKey?: string
+    /** Binding records already in storage when the stores start, as after a restart. */
+    storedBindings?: Record<string, unknown>
     breakGlassPolicy?: BreakGlassPolicy
     /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
     identityConfigured?: boolean
@@ -506,6 +508,7 @@ export function createEnforcementFixture(
   }
   const state = new DurableState(sql, database, now)
   state.migrate()
+  if (options.storedBindings) state.put('bindings', options.storedBindings)
   const durable = durableStores(state, {
     BINDING_KEY: options.bindingKey ?? btoa('x'.repeat(32)),
     PLATFORM_DOMAIN: options.platformDomain,
@@ -589,7 +592,11 @@ export function createEnforcementFixture(
       actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
     }
   }
-  const { identityConfigured: _identityConfigured, ...appOptions } = options
+  const {
+    identityConfigured: _identityConfigured,
+    storedBindings: _storedBindings,
+    ...appOptions
+  } = options
   const app = buildApp({
     ...stores,
     ...appOptions,

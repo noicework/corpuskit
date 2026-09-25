@@ -5,6 +5,7 @@ import { expect } from '@std/expect'
 import { DOC_PAGES } from '../../../packages/core/src/docs.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState } from './state.ts'
+import { BindingCipher } from '../../api/src/binding-crypto.ts'
 import {
   type PrincipalEnvelope,
   signPrincipal,
@@ -863,11 +864,9 @@ Deno.test('Worker startup migrates legacy binding credentials before serving req
     try {
       const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
       expect(health.status).toBe(200)
-      expect((await health.json()).bindingEncryption).toEqual({
-        configured,
-        required: true,
-        writable: configured,
-      })
+      const healthBody = await health.json()
+      expect(healthBody.bindingsReady).toBe(configured)
+      expect(healthBody.bindingEncryption).toBeUndefined()
       const binding = await worker.fetch(
         new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
         h.env,
@@ -882,6 +881,84 @@ Deno.test('Worker startup migrates legacy binding credentials before serving req
     } finally {
       h.database.close()
     }
+  }
+})
+
+Deno.test('Worker withholds a binding sealed under another key without failing other portals', async () => {
+  const originalFetch = globalThis.fetch
+  const warn = console.warn
+  const upstream: string[] = []
+  globalThis.fetch = (input) => {
+    upstream.push(String(input instanceof Request ? input.url : input))
+    return Promise.resolve(Response.json({ resources: [] }))
+  }
+  console.warn = () => {}
+  const token = 'fixture-only-stored-credential'
+  const sealed = await new BindingCipher(btoa('o'.repeat(32))).seal('marine', token)
+  const h = await realHarness({
+    BINDING_KEY: btoa('x'.repeat(32)),
+    ARAG_KB_MARINE: 'https://example.test/api/v1/kb/environment',
+    ARAG_KB_MARINE_TOKEN: 'fixture-only-environment-token',
+  }, {
+    marine: { baseUrl: 'https://example.test/kb/marine', token: sealed, connectedAt: 'then' },
+  })
+  try {
+    const status = await worker.fetch(
+      new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+      h.env,
+    )
+    expect(status.status).toBe(200)
+    expect(await status.json()).toEqual({ slug: 'marine', status: 'unavailable', kbId: 'marine' })
+    const resources = await worker.fetch(
+      new Request('https://corpuskit.test/api/t/marine/resources'),
+      h.env,
+    )
+    expect(resources.status).toBe(503)
+    expect(await resources.json()).toEqual({ error: 'binding_unavailable' })
+    // Neither the environment box nor the stored text stands in for the withheld credential.
+    expect(upstream).toEqual([])
+    const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
+    expect(health.status).toBe(200)
+    expect((await health.json()).bindingsReady).toBe(false)
+    const other = await worker.fetch(
+      new Request('https://corpuskit.test/api/t/grains/knowledge-box'),
+      h.env,
+    )
+    expect(other.status).toBe(200)
+    expect(h.state.get<Record<string, { token: string }>>('bindings', {}).marine?.token)
+      .toBe(sealed)
+  } finally {
+    globalThis.fetch = originalFetch
+    console.warn = warn
+    h.database.close()
+  }
+})
+
+Deno.test('Worker answers portal requests with binding_key_invalid for a malformed key', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  const h = await realHarness({ BINDING_KEY: 'not-a-valid-key' }, {
+    marine: { baseUrl: 'https://example.test/kb/marine', token: 'enc:v1:a:b', connectedAt: 'then' },
+  })
+  try {
+    for (const path of ['/api/health', '/api/t/marine/knowledge-box', '/auth/me']) {
+      const response = await worker.fetch(new Request(`https://corpuskit.test${path}`), h.env)
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ error: 'binding_key_invalid' })
+    }
+    // Pages that never touch credentials keep working.
+    const home = await worker.fetch(new Request('https://corpuskit.org/'), h.env)
+    expect(home.status).toBe(200)
+    // Paths that reach the object directly (scheduled maintenance) find it started and degraded.
+    const direct = await h.object.handleTrustedRequest(
+      new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+      {},
+    )
+    expect(direct.status).toBe(200)
+    expect((await direct.json()).status).toBe('unavailable')
+  } finally {
+    console.warn = warn
+    h.database.close()
   }
 })
 

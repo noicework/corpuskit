@@ -3,42 +3,46 @@ import { readFileSync } from 'node:fs'
 import type { KnowledgeBoxStatus } from '@research-portal/core'
 import { envBindings, type KbBinding, regionalBase } from '@research-portal/retrieval'
 import { writeJsonAtomic } from './persist.ts'
-import { BindingCipher, BindingCryptoError } from './binding-crypto.ts'
+import {
+  BindingCipher,
+  BindingCryptoError,
+  type BindingKeyState,
+  bindingKeyState,
+  isSealedBindingToken,
+} from './binding-crypto.ts'
 
 export interface StoredBinding extends KbBinding {
   connectedAt: string
 }
-export type BindingRecords = Record<string, StoredBinding>
+
+/** Deployment-wide reasons stored credentials, or new ones, cannot be used. */
+export type BindingStoreError =
+  | 'binding_key_missing'
+  | 'binding_key_invalid'
+  | 'binding_storage_invalid'
+
 export interface BindingEncryptionStatus {
+  /** A `BINDING_KEY` value is present. It may still be malformed; see `error`. */
   configured: boolean
+  /** This runtime refuses to store a new or replaced binding without a working key. */
   required: boolean
+  /** A new or replaced binding can be stored now. */
   writable: boolean
+  /** Why stored bindings or writes are degraded, when the cause is deployment-wide. */
+  error?: BindingStoreError
+  /** Stored bindings withheld because they cannot be opened; each reports `unavailable`. */
+  unavailable: number
 }
 
-/** Reject malformed credential records without echoing their contents. */
-export function bindingRecords(value: unknown, zone?: string): BindingRecords {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new BindingCryptoError('binding_storage_invalid')
-  }
-  const records: BindingRecords = {}
-  for (const [slug, entry] of Object.entries(value)) {
-    if (!entry || typeof entry !== 'object' || typeof entry.token !== 'string') {
-      throw new BindingCryptoError('binding_storage_invalid')
-    }
-    const baseUrl = typeof entry.baseUrl === 'string'
-      ? entry.baseUrl
-      : typeof entry.kbId === 'string' && zone
-      ? `${regionalBase(zone)}/kb/${entry.kbId}`
-      : undefined
-    if (!baseUrl) throw new BindingCryptoError('binding_storage_invalid')
-    Object.defineProperty(records, slug, {
-      value: { ...entry, baseUrl },
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    })
-  }
-  return records
+export type BindingChange =
+  | { operation: 'bindings.set' | 'bindings.remove'; slug: string }
+  | { operation: 'bindings.migrate' }
+
+/** Where a binding store keeps its records. Every write replaces the complete record set. */
+export interface BindingPersistence {
+  /** The stored record set, `undefined` when nothing is stored yet. Throws when unreadable. */
+  read(): unknown
+  write(records: Record<string, unknown>, change: BindingChange): void
 }
 
 export function ownBinding(
@@ -48,86 +52,159 @@ export function ownBinding(
   return Object.hasOwn(records, slug) ? records[slug] : undefined
 }
 
-/** Decode the complete snapshot before committing any migration or exposing its credentials. */
-export async function prepareBindings(records: BindingRecords, cipher: BindingCipher): Promise<{
-  stored: BindingRecords
-  connected: BindingRecords
-  changed: boolean
-}> {
-  const stored: BindingRecords = {}
-  const connected: BindingRecords = {}
-  let changed = false
-  for (const [slug, entry] of Object.entries(records)) {
-    const token = await cipher.open(slug, entry.token)
-    Object.defineProperty(connected, slug, {
-      value: { ...entry, token },
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    })
-    const seal = cipher.configured && !entry.token.startsWith('enc:')
-    changed ||= seal
-    Object.defineProperty(stored, slug, {
-      value: { ...entry, token: seal ? await cipher.seal(slug, token) : entry.token },
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    })
-  }
-  return { stored, connected, changed }
+/** A stored record with a usable shape, or `undefined`. Never echoes the record. */
+function storedBinding(value: unknown, zone?: string): StoredBinding | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const entry = value as Record<string, unknown>
+  if (typeof entry.token !== 'string') return undefined
+  const baseUrl = typeof entry.baseUrl === 'string'
+    ? entry.baseUrl
+    : typeof entry.kbId === 'string' && zone
+    ? `${regionalBase(zone)}/kb/${entry.kbId}`
+    : undefined
+  return baseUrl ? { ...entry, baseUrl } as StoredBinding : undefined
 }
 
-/** File-backed server-only credentials; encrypted deployments initialize before serving requests. */
-export class BindingStore {
+function unavailableStatus(slug: string, entry?: StoredBinding): KnowledgeBoxStatus {
+  return { slug, status: 'unavailable', ...(entry ? { kbId: truncate(displayId(entry)) } : {}) }
+}
+
+/**
+ * Server-only knowledge box credentials, sealed at rest when a key is configured.
+ *
+ * A stored record that cannot be opened (wrong or missing key, corrupt ciphertext or shape)
+ * is withheld: it reports `unavailable`, never falls back to an environment binding or to
+ * its stored text, and can still be replaced or removed. The rest of the store keeps working.
+ */
+export class SealedBindingStore {
   private readonly demo: Record<string, KbBinding>
-  private connected: BindingRecords = {}
-  private stored: BindingRecords
-  private readonly path: string
+  private readonly keyState: BindingKeyState
   private readonly cipher: BindingCipher
-  private initialized: boolean
+  /** The record set exactly as stored, so a write never drops records it could not read. */
+  private stored: Record<string, unknown> = {}
+  private storageInvalid = false
+  private readonly connected = new Map<string, StoredBinding>()
+  private readonly unavailable = new Map<string, KnowledgeBoxStatus>()
+  private pendingOpen: [string, StoredBinding][] = []
+  private pendingSeal: string[] = []
+  private initialized = false
   private initialization?: Promise<void>
 
-  constructor(env: Record<string, string | undefined> = process.env) {
+  constructor(
+    private readonly persistence: BindingPersistence,
+    env: Record<string, string | undefined>,
+    private readonly required: boolean,
+  ) {
     this.demo = envBindings(env)
-    this.path = env.BINDINGS_PATH ?? './data/bindings.json'
-    this.cipher = new BindingCipher(env.BINDING_KEY)
-    let value: unknown = {}
+    this.keyState = bindingKeyState(env.BINDING_KEY)
+    this.cipher = new BindingCipher(this.keyState === 'valid' ? env.BINDING_KEY : undefined)
+    let value: unknown
     try {
-      value = JSON.parse(readFileSync(this.path, 'utf8'))
-    } catch (error) {
-      if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
-        throw new BindingCryptoError('binding_storage_invalid')
+      value = persistence.read() ?? {}
+    } catch {
+      value = undefined
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      this.storageInvalid = true
+    } else {
+      this.stored = { ...value as Record<string, unknown> }
+      for (const [slug, raw] of Object.entries(this.stored)) {
+        const entry = storedBinding(raw, env.ARAG_ZONE)
+        if (!entry) this.unavailable.set(slug, unavailableStatus(slug))
+        else if (!isSealedBindingToken(entry.token)) {
+          this.connected.set(slug, entry)
+          if (this.keyState === 'valid') this.pendingSeal.push(slug)
+        } else if (this.keyState === 'valid') this.pendingOpen.push([slug, entry])
+        else this.unavailable.set(slug, unavailableStatus(slug, entry))
       }
     }
-    this.stored = bindingRecords(value, env.ARAG_ZONE)
-    this.initialized = !this.cipher.configured &&
-      Object.values(this.stored).every((entry) => !entry.token.startsWith('enc:'))
-    if (this.initialized) this.connected = structuredClone(this.stored)
-    if (!this.cipher.configured) {
+    this.initialized = this.pendingOpen.length === 0 && this.pendingSeal.length === 0
+    if (this.initialized) this.reportWithheld()
+  }
+
+  /** Open sealed records and seal remaining plaintext ones. Never rejects. */
+  initialize(): Promise<void> {
+    if (this.initialized) return Promise.resolve()
+    return this.initialization ??= this.openStored()
+  }
+
+  private async openStored(): Promise<void> {
+    for (const [slug, entry] of this.pendingOpen) {
+      try {
+        this.connected.set(slug, { ...entry, token: await this.cipher.open(slug, entry.token) })
+      } catch {
+        this.unavailable.set(slug, unavailableStatus(slug, entry))
+      }
+    }
+    this.pendingOpen = []
+    await this.sealPlaintext()
+    this.initialized = true
+    this.reportWithheld()
+  }
+
+  /** Say that credentials are withheld, and why, without naming a portal or a secret. */
+  private reportWithheld(): void {
+    const { error, unavailable } = this.encryptionStatus()
+    if (error === 'binding_storage_invalid') {
       console.warn(
-        '[bindings] BINDING_KEY is missing; local binding credentials use plaintext storage',
+        '[bindings] binding_storage_invalid: stored bindings are unreadable and withheld',
+      )
+    } else if (unavailable > 0) {
+      console.warn(
+        `[bindings] ${error ?? 'binding_unavailable'}: ${unavailable} stored binding(s) could ` +
+          'not be opened and are withheld until the key is fixed or they are replaced or removed',
       )
     }
   }
 
-  initialize(): Promise<void> {
-    if (this.initialized) return Promise.resolve()
-    return this.initialization ??= this.initializeBindings()
-  }
-
-  private async initializeBindings(): Promise<void> {
-    const prepared = await prepareBindings(this.stored, this.cipher)
-    if (prepared.changed) writeJsonAtomic(this.path, prepared.stored)
-    this.stored = prepared.stored
-    this.connected = prepared.connected
-    this.initialized = true
+  /**
+   * Seal stored plaintext once every sealed record has opened with this key. A record that
+   * did not open suggests the wrong key, so nothing is sealed with it until that is resolved.
+   */
+  private async sealPlaintext(): Promise<void> {
+    const slugs = this.pendingSeal
+    this.pendingSeal = []
+    if (slugs.length === 0 || this.unavailable.size > 0) return
+    try {
+      const next = { ...this.stored }
+      for (const slug of slugs) {
+        const entry = this.connected.get(slug)!
+        next[slug] = { ...entry, token: await this.cipher.seal(slug, entry.token) }
+      }
+      this.commit(next, { operation: 'bindings.migrate' })
+    } catch {
+      // The records stay readable as before and sealing is retried on the next start.
+      console.warn('[bindings] Stored credentials could not be sealed; retrying on next start')
+    }
   }
 
   encryptionStatus(): BindingEncryptionStatus {
-    return { configured: this.cipher.configured, required: false, writable: true }
+    const error: BindingStoreError | undefined = this.storageInvalid
+      ? 'binding_storage_invalid'
+      : this.keyState === 'invalid'
+      ? 'binding_key_invalid'
+      : this.keyState === 'missing' && (this.required || this.unavailable.size > 0)
+      ? 'binding_key_missing'
+      : undefined
+    return {
+      configured: this.keyState !== 'missing',
+      required: this.required,
+      writable: this.writeError() === undefined,
+      ...(error ? { error } : {}),
+      unavailable: this.unavailable.size,
+    }
+  }
+
+  private writeError(): BindingStoreError | undefined {
+    if (this.storageInvalid) return 'binding_storage_invalid'
+    if (this.keyState === 'invalid') return 'binding_key_invalid'
+    if (this.keyState === 'missing' && this.required) return 'binding_key_missing'
+    return undefined
   }
 
   assertWritable(): void {
+    const error = this.writeError()
+    if (error) throw new BindingCryptoError(error)
     this.assertInitialized()
   }
 
@@ -137,53 +214,94 @@ export class BindingStore {
 
   get(slug: string): KbBinding | undefined {
     this.assertInitialized()
-    const binding = ownBinding(this.connected, slug) ?? ownBinding(this.demo, slug)
+    // Unreadable storage may hide any portal's record, so no environment binding stands in.
+    if (this.storageInvalid) throw new BindingCryptoError('binding_storage_invalid')
+    if (this.unavailable.has(slug)) throw new BindingCryptoError('binding_unavailable')
+    const binding = this.connected.get(slug) ?? ownBinding(this.demo, slug)
     return binding ? { ...binding } : undefined
   }
 
   isDemo(slug: string): boolean {
     this.assertInitialized()
-    return !ownBinding(this.connected, slug) && Boolean(ownBinding(this.demo, slug))
+    if (this.storageInvalid || this.unavailable.has(slug)) return false
+    return !this.connected.has(slug) && Boolean(ownBinding(this.demo, slug))
   }
 
-  set(slug: string, binding: KbBinding): void | Promise<void> {
+  /** Store a new or replacement binding, sealing it when a key is configured. */
+  async set(slug: string, binding: KbBinding): Promise<void> {
     this.assertWritable()
-    const entry = { ...binding, connectedAt: new Date().toISOString() }
-    if (this.cipher.configured) {
-      return this.cipher.seal(slug, entry.token).then((token) => this.commit(slug, entry, token))
-    }
-    this.commit(slug, entry, entry.token)
+    const entry: StoredBinding = { ...binding, connectedAt: new Date().toISOString() }
+    const token = this.keyState === 'valid'
+      ? await this.cipher.seal(slug, entry.token)
+      : entry.token
+    // Merge after sealing so concurrent writes each keep the other's record.
+    this.commit({ ...this.stored, [slug]: { ...entry, token } }, {
+      operation: 'bindings.set',
+      slug,
+    })
+    this.connected.set(slug, entry)
+    this.unavailable.delete(slug)
   }
 
-  private commit(slug: string, entry: StoredBinding, token: string): void {
-    const stored = { ...this.stored, [slug]: { ...entry, token } }
-    writeJsonAtomic(this.path, stored)
-    this.stored = stored
-    this.connected = { ...this.connected, [slug]: entry }
-  }
-
-  /** Remove a connected binding; the tenant falls back to its environment box, if any. */
+  /** Remove a stored binding, including a withheld one; the environment box then applies. */
   remove(slug: string): void {
     this.assertInitialized()
-    const stored = { ...this.stored }
-    delete stored[slug]
-    writeJsonAtomic(this.path, stored)
-    this.stored = stored
-    delete this.connected[slug]
+    if (this.storageInvalid) throw new BindingCryptoError('binding_storage_invalid')
+    const next = { ...this.stored }
+    delete next[slug]
+    this.commit(next, { operation: 'bindings.remove', slug })
+    this.connected.delete(slug)
+    this.unavailable.delete(slug)
   }
 
   status(slug: string): KnowledgeBoxStatus {
     this.assertInitialized()
-    const connected = ownBinding(this.connected, slug)
+    if (this.storageInvalid) return { slug, status: 'unavailable' }
+    const withheld = this.unavailable.get(slug)
+    if (withheld) return { ...withheld }
+    const connected = this.connected.get(slug)
     if (connected) return { slug, status: 'connected', kbId: truncate(displayId(connected)) }
     const demo = ownBinding(this.demo, slug)
     if (demo) return { slug, status: 'demo', kbId: truncate(displayId(demo)) }
     return { slug, status: 'none' }
   }
+
+  /** Persistence and cache change together: a failed write leaves both as they were. */
+  private commit(next: Record<string, unknown>, change: BindingChange): void {
+    this.persistence.write(next, change)
+    this.stored = next
+  }
+}
+
+/** File-backed server-only credentials; encrypted deployments initialize before serving requests. */
+export class BindingStore extends SealedBindingStore {
+  constructor(env: Record<string, string | undefined> = process.env) {
+    const path = env.BINDINGS_PATH ?? './data/bindings.json'
+    super(
+      {
+        read: () => {
+          try {
+            return JSON.parse(readFileSync(path, 'utf8'))
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+            throw new BindingCryptoError('binding_storage_invalid')
+          }
+        },
+        write: (records) => writeJsonAtomic(path, records),
+      },
+      env,
+      false,
+    )
+    if (!env.BINDING_KEY) {
+      console.warn(
+        '[bindings] BINDING_KEY is missing; local binding credentials use plaintext storage',
+      )
+    }
+  }
 }
 
 /** Public binding-store contract for alternate durable runtimes. */
-export type BindingStoreApi = Pick<BindingStore, keyof BindingStore>
+export type BindingStoreApi = Pick<SealedBindingStore, keyof SealedBindingStore>
 
 const displayId = (binding: KbBinding) =>
   binding.kbId ?? binding.baseUrl.split('/').pop() ?? binding.baseUrl

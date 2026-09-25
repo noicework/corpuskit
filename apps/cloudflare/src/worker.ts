@@ -8,6 +8,7 @@ import {
   isPlatformHostname,
 } from '../../../packages/core/src/platform-domain.ts'
 import { platformShellResponse } from '../../api/src/platform-shell.ts'
+import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
@@ -90,8 +91,14 @@ export class PortalDurableObject extends DurableObject<Env> {
     }
     initialiseDemo(this.stores.tenants, bindings.ENVIRONMENT)
     ctx.blockConcurrencyWhile(async () => {
+      // A rejection here would reset the object on every request. Binding start-up withholds
+      // records it cannot open instead of failing, so only the optional demo seed can throw.
       await this.stores.bindings.initialize()
-      await initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
+      try {
+        await initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
+      } catch {
+        console.error('Demo portal seeding failed')
+      }
     })
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
@@ -449,6 +456,11 @@ async function forwardTrusted(
   env: Env,
   auth: Partial<AuthConfig>,
 ): Promise<Response> {
+  // A malformed key is a deployment fault, not a data fault: say so on every portal request,
+  // health included, rather than letting stored credentials look lost or be replaced.
+  if (bindingKeyState(stringEnv(env).BINDING_KEY) === 'invalid') {
+    return json({ error: 'binding_key_invalid' }, 503)
+  }
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
   const user = authConfigured(auth) ? await authUser(request, auth) : null
   let forwarded: Request

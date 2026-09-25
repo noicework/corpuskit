@@ -1805,13 +1805,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       typeof value === 'string' && value.length > 0 ? value.slice(0, 160) : undefined
     const builtAt = stamp(opts.webBuild?.builtAt)
     const buildSha = stamp(opts.webBuild?.sha)
+    // One coarse flag for monitors; the cause stays on the authorised admin overview.
+    const encryption = bindings.encryptionStatus()
+    const bindingsReady = encryption.writable && !encryption.error && encryption.unavailable === 0
     return c.json(
       {
         ok: web,
         web,
-        ...(bindings.encryptionStatus().required
-          ? { bindingEncryption: bindings.encryptionStatus() }
-          : {}),
+        ...(encryption.required || !bindingsReady ? { bindingsReady } : {}),
         version: stamp(opts.buildSha ?? process.env.BUILD_SHA) ?? 'dev',
         // The bundle actually served, so a stale build is visible (D1-21).
         ...(builtAt ? { builtAt } : {}),

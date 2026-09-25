@@ -11,11 +11,15 @@ function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
     ? 'var(--rp-ok-ink)'
     : status === 'demo'
     ? 'var(--rp-warn-ink)'
+    : status === 'unavailable'
+    ? 'var(--rp-bad-ink)'
     : 'var(--rp-line)'
   const label = status === 'connected'
     ? 'Connected'
     : status === 'demo'
     ? 'Demo content'
+    : status === 'unavailable'
+    ? 'Unavailable'
     : 'Not connected'
   return (
     <span className='relative flex h-2.5 w-2.5 shrink-0 items-center justify-center'>

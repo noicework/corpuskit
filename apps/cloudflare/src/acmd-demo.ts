@@ -32,17 +32,19 @@ export const ACMD_DEMO_TENANT = TenantConfigSchema.parse({
 
 /**
  * Seed only this demo; later appearance edits or a dedicated KB are preserved. The shared
- * binding is copied only when the store can seal new credentials.
+ * binding is copied only when the store can seal new credentials, and never over, or from,
+ * a stored binding that is unavailable.
  */
 export async function initialiseAcmdDemo(
   tenants: Pick<DurableTenantStore, 'get' | 'seed'>,
-  bindings: Pick<BindingStoreApi, 'get' | 'set' | 'encryptionStatus'>,
+  bindings: Pick<BindingStoreApi, 'get' | 'set' | 'status' | 'encryptionStatus'>,
   environment: string | undefined,
 ): Promise<void> {
   if (environment !== 'demo') return
   if (!tenants.get('acmd')) tenants.seed(ACMD_DEMO_TENANT)
-  if (!bindings.get('acmd') && bindings.encryptionStatus().writable) {
-    const documentation = bindings.get('demo')
-    if (documentation) await bindings.set('acmd', documentation)
-  }
+  if (bindings.status('acmd').status !== 'none' || !bindings.encryptionStatus().writable) return
+  const source = bindings.status('demo').status
+  if (source !== 'connected' && source !== 'demo') return
+  const documentation = bindings.get('demo')
+  if (documentation) await bindings.set('acmd', documentation)
 }

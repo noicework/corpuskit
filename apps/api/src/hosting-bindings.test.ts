@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
-import { BindingCryptoError } from './binding-crypto.ts'
+import { BindingCipher, BindingCryptoError } from './binding-crypto.ts'
 
 const token = 'fixture-only-knowledge-box-secret'
 const connect = {
@@ -18,9 +18,19 @@ Deno.test('Cloudflare missing binding key reports readiness and refuses writes b
     throw new Error('Unexpected upstream call')
   }
   try {
-    const expected = { configured: false, required: true, writable: false }
+    const expected = {
+      configured: false,
+      required: true,
+      writable: false,
+      error: 'binding_key_missing',
+      unavailable: 0,
+    }
+    // Anonymous health carries one coarse flag; the cause is for authorised administrators.
     const health = await f.requestAs(null, '/api/health')
-    expect((await health.json()).bindingEncryption).toEqual(expected)
+    const healthBody = await health.json()
+    expect(healthBody.bindingsReady).toBe(false)
+    expect(healthBody.bindingEncryption).toBeUndefined()
+    expect(JSON.stringify(healthBody)).not.toContain('binding_key')
     const overview = await f.requestAs(f.sessionFor('platform-admin'), '/api/admin/overview')
     expect(overview.status).toBe(200)
     const rows = await overview.json()
@@ -156,6 +166,55 @@ Deno.test('knowledge box provisioning errors never echo upstream credential deta
       else Deno.env.set(key, value)
     }
     globalThis.fetch = originalFetch
+    f.close()
+  }
+})
+
+Deno.test('a binding sealed under another key is withheld per portal and recoverable through the API', async () => {
+  const originalFetch = globalThis.fetch
+  const warn = console.warn
+  console.warn = () => {}
+  const sealed = await new BindingCipher(btoa('o'.repeat(32))).seal('a', token)
+  const f = createEnforcementFixture({
+    storedBindings: {
+      a: { baseUrl: 'https://zone.rag.progress.cloud/api/v1/kb/research', token: sealed },
+    },
+  })
+  try {
+    const admin = f.sessionFor('platform-admin')
+    const status = await f.requestAs(admin, '/api/t/a/knowledge-box')
+    expect(await status.json()).toEqual({ slug: 'a', status: 'unavailable', kbId: 'research' })
+    const health = await f.requestAs(null, '/api/health')
+    expect(health.status).toBe(200)
+    expect((await health.json()).bindingsReady).toBe(false)
+    const overview = await (await f.requestAs(admin, '/api/admin/overview')).json()
+    const row = overview.find((entry: { tenant: { slug: string } }) => entry.tenant.slug === 'a')
+    expect(row.knowledgeBox.status).toBe('unavailable')
+    expect(row.bindingEncryption).toEqual({
+      configured: true,
+      required: true,
+      writable: true,
+      unavailable: 1,
+    })
+    // Another portal on the same deployment is unaffected.
+    const other = await f.requestAs(admin, '/api/t/b/knowledge-box')
+    expect(other.status).toBe(200)
+    expect((await other.json()).status).toBe('none')
+    expect(f.state.get<Record<string, { token: string }>>('bindings', {}).a?.token).toBe(sealed)
+
+    globalThis.fetch = () => Promise.resolve(Response.json({ resources: 3 }))
+    const replaced = await f.requestAs(admin, '/api/admin/t/a/knowledge-box', connect)
+    expect(replaced.status).toBe(200)
+    expect((await replaced.json()).status.status).toBe('connected')
+    expect(f.stores.bindings.get('a')?.token).toBe(token)
+    const removed = await f.requestAs(admin, '/api/admin/t/a/knowledge-box', { method: 'DELETE' })
+    expect(removed.status).toBe(200)
+    expect((await removed.json()).status.status).toBe('none')
+    expect((await (await f.requestAs(null, '/api/health')).json()).bindingsReady).toBe(true)
+    expect(JSON.stringify(f.rbac.audit.read({ scope: { kind: 'platform' } }))).not.toContain(token)
+  } finally {
+    globalThis.fetch = originalFetch
+    console.warn = warn
     f.close()
   }
 })

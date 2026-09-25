@@ -9,6 +9,7 @@ export type BindingCryptoCode =
   | 'binding_encryption_failed'
   | 'binding_not_initialized'
   | 'binding_storage_invalid'
+  | 'binding_unavailable'
 
 /** Safe to report: never carries a token, key, ciphertext or underlying exception. */
 export class BindingCryptoError extends Error {
@@ -36,6 +37,24 @@ function urlDecode(value: string): Uint8Array<ArrayBuffer> {
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
   if (urlEncode(bytes) !== value) throw new Error('Invalid encoding')
   return bytes
+}
+
+/** Whether a stored token claims to be sealed; such a value is never used as plaintext. */
+export function isSealedBindingToken(token: string): boolean {
+  return token.startsWith('enc:')
+}
+
+export type BindingKeyState = 'missing' | 'valid' | 'invalid'
+
+/** Classify a `BINDING_KEY` value without keeping or reporting any part of it. */
+export function bindingKeyState(secret: string | undefined): BindingKeyState {
+  if (secret === undefined || secret === '') return 'missing'
+  try {
+    new BindingCipher(secret)
+    return 'valid'
+  } catch {
+    return 'invalid'
+  }
 }
 
 /** AES-GCM authenticates the portal slug as well as the token and ciphertext. */
@@ -87,7 +106,7 @@ export class BindingCipher {
   }
 
   async open(slug: string, token: string): Promise<string> {
-    if (!token.startsWith('enc:')) return token
+    if (!isSealedBindingToken(token)) return token
     if (!this.configured) throw new BindingCryptoError('binding_key_missing')
     try {
       const parts = token.split(':')

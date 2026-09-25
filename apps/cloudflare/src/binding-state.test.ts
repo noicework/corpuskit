@@ -102,11 +102,17 @@ Deno.test('durable bindings without a key read existing plaintext and environmen
     expect(store.get('marine')?.token).toBe(TOKEN)
     expect(store.get('grains')?.token).toBe('test-only-env-token')
     expect(store.isDemo('grains')).toBe(true)
-    expect(store.encryptionStatus()).toEqual({ configured: false, required: true, writable: false })
+    expect(store.encryptionStatus()).toEqual({
+      configured: false,
+      required: true,
+      writable: false,
+      error: 'binding_key_missing',
+      unavailable: 0,
+    })
     const before = f.raw()
     expect(() => store.assertWritable()).toThrow('binding_key_missing')
     for (const slug of ['marine', 'new']) {
-      expect(() => store.set(slug, binding)).toThrow('binding_key_missing')
+      await expect(store.set(slug, binding)).rejects.toThrow('binding_key_missing')
     }
     expect(f.raw()).toBe(before)
     store.remove('marine')
@@ -134,13 +140,28 @@ Deno.test('durable binding inserts and replacements seal fresh values and preser
     returned.token = 'modified-value'
     expect(store.get('marine')?.token).toBe(TOKEN)
     expect(JSON.stringify(store.status('marine'))).not.toContain(TOKEN)
-    expect(store.encryptionStatus()).toEqual({ configured: true, required: true, writable: true })
+    expect(store.encryptionStatus()).toEqual({
+      configured: true,
+      required: true,
+      writable: true,
+      unavailable: 0,
+    })
   } finally {
     f.cleanup()
   }
 })
 
-Deno.test('durable ciphertext failures never rewrite state or fall back to an environment token', async () => {
+Deno.test('durable ciphertext failures withhold only that record, without rewrites or fallback', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    await ciphertextFailures()
+  } finally {
+    console.warn = warn
+  }
+})
+
+async function ciphertextFailures() {
   for (const kind of ['malformed', 'wrong-key', 'wrong-slug', 'missing-key']) {
     const f = fixture()
     try {
@@ -160,14 +181,91 @@ Deno.test('durable ciphertext failures never rewrite state or fall back to an en
         ARAG_KB_GRAINS: 'environment',
         ARAG_KB_GRAINS_TOKEN: 'test-only-env-token',
       })
-      await expect(store.initialize()).rejects.toThrow(
-        kind === 'missing-key' ? 'binding_key_missing' : 'binding_decryption_failed',
-      )
-      expect(() => store.get('grains')).toThrow('binding_not_initialized')
+      await store.initialize()
+      expect(() => store.get('grains')).toThrow('binding_unavailable')
+      expect(store.isDemo('grains')).toBe(false)
+      expect(store.status('grains')).toEqual({
+        slug: 'grains',
+        status: 'unavailable',
+        kbId: 'example',
+      })
+      // Other portals keep working, and nothing is sealed with a key that failed a record.
+      expect(store.get('plaintext')?.token).toBe(TOKEN)
+      expect(store.encryptionStatus().unavailable).toBe(1)
       expect(f.raw()).toBe(before)
     } finally {
       f.cleanup()
     }
+  }
+}
+
+Deno.test('durable withheld bindings are recoverable by key restore, replacement or removal', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  const f = fixture()
+  try {
+    const original = new DurableBindingStore(f.state, { BINDING_KEY: KEY })
+    await original.initialize()
+    await original.set('marine', binding)
+    await original.set('grains', binding)
+    const sealed = f.raw()
+
+    const rotated = { BINDING_KEY: btoa('r'.repeat(32)) }
+    const store = durableStores(f.state, rotated).bindings
+    await store.initialize()
+    expect(store.encryptionStatus()).toMatchObject({ writable: true, unavailable: 2 })
+    expect(f.raw()).toBe(sealed)
+    const restored = new DurableBindingStore(f.state, { BINDING_KEY: KEY })
+    await restored.initialize()
+    expect(restored.get('grains')?.token).toBe(TOKEN)
+
+    await f.state.localMutations.run(
+      input,
+      new AbortController().signal,
+      () => store.set('marine', { ...binding, token: 'test-only-replacement-token' }),
+    )
+    await f.state.localMutations.run(
+      { ...input, scope: { kind: 'portal', slug: 'grains' } },
+      new AbortController().signal,
+      () => store.remove('grains'),
+    )
+    expect(store.encryptionStatus().unavailable).toBe(0)
+    const restarted = new DurableBindingStore(f.state, rotated)
+    await restarted.initialize()
+    expect(restarted.get('marine')?.token).toBe('test-only-replacement-token')
+    expect(restarted.status('grains').status).toBe('none')
+    expect(f.raw()).not.toContain('test-only-replacement-token')
+  } finally {
+    console.warn = warn
+    f.cleanup()
+  }
+})
+
+Deno.test('durable malformed binding key never throws at start-up and refuses writes', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  const f = fixture()
+  try {
+    const original = new DurableBindingStore(f.state, { BINDING_KEY: KEY })
+    await original.initialize()
+    await original.set('marine', binding)
+    const before = f.raw()
+    const store = new DurableBindingStore(f.state, { BINDING_KEY: 'not-a-key' })
+    await store.initialize()
+    expect(() => store.get('marine')).toThrow('binding_unavailable')
+    expect(store.encryptionStatus()).toEqual({
+      configured: true,
+      required: true,
+      writable: false,
+      error: 'binding_key_invalid',
+      unavailable: 1,
+    })
+    expect(() => store.assertWritable()).toThrow('binding_key_invalid')
+    await expect(store.set('marine', binding)).rejects.toThrow('binding_key_invalid')
+    expect(f.raw()).toBe(before)
+  } finally {
+    console.warn = warn
+    f.cleanup()
   }
 })
 
@@ -253,21 +351,41 @@ Deno.test('durable binding encryption cannot commit after the audit scope is can
   }
 })
 
-Deno.test('durable malformed binding JSON fails closed without logging credential fragments', () => {
+Deno.test('durable malformed binding JSON fails closed without logging credential fragments', async () => {
   const f = fixture()
   const logged: unknown[][] = []
   const log = console.error
+  const warn = console.warn
   console.error = (...args) => {
+    logged.push(args)
+  }
+  console.warn = (...args) => {
     logged.push(args)
   }
   try {
     const raw = `{"marine":{"token":"${TOKEN}",`
     f.sql.exec('INSERT INTO state (key,value,updated_at) VALUES (?,?,?)', 'bindings', raw, 1)
-    expect(() => new DurableBindingStore(f.state, {})).toThrow('binding_storage_invalid')
-    expect(logged).toEqual([])
+    const store = new DurableBindingStore(f.state, {
+      BINDING_KEY: KEY,
+      ARAG_KB_GRAINS: 'environment',
+      ARAG_KB_GRAINS_TOKEN: 'test-only-env-token',
+    })
+    await store.initialize()
+    for (const slug of ['marine', 'grains']) {
+      expect(() => store.get(slug)).toThrow('binding_storage_invalid')
+      expect(store.status(slug)).toEqual({ slug, status: 'unavailable' })
+    }
+    expect(store.encryptionStatus()).toMatchObject({
+      writable: false,
+      error: 'binding_storage_invalid',
+    })
+    await expect(store.set('marine', binding)).rejects.toThrow('binding_storage_invalid')
+    expect(() => store.remove('marine')).toThrow('binding_storage_invalid')
+    expect(JSON.stringify(logged)).not.toContain(TOKEN)
     expect(f.raw()).toContain(TOKEN)
   } finally {
     console.error = log
+    console.warn = warn
     f.cleanup()
   }
 })

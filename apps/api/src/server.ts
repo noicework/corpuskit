@@ -49,7 +49,8 @@ const docsHealth = new DocsHealth({
     tenants.list().map((t) => tenants.get(t.slug)).filter((t): t is NonNullable<typeof t> =>
       t !== undefined
     ),
-  isBound: (slug) => bindings.get(slug) !== undefined,
+  // A withheld (unavailable) credential is not probed; the admin overview reports it.
+  isBound: (slug) => ['connected', 'demo'].includes(bindings.status(slug).status),
   provider,
 })
 
