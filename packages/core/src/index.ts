@@ -396,8 +396,9 @@ export const TenantConfigSchema = z.object({
   relationTypes: z.string().array(),
   /**
    * Whether Explore shows the regional discovery band (the map of Australia
-   * and its state questions). Absent means shown; a portal whose corpus is
-   * not organised by Australian state sets it to false.
+   * and its state questions). Opt-in: only true shows it, and absent or false
+   * hides it. A portal whose corpus is organised by Australian state sets it
+   * to true, in its seed or through `PATCH /api/admin/tenants/:slug`.
    */
   regionalDiscovery: z.boolean().optional(),
   /**
@@ -435,6 +436,11 @@ export const TenantConfigSchema = z.object({
   /** Extraction routing rules (docs/EXTRACTION-LAB.md). Absent = platform default for everything. */
   extraction: ExtractionRulesSchema.optional(),
 })
+
+/** Whether Explore shows the regional discovery band: only when the portal opts in. */
+export function showsRegionalDiscovery(config: Pick<TenantConfig, 'regionalDiscovery'>): boolean {
+  return config.regionalDiscovery === true
+}
 
 // ---------------------------------------------------------------------------
 // Knowledge box connection status - which backing store a tenant is wired to.

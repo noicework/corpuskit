@@ -1,7 +1,11 @@
 import { type FormEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
-import type { ResourceSummary, TenantConfig } from '@research-portal/core'
+import {
+  type ResourceSummary,
+  showsRegionalDiscovery,
+  type TenantConfig,
+} from '@research-portal/core'
 import { getCatalog, getFacets, getTopicResources } from '../api/client.ts'
 import { topicsWithFacetCounts } from '../lib/topic-rows.ts'
 import { EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
@@ -322,9 +326,10 @@ function QuickEntry({ slug }: { slug: string }) {
  * ---------------------------------------------------------------------- */
 
 /**
- * A featured band: the corpus is national, so the map is a way in by place.
- * Each region asks a real question about that state rather than searching a
- * bare place name. The list beside the map is not decoration - it is the
+ * A featured band for a national corpus organised by Australian state, where
+ * the map is a way in by place. Shown only on a portal that opts in with
+ * `regionalDiscovery: true` (see `showsRegionalDiscovery`). Each region asks a
+ * real question about that state rather than searching a bare place name. The list beside the map is not decoration - it is the
  * keyboard and screen-reader path to the same questions, so it carries its own
  * group label; the sentence that used to tell a reader what to do here has
  * gone, and the label is what keeps that instruction for assistive tech.
@@ -545,7 +550,7 @@ export function ExplorePage() {
 
       <QuickEntry slug={config.slug} />
 
-      {config.regionalDiscovery !== false && <RegionBand slug={config.slug} />}
+      {showsRegionalDiscovery(config) && <RegionBand slug={config.slug} />}
 
       <section className='rp-shell space-y-10 pb-16 pt-12'>
         {isError

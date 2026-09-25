@@ -165,6 +165,51 @@ Deno.test('Manage uses scoped reads and rejects forbidden and stale tab destinat
   }
 })
 
+Deno.test('Appearance offers the ACMD palette only to a portal already using it', async () => {
+  const server = startTestServer({ identity: { role: 'owner' }, management })
+  const browser = await launch()
+  const paletteTiles = async (page: Page) => {
+    await page.waitForSelector('[data-appearance-save=colours]', { timeout: 15_000 })
+    return await page.evaluate(() =>
+      [...document.querySelectorAll('button[aria-label$=" palette"]')].map((node) => ({
+        label: node.getAttribute('aria-label'),
+        pressed: node.getAttribute('aria-pressed'),
+      }))
+    )
+  }
+  try {
+    let page = await browser.newPage(`${server.url}/t/marine/manage?tab=appearance`)
+    try {
+      await assertCurrentBuild(page)
+      const tiles = await paletteTiles(page)
+      expect(tiles.map((tile) => tile.label)).toEqual([
+        'Fathom palette',
+        'Canopy palette',
+        'Damson palette',
+        'Kiln palette',
+        'Observatory palette',
+        'CorpusKit palette',
+      ])
+      expect(tiles.find((tile) => tile.pressed === 'true')?.label).toBe('Fathom palette')
+    } finally {
+      await page.close()
+    }
+    // A portal made with the palette (as the ACMD demo seed writes it) still sees and keeps it.
+    server.tenants.patchBranding('marine', { paletteId: 'acmd' })
+    page = await browser.newPage(`${server.url}/t/marine/manage?tab=appearance`)
+    try {
+      const tiles = await paletteTiles(page)
+      expect(tiles.map((tile) => tile.label)).toContain('ACMD palette')
+      expect(tiles.find((tile) => tile.pressed === 'true')?.label).toBe('ACMD palette')
+    } finally {
+      await page.close()
+    }
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+})
+
 Deno.test('Manage drops pending scoped reads after identity or permission changes', async () => {
   const server = startTestServer({ identity: { role: 'curator' }, management })
   const delay = server.delayResponse('/api/admin/t/marine/counters')

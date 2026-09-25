@@ -35,6 +35,19 @@ entity/relation types, suggested questions, feature flags) from `GET /api/t/:slu
 entire UI - theme tokens, nav labels, hero copy, graph legend, topic rows - renders from it.
 Nothing tenant-specific ever appears in a component.
 
+The seeded showcase portals are defined in `apps/api/src/tenants.ts` and are never copied into
+storage: both the file store and the Durable Object read each seed on every request and merge
+only that portal's stored overrides over it. A change to a seed therefore reaches existing
+deployments on the next deploy, and a field an override sets explicitly still wins.
+
+Optional surfaces are opt-in per portal. The regional discovery band on Explore (a map of
+Australia and a question per state) appears only when `regionalDiscovery` is `true`; absent or
+`false` hides it. The grains and marine seeds set it, because their collections are organised by
+Australian state. The Manage screen has no control for it. A portal administrator (or the
+operator credential, see `HOSTING.md`) turns it on or off with `PATCH /api/admin/tenants/:slug`
+and a body of `{"regionalDiscovery": true}` or `{"regionalDiscovery": false}`, which needs
+`behaviour.write` on the portal as well as the route's `appearance.write`.
+
 Server-side, a tenant record also holds the knowledge-box binding: zone, KB id, service-account
 token (minted at provision time, never sent to the client). The Deno development server uses the
 file stores in `apps/api`; Cloudflare production injects equivalent synchronous adapters over a

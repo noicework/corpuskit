@@ -673,6 +673,13 @@ export const DOC_PAGES: DocPage[] = [
           'they reflect how the content has actually been labelled, not a fixed menu. **See all** ' +
           'on a row takes you to everything filed under that topic in the Library.',
       },
+      {
+        heading: 'Exploring by region',
+        body: 'A portal whose collection is organised by Australian state can also show an ' +
+          '**Explore by region** band: a map of Australia and a list of the states, each asking ' +
+          'what research has been done there. It is off unless the portal administrator turns ' +
+          'it on, so most portals do not show it.',
+      },
     ],
   },
   {

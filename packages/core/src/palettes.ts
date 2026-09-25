@@ -11,11 +11,13 @@ import { z } from 'zod'
 // matches. `mode` says which polarity the suite is - a dark palette flips
 // the semantic status colours and `color-scheme` with it.
 //
-// The five DEFAULT_PALETTES are the portal's stock library (signed off
+// Five of the DEFAULT_PALETTES are the portal's stock library (signed off
 // 2026-08-31): original identities, not sampled from any real organisation's
-// brand. Every palette must pass the PALETTE_CONTRACT below - palettes.test.ts
-// enforces it, so a bad edit fails the build rather than shipping an
-// illegible portal.
+// brand. CorpusKit is the project's own identity. A palette made for one
+// organisation is marked `listed: false`, so only the portal made with it is
+// offered it (see `pickerPaletteIds` and `canAssignPalette`). Every palette
+// must pass the PALETTE_CONTRACT below - palettes.test.ts enforces it, so a bad
+// edit fails the build rather than shipping an illegible portal.
 // ---------------------------------------------------------------------------
 
 const hexColour = z.string().regex(/^#[0-9a-f]{6}$/i)
@@ -85,6 +87,12 @@ export interface PaletteEntry {
   label: string
   /** One-line story shown in the palette picker. */
   description: string
+  /**
+   * False for a palette made for one organisation. It stays a valid choice, so the portal made
+   * with it renders unchanged and can keep it, but no other portal is offered it or may be
+   * given it. Absent means listed: offered to every portal.
+   */
+  listed?: boolean
   palette: Palette
 }
 
@@ -93,6 +101,7 @@ export const DEFAULT_PALETTES: Record<PaletteId, PaletteEntry> = {
     id: 'acmd',
     label: 'ACMD',
     description: 'ACMD navy, clear blue and white, from its current public website.',
+    listed: false,
     palette: {
       mode: 'light',
       brandSurface: '#212d57',
@@ -282,6 +291,28 @@ export const DEFAULT_PALETTES: Record<PaletteId, PaletteEntry> = {
       ink3: '#a5a3c4',
     },
   },
+}
+
+/** Whether a palette is offered to every portal (see `PaletteEntry.listed`). */
+export function isListedPalette(id: PaletteId): boolean {
+  return DEFAULT_PALETTES[id].listed !== false
+}
+
+/**
+ * The library palettes a portal's picker offers, in library order: every listed palette, plus
+ * the portal's current choice when that is an unlisted one, so the portal made with it can still
+ * see and keep it. 'default' (the portal's own colours) is offered separately.
+ */
+export function pickerPaletteIds(current?: PaletteChoice): PaletteId[] {
+  return PaletteIdSchema.options.filter((id) => isListedPalette(id) || id === current)
+}
+
+/**
+ * Whether a portal whose palette is `current` may be given `next`: 'default', any listed
+ * palette, or the unlisted palette it already uses. An unlisted palette is never newly assigned.
+ */
+export function canAssignPalette(next: PaletteChoice, current?: PaletteChoice): boolean {
+  return next === 'default' || isListedPalette(next) || next === current
 }
 
 // ---------------------------------------------------------------------------

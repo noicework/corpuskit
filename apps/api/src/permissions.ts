@@ -335,7 +335,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
         action: 'tenant.behaviour.update',
         permission: 'behaviour.write',
         scope: 'portal',
-        fields: ['searchPlaceholder'],
+        fields: ['searchPlaceholder', 'regionalDiscovery'],
       },
     ],
   }),

@@ -38,6 +38,12 @@ Actions deployment, including the real CorpusKit demo functional check.
 
 ## Source-matched chrome and refinement
 
+The ACMD palette is marked `listed: false` in `packages/core/src/palettes.ts`:
+it was made for this one portal, so no other portal's Appearance picker offers
+it and `PATCH /api/admin/tenants/:slug` refuses to assign it to a portal that
+is not already using it (`400 palette_not_available`). The ACMD portal still
+sees and keeps it. The seed writes the portal directly, so it is unaffected.
+
 The ACMD palette selects `AcmdChrome.tsx` for the real website navigation and
 footer destinations. The portal navigation remains a separate compact strip,
 and the source notice is included in measured header height so Ask and Graph
