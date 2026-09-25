@@ -2,7 +2,7 @@ import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { Permission, TenantConfig } from '@research-portal/core'
-import { getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
+import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import {
   tenantThemeVars,
   useBodyTheme,
@@ -268,10 +268,12 @@ export function TenantLayout() {
     data: config,
     isLoading,
     isError,
+    error,
   } = useQuery({
     queryKey: ['tenant-config', slug],
     queryFn: () => getTenantConfig(slug ?? ''),
     enabled: !!slug && access.can('portal.read', scope),
+    retry: false,
   })
   // Routes whose page owns the full viewport height.
   const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
@@ -338,6 +340,12 @@ export function TenantLayout() {
     return <FullPageSpinner />
   }
 
+  if (
+    config?.status === 'suspended' ||
+    (error instanceof ApiError && error.code === 'portal_suspended')
+  ) {
+    return <AccessUnavailable suspended />
+  }
   if (isError || !config) return <AccessUnavailable failedRead />
 
   // Links sit on the solid brand band, so the active state is white type over
@@ -652,6 +660,23 @@ export function TenantLayout() {
           <div className='border-b border-line bg-surface-2'>
             <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
               Demo portal. Answers currently use the CorpusKit documentation knowledge base.
+            </p>
+          </div>
+        )}
+        {config.status === 'read_only' && auth?.authenticated && (
+          <div
+            role='status'
+            className='border-b'
+            data-portal-read-only
+            style={{
+              background: 'var(--rp-warn-bg)',
+              color: 'var(--rp-warn-ink)',
+              borderColor: 'var(--rp-warn-line)',
+            }}
+          >
+            <p className='rp-shell py-2 text-sm leading-relaxed'>
+              <strong>This portal is read-only.</strong>{' '}
+              You can browse, search and ask questions. Content and settings cannot be changed.
             </p>
           </div>
         )}
