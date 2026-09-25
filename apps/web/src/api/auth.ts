@@ -17,10 +17,27 @@ export interface AuthUser {
   email: string
   roles: string[]
   isAdmin: boolean
+  provenance?: 'entra' | 'external'
 }
 
 const enabledCapability = z.unknown().transform((value) => value === true)
 const snapshotSchema = z.object({
+  entraEnabled: z.boolean().optional(),
+  externalLogin: z.object({
+    name: z.string().trim().min(1).default('Continue with your organisation account'),
+    startUrl: z.string().url().refine((value) => {
+      try {
+        const url = new URL(value)
+        return !url.username && !url.password &&
+          (url.protocol === 'https:' ||
+            (url.protocol === 'http:' &&
+              ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))
+      } catch {
+        return false
+      }
+    }),
+  }).strict().nullable().default(null),
+  sessionProvenance: z.enum(['entra', 'external']).nullable().optional(),
   authenticated: z.boolean(),
   user: z.object({
     id: z.string().min(1),
@@ -29,6 +46,7 @@ const snapshotSchema = z.object({
     email: z.string(),
     roles: z.array(z.string()),
     isAdmin: z.boolean(),
+    provenance: z.enum(['entra', 'external']).optional(),
   }).nullable(),
   effectiveRoles: EffectiveRolesSchema,
   provenance: z.array(

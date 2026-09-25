@@ -85,9 +85,18 @@ export function OverviewAccess(
         </>
       )}
       <div className='flex flex-wrap gap-3'>
-        {!overview.sessionAllowed && (
+        {!overview.sessionAllowed && overview.auth?.entraEnabled !== false && (
           <a href={microsoftLoginUrl(returnTo)} className='rp-btn rp-btn-primary'>
             Sign in with Microsoft
+          </a>
+        )}
+        {!overview.sessionAllowed && overview.auth?.externalLogin && (
+          <a
+            href={overview.auth.externalLogin.startUrl}
+            className='rp-btn rp-btn-outline whitespace-normal text-center'
+            data-external-login
+          >
+            {overview.auth.externalLogin.name}
           </a>
         )}
         {(overview.sessionAllowed || overview.breakGlassEnabled) && (

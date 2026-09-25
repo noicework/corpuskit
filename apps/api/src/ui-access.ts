@@ -36,6 +36,7 @@ export function buildUiAccessSnapshot(input: {
   session: TrustedSessionFacts | null
   effectiveRoles: unknown
   configuredTenantId: string
+  externalLoginEnabled?: boolean
   selectedSlug?: unknown
   /** Current store policy plus the separately stored disabled flag. */
   tenant: unknown
@@ -59,11 +60,11 @@ export function buildUiAccessSnapshot(input: {
   const identity = input.session
     ? { kind: 'user', tenantId: input.session.tenantId, oid: input.session.oid }
     : { kind: 'anonymous' }
-  // Foreign identities cannot carry configured-tenant assignments, even from a bad adapter.
-  const effectiveRoles = !!input.configuredTenantId &&
-      input.session?.tenantId === input.configuredTenantId
-    ? resolved.data
-    : { portalRoles: [] }
+  // Only the configured identity tenant or an enabled external session carries assignments.
+  const trustedIdentity = input.session?.tenantId === 'external'
+    ? input.externalLoginEnabled === true && input.session.provenance === 'external'
+    : !!input.configuredTenantId && input.session?.tenantId === input.configuredTenantId
+  const effectiveRoles = trustedIdentity ? resolved.data : { portalRoles: [] }
   const platformPrincipal = normalisePrincipal(identity, effectiveRoles)
   result.platformPermissions = PERMISSIONS.filter((permission) =>
     authorize(platformPrincipal, permission, { kind: 'platform' })

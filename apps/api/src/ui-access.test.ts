@@ -176,3 +176,53 @@ Deno.test('unconfigured Entra preserves public anonymous access without manageme
     expect(result.portalAccess?.canEnable).toBe(false)
   }
 })
+
+Deno.test('external UI access requires enabled trusted provenance and local assignments', () => {
+  const external = {
+    ...session(),
+    tenantId: 'external',
+    oid: 'ext:reader',
+    provenance: 'external' as const,
+  }
+  for (const configuredTenantId of ['tenant-1', '', 'external']) {
+    for (const accessMode of ['authenticated', 'restricted']) {
+      const base = {
+        session: external,
+        configuredTenantId,
+        tenant: { ...tenant, accessMode },
+      }
+      expect(snapshot({ ...base, externalLoginEnabled: true }).portalAccess).toEqual(unavailable)
+      expect(
+        snapshot({ ...base, externalLoginEnabled: true, effectiveRoles: roles('curator') })
+          .portalAccess?.effectiveRole,
+      ).toBe('curator')
+      for (const externalLoginEnabled of [undefined, false]) {
+        const result = snapshot({ ...base, externalLoginEnabled, effectiveRoles: roles('owner') })
+        expect(result.platformPermissions).toEqual([])
+        expect(result.portalAccess).toEqual(unavailable)
+      }
+      const missingProvenance = snapshot({
+        ...base,
+        session: { ...external, provenance: undefined },
+        externalLoginEnabled: true,
+        effectiveRoles: roles('owner'),
+      })
+      expect(missingProvenance.platformPermissions).toEqual([])
+      expect(missingProvenance.portalAccess).toEqual(unavailable)
+    }
+  }
+  expect(
+    snapshot({
+      session: external,
+      externalLoginEnabled: true,
+      effectiveRoles: roles('owner'),
+    }).platformPermissions,
+  ).toContain('platform.members.manage')
+  expect(
+    snapshot({
+      session: { ...session(), tenantId: 'foreign' },
+      externalLoginEnabled: true,
+      effectiveRoles: roles('owner'),
+    }).platformPermissions,
+  ).toEqual([])
+})
