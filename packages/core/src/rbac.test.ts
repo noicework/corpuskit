@@ -751,3 +751,16 @@ describe('RBAC catalogue and schema contracts', () => {
     ) expect(AuthorisationPrincipalSchema.safeParse(invalid).success).toBe(false)
   })
 })
+
+Deno.test('external identities need explicit local authority on authenticated portals', () => {
+  const identity = { kind: 'user', tenantId: 'external', oid: 'ext:person' }
+  for (const configuredTenantId of ['tenant-a', 'external']) {
+    const policy = { slug: 'alpha', accessMode: 'authenticated', configuredTenantId }
+    const unassigned = normalisePrincipal(identity, noRoles, policy)
+    expect(authorize(unassigned, 'portal.read', alpha)).toBe(false)
+    const assigned = normalisePrincipal(identity, {
+      portalRoles: [{ slug: 'alpha', role: 'viewer' }],
+    }, policy)
+    expect(authorize(assigned, 'portal.read', alpha)).toBe(true)
+  }
+})

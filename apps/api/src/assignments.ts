@@ -16,6 +16,7 @@ import { type RbacDatabase, RbacState, type RoleAssignment } from './rbac-state.
 /** Internal verified-session facts only. Shape validation does not verify an HTTP identity. */
 export interface VerifiedAssignmentSession {
   verified: true
+  provenance?: 'entra' | 'external'
   tenantId: string
   oid: string
   email?: string
@@ -25,13 +26,17 @@ export interface VerifiedAssignmentSession {
   groupStatus: 'complete' | 'absent' | 'malformed' | 'overage' | 'unverified'
   /** Original claim and session times in milliseconds, never the renewed envelope iat. */
   claimIssuedAt: number
+  createdAt?: number
   expiresAt: number
 }
 export interface AssignmentContext {
   requestId: string
   actor: AuditActor
 }
-export type AssignmentInput = Pick<RoleAssignment, 'subjectKind' | 'subjectId' | 'scope' | 'role'>
+export type AssignmentInput =
+  & Pick<RoleAssignment, 'subjectKind' | 'subjectId' | 'scope' | 'role'>
+  & Partial<Pick<RoleAssignment, 'source'>>
+type NormalisedAssignmentInput = AssignmentInput & Pick<RoleAssignment, 'source'>
 export type AssignmentResult<T = RoleAssignment> =
   | { ok: true; value: T }
   | { ok: false; code: 'last_owner' | 'email_conflict' | 'invalid_input' | 'invalid_principal' }
@@ -47,6 +52,14 @@ interface OwnerEvidence {
 const claimLifetime = 8 * 60 * 60 * 1000
 const identifier = (value: unknown): value is string =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
+const externalOid = (value: unknown): value is string =>
+  typeof value === 'string' && /^ext:[\s\S]{1,128}$/.test(value)
+const identityOid = (tenantId: string, value: unknown): value is string =>
+  tenantId === 'external' ? externalOid(value) : identifier(value)
+const sessionSource = (session: VerifiedAssignmentSession): RoleAssignment['source'] =>
+  session.tenantId === 'external' && session.provenance === 'external' ? 'external' : 'entra'
+const sessionStart = (session: VerifiedAssignmentSession): number =>
+  sessionSource(session) === 'external' ? session.createdAt ?? NaN : session.claimIssuedAt
 const email = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
   const normalised = value.trim().toLowerCase()
@@ -64,6 +77,8 @@ export interface RoleResolutionStores {
   rbac: Pick<RbacState, 'assignments' | 'groupCapability' | 'observeUnknownRole'>
   tenants: { list(includeDisabled?: boolean): { slug: string }[] }
   audience: string
+  externalLoginEnabled?: boolean
+  assignmentTenantId?: string
   /** Receives only a bounded SHA-256 identifier, never the raw claim. */
   logUnknownRole?: (identifier: string) => void
 }
@@ -96,15 +111,24 @@ export async function resolveEffectiveRoles(
 ): Promise<RoleResolution> {
   if (
     !session || session.verified !== true || !identifier(configuredTenantId) ||
-    session.tenantId !== configuredTenantId || !identifier(session.oid) ||
+    (sessionSource(session) === 'external'
+      ? !stores.externalLoginEnabled
+      : session.tenantId !== configuredTenantId || session.tenantId === 'external' ||
+        session.provenance === 'external') ||
+    !identityOid(session.tenantId, session.oid) ||
     !strings(session.roles) ||
     !Number.isSafeInteger(now) || !Number.isSafeInteger(session.claimIssuedAt) ||
     !Number.isSafeInteger(session.expiresAt) || session.claimIssuedAt < 0 ||
+    !Number.isSafeInteger(sessionStart(session)) || sessionStart(session) > now + 30_000 ||
+    sessionStart(session) < session.claimIssuedAt - 30_000 ||
     session.claimIssuedAt > now + 30_000 || session.expiresAt <= session.claimIssuedAt ||
-    Math.min(session.expiresAt, session.claimIssuedAt + claimLifetime) <= now
+    Math.min(session.expiresAt, sessionStart(session) + claimLifetime) <= now
   ) return emptyResolution()
 
-  const result = await resolveRoleGrants(session, session, stores)
+  const result = await resolveRoleGrants(session, session, {
+    ...stores,
+    assignmentTenantId: configuredTenantId,
+  })
   if (result.effectiveRoles.platformRole) {
     for (const portal of stores.tenants.list(true)) {
       if (!identifier(portal.slug)) continue
@@ -121,10 +145,18 @@ export async function resolveEffectiveRoles(
 export async function resolveRoleGrants(
   identity: { tenantId: string; oid: string },
   claims: GrantClaims | null,
-  stores: Pick<RoleResolutionStores, 'rbac' | 'audience' | 'logUnknownRole'>,
+  stores: Pick<
+    RoleResolutionStores,
+    'rbac' | 'audience' | 'logUnknownRole' | 'externalLoginEnabled' | 'assignmentTenantId'
+  >,
 ): Promise<RoleResolution> {
   const result = emptyResolution()
-  if (!identifier(identity.tenantId) || !identifier(identity.oid)) return result
+  if (!identifier(identity.tenantId) || !identityOid(identity.tenantId, identity.oid)) return result
+  const identitySource = identity.tenantId === 'external' ? 'external' : 'entra'
+  if (identitySource === 'external') {
+    if (!stores.externalLoginEnabled || !stores.assignmentTenantId) return result
+    claims = null
+  }
 
   const groupsValid = claims && strings(claims.groups) && claims.groups.every(identifier)
   result.groupCapability = !claims
@@ -167,10 +199,11 @@ export async function resolveRoleGrants(
       }
     }
   }
-  const rows = stores.rbac.assignments.list(identity.tenantId)
+  const assignmentTenantId = stores.assignmentTenantId ?? identity.tenantId
+  const rows = stores.rbac.assignments.list(assignmentTenantId)
   for (const source of ['group', 'local'] as const) {
     for (const row of rows) {
-      if (row.tenantId !== identity.tenantId) continue
+      if (row.tenantId !== assignmentTenantId || row.source !== identitySource) continue
       const matches = source === 'group'
         ? result.groupCapability === 'enabled' && row.subjectKind === 'group' &&
           claims?.groups.includes(row.subjectId)
@@ -207,6 +240,7 @@ export class AssignmentService {
     private readonly configuredTenantId: string,
     private readonly now: () => number = Date.now,
     private readonly audience?: string,
+    private readonly externalLoginEnabled = false,
   ) {
     if (!identifier(configuredTenantId)) throw new Error('Configured tenant is required')
     this.state = new RbacState(database, now)
@@ -216,7 +250,7 @@ export class AssignmentService {
     return this.state.assignments.list(this.configuredTenantId)
   }
 
-  private input(input: AssignmentInput): AssignmentInput | null {
+  private input(input: AssignmentInput): NormalisedAssignmentInput | null {
     const scope = ScopeSchema.safeParse(input.scope)
     const role = RoleSchema.safeParse(input.role)
     if (!scope.success || !role.success) return null
@@ -227,11 +261,19 @@ export class AssignmentService {
     if (!validRole || !['active-oid', 'pending-email', 'group'].includes(input.subjectKind)) {
       return null
     }
+    const source = input.source === undefined ? 'entra' : input.source
+    if (
+      !['entra', 'external'].includes(source) ||
+      (input.subjectKind === 'group' && source !== 'entra')
+    ) return null
     const subjectId = input.subjectKind === 'pending-email'
       ? email(input.subjectId)
       : input.subjectId
-    if (!subjectId || (input.subjectKind !== 'pending-email' && !identifier(subjectId))) return null
-    return { subjectKind: input.subjectKind, subjectId, scope: scope.data, role: role.data }
+    if (
+      !subjectId || (input.subjectKind !== 'pending-email' &&
+        !(source === 'external' ? externalOid(subjectId) : identifier(subjectId)))
+    ) return null
+    return { subjectKind: input.subjectKind, subjectId, source, scope: scope.data, role: role.data }
   }
 
   private record(
@@ -276,8 +318,8 @@ export class AssignmentService {
   private insert(row: RoleAssignment): void {
     this.database.exec(
       `INSERT INTO role_assignments
-      (id,tenant_id,subject_kind,subject_id,scope_kind,scope_slug,role,email_provenance,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      (id,tenant_id,subject_kind,subject_id,scope_kind,scope_slug,role,email_provenance,created_at,updated_at,source)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       row.id,
       row.tenantId,
       row.subjectKind,
@@ -288,6 +330,7 @@ export class AssignmentService {
       row.emailProvenance,
       row.createdAt,
       row.updatedAt,
+      row.source,
     )
   }
 
@@ -297,7 +340,8 @@ export class AssignmentService {
       if (!valid) return this.denied(context, 'invalid_input')
       if (
         this.list().some((row) =>
-          row.subjectKind === valid.subjectKind && row.subjectId === valid.subjectId &&
+          row.source === valid.source && row.subjectKind === valid.subjectKind &&
+          row.subjectId === valid.subjectId &&
           sameScope(row.scope, valid.scope)
         )
       ) {
@@ -342,7 +386,8 @@ export class AssignmentService {
       if (patch !== null && !valid) return this.denied(context, 'invalid_input', previous)
       if (
         valid && previous.emailProvenance && previous.subjectKind === 'active-oid' &&
-        (valid.subjectKind !== previous.subjectKind || valid.subjectId !== previous.subjectId)
+        (valid.subjectKind !== previous.subjectKind || valid.subjectId !== previous.subjectId ||
+          valid.source !== previous.source)
       ) {
         return this.denied(context, 'email_conflict', previous)
       }
@@ -360,7 +405,8 @@ export class AssignmentService {
       if (
         next &&
         remaining.some((row) =>
-          row.subjectKind === next.subjectKind && row.subjectId === next.subjectId &&
+          row.source === next.source && row.subjectKind === next.subjectKind &&
+          row.subjectId === next.subjectId &&
           sameScope(row.scope, next.scope)
         )
       ) {
@@ -392,17 +438,24 @@ export class AssignmentService {
   }
 
   private validSession(session: VerifiedAssignmentSession): boolean {
-    return session.verified === true && session.tenantId === this.configuredTenantId &&
-      identifier(session.oid) && strings(session.roles) && strings(session.groups) &&
+    return session.verified === true &&
+      (sessionSource(session) === 'external'
+        ? this.externalLoginEnabled
+        : session.tenantId === this.configuredTenantId && session.tenantId !== 'external' &&
+          session.provenance !== 'external') &&
+      identityOid(session.tenantId, session.oid) && strings(session.roles) &&
+      strings(session.groups) &&
       ['complete', 'absent', 'malformed', 'overage', 'unverified'].includes(session.groupStatus) &&
       Number.isSafeInteger(session.claimIssuedAt) && Number.isSafeInteger(session.expiresAt) &&
       session.claimIssuedAt <= this.now() + 30_000 && session.claimIssuedAt >= 0 &&
+      Number.isSafeInteger(sessionStart(session)) && sessionStart(session) <= this.now() + 30_000 &&
+      sessionStart(session) >= session.claimIssuedAt - 30_000 &&
       session.expiresAt > session.claimIssuedAt
   }
 
   private fresh(session: VerifiedAssignmentSession): boolean {
     return this.validSession(session) &&
-      Math.min(session.expiresAt, session.claimIssuedAt + claimLifetime) > this.now()
+      Math.min(session.expiresAt, sessionStart(session) + claimLifetime) > this.now()
   }
 
   /** Supplied only after cryptographic verification by trusted ingress, never from request JSON. */
@@ -414,24 +467,26 @@ export class AssignmentService {
     if (!this.validSession(session)) return false
     const old = this.database.all<OwnerEvidence>(
       'SELECT * FROM rbac_owner_evidence WHERE tenant_id = ? AND oid = ?',
-      this.configuredTenantId,
+      session.tenantId,
       session.oid,
     )[0]
     // Concurrent valid sessions remain usable without replacing newer owner evidence.
     if (old && old.claim_iat > session.claimIssuedAt) return true
     // Equal issuance times cannot restore a claim contradicted by another verified observation.
+    const observedRoles = sessionSource(session) === 'external' ? [] : session.roles
+    const observedGroups = sessionSource(session) === 'external' ? [] : session.groups
     const roles = old?.claim_iat === session.claimIssuedAt
-      ? session.roles.filter((role) => (JSON.parse(old.roles_json) as string[]).includes(role))
-      : session.roles
+      ? observedRoles.filter((role) => (JSON.parse(old.roles_json) as string[]).includes(role))
+      : observedRoles
     const groups = old?.claim_iat === session.claimIssuedAt
-      ? session.groups.filter((group) => (JSON.parse(old.groups_json) as string[]).includes(group))
-      : session.groups
+      ? observedGroups.filter((group) => (JSON.parse(old.groups_json) as string[]).includes(group))
+      : observedGroups
     const status = old?.claim_iat === session.claimIssuedAt && old.group_status !== 'complete'
       ? old.group_status
       : session.groupStatus
     const expires = Math.min(
       session.expiresAt,
-      session.claimIssuedAt + claimLifetime,
+      sessionStart(session) + claimLifetime,
       old?.claim_iat === session.claimIssuedAt ? old.expires_at : Infinity,
     )
     this.database.exec(
@@ -440,7 +495,7 @@ export class AssignmentService {
       VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,oid) DO UPDATE SET
       roles_json=excluded.roles_json,groups_json=excluded.groups_json,group_status=excluded.group_status,
       claim_iat=excluded.claim_iat,expires_at=excluded.expires_at,observed_at=excluded.observed_at`,
-      this.configuredTenantId,
+      session.tenantId,
       session.oid,
       JSON.stringify(roles),
       JSON.stringify(groups),
@@ -454,9 +509,10 @@ export class AssignmentService {
 
   private owners(rows: RoleAssignment[]): Set<string> {
     const owners = new Set(
-      rows.filter((row) => row.subjectKind === 'active-oid' && row.role === 'owner').map((row) =>
-        row.subjectId
-      ),
+      rows.filter((row) =>
+        row.subjectKind === 'active-oid' && row.role === 'owner' &&
+        (row.source === 'entra' || this.externalLoginEnabled)
+      ).map((row) => `${row.source}:${row.subjectId}`),
     )
     const groupSupport = this.audience !== undefined &&
       this.state.groupCapability(this.audience) === 'verified-supported'
@@ -481,7 +537,7 @@ export class AssignmentService {
         roles.includes('CorpusKit.Owner') ||
         (groupSupport && evidence.group_status === 'complete' &&
           claims.some((group) => groups.has(group)))
-      ) owners.add(evidence.oid)
+      ) owners.add(`entra:${evidence.oid}`)
     }
     return owners
   }
@@ -494,15 +550,17 @@ export class AssignmentService {
       if (!this.observe(session)) return this.denied(context, 'invalid_principal')
       if (!this.fresh(session)) return this.denied(context, 'invalid_principal')
       const emails = new Set(
-        [email(session.email), email(session.preferredUsername)].filter((value): value is string =>
-          value !== null
-        ),
+        [
+          email(session.email),
+          sessionSource(session) === 'entra' ? email(session.preferredUsername) : null,
+        ].filter((value): value is string => value !== null),
       )
       const rows = this.list()
+      const source = sessionSource(session)
       const pending = rows.filter((row) =>
-        row.subjectKind === 'pending-email' && emails.has(row.subjectId)
+        row.source === source && row.subjectKind === 'pending-email' && emails.has(row.subjectId)
       )
-      const active = rows.filter((row) => row.subjectKind === 'active-oid')
+      const active = rows.filter((row) => row.source === source && row.subjectKind === 'active-oid')
       const plannedScopes = new Set<string>()
       for (const row of pending) {
         const scopeKey = JSON.stringify(row.scope)
@@ -559,15 +617,17 @@ export class AssignmentService {
       for (const subjectId of emails) {
         if (
           rows.some((row) =>
-            (row.subjectKind === 'pending-email' && row.subjectId === subjectId &&
+            row.source === 'entra' &&
+            ((row.subjectKind === 'pending-email' && row.subjectId === subjectId &&
               row.scope.kind === 'platform') ||
-            (row.subjectKind === 'active-oid' && row.emailProvenance === subjectId)
+              (row.subjectKind === 'active-oid' && row.emailProvenance === subjectId))
           )
         ) continue
         this.insert({
           id: crypto.randomUUID(),
           tenantId: this.configuredTenantId,
           subjectKind: 'pending-email',
+          source: 'entra',
           subjectId,
           scope: { kind: 'platform' },
           role: 'owner',

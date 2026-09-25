@@ -31,6 +31,7 @@ export interface RoleAssignment {
   tenantId: string
   subjectKind: 'active-oid' | 'pending-email' | 'group'
   subjectId: string
+  source: 'entra' | 'external'
   scope: Scope
   role: Role
   emailProvenance: string | null
@@ -60,6 +61,7 @@ interface AssignmentRow {
   tenant_id: string
   subject_kind: RoleAssignment['subjectKind']
   subject_id: string
+  source: RoleAssignment['source']
   scope_kind: Scope['kind']
   scope_slug: string
   role: Role
@@ -86,19 +88,23 @@ const auditIndexes = [
   'CREATE INDEX IF NOT EXISTS audit_events_by_request ON audit_events(request_id)',
   'CREATE INDEX IF NOT EXISTS audit_events_by_scope ON audit_events(scope_kind,scope_slug,at)',
 ]
-const schema = [
-  auditSchema('audit_events'),
-  ...auditIndexes,
-  `CREATE TABLE IF NOT EXISTS role_assignments (
+const assignmentSchema = (table: 'role_assignments' | 'role_assignments_v2') =>
+  `CREATE TABLE IF NOT EXISTS ${table} (
     id TEXT PRIMARY KEY NOT NULL, tenant_id TEXT NOT NULL CHECK(length(tenant_id) > 0),
     subject_kind TEXT NOT NULL CHECK(subject_kind IN ('active-oid','pending-email','group')),
     subject_id TEXT NOT NULL CHECK(length(subject_id) > 0),
+    source TEXT NOT NULL DEFAULT 'entra' CHECK(source IN ('entra','external')),
     scope_kind TEXT NOT NULL, scope_slug TEXT NOT NULL, role TEXT NOT NULL,
     email_provenance TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-    UNIQUE(tenant_id,subject_kind,subject_id,scope_kind,scope_slug),
+    UNIQUE(tenant_id,source,subject_kind,subject_id,scope_kind,scope_slug),
+    CHECK(subject_kind != 'group' OR source = 'entra'),
     CHECK(subject_kind != 'pending-email' OR (subject_id = lower(trim(subject_id)) AND instr(subject_id,'@') > 1)),
     CHECK((scope_kind = 'platform' AND scope_slug = '' AND role IN (${sqlRoles(PLATFORM_ROLES)})) OR
-      (scope_kind = 'portal' AND length(scope_slug) > 0 AND role IN (${sqlRoles(PORTAL_ROLES)}))))`,
+      (scope_kind = 'portal' AND length(scope_slug) > 0 AND role IN (${sqlRoles(PORTAL_ROLES)}))))`
+const schema = [
+  auditSchema('audit_events'),
+  ...auditIndexes,
+  assignmentSchema('role_assignments'),
   'CREATE INDEX IF NOT EXISTS role_assignments_by_email ON role_assignments(tenant_id,email_provenance)',
   `CREATE TABLE IF NOT EXISTS rbac_migrations (
     name TEXT PRIMARY KEY NOT NULL, completed_at INTEGER NOT NULL)`,
@@ -203,7 +209,12 @@ export class RbacState {
   creatorEvidence(tenantId: string, oid: string): CreatorEvidence | null {
     const identifier = (value: unknown): value is string =>
       typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(value)
-    if (!identifier(tenantId) || !identifier(oid)) return null
+    if (
+      !identifier(tenantId) ||
+      !(tenantId === 'external'
+        ? typeof oid === 'string' && /^ext:[\s\S]{1,128}$/.test(oid)
+        : identifier(oid))
+    ) return null
     const row = this.database.all<{
       tenant_id: string
       oid: string
@@ -228,7 +239,8 @@ export class RbacState {
           Number.isSafeInteger(time) && time >= 0
         ) ||
         row.claim_iat > row.observed_at + 30_000 || row.observed_at > this.now() ||
-        row.expires_at <= row.claim_iat || row.expires_at > row.claim_iat + 28_800_000
+        row.expires_at <= row.claim_iat ||
+        row.expires_at > row.claim_iat + 28_800_000 + (tenantId === 'external' ? 120_000 : 0)
       ) return null
       return {
         tenantId,
@@ -325,8 +337,19 @@ export class RbacState {
   }
 
   /** Internal factory. The configured tenant and deployment audience come from trusted config. */
-  assignmentService(configuredTenantId: string, audience?: string): AssignmentService {
-    return new AssignmentService(this.database, this.audit, configuredTenantId, this.now, audience)
+  assignmentService(
+    configuredTenantId: string,
+    audience?: string,
+    externalLoginEnabled = false,
+  ): AssignmentService {
+    return new AssignmentService(
+      this.database,
+      this.audit,
+      configuredTenantId,
+      this.now,
+      audience,
+      externalLoginEnabled,
+    )
   }
 
   constructor(private readonly database: RbacDatabase, private readonly now = Date.now) {
@@ -340,6 +363,7 @@ export class RbacState {
           tenantId: row.tenant_id,
           subjectKind: row.subject_kind,
           subjectId: row.subject_id,
+          source: row.source,
           scope: row.scope_kind === 'platform'
             ? { kind: 'platform' }
             : { kind: 'portal', slug: row.scope_slug },
@@ -443,6 +467,22 @@ export class RbacState {
   migrate(): void {
     this.database.transactionSync(() => {
       for (const query of schema) this.database.exec(query)
+      const assignmentColumns = this.database.all<{ name: string }>(
+        'PRAGMA table_info(role_assignments)',
+      )
+      if (!assignmentColumns.some((column) => column.name === 'source')) {
+        this.database.exec(assignmentSchema('role_assignments_v2'))
+        const columns =
+          'id,tenant_id,subject_kind,subject_id,scope_kind,scope_slug,role,email_provenance,created_at,updated_at'
+        this.database.exec(
+          `INSERT INTO role_assignments_v2 (${columns},source) SELECT ${columns},'entra' FROM role_assignments`,
+        )
+        this.database.exec('DROP TABLE role_assignments')
+        this.database.exec('ALTER TABLE role_assignments_v2 RENAME TO role_assignments')
+        this.database.exec(
+          'CREATE INDEX role_assignments_by_email ON role_assignments(tenant_id,email_provenance)',
+        )
+      }
       const marker = 'rbac-audit-actors-v2'
       if (!this.database.all('SELECT name FROM rbac_migrations WHERE name = ?', marker).length) {
         this.database.exec(auditSchema('audit_events_v2'))

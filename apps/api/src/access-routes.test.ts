@@ -854,3 +854,50 @@ Deno.test('portal access routes perform real CRUD with immutable scope and stric
     f.close()
   }
 })
+
+Deno.test('member APIs expose source and keep matching email assignments separate', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (const path of ['/api/admin/t/a/members', '/api/admin/people']) {
+      const role = path.endsWith('/people') ? 'platform-admin' : 'viewer'
+      const admin = sessionFor('owner')
+      const body = { subjectKind: 'pending-email', subjectId: 'Source@Example.test', role }
+      const entra = await f.requestAs(admin, path, json('POST', body))
+      expect(entra.status).toBe(201)
+      expect(await entra.json()).toMatchObject({
+        source: 'entra',
+        subjectId: 'source@example.test',
+      })
+      const external = await f.requestAs(admin, path, json('POST', { ...body, source: 'external' }))
+      expect(external.status).toBe(201)
+      const item = await external.json()
+      expect(item).toMatchObject({ source: 'external', subjectId: 'source@example.test' })
+      expect((await f.requestAs(admin, path, json('POST', { ...body, source: 'external' }))).status)
+        .toBe(409)
+      expect((await f.requestAs(admin, path, json('POST', { ...body, source: 'other' }))).status)
+        .toBe(400)
+      expect(
+        (await f.requestAs(admin, `${path}/${item.id}`, json('PATCH', { role, source: 'entra' })))
+          .status,
+      ).toBe(400)
+      const list = await (await f.requestAs(admin, path)).json()
+      expect(
+        list.items.filter((row: { subjectId: string }) => row.subjectId === 'source@example.test')
+          .map((row: { source: string }) => row.source).sort(),
+      ).toEqual(['entra', 'external'])
+      const direct = await f.requestAs(
+        admin,
+        path,
+        json('POST', {
+          subjectKind: 'active-oid',
+          subjectId: 'ext:another person 人',
+          source: 'external',
+          role,
+        }),
+      )
+      expect(direct.status).toBe(201)
+    }
+  } finally {
+    f.close()
+  }
+})

@@ -849,6 +849,7 @@ export interface BuildAppOptions {
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
   configuredTenantId?: string
+  externalLoginEnabled?: boolean
   audience?: string
   now?: () => number
   localMutations?: import('./audit-execution.ts').LocalMutationScope
@@ -1104,8 +1105,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     opts.rbac && opts.audience && opts.audit && opts.breakGlass
       ? {
         keys: mcpKeys,
-        creatorStores: { rbac: opts.rbac, audience: opts.audience },
+        creatorStores: {
+          rbac: opts.rbac,
+          audience: opts.audience,
+          externalLoginEnabled: opts.externalLoginEnabled,
+        },
         configuredTenantId,
+        externalLoginEnabled: opts.externalLoginEnabled,
         tenants,
         audit: opts.audit,
         breakGlass: opts.breakGlass,
@@ -1715,7 +1721,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (!opts.rbac || !opts.audience) {
         throw new AuthorisationError(403)
       }
-      return opts.rbac.assignmentService(configuredTenantId, opts.audience)
+      return opts.rbac.assignmentService(
+        configuredTenantId,
+        opts.audience,
+        opts.externalLoginEnabled,
+      )
     },
     groupCapability: () =>
       opts.rbac && opts.audience &&

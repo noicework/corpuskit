@@ -139,7 +139,7 @@ export function normalisePrincipal(
   const implicitViewer = policy !== undefined &&
     (policy.accessMode === 'public' ||
       (policy.accessMode === 'authenticated' && rawIdentity.kind === 'user' &&
-        rawIdentity.tenantId === policy.configuredTenantId))
+        rawIdentity.tenantId !== 'external' && rawIdentity.tenantId === policy.configuredTenantId))
 
   // Zod parsing has made fresh objects. Existing valid portal roles already meet the viewer floor.
   if (implicitViewer && !roles.portalRoles.some((grant) => grant.slug === policy.slug)) {
