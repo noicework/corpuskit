@@ -489,6 +489,29 @@ Deno.test('Durable portal policy survives reload and repeated migration for seed
   }
 })
 
+Deno.test('Durable portal store never gives a new portal a retired slug', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const store = new DurableTenantStore(state, 'corpuskit.org')
+    expect(store.add({ name: 'Acme' }).slug).toBe('acme')
+    expect(store.remove('acme')).toBe(true)
+    // The removed portal had no keys or members and no caller marks the slug unavailable, so
+    // only its retirement keeps the next portal off it.
+    expect(store.get('acme')).toBeUndefined()
+    expect(store.isRetired('acme')).toBe(true)
+    expect(store.add({ name: 'Acme' }).slug).toBe('acme-2')
+    const restarted = new DurableState(sql, sql)
+    restarted.migrate()
+    expect(new DurableTenantStore(restarted, 'corpuskit.org').add({ name: 'Acme' }).slug).toBe(
+      'acme-3',
+    )
+  } finally {
+    sql.database.close()
+  }
+})
+
 Deno.test('Durable corrupt policy never exposes seed fallback and survives unrelated writes', () => {
   const sql = new TestSqlStorage()
   try {

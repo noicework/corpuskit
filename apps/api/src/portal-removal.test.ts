@@ -97,6 +97,27 @@ Deno.test('a removed portal retires its slug and revokes its members, group mapp
   }
 })
 
+Deno.test('a removed portal with no members or keys still never gives its slug to a new portal', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const owner = f.sessionFor('owner')
+    expect(await createPortal(f, 'Plain')).toBe('plain')
+    const removed = await f.requestAs(owner, '/api/admin/tenants/plain', { method: 'DELETE' })
+    expect(removed.status).toBe(200)
+    // Nothing but the retired slug is left on record to keep the next portal off it.
+    expect(portalRows(f, 'plain')).toEqual([])
+    expect(f.stores.mcpKeys.list('plain')).toEqual([])
+    expect(f.stores.tenants.isRetired('plain')).toBe(true)
+
+    expect(await createPortal(f, 'Plain')).toBe('plain-2')
+    expect(f.stores.tenants.get('plain')).toBeUndefined()
+    // The store refuses the retired slug by itself, whatever the caller checked first.
+    expect(f.stores.tenants.add({ name: 'Plain' }).slug).toBe('plain-3')
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('a slug still holding access from a portal removed before retirement is not reused', async () => {
   const f = createEnforcementFixture()
   try {
