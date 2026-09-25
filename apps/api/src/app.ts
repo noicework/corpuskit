@@ -1,15 +1,29 @@
-import { FileLifecycleStore, type PortalLifecycleStore } from './lifecycle-store.ts'
+import { PortalLifecycleStore } from './lifecycle-store.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
-  admitPortalAsk,
+  admitAsks,
+  type AskReceipt,
   assertAgentsEnabled,
+  enforceAccessChange,
   enforceReadOnly,
   enforceSuspension,
   isPlatformAuthority,
+  lifecycleToolGuard,
+  readLifecycle,
+  refundAsks,
+  safePortalProjection,
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
-import { capacityUsage, guardManagement, precheckAdd } from './lifecycle-management.ts'
 import {
+  capacityUsage,
+  guardManagement,
+  precheckAdd,
+  resetCapacityOnRebind,
+  withRequestAuthority,
+} from './lifecycle-management.ts'
+import {
+  askUse,
+  type Declaration,
   declaredRoute,
   declaredSubAction,
   infrastructureHandler,
@@ -951,17 +965,17 @@ export function researchOwner(c: Context): Promise<ResearchOwner> {
 }
 
 export function buildApp(opts: BuildAppOptions): Hono {
-  // Hosting lifecycle (docs/HOSTING.md). Every management write passes the lifecycle guard.
-  // HTTP handlers run only after the route guard has admitted the caller, so the guard lets a
-  // platform principal's write reach a suspended portal; scheduled jobs never can.
-  const lifecycle = opts.lifecycle ??
-    new FileLifecycleStore(process.env.DATA_DIR, undefined, opts.now)
+  // Hosting lifecycle (docs/HOSTING.md). Every management write passes the lifecycle guard,
+  // which lets a write reach a suspended portal only while it runs for a request the route
+  // guard admitted for a platform principal. Without a configured store the state is transient.
+  const lifecycle = opts.lifecycle ?? new PortalLifecycleStore(undefined, opts.now)
   const rawManagement = opts.management
-  if (rawManagement) {
-    opts = {
-      ...opts,
-      management: guardManagement(rawManagement, lifecycle, { allowSuspended: true }),
-    }
+  opts = {
+    ...opts,
+    bindings: resetCapacityOnRebind(opts.bindings ?? new BindingStore({}), lifecycle),
+    ...(rawManagement
+      ? { management: guardManagement(rawManagement, lifecycle, { platformRequests: true }) }
+      : {}),
   }
   const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
@@ -1094,6 +1108,17 @@ export function buildApp(opts: BuildAppOptions): Hono {
       : { kind: 'anonymous' }
     requestContexts.set(request, context)
     return context
+  }
+  // Asks each request counted toward the hosting daily limit, returned if it is then refused.
+  const askReceipts = new WeakMap<Request, AskReceipt | null>()
+  const admitRequestAsks = (
+    request: Request,
+    declaration: Declaration,
+    targets: readonly TenantConfig[],
+  ) => {
+    const use = askUse(declaration)
+    if (!use || askReceipts.has(request)) return
+    askReceipts.set(request, admitAsks(lifecycle, use, targets, opts.now?.() ?? Date.now()))
   }
   const markDenialAudited = (request: Request) => {
     requestContext(request).denialAudited = true
@@ -1249,10 +1274,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
           const slug = config.slug
           if (requested && !requested.has(slug)) return false
           // The portal list still shows a suspended portal, with its status, so the picker
-          // can mark it paused; cross-portal asks leave it out.
+          // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
+          // be read is left out on its own.
+          const hosting = readLifecycle(lifecycle, slug)
+          if (!hosting) return false
           if (
             declaration.path !== '/api/tenants' &&
-            lifecycle.get(slug).status === 'suspended' && !isPlatformAuthority(selected)
+            hosting.status === 'suspended' && !isPlatformAuthority(selected)
           ) return false
           if (!AccessModeSchema.safeParse(config.accessMode).success) return false
           const policy = {
@@ -1296,6 +1324,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             if (context.denialAudited) markDenialAudited(c.req.raw)
           }
         }
+        admitRequestAsks(c.req.raw, declaration, targets)
         return targets
       },
       declared: async () => {
@@ -1305,7 +1334,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const selected = await authority(scope)
         const hosted = scope.kind === 'portal' ? tenants.get(scope.slug) : undefined
         if (hosted) {
-          enforceSuspension(lifecycle, hosted, selected, { safeMetadata: declaration.safeMetadata })
+          enforceSuspension(lifecycle, hosted, selected, {
+            ...(declaration.safeMetadata ? { metadata: () => safeProjection(hosted) } : {}),
+            // The paused screen draws the logo its safe projection names.
+            asset: declaration.path === '/api/t/:slug/branding/:kind' &&
+              c.req.path.endsWith('/branding/logo'),
+          })
         }
         try {
           // D9 is available only after credential and portal validation succeeded, and D13
@@ -1319,6 +1353,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           if (context.denialAudited) markDenialAudited(c.req.raw)
         }
         if (hosted && mutatesPortal(declaration)) enforceReadOnly(lifecycle, hosted.slug)
+        if (hosted) admitRequestAsks(c.req.raw, declaration, [hosted])
         return selected
       },
       subActions: async (names) => {
@@ -1499,10 +1534,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return false
     }
   }
-  /** A capacity ledger describes one knowledge box; connecting another starts it afresh. */
-  const rebound = (slug: string, before: string | undefined) => {
-    if (bindings.get(slug)?.baseUrl !== before) lifecycle.resetCapacity(slug)
-  }
   const portalSubAction = async (c: Context, name: string, slug: string, future = false) => {
     const selected = await authoriseDeclared(c)
     if (!selected) throw new AuthorisationError(403)
@@ -1617,12 +1648,30 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // MCP credential failures are rate limited before the guard verifies any bearer (D13).
   registerMcpAuthRateLimit(app, { rateLimitPerMin: opts.rateLimitMcpAuthPerMin })
 
-  // Every API operation is checked before any route-specific middleware or handler.
+  // Every API operation is checked before any route-specific middleware or handler. The rest of
+  // the request runs with the caller's platform authority on record for the lifecycle guard.
   registerInfrastructure(app, '*', async (c, next) => {
+    let platform = false
     if (c.req.path === '/api' || c.req.path.startsWith('/api/')) {
-      if (!isInfrastructurePreflight(c)) await authoriseDeclared(c)
+      if (!isInfrastructurePreflight(c)) {
+        const selected = await authoriseDeclared(c)
+        platform = !!selected && isPlatformAuthority(selected)
+      }
     }
-    await next()
+    await withRequestAuthority(platform, next)
+    // An ask refused after it was counted, such as by the rate limit, costs no quota; an
+    // answered one is portal activity, on every portal it reached.
+    const receipt = askReceipts.get(c.req.raw)
+    if (receipt && c.res.status >= 400) refundAsks(lifecycle, receipt)
+    else if (receipt) {
+      for (const slug of receipt.slugs) {
+        try {
+          lifecycle.touch(slug, receipt.at)
+        } catch {
+          console.error('Portal activity could not be recorded')
+        }
+      }
+    }
   })
 
   // The SPA is served same-origin; no cross-origin API access is needed -
@@ -1772,6 +1821,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   registerAccessRoutes(app, {
     tenants,
     updateMode: async (c, previousAccessMode, accessMode) => {
+      enforceAccessChange(lifecycle, c.req.param('slug')!, previousAccessMode, accessMode)
       if (!opts.localMutations) throw new AuditWriteError()
       await declaredSubAction(
         'PATCH',
@@ -1824,11 +1874,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     authorityDependencies,
     authorise: authoriseDeclared,
     // The MCP transport route is already guarded; each tool call is checked again on its own.
-    beforeTool: (declaration, config, authority) => {
-      enforceSuspension(lifecycle, config, authority)
-      if (mutatesPortal(declaration)) enforceReadOnly(lifecycle, config.slug)
-      if (declaration.permission === 'portal.ask') admitPortalAsk(lifecycle, config, opts.now?.())
-    },
+    beforeTool: lifecycleToolGuard(lifecycle, () => opts.now?.() ?? Date.now()),
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to
@@ -1911,10 +1957,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/tenants'), async (c) => {
     const targets = await requestAuthorisation(c).aggregate()
     return c.json(
-      targets.map((config) => ({
-        ...tenantSummary(config),
-        status: lifecycle.get(config.slug).status,
-      })),
+      targets.flatMap((config) => {
+        // A portal whose lifecycle cannot be read is left out on its own.
+        const hosting = readLifecycle(lifecycle, config.slug)
+        return hosting ? [{ ...tenantSummary(config), status: hosting.status }] : []
+      }),
     )
   })
 
@@ -1942,6 +1989,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!path) return null
     return `/api/t/${slug}/branding/${kind}?v=${Math.round(statSync(path).mtimeMs)}`
   }
+  /** D9's safe projection, shared by sign-in screens and the suspended portal's 423. */
+  const safeProjection = (config: TenantConfig) =>
+    safePortalProjection(
+      config,
+      brandingUrl(config.slug, 'logo') ?? config.branding.logoUrl ?? null,
+    )
   const withBrandingUrls = (config: TenantConfig): TenantConfig => {
     const logo = brandingUrl(config.slug, 'logo')
     const hero = brandingUrl(config.slug, 'hero')
@@ -1962,20 +2015,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/t/:slug/config'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    if (safeMetadataRequests.has(c.req.raw)) {
-      const { productName, organisation, colours, paletteId } = config.branding
-      return c.json({
-        slug: config.slug,
-        branding: {
-          productName,
-          organisation,
-          logoUrl: brandingUrl(config.slug, 'logo') ?? config.branding.logoUrl ?? null,
-          colours,
-          paletteId: paletteId ?? null,
-        },
-        accessMode: config.accessMode,
-      })
-    }
+    if (safeMetadataRequests.has(c.req.raw)) return c.json(safeProjection(config))
     // Readers learn the hosting status (the SPA's read-only banner). A suspended portal
     // never gets here: its 423 carries the safe projection and status instead.
     return c.json({ ...withBrandingUrls(config), status: lifecycle.get(config.slug).status })
@@ -3326,15 +3366,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    // Selecting the portals admits the ask on every one of them or on none.
     const targets = await requestAuthorisation(c).aggregate(parsed.data.slugs)
-    // Admit an ask on every selected portal or on none. Nothing here awaits, so no other
-    // request can spend a portal's last ask between the check and the count.
-    const askedAt = opts.now?.()
-    for (const config of targets) {
-      const denied = lifecycle.askQuota(config.slug, config.timezone ?? 'UTC', askedAt)
-      if (denied) throw new PortalLifecycleError(429, { error: 'ask_quota_exceeded', ...denied })
-    }
-    for (const config of targets) admitPortalAsk(lifecycle, config, askedAt)
     return streamSSE(c, async (stream) => {
       let chain: Promise<void> = Promise.resolve()
       const write = (slug: string, event: unknown) => {
@@ -3777,9 +3810,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
-    const before = bindings.get(config.slug)?.baseUrl
     bindings.remove(config.slug)
-    rebound(config.slug, before)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug) })
   })
@@ -3965,9 +3996,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         kbSlug,
         parsed.data.title ?? `${config.branding.productName}`,
       )
-      const before = bindings.get(config.slug)?.baseUrl
       bindings.set(config.slug, binding)
-      rebound(config.slug, before)
       opts.invalidate?.(config.slug)
       return c.json({ ok: true, status: bindings.status(config.slug) })
     } catch (err) {
@@ -4000,7 +4029,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = linkBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     // A full portal refuses before the page is fetched.
-    await precheckAdd(rawManagement!, lifecycle, config, { allowSuspended: true })
+    await precheckAdd(rawManagement!, lifecycle, config, { platformRequests: true })
     // Same quality gate as scheduled syncs: fetch and clean the page so the
     // index holds body text, and bot walls never enter the corpus. Falls back
     // to the platform crawler when the site blocks server fetches.
@@ -4961,7 +4990,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // to what a failed scheduled run leaves behind.
         if (operationSignals.get(c.req.raw)?.aborted) return
         const message = recordSyncFailure(sources, config.slug, source, err)
-        await emit({ type: 'error', message })
+        // A hosting refusal carries its code, so the web app can explain it in its own words.
+        await emit({
+          type: 'error',
+          message,
+          ...(err instanceof PortalLifecycleError ? err.body : {}),
+        })
       }
     })
   })
@@ -5082,9 +5116,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         : `Could not reach this knowledge box (${status || 'network error'}).`
       return c.json({ error: 'verification_failed', message }, 400)
     }
-    const before = bindings.get(config.slug)?.baseUrl
     bindings.set(config.slug, candidate)
-    rebound(config.slug, before)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug), resourceCount })
   })
@@ -5107,7 +5139,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? intents.find((i) => i.id === parsed.data.intent)
       : undefined
     if (parsed.data.intent && !intentDef) return c.json({ error: 'unknown_intent' }, 400)
-    admitPortalAsk(lifecycle, config, opts.now?.())
     // The finished response declares UTF-8 (the streaming helper sets its own
     // content type); a Latin-1-assuming API client otherwise sees mojibake.
     return withUtf8EventStream(streamSSE(c, async (stream) => {
@@ -6645,7 +6676,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = docsAskBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
-    admitPortalAsk(lifecycle, config, opts.now?.())
     return streamSSE(c, async (stream) => {
       const cancelled = () =>
         stream.aborted || c.req.raw.signal.aborted ||

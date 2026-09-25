@@ -8,7 +8,13 @@ import {
 import { AragProvider } from '@research-portal/retrieval'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import { PortalLifecycleStore } from './lifecycle-store.ts'
-import { capacityUsage, guardManagement, precheckAdd } from './lifecycle-management.ts'
+import {
+  capacityUsage,
+  guardManagement,
+  precheckAdd,
+  resetCapacityOnRebind,
+  withRequestAuthority,
+} from './lifecycle-management.ts'
 
 const config = { slug: 'test' } as TenantConfig
 const text = { title: 'Title', body: 'Body' }
@@ -90,7 +96,7 @@ Deno.test('management guards every content and configuration writer before dispa
   }
 })
 
-Deno.test('platform-authorised suspension writes remain possible and reads retain provider this', async () => {
+Deno.test('only a platform request writes to a suspended portal, and reads retain provider this', async () => {
   class Provider {
     private value = 'fixture'
     resourceCount() {
@@ -105,14 +111,72 @@ Deno.test('platform-authorised suspension writes remain possible and reads retai
   }
   const raw = new Provider() as unknown as AragProvider
   const lifecycle = store('suspended')
-  const guarded = guardManagement(raw, lifecycle, { allowSuspended: true })
-  expect(await guarded.createText(config, text)).toEqual({ id: 'fixture' })
+  const guarded = guardManagement(raw, lifecycle, { platformRequests: true })
+  expect(
+    await withRequestAuthority(true, () => guarded.createText(config, text)),
+  ).toEqual({ id: 'fixture' })
   expect(await guarded.search(config, 'read')).toEqual({ value: 'fixture' })
+  // A request for anyone else, and any write made outside a request, is refused.
+  await denied(
+    withRequestAuthority(false, () => guarded.createText(config, text)),
+    423,
+    'portal_suspended',
+  )
+  await denied(guarded.createText(config, text), 423, 'portal_suspended')
+  // The authority follows the request's own asynchronous work, not whichever ran last.
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => release = resolve)
+  const platformWrite = withRequestAuthority(true, async () => {
+    await gate
+    return await guarded.createText(config, text)
+  })
+  const otherWrite = withRequestAuthority(false, async () => {
+    await gate
+    return await guarded.createText(config, text)
+  })
+  release()
+  expect(await platformWrite).toEqual({ id: 'fixture' })
+  await denied(otherWrite, 423, 'portal_suspended')
   lifecycle.set('test', { status: 'read_only', limits: null })
-  await denied(guarded.createText(config, text), 423, 'portal_read_only')
-  // Unattended callers never write to a suspended portal.
+  await denied(
+    withRequestAuthority(true, () => guarded.createText(config, text)),
+    423,
+    'portal_read_only',
+  )
+  // Unattended callers never write to a suspended portal, even inside a platform request.
   lifecycle.set('test', { status: 'suspended', limits: null })
-  await denied(guardManagement(raw, lifecycle).createText(config, text), 423, 'portal_suspended')
+  await denied(
+    withRequestAuthority(true, () => guardManagement(raw, lifecycle).createText(config, text)),
+    423,
+    'portal_suspended',
+  )
+})
+
+Deno.test('a request suspended mid-operation refuses its later writes unless it is a platform request', async () => {
+  for (const platform of [false, true]) {
+    const lifecycle = store('active')
+    let writes = 0
+    const raw = {
+      resourceCount: () => Promise.resolve(0),
+      createText: () => {
+        writes++
+        // The operator pauses the portal while the request is still writing.
+        if (writes === 1) lifecycle.set('test', { status: 'suspended', limits: null })
+        return Promise.resolve({ id: `res-${writes}` })
+      },
+    } as unknown as AragProvider
+    const guarded = guardManagement(raw, lifecycle, { platformRequests: true })
+    const run = withRequestAuthority(platform, async () => {
+      for (let i = 0; i < 3; i++) await guarded.createText(config, text)
+    })
+    if (platform) {
+      await run
+      expect(writes).toBe(3)
+    } else {
+      await denied(run, 423, 'portal_suspended')
+      expect(writes).toBe(1)
+    }
+  }
 })
 
 Deno.test('agent limits stop actual starts including calls inside compound operations', async () => {
@@ -260,10 +324,8 @@ Deno.test('byte ledger counts source bytes, refuses the add that would exceed, a
   const guarded = guardManagement(raw, lifecycle)
   await guarded.uploadFile(config, upload(6))
   await guarded.createText(config, { title: 'a', body: 'abc' })
-  // A link the platform crawls carries no bytes from the portal.
-  await guarded.createLink(config, { url: 'https://example.test' })
-  state.count = 3
-  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 3, bytes: 9 })
+  state.count = 2
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 9 })
   expect(await denied(guarded.uploadFile(config, upload(2)), 413, 'limit_exceeded')).toEqual({
     error: 'limit_exceeded',
     limit: 'maxBytes',
@@ -274,8 +336,76 @@ Deno.test('byte ledger counts source bytes, refuses the add that would exceed, a
   await denied(guarded.createText(config, { title: 'a', body: 'éé' }), 413, 'limit_exceeded')
   await guarded.deleteResource(config, 'res-1')
   await guarded.uploadFile(config, upload(7))
-  expect(state.calls).toBe(4)
-  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 3, bytes: 10 })
+  expect(state.calls).toBe(3)
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 10 })
+})
+
+Deno.test('a crawled link cannot be sized: a byte limit refuses it and bytes become unknown', async () => {
+  const { state, raw } = box(0)
+  const lifecycle = store('active', { maxBytes: 1_000 })
+  const guarded = guardManagement(raw, lifecycle)
+  await guarded.createText(config, { title: 'a', body: 'x'.repeat(999) })
+  state.count = 1
+  // However large the linked document is, the portal never sees it, so it is not admitted.
+  await denied(
+    guarded.createLink(config, { url: 'https://example.test/large.pdf' }),
+    503,
+    'usage_unavailable',
+  )
+  expect(state.calls).toBe(1)
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 999 })
+  // Without a byte limit the link is added, and usage then reports bytes as unknown.
+  lifecycle.set('test', { status: 'active', limits: { maxResources: 10 } })
+  await guarded.createLink(config, { url: 'https://example.test/large.pdf' })
+  state.count = 2
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: null })
+  lifecycle.set('test', { status: 'active', limits: { maxBytes: 1_000_000 } })
+  await denied(guarded.createText(config, text), 503, 'usage_unavailable')
+  // Deleting the link through the portal makes the byte count known again.
+  lifecycle.set('test', { status: 'active', limits: null })
+  await guarded.deleteResource(config, 'res-2')
+  state.count = 1
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 999 })
+})
+
+Deno.test('changing or removing a knowledge box starts a fresh ledger whichever path writes it', async () => {
+  const lifecycle = store('active')
+  const records = new Map<string, { baseUrl: string }>()
+  const bindings = resetCapacityOnRebind({
+    get: (slug: string) => records.get(slug),
+    set: (slug: string, binding: { baseUrl: string }) => void records.set(slug, binding),
+    remove: (slug: string) => void records.delete(slug),
+    status: (slug: string) => (records.has(slug) ? 'bound' : 'unbound'),
+  }, lifecycle)
+  const started = () => {
+    lifecycle.reserveAdd('test', { observed: 0, bytes: 1 })
+    expect(lifecycle.hasCapacityLedger('test')).toBe(true)
+  }
+  bindings.set('test', { baseUrl: 'https://example.test/kb/one' })
+  started()
+  // Reconnecting the same box keeps the ledger.
+  bindings.set('test', { baseUrl: 'https://example.test/kb/one' })
+  expect(lifecycle.hasCapacityLedger('test')).toBe(true)
+  bindings.set('test', { baseUrl: 'https://example.test/kb/two' })
+  expect(lifecycle.hasCapacityLedger('test')).toBe(false)
+  started()
+  bindings.remove('test')
+  expect(lifecycle.hasCapacityLedger('test')).toBe(false)
+  expect(bindings.status('test')).toBe('unbound')
+  // An asynchronous binding store resets once its write has landed.
+  const pending = resetCapacityOnRebind({
+    get: (slug: string) => records.get(slug),
+    set: async (slug: string, binding: { baseUrl: string }) => {
+      await Promise.resolve()
+      records.set(slug, binding)
+    },
+    remove: (slug: string) => void records.delete(slug),
+  }, lifecycle)
+  started()
+  const write = pending.set('test', { baseUrl: 'https://example.test/kb/three' })
+  expect(lifecycle.hasCapacityLedger('test')).toBe(true)
+  await write
+  expect(lifecycle.hasCapacityLedger('test')).toBe(false)
 })
 
 Deno.test('byte limits fail closed while the portal cannot know its bytes', async () => {
@@ -395,5 +525,16 @@ Deno.test('a precheck refuses a full portal before remote work and reserves noth
     max: 3,
   })
   await denied(precheckAdd(raw, store('read_only', null), config), 423, 'portal_read_only')
-  expect(state.calls).toBe(1)
+  // A portal whose storage is exactly full refuses too: any page brings at least one byte.
+  const bytes = store('active', { maxBytes: 4 })
+  state.count = 0
+  await precheckAdd(raw, bytes, config)
+  await guardManagement(raw, bytes).createText(config, text)
+  state.count = 1
+  expect(await denied(precheckAdd(raw, bytes, config), 413, 'limit_exceeded')).toMatchObject({
+    limit: 'maxBytes',
+    value: 5,
+    max: 4,
+  })
+  expect(state.calls).toBe(2)
 })

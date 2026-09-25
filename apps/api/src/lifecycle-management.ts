@@ -5,12 +5,31 @@ import {
   type TenantConfig,
 } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import type { AddOutcome, PortalLifecycleStore } from './lifecycle-store.ts'
 
 interface ManagementOptions {
-  /** HTTP has already checked platform authority; unattended jobs never set this. */
-  allowSuspended?: boolean
+  /**
+   * Let a write reach a suspended portal while it runs for a request the route guard admitted
+   * for a platform administrator or owner (`withRequestAuthority`). Every other request, and
+   * every write made outside a request, such as by a scheduled job, is refused.
+   */
+  platformRequests?: boolean
+}
+
+const requestAuthority = new AsyncLocalStorage<{ platform: boolean }>()
+
+/**
+ * Run the rest of one request with its caller's platform authority on record, so each write it
+ * makes, however long after the request started, is judged against that caller.
+ */
+export function withRequestAuthority<T>(platform: boolean, work: () => T): T {
+  return requestAuthority.run({ platform }, work)
+}
+
+function platformRequest(): boolean {
+  return requestAuthority.getStore()?.platform === true
 }
 
 /** Provider methods that change a knowledge box. A read-only portal refuses every one. */
@@ -65,7 +84,7 @@ export function assertManagementWritable(
   if (status === 'read_only') {
     throw new PortalLifecycleError(423, { error: 'portal_read_only' })
   }
-  if (status === 'suspended' && !options.allowSuspended) {
+  if (status === 'suspended' && !(options.platformRequests && platformRequest())) {
     throw new PortalLifecycleError(423, { error: 'portal_suspended' })
   }
 }
@@ -105,7 +124,7 @@ async function admitAdd(
   management: AragProvider,
   lifecycle: PortalLifecycleStore,
   config: TenantConfig,
-  bytes: number,
+  bytes: number | null,
   options: ManagementOptions,
 ): Promise<string | null> {
   return await serialCapacity(lifecycle, config.slug, async () => {
@@ -135,7 +154,8 @@ async function admitAdd(
 /**
  * Check, without reserving, that one more add could be admitted now. A route that must do
  * remote work before its write, such as fetching a page to add, calls this first so a full
- * portal refuses before anything is fetched. The write itself is still admitted by the guard.
+ * portal refuses before anything is fetched. Any add brings at least one byte. The write itself
+ * is still admitted by the guard.
  */
 export async function precheckAdd(
   management: AragProvider,
@@ -148,7 +168,7 @@ export async function precheckAdd(
   if (limits?.maxResources === undefined && limits?.maxBytes === undefined) return
   const observed = await resources(management, config)
   assertManagementWritable(lifecycle, config.slug, options)
-  const admission = lifecycle.checkAdd(config.slug, { observed, bytes: 0 })
+  const admission = lifecycle.checkAdd(config.slug, { observed, bytes: 1 })
   if ('unavailable' in admission) throw unavailable()
   if ('limit' in admission) {
     throw new PortalLifecycleError(413, { error: 'limit_exceeded', ...admission })
@@ -182,16 +202,17 @@ function createdId(result: unknown): AddOutcome {
 }
 
 /**
- * Source bytes an add sends: file bytes, text bytes, and none for a link the platform crawls.
- * An add whose size cannot be read is refused rather than admitted unmeasured.
+ * Source bytes an add sends: file bytes and text bytes. A link the platform crawls stores
+ * content the portal never sees, so its size is unknown (null). An add whose size cannot be
+ * read is refused rather than admitted unmeasured.
  */
-function addBytes(name: string, input: unknown): number {
+function addBytes(name: string, input: unknown): number | null {
   const value = input as { body?: unknown; bytes?: unknown } | undefined
   if (name === 'uploadFile' && value?.bytes instanceof Uint8Array) return value.bytes.byteLength
   if (name === 'createText' && typeof value?.body === 'string') {
     return encoder.encode(value.body).byteLength
   }
-  if (name === 'createLink') return 0
+  if (name === 'createLink') return null
   throw unavailable()
 }
 
@@ -251,7 +272,8 @@ export function guardManagement(
               config.slug,
               token,
               () => value.call(receiver, config, ...args),
-              createdId,
+              // A crawled link is recorded as a resource the ledger cannot size.
+              bytes === null ? () => ({ created: true }) : createdId,
             )
           }
           const result = await value.call(receiver, config, ...args)
@@ -261,6 +283,51 @@ export function guardManagement(
           return result
         }
       } else wrapped = value.bind(receiver)
+      methods.set(property, wrapped)
+      return wrapped
+    },
+  })
+}
+
+interface BindingWrites {
+  get(slug: string): { baseUrl: string } | undefined
+  set(slug: string, ...rest: never[]): unknown
+  remove(slug: string, ...rest: never[]): unknown
+}
+
+/**
+ * A capacity ledger describes one knowledge box. Wrap the binding store so that connecting a
+ * different box, or disconnecting one, starts the portal's ledger afresh once the write lands,
+ * whichever route or job made it.
+ */
+export function resetCapacityOnRebind<T extends BindingWrites>(
+  bindings: T,
+  lifecycle: PortalLifecycleStore,
+): T {
+  const methods = new Map<PropertyKey, unknown>()
+  return new Proxy(bindings, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target)
+      if (typeof value !== 'function') return value
+      if (methods.has(property)) return methods.get(property)
+      let wrapped: unknown = value.bind(target)
+      if (property === 'set' || property === 'remove') {
+        wrapped = (slug: string, ...rest: unknown[]) => {
+          const before = target.get(slug)?.baseUrl
+          const reset = () => {
+            if (target.get(slug)?.baseUrl !== before) lifecycle.resetCapacity(slug)
+          }
+          const result = value.call(target, slug, ...rest)
+          if (result instanceof Promise) {
+            return result.then((settled) => {
+              reset()
+              return settled
+            })
+          }
+          reset()
+          return result
+        }
+      }
       methods.set(property, wrapped)
       return wrapped
     },

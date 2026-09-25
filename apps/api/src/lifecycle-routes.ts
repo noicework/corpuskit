@@ -51,7 +51,7 @@ export function registerLifecycleRoutes(app: Hono, services: LifecycleRouteServi
     const slug = c.req.param('slug')
     if (!services.tenants.get(slug)) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = PortalLifecycleInputSchema.safeParse(await c.req.json().catch(() => null))
-    if (!parsed.success) return c.json({ error: 'invalid_input' }, 400)
+    if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const lifecycle = await services.update(c, slug, parsed.data)
     c.header('Cache-Control', 'private, no-store')
     return c.json({ ok: true, lifecycle })

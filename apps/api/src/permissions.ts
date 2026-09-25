@@ -106,7 +106,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   ...([
     ['lifecycle', ['set'], 'portal.create', 'platform'],
     ['lifecycle', ['remove'], 'portal.delete', 'platform'],
-    ['lifecycle', ['consumeAsk'], 'portal.ask', 'portal'],
+    ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],
     ['lifecycle', ['touch'], 'portal.read', 'portal'],
     ['lifecycle', ['reserveAdd', 'settleAdd', 'forgetResource'], 'content.write', 'portal'],
     ['lifecycle', ['resetCapacity'], 'bindings.write', 'portal'],
@@ -414,8 +414,10 @@ export function declarationFor(method: string, path: string): Declaration {
 /**
  * Hosting read-only mode refuses every portal operation that changes content or configuration.
  * Any non-read portal route or tool counts unless it is exempt here, so a new one is refused by
- * default. Exempt: asking and a user's own research artefacts, and access control (members,
- * keys, access mode, disable and enable), so access can always be tightened or revoked.
+ * default. Exempt: asking and a user's own research artefacts; revoking access (removing a
+ * member, a group mapping or an MCP key); `disable` and `enable`, which keep their own meaning;
+ * and the access mode, where the handler accepts only a change that makes the portal more
+ * restrictive (`isAccessTightening`).
  */
 const READ_ONLY_EXEMPT_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
   'portal.read',
@@ -423,10 +425,11 @@ const READ_ONLY_EXEMPT_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission
   'portal.generate',
   'portal.investigate',
   'portal.watch',
-  'members.manage',
-  'keys.manage',
 ])
 const READ_ONLY_EXEMPT_ROUTES: ReadonlySet<string> = new Set([
+  'DELETE /api/admin/t/:slug/members/:id',
+  'DELETE /api/admin/t/:slug/groups/:id',
+  'DELETE /api/t/:slug/mcp/keys/:id',
   'PATCH /api/admin/t/:slug/access',
   'POST /api/admin/t/:slug/disable',
   'POST /api/admin/t/:slug/enable',
@@ -439,6 +442,57 @@ export function mutatesPortal(
   if (declaration.method === 'GET' || declaration.method === 'HEAD') return false
   if (READ_ONLY_EXEMPT_PERMISSIONS.has(declaration.permission)) return false
   return !READ_ONLY_EXEMPT_ROUTES.has(`${declaration.method} ${declaration.path}`)
+}
+
+const ACCESS_ORDER = ['public', 'authenticated', 'restricted'] as const
+/** Whether an access-mode change keeps the portal at least as restrictive as it was. */
+export function isAccessTightening(
+  from: typeof ACCESS_ORDER[number],
+  to: typeof ACCESS_ORDER[number],
+): boolean {
+  return ACCESS_ORDER.indexOf(to) >= ACCESS_ORDER.indexOf(from)
+}
+
+/**
+ * How a portal route or tool meets the hosting daily ask limit (`asksPerDay`):
+ * - `count`: it answers a question with a paid model call, so each call counts as one ask and
+ *   is refused once the day's asks are spent.
+ * - `gate`: it makes a paid model call that only accompanies an ask already counted (routing,
+ *   sub-questions, source verdicts, follow-up suggestions). It does not count, but it is
+ *   refused once the day's asks are spent.
+ * Every non-read portal route or tool with the ask or generate permission counts unless it is
+ * listed here, so a new one is limited by default.
+ */
+export type AskUse = 'count' | 'gate'
+const ASK_FREE_ROUTES: ReadonlySet<string> = new Set([
+  // A user's own saved research and answer feedback make no model call.
+  'PUT /api/t/:slug/sessions/:id',
+  'DELETE /api/t/:slug/sessions/:id',
+  'POST /api/t/:slug/feedback',
+])
+const ASK_GATED_ROUTES: ReadonlySet<string> = new Set([
+  'POST /api/t/:slug/route',
+  'POST /api/t/:slug/subqueries',
+  'POST /api/t/:slug/verdicts',
+  'POST /api/t/:slug/followups',
+])
+/** Paid answers declared under another permission. */
+const ASK_COUNTED_ROUTES: ReadonlySet<string> = new Set([
+  'POST /api/t/:slug/investigations/:id/synthesise',
+])
+export function askUse(
+  declaration: Pick<Declaration, 'kind' | 'method' | 'path' | 'permission' | 'scope'>,
+): AskUse | null {
+  if (declaration.scope !== 'portal') return null
+  if (declaration.kind !== 'http' && declaration.kind !== 'mcp') return null
+  if (declaration.method === 'GET' || declaration.method === 'HEAD') return null
+  const key = `${declaration.method} ${declaration.path}`
+  if (ASK_GATED_ROUTES.has(key)) return 'gate'
+  if (ASK_COUNTED_ROUTES.has(key)) return 'count'
+  if (ASK_FREE_ROUTES.has(key)) return null
+  return declaration.permission === 'portal.ask' || declaration.permission === 'portal.generate'
+    ? 'count'
+    : null
 }
 
 /** Called while registering each concrete handler, retaining Hono's literal path inference. */

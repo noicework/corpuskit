@@ -470,11 +470,16 @@ export function sessionFor(
 
 /** Test-only SQLite, trusted request-context and provider boundary for all route families. */
 export function createEnforcementFixture(
-  options: Pick<BuildAppOptions, 'management' | 'domainProvisioner'> & {
-    breakGlassPolicy?: BreakGlassPolicy
-    /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
-    identityConfigured?: boolean
-  } = {},
+  options:
+    & Pick<
+      BuildAppOptions,
+      'management' | 'domainProvisioner' | 'lifecycle' | 'rateLimitAskPerMin'
+    >
+    & {
+      breakGlassPolicy?: BreakGlassPolicy
+      /** false models a deployment with no Entra configuration (no ENTRA_TENANT_ID). */
+      identityConfigured?: boolean
+    } = {},
   ownedAdapter: 'durable' | 'local' = 'durable',
 ) {
   const directory = Deno.makeTempDirSync({ prefix: 'enforcement-' })
@@ -597,7 +602,7 @@ export function createEnforcementFixture(
       options.breakGlassPolicy ?? { environment: 'production' },
     ),
     brandingPath: `${directory}/branding`,
-    rateLimitAskPerMin: 0,
+    rateLimitAskPerMin: options.rateLimitAskPerMin ?? 0,
     rateLimitEstatePerMin: 0,
     rateLimitMcpAuthPerMin: 0,
   })

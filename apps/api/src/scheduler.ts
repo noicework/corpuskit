@@ -18,6 +18,7 @@ import { DECLARATIONS } from './permissions.ts'
 import type { PortalLifecycleStore } from './lifecycle-store.ts'
 import { assertManagementWritable, guardManagement } from './lifecycle-management.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
+import { readLifecycle } from './lifecycle-policy.ts'
 
 interface SystemJobContext {
   localMutations?: LocalMutationScope
@@ -218,6 +219,8 @@ export async function syncSource(
   let skipped = 0
   /** The first refusal reason seen, reported once instead of per page. */
   let rejectedReason: string | undefined
+  /** A hosting refusal (a limit, read-only or paused) that stopped this run. */
+  let refusal: PortalLifecycleError | undefined
   for (const [i, url] of fresh.entries()) {
     signal?.throwIfAborted()
     try {
@@ -296,6 +299,13 @@ export async function syncSource(
       added += 1
       if (added % 5 === 0) await emit(`Ingested ${added} of ${fresh.length} new pages…`)
     } catch (err) {
+      if (err instanceof PortalLifecycleError) {
+        // The portal refuses every further page the same way (its limit is reached, or it is
+        // read-only or paused): stop and say so once, keeping the pages already added.
+        refusal = err
+        await emit(err.message)
+        break
+      }
       if (err instanceof AragApiError && err.backpressure) {
         // The box's ingestion queue is full. Stop this run cleanly rather
         // than hammering it for every remaining page - they stay un-synced
@@ -330,6 +340,14 @@ export async function syncSource(
     )
   }
   signal?.throwIfAborted()
+  if (refusal) {
+    // Keep what this run got through, so the next sync neither re-adds nor re-reads it.
+    sources.update(config.slug, source.id, {
+      synced: [...known].slice(-5000),
+      itemCount: (source.itemCount ?? source.synced?.length ?? 0) + added,
+    })
+    throw refusal
+  }
   sources.update(config.slug, source.id, {
     lastSync: new Date().toISOString(),
     lastAdded: added,
@@ -374,7 +392,11 @@ export async function runWatches(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
-    if (context?.lifecycle?.get(config.slug).status === 'suspended') continue
+    // A job never acts on a portal whose hosting state it cannot read, or that is paused.
+    if (context?.lifecycle) {
+      const hosting = readLifecycle(context.lifecycle, config.slug)
+      if (!hosting || hosting.status === 'suspended') continue
+    }
     for (const watch of watches.list(config.slug)) {
       await scopedSystemAction(context, 'maintenance.watch.run', config.slug, {
         kind: 'watch',
@@ -436,10 +458,12 @@ export async function runAutoEnrichments(
     const config = tenants.get(summary.slug)
     if (!config) continue
     // Enrichment and suggested-question generators are agents: they need an active portal
-    // whose agents are enabled.
-    const hosting = context?.lifecycle?.get(config.slug)
-    if (hosting && (hosting.status !== 'active' || hosting.limits?.agentsEnabled === false)) {
-      continue
+    // whose agents are enabled, and a hosting state that can be read.
+    if (context?.lifecycle) {
+      const hosting = readLifecycle(context.lifecycle, config.slug)
+      if (!hosting || hosting.status !== 'active' || hosting.limits?.agentsEnabled === false) {
+        continue
+      }
     }
     try {
       await scopedSystemAction(context, 'maintenance.enrichment.run', config.slug, {
@@ -497,9 +521,12 @@ export async function runAutoSyncs(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
-    if (context?.lifecycle && context.lifecycle.get(config.slug).status !== 'active') continue
+    if (context?.lifecycle && readLifecycle(context.lifecycle, config.slug)?.status !== 'active') {
+      continue
+    }
     for (const source of sources.list(config.slug)) {
       if (!source.auto) continue
+      let refused = false
       await scopedSystemAction(context, 'maintenance.source.sync', config.slug, {
         kind: 'source',
         id: source.id,
@@ -507,15 +534,26 @@ export async function runAutoSyncs(
         try {
           await syncSource(management, sources, config, source, () => {}, signal)
         } catch (err) {
+          signal.throwIfAborted()
+          if (err instanceof PortalLifecycleError) {
+            // The portal's hosting state (a limit reached, read-only or paused) refuses its
+            // other sources alike. Say so on the source and move on to the next portal; the
+            // pass itself has not failed.
+            refused = true
+            try {
+              recordSyncFailure(sources, config.slug, source, err)
+            } catch { /* A read-only or paused portal keeps its source record as it was. */ }
+            return
+          }
           // The site is unreachable, or the box refuses writes. Record the reason
           // against the source for Manage, then stop this run.
           // The internal caller must observe and audit the failed maintenance pass.
-          signal.throwIfAborted()
           recordSyncFailure(sources, config.slug, source, err)
           console.error(`[scheduler] auto-sync failed for ${config.slug}`)
           throw err
         }
       })
+      if (refused) break
     }
   }
 }
