@@ -237,3 +237,35 @@ Deno.test('every Worker configuration attaches portal hostnames to its own scrip
     expect(config.vars.WORKER_NAME).toBe(config.name)
   }
 })
+
+Deno.test('hostname automation calls fetch unbound, as the Workers runtime requires', async () => {
+  const calls: string[] = []
+  // Mirrors the Workers fetch: called with any receiver other than undefined or globalThis, it throws.
+  const workersFetch = function (this: unknown, input: string | URL | Request, init?: RequestInit) {
+    if (this !== undefined && this !== globalThis) {
+      throw new TypeError('Illegal invocation: function called with incorrect `this` reference.')
+    }
+    calls.push(`${init?.method ?? 'GET'} ${String(input)}`)
+    if ((init?.method ?? 'GET') === 'GET') {
+      return Promise.resolve(Response.json({ success: true, result: [] }))
+    }
+    const hostname = JSON.parse(String(init?.body)).hostname
+    return Promise.resolve(Response.json({
+      success: true,
+      result: {
+        id: 'd1',
+        hostname,
+        service: 'corpuskit',
+        zone_name: 'corpuskit.org',
+        environment: 'production',
+      },
+    }))
+  } as typeof fetch
+  const provisioner = new CloudflareDomainProvisioner(
+    { accountId: 'acct', apiToken: 'token' },
+    workersFetch,
+  )
+  const attached = await provisioner.attach('acme.corpuskit.org')
+  expect(attached.hostname).toBe('acme.corpuskit.org')
+  expect(calls.length).toBe(2)
+})

@@ -195,7 +195,11 @@ export class CloudflareDomainProvisioner implements PortalDomainProvisioner {
     init: RequestInit = {},
     expectResult = true,
   ): Promise<T> {
-    const response = await this.fetcher(
+    // Detach before calling: the Workers runtime rejects fetch invoked as a method of another
+    // object ("Illegal invocation"), so `this.fetcher(...)` fails there even though it works
+    // under Deno and in tests.
+    const fetcher = this.fetcher
+    const response = await fetcher(
       `${CLOUDFLARE_API_BASE}/accounts/${encodeURIComponent(this.config.accountId)}${path}`,
       {
         ...init,
