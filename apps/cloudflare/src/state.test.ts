@@ -1293,7 +1293,7 @@ Deno.test('Durable RBAC migrates additively and rolls back rows with failed audi
     expect(stores.assignments.list('tenant-1')).toEqual([])
     expect(stores.locks.lockedUntil('ip')).toBeNull()
     expect(state.get('tenant:existing', null)).toEqual({ slug: 'existing' })
-    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 3 }])
+    expect(state.rbacDatabase.all('SELECT count(*) AS n FROM rbac_migrations')).toEqual([{ n: 4 }])
     expect(() =>
       state.rbacDatabase.transactionSync(() => {
         state.rbacDatabase.exec('INSERT INTO break_glass_locks VALUES (?,?)', 'ip', 2000)

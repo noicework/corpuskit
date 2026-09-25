@@ -326,6 +326,64 @@ Deno.test('audit component reads real scoped events, filters, snapshots and fail
   }
 })
 
+Deno.test('audit production pages render and filter operator events at platform and portal scope', async () => {
+  const server = startTestServer({ identity: { role: 'owner' } }),
+    db = seed(server.directory)
+  for (
+    const scope of [{ kind: 'platform' as const }, { kind: 'portal' as const, slug: 'marine' }]
+  ) {
+    db.rbac.audit.append(createAuditEvent({
+      requestId: `operator-${scope.kind}-event`,
+      actor: { kind: 'operator', id: 'operator:fixture-hosting' },
+      action: 'request.privileged',
+      scope,
+      target: { kind: 'request' },
+      outcome: 'success',
+      detail: { permission: scope.kind === 'platform' ? 'portal.create' : 'bindings.write' },
+    }))
+  }
+  const browser = await launch(),
+    page = await browser.newPage(`${server.url}/admin/audit`)
+  try {
+    await page.bringToFront()
+    await ready(page)
+    await assertCurrentBuild(page)
+    expect(await page.evaluate(() => document.querySelector('[data-audit-results]')!.textContent))
+      .toContain('operator:fixture-hosting')
+    for (const platform of [true, false]) {
+      if (!platform) {
+        await page.goto(`${server.url}/t/marine/manage?tab=audit`)
+        await ready(page)
+      }
+      expect(await page.$('[aria-label="Actor kind"] option[value="operator"]')).not.toBeNull()
+      await input(page, 'Actor kind', 'operator')
+      await input(page, 'Actor ID', 'operator:fixture-hosting')
+      await click(page, 'Apply filters')
+      await ready(page)
+      const results = await page.evaluate(() =>
+        document.querySelector('[data-audit-results]')!.textContent
+      )
+      expect(results).toContain('operator:fixture-hosting')
+      expect(results).toContain('operator-portal-event')
+      expect(results).not.toContain('request-marine')
+      if (platform) expect(results).toContain('operator-platform-event')
+      else expect(results).not.toContain('operator-platform-event')
+      const requested = new URL(
+        server.requests.filter((request) => request.path.includes('/audit?')).at(-1)!.path,
+        server.url,
+      )
+      expect(requested.pathname).toBe(platform ? '/api/admin/audit' : '/api/admin/t/marine/audit')
+      expect(requested.searchParams.get('actorKind')).toBe('operator')
+      expect(requested.searchParams.get('actorId')).toBe('operator:fixture-hosting')
+    }
+  } finally {
+    db.database.close()
+    await page.close()
+    await browser.close()
+    await server.close()
+  }
+})
+
 Deno.test('audit production navigation mounts immutable portal and platform scopes', async () => {
   const server = startTestServer({ identity: { role: 'owner' } }),
     db = seed(server.directory),

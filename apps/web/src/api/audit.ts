@@ -10,6 +10,7 @@ export const AUDIT_ACTORS = [
   'break-glass',
   'key',
   'legacy-key',
+  'operator',
   'system',
 ] as const
 export const AUDIT_OUTCOMES = ['intent', 'success', 'denied', 'failure', 'uncertain'] as const

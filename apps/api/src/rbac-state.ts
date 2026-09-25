@@ -70,10 +70,10 @@ interface AssignmentRow {
 
 // Schema constants come from the core catalogue; no grant policy is duplicated here.
 const sqlRoles = (roles: readonly string[]) => roles.map((role) => `'${role}'`).join(',')
-const auditSchema = (table: 'audit_events' | 'audit_events_v2') =>
+const auditSchema = (table: 'audit_events' | 'audit_events_v2' | 'audit_events_v3') =>
   `CREATE TABLE IF NOT EXISTS ${table} (
     id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, request_id TEXT NOT NULL,
-    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('anonymous','user','break-glass','key','legacy-key','system')),
+    actor_kind TEXT NOT NULL CHECK(actor_kind IN ('anonymous','user','operator','break-glass','key','legacy-key','system')),
     actor_id TEXT, actor_label TEXT, action TEXT NOT NULL,
     scope_kind TEXT NOT NULL CHECK(scope_kind IN ('platform','portal')), scope_slug TEXT,
     target_kind TEXT NOT NULL, target_id TEXT,
@@ -443,16 +443,20 @@ export class RbacState {
   migrate(): void {
     this.database.transactionSync(() => {
       for (const query of schema) this.database.exec(query)
-      const marker = 'rbac-audit-actors-v2'
-      if (!this.database.all('SELECT name FROM rbac_migrations WHERE name = ?', marker).length) {
-        this.database.exec(auditSchema('audit_events_v2'))
+      for (const version of ['v2', 'v3'] as const) {
+        const marker = `rbac-audit-actors-${version}`
+        if (this.database.all('SELECT name FROM rbac_migrations WHERE name = ?', marker).length) {
+          continue
+        }
+        const table = `audit_events_${version}` as const
+        this.database.exec(auditSchema(table))
         const columns =
           'id,at,request_id,actor_kind,actor_id,actor_label,action,scope_kind,scope_slug,target_kind,target_id,outcome,detail_json'
         this.database.exec(
-          `INSERT INTO audit_events_v2 (${columns}) SELECT ${columns} FROM audit_events`,
+          `INSERT INTO ${table} (${columns}) SELECT ${columns} FROM audit_events`,
         )
         this.database.exec('DROP TABLE audit_events')
-        this.database.exec('ALTER TABLE audit_events_v2 RENAME TO audit_events')
+        this.database.exec(`ALTER TABLE ${table} RENAME TO audit_events`)
         for (const query of auditIndexes) this.database.exec(query)
         this.database.exec(
           'INSERT INTO rbac_migrations (name,completed_at) VALUES (?,?)',
