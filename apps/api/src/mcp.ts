@@ -1,3 +1,4 @@
+import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
   type Declaration,
   DECLARATIONS,
@@ -63,6 +64,7 @@ const READ_ONLY_TOOL = {
 } as const
 
 export interface McpRoutesOptions {
+  beforeTool?: (declaration: Declaration, config: TenantConfig, authority: RequestAuthority) => void
   localMutations?: LocalMutationScope
   provider: RetrievalProvider
   tenant: (slug: string) => TenantConfig | undefined
@@ -202,6 +204,7 @@ async function safeTool(call: () => Promise<Record<string, unknown>>) {
     return jsonResult(await call())
   } catch (error) {
     if (error instanceof AuditWriteError) throw error
+    if (error instanceof PortalLifecycleError) return { ...jsonResult(error.body), isError: true }
     return toolError('The corpus could not complete this request. Please try again.')
   }
 }
@@ -235,6 +238,7 @@ export function createMcpServer(opts: McpRoutesOptions): {
           accessMode: config?.accessMode,
           configuredTenantId: opts.authorityDependencies.configuredTenantId,
         })
+        if (config) opts.beforeTool?.(declaration, config, authority)
         return await executeMcpTool(
           declaration,
           auditContext,

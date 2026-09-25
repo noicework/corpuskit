@@ -726,6 +726,9 @@ const html = `<html><title>Research</title><main><p>${
 }</p><a href="https://example.test/article">Article</a></main></html>`
 // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
 export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
+  ['GET', 'lifecycle', 'portal.create'],
+  ['PUT', 'lifecycle', 'portal.create', { status: 'active', limits: null }],
+  ['GET', 'usage', 'portal.create'],
   ['GET', 'extraction/methods', 'content.write'],
   ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
   ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
@@ -880,6 +883,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       listResources: () => [matrixResource],
       labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
       counters: () => ({ resources: 1 }),
+      resourceCount: () => 1,
       recentResources: () => [matrixResource],
       createText: () => ({ id: 'created' }),
       createLink: () => ({ id: 'created' }),
@@ -913,7 +917,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       invalidate: () => undefined,
       listSearchConfigs: () => ['portal-search'],
       ensureSearchConfigs: () => ['portal-search'],
-      ingestDocumentation: () => ({ created: 1 }),
+      ingestDocumentation: () => ({ created: ['page'], updated: [], failed: [] }),
       corpusHealth: () => ({ total: 1, failed: 0 }),
       purgeFailedResources: () => ({ deleted: 1 }),
       resourceFull: () => ({
@@ -1077,7 +1081,11 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'insights') {
             expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
           } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
-          else throw new Error(`Missing positive assertion for ${template}`)
+          else if (suffix === 'lifecycle') {
+            expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+          } else if (suffix === 'usage') {
+            expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
+          } else throw new Error(`Missing positive assertion for ${template}`)
         } else {
           expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
           if (suffix === 'disable' || suffix === 'enable') {

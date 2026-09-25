@@ -67,6 +67,15 @@ function entry(
 
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform'),
+  entry('http', 'PUT', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
+    subActions: [{
+      action: 'portal.lifecycle.update',
+      permission: 'portal.create',
+      scope: 'platform',
+    }],
+  }),
+  entry('http', 'GET', '/api/admin/t/:slug/usage', 'portal.create', 'platform'),
   entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
     subActions: [{
       action: 'tenant.access.update',
@@ -95,6 +104,12 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ),
   ]),
   ...([
+    ['lifecycle', ['set'], 'portal.create', 'platform'],
+    ['lifecycle', ['remove'], 'portal.delete', 'platform'],
+    ['lifecycle', ['consumeAsk'], 'portal.ask', 'portal'],
+    ['lifecycle', ['touch'], 'portal.read', 'portal'],
+    ['lifecycle', ['reserveAdd', 'settleAdd', 'forgetResource'], 'content.write', 'portal'],
+    ['lifecycle', ['resetCapacity'], 'bindings.write', 'portal'],
     ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
     ['tenants', ['remove'], 'portal.delete', 'platform'],
@@ -394,6 +409,36 @@ export function declarationFor(method: string, path: string): Declaration {
     candidates.find((item) => item.method === 'ALL')
   if (!declaration) throw new Error('Missing route permission declaration')
   return declaration
+}
+
+/**
+ * Hosting read-only mode refuses every portal operation that changes content or configuration.
+ * Any non-read portal route or tool counts unless it is exempt here, so a new one is refused by
+ * default. Exempt: asking and a user's own research artefacts, and access control (members,
+ * keys, access mode, disable and enable), so access can always be tightened or revoked.
+ */
+const READ_ONLY_EXEMPT_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  'portal.read',
+  'portal.ask',
+  'portal.generate',
+  'portal.investigate',
+  'portal.watch',
+  'members.manage',
+  'keys.manage',
+])
+const READ_ONLY_EXEMPT_ROUTES: ReadonlySet<string> = new Set([
+  'PATCH /api/admin/t/:slug/access',
+  'POST /api/admin/t/:slug/disable',
+  'POST /api/admin/t/:slug/enable',
+])
+export function mutatesPortal(
+  declaration: Pick<Declaration, 'kind' | 'method' | 'path' | 'permission' | 'scope'>,
+): boolean {
+  if (declaration.scope !== 'portal') return false
+  if (declaration.kind !== 'http' && declaration.kind !== 'mcp') return false
+  if (declaration.method === 'GET' || declaration.method === 'HEAD') return false
+  if (READ_ONLY_EXEMPT_PERMISSIONS.has(declaration.permission)) return false
+  return !READ_ONLY_EXEMPT_ROUTES.has(`${declaration.method} ${declaration.path}`)
 }
 
 /** Called while registering each concrete handler, retaining Hono's literal path inference. */

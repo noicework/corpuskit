@@ -29,6 +29,7 @@ import { createAuditEvent, redactAuditDetail } from './audit.ts'
 
 const dir = await Deno.makeTempDir()
 Deno.env.set('DATA_DIR', dir)
+const { PortalLifecycleStore } = await import('./lifecycle-store.ts')
 
 const { sessionFor } = await import('./enforcement-fixture.ts')
 const watchContext = () => ({
@@ -54,6 +55,58 @@ const { TenantStore } = await import('./tenants.ts')
 
 const freshTenants = () =>
   new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` })
+
+Deno.test('maintenance skips read-only content jobs, agent runs when agents are disabled, and all suspended portal jobs', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const lifecycle = new PortalLifecycleStore()
+    for (
+      const [status, limits, jobs] of [
+        ['read_only', null, ['sync', 'enrichment']],
+        ['suspended', null, ['sync', 'watch', 'enrichment']],
+        ['active', { agentsEnabled: false }, ['enrichment']],
+      ] as const
+    ) {
+      const tenants = freshTenants()
+      for (const tenant of tenants.list()) lifecycle.set(tenant.slug, { status, limits })
+      let providerCalls = 0
+      const management = new Proxy({}, {
+        get() {
+          return () => {
+            providerCalls++
+            throw new Error('Unexpected provider call')
+          }
+        },
+      }) as AragProvider
+      const stores = {
+        rbac,
+        tenants,
+        lifecycle,
+        sources: {
+          list: () => {
+            throw new Error('Unexpected source access')
+          },
+        } as unknown as InstanceType<typeof SourceStore>,
+        watches: {
+          list: () => {
+            throw new Error('Unexpected watch access')
+          },
+        } as unknown as InstanceType<typeof WatchStore>,
+        enrichments: {
+          get: () => {
+            throw new Error('Unexpected enrichment access')
+          },
+        } as unknown as InstanceType<typeof EnrichmentStore>,
+      }
+      await runSystemMaintenance(management, stores, undefined, [...jobs], false)
+      expect(providerCalls).toBe(0)
+    }
+  } finally {
+    db.close()
+  }
+})
 
 Deno.test('scheduled watch mutations carry portal target and shared system correlation', async () => {
   const db = new LocalRbacDatabase(':memory:')

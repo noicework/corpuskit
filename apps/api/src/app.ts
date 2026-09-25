@@ -1,3 +1,14 @@
+import { FileLifecycleStore, type PortalLifecycleStore } from './lifecycle-store.ts'
+import { PortalLifecycleError } from './lifecycle-error.ts'
+import {
+  admitPortalAsk,
+  assertAgentsEnabled,
+  enforceReadOnly,
+  enforceSuspension,
+  isPlatformAuthority,
+} from './lifecycle-policy.ts'
+import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
+import { capacityUsage, guardManagement, precheckAdd } from './lifecycle-management.ts'
 import {
   declaredRoute,
   declaredSubAction,
@@ -5,6 +16,7 @@ import {
   isInfrastructurePreflight,
   isPrivileged,
   matchedDeclaration,
+  mutatesPortal,
   registerInfrastructure,
   registerPreflightInfrastructure,
 } from './permissions.ts'
@@ -291,7 +303,12 @@ import {
   SUGGESTED_QUESTIONS_SCHEMA_ID,
 } from './suggested-questions.ts'
 import { tenantAliasLocation } from './tenant-aliases.ts'
-import { AgentRestartError, applyLabelsetUpdate, duplicateLabelTitle } from './labelsets.ts'
+import {
+  AgentRestartError,
+  applyLabelsetUpdate,
+  duplicateLabelTitle,
+  planLabelsetRebuild,
+} from './labelsets.ts'
 import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
@@ -846,6 +863,7 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
   configuredTenantId?: string
@@ -933,6 +951,18 @@ export function researchOwner(c: Context): Promise<ResearchOwner> {
 }
 
 export function buildApp(opts: BuildAppOptions): Hono {
+  // Hosting lifecycle (docs/HOSTING.md). Every management write passes the lifecycle guard.
+  // HTTP handlers run only after the route guard has admitted the caller, so the guard lets a
+  // platform principal's write reach a suspended portal; scheduled jobs never can.
+  const lifecycle = opts.lifecycle ??
+    new FileLifecycleStore(process.env.DATA_DIR, undefined, opts.now)
+  const rawManagement = opts.management
+  if (rawManagement) {
+    opts = {
+      ...opts,
+      management: guardManagement(rawManagement, lifecycle, { allowSuspended: true }),
+    }
+  }
   const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
   const tenants = opts.tenants ?? new TenantStore({})
@@ -1218,6 +1248,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         tenants.list(false, (config) => {
           const slug = config.slug
           if (requested && !requested.has(slug)) return false
+          // The portal list still shows a suspended portal, with its status, so the picker
+          // can mark it paused; cross-portal asks leave it out.
+          if (
+            declaration.path !== '/api/tenants' &&
+            lifecycle.get(slug).status === 'suspended' && !isPlatformAuthority(selected)
+          ) return false
           if (!AccessModeSchema.safeParse(config.accessMode).success) return false
           const policy = {
             slug,
@@ -1267,6 +1303,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const { declaration, scope, policy } = target()
         if (declaration.scope === 'public') return null
         const selected = await authority(scope)
+        const hosted = scope.kind === 'portal' ? tenants.get(scope.slug) : undefined
+        if (hosted) {
+          enforceSuspension(lifecycle, hosted, selected, { safeMetadata: declaration.safeMetadata })
+        }
         try {
           // D9 is available only after credential and portal validation succeeded, and D13
           // makes the safe projection a successful response: it is evaluated without audit.
@@ -1278,6 +1318,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         } finally {
           if (context.denialAudited) markDenialAudited(c.req.raw)
         }
+        if (hosted && mutatesPortal(declaration)) enforceReadOnly(lifecycle, hosted.slug)
         return selected
       },
       subActions: async (names) => {
@@ -1320,6 +1361,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     run: () => T | Promise<T>,
     detail = {},
     scope: Scope = classification(c).scope,
+    target: { kind: string; id?: string } = { kind: 'request' },
   ) =>
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
@@ -1331,7 +1373,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           actor: requestContext(c.req.raw).actor!,
           action,
           scope,
-          target: { kind: 'request' },
+          target,
           detail: { permission: declaration.permission, ...detail },
         },
         run,
@@ -1457,6 +1499,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return false
     }
   }
+  /** A capacity ledger describes one knowledge box; connecting another starts it afresh. */
+  const rebound = (slug: string, before: string | undefined) => {
+    if (bindings.get(slug)?.baseUrl !== before) lifecycle.resetCapacity(slug)
+  }
   const portalSubAction = async (c: Context, name: string, slug: string, future = false) => {
     const selected = await authoriseDeclared(c)
     if (!selected) throw new AuthorisationError(403)
@@ -1471,6 +1517,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         authoriseNewPortalDomain(selected, slug)
       } else {
         const config = tenants.get(slug)
+        if (config) enforceSuspension(lifecycle, config, selected)
         authoriseOperation(
           selected,
           action.permission,
@@ -1482,6 +1529,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     } finally {
       if (requestContext(c.req.raw).denialAudited) markDenialAudited(c.req.raw)
     }
+    // Copying out of a read-only portal is a read; copying into one is refused up front.
+    if (name === 'migration.destination' && tenants.get(slug)) enforceReadOnly(lifecycle, slug)
   }
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
@@ -1514,6 +1563,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }),
       )
       markDenialAudited(c.req.raw)
+    }
+    // Portal activity for hosting usage: successful asks and other portal writes. Reads never
+    // write state, so browsing alone is not recorded. Recording never fails a request.
+    if (c.res.status < 400 && !['GET', 'HEAD'].includes(c.req.method)) {
+      const declaration = classification(c).declaration
+      const slug = c.req.param('slug')
+      if (slug && declaration?.scope === 'portal') {
+        try {
+          lifecycle.touch(slug, opts.now?.())
+        } catch {
+          console.error('Portal activity could not be recorded')
+        }
+      }
     }
     c.header('x-request-id', context.requestId)
   })
@@ -1588,6 +1650,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (err instanceof KnowledgeBoxNotConnectedError) {
       return c.json({ error: 'knowledge_box_not_connected', slug: err.slug }, 503)
     }
+    if (err instanceof PortalLifecycleError) return c.json(err.body, err.status)
     console.error(err)
     return c.json({ error: 'internal_error' }, 500)
   })
@@ -1672,6 +1735,32 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.res = response
   })
 
+  registerLifecycleRoutes(app, {
+    lifecycle,
+    tenants,
+    now: opts.now,
+    members: (slug) =>
+      opts.rbac?.assignments.list(configuredTenantId).filter((row) =>
+        row.scope.kind === 'portal' && row.scope.slug === slug
+      ).length ?? 0,
+    capacity: async (config) => {
+      // A portal without a knowledge box holds nothing.
+      if (!bindings.get(config.slug)) return { resources: 0, bytes: 0 }
+      if (!rawManagement) throw new PortalLifecycleError(503, { error: 'usage_unavailable' })
+      return await capacityUsage(rawManagement, lifecycle, config)
+    },
+    update: (c, slug, input) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/lifecycle',
+        'portal.lifecycle.update',
+        () => lifecycle.set(slug, { status: input.status, limits: input.limits }),
+        lifecycleAuditDetail(input),
+        { kind: 'platform' },
+        { kind: 'portal', id: slug },
+      ),
+  })
+
   registerAuditRoutes(app, {
     authorise: authoriseDeclared,
     state: () => {
@@ -1734,6 +1823,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     requestContext,
     authorityDependencies,
     authorise: authoriseDeclared,
+    // The MCP transport route is already guarded; each tool call is checked again on its own.
+    beforeTool: (declaration, config, authority) => {
+      enforceSuspension(lifecycle, config, authority)
+      if (mutatesPortal(declaration)) enforceReadOnly(lifecycle, config.slug)
+      if (declaration.permission === 'portal.ask') admitPortalAsk(lifecycle, config, opts.now?.())
+    },
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to
@@ -1815,7 +1910,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   app.get(declaredRoute('GET', '/api/tenants'), async (c) => {
     const targets = await requestAuthorisation(c).aggregate()
-    return c.json(targets.map(tenantSummary))
+    return c.json(
+      targets.map((config) => ({
+        ...tenantSummary(config),
+        status: lifecycle.get(config.slug).status,
+      })),
+    )
   })
 
   const brandingDir = opts.brandingPath ?? process.env.BRANDING_PATH ?? './data/branding'
@@ -1876,7 +1976,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         accessMode: config.accessMode,
       })
     }
-    return c.json(withBrandingUrls(config))
+    // Readers learn the hosting status (the SPA's read-only banner). A suspended portal
+    // never gets here: its 423 carries the safe projection and status instead.
+    return c.json({ ...withBrandingUrls(config), status: lifecycle.get(config.slug).status })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/branding/:kind'), (c) => {
@@ -2314,7 +2416,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // D13: a cold cache is filled as a side effect for any caller allowed to read this route,
     // exactly as before phase 3. The declared sub-actions name the audited work below; they
     // are not a permission the reader must hold, so no denial is written here.
-    if (!opts.management) return c.json({ questions: [] })
+    // A read-only or suspended portal, or one with agents disabled, serves cached openers but
+    // never generates new ones.
+    const hosting = lifecycle.get(config.slug)
+    if (
+      !opts.management || hosting.status !== 'active' || hosting.limits?.agentsEnabled === false
+    ) return c.json({ questions: [] })
     let job = questionsInFlight.get(key)
     const joined = !!job
     if (!job) {
@@ -3220,6 +3327,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
     const targets = await requestAuthorisation(c).aggregate(parsed.data.slugs)
+    // Admit an ask on every selected portal or on none. Nothing here awaits, so no other
+    // request can spend a portal's last ask between the check and the count.
+    const askedAt = opts.now?.()
+    for (const config of targets) {
+      const denied = lifecycle.askQuota(config.slug, config.timezone ?? 'UTC', askedAt)
+      if (denied) throw new PortalLifecycleError(429, { error: 'ask_quota_exceeded', ...denied })
+    }
+    for (const config of targets) admitPortalAsk(lifecycle, config, askedAt)
     return streamSSE(c, async (stream) => {
       let chain: Promise<void> = Promise.resolve()
       const write = (slug: string, event: unknown) => {
@@ -3662,7 +3777,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    const before = bindings.get(config.slug)?.baseUrl
     bindings.remove(config.slug)
+    rebound(config.slug, before)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug) })
   })
@@ -3819,6 +3936,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     tenants.remove(slug)
     bindings.remove(slug)
+    lifecycle.remove(slug)
     opts.invalidate?.(slug)
     return c.json({
       ok: true,
@@ -3847,7 +3965,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         kbSlug,
         parsed.data.title ?? `${config.branding.productName}`,
       )
+      const before = bindings.get(config.slug)?.baseUrl
       bindings.set(config.slug, binding)
+      rebound(config.slug, before)
       opts.invalidate?.(config.slug)
       return c.json({ ok: true, status: bindings.status(config.slug) })
     } catch (err) {
@@ -3879,6 +3999,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailable) return unavailable
     const parsed = linkBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    // A full portal refuses before the page is fetched.
+    await precheckAdd(rawManagement!, lifecycle, config, { allowSuspended: true })
     // Same quality gate as scheduled syncs: fetch and clean the page so the
     // index holds body text, and bot walls never enter the corpus. Falls back
     // to the platform crawler when the site blocks server fetches.
@@ -3915,7 +4037,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // A knowledge-box back-pressure error is not a fetch/parse failure -
         // falling through to createLink below would just hit the same full
         // queue again. Let it escape to the outer catch instead.
-        if (err instanceof AragApiError && err.backpressure) throw err
+        if (
+          err instanceof PortalLifecycleError || (err instanceof AragApiError && err.backpressure)
+        ) throw err
         // Any other failure (network, parsing) falls through to the platform crawler.
       }
       return c.json(await management!.createLink(config, parsed.data))
@@ -4090,6 +4214,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!proposal) return c.json({ error: 'no_proposal', message: 'Run Propose first.' }, 400)
     const parsed = kgImplementSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    assertAgentsEnabled(lifecycle, config.slug)
     return streamSSE(c, async (stream) => {
       for await (
         const event of implementKgStrategy(management!, config, proposal, {
@@ -4149,6 +4274,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
         labelset.id === suggestion.labels.labelsetId
       )
     ) return adminNotFound(c)
+    // Graph suggestions replace the graph agent; taxonomy suggestions start none.
+    if (action === 'suggestion.graph.write') assertAgentsEnabled(lifecycle, config.slug)
     try {
       const summary = await subAction(
         c,
@@ -4198,6 +4325,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Validate up front so the UI can show problems without streaming.
     const problems = validateGraphStrategy(input)
     if (problems.length > 0) return c.json({ error: 'invalid_strategy', problems }, 422)
+    // Replacing the strategy removes the running agent before starting its successor.
+    assertAgentsEnabled(lifecycle, config.slug)
     return streamSSE(c, async (stream) => {
       for await (const event of replaceGraphStrategy(management!, config, input)) {
         await stream.writeSSE({ data: JSON.stringify(event) })
@@ -4322,6 +4451,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableRun = requireManagement(c)
     if (unavailableRun) return unavailableRun
+    // Enrichment generators are the portal's own agents.
+    assertAgentsEnabled(lifecycle, config.slug)
     return streamSSE(c, async (stream) => {
       try {
         const body = await c.req.json().catch(() => ({})) as {
@@ -4362,6 +4493,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
+    assertAgentsEnabled(lifecycle, config.slug)
     const body = await c.req.json().catch(() => ({})) as { limit?: number }
     const limit = typeof body.limit === 'number' && body.limit > 0
       ? Math.min(Math.floor(body.limit), 2000)
@@ -4391,6 +4523,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailableOne = requireManagement(c)
     if (unavailableOne) return unavailableOne
+    assertAgentsEnabled(lifecycle, config.slug)
     const id = c.req.param('id')
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     if (!await adminResource(c, config, id)) return adminNotFound(c)
@@ -4590,6 +4723,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const id = c.req.param('id')
     const existing = await provider.labelsets(config).catch(() => [])
     if (!existing.some((ls) => ls.id === id)) return adminNotFound(c)
+    // Saving restarts the labellers that carry this set; with agents disabled, refuse before
+    // anything is written rather than leave a labeller removed.
+    if (
+      lifecycle.get(config.slug).limits?.agentsEnabled === false &&
+      planLabelsetRebuild(await management!.agentConfigs(config), { id, ...parsed.data }).length
+    ) assertAgentsEnabled(lifecycle, config.slug)
     try {
       const result = await applyLabelsetUpdate(management!, config, { id, ...parsed.data })
       return c.json({ ok: true, ...result })
@@ -4943,7 +5082,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
         : `Could not reach this knowledge box (${status || 'network error'}).`
       return c.json({ error: 'verification_failed', message }, 400)
     }
+    const before = bindings.get(config.slug)?.baseUrl
     bindings.set(config.slug, candidate)
+    rebound(config.slug, before)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug), resourceCount })
   })
@@ -4966,6 +5107,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? intents.find((i) => i.id === parsed.data.intent)
       : undefined
     if (parsed.data.intent && !intentDef) return c.json({ error: 'unknown_intent' }, 400)
+    admitPortalAsk(lifecycle, config, opts.now?.())
     // The finished response declares UTF-8 (the streaming helper sets its own
     // content type); a Latin-1-assuming API client otherwise sees mojibake.
     return withUtf8EventStream(streamSSE(c, async (stream) => {
@@ -6503,6 +6645,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = docsAskBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    admitPortalAsk(lifecycle, config, opts.now?.())
     return streamSSE(c, async (stream) => {
       const cancelled = () =>
         stream.aborted || c.req.raw.signal.aborted ||

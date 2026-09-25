@@ -15,11 +15,15 @@ import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
 import type { RbacState } from './rbac-state.ts'
 import { executeAudited, type LocalMutationScope } from './audit-execution.ts'
 import { DECLARATIONS } from './permissions.ts'
+import type { PortalLifecycleStore } from './lifecycle-store.ts'
+import { assertManagementWritable, guardManagement } from './lifecycle-management.ts'
+import { PortalLifecycleError } from './lifecycle-error.ts'
 
 interface SystemJobContext {
   localMutations?: LocalMutationScope
   audit: AuditStore
   requestId: string
+  lifecycle?: PortalLifecycleStore
 }
 type SystemAction =
   | 'maintenance.source.sync'
@@ -115,6 +119,23 @@ interface MaintenanceStores {
   sources: SourceStoreApi
   watches: WatchStoreApi
   enrichments: EnrichmentStoreApi
+  lifecycle?: PortalLifecycleStore
+}
+
+function guardedMaintenanceStore<T extends object>(store: T, lifecycle?: PortalLifecycleStore): T {
+  if (!lifecycle) return store
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      const method = Reflect.get(target, property, receiver)
+      if (typeof method !== 'function') return method
+      return (slug: string, ...args: unknown[]) => {
+        if (['add', 'update', 'remove', 'put', 'importRecords'].includes(String(property))) {
+          assertManagementWritable(lifecycle, slug)
+        }
+        return method.call(target, slug, ...args)
+      }
+    },
+  })
 }
 
 export async function runSystemMaintenance(
@@ -125,13 +146,17 @@ export async function runSystemMaintenance(
   retain = true,
 ): Promise<void> {
   const days = auditRetentionDays(retentionDays)
+  const guarded = stores.lifecycle ? guardManagement(management, stores.lifecycle) : management
+  const sources = guardedMaintenanceStore(stores.sources, stores.lifecycle)
+  const enrichments = guardedMaintenanceStore(stores.enrichments, stores.lifecycle)
   if (retain) stores.rbac.retainAudit(days)
   for (const job of jobs) {
     await runSystemJob(stores.rbac.audit, job, (context) => {
       context.localMutations = stores.localMutations
-      if (job === 'sync') return runAutoSyncs(management, stores.tenants, stores.sources, context)
-      if (job === 'watch') return runWatches(management, stores.tenants, stores.watches, context)
-      return runAutoEnrichments(management, stores.tenants, stores.enrichments, context)
+      context.lifecycle = stores.lifecycle
+      if (job === 'sync') return runAutoSyncs(guarded, stores.tenants, sources, context)
+      if (job === 'watch') return runWatches(guarded, stores.tenants, stores.watches, context)
+      return runAutoEnrichments(guarded, stores.tenants, enrichments, context)
     })
   }
 }
@@ -246,6 +271,7 @@ export async function syncSource(
         // not be masked as "the site was awkward, skip it". Back-pressure
         // needs the outer catch's deferral, and a 401/403 means the box
         // refuses writes outright - both belong to the caller.
+        if (err instanceof PortalLifecycleError) throw err
         if (err instanceof AragApiError) {
           if (err.backpressure || err.status === 401 || err.status === 403) throw err
         }
@@ -348,6 +374,7 @@ export async function runWatches(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
+    if (context?.lifecycle?.get(config.slug).status === 'suspended') continue
     for (const watch of watches.list(config.slug)) {
       await scopedSystemAction(context, 'maintenance.watch.run', config.slug, {
         kind: 'watch',
@@ -408,6 +435,12 @@ export async function runAutoEnrichments(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
+    // Enrichment and suggested-question generators are agents: they need an active portal
+    // whose agents are enabled.
+    const hosting = context?.lifecycle?.get(config.slug)
+    if (hosting && (hosting.status !== 'active' || hosting.limits?.agentsEnabled === false)) {
+      continue
+    }
     try {
       await scopedSystemAction(context, 'maintenance.enrichment.run', config.slug, {
         kind: 'portal',
@@ -464,6 +497,7 @@ export async function runAutoSyncs(
   for (const summary of tenants.list()) {
     const config = tenants.get(summary.slug)
     if (!config) continue
+    if (context?.lifecycle && context.lifecycle.get(config.slug).status !== 'active') continue
     for (const source of sources.list(config.slug)) {
       if (!source.auto) continue
       await scopedSystemAction(context, 'maintenance.source.sync', config.slug, {
@@ -506,8 +540,9 @@ export function startScheduler(
   enrichments: EnrichmentStoreApi,
   rbac: RbacState,
   env: Record<string, string | undefined>,
+  lifecycle?: PortalLifecycleStore,
 ): () => void {
-  const stores = { rbac, tenants, sources, watches, enrichments }
+  const stores = { rbac, tenants, sources, watches, enrichments, lifecycle }
   const runDaily = () =>
     runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'])
   const runEnrichments = () =>

@@ -19,6 +19,7 @@ import { McpKeyStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
+import { PortalLifecycleStore } from './lifecycle-store.ts'
 import { sessionFor } from './enforcement-fixture.ts'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { LocalIngress } from './local-ingress.ts'
@@ -1529,4 +1530,39 @@ Deno.test('a migrated legacy key is a fixed viewer key on its portal until revok
   } finally {
     f.close()
   }
+})
+
+Deno.test('MCP answers count toward the daily ask limit while searches and read-only portals do not', async () => {
+  const lifecycle = new PortalLifecycleStore()
+  const test = harness(60, { lifecycle })
+  const issued = await mint(test)
+  lifecycle.set('marine', { status: 'read_only', limits: { asksPerDay: 1 } })
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = await mcpRequest(test, 'marine', issued.key, {
+      jsonrpc: '2.0',
+      id: name,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    })
+    expect(response.status).toBe(200)
+    return (await response.json()).result
+  }
+  expect((await call('search_corpus', { query: 'Research' })).isError).not.toBe(true)
+  expect((await call('answer_question', { question: 'What is stock health?' })).isError).not.toBe(
+    true,
+  )
+  const refused = await call('answer_question', { question: 'And the trend?' })
+  expect(refused.isError).toBe(true)
+  expect(refused.structuredContent).toMatchObject({ error: 'ask_quota_exceeded', limit: 1 })
+  expect(lifecycle.usage('marine').asksToday).toBe(1)
+  // A suspended portal refuses the key before any tool runs.
+  lifecycle.set('marine', { status: 'suspended', limits: null })
+  const paused = await mcpRequest(test, 'marine', issued.key, {
+    jsonrpc: '2.0',
+    id: 'paused',
+    method: 'tools/call',
+    params: { name: 'search_corpus', arguments: { query: 'Research' } },
+  })
+  expect(paused.status).toBe(423)
+  expect(await paused.json()).toEqual({ error: 'portal_suspended' })
 })

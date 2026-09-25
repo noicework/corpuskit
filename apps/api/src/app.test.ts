@@ -343,6 +343,9 @@ describe('independent admin route permission matrix', () => {
   }</p><a href="https://example.test/article">Article</a></main></html>`
   // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
   const rows: [string, string, Permission, unknown?][] = [
+    ['GET', 'lifecycle', 'portal.create'],
+    ['PUT', 'lifecycle', 'portal.create', { status: 'read_only', limits: { asksPerDay: 5 } }],
+    ['GET', 'usage', 'portal.create'],
     ['GET', 'extraction/methods', 'content.write'],
     ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
     ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
@@ -549,6 +552,7 @@ describe('independent admin route permission matrix', () => {
           listResources: () => [resourceOne],
           labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
           counters: () => ({ resources: 1 }),
+          resourceCount: () => 1,
           recentResources: () => [resourceOne],
           createText: () => ({ id: 'created' }),
           createLink: () => ({ id: 'created' }),
@@ -582,7 +586,7 @@ describe('independent admin route permission matrix', () => {
           invalidate: () => undefined,
           listSearchConfigs: () => ['portal-search'],
           ensureSearchConfigs: () => ['portal-search'],
-          ingestDocumentation: () => ({ created: 1 }),
+          ingestDocumentation: () => ({ created: ['page'], updated: [], failed: [] }),
           corpusHealth: () => ({ total: 1, failed: 0 }),
           purgeFailedResources: () => ({ deleted: 1 }),
           resourceFull: () => ({
@@ -748,7 +752,11 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'insights') {
                 expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
-              else throw new Error(`Missing positive assertion for ${template}`)
+              else if (suffix === 'lifecycle') {
+                expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+              } else if (suffix === 'usage') {
+                expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
+              } else throw new Error(`Missing positive assertion for ${template}`)
             } else {
               expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
               if (suffix === 'disable' || suffix === 'enable') {
