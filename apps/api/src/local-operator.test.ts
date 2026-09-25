@@ -186,6 +186,79 @@ Deno.test('local operator manages portal access and email members with its audit
   }
 })
 
+Deno.test('local operator reads and sets portal lifecycle and reads usage with its audit actor', async () => {
+  const f = fixture()
+  try {
+    const initial = await f.invoke('/api/admin/t/marine/lifecycle')
+    expect(initial.status).toBe(200)
+    expect(await initial.json()).toMatchObject({ status: 'active', limits: null })
+    const set = await f.invoke(
+      '/api/admin/t/marine/lifecycle',
+      json('PUT', {
+        status: 'suspended',
+        limits: { asksPerDay: 5, agentsEnabled: false },
+        note: 'Paused by hosting automation',
+      }),
+    )
+    expect(set.status).toBe(200)
+    expect(await set.json()).toMatchObject({
+      ok: true,
+      lifecycle: { status: 'suspended', limits: { asksPerDay: 5, agentsEnabled: false } },
+    })
+    // Platform-level authority is never paused out of the portal's hosting state.
+    const read = await f.invoke('/api/admin/t/marine/lifecycle')
+    expect(read.status).toBe(200)
+    expect((await read.json()).status).toBe('suspended')
+    const usage = await f.invoke('/api/admin/t/marine/usage')
+    expect(usage.status).toBe(200)
+    expect(await usage.json()).toMatchObject({
+      status: 'suspended',
+      limits: { asksPerDay: 5, agentsEnabled: false },
+      resources: 0,
+      bytes: 0,
+      asksToday: 0,
+      members: 0,
+    })
+    // The flags open these routes only: portal deletion and platform administration stay shut.
+    for (
+      const [method, path] of [
+        ['DELETE', '/api/admin/tenants/marine'],
+        ['GET', '/api/admin/people'],
+        ['GET', '/api/admin/overview'],
+        ['POST', '/api/admin/t/marine/enable'],
+      ] as const
+    ) {
+      const refused = await f.invoke(path, { method })
+      expect([method, path, refused.status]).toEqual([method, path, 403])
+      expect(await refused.json()).toEqual({ error: 'operator_not_allowed' })
+    }
+    expect(f.tenants.get('marine')).not.toBeNull()
+    const events = f.events()
+    const update = events.filter((event) => event.action === 'portal.lifecycle.update')
+    // The route's intent and success records, and the named record committed with the write.
+    expect(update.map((event) => event.outcome).sort()).toEqual(['intent', 'success', 'success'])
+    for (const event of update) {
+      expect(event).toMatchObject({
+        actor_kind: 'operator',
+        actor_id: 'operator:hosting-test',
+        scope_kind: 'platform',
+        target_kind: 'portal',
+        target_id: 'marine',
+      })
+    }
+    expect(JSON.parse(update[0]!.detail_json)).toMatchObject({
+      lifecycleStatus: 'suspended',
+      asksPerDay: 5,
+      agentsEnabled: false,
+      note: 'Paused by hosting automation',
+    })
+    expect(events.every((event) => event.actor_id === 'operator:hosting-test')).toBe(true)
+    expect(JSON.stringify(events)).not.toContain(operatorKey)
+  } finally {
+    f.dispose()
+  }
+})
+
 Deno.test('local operator refuses malformed, wrong, missing, disabled and conflicting credentials without fallback', async () => {
   const cases: [Record<string, string | undefined>, HeadersInit][] = [
     [{}, { authorization: `Operator ${'Ag'.repeat(22)}` }],

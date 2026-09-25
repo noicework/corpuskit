@@ -332,6 +332,59 @@ Deno.test('Worker operator allowlist reaches portal setup, email assignments, co
   }
 })
 
+Deno.test('Worker operator reads and sets portal lifecycle and reads usage, and nothing wider', async () => {
+  const f = await fixture()
+  try {
+    const initial = await f.invoke('/api/admin/t/marine/lifecycle')
+    expect(initial.status).toBe(200)
+    expect(await initial.json()).toMatchObject({ status: 'active', limits: null })
+    const set = await f.invoke(
+      '/api/admin/t/marine/lifecycle',
+      jsonRequest('PUT', { status: 'read_only', limits: { maxResources: 20 } }),
+    )
+    expect(set.status).toBe(200)
+    expect(await set.json()).toMatchObject({
+      ok: true,
+      lifecycle: { status: 'read_only', limits: { maxResources: 20 } },
+    })
+    expect(f.stores.lifecycle.get('marine')).toMatchObject({
+      status: 'read_only',
+      limits: { maxResources: 20 },
+    })
+    const usage = await f.invoke('/api/admin/t/marine/usage')
+    expect(usage.status).toBe(200)
+    expect(await usage.json()).toMatchObject({
+      status: 'read_only',
+      limits: { maxResources: 20 },
+      asksToday: 0,
+      asks30d: 0,
+    })
+    // Portal deletion, platform administration and other portal routes stay closed.
+    for (
+      const [method, path] of [
+        ['DELETE', '/api/admin/tenants/marine'],
+        ['GET', '/api/admin/groups'],
+        ['GET', '/api/admin/t/marine/audit'],
+        ['POST', '/api/admin/t/marine/disable'],
+      ] as const
+    ) {
+      const refused = await f.invoke(path, { method })
+      expect([method, path, refused.status]).toEqual([method, path, 403])
+      expect(await refused.json()).toEqual({ error: 'operator_not_allowed' })
+    }
+    expect(f.stores.tenants.get('marine')).not.toBeNull()
+    const events = f.events()
+    expect(
+      events.filter((event) => event.action === 'portal.lifecycle.update')
+        .map((event) => event.outcome).sort(),
+    ).toEqual(['intent', 'success', 'success'])
+    expect(events.every((event) => event.actor_id === 'operator:hosting-automation')).toBe(true)
+    expect(JSON.stringify(events)).not.toContain(operatorKey)
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('Operator KB binding accepts endpoint or legacy url and rejects ambiguous or missing endpoints', async () => {
   const f = await fixture()
   const originalGetJson = KbClient.prototype.getJson

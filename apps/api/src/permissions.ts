@@ -68,15 +68,20 @@ function entry(
 
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
-  entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform'),
+  entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
+    operator: true,
+  }),
   entry('http', 'PUT', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
+    operator: true,
     subActions: [{
       action: 'portal.lifecycle.update',
       permission: 'portal.create',
       scope: 'platform',
     }],
   }),
-  entry('http', 'GET', '/api/admin/t/:slug/usage', 'portal.create', 'platform'),
+  entry('http', 'GET', '/api/admin/t/:slug/usage', 'portal.create', 'platform', {
+    operator: true,
+  }),
   entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
     operator: true,
     subActions: [{

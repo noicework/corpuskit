@@ -145,6 +145,8 @@ The current allowlist is:
 | Change portal access mode | `PATCH /api/admin/t/:slug/access` |
 | List and create portal members | `GET`, `POST /api/admin/t/:slug/members` |
 | Remove a portal member | `DELETE /api/admin/t/:slug/members/:id` |
+| Read or replace a portal's lifecycle | `GET`, `PUT /api/admin/t/:slug/lifecycle` |
+| Read portal usage | `GET /api/admin/t/:slug/usage` |
 | Read corpus counters | `GET /api/admin/t/:slug/counters` |
 | Upload branding | `POST /api/admin/t/:slug/branding/:kind` |
 | Migrate content between portals | `POST /api/admin/migrate` |
@@ -175,9 +177,11 @@ route only composes authority a platform-admin already holds: it separately chec
 portal, and it changes no platform settings. The administration screen still offers the
 migration panel to owners only.
 
-Additional hosting routes, including the
-[portal lifecycle and usage routes](#portal-lifecycle-limits-and-usage), must explicitly opt in
-with `operator: true`; adding a route does not make it operator-accessible automatically.
+The [portal lifecycle and usage routes](#portal-lifecycle-limits-and-usage) are on the list, so
+hosting automation can pause, restore and limit a portal and read its usage. The operator holds
+platform-admin authority, so a suspended portal does not pause it out. Any other hosting route
+must opt in explicitly with `operator: true`; adding a route does not make it
+operator-accessible automatically.
 
 Every operator call is audited, including allowed reads and denied attempts. Verified calls use
 actor kind `operator` and actor id `operator:<OPERATOR_ID>`, so the default is
@@ -199,8 +203,8 @@ identify a different operator. Remove `OPERATOR_API_KEY` to disable this authent
 ## Portal lifecycle, limits and usage
 
 Each portal has a hosting lifecycle: a status, optional limits, and usage counters. A platform
-administrator or owner manages them through three routes. Portal roles cannot see or change
-them.
+administrator or owner manages them through three routes, and so can the
+[operator credential](#operator-credential). Portal roles cannot see or change them.
 
 | Route | Purpose |
 |---|---|
@@ -236,7 +240,7 @@ allowed: `asksPerDay: 0` refuses every ask. Invalid input, including unknown fie
 refused with 400 `invalid_request`.
 
 Each change is audited at platform scope as `portal.lifecycle.update`, with the portal as the
-target. The record holds the new status, each limit that is set, and the note. The note is at
+target; a change made with the operator credential names the actor `operator:<OPERATOR_ID>`. The record holds the new status, each limit that is set, and the note. The note is at
 most 1000 characters. A note that contains control characters, bidirectional overrides or text
 shaped like a credential (a bearer or operator token, a key, a JWT, a sealed binding, or
 `token=`, `password:` and similar) is refused, so it cannot carry a secret into the audit log.
@@ -282,8 +286,9 @@ still refused to anyone who could not read it before. Nothing else is disclosed.
 list (`GET /api/tenants`) still shows the portal with its status, and cross-portal asks leave
 it out. Scheduled syncs, watches and enrichment runs stop.
 
-Platform administrators and owners are not paused out. They can still use and change a
-suspended portal: they can inspect it, fix its binding, and restore it.
+Platform administrators and owners are not paused out, and neither is the operator
+credential. They can still use and change a suspended portal: they can inspect it, fix its
+binding, and restore it.
 
 A request is judged by who made it for as long as it runs. If a portal is suspended while a
 request from anyone else is still writing to it (a source sync, a documentation ingest, a

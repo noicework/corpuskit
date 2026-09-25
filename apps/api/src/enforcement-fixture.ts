@@ -158,6 +158,9 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
     'GET /api/admin/t/:slug/counters',
     'POST /api/admin/t/:slug/branding/:kind',
     'POST /api/admin/migrate',
+    'GET /api/admin/t/:slug/lifecycle',
+    'PUT /api/admin/t/:slug/lifecycle',
+    'GET /api/admin/t/:slug/usage',
   ])
   for (const row of rows) {
     expect(
