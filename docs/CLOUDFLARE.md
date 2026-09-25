@@ -234,8 +234,8 @@ Code rollback preserves current Durable Object state, not a historical database 
 [does not permit rollback across a Durable Object class lifecycle change](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/),
 and old code may not understand newly written data. Releases that change class migrations, storage
 schemas or resource bindings need an explicitly reviewed compatibility/recovery plan. Sealed
-knowledge-box tokens are one such format: a version that seals stored tokens as it starts would
-have them sealed by its own verification probe, before a rollback. Stored tokens are therefore
-sealed only after an explicit `BINDING_KEY_MIGRATE` step taken once the release has verified. This safety
-mechanism is for compatible code releases, including the citation-provider fix; it is not a database
-backup or schema reversal mechanism.
+knowledge-box tokens are one such format: a version that sealed stored tokens as it started would
+have them sealed by its own verification probe, before any rollback. Stored tokens are therefore
+sealed only by an explicit `BINDING_KEY_MIGRATE` step, taken once the release has verified. This
+safety mechanism is for compatible code releases, including the citation-provider fix; it is not a
+database backup or schema reversal mechanism.

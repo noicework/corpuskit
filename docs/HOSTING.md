@@ -544,9 +544,9 @@ No secret or variable is needed.
 ### Deleting a portal
 
 `DELETE /api/admin/tenants/<slug>` (owner only) removes the portal and retires its slug in one
-write, then removes its knowledge box binding and lifecycle records. It then revokes every member
-row and group mapping scoped to the portal, each recorded as an `assignment.delete` audit event,
-and every data key issued for it. The portal's other records (sources, enrichments, insights,
+write, then removes its knowledge box binding and lifecycle records. After that it revokes every
+member row and group mapping scoped to the portal, each recorded as an `assignment.delete` audit
+event, and every data key issued for it. The portal's other records (sources, enrichments, insights,
 suggestions, knowledge graph proposals, research sessions, investigations, watches and branding)
 stay stored under the retired slug, where no portal route can reach them. Its audit events stay
 in the platform audit log.
@@ -773,15 +773,15 @@ the app shell, homepage, About page and documentation. Custom hostnames outside 
 domain retain host-only cookies; lookalike suffixes are never included in the platform cookie
 scope, and the SPA only links across origins to hostnames within the platform domain.
 
-Every host under the platform domain, and every portal's API on each of them, shares that one
-session cookie. A file that a portal administrator or a knowledge box supplied therefore must
-never run as a page there. Branding uploads accept PNG, JPEG and WebP images and WOFF2, WOFF, TTF
-and OTF fonts; SVG is refused with HTTP 415 `unsupported_type`, because an SVG can carry script.
-Branding assets, including any SVG stored before this rule, are served with
+Every host under the platform domain shares that one session cookie, and each of them answers
+the API routes of every portal. A file that a portal administrator or a knowledge box supplied
+must therefore never run as a page there. Branding uploads accept PNG, JPEG and WebP images and
+WOFF2, WOFF, TTF and OTF fonts; SVG is refused with HTTP 415 `unsupported_type`, because an SVG
+can carry script. Branding assets, including any SVG stored before this rule, are served with
 `Content-Security-Policy: sandbox; default-src 'none'; frame-ancestors 'none'` and
 `Content-Disposition: attachment`. Resource thumbnails carry the same policy. Knowledge box files
-carry it too and download, except PDFs, which open in the browser's own viewer, and raster images,
-audio and video, which show in place.
+carry it too, except PDFs, which need the browser's own viewer. Of the sandboxed files, raster
+images, audio and video show in place and everything else downloads.
 
 The two seeded showcase portals, and one showcase portal created before hostnames were stored,
 receive their `corpuskit.org` hostnames when read on the `corpuskit.org` platform domain only.
