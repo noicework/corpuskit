@@ -162,7 +162,11 @@ async function select(
   const scope: Scope = slug ? { kind: 'portal', slug } : { kind: 'platform' }
   const session = context.session
   const sessionValid = session !== null && validSessionFacts(session, (deps.now ?? Date.now)()) &&
-    identifier(session.tenantId) && identifier(session.oid)
+    identifier(session.tenantId) &&
+    (session.tenantId === 'external'
+      ? deps.externalLoginEnabled === true && session.provenance === 'external' &&
+        /^ext:[\s\S]{1,128}$/u.test(session.oid)
+      : identifier(session.oid))
   if (!identifier(deps.configuredTenantId) || (session !== null && !sessionValid)) {
     refuse(state, { kind: 'anonymous' }, scope)
   }
@@ -228,7 +232,9 @@ async function select(
       session: provenanceSession,
       provenanceSession,
       actor,
-      effectiveRoles: provenanceSession.tenantId === deps.configuredTenantId
+      effectiveRoles: (provenanceSession.tenantId === deps.configuredTenantId ||
+          (deps.externalLoginEnabled && provenanceSession.tenantId === 'external' &&
+            provenanceSession.provenance === 'external'))
         ? roles.data
         : { portalRoles: [] },
     }
@@ -423,7 +429,11 @@ export function researchOwner(
   const scope: Scope = { kind: 'portal', slug: policy.slug }
   if (authority.kind === 'key') refuse(state, authority.actor, scope)
   const session = authority.provenanceSession
-  if (session?.tenantId === state.deps.configuredTenantId) {
+  if (
+    session && (session.tenantId === state.deps.configuredTenantId ||
+      (state.deps.externalLoginEnabled && session.tenantId === 'external' &&
+        session.provenance === 'external'))
+  ) {
     try {
       return researchOwnerValue({ kind: 'user', tenantId: session.tenantId, oid: session.oid })
     } catch {

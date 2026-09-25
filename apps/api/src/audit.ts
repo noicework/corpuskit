@@ -158,11 +158,26 @@ const member = (values: readonly string[]): Validator => (value): value is strin
 const count: Validator = (value): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const id: Validator = (value): value is string =>
-  typeof value === 'string' && identifier.test(value) && !value.includes('://')
+  typeof value === 'string' &&
+  ((identifier.test(value) && !value.includes('://')) || /^ext:[\s\S]{1,128}$/u.test(value))
 const declaredFields = DECLARATIONS.flatMap((item) =>
   item.subActions?.flatMap((action) => action.fields ?? []) ?? []
 )
 const fields = {
+  externalReason: member([
+    'configuration',
+    'encoding',
+    'header',
+    'signature',
+    'claims',
+    'issuer',
+    'audience',
+    'lifetime',
+    'email',
+    'replay',
+    'storage',
+    'session',
+  ]),
   previousAccessMode: member(AccessModeSchema.options),
   accessMode: member(AccessModeSchema.options),
   keyRole: member(PORTAL_ROLES),
@@ -202,6 +217,7 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'auth.external.denied': ['externalReason'],
   'local.mutation': ['permission', 'operation', 'mutation', 'sessionOid', 'sessionTenantId'],
   'assignment.create': ['role', 'subjectKind'],
   'assignment.update': ['role', 'previousRole', 'subjectKind'],

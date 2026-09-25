@@ -12,8 +12,8 @@ export type ResearchOwner =
   | { kind: 'anonymous'; clientId: string }
 
 /** Bound the complete local path as well as individual filesystem components. */
-function identifier(value: unknown): string {
-  if (typeof value !== 'string' || !value.length || value.length > 128) {
+function identifier(value: unknown, external = false): string {
+  if (typeof value !== 'string' || !value.length || value.length > (external ? 260 : 128)) {
     throw new Error('Invalid research identifier')
   }
   // TextEncoder replaces unpaired surrogates, which would collapse distinct identities.
@@ -24,9 +24,11 @@ function identifier(value: unknown): string {
       if (!(next >= 0xdc00 && next <= 0xdfff)) throw new Error('Invalid research Unicode')
     } else if (unit >= 0xdc00 && unit <= 0xdfff) throw new Error('Invalid research Unicode')
   }
-  if (new TextEncoder().encode(value).length > 128) throw new Error('Research identifier too long')
+  if (new TextEncoder().encode(value).length > (external ? 800 : 128)) {
+    throw new Error('Research identifier too long')
+  }
   // Bound JSON escape expansion too, keeping the complete filesystem path representable.
-  if (new TextEncoder().encode(JSON.stringify(value)).length > 130) {
+  if (new TextEncoder().encode(JSON.stringify(value)).length > (external ? 800 : 130)) {
     throw new Error('Research identifier too long')
   }
   return value
@@ -43,7 +45,15 @@ export function researchOwnerValue(value: unknown): ResearchOwner {
     return { kind: 'anonymous', clientId: identifier(record.clientId) }
   }
   if (record.kind === 'user' && Object.keys(record).sort().join() === 'kind,oid,tenantId') {
-    return { kind: 'user', tenantId: identifier(record.tenantId), oid: identifier(record.oid) }
+    const external = record.tenantId === 'external'
+    if (external && (typeof record.oid !== 'string' || !/^ext:[\s\S]{1,128}$/u.test(record.oid))) {
+      throw new Error('Invalid external research identifier')
+    }
+    return {
+      kind: 'user',
+      tenantId: identifier(record.tenantId),
+      oid: identifier(record.oid, external),
+    }
   }
   throw new Error('Invalid research owner')
 }
