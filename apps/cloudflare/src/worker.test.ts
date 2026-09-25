@@ -1263,6 +1263,94 @@ Deno.test('external handoff reaches the real Worker and durable roles across obj
   }
 })
 
+Deno.test('external-only Worker sets up its first owner through break-glass and an external sign-in', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const now = Math.floor(Date.now() / 1000)
+  const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+    part({
+      iss: 'https://issuer.example',
+      aud: 'dedicated-portal',
+      sub: 'first-owner',
+      email: 'First-Owner@Example.test',
+      email_verified: true,
+      iat: now - 5,
+      exp: now + 60,
+      jti: crypto.randomUUID(),
+    })
+  }`
+  const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
+  const h = realHarness({
+    WORKER_NAME: 'dedicated-portal',
+    ENTRA_TENANT_ID: '',
+    ENTRA_CLIENT_ID: '',
+    ENTRA_CLIENT_SECRET: '',
+    ADMIN_BREAK_GLASS: 'true',
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  })
+  try {
+    const grant = (body: Record<string, unknown>) =>
+      worker.fetch(
+        new Request('https://corpuskit.test/api/admin/people', {
+          method: 'POST',
+          headers: {
+            'x-admin-passcode': 'fixture',
+            'cf-connecting-ip': '192.0.2.1',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            subjectKind: 'pending-email',
+            subjectId: 'first-owner@example.test',
+            role: 'owner',
+            ...body,
+          }),
+        }),
+        h.env,
+      )
+    // Without an Entra tenant an Entra row could never be claimed, so it is refused.
+    for (const body of [{}, { source: 'entra' }]) {
+      const refused = await grant(body)
+      expect(refused.status).toBe(400)
+      expect(await refused.json()).toEqual({ error: 'invalid_input' })
+    }
+    const created = await grant({ source: 'external' })
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ source: 'external', role: 'owner' })
+    const handoff = await worker.fetch(
+      new Request(
+        `https://corpuskit.test/auth/external?${new URLSearchParams({
+          assertion: `${content}.${encode(new Uint8Array(signature))}`,
+          returnTo: '/admin',
+        })}`,
+      ),
+      h.env,
+    )
+    expect(handoff.status).toBe(303)
+    expect(handoff.headers.get('location')).toBe('/admin')
+    const cookie = handoff.headers.get('set-cookie')!.split(';')[0]!
+    const me = await (await worker.fetch(
+      new Request('https://corpuskit.test/auth/me', { headers: { cookie } }),
+      h.env,
+    )).json()
+    expect(me).toMatchObject({
+      entraEnabled: false,
+      sessionProvenance: 'external',
+      effectiveRoles: { platformRole: 'owner' },
+    })
+    const overview = await worker.fetch(
+      new Request('https://corpuskit.test/api/admin/overview', { headers: { cookie } }),
+      h.env,
+    )
+    expect(overview.status).toBe(200)
+  } finally {
+    h.database.close()
+  }
+})
+
 Deno.test('Worker refuses external handoffs, cookies and envelopes once the issuer is removed', async () => {
   const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
   const encoder = new TextEncoder()

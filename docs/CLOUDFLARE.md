@@ -81,7 +81,9 @@ Do not upload account provisioning credentials (`ARAG_ACCOUNT`, `ARAG_NUA_KEY`) 
 External sign-in configuration is included in the allowlisted upload. An external-only deployment
 can supply both `EXTERNAL_LOGIN_ISSUER` and `EXTERNAL_LOGIN_JWK` instead of
 `ENTRA_CLIENT_SECRET`; `SESSION_SECRET` is still required. The issuer's private signing key must
-stay with the issuer and is never uploaded to CorpusKit.
+stay with the issuer and is never uploaded to CorpusKit: the upload refuses an
+`EXTERNAL_LOGIN_JWK` that is not an Ed25519 public JWK, including one that carries private key
+material.
 
 ## Portal custom domains
 
@@ -144,9 +146,13 @@ or without Entra. Set `EXTERNAL_LOGIN_ISSUER`, `EXTERNAL_LOGIN_JWK` and `SESSION
 set `WORKER_NAME` to the exact deployment audience expected by the issuer. The external settings
 may be Worker variables or use the allowlisted `.env` upload; the JWK contains only the public key.
 
-Set `EXTERNAL_LOGIN_START_URL` to show the external button on the portal sign-in gate. The optional
+Set `EXTERNAL_LOGIN_START_URL` to show the external button on the portal sign-in gate; an
+external-only deployment needs it, or people have no way to begin sign-in from the portal. The
+button adds the current portal path as `returnTo` for the issuer to pass back. The optional
 `EXTERNAL_LOGIN_NAME` label defaults to `Continue with your organisation account`. Without a
-start URL, the button is hidden and `/auth/external` still accepts valid handoffs. Replay records
+start URL, the button is hidden and `/auth/external` still accepts valid handoffs. The issuer has
+obligations of its own; read
+[issuer responsibilities](HOSTING.md#issuer-responsibilities) before connecting one. Replay records
 live in the existing Durable Object SQLite database and survive Worker isolate replacement.
 External identities receive authority only through local assignments with `source: "external"`.
 
