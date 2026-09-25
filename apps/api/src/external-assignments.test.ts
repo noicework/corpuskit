@@ -1,6 +1,10 @@
 import { expect } from '@std/expect'
 import { DurableState, type SqlStorageLike } from '../../cloudflare/src/state.ts'
-import { resolveEffectiveRoles, type VerifiedAssignmentSession } from './assignments.ts'
+import {
+  resolveEffectiveRoles,
+  resolveRoleGrants,
+  type VerifiedAssignmentSession,
+} from './assignments.ts'
 import { AuditWriteError } from './audit.ts'
 import { resolveCreatorAuthority } from './creator-authority.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
@@ -161,6 +165,120 @@ for (const adapter of ['local', 'durable'] as const) {
       expect(roles.provenance.map((grant) => grant.source)).toEqual(['local'])
       f.restart()
       expect(f.service.list().filter((row) => row.subjectKind === 'active-oid')).toHaveLength(3)
+    } finally {
+      f.close()
+    }
+  })
+
+  Deno.test(`${adapter} object-id grants stay bound to their identity source in both directions`, async () => {
+    const f = fixture()
+    try {
+      const seed = (id: string, subjectId: string, source: string, slug: string) =>
+        f.database.exec(
+          `INSERT INTO role_assignments
+          (id,tenant_id,subject_kind,subject_id,scope_kind,scope_slug,role,email_provenance,created_at,updated_at,source)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          id,
+          'tenant-1',
+          'active-oid',
+          subjectId,
+          'portal',
+          slug,
+          'curator',
+          null,
+          start,
+          start,
+          source,
+        )
+      // Rows written before validation existed, or by a faulty adapter, must still not match.
+      seed('entra-labelled-external', 'ext:person-1', 'entra', 'marine')
+      seed('external-labelled-entra', 'entra-person', 'external', 'coastal')
+      seed('external-labelled-prefixed', 'ext:entra-lookalike', 'external', 'reef')
+      const external = session({ oid: 'ext:person-1' })
+      const roles = await resolveEffectiveRoles(external, f.stores(), 'tenant-1', f.now())
+      expect(roles.effectiveRoles).toEqual({ portalRoles: [] })
+      expect(roles.provenance).toEqual([])
+      expect(
+        (await resolveRoleGrants({ tenantId: 'external', oid: 'ext:person-1' }, null, {
+          ...f.stores(),
+          assignmentTenantId: 'tenant-1',
+        })).effectiveRoles,
+      ).toEqual({ portalRoles: [] })
+      for (const oid of ['entra-person', 'ext:entra-lookalike']) {
+        const entra = session({ tenantId: 'tenant-1', provenance: 'entra', oid })
+        expect(
+          (await resolveEffectiveRoles(entra, f.stores(), 'tenant-1', f.now())).effectiveRoles,
+        ).toEqual({ portalRoles: [] })
+      }
+      // Positive controls: the same identities resolve rows of their own source.
+      seed('external-own', 'ext:person-1', 'external', 'estuary')
+      seed('entra-own', 'entra-person', 'entra', 'harbour')
+      expect(
+        (await resolveEffectiveRoles(external, f.stores(), 'tenant-1', f.now())).effectiveRoles,
+      ).toEqual({ portalRoles: [{ slug: 'estuary', role: 'curator' }] })
+      expect(
+        (await resolveEffectiveRoles(
+          session({ tenantId: 'tenant-1', provenance: 'entra', oid: 'entra-person' }),
+          f.stores(),
+          'tenant-1',
+          f.now(),
+        )).effectiveRoles,
+      ).toEqual({ portalRoles: [{ slug: 'harbour', role: 'curator' }] })
+      // The misleading row cannot be created through the service either.
+      for (
+        const input of [
+          { subjectId: 'ext:person-1', source: 'entra' as const },
+          { subjectId: 'ext:person-1' },
+          { subjectId: 'EXT:person-1', source: 'entra' as const },
+        ]
+      ) {
+        expect(
+          f.service.create({
+            ...pending,
+            ...input,
+            subjectKind: 'active-oid',
+            scope: { kind: 'portal', slug: 'delta' },
+          }, context),
+        ).toEqual({ ok: false, code: 'invalid_input' })
+      }
+      expect(
+        f.service.create({
+          ...pending,
+          subjectKind: 'group',
+          subjectId: 'ext:group',
+        }, context),
+      ).toEqual({ ok: false, code: 'invalid_input' })
+    } finally {
+      f.close()
+    }
+  })
+
+  Deno.test(`${adapter} external claims ignore preferred usernames that only Entra vouches for`, () => {
+    const f = fixture()
+    try {
+      f.service.create({ ...pending, source: 'external' }, context)
+      f.service.create(pending, context)
+      // Only the verified email claims an external row; a username field is not evidence.
+      const external = session({
+        email: 'other@example.test',
+        preferredUsername: pending.subjectId,
+      })
+      expect(f.service.activate(external, context)).toEqual({ ok: true, value: [] })
+      expect(f.service.list().map((row) => row.subjectKind)).toEqual([
+        'pending-email',
+        'pending-email',
+      ])
+      const entra = f.service.activate(
+        session({
+          tenantId: 'tenant-1',
+          provenance: 'entra',
+          oid: 'entra-person',
+          email: 'other@example.test',
+          preferredUsername: pending.subjectId,
+        }),
+        context,
+      )
+      expect(entra.ok && entra.value.map((row) => row.source)).toEqual(['entra'])
     } finally {
       f.close()
     }
@@ -343,6 +461,42 @@ Deno.test('assignment source migration rolls back the complete legacy table when
     expect(local.all("SELECT name FROM sqlite_master WHERE name='role_assignments_v2'")).toEqual([])
   } finally {
     local.close()
+  }
+})
+
+Deno.test('a deployment without an Entra tenant refuses assignments no Entra identity could claim', () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const state = new RbacState(db, () => start)
+    state.migrate()
+    // The Worker and local server configure the tenant as `external` when only external sign-in is set.
+    const service = state.assignmentService('external', 'corpuskit', true)
+    for (
+      const input of [
+        pending,
+        { ...pending, source: 'entra' as const },
+        { ...pending, subjectKind: 'active-oid' as const, subjectId: 'entra-person' },
+        { ...pending, subjectKind: 'group' as const, subjectId: 'owners' },
+      ]
+    ) {
+      expect(service.create(input, context)).toEqual({ ok: false, code: 'invalid_input' })
+    }
+    const created = service.create({ ...pending, source: 'external' }, context)
+    expect(created.ok && created.value.source).toBe('external')
+    expect(
+      service.create({
+        subjectKind: 'pending-email',
+        subjectId: 'first-owner@example.test',
+        source: 'external',
+        scope: { kind: 'platform' },
+        role: 'owner',
+      }, context).ok,
+    ).toBe(true)
+    expect(service.activate(session({ email: 'first-owner@example.test' }), context)).toMatchObject(
+      { ok: true, value: [{ role: 'owner', subjectId: session().oid }] },
+    )
+  } finally {
+    db.close()
   }
 })
 

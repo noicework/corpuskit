@@ -264,14 +264,19 @@ export class AssignmentService {
     const source = input.source === undefined ? 'entra' : input.source
     if (
       !['entra', 'external'].includes(source) ||
-      (input.subjectKind === 'group' && source !== 'entra')
+      (input.subjectKind === 'group' && source !== 'entra') ||
+      // Without an Entra tenant no Entra identity can ever claim or match the row.
+      (source === 'entra' && this.configuredTenantId === 'external')
     ) return null
     const subjectId = input.subjectKind === 'pending-email'
       ? email(input.subjectId)
       : input.subjectId
     if (
       !subjectId || (input.subjectKind !== 'pending-email' &&
-        !(source === 'external' ? externalOid(subjectId) : identifier(subjectId)))
+        !(source === 'external'
+          ? externalOid(subjectId)
+          // An external object id is never an Entra subject, whatever the row claims.
+          : identifier(subjectId) && !/^ext:/i.test(subjectId)))
     ) return null
     return { subjectKind: input.subjectKind, subjectId, source, scope: scope.data, role: role.data }
   }
