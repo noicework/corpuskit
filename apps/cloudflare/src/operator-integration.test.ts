@@ -22,7 +22,7 @@ type WorkerModule = {
   default: { fetch(request: Request, env: Env): Promise<Response> }
 }
 
-function fixture(overrides: Record<string, string | undefined> = {}) {
+async function fixture(overrides: Record<string, string | undefined> = {}) {
   const database = new DatabaseSync(':memory:')
   const storage: DurableObjectState['storage'] = {
     sql: {
@@ -76,6 +76,8 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     SESSION_SECRET: sessionSecret,
     OPERATOR_API_KEY: operatorKey,
     OPERATOR_ID: 'hosting-automation',
+    // Cloudflare stores new knowledge-box credentials only when it can seal them.
+    BINDING_KEY: btoa('operator-fixture-binding-key-32b'),
     ENTRA_TENANT_ID: 'tenant-1',
     ENVIRONMENT: 'production',
     ADMIN_BREAK_GLASS: 'true',
@@ -87,7 +89,16 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     PORTAL: { getByName: () => object },
     ...overrides,
   } as unknown as Env
-  const object = new workerModule.PortalDurableObject({ storage }, env)
+  let initialization: Promise<unknown> = Promise.resolve()
+  const object = new workerModule.PortalDurableObject({
+    storage,
+    blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T> {
+      const pending = callback()
+      initialization = pending
+      return pending
+    },
+  }, env)
+  await initialization
   const ingress = object.handleTrustedRequest.bind(object)
   object.handleTrustedRequest = (request, context) => {
     forwarded.push({ headers: Object.fromEntries(request.headers), context })
@@ -171,7 +182,7 @@ const newMember = {
 }
 
 Deno.test('Worker operator ingress signs a restricted principal and strips raw credentials', async () => {
-  const f = fixture()
+  const f = await fixture()
   try {
     const response = await f.invoke('/api/admin/t/marine/members', {
       headers: {
@@ -226,7 +237,7 @@ Deno.test('Worker operator ingress signs a restricted principal and strips raw c
 })
 
 Deno.test('Worker operator allowlist reaches portal setup, email assignments, counters and branding', async () => {
-  const f = fixture()
+  const f = await fixture()
   const originalGetJson = KbClient.prototype.getJson
   const probes: string[] = []
   KbClient.prototype.getJson = <T>(path: string): Promise<T> => {
@@ -322,7 +333,7 @@ Deno.test('Worker operator allowlist reaches portal setup, email assignments, co
 })
 
 Deno.test('Operator KB binding accepts endpoint or legacy url and rejects ambiguous or missing endpoints', async () => {
-  const f = fixture()
+  const f = await fixture()
   const originalGetJson = KbClient.prototype.getJson
   const probes: string[] = []
   KbClient.prototype.getJson = <T>(path: string): Promise<T> => {
@@ -383,7 +394,7 @@ Deno.test('Worker refuses wrong, absent, malformed and disabled operator credent
       ['x'.repeat(43) + '=', `Operator ${'x'.repeat(43)}=`],
     ] as const
   ) {
-    const f = fixture({ OPERATOR_API_KEY: configured })
+    const f = await fixture({ OPERATOR_API_KEY: configured })
     try {
       const response = await f.invoke('/api/admin/t/marine/members', {
         headers: { 'x-admin-passcode': 'fixture-passcode' },
@@ -400,7 +411,7 @@ Deno.test('Worker refuses wrong, absent, malformed and disabled operator credent
 })
 
 Deno.test('Worker operators cannot use unflagged, owner-only, data-plane or non-API routes', async () => {
-  const f = fixture()
+  const f = await fixture()
   try {
     for (
       const [method, path] of [
@@ -434,7 +445,7 @@ Deno.test('Worker operators cannot use unflagged, owner-only, data-plane or non-
 })
 
 Deno.test('Worker refuses the operator key under Bearer and never uses it as a session or data key', async () => {
-  const f = fixture()
+  const f = await fixture()
   try {
     for (const path of ['/api/admin/t/marine/members', '/api/t/marine/config', '/auth/me', '/']) {
       const response = await f.invoke(path, {}, `Bearer ${operatorKey}`)
@@ -449,7 +460,7 @@ Deno.test('Worker refuses the operator key under Bearer and never uses it as a s
 })
 
 Deno.test('Operator data-plane denial remains audited after the MCP credential limiter is exhausted', async () => {
-  const f = fixture()
+  const f = await fixture()
   try {
     const path = '/api/t/marine/mcp'
     const invalidBearer = `Bearer ck_${'A'.repeat(43)}`
@@ -478,7 +489,7 @@ Deno.test('Operator data-plane denial remains audited after the MCP credential l
 })
 
 Deno.test('Worker operator automation works without Entra and defaults the audit identity', async () => {
-  const f = fixture({ ENTRA_TENANT_ID: undefined, OPERATOR_ID: undefined })
+  const f = await fixture({ ENTRA_TENANT_ID: undefined, OPERATOR_ID: undefined })
   try {
     const response = await f.invoke(
       '/api/admin/tenants',
@@ -494,7 +505,7 @@ Deno.test('Worker operator automation works without Entra and defaults the audit
 })
 
 Deno.test('DO rejects forged, stale, wrong-audience and raw operator credentials', async () => {
-  const f = fixture()
+  const f = await fixture()
   try {
     const payload = {
       v: 1 as const,
@@ -539,7 +550,7 @@ Deno.test('DO rejects forged, stale, wrong-audience and raw operator credentials
 
 Deno.test('DO refuses a correctly signed operator envelope while the operator key is disabled', async () => {
   for (const configured of [undefined, '', 'short']) {
-    const f = fixture({ OPERATOR_API_KEY: configured })
+    const f = await fixture({ OPERATOR_API_KEY: configured })
     try {
       const header = await signPrincipal({
         v: 1,
@@ -572,7 +583,7 @@ Deno.test('DO refuses a correctly signed operator envelope while the operator ke
 })
 
 Deno.test('Operator audit failures stop mutations and credentials never enter diagnostic logs', async () => {
-  const f = fixture()
+  const f = await fixture()
   const messages: unknown[][] = []
   const originals = { log: console.log, warn: console.warn, error: console.error }
   console.log = (...args: unknown[]) => messages.push(args)
@@ -621,7 +632,7 @@ Deno.test('Worker refusals reach the Durable Object without credentials, cookies
     ],
   ] as const
   for (const [label, overrides, authorization, passcode, error] of cases) {
-    const f = fixture(overrides)
+    const f = await fixture(overrides)
     try {
       const response = await f.invoke('/api/admin/t/marine/members', {
         method: 'POST',
@@ -664,7 +675,7 @@ Deno.test('DO refuses a signed operator envelope that arrives with a session or 
     ['break-glass passcode', {}, { 'x-admin-passcode': 'fixture-passcode' }],
   ]
   for (const [label, context, headers] of cases) {
-    const f = fixture()
+    const f = await fixture()
     try {
       const response = await f.object.handleTrustedRequest(
         new Request('https://corpuskit.test/api/admin/t/marine/members', {
@@ -693,7 +704,7 @@ Deno.test('DO refuses a signed operator envelope that arrives with a session or 
 })
 
 Deno.test('Worker rate limits invalid operator credentials per address without limiting verified calls', async () => {
-  const f = fixture()
+  const f = await fixture()
   const path = '/api/admin/t/marine/members'
   const wrong = `Operator ${'B'.repeat(43)}`
   const denials = () => f.events().filter((event) => event.action === 'request.denied').length
@@ -740,7 +751,7 @@ Deno.test('Durable Object warns once without the value when a present operator k
     ] as const
     for (const [overrides, variable] of misconfigured) {
       warnings.length = 0
-      const f = fixture(overrides)
+      const f = await fixture(overrides)
       try {
         expect(operatorWarnings()).toHaveLength(1)
         expect(operatorWarnings()[0]).toContain(variable)
@@ -757,7 +768,8 @@ Deno.test('Durable Object warns once without the value when a present operator k
     }
     for (const overrides of [{}, { OPERATOR_API_KEY: undefined }, { OPERATOR_API_KEY: '' }]) {
       warnings.length = 0
-      fixture(overrides).close()
+      const f = await fixture(overrides)
+      f.close()
       expect(operatorWarnings()).toEqual([])
     }
   } finally {
