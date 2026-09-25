@@ -25,6 +25,8 @@ Configure the same values in the Worker environment or the local server's `.env`
 The Worker and a production local server require `SESSION_SECRET`. For local development only,
 an omitted secret uses a randomly generated process key, so sessions end on restart. Replay
 identifiers still persist independently in SQLite; restarting does not make an assertion reusable.
+The local server serves only `/auth/external` and `/auth/logout` from the `/auth/*` boundary and
+reads only external session cookies; its Entra behaviour is unchanged.
 
 External sign-in is off unless both issuer and public JWK are set. Invalid configuration fails
 closed. Entra credentials are not required for an external-only deployment. When Entra is also
@@ -39,7 +41,7 @@ The issuer signs a compact JWS with Ed25519. Its protected header must have `alg
 |---|---|
 | `iss` | Exactly `EXTERNAL_LOGIN_ISSUER`. |
 | `aud` | Exactly this deployment's `WORKER_NAME`. |
-| `sub` | Stable issuer user id, 1 to 128 characters. |
+| `sub` | Stable issuer user id, 1 to 128 characters, with no control characters. |
 | `email` | A valid email address, normalised to lower case in the session. |
 | `email_verified` | Boolean `true`. |
 | `name` | Optional display name. |
@@ -50,14 +52,18 @@ Successful verification creates an encrypted session with `provenance: "external
 eight hours after creation. The identity has `tid: "external"`, `oid: "ext:<sub>"`, the verified
 email and optional name. Assertion roles and groups never grant authority. A `303` response
 redirects to `returnTo`, which must begin with a single `/` and stay on the same origin. Absolute
-URLs, protocol-relative URLs, backslashes and encoded redirect bypasses fall back to `/`.
+URLs, protocol-relative URLs, backslashes, control characters, encoded redirect bypasses and
+characters outside visible ASCII (percent-encode them) fall back to `/`. An unusable `returnTo`
+never fails the sign-in; it only changes the destination.
 
 Assertion replay is checked in the existing SQLite-backed Durable Object, so a token cannot be
 reused in another Worker isolate. The local server uses the RBAC SQLite database for the same
 single-use check, including across local server restarts. The signed principal envelope accepts
 `tid: "external"` only while the feature is configured. Verification failures return only
 `401 {"error":"external_login_invalid"}`; the audit log records a safe reason code without the
-assertion, signing key or email address.
+assertion, signing key or email address, as the `auth.external.denied` action with one
+`externalReason` field. As for every audited denial, if that record cannot be written the request
+fails with `500 {"error":"audit_write_failed"}`, and no session is issued either way.
 
 Treat the assertion query parameter as a credential. The deployment configurations disable
 [Worker invocation logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#invocation-logs),
@@ -66,7 +72,10 @@ proxy, request tracing, access logging or telemetry export to omit the handoff q
 well. The handler sends `Cache-Control: no-store` and `Referrer-Policy: no-referrer` on both success
 and failure.
 
-External users receive roles only through local assignments. In the portal Members screen or
+External users receive roles only through local assignments. The `authenticated` access mode
+admits signed-in users of the configured Entra tenant only, so on an `authenticated` or
+`restricted` portal an external identity sees only what is assigned to it; a `public` portal
+remains readable by everyone. In the portal Members screen or
 the platform People screen, choose the external identity source when adding a person. The existing
 assignment APIs accept `source: "entra" | "external"` and return it with each assignment. For
 example, `POST /api/admin/t/:slug/members` accepts:
