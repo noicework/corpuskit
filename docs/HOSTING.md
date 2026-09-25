@@ -154,10 +154,15 @@ The current allowlist is:
 Create an email assignment with a body such as
 `{"subjectKind":"pending-email","subjectId":"reader@example.org","role":"viewer"}`.
 The list response returns the assignment identifier used for deletion. Member role changes and
-group mappings are separate routes and are not enabled for this credential. For people who sign
-in through [external sign-in](#external-sign-in-handoff), add `"source":"external"`: an assignment
-that omits it is an Entra assignment, which an external identity can never claim and which a
-deployment without Entra refuses.
+group mappings are separate routes and are not enabled for this credential.
+
+Member assignments created for people who sign in through
+[external sign-in](#external-sign-in-handoff) must send `"source":"external"`, for example
+`{"subjectKind":"pending-email","subjectId":"reader@example.org","source":"external","role":"viewer"}`.
+Operator-created assignments default to `entra` when `source` is omitted, as they do for every
+other caller. An external identity can never claim an Entra assignment, so the person would never
+gain access through it, and a deployment without Entra refuses such an assignment with
+`400 {"error":"invalid_input"}`.
 
 Knowledge-box connection accepts
 `{"endpoint":"https://<region>.rag.progress.cloud/api/v1/kb/<box-id>","token":"<token>"}`
