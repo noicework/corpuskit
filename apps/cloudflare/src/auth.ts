@@ -113,24 +113,23 @@ export async function authUser(request: Request, config: AuthConfig): Promise<Au
 
 export async function handleAuthRequest(
   request: Request,
-  config: AuthConfig,
+  config: Partial<AuthConfig>,
   external?: ExternalLoginServices,
 ): Promise<Response | null> {
   const url = new URL(request.url)
   if (url.pathname === '/auth/external' && request.method === 'GET') {
     return finishExternalLogin(url, config, external)
   }
-  if (['/auth/login', '/auth/callback'].includes(url.pathname) && !authConfigured(config)) {
-    return json({ error: 'microsoft_sign_in_not_configured' }, 503)
-  }
-  if (url.pathname === '/auth/login' && request.method === 'GET') {
-    return beginLogin(url, config)
-  }
-  if (url.pathname === '/auth/callback' && request.method === 'GET') {
-    return finishLogin(request, url, config)
+  if (['/auth/login', '/auth/callback'].includes(url.pathname)) {
+    if (!authConfigured(config)) return json({ error: 'microsoft_sign_in_not_configured' }, 503)
+    if (request.method === 'GET') {
+      return url.pathname === '/auth/login'
+        ? beginLogin(url, config)
+        : finishLogin(request, url, config)
+    }
   }
   if (url.pathname === '/auth/me' && request.method === 'GET') {
-    const user = await authUser(request, config)
+    const user = sessionAuthConfigured(config) ? await authUser(request, config) : null
     return json({ authenticated: Boolean(user), user }, 200)
   }
   if (url.pathname === '/auth/logout' && (request.method === 'GET' || request.method === 'POST')) {
@@ -149,7 +148,7 @@ export async function handleAuthRequest(
 
 async function finishExternalLogin(
   url: URL,
-  config: AuthConfig,
+  config: Partial<AuthConfig>,
   services?: ExternalLoginServices,
 ): Promise<Response> {
   try {

@@ -214,6 +214,14 @@ export class PortalDurableObject extends DurableObject<Env> {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
+        // Deployment-wide sign-in availability; hostname-specific settings do not change it.
+        const signIn = {
+          clientId: this.bindings.ENTRA_CLIENT_ID,
+          clientSecret: this.bindings.ENTRA_CLIENT_SECRET,
+          tenantId: this.bindings.ENTRA_TENANT_ID,
+          sessionSecret: this.bindings.SESSION_SECRET,
+          externalLogin: externalLoginConfig(this.bindings),
+        }
         return json({
           ...buildUiAccessSnapshot({
             externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
@@ -223,8 +231,8 @@ export class PortalDurableObject extends DurableObject<Env> {
             selectedSlug,
             tenant,
           }),
-          enabled: sessionAuthConfigured(authConfig(this.bindings, '')),
-          entraEnabled: authConfigured(authConfig(this.bindings, '')),
+          enabled: sessionAuthConfigured(signIn),
+          entraEnabled: authConfigured(signIn),
           externalLogin: externalLoginPresentation(externalLoginConfig(this.bindings)),
           externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
           sessionProvenance: principal.session ? principal.session.provenance ?? 'entra' : null,
@@ -492,14 +500,14 @@ async function forwardTrusted(
   }
 }
 
-function authConfig(env: Env | Record<string, string | undefined>, hostname: string): AuthConfig {
+function authConfig(env: Env, hostname: string): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = hostname === PLATFORM_DOMAIN || hostname.endsWith(`.${PLATFORM_DOMAIN}`)
   return {
-    clientId: values.ENTRA_CLIENT_ID ?? '',
-    clientSecret: values.ENTRA_CLIENT_SECRET ?? '',
-    tenantId: values.ENTRA_TENANT_ID ?? '',
-    sessionSecret: values.SESSION_SECRET ?? '',
+    clientId: values.ENTRA_CLIENT_ID,
+    clientSecret: values.ENTRA_CLIENT_SECRET,
+    tenantId: values.ENTRA_TENANT_ID,
+    sessionSecret: values.SESSION_SECRET,
     redirectUri: onPlatformDomain
       ? values.ENTRA_REDIRECT_URI
       : hostname === 'corpuskit.noice.net.au'
