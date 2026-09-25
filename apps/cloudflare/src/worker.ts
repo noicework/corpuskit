@@ -8,7 +8,7 @@ import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
 import {
   PRINCIPAL_HEADER,
-  type PrincipalEnvelope,
+  type SessionEnvelope,
   signPrincipal,
   stripIdentityHeaders,
   type TrustedSessionFacts,
@@ -18,6 +18,12 @@ import {
 import { coarseAdminEligibility, resolveEffectiveRoles } from '../../api/src/assignments.ts'
 import { buildUiAccessSnapshot } from '../../api/src/ui-access.ts'
 import { KeyPortalSlugSchema } from '../../api/src/scoped-key-record.ts'
+import {
+  authenticateOperator,
+  configuredOperatorId,
+  hasOperatorScheme,
+  operatorEnvelope,
+} from '../../api/src/operator.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
 import type { BreakGlassService } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
@@ -136,15 +142,33 @@ export class PortalDurableObject extends DurableObject<Env> {
       sessionSecret: this.bindings.SESSION_SECRET ?? '',
       audience: this.bindings.WORKER_NAME ?? '',
       tenantId: this.bindings.ENTRA_TENANT_ID ?? '',
+      operatorId: configuredOperatorId(this.bindings),
     })
     if (result.kind === 'rejected') throw new InvalidPrincipal()
     const session = context.session ?? null
+    const envelope = result.kind === 'verified' ? result.envelope : null
+    if (envelope?.kind === 'operator') {
+      if (
+        session || request.headers.has('authorization') || request.headers.has('x-admin-passcode')
+      ) {
+        throw new InvalidPrincipal()
+      }
+      return {
+        requestId: crypto.randomUUID(),
+        operator: { id: envelope.id },
+        session: null,
+        clientIp: context.clientIp,
+        effectiveRoles: { platformRole: 'platform-admin', portalRoles: [] },
+        coarseAdminEligible: true,
+        user: null,
+      }
+    }
     if (
-      result.kind === 'anonymous' ? session !== null : !validSessionFacts(session) ||
-        session.tenantId !== result.envelope.tid || session.oid !== result.envelope.oid ||
-        (session.email ?? '') !== result.envelope.email ||
-        JSON.stringify(session.roles) !== JSON.stringify(result.envelope.roles) ||
-        JSON.stringify(session.groups) !== JSON.stringify(result.envelope.groups)
+      envelope === null ? session !== null : !validSessionFacts(session) ||
+        session.tenantId !== envelope.tid || session.oid !== envelope.oid ||
+        (session.email ?? '') !== envelope.email ||
+        JSON.stringify(session.roles) !== JSON.stringify(envelope.roles) ||
+        JSON.stringify(session.groups) !== JSON.stringify(envelope.groups)
     ) throw new InvalidPrincipal()
     const requestId = crypto.randomUUID()
     if (session) {
@@ -165,13 +189,13 @@ export class PortalDurableObject extends DurableObject<Env> {
       clientIp: context.clientIp,
       ...resolution,
       coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
-      user: result.kind === 'verified'
+      user: envelope
         ? {
-          id: result.envelope.oid,
-          tenantId: result.envelope.tid,
-          email: result.envelope.email,
-          name: result.envelope.name,
-          roles: result.envelope.roles,
+          id: envelope.oid,
+          tenantId: envelope.tid,
+          email: envelope.email,
+          name: envelope.name,
+          roles: envelope.roles,
         }
         : null,
     }
@@ -180,6 +204,10 @@ export class PortalDurableObject extends DurableObject<Env> {
   async handleTrustedRequest(request: Request, context: TrustedRequestContext): Promise<Response> {
     try {
       const principal = await this.requestPrincipal(request, context)
+      if (principal.operator && !new URL(request.url).pathname.startsWith('/api/')) {
+        await this.auditDenial(request, 403, principal, 'operator_not_allowed')
+        return json({ error: 'operator_not_allowed' }, 403)
+      }
       if (new URL(request.url).pathname.startsWith('/__corpuskit/')) {
         return json({ error: 'not_found' }, 404)
       }
@@ -251,19 +279,25 @@ export class PortalDurableObject extends DurableObject<Env> {
     request: Request,
     status: 401 | 403,
     principal?: PortalRequestContext,
+    code?: 'operator_not_allowed',
   ): Promise<void> {
     appendAudit(
       this.stores.audit,
       createAuditEvent({
         requestId: principal?.requestId ?? crypto.randomUUID(),
-        actor: principal?.session
+        actor: principal?.operator
+          ? { kind: 'operator', id: `operator:${principal.operator.id}` }
+          : principal?.session
           ? { kind: 'user', id: principal.session.oid }
           : { kind: 'anonymous' },
         action: 'request.denied',
         scope: { kind: 'platform' },
         target: { kind: 'request' },
         outcome: 'denied',
-        detail: { code: status === 401 ? 'unauthorised' : 'forbidden', method: request.method },
+        detail: {
+          code: code ?? (status === 401 ? 'unauthorised' : 'forbidden'),
+          method: request.method,
+        },
       }),
     )
   }
@@ -292,6 +326,10 @@ export default {
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
+  // Explicit hosting credentials are handled before redirects, sessions or static assets.
+  if ((await authenticateOperator(request, stringEnv(env))).kind !== 'absent') {
+    return forwardTrusted(request, env, authConfig(env, url.hostname))
+  }
   const hostnameLocation = platformHostnameLocation(request)
   if (hostnameLocation) {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
@@ -403,14 +441,26 @@ export async function forwardPortalRequest(
   env: Env,
 ): Promise<Request> {
   const headers = stripIdentityHeaders(request.headers)
-  if (user) {
-    const bindings = stringEnv(env)
+  const bindings = stringEnv(env)
+  const operator = await authenticateOperator(request, bindings)
+  if (operator.kind === 'rejected') throw new InvalidOperator()
+  if (operator.kind === 'verified') {
+    headers.delete('authorization')
+    headers.delete('cookie')
+    headers.set(
+      PRINCIPAL_HEADER,
+      await signPrincipal(
+        operatorEnvelope(operator.id, bindings.WORKER_NAME ?? ''),
+        bindings.SESSION_SECRET ?? '',
+      ),
+    )
+  } else if (user) {
     if (!validSessionFacts(user.sessionFacts)) throw new InvalidPrincipal()
     headers.set(
       PRINCIPAL_HEADER,
       await signPrincipal({
         v: 1,
-        aud: bindings.WORKER_NAME as PrincipalEnvelope['aud'],
+        aud: bindings.WORKER_NAME as SessionEnvelope['aud'],
         tid: user.tenantId,
         oid: user.id,
         email: user.email,
@@ -425,6 +475,7 @@ export async function forwardPortalRequest(
 }
 
 class InvalidPrincipal extends Error {}
+class InvalidOperator extends Error {}
 
 async function forwardTrusted(
   request: Request,
@@ -432,17 +483,25 @@ async function forwardTrusted(
   auth: Partial<AuthConfig>,
 ): Promise<Response> {
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
-  const user = authConfigured(auth) ? await authUser(request, auth) : null
+  const user = !hasOperatorScheme(request) && authConfigured(auth)
+    ? await authUser(request, auth)
+    : null
   let forwarded: Request
   try {
     forwarded = await forwardPortalRequest(request, user, env)
-  } catch {
+  } catch (error) {
     try {
-      await stub.auditDenial(request, 401)
+      const headers = stripIdentityHeaders(request.headers)
+      headers.delete('authorization')
+      headers.delete('cookie')
+      headers.delete('x-admin-passcode')
+      await stub.auditDenial(new Request(request, { headers }), 401)
     } catch {
       return json({ error: 'audit_write_failed' }, 500)
     }
-    return json({ error: 'invalid_principal' }, 401)
+    return json({
+      error: error instanceof InvalidOperator ? 'invalid_operator' : 'invalid_principal',
+    }, 401)
   }
   try {
     return await stub.handleTrustedRequest(forwarded, {

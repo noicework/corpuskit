@@ -20,6 +20,7 @@ export interface Declaration {
   readonly aggregate?: 'authorised-portals'
   readonly safeMetadata?: true
   readonly owned?: 'research'
+  readonly operator?: true
   readonly action: 'request.privileged' | 'local.mutation'
   readonly target: { readonly kind: 'request' | 'tool'; readonly param?: string }
   readonly subActions?: readonly SubAction[]
@@ -34,7 +35,7 @@ function entry(
   extra: Partial<
     Pick<
       Declaration,
-      'reason' | 'subActions' | 'detailFields' | 'aggregate' | 'safeMetadata' | 'owned'
+      'reason' | 'subActions' | 'detailFields' | 'aggregate' | 'safeMetadata' | 'owned' | 'operator'
     >
   > = {},
 ): Declaration {
@@ -68,6 +69,7 @@ function entry(
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
+    operator: true,
     subActions: [{
       action: 'tenant.access.update',
       permission: 'behaviour.write',
@@ -88,10 +90,14 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   ]),
   ...['members', 'groups'].flatMap((family) => [
     ...['GET', 'POST'].map((method) =>
-      entry('http', method, `/api/admin/t/:slug/${family}`, 'members.manage', 'portal')
+      entry('http', method, `/api/admin/t/:slug/${family}`, 'members.manage', 'portal', {
+        ...(family === 'members' ? { operator: true } : {}),
+      })
     ),
     ...['PATCH', 'DELETE'].map((method) =>
-      entry('http', method, `/api/admin/t/:slug/${family}/:id`, 'members.manage', 'portal')
+      entry('http', method, `/api/admin/t/:slug/${family}/:id`, 'members.manage', 'portal', {
+        ...(family === 'members' && method === 'DELETE' ? { operator: true } : {}),
+      })
     ),
   ]),
   ...([
@@ -262,8 +268,11 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/t/:slug/followups', 'portal.generate', 'portal'),
   // D13: the estate overview is a platform-admin read, not an owner-only settings write.
   entry('http', 'GET', '/api/admin/overview', 'portal.create', 'platform'),
-  entry('http', 'DELETE', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
+  entry('http', 'DELETE', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'POST', '/api/admin/tenants', 'portal.create', 'platform', {
+    operator: true,
     subActions: [
       { action: 'tenant.domain.attach', permission: 'domains.write', scope: 'portal' },
       { action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' },
@@ -273,7 +282,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     subActions: [{ action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' }],
   }),
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box/create', 'bindings.write', 'portal'),
-  entry('http', 'GET', '/api/admin/t/:slug/counters', 'content.write', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/counters', 'content.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/recent', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/link', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/text', 'content.write', 'portal'),
@@ -282,6 +293,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/enable', 'behaviour.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/analyse', 'behaviour.write', 'portal'),
   entry('http', 'PATCH', '/api/admin/tenants/:slug', 'appearance.write', 'portal', {
+    operator: true,
     subActions: [
       {
         action: 'tenant.appearance.update',
@@ -338,7 +350,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/enrichments/run', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/questions/run', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/enrich', 'enrichments.write', 'portal'),
-  entry('http', 'POST', '/api/admin/t/:slug/branding/:kind', 'appearance.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/branding/:kind', 'appearance.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),
   entry('http', 'PUT', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/search-configs', 'behaviour.write', 'portal'),
@@ -358,13 +372,16 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'DELETE', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources/:id/sync', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/migrate', 'portal.create', 'platform', {
+    operator: true,
     detailFields: ['from', 'to'],
     subActions: [
       { action: 'migration.source', permission: 'content.write', scope: 'portal' },
       { action: 'migration.destination', permission: 'content.write', scope: 'portal' },
     ],
   }),
-  entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal', {
+    operator: true,
+  }),
   entry('http', 'POST', '/api/t/:slug/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/docs/ask', 'portal.ask', 'portal'),
   entry('http', 'GET', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal'),
@@ -422,7 +439,7 @@ export function declaredSubAction<T>(
   return run(declaration)
 }
 export function isPrivileged(declaration: Declaration, actor?: AuditActor): boolean {
-  return actor?.kind === 'break-glass' ||
+  return actor?.kind === 'operator' || actor?.kind === 'break-glass' ||
     (declaration.permission !== 'portal.read' && declaration.permission !== 'portal.ask')
 }
 
@@ -456,6 +473,15 @@ export function assertDeclarationInventory(
   const keys = declarations.map((item) => `${item.kind} ${item.method} ${item.path}`)
   if (new Set(keys).size !== keys.length) throw new Error('Duplicate permission declaration')
   for (const item of declarations) {
+    if (
+      item.operator !== undefined && (
+        item.operator !== true || item.kind !== 'http' || !item.path.startsWith('/api/admin/') ||
+        item.scope === 'public' ||
+        ['portal.delete', 'platform.members.manage', 'platform.settings.write'].includes(
+          item.permission,
+        )
+      )
+    ) throw new Error('Invalid operator permission declaration')
     if (item.scope === 'public' && !item.reason?.trim()) throw new Error('Missing public reason')
     const names = item.subActions?.map((action) => action.action) ?? []
     if (new Set(names).size !== names.length) throw new Error('Duplicate sub-action declaration')

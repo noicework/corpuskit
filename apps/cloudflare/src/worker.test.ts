@@ -6,7 +6,7 @@ import { DOC_PAGES } from '../../../packages/core/src/docs.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState } from './state.ts'
 import {
-  type PrincipalEnvelope,
+  type SessionEnvelope,
   signPrincipal,
   type TrustedSessionFacts,
   verifyPrincipal,
@@ -656,7 +656,7 @@ async function sessionCookie(session: TrustedSessionFacts): Promise<string> {
 async function principalRequest(
   path = '/auth/me',
   session = facts(),
-  extra: Partial<PrincipalEnvelope> = {},
+  extra: Partial<SessionEnvelope> = {},
 ) {
   const header = await signPrincipal({
     v: 1,

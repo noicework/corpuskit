@@ -2,11 +2,14 @@ import { expect } from '@std/expect'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { issueScopedKey } from './scoped-keys.ts'
 import {
+  authoriseNewPortalDomain,
   authoriseOperation,
+  authoriseOperatorRoute,
   authoriseSubActions,
   researchOwner,
   selectRequestAuthority,
 } from './authorisation.ts'
+import { DECLARATIONS } from './permissions.ts'
 import { AuditWriteError } from './audit.ts'
 
 function dependencies(f: ReturnType<typeof createEnforcementFixture>) {
@@ -481,6 +484,98 @@ Deno.test('key authorities are data-plane only whatever role they carry', async 
         expect(f.rbac.audit.read({ scope: { kind: 'platform' }, limit: 1000 }).length).toBe(
           before + 1,
         )
+      }
+    }
+    f.assertNoProtectedDispatch()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('operator authority is isolated from ambient credentials and never gains owner permissions', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const contextFor = async () => ({ ...await f.contextFor(null), operator: { id: 'hosting' } })
+    const select = async (
+      context?: Awaited<ReturnType<typeof contextFor>>,
+      headers?: HeadersInit,
+    ) =>
+      await selectRequestAuthority(
+        new Request('http://local/api/admin/tenants', { method: 'POST', headers }),
+        context ?? await contextFor(),
+        dependencies(f),
+      )
+    const context = await contextFor()
+    context.effectiveRoles = { platformRole: 'owner', portalRoles: [] }
+    const authority = await select(context)
+    context.operator.id = 'changed'
+    expect(authority).toMatchObject({
+      kind: 'operator',
+      id: 'hosting',
+      actor: { kind: 'operator', id: 'operator:hosting' },
+      provenanceSession: null,
+    })
+    expect(authoriseOperation(authority, 'portal.create', { kind: 'platform' })).toBe(true)
+    expect(authoriseOperation(authority, 'bindings.write', scope, policy())).toBe(true)
+    expect(authoriseNewPortalDomain(authority, 'future-portal')).toBe(true)
+    for (
+      const permission of ['portal.delete', 'platform.members.manage', 'platform.settings.write']
+    ) {
+      const fresh = await select()
+      expect(() => authoriseOperation(fresh, permission, { kind: 'platform' })).toThrow('forbidden')
+    }
+    for (
+      const headers of [
+        new Headers({ authorization: 'Bearer fixture' }),
+        new Headers({ 'x-admin-passcode': 'test-only' }),
+      ]
+    ) {
+      await expect(select(await contextFor(), headers)).rejects.toThrow()
+    }
+    await expect(select({ ...await f.contextFor(f.creator), operator: { id: 'hosting' } }))
+      .rejects.toThrow()
+    await expect(select({ ...await contextFor(), operator: { id: '' } })).rejects.toThrow()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('operator route selection fails closed and records namespaced denial actors', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (const declaration of [...DECLARATIONS, undefined]) {
+      const path = declaration?.kind === 'http'
+        ? declaration.path.replace(':slug', 'a').replaceAll(/:[^/]+/g, 'fixture').replace(
+          '*',
+          'fixture',
+        )
+        : '/api/t/a/mcp'
+      const context = { ...await f.contextFor(null), operator: { id: 'hosting' } }
+      const authority = await selectRequestAuthority(
+        new Request(`http://local${path}`, {
+          method: !declaration || ['MCP', 'SYSTEM', 'LOCAL', 'ALL'].includes(declaration.method)
+            ? 'POST'
+            : declaration.method,
+        }),
+        context,
+        dependencies(f),
+      )
+      if (declaration?.operator === true) {
+        expect(() => authoriseOperatorRoute(authority, declaration)).not.toThrow()
+      } else {
+        expect(() => authoriseOperatorRoute(authority, declaration)).toThrow('operator_not_allowed')
+        expect(context.denialAudited).toBe(true)
+        const events = f.rbac.audit.read({
+          scope: { kind: 'platform' },
+          requestId: context.requestId,
+        })
+        expect(events).toHaveLength(1)
+        expect(events[0]).toMatchObject({
+          actor_kind: 'operator',
+          actor_id: 'operator:hosting',
+          outcome: 'denied',
+        })
+        expect(JSON.parse(events[0]!.detail_json).code).toBe('operator_not_allowed')
       }
     }
     f.assertNoProtectedDispatch()

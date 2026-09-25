@@ -33,6 +33,7 @@ import {
   AuthorisationError,
   authoriseNewPortalDomain,
   authoriseOperation,
+  authoriseOperatorRoute,
   authoriseSubActions as checkSubActions,
   type AuthorityDependencies,
   evaluateOperation,
@@ -521,9 +522,12 @@ const docsAskBodySchema = z.object({
     .optional(),
 }).strict()
 const connectBodySchema = z.object({
-  url: z.string().min(12),
+  url: z.string().min(12).optional(),
+  endpoint: z.string().min(12).optional(),
   token: z.string().min(20),
-}).strict()
+}).strict().refine((value) => (value.url === undefined) !== (value.endpoint === undefined), {
+  message: 'Supply one knowledge box endpoint',
+}).transform((value) => ({ url: value.endpoint ?? value.url!, token: value.token }))
 const createKbBodySchema = z.object({ title: z.string().min(1).max(80).optional() }).strict()
 const linkBodySchema = z.object({
   url: z.string().url(),
@@ -833,6 +837,8 @@ export interface BrandingAssetStore {
 
 export interface PortalRequestContext {
   requestId: string
+  /** Populated only by ingress after signed operator envelope verification. */
+  operator?: { id: string }
   session: import('./principal.ts').TrustedSessionFacts | null
   clientIp?: string
   coarseAdminEligible: boolean
@@ -1059,7 +1065,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/.test(context.requestId)) {
       context.requestId = crypto.randomUUID()
     }
-    context.actor ??= context.session
+    context.actor ??= context.operator
+      ? { kind: 'operator', id: `operator:${context.operator.id}` }
+      : context.session
       ? { kind: 'user', id: context.session.oid }
       : { kind: 'anonymous' }
     requestContexts.set(request, context)
@@ -1124,19 +1132,17 @@ export function buildApp(opts: BuildAppOptions): Hono {
             requiredAudit(),
             createAuditEvent({
               requestId: context.requestId,
-              actor: context.session
-                ? { kind: 'user', id: context.session.oid }
-                : { kind: 'anonymous' },
+              actor: context.actor!,
               action: 'request.denied',
               scope,
               target: { kind: 'request' },
               outcome: 'denied',
-              detail: { code: context.session ? 'forbidden' : 'unauthorised' },
+              detail: { code: context.session || context.operator ? 'forbidden' : 'unauthorised' },
             }, opts.now),
           )
           markDenialAudited(c.req.raw)
         }
-        failure = new AuthorisationError(context.session ? 403 : 401)
+        failure = new AuthorisationError(context.session || context.operator ? 403 : 401)
       } catch {
         failure = new AuditWriteError()
       }
@@ -1550,6 +1556,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
     c.header('Content-Security-Policy', "frame-ancestors 'none'")
+  })
+
+  // Operator scope is enforced before data-plane limiters or CORS can finish a request.
+  registerInfrastructure(app, '*', async (c, next) => {
+    const context = requestContext(c.req.raw)
+    if (context.operator) {
+      if (!authorityDependencies) throw new AuditWriteError()
+      const authority = await selectRequestAuthority(c.req.raw, context, authorityDependencies)
+      context.actor = authority.actor
+      try {
+        authoriseOperatorRoute(authority, classification(c).declaration)
+      } finally {
+        if (context.denialAudited) markDenialAudited(c.req.raw)
+      }
+    }
+    await next()
   })
 
   // MCP credential failures are rate limited before the guard verifies any bearer (D13).
@@ -4908,11 +4930,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const raw = await c.req.json().catch(() => null) as
-      | { url?: unknown; token?: unknown }
+      | { url?: unknown; endpoint?: unknown; token?: unknown }
       | null
     const parsed = connectBodySchema.safeParse(
-      raw && typeof raw.url === 'string' && typeof raw.token === 'string'
-        ? { ...raw, url: raw.url.trim(), token: cleanToken(raw.token) }
+      raw && typeof raw.token === 'string'
+        ? {
+          ...raw,
+          ...(typeof raw.url === 'string' ? { url: raw.url.trim() } : {}),
+          ...(typeof raw.endpoint === 'string' ? { endpoint: raw.endpoint.trim() } : {}),
+          token: cleanToken(raw.token),
+        }
         : raw,
     )
     if (!parsed.success) return c.json({ error: 'invalid_binding' }, 400)

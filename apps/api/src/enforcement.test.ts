@@ -22,6 +22,23 @@ import {
 import { runAccessMatrix, runAuditMatrix } from './enforcement-fixture.ts'
 import './cold-read-enforcement.test.ts'
 
+Deno.test('operator context fails closed when the required authority dependencies are absent', async () => {
+  const app = buildApp({
+    provider: new DoubleProvider(),
+    requestContext: () => ({
+      requestId: 'operator-missing-dependencies',
+      operator: { id: 'hosting-test' },
+      session: null,
+      coarseAdminEligible: true,
+    }),
+  })
+  for (const path of ['/api/health', '/api/admin/tenants', '/api/t/marine/config']) {
+    const response = await app.request(path)
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'audit_write_failed' })
+  }
+})
+
 Deno.test('complete HTTP matrix: members and groups', runAccessMatrix)
 Deno.test('complete HTTP matrix: audit and exports', runAuditMatrix)
 
@@ -99,6 +116,8 @@ Deno.test('complete inventory detects removed, added, duplicate and changed inde
       [...DECLARATIONS, { ...target, path: '/api/future' }],
       [...DECLARATIONS, target],
       DECLARATIONS.map((d) => d === target ? { ...d, permission: 'portal.generate' as const } : d),
+      DECLARATIONS.map((d) => d.operator ? { ...d, operator: undefined } : d),
+      DECLARATIONS.map((d) => d === target ? { ...d, operator: true as const } : d),
     ]
   ) expect(() => assertCompleteHttpInventory(app, declarations)).toThrow()
   app.get('/api/future', (c) => c.text('undeclared'))
@@ -281,4 +300,22 @@ Deno.test('matched registration resolves exact operations through infrastructure
   const before = protectedCalls
   expect((await app.request('/api/t/a/undeclared')).status).toBe(500)
   expect(protectedCalls).toBe(before)
+})
+
+Deno.test('operator flags reject non-administrative and owner-only declarations', () => {
+  for (
+    const declaration of DECLARATIONS.filter((item) =>
+      item.kind !== 'http' || !item.path.startsWith('/api/admin/') ||
+      ['portal.delete', 'platform.members.manage', 'platform.settings.write'].includes(
+        item.permission,
+      )
+    )
+  ) {
+    expect(() => assertDeclarationInventory([{ ...declaration, operator: true }])).toThrow()
+  }
+  expect(declarationFor('POST', '/api/admin/migrate')).toMatchObject({
+    operator: true,
+    permission: 'portal.create',
+    scope: 'platform',
+  })
 })

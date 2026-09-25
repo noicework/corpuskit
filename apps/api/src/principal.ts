@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { VerifiedAssignmentSession } from './assignments.ts'
+import { OperatorIdSchema } from './operator.ts'
 
 /** Only passed by trusted ingress methods, never decoded from request headers. */
 export interface TrustedSessionFacts extends VerifiedAssignmentSession {
@@ -37,8 +38,9 @@ const decoder = new TextDecoder('utf-8', { fatal: true })
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/)
 
 /** D4 wire fields only. Original session facts travel separately in trusted internal context. */
-export const PrincipalEnvelopeSchema = z.object({
+const SessionEnvelopeSchema = z.object({
   v: z.literal(1),
+  kind: z.literal('session').optional(),
   aud: z.enum(['corpuskit', 'corpuskit-demo', 'corpuskit-demos']),
   tid: identifier,
   oid: identifier,
@@ -49,11 +51,22 @@ export const PrincipalEnvelopeSchema = z.object({
   /** Seconds since Unix epoch. This is transport issuance, not original claim age. */
   iat: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 }).strict()
+export type SessionEnvelope = z.infer<typeof SessionEnvelopeSchema>
+const OperatorEnvelopeSchema = z.object({
+  v: z.literal(1),
+  kind: z.literal('operator'),
+  aud: identifier,
+  id: OperatorIdSchema,
+  iat: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+}).strict()
+export type OperatorEnvelope = z.infer<typeof OperatorEnvelopeSchema>
+export const PrincipalEnvelopeSchema = z.union([SessionEnvelopeSchema, OperatorEnvelopeSchema])
 export type PrincipalEnvelope = z.infer<typeof PrincipalEnvelopeSchema>
 export interface PrincipalVerificationConfig {
   sessionSecret: string
   audience: string
   tenantId: string
+  operatorId?: string
 }
 export type PrincipalRejectionCode =
   | 'size'
@@ -170,7 +183,9 @@ export async function verifyPrincipal(
   if (!parsed.success) return reject('schema')
   const envelope = parsed.data
   if (envelope.aud !== config.audience) return reject('audience')
-  if (envelope.tid !== config.tenantId) return reject('tenant')
+  if (envelope.kind === 'operator') {
+    if (!config.operatorId || envelope.id !== config.operatorId) return reject('configuration')
+  } else if (envelope.tid !== config.tenantId) return reject('tenant')
   const age = now - envelope.iat * 1000
   if (!Number.isSafeInteger(now) || age > 60_000 || age < -30_000) return reject('freshness')
   return { kind: 'verified', envelope }
