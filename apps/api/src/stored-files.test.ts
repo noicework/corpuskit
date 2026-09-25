@@ -113,3 +113,68 @@ Deno.test('knowledge box files are sandboxed, and only PDFs and passive media op
     f.close()
   }
 })
+
+Deno.test('a knowledge box file opens in place only as exactly the one type that was checked', async () => {
+  let upstream = new Headers()
+  const management = {
+    resourceContent: () =>
+      Promise.resolve({ id: 'res-1', files: [{ group: 'files', fieldId: 'original' }] }),
+    fileStream: () => Promise.resolve(new Response('stored bytes', { headers: upstream })),
+  } as unknown as AragProvider
+  const f = createEnforcementFixture({ management })
+  const serve = async (...values: string[]) => {
+    upstream = new Headers()
+    for (const value of values) upstream.append('content-type', value)
+    const response = await f.requestAs(null, '/api/t/public-a/resources/res-1/file/original')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    await response.body?.cancel()
+    return response.headers
+  }
+  try {
+    // A browser splits the header on commas and uses the last type it can parse, so each of
+    // these would render as HTML on a host that shares the session cookie if served in place.
+    for (
+      const values of [
+        ['application/pdf;x=1, text/html'],
+        ['application/pdf, text/html'],
+        ['application/pdf;x="a,b"'],
+        ['image/png, text/html'],
+        ['video/mp4, text/html; charset=utf-8'],
+        ['audio/mpeg;codecs="mp3,html"'],
+        // Two upstream headers arrive as one comma-joined value.
+        ['application/pdf', 'text/html'],
+        ['image/png', 'image/svg+xml'],
+      ]
+    ) {
+      const headers = await serve(...values)
+      expect(headers.get('content-disposition')).toBe('attachment')
+      expect(headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
+    }
+
+    // A value that is not a media type at all is never PDF or passive media.
+    for (const value of ['application/pdf/x', 'application/', '/pdf', 'pdf', 'image/png x']) {
+      const headers = await serve(value)
+      expect(headers.get('content-disposition')).toBe('attachment')
+      expect(headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
+    }
+
+    // One valid type is served as exactly that type, without the upstream parameters.
+    const inline: [string, string, string][] = [
+      ['application/pdf;x=1', 'application/pdf', "frame-ancestors 'none'"],
+      ['Application/PDF; name="report.pdf"', 'application/pdf', "frame-ancestors 'none'"],
+      ['image/PNG; x=1', 'image/png', STORED_FILE_POLICY],
+      ['image/webp', 'image/webp', STORED_FILE_POLICY],
+      ['audio/mpeg; codecs=mp3', 'audio/mpeg', STORED_FILE_POLICY],
+      ['video/mp4;codecs=avc1', 'video/mp4', STORED_FILE_POLICY],
+    ]
+    for (const [value, type, policy] of inline) {
+      const headers = await serve(value)
+      expect(headers.get('content-type')).toBe(type)
+      expect(headers.get('content-disposition')).toBe('inline')
+      expect(headers.get('content-security-policy')).toBe(policy)
+    }
+  } finally {
+    f.close()
+  }
+})

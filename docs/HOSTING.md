@@ -781,7 +781,11 @@ can carry script. Branding assets, including any SVG stored before this rule, ar
 `Content-Security-Policy: sandbox; default-src 'none'; frame-ancestors 'none'` and
 `Content-Disposition: attachment`. Resource thumbnails carry the same policy. Knowledge box files
 carry it too, except PDFs, which need the browser's own viewer. Of the sandboxed files, raster
-images, audio and video show in place and everything else downloads.
+images, audio and video show in place and everything else downloads. A knowledge box file shows
+in place only when its upstream `Content-Type` names exactly one media type, and it is then served
+as exactly that type, without parameters (`application/pdf`, not `application/pdf; x=1`). A value
+holding a comma, or one that is not a media type, is sandboxed and downloads, because a browser
+splits the header on commas and could render a later type, such as `text/html`, in place.
 
 The two seeded showcase portals, and one showcase portal created before hostnames were stored,
 receive their `corpuskit.org` hostnames when read on the `corpuskit.org` platform domain only.

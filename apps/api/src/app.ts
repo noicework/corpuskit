@@ -2704,13 +2704,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (v) headers.set(h, v)
     }
     // A PDF opens in the browser's own viewer, which a sandboxed document cannot use. Any other
-    // stored file is sandboxed, and only passive media is shown in place.
+    // stored file is sandboxed, and only passive media is shown in place. A file shown in place
+    // is served as exactly the type that was checked, so a browser cannot read another type out
+    // of the upstream value.
     const type = storedFileType(headers.get('content-type'))
-    if (type !== 'application/pdf') headers.set('content-security-policy', STORED_FILE_POLICY)
-    headers.set(
-      'content-disposition',
-      type === 'application/pdf' || passiveMedia(type) ? 'inline' : 'attachment',
-    )
+    const pdf = type === 'application/pdf'
+    const inline = type !== null && (pdf || passiveMedia(type))
+    if (inline) headers.set('content-type', type)
+    if (!pdf) headers.set('content-security-policy', STORED_FILE_POLICY)
+    headers.set('content-disposition', inline ? 'inline' : 'attachment')
     return new Response(upstream.body, { status: upstream.status, headers })
   })
 
@@ -6901,9 +6903,19 @@ function storedFileHeaders(contentType: string): Record<string, string> {
   }
 }
 
-/** A stored file's media type without parameters, lower case. */
-function storedFileType(contentType: string | null): string {
-  return (contentType ?? '').split(';')[0]!.trim().toLowerCase()
+/** `type/subtype`, each an HTTP token. */
+const MEDIA_TYPE = /^[!#$%&'*+.^_`|~0-9a-z-]+\/[!#$%&'*+.^_`|~0-9a-z-]+$/
+
+/**
+ * The one media type a stored file's Content-Type names, without parameters and lower case, or
+ * null when the value is not exactly one valid media type. A browser splits the header on commas
+ * and uses the last type it can parse, so a value holding a comma could be read as a type other
+ * than the one checked here; it never counts as a type.
+ */
+function storedFileType(contentType: string | null): string | null {
+  if (!contentType || contentType.includes(',')) return null
+  const type = contentType.split(';')[0]!.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, '').toLowerCase()
+  return MEDIA_TYPE.test(type) ? type : null
 }
 
 /** Raster images, audio and video: shown in place, never a document that can run script. */
