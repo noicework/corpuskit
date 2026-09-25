@@ -89,6 +89,51 @@ export function assertManagementWritable(
   }
 }
 
+/**
+ * The check a long generation run (enrichments, suggested questions) makes before each paid
+ * model call and before each write: the portal still accepts writes, judged as
+ * `assertManagementWritable` judges them, and still allows its agents. A throw stops the run.
+ */
+export function assertAgentRunAllowed(
+  lifecycle: PortalLifecycleStore,
+  slug: string,
+  options: ManagementOptions = {},
+): void {
+  assertManagementWritable(lifecycle, slug, options)
+  if (lifecycle.get(slug).limits?.agentsEnabled === false) {
+    throw new PortalLifecycleError(403, { error: 'agents_disabled' })
+  }
+}
+
+/** Methods of a portal-local store that change it. Each takes the portal slug first. */
+const STORE_WRITES = new Set(['add', 'update', 'remove', 'put', 'importRecords'])
+
+/**
+ * Wrap a portal-local store (sources, enrichments), whose methods take the portal slug first,
+ * so each write checks lifecycle state at the moment it lands, as `guardManagement` does for
+ * knowledge-box writes. Scheduled jobs write through it without the platform exception; long
+ * HTTP runs write through it with `platformRequests`, so they are judged by who started them.
+ */
+export function guardPortalWrites<T extends object>(
+  store: T,
+  lifecycle?: PortalLifecycleStore,
+  options: ManagementOptions = {},
+): T {
+  if (!lifecycle) return store
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      const method = Reflect.get(target, property, receiver)
+      if (typeof method !== 'function') return method
+      return (slug: string, ...args: unknown[]) => {
+        if (STORE_WRITES.has(String(property))) {
+          assertManagementWritable(lifecycle, slug, options)
+        }
+        return method.call(target, slug, ...args)
+      }
+    },
+  })
+}
+
 function unavailable(): PortalLifecycleError {
   return new PortalLifecycleError(503, { error: 'usage_unavailable' })
 }

@@ -19,6 +19,7 @@ import {
 } from '@research-portal/core'
 import { AragApiError, type AragProvider, overlayEnrichment } from '@research-portal/retrieval'
 import { writeJsonAtomic } from './persist.ts'
+import { PortalLifecycleError } from './lifecycle-error.ts'
 
 /**
  * The portal's own store of generated enrichments (the merchandising cache),
@@ -410,6 +411,8 @@ export async function generateEnrichment(
   config: TenantConfig,
   resourceId: string,
   agent: EnrichmentAgent = DEFAULT_RESEARCH_ENRICHMENT,
+  /** Checked immediately before the paid model call; a throw stops generation there. */
+  proceed?: () => void,
 ): Promise<Enrichment> {
   // Read the resource first: this is both the grounding text for generation
   // and the fallback source for graceful degradation.
@@ -427,6 +430,8 @@ export async function generateEnrichment(
   const schema = enrichmentJsonSchema(agent)
   let data: Record<string, unknown> | null = null
   if (documentText) {
+    // Outside the try below: a hosting refusal must stop generation, not degrade it.
+    proceed?.()
     try {
       const result = await management.askStructured(
         config,
@@ -494,6 +499,12 @@ type EnrichmentRunOptions = {
   agent?: EnrichmentAgent
   /** Test/operations seam; HTTP callers cannot set these values. */
   backoff?: Partial<EnrichmentBackoffOptions>
+  /**
+   * The portal's hosting check, made before each resource, before each paid model call and
+   * before each write. When it throws a hosting refusal the run stops: nothing more is
+   * generated or written, and the run ends with one `error` event carrying the refusal's code.
+   */
+  proceed?: () => void
 }
 
 function resolvedBackoff(
@@ -516,6 +527,7 @@ function resolvedBackoff(
  * small bounded budget above.
  */
 function isEnrichmentStrain(err: unknown): boolean {
+  if (err instanceof PortalLifecycleError) return false
   if (err instanceof AragApiError) {
     return err.status === 408 || err.status === 429 || err.status === 503 || err.status === 504
   }
@@ -671,17 +683,23 @@ export async function* runEnrichmentOverCorpus(
   let enriched = 0
   let errors = 0
   let strained = false
+  /** A hosting refusal (paused, read-only or agents disabled) that stopped the run. */
+  let refusal: PortalLifecycleError | undefined
   const worker = async () => {
     for (;;) {
+      if (refusal) return
       const i = index++
       if (i >= limited.length) return
       const resource = limited[i]!
       try {
+        opts.proceed?.()
         const enrichment = await withEnrichmentBackoff(
-          () => generateEnrichment(management, config, resource.id, agent),
+          () => generateEnrichment(management, config, resource.id, agent, opts.proceed),
           gate,
           backoff,
         )
+        // Generation can take a while: judge the write by the portal's state now.
+        opts.proceed?.()
         store.put(config.slug, resource.id, enrichment)
         enriched++
         const generatedTitle = titleKey && typeof enrichment.data[titleKey] === 'string'
@@ -694,6 +712,12 @@ export async function* runEnrichmentOverCorpus(
           outcome: 'enriched',
         })
       } catch (err) {
+        if (err instanceof PortalLifecycleError) {
+          // Every further resource would be refused the same way: stop every worker, keep
+          // what was already written, and report the refusal once.
+          refusal ??= err
+          return
+        }
         errors++
         strained ||= isEnrichmentStrain(err)
         push({
@@ -729,6 +753,14 @@ export async function* runEnrichmentOverCorpus(
     })
   }
   await pool
+  if (refusal) {
+    yield {
+      type: 'error',
+      message: `Stopped after ${enriched} of ${limited.length} resources. ${refusal.message}`,
+      error: refusal.body.error,
+    }
+    return
+  }
   if (strained || (limited.length > 0 && enriched === 0)) {
     // A zero-yield run had outstanding work at `start`, so it is never
     // "caught up". Pause once before returning a distinct error event; the

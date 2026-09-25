@@ -719,7 +719,15 @@ export const EnrichmentRunEventSchema = z.discriminatedUnion('type', [
     enriched: z.number().int().nonnegative(),
     errors: z.number().int().nonnegative(),
   }),
-  z.object({ type: z.literal('error'), message: z.string() }),
+  z.object({
+    type: z.literal('error'),
+    message: z.string(),
+    /**
+     * Set when the portal's hosting state stopped the run: `portal_suspended`,
+     * `portal_read_only` or `agents_disabled`, as in the matching HTTP refusal.
+     */
+    error: z.string().optional(),
+  }),
 ])
 
 export type EnrichmentAgentStatus = z.infer<typeof EnrichmentAgentStatusSchema>

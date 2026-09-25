@@ -61,8 +61,9 @@ and text, sources and syncs, reingest, purges, label sets, the knowledge graph, 
 enrichment and suggested-question runs, prompts, search configurations, extraction rules,
 appearance, branding and the knowledge-box binding. A copy into the portal (`POST
 /api/admin/migrate`) is refused too; a copy out of it is allowed. Scheduled source syncs,
-enrichment runs and suggested-question runs stop. Cached suggested questions are still served,
-and no new ones are generated.
+enrichment runs and suggested-question runs stop, and a run already under way stops before its
+next model call (see [Runs in progress](#runs-in-progress)). Cached suggested questions are
+still served, and no new ones are generated.
 
 These keep working on a read-only portal:
 
@@ -96,12 +97,51 @@ suspended portal: they can inspect it, fix its binding, and restore it.
 
 A request is judged by who made it for as long as it runs. If a portal is suspended while a
 request from anyone else is still writing to it (a source sync, a documentation ingest, a
-purge or a content copy, for example), the next write that request makes is refused with 423
-`portal_suspended`. A platform administrator's request in flight carries on.
+purge or a content copy, for example), the next knowledge-box write that request makes is
+refused with 423 `portal_suspended`. A platform administrator's request in flight carries on.
+Enrichment and suggested-question runs write to the portal's own store instead, and stop as
+described in [Runs in progress](#runs-in-progress).
 
 Where the status is visible: the full configuration (`GET /api/t/:slug/config`) and each row
 of `GET /api/tenants` carry `status`. The safe sign-in projection of a portal that is not
 suspended is unchanged and does not include it.
+
+### Runs in progress
+
+Enrichment runs (`POST /api/admin/t/:slug/enrichments/run`) and suggested-question runs
+(`POST /api/admin/t/:slug/questions/run`) can each make up to 2000 paid model calls, and they
+write their results to the portal's own enrichment store, not to the knowledge box. A run
+checks the portal again before each resource, before each model call and before each write.
+The run stops at the first check that finds any of these:
+
+- the portal is suspended, unless a platform administrator or owner started the run
+- the portal is read-only
+- `agentsEnabled` is `false`
+
+A stopped run starts no further model call and writes nothing more. A model call already under
+way when the change lands finishes, but its result is not written. Results written before the
+change are kept. Each write the run makes to the enrichment store is also checked at the moment
+it lands, in the same way as a knowledge-box write. The stream ends with a single event that
+names the refusal, in place of `done`:
+
+```json
+{
+  "type": "error",
+  "message": "Stopped after 4 of 8 resources. This portal is paused, so no content can be added or changed.",
+  "error": "portal_suspended"
+}
+```
+
+`error` is `portal_suspended`, `portal_read_only` or `agents_disabled`, the same code the
+matching HTTP refusal carries. No per-resource error events are sent for the resources the run
+did not reach. Enriching one resource (`POST /api/admin/t/:slug/resources/:id/enrich`) makes
+the same checks, and a change during its model call answers with the refusal's status and body
+instead of storing the result.
+
+Scheduled enrichment and suggested-question runs make the same checks, with no platform
+exception. A scheduled run that stops this way ends that portal's pass: its suggested-question
+run is not started, and the other portals are processed as usual. The maintenance job is not
+recorded as failed.
 
 ### Limits
 
@@ -162,10 +202,12 @@ A refused MCP call returns the same body as a tool error.
 and labellers) and the enrichment and suggested-question generators. The refused routes are
 `kg/implement`, `PUT kg/strategy`, graph suggestions, `enrichments/run`, `questions/run` and
 `resources/:id/enrich`. Scheduled enrichment and suggested-question runs are skipped, and no
-suggested questions are generated on demand. Saving a label set is refused only when saving it
+suggested questions are generated on demand. An enrichment or suggested-question run already
+under way when agents are disabled stops before its next model call (see
+[Runs in progress](#runs-in-progress)). Saving a label set is refused only when saving it
 would restart a labeller that carries the set. Every operation that would replace an agent is
 refused before its first write, so a refusal never leaves a strategy or labeller half
-replaced. Existing agents keep running, and one can still be deleted.
+replaced. Existing knowledge-box agents keep running, and one can still be deleted.
 
 ### Usage
 
@@ -224,6 +266,12 @@ Enforcement is central, so a new route cannot bypass it by accident:
    for such a request. The same wrapper admits resource and byte usage and refuses agent
    starts. Scheduled jobs use it without the platform exception, so no background job ever
    writes to a suspended or read-only portal.
+5. The portal's own stores that long-running work writes to (sources for scheduled syncs, and
+   the enrichment store for scheduled and HTTP generation runs) are wrapped by
+   `guardPortalWrites()` in `apps/api/src/lifecycle-management.ts`, which checks each write
+   the same way. Generation runs also call `assertAgentRunAllowed()` before each model call
+   and each write, so a run stops as soon as the portal is paused, made read-only or has its
+   agents disabled.
 
 ### Relationship to disable and enable
 

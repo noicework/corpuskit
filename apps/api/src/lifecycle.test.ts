@@ -769,6 +769,145 @@ Deno.test('suspending a portal stops a portal role request mid-operation but not
   }
 })
 
+/**
+ * A readable corpus of `total` documents whose paid model calls are counted. `onCall` runs
+ * inside each model call, before it answers, so a test can change the portal mid-run.
+ */
+function generationBox(total: number) {
+  const box = {
+    calls: 0,
+    onCall: (_call: number) => {},
+    management: new AragProvider({ resolveBinding: () => undefined }),
+  }
+  const resources = Array.from({ length: total }, (_, index) => ({
+    id: `doc-${index + 1}`,
+    title: `Report ${index + 1}`,
+    summary: `What report ${index + 1} found.`,
+  }))
+  const text = 'The survey found that the northern reef recovered within two seasons. '.repeat(8)
+  Object.assign(box.management, {
+    listResources: () => Promise.resolve(resources),
+    invalidate: () => {},
+    resourceContent: (_config: unknown, id: string) =>
+      Promise.resolve({ id, title: 'Report', kind: 'text', texts: [{ fieldId: 'body', text }] }),
+    askStructured: () => {
+      box.calls++
+      box.onCall(box.calls)
+      return Promise.resolve({
+        object: {
+          title: 'Northern reef recovery',
+          summary: 'The northern reef recovered within two seasons.',
+          questions: [],
+        },
+      })
+    },
+  })
+  return box
+}
+
+async function runEvents(response: Response) {
+  return (await response.text()).split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice('data: '.length)) as Record<string, unknown>)
+}
+
+const GENERATION_RUNS = [
+  ['enrichments/run', 'research-summary'],
+  ['questions/run', 'suggested-questions'],
+] as const
+const CORPUS = 8
+const CHANGE_AT = 5
+
+Deno.test('a generation run stops before its next model call and write once the portal is paused, read-only or has agents disabled', async () => {
+  const changes = [
+    [{ status: 'suspended', limits: null }, 'portal_suspended'],
+    [{ status: 'read_only', limits: null }, 'portal_read_only'],
+    [{ status: 'active', limits: { agentsEnabled: false } }, 'agents_disabled'],
+  ] as const
+  for (const [run, schemaId] of GENERATION_RUNS) {
+    for (const [change, code] of changes) {
+      const box = generationBox(CORPUS)
+      const f = createEnforcementFixture({ management: box.management })
+      try {
+        let writtenAtChange = -1
+        box.onCall = (call) => {
+          if (call !== CHANGE_AT) return
+          writtenAtChange = f.stores.enrichments.count('a', schemaId)
+          f.stores.lifecycle.set('a', change)
+        }
+        const response = await f.requestAs(
+          f.sessionFor('portal-admin'),
+          `/api/admin/t/a/${run}`,
+          json('POST', {}),
+        )
+        expect(response.status).toBe(200)
+        const events = await runEvents(response)
+        const label = `${run} ${code}`
+        // The call under way when the change landed was the last model call made.
+        expect(box.calls, label).toBe(CHANGE_AT)
+        // Resources finished before the change are kept; nothing is written after it, not even
+        // the result of the call that was under way.
+        expect(writtenAtChange, label).toBeGreaterThan(0)
+        expect(f.stores.enrichments.count('a', schemaId), label).toBe(writtenAtChange)
+        // The run ends with one event naming the refusal, never a stream of per-item errors.
+        expect(events.at(-1), label).toMatchObject({ type: 'error', error: code })
+        expect(events.filter((event) => event.type === 'error'), label).toHaveLength(1)
+        expect(events.some((event) => event.type === 'done'), label).toBe(false)
+        expect(events.some((event) => event.outcome === 'error'), label).toBe(false)
+      } finally {
+        f.close()
+      }
+    }
+  }
+})
+
+Deno.test('a generation run on an active portal completes, and a platform request carries on through a suspension', async () => {
+  for (const [run, schemaId] of GENERATION_RUNS) {
+    for (const [role, suspend] of [['portal-admin', false], ['platform-admin', true]] as const) {
+      const box = generationBox(CORPUS)
+      const f = createEnforcementFixture({ management: box.management })
+      try {
+        box.onCall = (call) => {
+          if (suspend && call === CHANGE_AT) {
+            f.stores.lifecycle.set('a', { status: 'suspended', limits: null })
+          }
+        }
+        const response = await f.requestAs(f.sessionFor(role), `/api/admin/t/a/${run}`, {
+          ...json('POST', {}),
+        })
+        expect(response.status).toBe(200)
+        const events = await runEvents(response)
+        const label = `${run} ${role}`
+        expect(box.calls, label).toBe(CORPUS)
+        expect(f.stores.enrichments.count('a', schemaId), label).toBe(CORPUS)
+        expect(events.at(-1), label).toEqual({ type: 'done', enriched: CORPUS, errors: 0 })
+      } finally {
+        f.close()
+      }
+    }
+  }
+})
+
+Deno.test('enriching one resource refuses to store its result once the portal is paused mid-call', async () => {
+  const box = generationBox(1)
+  const f = createEnforcementFixture({ management: box.management })
+  try {
+    box.onCall = () => f.stores.lifecycle.set('a', { status: 'suspended', limits: null })
+    const before = f.stores.enrichments.count('a')
+    const response = await f.requestAs(
+      f.sessionFor('portal-admin'),
+      '/api/admin/t/a/resources/res-1/enrich',
+      { method: 'POST' },
+    )
+    expect(response.status).toBe(423)
+    expect(await response.json()).toEqual({ error: 'portal_suspended' })
+    expect(box.calls).toBe(1)
+    expect(f.stores.enrichments.count('a')).toBe(before)
+  } finally {
+    f.close()
+  }
+})
+
 // Independently authored: every route or tool that makes a paid model call for its caller.
 const ASKS_COUNTED = new Set([
   'POST /api/t/:slug/ask',

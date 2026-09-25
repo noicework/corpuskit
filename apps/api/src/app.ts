@@ -15,8 +15,10 @@ import {
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
 import {
+  assertAgentRunAllowed,
   capacityUsage,
   guardManagement,
+  guardPortalWrites,
   precheckAdd,
   resetCapacityOnRebind,
   withRequestAuthority,
@@ -990,6 +992,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const suggestions = opts.suggestions ?? new SuggestionStore()
   const kgProposals = opts.kgProposals ?? new KgProposalStore()
   const enrichments = opts.enrichments ?? new EnrichmentStore()
+  // Generation runs write the portal's own enrichment store, not the knowledge box. Their
+  // writes pass the same lifecycle check as a knowledge-box write, judged by who started the
+  // run, and the runs recheck the portal before each model call and each write.
+  const generated = guardPortalWrites(enrichments, lifecycle, { platformRequests: true })
+  const generationCheck = (slug: string) => () =>
+    assertAgentRunAllowed(lifecycle, slug, { platformRequests: true })
   const domains = opts.domainProvisioner === undefined
     ? createCloudflareDomainProvisioner(process.env)
     : opts.domainProvisioner
@@ -4496,10 +4504,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const agent = ENRICHMENT_AGENTS.find((a) => a.id === body.agentId) ??
           DEFAULT_RESEARCH_ENRICHMENT
         for await (
-          const event of runEnrichmentOverCorpus(management!, enrichments, config, {
+          const event of runEnrichmentOverCorpus(management!, generated, config, {
             scope,
             limit,
             agent,
+            proceed: generationCheck(config.slug),
           })
         ) {
           await stream.writeSSE({ data: JSON.stringify(event) })
@@ -4509,6 +4518,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           data: JSON.stringify({
             type: 'error',
             message: err instanceof Error ? err.message : 'Enrichment run failed',
+            ...(err instanceof PortalLifecycleError ? { error: err.body.error } : {}),
           }),
         })
       }
@@ -4530,8 +4540,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return streamSSE(c, async (stream) => {
       try {
         for await (
-          const event of runSuggestedQuestionsOverCorpus(management!, enrichments, config, {
+          const event of runSuggestedQuestionsOverCorpus(management!, generated, config, {
             limit,
+            proceed: generationCheck(config.slug),
           })
         ) {
           await stream.writeSSE({ data: JSON.stringify(event) })
@@ -4541,6 +4552,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           data: JSON.stringify({
             type: 'error',
             message: err instanceof Error ? err.message : 'Question run failed',
+            ...(err instanceof PortalLifecycleError ? { error: err.body.error } : {}),
           }),
         })
       }
@@ -4559,8 +4571,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     try {
       const agentId = new URL(c.req.url).searchParams.get('agentId')
       const agent = ENRICHMENT_AGENTS.find((a) => a.id === agentId) ?? DEFAULT_RESEARCH_ENRICHMENT
-      const enrichment = await generateEnrichment(management!, config, id, agent)
-      enrichments.put(config.slug, id, enrichment)
+      const proceed = generationCheck(config.slug)
+      const enrichment = await generateEnrichment(management!, config, id, agent, proceed)
+      proceed()
+      generated.put(config.slug, id, enrichment)
       const resource = await provider.resource(config, id)
       return c.json({
         ok: true,
@@ -4568,6 +4582,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
         resource: resource ? merchandiseSummary(enrichments, config.slug, resource) : null,
       })
     } catch (err) {
+      // A hosting refusal keeps its own status and body.
+      if (err instanceof PortalLifecycleError) throw err
       const message = err instanceof Error ? err.message : 'generation failed'
       return c.json({ error: 'enrichment_failed', message }, 502)
     }

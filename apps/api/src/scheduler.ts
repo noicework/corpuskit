@@ -16,7 +16,11 @@ import type { RbacState } from './rbac-state.ts'
 import { executeAudited, type LocalMutationScope } from './audit-execution.ts'
 import { DECLARATIONS } from './permissions.ts'
 import type { PortalLifecycleStore } from './lifecycle-store.ts'
-import { assertManagementWritable, guardManagement } from './lifecycle-management.ts'
+import {
+  assertAgentRunAllowed,
+  guardManagement,
+  guardPortalWrites,
+} from './lifecycle-management.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import { readLifecycle } from './lifecycle-policy.ts'
 
@@ -123,22 +127,6 @@ interface MaintenanceStores {
   lifecycle?: PortalLifecycleStore
 }
 
-function guardedMaintenanceStore<T extends object>(store: T, lifecycle?: PortalLifecycleStore): T {
-  if (!lifecycle) return store
-  return new Proxy(store, {
-    get(target, property, receiver) {
-      const method = Reflect.get(target, property, receiver)
-      if (typeof method !== 'function') return method
-      return (slug: string, ...args: unknown[]) => {
-        if (['add', 'update', 'remove', 'put', 'importRecords'].includes(String(property))) {
-          assertManagementWritable(lifecycle, slug)
-        }
-        return method.call(target, slug, ...args)
-      }
-    },
-  })
-}
-
 export async function runSystemMaintenance(
   management: AragProvider,
   stores: MaintenanceStores,
@@ -148,8 +136,9 @@ export async function runSystemMaintenance(
 ): Promise<void> {
   const days = auditRetentionDays(retentionDays)
   const guarded = stores.lifecycle ? guardManagement(management, stores.lifecycle) : management
-  const sources = guardedMaintenanceStore(stores.sources, stores.lifecycle)
-  const enrichments = guardedMaintenanceStore(stores.enrichments, stores.lifecycle)
+  // No platform exception: a background job never writes to a suspended or read-only portal.
+  const sources = guardPortalWrites(stores.sources, stores.lifecycle)
+  const enrichments = guardPortalWrites(stores.enrichments, stores.lifecycle)
   if (retain) stores.rbac.retainAudit(days)
   for (const job of jobs) {
     await runSystemJob(stores.rbac.audit, job, (context) => {
@@ -459,13 +448,18 @@ export async function runAutoEnrichments(
     if (!config) continue
     // Enrichment and suggested-question generators are agents: they need an active portal
     // whose agents are enabled, and a hosting state that can be read.
-    if (context?.lifecycle) {
-      const hosting = readLifecycle(context.lifecycle, config.slug)
+    const lifecycle = context?.lifecycle
+    if (lifecycle) {
+      const hosting = readLifecycle(lifecycle, config.slug)
       if (!hosting || hosting.status !== 'active' || hosting.limits?.agentsEnabled === false) {
         continue
       }
     }
+    // Rechecked before each model call and write, so a portal paused, made read-only or with
+    // agents disabled while its run is going stops there.
+    const proceed = lifecycle ? () => assertAgentRunAllowed(lifecycle, config.slug) : undefined
     try {
+      let refused = false
       await scopedSystemAction(context, 'maintenance.enrichment.run', config.slug, {
         kind: 'portal',
         id: config.slug,
@@ -475,10 +469,13 @@ export async function runAutoEnrichments(
           const event of runEnrichmentOverCorpus(management, enrichments, config, {
             scope: 'missing',
             limit: AUTO_ENRICH_CAP,
+            proceed,
           })
         ) {
           signal.throwIfAborted()
-          if (event.type === 'error') problem = event.message
+          // A hosting refusal stops this portal alone; the pass itself has not failed.
+          if (event.type === 'error' && event.error) refused = true
+          else if (event.type === 'error') problem = event.message
         }
         if (problem) {
           // Tenants share the platform account. Once one box says it is
@@ -487,6 +484,7 @@ export async function runAutoEnrichments(
           throw new Error('Scheduled enrichment did not complete')
         }
       })
+      if (refused) continue
       await scopedSystemAction(context, 'maintenance.questions.run', config.slug, {
         kind: 'portal',
         id: config.slug,
@@ -496,9 +494,11 @@ export async function runAutoEnrichments(
         for await (
           const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
             limit: AUTO_QUESTIONS_CAP,
+            proceed,
           })
         ) {
           signal.throwIfAborted()
+          if (event.type === 'error' && event.error) return
           if (event.type === 'error') {
             throw new Error('Scheduled suggested questions did not complete')
           }

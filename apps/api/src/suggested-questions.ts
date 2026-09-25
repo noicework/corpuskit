@@ -1,6 +1,7 @@
 import type { EnrichmentRunEvent, ResourceContent, TenantConfig } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
 import type { EnrichmentStoreApi } from './enrichments.ts'
+import { PortalLifecycleError } from './lifecycle-error.ts'
 
 /**
  * Openers worth asking about ONE particular document, written from the
@@ -199,6 +200,8 @@ export function questionContextFor(content: ResourceContent | null): string {
 /**
  * Generate openers for one resource. Audited callers use strict failures and
  * cancellation checks; existing batch callers retain their empty-result fallback.
+ * `proceed` is checked immediately before the paid model call, and a throw from it
+ * always propagates.
  */
 export async function generateSuggestedQuestions(
   management: AragProvider,
@@ -206,7 +209,7 @@ export async function generateSuggestedQuestions(
   resourceId: string,
   title: string,
   summary?: string,
-  options: { signal?: AbortSignal; strict?: boolean } = {},
+  options: { signal?: AbortSignal; strict?: boolean; proceed?: () => void } = {},
 ): Promise<string[]> {
   options.signal?.throwIfAborted()
   const content = await management.resourceContent(config, resourceId).catch((error) => {
@@ -233,6 +236,8 @@ export async function generateSuggestedQuestions(
     '--- END DOCUMENT TEXT ---',
   ].filter(Boolean).join('\n')
 
+  // Outside the try below, so a hosting refusal is never mistaken for an empty answer.
+  options.proceed?.()
   try {
     const result = await management.askStructured(config, questionsSchema(asked), prompt, {
       resourceId,
@@ -255,12 +260,17 @@ const QUESTIONS_CONCURRENCY = 3
  * time. This is the enrichment-time pass: the resource page reads from the
  * store and never waits on generation. Reuses the enrichment run's event
  * shape so Manage can stream it the same way.
+ *
+ * `proceed` is the portal's hosting check, made before each resource, before
+ * each paid model call and before each write. When it throws a hosting refusal
+ * the run stops: nothing more is generated or written, and the run ends with
+ * one `error` event carrying the refusal's code.
  */
 export async function* runSuggestedQuestionsOverCorpus(
   management: AragProvider,
   store: EnrichmentStoreApi,
   config: TenantConfig,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; proceed?: () => void } = {},
 ): AsyncGenerator<EnrichmentRunEvent> {
   let catalogue
   try {
@@ -291,19 +301,26 @@ export async function* runSuggestedQuestionsOverCorpus(
   let index = 0
   let written = 0
   let errors = 0
+  /** A hosting refusal (paused, read-only or agents disabled) that stopped the run. */
+  let refusal: PortalLifecycleError | undefined
   const worker = async () => {
     for (;;) {
+      if (refusal) return
       const i = index++
       if (i >= targets.length) return
       const resource = targets[i]!
       try {
+        opts.proceed?.()
         const questions = await generateSuggestedQuestions(
           management,
           config,
           resource.id,
           resource.title,
           resource.summary,
+          { proceed: opts.proceed },
         )
+        // Generation can take a while: judge the write by the portal's state now.
+        opts.proceed?.()
         store.put(config.slug, resource.id, {
           schemaId: SUGGESTED_QUESTIONS_SCHEMA_ID,
           generatedAt: new Date().toISOString(),
@@ -312,6 +329,12 @@ export async function* runSuggestedQuestionsOverCorpus(
         written++
         push({ type: 'item', id: resource.id, title: resource.title, outcome: 'enriched' })
       } catch (err) {
+        if (err instanceof PortalLifecycleError) {
+          // Every further resource would be refused the same way: stop every worker, keep
+          // what was already written, and report the refusal once.
+          refusal ??= err
+          return
+        }
         errors++
         push({
           type: 'item',
@@ -344,5 +367,13 @@ export async function* runSuggestedQuestionsOverCorpus(
     })
   }
   await pool
+  if (refusal) {
+    yield {
+      type: 'error',
+      message: `Stopped after ${written} of ${targets.length} resources. ${refusal.message}`,
+      error: refusal.body.error,
+    }
+    return
+  }
   yield { type: 'done', enriched: written, errors }
 }
