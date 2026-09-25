@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { missingWorkerSecrets, workerSecrets } from './upload-secrets.ts'
+import { missingWorkerSecrets, unsafeWorkerSecrets, workerSecrets } from './upload-secrets.ts'
 
 Deno.test('Worker secret upload excludes account provisioning credentials', () => {
   const values = workerSecrets(`
@@ -83,4 +83,39 @@ Deno.test('Worker secret upload retains session, zone and knowledge-box prerequi
     'SESSION_SECRET',
     'ARAG_KB_<SLUG> + token',
   ])
+})
+
+Deno.test('Worker secret upload refuses an external sign-in key that is not an Ed25519 public JWK', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
+  expect(privateJwk.d).toBeDefined()
+  const message = 'EXTERNAL_LOGIN_JWK must be an Ed25519 public JWK without private key material'
+  expect(unsafeWorkerSecrets({ ...baseSecrets })).toEqual([])
+  expect(unsafeWorkerSecrets({ EXTERNAL_LOGIN_JWK: JSON.stringify(publicJwk) })).toEqual([])
+  expect(
+    unsafeWorkerSecrets({
+      EXTERNAL_LOGIN_JWK:
+        '{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWqFVT1RJXsGFiLKXMhzSk2YuOw"}',
+    }),
+  ).toEqual([])
+  for (
+    const value of [
+      JSON.stringify(privateJwk),
+      JSON.stringify({ kty: 'OKP', crv: 'Ed25519', x: publicJwk.x, d: '' }),
+      JSON.stringify({ ...publicJwk, crv: 'X25519' }),
+      JSON.stringify({ ...publicJwk, kty: 'EC' }),
+      JSON.stringify({ kty: 'OKP', crv: 'Ed25519' }),
+      JSON.stringify({ kty: 'OKP', crv: 'Ed25519', x: 'public-key' }),
+      JSON.stringify([publicJwk]),
+      'public-key',
+      '',
+    ]
+  ) {
+    const unsafe = unsafeWorkerSecrets({ ...baseSecrets, EXTERNAL_LOGIN_JWK: value })
+    expect(unsafe).toEqual([message])
+    // The refusal names the setting only; it never echoes key material.
+    if (value.length > 2) expect(unsafe.join()).not.toContain(value)
+    if (privateJwk.d) expect(unsafe.join()).not.toContain(privateJwk.d)
+  }
 })
