@@ -21,7 +21,7 @@ type WorkerHandler = {
 type WorkerModule = {
   PortalDurableObject: typeof PortalDurableObject
   default: WorkerHandler
-  marketingHomeRequest(request: Request): Request
+  marketingHomeRequest(request: Request, domain: string): Request
   forwardPortalRequest(
     request: Request,
     user: AuthUser | null,
@@ -84,7 +84,7 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
     ASSETS: { fetch: () => Promise.resolve(new Response('fixture')) },
     PORTAL: { getByName: () => object },
   } as unknown as Env
-  const start = () => {
+  const start = async () => {
     database = new DatabaseSync(`${directory}/state.sqlite`)
     const storage: DurableObjectState['storage'] = {
       sql: {
@@ -124,12 +124,21 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
       },
     }
 
-    object = new workerModule.PortalDurableObject({ storage }, env)
+    let initialization: Promise<unknown> = Promise.resolve()
+    object = new workerModule.PortalDurableObject({
+      storage,
+      blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T> {
+        const pending = callback()
+        initialization = pending
+        return pending
+      },
+    }, env)
+    await initialization
     state = new DurableState(storage.sql, storage)
     trackJourneyProvider((object as unknown as { provider: object }).provider, calls)
   }
   try {
-    start()
+    await start()
     const journey: EnforcementJourney = {
       get stores() {
         return (object as unknown as { stores: DurableStores }).stores
@@ -145,9 +154,9 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
         return state.rbac
       },
       exec: (sql) => database.exec(sql),
-      restart: () => {
+      restart: async () => {
         database.close()
-        start()
+        await start()
       },
       advance: (ms) => {
         clock += ms

@@ -3,18 +3,72 @@ import { portalHref } from './portal-url.ts'
 
 Deno.test('portalHref uses a tenant custom domain on CorpusKit production hosts', () => {
   expect(portalHref('marine', {
+    platformDomain: 'corpuskit.org',
     hostname: 'marine.corpuskit.org',
     currentHostname: 'corpuskit.org',
   })).toBe(
     'https://marine.corpuskit.org/t/marine',
   )
   expect(portalHref('grains', {
+    platformDomain: 'corpuskit.org',
     hostname: 'grains.corpuskit.org',
     suffix: '/search?q=wheat',
     currentHostname: 'marine.corpuskit.org',
   })).toBe(
     'https://grains.corpuskit.org/t/grains/search?q=wheat',
   )
+})
+
+Deno.test('portalHref uses a runtime domain and keeps other deployments relative', () => {
+  const options = {
+    platformDomain: 'research.example.org',
+    hostname: 'marine.research.example.org',
+  }
+  expect(portalHref('marine', { ...options, currentHostname: 'research.example.org' }))
+    .toBe('https://marine.research.example.org/t/marine')
+  expect(portalHref('marine', { ...options, currentHostname: 'grains.research.example.org' }))
+    .toBe('https://marine.research.example.org/t/marine')
+  expect(portalHref('marine', { ...options, currentHostname: 'marine.research.example.org' }))
+    .toBe('/t/marine')
+  for (
+    const host of ['corpuskit.org', 'research.example.org.evil.test', 'notresearch.example.org']
+  ) {
+    expect(portalHref('marine', { ...options, currentHostname: host })).toBe('/t/marine')
+  }
+})
+
+Deno.test('portalHref never sends a deployment to another platform domain', () => {
+  for (const currentHostname of ['research.example.org', 'grains.research.example.org']) {
+    expect(portalHref('opax', {
+      platformDomain: 'research.example.org',
+      hostname: 'opax.corpuskit.org',
+      currentHostname,
+    })).toBe('/t/opax')
+  }
+  expect(portalHref('opax', {
+    platformDomain: 'research.example.org',
+    hostname: 'opax.research.example.org.evil.test',
+    currentHostname: 'research.example.org',
+  })).toBe('/t/opax')
+})
+
+Deno.test('portalHref without valid runtime configuration or hostname stays relative', () => {
+  for (
+    const platformDomain of [undefined, '', '__CORPUSKIT_PLATFORM_DOMAIN__', 'https://example.org']
+  ) {
+    expect(portalHref('marine', {
+      platformDomain,
+      hostname: 'marine.corpuskit.org',
+      currentHostname: 'corpuskit.org',
+    })).toBe('/t/marine')
+  }
+  for (const hostname of ['evil.test/path', 'evil.test@other.test', 'evil.test#fragment']) {
+    expect(portalHref('marine', {
+      platformDomain: 'research.example.org',
+      hostname,
+      currentHostname: 'research.example.org',
+    })).toBe('/t/marine')
+  }
 })
 
 Deno.test('portalHref keeps portals without a configured hostname relative', () => {

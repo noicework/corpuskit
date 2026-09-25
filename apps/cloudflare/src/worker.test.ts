@@ -5,6 +5,7 @@ import { expect } from '@std/expect'
 import { DOC_PAGES } from '../../../packages/core/src/docs.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState } from './state.ts'
+import { BindingCipher } from '../../api/src/binding-crypto.ts'
 import {
   type PrincipalEnvelope,
   signPrincipal,
@@ -20,7 +21,7 @@ import { ROLES } from '@research-portal/core'
 import type { DurableStores } from './state.ts'
 
 Deno.test('Worker and local ingress return identical current selected-scope capabilities', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const stores = (h.object as unknown as { stores: DurableStores }).stores
     const local = new LocalIngress({
@@ -102,7 +103,7 @@ Deno.test('Worker and local ingress return identical current selected-scope capa
 })
 
 Deno.test('Worker selected snapshot preserves public access without Entra configuration', async () => {
-  const h = realHarness({ ENTRA_TENANT_ID: '' })
+  const h = await realHarness({ ENTRA_TENANT_ID: '' })
   try {
     const response = await worker.fetch(
       new Request('https://corpuskit.test/auth/me?portal=marine'),
@@ -129,7 +130,7 @@ type WorkerHandler = {
 type WorkerModule = {
   PortalDurableObject: typeof PortalDurableObject
   default: WorkerHandler
-  marketingHomeRequest(request: Request): Request
+  marketingHomeRequest(request: Request, domain: string): Request
   forwardPortalRequest(
     request: Request,
     user: AuthUser | null,
@@ -172,6 +173,116 @@ Deno.test('Worker keeps the apex canonical when www is requested', async () => {
   expect(response.headers.get('location')).toBe('https://corpuskit.org/why?ref=www')
 })
 
+Deno.test('Worker redirects and serves platform documents using a non-default domain', async () => {
+  for (
+    const [input, status, location, path] of [
+      [
+        'https://www.research.example.org/docs/?q=1',
+        308,
+        'https://research.example.org/docs/?q=1',
+        '',
+      ],
+      ['https://marine.research.example.org/?q=1', 308, '/t/marine?q=1', ''],
+      ['https://research.example.org/about/', 200, null, '/about'],
+      ['https://research.example.org/docs/', 200, null, '/docs/'],
+      ['https://corpuskit.org/about/', 404, null, ''],
+      ['https://marine.research.example.org/about/', 404, null, ''],
+    ] as const
+  ) {
+    const harness = workerHarness()
+    Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+    const response = await worker.fetch(new Request(input), harness.env)
+    expect(response.status).toBe(status)
+    expect(response.headers.get('location')).toBe(location)
+    expect(harness.assetRequests.map((request) => new URL(request.url).pathname))
+      .toEqual(path ? [path] : [])
+    await response.body?.cancel()
+  }
+})
+
+Deno.test('Worker domain redirects reject unrelated, nested and reserved hostnames and mutations', async () => {
+  for (
+    const hostname of [
+      'marine.corpuskit.org',
+      'notresearch.example.org',
+      'research.example.org.evil.test',
+      'marine.nested.research.example.org',
+      'admin.research.example.org',
+    ]
+  ) {
+    const harness = workerHarness()
+    Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+    const response = await worker.fetch(new Request(`https://${hostname}/`), harness.env)
+    expect(response.headers.get('location')).toBeNull()
+    await response.body?.cancel()
+  }
+  const harness = workerHarness()
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  const response = await worker.fetch(
+    new Request('https://marine.research.example.org/', { method: 'POST' }),
+    harness.env,
+  )
+  expect(response.status).toBe(405)
+  expect(response.headers.get('location')).toBeNull()
+})
+
+Deno.test('Worker injects domain configuration per HTML response without changing the bundle', async () => {
+  const shell =
+    '<head><meta name="corpuskit-platform-domain" content="__CORPUSKIT_PLATFORM_DOMAIN__"></head>'
+  const harness = workerHarness({
+    assets: () =>
+      new Response(shell, {
+        headers: { 'content-type': 'text/html', etag: 'static-body' },
+      }),
+  })
+  for (const domain of [undefined, 'research.example.org', 'other.example.org']) {
+    Object.assign(harness.env, { PLATFORM_DOMAIN: domain })
+    const response = await worker.fetch(
+      new Request('https://research.example.org/t/marine'),
+      harness.env,
+    )
+    expect(await response.text()).toContain(`content="${domain ?? 'corpuskit.org'}"`)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('etag')).toBeNull()
+  }
+})
+
+Deno.test('Worker cookies share only the configured platform domain', async () => {
+  for (
+    const hostname of [
+      'research.example.org',
+      'marine.research.example.org',
+      'corpuskit.org',
+      'research.example.org.evil.test',
+    ]
+  ) {
+    const harness = workerHarness()
+    Object.assign(harness.env, {
+      PLATFORM_DOMAIN: 'research.example.org',
+      ENTRA_CLIENT_SECRET: 'test-only-client-secret',
+    })
+    const response = await worker.fetch(new Request(`https://${hostname}/auth/logout`), harness.env)
+    expect(response.status).toBe(302)
+    const cookie = response.headers.get('set-cookie')!
+    expect(cookie).toContain('Max-Age=0')
+    if (['research.example.org', 'marine.research.example.org'].includes(hostname)) {
+      expect(cookie).toContain('Domain=research.example.org')
+    } else expect(cookie).not.toContain('Domain=')
+    expect(cookie).not.toContain('Domain=corpuskit.org')
+  }
+})
+
+Deno.test('Worker rejects invalid platform configuration without forwarding or exposing it', async () => {
+  const harness = workerHarness()
+  const malformed = 'invalid.example.org"><script>alert(1)</script>'
+  Object.assign(harness.env, { PLATFORM_DOMAIN: malformed })
+  const response = await worker.fetch(new Request('https://corpuskit.org/'), harness.env)
+  expect(response.status).toBe(503)
+  expect(await response.json()).toEqual({ error: 'platform_domain_invalid' })
+  expect(harness.assetRequests).toHaveLength(0)
+  expect(harness.portalRequests).toHaveLength(0)
+})
+
 Deno.test('Worker serves the marketing app at the CorpusKit apex', async () => {
   const harness = workerHarness()
   const response = await worker.fetch(new Request('https://corpuskit.org/'), harness.env)
@@ -186,6 +297,7 @@ Deno.test('Worker serves the marketing app at the CorpusKit apex', async () => {
 Deno.test('Worker preserves the marketing URL query while selecting the homepage asset', () => {
   const request = workerModule.marketingHomeRequest(
     new Request('https://corpuskit.org/?campaign=launch', { method: 'HEAD' }),
+    'corpuskit.org',
   )
 
   expect(new URL(request.url).pathname).toBe('/home')
@@ -248,7 +360,7 @@ Deno.test('About asset selection preserves SPA paths and does not rewrite mutati
   }
   for (const method of ['POST', 'PUT', 'DELETE']) {
     const request = new Request('https://corpuskit.org/about/', { method })
-    expect(workerModule.marketingHomeRequest(request)).toBe(request)
+    expect(workerModule.marketingHomeRequest(request, 'corpuskit.org')).toBe(request)
   }
 })
 
@@ -329,7 +441,7 @@ Deno.test('public docs stay on the apex, preserve www canonicalisation and do no
   for (const path of paths) {
     for (const method of ['POST', 'PUT', 'DELETE']) {
       const request = new Request(`https://corpuskit.org${path}`, { method })
-      expect(workerModule.marketingHomeRequest(request)).toBe(request)
+      expect(workerModule.marketingHomeRequest(request, 'corpuskit.org')).toBe(request)
     }
   }
   const response = await worker.fetch(
@@ -674,7 +786,7 @@ async function principalRequest(
     headers: { 'x-corpuskit-principal': header, 'x-corpuskit-sso-admin': '1' },
   })
 }
-function realHarness(extraEnv: Record<string, string> = {}) {
+async function realHarness(extraEnv: Record<string, string> = {}, legacyBindings?: unknown) {
   const database = new DatabaseSync(':memory:')
   const storage: DurableObjectState['storage'] = {
     sql: {
@@ -720,14 +832,139 @@ function realHarness(extraEnv: Record<string, string> = {}) {
     ADMIN_PASSCODE: 'fixture',
     ...extraEnv,
   })
-  const object = new workerModule.PortalDurableObject({ storage }, harness.env)
+  if (legacyBindings) {
+    const seed = new DurableState(storage.sql, storage)
+    seed.migrate()
+    seed.put('bindings', legacyBindings)
+  }
+  let initialization: Promise<unknown> = Promise.resolve()
+  const object = new workerModule.PortalDurableObject({
+    storage,
+    blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T> {
+      const pending = callback()
+      initialization = pending
+      return pending
+    },
+  }, harness.env)
+  await initialization
   harness.env.PORTAL = { getByName: () => object }
   return { ...harness, object, database, state: new DurableState(storage.sql, storage) }
 }
 
+Deno.test('Worker startup migrates legacy binding credentials before serving requests', async () => {
+  for (const configured of [false, true]) {
+    const token = 'fixture-only-stored-credential'
+    const h = await realHarness(configured ? { BINDING_KEY: btoa('x'.repeat(32)) } : {}, {
+      marine: {
+        baseUrl: 'https://example.test/kb/marine',
+        token,
+        connectedAt: '2026-01-01T00:00:00Z',
+      },
+    })
+    try {
+      const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
+      expect(health.status).toBe(200)
+      const healthBody = await health.json()
+      expect(healthBody.bindingsReady).toBe(configured)
+      expect(healthBody.bindingEncryption).toBeUndefined()
+      const binding = await worker.fetch(
+        new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+        h.env,
+      )
+      expect(binding.status).toBe(200)
+      const body = await binding.text()
+      expect(JSON.parse(body).status).toBe('connected')
+      expect(body).not.toContain(token)
+      const stored = h.state.get<Record<string, { token: string }>>('bindings', {})
+      if (configured) expect(stored.marine?.token).toMatch(/^enc:v1:/)
+      else expect(stored.marine?.token).toBe(token)
+    } finally {
+      h.database.close()
+    }
+  }
+})
+
+Deno.test('Worker withholds a binding sealed under another key without failing other portals', async () => {
+  const originalFetch = globalThis.fetch
+  const warn = console.warn
+  const upstream: string[] = []
+  globalThis.fetch = (input) => {
+    upstream.push(String(input instanceof Request ? input.url : input))
+    return Promise.resolve(Response.json({ resources: [] }))
+  }
+  console.warn = () => {}
+  const token = 'fixture-only-stored-credential'
+  const sealed = await new BindingCipher(btoa('o'.repeat(32))).seal('marine', token)
+  const h = await realHarness({
+    BINDING_KEY: btoa('x'.repeat(32)),
+    ARAG_KB_MARINE: 'https://example.test/api/v1/kb/environment',
+    ARAG_KB_MARINE_TOKEN: 'fixture-only-environment-token',
+  }, {
+    marine: { baseUrl: 'https://example.test/kb/marine', token: sealed, connectedAt: 'then' },
+  })
+  try {
+    const status = await worker.fetch(
+      new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+      h.env,
+    )
+    expect(status.status).toBe(200)
+    expect(await status.json()).toEqual({ slug: 'marine', status: 'unavailable', kbId: 'marine' })
+    const resources = await worker.fetch(
+      new Request('https://corpuskit.test/api/t/marine/resources'),
+      h.env,
+    )
+    expect(resources.status).toBe(503)
+    expect(await resources.json()).toEqual({ error: 'binding_unavailable' })
+    // Neither the environment box nor the stored text stands in for the withheld credential.
+    expect(upstream).toEqual([])
+    const health = await worker.fetch(new Request('https://corpuskit.test/api/health'), h.env)
+    expect(health.status).toBe(200)
+    expect((await health.json()).bindingsReady).toBe(false)
+    const other = await worker.fetch(
+      new Request('https://corpuskit.test/api/t/grains/knowledge-box'),
+      h.env,
+    )
+    expect(other.status).toBe(200)
+    expect(h.state.get<Record<string, { token: string }>>('bindings', {}).marine?.token)
+      .toBe(sealed)
+  } finally {
+    globalThis.fetch = originalFetch
+    console.warn = warn
+    h.database.close()
+  }
+})
+
+Deno.test('Worker answers portal requests with binding_key_invalid for a malformed key', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  const h = await realHarness({ BINDING_KEY: 'not-a-valid-key' }, {
+    marine: { baseUrl: 'https://example.test/kb/marine', token: 'enc:v1:a:b', connectedAt: 'then' },
+  })
+  try {
+    for (const path of ['/api/health', '/api/t/marine/knowledge-box', '/auth/me']) {
+      const response = await worker.fetch(new Request(`https://corpuskit.test${path}`), h.env)
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ error: 'binding_key_invalid' })
+    }
+    // Pages that never touch credentials keep working.
+    const home = await worker.fetch(new Request('https://corpuskit.org/'), h.env)
+    expect(home.status).toBe(200)
+    // Paths that reach the object directly (scheduled maintenance) find it started and degraded.
+    const direct = await h.object.handleTrustedRequest(
+      new Request('https://corpuskit.test/api/t/marine/knowledge-box'),
+      {},
+    )
+    expect(direct.status).toBe(200)
+    expect((await direct.json()).status).toBe('unavailable')
+  } finally {
+    console.warn = warn
+    h.database.close()
+  }
+})
+
 Deno.test('Worker break-glass uses trusted peer lockout and production policy with session co-attribution', async () => {
   for (const enabled of [false, true]) {
-    const h = realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
+    const h = await realHarness({ ENVIRONMENT: 'production', ADMIN_BREAK_GLASS: String(enabled) })
     try {
       const session = { ...facts(), roles: ['CorpusKit.Owner'] }
       const cookie = await sessionCookie(session)
@@ -769,7 +1006,7 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
 })
 
 Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling stays non-system', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     h.state.put('tenants', { disabled: ['marine', 'grains'] })
     for (const method of ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
@@ -821,8 +1058,8 @@ Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling st
   }
 })
 
-Deno.test('Durable retention rolls back deleted history if its purge event cannot be written', () => {
-  const h = realHarness()
+Deno.test('Durable retention rolls back deleted history if its purge event cannot be written', async () => {
+  const h = await realHarness()
   try {
     const before = h.state.rbac.audit.read({ scope: { kind: 'platform' } })
     h.database.exec("UPDATE audit_events SET at = '2020-01-01T00:00:00.000Z'")
@@ -839,7 +1076,7 @@ Deno.test('Durable retention rolls back deleted history if its purge event canno
 })
 
 Deno.test('real DO rejects invalid envelope or mismatched method facts without legacy rescue', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const session = facts()
     const requests = [
@@ -895,7 +1132,7 @@ Deno.test('real DO rejects invalid envelope or mismatched method facts without l
 })
 
 Deno.test('real DO principal failures perform zero protected provider calls and require denial audit', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   const original = AragProvider.prototype.catalog
   let calls = 0
   AragProvider.prototype.catalog = (tenant) => {
@@ -958,7 +1195,7 @@ Deno.test('real DO principal failures perform zero protected provider calls and 
 })
 
 Deno.test('real DO auth/me resolves current assignments and preserves original claim age', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const session = { ...facts(), roles: [] }
     const read = async () =>
@@ -1017,7 +1254,7 @@ Deno.test('real DO auth/me resolves current assignments and preserves original c
 })
 
 Deno.test('Worker auth/me retains cookie lifetime and original age across fresh envelopes', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   const originalNow = Date.now
   try {
     const now = originalNow()
@@ -1044,7 +1281,7 @@ Deno.test('Worker auth/me retains cookie lifetime and original age across fresh 
 })
 
 Deno.test('Worker signing denials require audit before returning and concurrent DO contexts stay separate', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const session = { ...facts(), roles: ['CorpusKit.Owner'] }
     const cookie = await sessionCookie(session)
@@ -1076,7 +1313,7 @@ Deno.test('Worker signing denials require audit before returning and concurrent 
 })
 
 Deno.test('real Worker and DO fail closed on audit outages and keep anonymous public requests usable', async () => {
-  const h = realHarness()
+  const h = await realHarness()
   try {
     const response = await worker.fetch(
       new Request('https://corpuskit.test/api/t/marine/config', {

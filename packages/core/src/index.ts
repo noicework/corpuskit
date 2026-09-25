@@ -439,13 +439,15 @@ export const TenantConfigSchema = z.object({
 // ---------------------------------------------------------------------------
 // Knowledge box connection status - which backing store a tenant is wired to.
 // "demo" = the seeded demo knowledge box shipped with the app; "connected" =
-// a knowledge box an administrator connected in the app; "none" = not wired.
+// a knowledge box an administrator connected in the app; "none" = not wired;
+// "unavailable" = a stored connection that cannot be opened (for example after
+// its encryption key changed) and is withheld until replaced or removed.
 // Never carries credentials.
 // ---------------------------------------------------------------------------
 
 export const KnowledgeBoxStatusSchema = z.object({
   slug: z.string().min(1),
-  status: z.enum(['demo', 'connected', 'none']),
+  status: z.enum(['demo', 'connected', 'none', 'unavailable']),
   /** Truncated knowledge box id for display - never the token. */
   kbId: z.string().optional(),
 })

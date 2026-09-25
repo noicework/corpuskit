@@ -21,6 +21,7 @@ interface DurableObjectSqlStorage {
 }
 
 interface DurableObjectState {
+  blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>
   storage: {
     sql: DurableObjectSqlStorage
     transactionSync<T>(callback: () => T): T

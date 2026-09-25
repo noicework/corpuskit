@@ -18,6 +18,7 @@ const STATUS_DOT: Record<Status, string> = {
   connected: 'bg-[var(--rp-ok-ink)]',
   demo: 'bg-[var(--rp-warn-ink)]',
   none: 'bg-surface-3',
+  unavailable: 'bg-[var(--rp-bad-ink)]',
 }
 
 function StatusDot({ status }: { status: Status }) {
@@ -32,6 +33,7 @@ function StatusDot({ status }: { status: Status }) {
 function StatusBadge({ status }: { status: Status }) {
   if (status === 'connected') return <span className='rp-badge rp-badge-ok'>Connected</span>
   if (status === 'demo') return <span className='rp-badge rp-badge-warn'>Demo only</span>
+  if (status === 'unavailable') return <span className='rp-badge rp-badge-bad'>Unavailable</span>
   return <span className='rp-badge rp-badge-quiet'>Not connected</span>
 }
 

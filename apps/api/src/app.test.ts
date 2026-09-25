@@ -646,7 +646,8 @@ describe('independent admin route permission matrix', () => {
             generatedAt: '2026-09-12T00:00:00Z',
             data: { title: 'Seeded research' },
           })
-          fixture.stores.bindings.set('a', {
+          await fixture.stores.bindings.initialize()
+          await fixture.stores.bindings.set('a', {
             baseUrl: 'https://example.test/kb/a',
             token: 'fixture-token',
             kbId: 'a',
@@ -1078,9 +1079,10 @@ describe('portal domain lifecycle', () => {
     expect(tenants.get('removal-retry')).toBeDefined()
   })
 
-  it('upgrades the existing OPAX runtime config to its configured hostname', () => {
+  it('upgrades the existing OPAX runtime config to its showcase hostname on read only', () => {
     const tenants = freshTenants()
-    expect(tenants.add({ name: 'OPAX' }).hostname).toBe('opax.corpuskit.org')
+    expect(tenants.add({ name: 'OPAX' }).hostname).toBeUndefined()
+    expect(tenants.get('opax')?.hostname).toBe('opax.corpuskit.org')
     expect(tenants.list().find((tenant) => tenant.slug === 'opax')?.hostname).toBe(
       'opax.corpuskit.org',
     )

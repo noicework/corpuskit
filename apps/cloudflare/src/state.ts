@@ -3,14 +3,14 @@ import {
   type Enrichment,
   type KgProposal,
   KgProposalSchema,
-  type KnowledgeBoxStatus,
   type TenantConfig,
   TenantConfigSchema,
   type TenantSummary,
 } from '@research-portal/core'
-import { envBindings, type KbBinding, regionalBase } from '@research-portal/retrieval'
 import type { BrandingAsset, BrandingAssetStore, BrandingKind } from '../../api/src/app.ts'
-import type { BindingStoreApi } from '../../api/src/bindings.ts'
+import { type BindingStoreApi, SealedBindingStore } from '../../api/src/bindings.ts'
+import { BindingCryptoError } from '../../api/src/binding-crypto.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
@@ -373,6 +373,7 @@ export class DurableState {
     try {
       return JSON.parse(row.value) as T
     } catch (error) {
+      if (key === 'bindings') throw new BindingCryptoError('binding_storage_invalid')
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
       if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
@@ -679,60 +680,24 @@ export function stringEnv(env: object): Record<string, string | undefined> {
   return result
 }
 
-export class DurableBindingStore implements BindingStoreApi {
-  private readonly demo: Record<string, KbBinding>
-
-  constructor(private readonly state: DurableState, env: Record<string, string | undefined>) {
-    this.demo = envBindings(env)
-    const connected = this.connected()
-    const zone = env.ARAG_ZONE
-    if (!zone) return
-    let changed = false
-    for (const entry of Object.values(connected)) {
-      if (!entry.baseUrl && entry.kbId) {
-        entry.baseUrl = `${regionalBase(zone)}/kb/${entry.kbId}`
-        changed = true
-      }
-    }
-    if (changed) this.state.put('bindings', connected)
-  }
-
-  private connected(): Record<string, KbBinding & { connectedAt: string }> {
-    return this.state.get('bindings', {})
-  }
-
-  get(slug: string): KbBinding | undefined {
-    return this.connected()[slug] ?? this.demo[slug]
-  }
-
-  isDemo(slug: string): boolean {
-    return !this.connected()[slug] && Boolean(this.demo[slug])
-  }
-
-  set(slug: string, binding: KbBinding): void {
-    const connected = this.connected()
-    connected[slug] = { ...binding, connectedAt: new Date().toISOString() }
-    this.state.put('bindings', connected)
-  }
-
-  remove(slug: string): void {
-    const connected = this.connected()
-    delete connected[slug]
-    this.state.put('bindings', connected)
-  }
-
-  status(slug: string): KnowledgeBoxStatus {
-    const connected = this.connected()[slug]
-    if (connected) return { slug, status: 'connected', kbId: truncate(displayId(connected)) }
-    const demo = this.demo[slug]
-    if (demo) return { slug, status: 'demo', kbId: truncate(displayId(demo)) }
-    return { slug, status: 'none' }
+/** Credentials in the `bindings` state row; writes share the local mutation audit transaction. */
+export class DurableBindingStore extends SealedBindingStore implements BindingStoreApi {
+  constructor(state: DurableState, env: Record<string, string | undefined>) {
+    super(
+      {
+        read: () => state.get<unknown>('bindings', undefined),
+        write: (records, change) => {
+          const put = () => state.put('bindings', records)
+          // Migration runs at start-up, outside any request, like the other store upgrades.
+          if (change.operation === 'bindings.migrate') put()
+          else state.localMutation(change.operation, [change.slug], put)
+        },
+      },
+      env,
+      true,
+    )
   }
 }
-
-const displayId = (binding: KbBinding) =>
-  binding.kbId ?? binding.baseUrl.split('/').pop() ?? binding.baseUrl
-const truncate = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…` : id)
 
 interface TenantState {
   custom: Record<string, unknown>
@@ -748,7 +713,7 @@ const DEFAULT_COLOURS = {
 }
 
 export class DurableTenantStore implements TenantStoreApi {
-  constructor(private readonly state: DurableState) {}
+  constructor(private readonly state: DurableState, private readonly platformDomain: string) {}
 
   private load(): TenantState {
     const raw = tenantRecord(this.state.get<unknown>('tenants', {}))
@@ -779,10 +744,13 @@ export class DurableTenantStore implements TenantStoreApi {
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
     const base = tenantConfig(slug) ?? custom
     if (!base) return undefined
-    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base)
+    if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(data.overrides[slug])
     const { prompts: _prompts, ...configPatch } = override
-    return withPlatformHostname(TenantConfigSchema.parse({ ...base, ...configPatch }))
+    return withPlatformHostname(
+      TenantConfigSchema.parse({ ...base, ...configPatch }),
+      this.platformDomain,
+    )
   }
 
   promptsFor(slug: string): { ask?: string; images?: boolean } {
@@ -896,10 +864,10 @@ export class DurableTenantStore implements TenantStoreApi {
       entityTypes: [],
       relationTypes: [],
     })
-    const configured = withPlatformHostname(config)
-    data.custom[slug] = configured
+    // Persist and return exactly what was created: a hostname comes only from domain attachment.
+    data.custom[slug] = config
     this.save(data)
-    return configured
+    return config
   }
 
   remove(slug: string): boolean {
@@ -1628,8 +1596,11 @@ export function durableStores(
     audit: state.rbac.audit,
     assignments: state.rbac.assignments,
     locks: state.rbac.locks,
-    bindings: state.auditedStore('bindings', new DurableBindingStore(state, env)),
-    tenants: state.auditedStore('tenants', new DurableTenantStore(state)),
+    bindings: new DurableBindingStore(state, env),
+    tenants: state.auditedStore(
+      'tenants',
+      new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN)),
+    ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
     watches: state.auditedStore('watches', new DurableWatchStore(state)),

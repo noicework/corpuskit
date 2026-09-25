@@ -14,6 +14,8 @@ import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
+import { platformShellResponse } from './platform-shell.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 
 loadRootEnv()
 
@@ -21,6 +23,7 @@ const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
 const bindings = new BindingStore()
+await bindings.initialize()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
 const provider = new AragProvider({
@@ -46,7 +49,8 @@ const docsHealth = new DocsHealth({
     tenants.list().map((t) => tenants.get(t.slug)).filter((t): t is NonNullable<typeof t> =>
       t !== undefined
     ),
-  isBound: (slug) => bindings.get(slug) !== undefined,
+  // A withheld (unavailable) credential is not probed; the admin overview reports it.
+  isBound: (slug) => ['connected', 'demo'].includes(bindings.status(slug).status),
   provider,
 })
 
@@ -164,4 +168,9 @@ app.get(
   }),
 )
 
-Deno.serve({ port }, (request, info) => ingress.handle(request, (clean) => app.fetch(clean), info))
+const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
+Deno.serve({ port }, async (request, info) =>
+  platformShellResponse(
+    await ingress.handle(request, (clean) => app.fetch(clean), info),
+    platformDomain,
+  ))

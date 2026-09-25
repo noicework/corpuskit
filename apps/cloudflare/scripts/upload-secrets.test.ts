@@ -10,6 +10,8 @@ ARAG_KB_MARINE=box-id
 ARAG_KB_MARINE_TOKEN="box-token"
 ENTRA_CLIENT_SECRET=client-secret
 SESSION_SECRET=session-secret
+BINDING_KEY=test-only-key
+PLATFORM_DOMAIN=research.example
 CLOUDFLARE_ACCOUNT_ID=cloudflare-account-id
 CLOUDFLARE_DOMAINS_TOKEN=domain-token
 `)
@@ -20,6 +22,7 @@ CLOUDFLARE_DOMAINS_TOKEN=domain-token
     ARAG_KB_MARINE_TOKEN: 'box-token',
     ENTRA_CLIENT_SECRET: 'client-secret',
     SESSION_SECRET: 'session-secret',
+    BINDING_KEY: 'test-only-key',
     CLOUDFLARE_ACCOUNT_ID: 'cloudflare-account-id',
     CLOUDFLARE_DOMAINS_TOKEN: 'domain-token',
   })

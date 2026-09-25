@@ -69,11 +69,25 @@ Only Worker-relevant values are read at runtime:
 - `ENTRA_CLIENT_SECRET`
 - `ENTRA_ADMIN_EMAILS` as an optional break-glass allowlist
 - `SESSION_SECRET`, a random value of at least 32 bytes
+- `BINDING_KEY`, standard base64 of 32 random bytes, seals persisted knowledge-box tokens
+  with AES-256-GCM. Required for new or replacement bindings; existing plaintext records remain
+  readable without it. A malformed value makes every API request answer 503
+  `binding_key_invalid`; a stored binding the key cannot open is reported `unavailable` and can
+  be replaced or disconnected. See
+  [hosting credential encryption](HOSTING.md#knowledge-box-credential-encryption) for migration,
+  readiness signals and key recovery. The secret upload task includes this value when
+  configured; it never generates or rotates it.
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_DOMAINS_TOKEN`, optional credentials for
-  automatically attaching a safe `<slug>.corpuskit.org` custom domain when an administrator
+  automatically attaching a safe `<slug>.<PLATFORM_DOMAIN>` custom domain when an administrator
   creates a portal
 
 Do not upload account provisioning credentials (`ARAG_ACCOUNT`, `ARAG_NUA_KEY`) to the Worker.
+
+`PLATFORM_DOMAIN` is an ordinary Worker runtime variable, defaulting to `corpuskit.org`. It controls
+automatic portal hostnames, the platform redirect, shared cookie scope and the runtime domain
+injected into the SPA shell. Set it in the target Worker's vars rather than the secret upload
+task. Configure routes, domain-token zone permissions and the identity redirect URI consistently.
+See [configurable platform domain](HOSTING.md#configurable-platform-domain).
 
 ## Portal custom domains
 
@@ -84,13 +98,16 @@ credentials are configured, the admin create route then:
 1. validates the generated slug as a public DNS label and rejects reserved infrastructure names;
 2. looks up the exact hostname with
    [`GET /accounts/{account_id}/workers/domains`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/list/);
-3. attaches it to the `corpuskit` Worker with
+3. attaches it to the Worker script named by `WORKER_NAME` (default `corpuskit`; it must equal the
+   script `name` in the Wrangler configuration) with
    [`PUT /accounts/{account_id}/workers/domains`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/update/)
-   when it is absent; and
+   when it is absent, letting Cloudflare place it in the account zone that contains the hostname,
+   and rejects a result for another hostname, Worker or zone; and
 4. stores the hostname on the tenant only after Cloudflare confirms it.
 
 Cloudflare creates the DNS record and TLS certificate for a Worker Custom Domain. Repeating create
-is a no-op when the hostname is already attached to the `corpuskit` Worker. Removing a custom
+is a no-op when the hostname is already attached to the configured Worker. `PLATFORM_DOMAIN` can
+be a subdomain, such as `research.example.org` within the `example.org` zone. Removing a custom
 portal looks up the domain and calls
 [`DELETE /accounts/{account_id}/workers/domains/{domain_id}`](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/delete/)
 before deleting the tenant. If create
@@ -100,10 +117,10 @@ be retried without leaving an attached orphan domain.
 
 Create a dedicated API token named for portal-domain provisioning. Do not reuse the CI deployment
 token or a Global API Key. Restrict it to the CorpusKit Cloudflare account and the
-`corpuskit.org` zone with exactly:
+zone containing `PLATFORM_DOMAIN` (default `corpuskit.org`) with exactly:
 
 - Account - Workers Scripts - Edit (`Workers Scripts Write` in the API reference).
-- Zone - DNS - Edit, limited to the single `corpuskit.org` zone.
+- Zone - DNS - Edit, limited to that single platform zone.
 
 Put the token in `.env` as `CLOUDFLARE_DOMAINS_TOKEN` and the target account identifier as
 `CLOUDFLARE_ACCOUNT_ID`, then rerun `deno task secrets:cloudflare`. Both are uploaded through the

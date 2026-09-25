@@ -39,7 +39,9 @@ Deno.test('every public page has complete content, metadata, anchors, navigation
     expect(html).toContain('href="/docs" aria-current="page">Docs</a>')
     expect(html).not.toContain('href="/about" aria-current')
     expect(html).toContain(
-      `<meta property="og:url" content="https://corpuskit.org/docs${page ? `/${page.id}` : ''}">`,
+      `<meta property="og:url" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/docs${
+        page ? `/${page.id}` : ''
+      }">`,
     )
     expect(html).toContain('<meta name="twitter:card" content="summary_large_image">')
     expect(html).not.toMatch(

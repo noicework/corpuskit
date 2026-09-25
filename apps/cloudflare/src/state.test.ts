@@ -453,7 +453,7 @@ Deno.test('Durable portal policy survives reload and repeated migration for seed
   try {
     let state = new DurableState(sql, sql)
     state.migrate()
-    let store = new DurableTenantStore(state)
+    let store = new DurableTenantStore(state, 'corpuskit.org')
     state.put('tenants', {
       custom: { legacy: { ...tenantConfig('marine'), slug: 'legacy', accessMode: undefined } },
       overrides: { marine: { searchPlaceholder: 'Legacy seed' } },
@@ -471,7 +471,7 @@ Deno.test('Durable portal policy survives reload and repeated migration for seed
         for (let repeat = 0; repeat < 2; repeat++) {
           state = new DurableState(sql, sql)
           state.migrate()
-          store = new DurableTenantStore(state)
+          store = new DurableTenantStore(state, 'corpuskit.org')
           expect(store.get(slug)?.accessMode).toBe(accessMode)
           expect(store.get(slug)?.branding).toEqual(branding)
           expect(store.isDisabled(slug)).toBe(true)
@@ -508,7 +508,7 @@ Deno.test('Durable corrupt policy never exposes seed fallback and survives unrel
         for (let repeat = 0; repeat < 2; repeat++) {
           const restart = new DurableState(sql, sql)
           restart.migrate()
-          const store = new DurableTenantStore(restart)
+          const store = new DurableTenantStore(restart, 'corpuskit.org')
           expect(() => store.get('marine')).toThrow()
           expect(store.list(true).some((item) => item.slug === 'marine')).toBe(false)
           expect(store.get('grains')?.accessMode).toBe('public')
@@ -518,14 +518,14 @@ Deno.test('Durable corrupt policy never exposes seed fallback and survives unrel
     }
     for (const raw of [null, [], { custom: null }, { custom: {}, overrides: [] }]) {
       state.put('tenants', raw)
-      expect(() => new DurableTenantStore(state).get('marine')).toThrow()
-      expect(() => new DurableTenantStore(state).list()).toThrow()
+      expect(() => new DurableTenantStore(state, 'corpuskit.org').get('marine')).toThrow()
+      expect(() => new DurableTenantStore(state, 'corpuskit.org').list()).toThrow()
     }
     sql.database.prepare('UPDATE state SET value = ? WHERE key = ?').run('{broken', 'tenants')
     for (let repeat = 0; repeat < 2; repeat++) {
       const restarted = new DurableState(sql, sql)
       restarted.migrate()
-      expect(() => new DurableTenantStore(restarted).get('marine')).toThrow()
+      expect(() => new DurableTenantStore(restarted, 'corpuskit.org').get('marine')).toThrow()
     }
   } finally {
     sql.database.close()
@@ -1468,9 +1468,15 @@ Deno.test('DurableTenantStore exposes hostnames for OPAX and successfully provis
   const sql = new TestSqlStorage()
   const state = new DurableState(sql)
   state.migrate()
-  const store = new DurableTenantStore(state)
+  const store = new DurableTenantStore(state, 'corpuskit.org')
 
-  expect(store.add({ name: 'OPAX' }).hostname).toBe('opax.corpuskit.org')
+  // The showcase upgrade is applied on read and never saved, so creation still attaches.
+  expect(store.add({ name: 'OPAX' }).hostname).toBeUndefined()
+  expect(store.get('opax')?.hostname).toBe('opax.corpuskit.org')
+  expect(
+    state.get<{ custom: Record<string, { hostname?: string }> }>('tenants', { custom: {} })
+      .custom.opax?.hostname,
+  ).toBeUndefined()
   store.add({ name: 'New portal' })
   store.patch('new-portal', { hostname: 'new-portal.corpuskit.org' })
 
@@ -1478,6 +1484,20 @@ Deno.test('DurableTenantStore exposes hostnames for OPAX and successfully provis
   expect(store.list().find((tenant) => tenant.slug === 'new-portal')?.hostname).toBe(
     'new-portal.corpuskit.org',
   )
+})
+
+Deno.test('DurableTenantStore never gives showcase hostnames to another platform domain', () => {
+  const state = new DurableState(new TestSqlStorage())
+  state.migrate()
+  const store = new DurableTenantStore(state, 'research.example')
+
+  expect(store.add({ name: 'OPAX' }).hostname).toBeUndefined()
+  for (const slug of ['marine', 'grains', 'opax']) {
+    expect(store.get(slug)?.hostname).toBeUndefined()
+  }
+  expect(store.list().filter((tenant) => tenant.hostname)).toEqual([])
+  store.patch('opax', { hostname: 'opax.research.example' })
+  expect(store.get('opax')?.hostname).toBe('opax.research.example')
 })
 
 Deno.test('DurableRoutingLog appends per decision, trims to its cap and keeps tenants apart', () => {

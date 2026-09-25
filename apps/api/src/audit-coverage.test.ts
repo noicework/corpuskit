@@ -654,7 +654,7 @@ Deno.test('actual MCP tools/list equals declarations in both directions', async 
 Deno.test('Worker authentication and static boundaries stay separate from Hono handlers', async () => {
   const worker = await Deno.readTextFile(new URL('../../cloudflare/src/worker.ts', import.meta.url))
   expect(worker).toContain("url.pathname.startsWith('/auth/')")
-  expect(worker).toContain('env.ASSETS.fetch(marketingHomeRequest(request))')
+  expect(worker).toContain('env.ASSETS.fetch(marketingHomeRequest(request, platformDomain))')
   const boundaries = DECLARATIONS.filter((item) => item.kind === 'boundary')
   expect(boundaries.map((item) => item.path)).toEqual(['/auth/*', 'static-assets'])
   expect(boundaries.find((item) => item.path === 'static-assets')?.reason).toContain('/docs')

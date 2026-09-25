@@ -291,7 +291,7 @@ export async function assertEnforcementJourney(h: EnforcementJourney): Promise<v
 export interface IdentityJourney {
   readonly rbac: RbacState
   exec(sql: string): void
-  restart(): void
+  restart(): void | Promise<void>
   advance(ms: number): void
   invoke(
     path: string,
@@ -440,7 +440,7 @@ export async function assertIdentityJourney(h: IdentityJourney): Promise<void> {
       attempt === 4 ? 403 : 401,
     )
   }
-  h.restart()
+  await h.restart()
   const locked = await h.invoke('/api/admin/overview', undefined, passcode('fixture'))
   expect(locked.status).toBe(403)
   expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(0)

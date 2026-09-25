@@ -91,6 +91,8 @@ import { publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { type NewTenantInput, TenantStore, type TenantStoreApi, tenantSummary } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
+import { BindingCryptoError } from './binding-crypto.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
 import { GENERATE_SCHEMAS } from './generate-schemas.ts'
 import {
@@ -860,6 +862,7 @@ export interface BuildAppOptions {
   /** The live provider's management surface; absent in tests. */
   management?: AragProvider
   bindings?: BindingStoreApi
+  platformDomain?: string
   insights?: InsightsStoreApi
   sessions?: SessionsStoreApi
   /** Source registry; shared with startScheduler in server.ts so a scheduled sync and a
@@ -935,7 +938,8 @@ export function researchOwner(c: Context): Promise<ResearchOwner> {
 export function buildApp(opts: BuildAppOptions): Hono {
   const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
-  const tenants = opts.tenants ?? new TenantStore({})
+  const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
+  const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
   const insights = opts.insights ?? new InsightsStore()
   const routing = opts.routing ?? new RoutingLog()
   const sessions = opts.sessions ?? new SessionsStore()
@@ -1573,6 +1577,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   )
 
   app.onError((err, c) => {
+    if (err instanceof BindingCryptoError) return c.json({ error: err.code }, err.status)
     if (err instanceof AuthorisationError) {
       if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
       if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
@@ -1800,10 +1805,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       typeof value === 'string' && value.length > 0 ? value.slice(0, 160) : undefined
     const builtAt = stamp(opts.webBuild?.builtAt)
     const buildSha = stamp(opts.webBuild?.sha)
+    // One coarse flag for monitors; the cause stays on the authorised admin overview.
+    const encryption = bindings.encryptionStatus()
+    const bindingsReady = encryption.writable && !encryption.error && encryption.unavailable === 0
     return c.json(
       {
         ok: web,
         web,
+        ...(encryption.required || !bindingsReady ? { bindingsReady } : {}),
         version: stamp(opts.buildSha ?? process.env.BUILD_SHA) ?? 'dev',
         // The bundle actually served, so a stale build is visible (D1-21).
         ...(builtAt ? { builtAt } : {}),
@@ -3649,6 +3658,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return {
           tenant: summary,
           knowledgeBox: bindings.status(summary.slug),
+          bindingEncryption: bindings.encryptionStatus(),
           resourceCount,
           custom: tenants.isCustom(summary.slug),
           disabled: tenants.isDisabled(summary.slug),
@@ -3681,7 +3691,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!KeyPortalSlugSchema.safeParse(newSlug).success) {
       return c.json({ error: 'invalid_request' }, 400)
     }
-    const newHostname = portalHostnameForSlug(newSlug)
+    const newHostname = portalHostnameForSlug(newSlug, platformDomain)
     if (newHostname && domains) {
       await portalSubAction(c, 'tenant.domain.attach', newSlug, true)
       await portalSubAction(c, 'tenant.domain.detach', newSlug, true)
@@ -3699,7 +3709,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
 
-      const hostname = portalHostnameForSlug(config.slug)
+      const hostname = portalHostnameForSlug(config.slug, platformDomain)
       if (!hostname) {
         return c.json({
           ok: true,
@@ -3831,6 +3841,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box/create'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    bindings.assertWritable()
     if (!accountOpsAvailable()) {
       return c.json({
         error: 'account_credentials_missing',
@@ -3847,12 +3858,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         kbSlug,
         parsed.data.title ?? `${config.branding.productName}`,
       )
-      bindings.set(config.slug, binding)
+      await bindings.set(config.slug, binding)
       opts.invalidate?.(config.slug)
       return c.json({ ok: true, status: bindings.status(config.slug) })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'creation failed'
-      return c.json({ error: 'creation_failed', message }, 502)
+      if (err instanceof BindingCryptoError) throw err
+      return c.json({ error: 'creation_failed', message: 'Knowledge box creation failed.' }, 502)
     }
   })
 
@@ -4907,6 +4918,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    bindings.assertWritable()
     const raw = await c.req.json().catch(() => null) as
       | { url?: unknown; token?: unknown }
       | null
@@ -4943,7 +4955,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         : `Could not reach this knowledge box (${status || 'network error'}).`
       return c.json({ error: 'verification_failed', message }, 400)
     }
-    bindings.set(config.slug, candidate)
+    await bindings.set(config.slug, candidate)
     opts.invalidate?.(config.slug)
     return c.json({ ok: true, status: bindings.status(config.slug), resourceCount })
   })

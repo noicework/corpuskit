@@ -158,6 +158,8 @@ function ManageContent() {
                 ? 'Knowledge box connected'
                 : status.data.status === 'demo'
                 ? 'Demo knowledge box'
+                : status.data.status === 'unavailable'
+                ? 'Knowledge box connection unavailable. Reconnect or disconnect it.'
                 : 'Knowledge box not connected'
               : status.isError
               ? 'Connection status is unavailable.'
@@ -182,7 +184,8 @@ function ManageContent() {
               Content statistics are unavailable.
             </p>
           )}
-          {status.data?.status === 'none' && can('bindings.write') && tab !== 'connections' && (
+          {(status.data?.status === 'none' || status.data?.status === 'unavailable') &&
+            can('bindings.write') && tab !== 'connections' && (
             <button
               type='button'
               className='rp-btn rp-btn-outline mt-3'
