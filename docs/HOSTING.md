@@ -14,6 +14,7 @@ install.
 | Per-portal status, limits and usage | [Portal lifecycle, limits and usage](#portal-lifecycle-limits-and-usage) |
 | Sign-in through a trusted outside identity issuer | [External sign-in handoff](#external-sign-in-handoff) |
 | The hostname portals and sessions live under | [Configurable platform domain](#configurable-platform-domain) |
+| Serving a portal on hostnames outside the platform domain | [Portal host aliases](#portal-host-aliases) |
 
 ## Knowledge box credential encryption
 
@@ -179,6 +180,7 @@ The current allowlist is:
 | Read or replace a portal's lifecycle | `GET`, `PUT /api/admin/t/:slug/lifecycle` |
 | Read portal usage | `GET /api/admin/t/:slug/usage` |
 | Read corpus counters | `GET /api/admin/t/:slug/counters` |
+| List, register or remove portal host aliases | `GET /api/admin/t/:slug/aliases`, `PUT`, `DELETE /api/admin/t/:slug/aliases/:hostname` |
 | Upload branding | `POST /api/admin/t/:slug/branding/:kind` |
 | Migrate content between portals | `POST /api/admin/migrate` |
 
@@ -208,11 +210,13 @@ Knowledge-box connection accepts
 and validates the binding with the provider before saving it. The existing `url` field remains
 available; supply exactly one of `endpoint` or `url`.
 
-This version has no standalone dedicated-hostname assignment or removal routes. Portal creation
-can attach the automatically derived hostname when the domain provisioner is configured. The
-existing hostname removal operation is part of portal deletion, which requires `owner` and is
-therefore refused for operators. A future dedicated-hostname route must opt in explicitly and
-retain the `domains.write` permission.
+Portal creation can attach the automatically derived hostname when the domain provisioner is
+configured, and portal deletion, which requires `owner` and is therefore refused for operators,
+detaches it. Hostnames outside the platform domain are routed by the hosting operator and
+registered with the [portal host alias](#portal-host-aliases) routes.
+
+Operator calls are refused on a portal's alias host with `403 operator_not_allowed`, whatever the
+route. Use the platform hostname, the Worker's own `workers.dev` hostname or a service binding.
 
 `POST /api/admin/migrate` is declared with `portal.create` (platform-admin) rather than the
 owner-only `platform.settings.write`, for every caller, so that the operator can use it. The
@@ -551,8 +555,10 @@ No secret or variable is needed.
 
 ### Deleting a portal
 
-`DELETE /api/admin/tenants/<slug>` (owner only) removes the portal and retires its slug in one
-write, then removes its knowledge box binding and lifecycle records. After that it revokes every
+`DELETE /api/admin/tenants/<slug>` (owner only) removes the portal, retires its slug and removes
+its [host aliases](#portal-host-aliases) in one write, then removes its knowledge box binding and
+lifecycle records. Only the portal's own hostname is detached from the Worker; alias hostnames are
+left to the hosting operator that routed them. After that it revokes every
 member row and group mapping scoped to the portal, each recorded as an `assignment.delete` audit
 event, and every data key issued for it. The portal's other records (sources, enrichments, insights,
 suggestions, knowledge graph proposals, research sessions, investigations, watches and branding)
@@ -789,7 +795,9 @@ domain into each HTML response at runtime, before the SPA loads, so a single web
 different deployments without a rebuild. The same value fills the canonical and share-card URLs of
 the app shell, homepage, About page and documentation. Custom hostnames outside the platform
 domain retain host-only cookies; lookalike suffixes are never included in the platform cookie
-scope, and the SPA only links across origins to hostnames within the platform domain.
+scope. The SPA only links across origins to hostnames within the platform domain, except on a
+[portal's alias host](#portal-host-aliases), where links to other portals go to their canonical
+hostnames.
 
 Every host under the platform domain shares that one session cookie, and each of them answers
 the API routes of every portal. A file that a portal administrator or a knowledge box supplied
@@ -823,3 +831,176 @@ for the account. `WORKER_NAME` is also the signing audience, so it must equal th
 name. Before changing it on a deployment that already attached hostnames, list the account's
 Worker custom domains: a portal whose hostname is attached to the previous script cannot be
 removed (`domain_removal_failed`) until that hostname is detached or moved.
+
+## Portal host aliases
+
+A hosting operator can serve a portal on hostnames outside the platform domain, such as
+`research.example.org`. The portal never creates DNS records, certificates or routes for these
+hostnames. The operator first routes a hostname to this Worker, by whatever means it likes, and
+then registers it here as one of the portal's aliases. Removing an alias here does not remove the
+operator's routing either.
+
+### Routes
+
+| Method and route | Body | Answer |
+|---|---|---|
+| `GET /api/admin/t/:slug/aliases` | None | `{ "aliases": [{ "hostname", "primary", "createdAt" }], "hostname" }` |
+| `PUT /api/admin/t/:slug/aliases/:hostname` | Empty, or `{ "primary": true \| false }` | 200 `{ "ok": true, "aliases": [...], "hostname" }` |
+| `DELETE /api/admin/t/:slug/aliases/:hostname` | None | 200 `{ "ok": true, "aliases": [...], "hostname" }` |
+
+The top-level `hostname` is the portal's canonical hostname after the call, or `null` when it has
+none. `aliases` lists the portal's aliases, oldest first; `createdAt` is an ISO timestamp.
+
+`PUT` is idempotent: registering an alias the portal already has keeps its creation time, and
+changes `primary` only when the body gives it. `DELETE` is idempotent too: removing a hostname the
+portal does not have, including another portal's alias, is still 200 and changes nothing.
+
+All three routes are hosting control at platform scope, like the
+[lifecycle routes](#portal-lifecycle-limits-and-usage). They need `portal.create` at platform
+scope (a platform administrator or owner) and accept the [operator credential](#operator-credential).
+Portal roles can neither read nor change aliases: a portal administrator who could register one
+could claim a hostname the deployment already answers on and take it over for their own portal.
+The routes are refused to `ck_` keys, answered `private, no-store`, and stay available while a
+portal is suspended, read-only or disabled.
+
+| Refusal | Status | Body |
+|---|---|---|
+| The hostname cannot be an alias (see below) | 400 | `{ "error": "invalid_hostname" }` |
+| The `PUT` body is not empty, `{}` or `{ "primary": <boolean> }` | 400 | `{ "error": "invalid_request" }` |
+| No such portal | 404 | `{ "error": "unknown_tenant" }` |
+| The hostname is another portal's alias, or another portal's own hostname | 409 | `{ "error": "hostname_taken" }` |
+| The portal already has `MAX_PORTAL_ALIASES` aliases | 409 | `{ "error": "alias_limit" }` |
+
+`MAX_PORTAL_ALIASES` is a runtime variable: a whole number from 0 to 100, 5 when unset or invalid.
+Updating an alias the portal already has is never refused by the limit. The check that a hostname
+is free and the write that registers it happen in one synchronous store call inside the Durable
+Object's SQLite transaction, so two concurrent registrations of one hostname, or of a portal's
+last free alias, admit exactly one.
+
+### Valid hostnames
+
+The hostname in the path is trimmed, lower-cased and loses one trailing dot. It must then be a DNS
+name of at least two labels and at most 253 characters, each label made of letters, digits and
+inner hyphens, at most 63 characters long. These are refused with `invalid_hostname`:
+
+- IP literals in any spelling, and any name whose last label is numeric;
+- ports, paths, credentials, wildcards and any character outside the label alphabet;
+- punycode (`xn--`) and every other label with hyphens in its third and fourth places, and
+  unicode names, which are refused rather than converted;
+- the platform domain and every name under it, which the platform routes itself;
+- `workers.dev` names, which the operator keeps for reaching the Worker directly.
+
+### Canonical hostname
+
+With `"primary": true` the alias becomes the portal's canonical hostname: `hostname` in the portal
+configuration (`GET /api/t/:slug/config`) and the portal list (`GET /api/tenants`), used for
+canonical and share URLs and for links. Only one alias is primary at a time, so promoting one
+clears the others. Deleting the primary alias, or `PUT` with `"primary": false` on it, reverts the
+canonical hostname to the portal's own hostname, the automatic `<slug>.<PLATFORM_DOMAIN>` when it
+has one; otherwise the portal has none. The automatic platform hostname keeps serving the portal
+either way.
+
+### Serving on an alias host
+
+A request whose `Host` is a registered alias reaches that portal only:
+
+- `GET /` answers 308 with `Location: /t/<slug>` and the original query string, as a platform
+  subdomain's root does.
+- The portal's pages (`/t/<slug>/...`), its API (`/api/t/<slug>/...`) and its portal-scoped
+  administration (`/api/admin/t/<slug>/...`) work as on the platform hosts, and so do
+  `/api/health`, static assets and the SPA shell.
+- `GET /api/tenants` lists that portal alone. `GET /auth/me?portal=` answers for that portal alone.
+- Every other portal's pages answer a plain-text 404, and its API
+  `404 { "error": "not_found" }`, before any credential is read.
+- Platform-scope API routes answer `404 { "error": "not_found" }` too, whoever calls them:
+  `/api/admin/tenants`, `/api/admin/overview`, people, groups and platform audit, content
+  migration, cross-portal asks, and the portal's own lifecycle, usage and alias routes.
+- Platform pages (`/admin`, `/about`, `/docs`, `/home`) answer a plain-text 404.
+- The operator credential is refused with `403 operator_not_allowed` and audited, whatever the
+  route; a wrong key is refused with `401 invalid_operator` as anywhere else.
+- The [lifecycle](#portal-lifecycle-limits-and-usage) applies unchanged: a suspended portal shows
+  its paused screen and a read-only one refuses writes.
+
+The SPA calls the API with relative URLs, so it works unchanged on an alias host. The server fills
+a `corpuskit-host-portal` shell setting with the portal's slug on its alias hosts and leaves it
+empty on every other host. On an alias host the SPA keeps links to its own portal on that host,
+and sends links to any other portal to that portal's canonical hostname, or to the platform domain
+when it has none. The portal switcher lists only the alias host's portal, because the portal list
+does. Platform administration links, which only platform administrators see, lead to the platform
+pages, which are not served on an alias host.
+
+### Sign-in on an alias host
+
+`/auth/external`, `/auth/me` and `/auth/logout` behave as on a platform host, with a session
+cookie that is always host-only on an alias host: it is never shared with the platform domain or
+another alias. [External sign-in](#external-sign-in-handoff) returns to a same-origin path only,
+so `returnTo` cannot send a person to another host. Entra sign-in is offered on an alias host only
+when `ENTRA_REDIRECT_URI` is on that host; otherwise the host reports `entraEnabled: false`,
+refuses `/auth/login` with `503 microsoft_sign_in_not_configured`, and reads no Entra session
+cookie. A hosting operator that uses external sign-in should send each person back to the host
+they started from, as [its responsibilities](#issuer-responsibilities) already require.
+
+### Lookup, caching and consistency
+
+The Durable Object holds the alias records and is authoritative. The Worker looks up every host
+that could be an alias, that is every valid hostname outside the platform domain and
+`workers.dev`, and caches each answer, positive or negative, in the isolate for
+`ALIAS_CACHE_SECONDS`. That runtime variable is a whole number of
+seconds from 0 to 300, 30 when unset or invalid; 0 turns the cache off. Platform hosts, IP
+addresses and `workers.dev` hosts are never looked up. If a lookup fails, the Worker treats the
+host as unregistered for that request and does not cache the failure.
+
+The Durable Object checks every API request against its own record of the host as well, and
+applies the Worker's cached answer only to narrow a request further. So a stale edge answer can
+send a visitor to the wrong portal's home page for up to `ALIAS_CACHE_SECONDS`, but never serves
+another portal's data, and an operator credential is refused as soon as the alias exists. The
+local server reads the registry on every request and caches nothing.
+
+**Operator rule:** after deleting an alias, wait longer than `ALIAS_CACHE_SECONDS` before
+registering the same hostname on a different portal. Within that window the hostname can still
+redirect to the previous portal and serve neither portal's data.
+
+### Lifecycle, audit and storage
+
+Deleting a portal deletes its aliases in the same write, and a deleted portal's hostnames stop
+resolving at once. Portal deletion detaches only the portal's own hostname from the Worker.
+
+Every `PUT` and `DELETE` is audited at platform scope with the portal as the target, as
+`portal.alias.set` or `portal.alias.remove`. The record names the actor (`operator:<OPERATOR_ID>`
+for the operator credential), `aliasHostname`, and `aliasPrimary`: the primary flag the alias has
+after a `PUT`, or had before a `DELETE`. A successful change is recorded in the same transaction as
+the change itself. A refused `PUT` is recorded with outcome `failure`.
+
+On Cloudflare the aliases are stored in the Durable Object's `tenants` state row, as an `aliases`
+list that appears once a portal has an alias. The local server stores the same list in its
+portal registry file (`TENANTS_PATH`). A malformed list fails closed, like the rest of the
+registry. Code from before this feature ignores the list: a rollback serves alias hosts as
+unregistered hosts, uses each portal's own hostname as its canonical hostname, and drops the list
+at its next registry write, so register the aliases again after rolling forward.
+
+### Example: Cloudflare for SaaS
+
+One way to route customer hostnames to this Worker, in the Cloudflare zone that holds the
+platform domain:
+
+1. Enable Cloudflare for SaaS on the zone and create its fallback origin, for example a proxied
+   originless record `fallback.<platform domain> AAAA 100::`. Publish a CNAME target for
+   customers, such as `customers.<platform domain>`, that points at the fallback origin.
+2. For each customer hostname, add a custom hostname such as `research.example.org` and let
+   Cloudflare validate it and issue its certificate. The customer creates
+   `research.example.org CNAME customers.<platform domain>` in their own DNS.
+3. Add a Worker route with the exact pattern `research.example.org/*` for the Worker named by
+   `WORKER_NAME`. An exact route per hostname keeps every other hostname in the zone away from
+   the Worker.
+4. Register the alias on the platform hostname with the operator credential:
+
+   ```http
+   PUT /api/admin/t/<slug>/aliases/research.example.org
+   Authorization: Operator <key>
+   content-type: application/json
+
+   {"primary": true}
+   ```
+
+To retire a hostname, delete the alias first, then remove the route and the custom hostname, and
+wait longer than `ALIAS_CACHE_SECONDS` before registering it for another portal.
