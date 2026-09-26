@@ -1330,10 +1330,11 @@ line; call it again to finish.
 - **The erasure's own audit records.** Each erase call records one `portal.erase` line at
   platform scope with the portal as the target: the actor, the time and a count for each kind
   (`erasedSessions`, `erasedAuditEvents` and so on, and `count` for the total), never what was
-  erased. The request that erased it keeps its `request.privileged` and `local.mutation` records
-  too, and with `?erase=true` so do the deletion's records made in the same request; these name
-  the actor, the slug and opaque record ids, never a member or any content. A later erase of the
-  same slug keeps the earlier erasures' records.
+  erased. The request that erased it keeps its other records too: its `request.privileged`
+  records, and the `local.mutation` records of the stores it changed (on Cloudflare, one
+  `erasure.erase` record for the whole transaction). With `?erase=true` so do the deletion's
+  records made in the same request. These name the actor, the slug and opaque record ids, never a
+  member or any content. A later erase of the same slug keeps the earlier erasures' records.
 
 Nothing else about the portal is kept. Audit events of other portals, and platform events that do
 not target this one, are untouched. All audit records, erasure lines included, still age out under
