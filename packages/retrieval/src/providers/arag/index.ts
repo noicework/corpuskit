@@ -1514,12 +1514,15 @@ export class AragProvider implements RetrievalProvider {
       topicId?: string
       extraMetadata?: Record<string, unknown>
       originUrl?: string
+      /** Create the resource hidden (a draft), where the knowledge box has hidden resources on. */
+      hidden?: boolean
     },
   ): Promise<{ id: string }> {
     const body: Record<string, unknown> = {
       title: input.title,
       icon: 'text/plain',
       texts: { body: { body: input.body, format: input.format ?? 'MARKDOWN' } },
+      ...(input.hidden ? { hidden: true } : {}),
     }
     if (input.originUrl) body.origin = { url: input.originUrl }
     if (input.slug) body.slug = input.slug

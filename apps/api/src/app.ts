@@ -617,6 +617,18 @@ const sourcePatchSchema = z.object({
 const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
 /** The most recent additions one request may list. */
 const RECENT_LIMIT_MAX = 100
+/** A knowledge box without hidden resources, which this server cannot turn on. */
+class HiddenResourcesOff extends Error {}
+const HIDDEN_RESOURCES_OFF = {
+  error: 'hidden_resources_off',
+  message:
+    'Hiding needs hidden resources, which are not turned on for this knowledge box. Ask the hosting operator to turn them on.',
+} as const
+const DRAFTS_OFF = {
+  error: 'draft_unavailable',
+  message:
+    'The link was not added: drafts need hidden resources, which are not turned on for this knowledge box. Add it without drafting, or ask the hosting operator to turn hidden resources on.',
+} as const
 // Purge is destructive - default TRUE means "just show me the scope", never
 // "go ahead and delete". An explicit { dryRun: false } is required to delete.
 const purgeFailedBodySchema = z.object({ dryRun: z.boolean().optional() })
@@ -4470,6 +4482,63 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(await management!.recentResources(config, limit))
   })
 
+  /**
+   * Hide (or show) a resource. Knowledge boxes ship with hidden resources off: this server turns
+   * them on and tries once more when it holds the account key, and otherwise reports that they
+   * are off rather than failing obscurely.
+   */
+  const hideResource = async (config: TenantConfig, id: string, hidden: boolean) => {
+    try {
+      await management!.setResourceHidden(config, id, hidden)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : ''
+      if (!/hidden resources enabled/i.test(message)) throw err
+      const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
+      if (!kbId || !accountOpsAvailable()) throw new HiddenResourcesOff()
+      await enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId)
+      await management!.setResourceHidden(config, id, hidden)
+    }
+  }
+
+  /**
+   * Keep a resource just added as a draft, or take it back. A draft that cannot be hidden is
+   * never left published: it is removed and the refusal says why. Only when removing it fails
+   * too does the answer name the resource that stayed, so the administrator can hide or remove
+   * it. Returns undefined when the draft is hidden.
+   */
+  const keepDraft = async (
+    config: TenantConfig,
+    id: string,
+  ): Promise<{ status: 409 | 502; body: Record<string, string> } | undefined> => {
+    try {
+      await hideResource(config, id, true)
+      return undefined
+    } catch (err) {
+      const off = err instanceof HiddenResourcesOff
+      try {
+        await management!.deleteResource(config, id)
+      } catch {
+        return {
+          status: 502,
+          body: {
+            error: 'draft_not_hidden',
+            message:
+              'The link was added but could not be kept as a draft, and removing it failed. Hide or remove it from Recent additions.',
+            id,
+          },
+        }
+      }
+      return {
+        status: off ? 409 : 502,
+        body: off ? { ...DRAFTS_OFF } : {
+          error: 'draft_unavailable',
+          message:
+            'The link was not added: it could not be kept as a draft. Try again, or add it without drafting.',
+        },
+      }
+    }
+  }
+
   app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/link'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
@@ -4497,9 +4566,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
               body: cleaned.body,
               format: 'MARKDOWN',
               originUrl: parsed.data.url,
+              ...(parsed.data.hidden ? { hidden: true } : {}),
             })
             if (parsed.data.hidden) {
-              await management!.setResourceHidden(config, created.id, true).catch(() => {})
+              const refused = await keepDraft(config, created.id)
+              if (refused) return c.json(refused.body, refused.status)
             }
             return c.json(created)
           }
@@ -4520,7 +4591,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ) throw err
         // Any other failure (network, parsing) falls through to the platform crawler.
       }
-      return c.json(await management!.createLink(config, parsed.data))
+      const created = await management!.createLink(config, parsed.data)
+      if (parsed.data.hidden) {
+        const refused = await keepDraft(config, created.id)
+        if (refused) return c.json(refused.body, refused.status)
+      }
+      return c.json(created)
     } catch (err) {
       const handled = ingestErrorResponse(err)
       if (handled) return c.json(handled.body, handled.status)
@@ -5342,14 +5418,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     if (!await adminResource(c, config, c.req.param('id'))) return adminNotFound(c)
     try {
-      await management!.setResourceHidden(config, c.req.param('id'), parsed.data.hidden)
+      await hideResource(config, c.req.param('id'), parsed.data.hidden)
     } catch (err) {
-      // Boxes ship with the hidden-resources feature off - enable and retry.
-      const message = err instanceof Error ? err.message : ''
-      const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
-      if (!/hidden resources enabled/i.test(message) || !kbId) throw err
-      await enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId)
-      await management!.setResourceHidden(config, c.req.param('id'), parsed.data.hidden)
+      if (err instanceof HiddenResourcesOff) return c.json(HIDDEN_RESOURCES_OFF, 409)
+      throw err
     }
     return c.json({ ok: true })
   })
