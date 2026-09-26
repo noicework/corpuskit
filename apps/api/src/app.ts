@@ -620,6 +620,10 @@ const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
 const RECENT_LIMIT_MAX = 100
 /** A knowledge box without hidden resources, which this server cannot turn on. */
 class HiddenResourcesOff extends Error {}
+/** The platform's refusal to hide a resource, on create or later, where hidden resources are off. */
+const hiddenResourcesOff = (err: unknown) =>
+  err instanceof HiddenResourcesOff ||
+  (err instanceof Error && /hidden resources enabled/i.test(err.message))
 const HIDDEN_RESOURCES_OFF = {
   error: 'hidden_resources_off',
   message:
@@ -4495,20 +4499,42 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   /**
-   * Hide (or show) a resource. Knowledge boxes ship with hidden resources off: this server turns
-   * them on and tries once more when it holds the account key, and otherwise reports that they
-   * are off rather than failing obscurely.
+   * Turn on the knowledge box's hidden resources (they ship off) when this server holds the
+   * account key. Without it, or when the platform refuses, they stay off (`HiddenResourcesOff`).
    */
+  const enableHidden = async (config: TenantConfig) => {
+    const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
+    if (!kbId || !accountOpsAvailable()) throw new HiddenResourcesOff()
+    try {
+      await enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId)
+    } catch {
+      throw new HiddenResourcesOff()
+    }
+  }
+
+  /** Hide (or show) a resource, turning hidden resources on first where they are off. */
   const hideResource = async (config: TenantConfig, id: string, hidden: boolean) => {
     try {
       await management!.setResourceHidden(config, id, hidden)
     } catch (err) {
-      const message = err instanceof Error ? err.message : ''
-      if (!/hidden resources enabled/i.test(message)) throw err
-      const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
-      if (!kbId || !accountOpsAvailable()) throw new HiddenResourcesOff()
-      await enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId)
+      if (!hiddenResourcesOff(err)) throw err
+      await enableHidden(config)
       await management!.setResourceHidden(config, id, hidden)
+    }
+  }
+
+  /**
+   * Create a resource as a draft. The platform refuses to create a hidden resource on a box
+   * without hidden resources, and creates nothing: they are turned on and the create is made
+   * again, or the draft is refused. It is never created public instead.
+   */
+  const createDraft = async <T>(config: TenantConfig, create: () => Promise<T>): Promise<T> => {
+    try {
+      return await create()
+    } catch (err) {
+      if (!hiddenResourcesOff(err)) throw err
+      await enableHidden(config)
+      return await create()
     }
   }
 
@@ -4535,7 +4561,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           body: {
             error: 'draft_not_hidden',
             message:
-              'The link was added but could not be kept as a draft, and removing it failed. Hide or remove it from Recent additions.',
+              'The link was added, but it could not be confirmed as a draft and removing it failed. Check it in Recent additions, and hide or remove it.',
             id,
           },
         }
@@ -4573,14 +4599,17 @@ export function buildApp(opts: BuildAppOptions): Hono {
           const html = await res.text()
           const cleaned = extractMainContent(html)
           if (cleaned) {
-            const created = await management!.createText(config, {
-              title: parsed.data.title?.trim() || cleaned.title,
-              body: cleaned.body,
-              format: 'MARKDOWN',
-              originUrl: parsed.data.url,
-              ...(parsed.data.hidden ? { hidden: true } : {}),
-            })
-            if (parsed.data.hidden) {
+            const draft = parsed.data.hidden === true
+            const create = () =>
+              management!.createText(config, {
+                title: parsed.data.title?.trim() || cleaned.title,
+                body: cleaned.body,
+                format: 'MARKDOWN',
+                originUrl: parsed.data.url,
+                ...(draft ? { hidden: true } : {}),
+              })
+            const created = draft ? await createDraft(config, create) : await create()
+            if (draft) {
               const refused = await keepDraft(config, created.id)
               if (refused) return c.json(refused.body, refused.status)
             }
@@ -4597,19 +4626,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
       } catch (err) {
         // A knowledge-box back-pressure error is not a fetch/parse failure -
         // falling through to createLink below would just hit the same full
-        // queue again. Let it escape to the outer catch instead.
+        // queue again. Let it escape to the outer catch instead. Neither is a
+        // draft the box refused to hide: the crawler would be refused too.
         if (
-          err instanceof PortalLifecycleError || (err instanceof AragApiError && err.backpressure)
+          err instanceof PortalLifecycleError ||
+          (err instanceof AragApiError && err.backpressure) ||
+          hiddenResourcesOff(err)
         ) throw err
         // Any other failure (network, parsing) falls through to the platform crawler.
       }
-      const created = await management!.createLink(config, parsed.data)
+      const created = parsed.data.hidden
+        ? await createDraft(config, () => management!.createLink(config, parsed.data))
+        : await management!.createLink(config, parsed.data)
       if (parsed.data.hidden) {
         const refused = await keepDraft(config, created.id)
         if (refused) return c.json(refused.body, refused.status)
       }
       return c.json(created)
     } catch (err) {
+      // Nothing was created: the box refused a hidden resource and this server cannot turn
+      // hidden resources on.
+      if (parsed.data.hidden && hiddenResourcesOff(err)) return c.json({ ...DRAFTS_OFF }, 409)
       const handled = ingestErrorResponse(err)
       if (handled) return c.json(handled.body, handled.status)
       throw err
