@@ -36,6 +36,7 @@ import { buildUiAccessSnapshot } from './ui-access.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import {
   aliasHostRoute,
+  aliasStartupWarnings,
   classifyHost,
   type HostKind,
   hostPortalFor,
@@ -58,7 +59,7 @@ interface LocalIngressOptions {
   rbac: RbacState
   tenants:
     & { list(): { slug: string }[] }
-    & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled' | 'aliasPortal'>>
+    & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled' | 'aliasPortal' | 'aliasHostnames'>>
   externalReplays?: ExternalLoginReplayStore
   env: Record<string, string | undefined>
 }
@@ -66,13 +67,6 @@ type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
 /** The TCP peer, which keys the per-address failure limits. */
 const peerAddress = (info?: PeerInfo) =>
   info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
-const redirectHost = (uri?: string) => {
-  try {
-    return new URL(uri ?? '').hostname
-  } catch {
-    return undefined
-  }
-}
 class InvalidLocalPrincipal extends Error {}
 class InvalidOperatorCredential extends Error {}
 
@@ -96,6 +90,12 @@ export class LocalIngress {
     if (operatorWarning) console.warn(operatorWarning)
     const hostWarning = externalHostWarning(env)
     if (hostWarning) console.warn(hostWarning)
+    try {
+      const registered = options.tenants.aliasHostnames?.() ?? []
+      for (const warning of aliasStartupWarnings(env, registered)) console.warn(warning)
+    } catch {
+      // An unreadable registry fails its own requests; it never stops the server starting.
+    }
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -145,12 +145,8 @@ export class LocalIngress {
     const platformDomain = this.platformDomain()
     if (!tenants.aliasPortal || platformDomain === null) return undefined
     const lookup = { aliasPortal: (hostname: string) => tenants.aliasPortal!(hostname) }
-    return hostPortalFor(
-      lookup,
-      new URL(request.url).hostname,
-      platformDomain,
-      reservedHostnames(this.options.env),
-    ) ?? undefined
+    // As in the Durable Object, an alias record narrows even a reserved host.
+    return hostPortalFor(lookup, new URL(request.url).hostname, platformDomain) ?? undefined
   }
 
   private platformDomain(): string | null {
@@ -208,11 +204,11 @@ export class LocalIngress {
           headers: { 'cache-control': 'no-store' },
         })
       }
-      // As in the Worker, a session issued outside the platform domain is sealed to its host and
-      // read nowhere else.
-      const auth: AuthConfig = host.kind === 'platform'
-        ? this.auth
-        : { ...this.auth, sessionHost: normaliseHostname(new URL(request.url).hostname) }
+      // As in the Worker, a session issued on an alias or other candidate host is sealed to it
+      // and read nowhere else, and an external assertion there must name it.
+      const auth: AuthConfig = host.kind === 'candidate' || hostPortal !== undefined
+        ? { ...this.auth, sessionHost: normaliseHostname(new URL(request.url).hostname) }
+        : this.auth
       const headers = stripIdentityHeaders(request.headers)
       // As in the Worker, an explicit operator credential is decided before sign-in routes or
       // sessions: it is the whole authority, and no session cookie is read beside it.
@@ -380,9 +376,8 @@ export class LocalIngress {
             tenant,
           }),
           enabled: sessionAuthConfigured(auth),
-          // On an alias host, Entra only when its redirect URI is on that host, as in the Worker.
-          entraEnabled: authConfigured(auth) &&
-            (hostPortal === undefined || redirectHost(auth.redirectUri) === auth.sessionHost),
+          // Never on an alias host, as in the Worker.
+          entraEnabled: authConfigured(auth) && hostPortal === undefined,
           externalLogin: externalLoginPresentation(this.auth.externalLogin),
           externalLoginEnabled: this.externalEnabled,
           sessionProvenance: session ? session.provenance ?? 'entra' : null,

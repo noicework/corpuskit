@@ -10,7 +10,11 @@ import { TenantStore } from './tenants.ts'
 
 const operatorKey = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE'
 
-function fixture(extra: Record<string, string> = {}) {
+function fixture(
+  extra: Record<string, string> = {},
+  /** Writes to the registry before the server starts, as an earlier release could have. */
+  seed?: (tenants: TenantStore) => void,
+) {
   const directory = Deno.makeTempDirSync({ prefix: 'local-aliases-' })
   const database = new LocalRbacDatabase(`${directory}/rbac.sqlite`)
   const rbac = new RbacState(database)
@@ -24,6 +28,7 @@ function fixture(extra: Record<string, string> = {}) {
     MAX_PORTAL_ALIASES: '3',
     ...extra,
   }
+  seed?.(new TenantStore(env))
   const owned = localOwnedStores(directory, database, rbac.audit, env)
   const tenants = owned.tenants!
   const ingress = new LocalIngress({
@@ -277,6 +282,41 @@ Deno.test('the local server seals unknown-host sessions, denies unknown hosts an
   } finally {
     g.dispose()
   }
+})
+
+Deno.test('the local server narrows a reserved host by its alias record and warns at start-up', async () => {
+  const warn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: string) => warnings.push(message)
+  let f: ReturnType<typeof fixture>
+  try {
+    f = fixture(
+      { RESERVED_HOSTNAMES: 'shared.example.org' },
+      (tenants) => expect(tenants.setAlias('marine', 'shared.example.org', true, 5).ok).toBe(true),
+    )
+  } finally {
+    console.warn = warn
+  }
+  try {
+    expect(warnings.some((message) => message.includes('shared.example.org'))).toBe(true)
+    expect(warnings.some((message) => message.includes('UNKNOWN_HOSTS is serve'))).toBe(true)
+    expect((await (await f.request('localhost', '/api/t/marine/config')).json()).hostname)
+      .toBe('marine.corpuskit.org')
+    expect((await f.request('shared.example.org', '/api/t/grains/config')).status).toBe(404)
+    expect((await f.request('shared.example.org', '/api/t/marine/config')).status).toBe(200)
+    const operator = await f.request('shared.example.org', '/api/admin/t/marine/aliases', {}, true)
+    expect(operator.status).toBe(403)
+  } finally {
+    f.dispose()
+  }
+  const quiet: string[] = []
+  console.warn = (message: string) => quiet.push(message)
+  try {
+    fixture({ UNKNOWN_HOSTS: 'deny' }).dispose()
+  } finally {
+    console.warn = warn
+  }
+  expect(quiet.some((message) => message.includes('UNKNOWN_HOSTS is serve'))).toBe(false)
 })
 
 async function assertion(key: CryptoKey, extra: Record<string, unknown> = {}): Promise<string> {

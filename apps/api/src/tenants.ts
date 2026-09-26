@@ -14,6 +14,7 @@ import {
   type AliasWriteResult,
   applyAlias,
   type PortalAlias,
+  reservedHostnames,
   storedAliases,
   type StoredPortalAlias,
   withoutAlias,
@@ -269,6 +270,8 @@ export class TenantStore {
   private aliasRecords: StoredPortalAlias[] = []
   private readonly path: string
   private readonly platformDomain: string
+  /** Hostnames the deployment keeps for itself, which are never a canonical hostname. */
+  private readonly reserved: ReadonlySet<string>
 
   private committed!: {
     custom: Record<string, unknown>
@@ -284,6 +287,7 @@ export class TenantStore {
   ) {
     this.path = env.TENANTS_PATH ?? './data/tenants.json'
     this.platformDomain = getPlatformDomain(env.PLATFORM_DOMAIN)
+    this.reserved = reservedHostnames(env)
     let raw: Record<string, unknown>
     try {
       raw = tenantRecord(JSON.parse(readFileSync(this.path, 'utf8')))
@@ -306,7 +310,7 @@ export class TenantStore {
   /** The portal's configuration, with its primary alias as the canonical hostname. */
   get(slug: string): TenantConfig | undefined {
     const config = this.own(slug)
-    return config && withPrimaryAlias(config, this.aliasRecords)
+    return config && withPrimaryAlias(config, this.aliasRecords, this.reserved)
   }
 
   /** The portal's configuration before its aliases apply. */
@@ -338,6 +342,11 @@ export class TenantStore {
   /** The portal's registered host aliases, oldest first. */
   portalAliases(slug: string): PortalAlias[] {
     return aliasesFor(this.aliasRecords, slug)
+  }
+
+  /** Every hostname registered as an alias of an existing portal. */
+  aliasHostnames(): string[] {
+    return this.aliasRecords.filter((alias) => this.own(alias.slug)).map((alias) => alias.hostname)
   }
 
   /** The existing portal a normalised hostname is registered to, if any. */

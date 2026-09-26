@@ -56,6 +56,7 @@ import {
   type AliasWriteResult,
   applyAlias,
   type PortalAlias,
+  reservedHostnames,
   storedAliases,
   type StoredPortalAlias,
   withoutAlias,
@@ -776,7 +777,12 @@ const DEFAULT_COLOURS = {
 }
 
 export class DurableTenantStore implements TenantStoreApi {
-  constructor(private readonly state: DurableState, private readonly platformDomain: string) {}
+  constructor(
+    private readonly state: DurableState,
+    private readonly platformDomain: string,
+    /** Hostnames the deployment keeps for itself, which are never a canonical hostname. */
+    private readonly reserved: ReadonlySet<string> = new Set(),
+  ) {}
 
   private load(): TenantState {
     const raw = tenantRecord(this.state.get<unknown>('tenants', {}))
@@ -814,7 +820,7 @@ export class DurableTenantStore implements TenantStoreApi {
   get(slug: string): TenantConfig | undefined {
     const data = this.load()
     const config = this.own(data, slug)
-    return config && withPrimaryAlias(config, data.aliases)
+    return config && withPrimaryAlias(config, data.aliases, this.reserved)
   }
 
   /** The portal's configuration before its aliases apply. */
@@ -846,6 +852,11 @@ export class DurableTenantStore implements TenantStoreApi {
 
   portalAliases(slug: string): PortalAlias[] {
     return aliasesFor(this.load().aliases, slug)
+  }
+
+  aliasHostnames(): string[] {
+    const data = this.load()
+    return data.aliases.filter((alias) => this.own(data, alias.slug)).map((alias) => alias.hostname)
   }
 
   aliasPortal(hostname: string): string | undefined {
@@ -1753,7 +1764,7 @@ export function durableStores(
     bindings: new DurableBindingStore(state, env),
     tenants: state.auditedStore(
       'tenants',
-      new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN)),
+      new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN), reservedHostnames(env)),
     ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),

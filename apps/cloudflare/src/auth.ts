@@ -17,10 +17,11 @@ export interface AuthConfig {
   adminEmails?: string
   cookieDomain?: string
   /**
-   * Set on every host outside the platform cookie scope (an alias, a reserved or an unknown host),
-   * to that host. A session issued there is sealed to the host and read nowhere else, so a cookie
-   * taken from it is worthless on any other host. Unset on platform hosts, where a session sealed
-   * to a host is never read.
+   * Set on a portal's alias host and on any other candidate host (a hostname outside the platform
+   * domain that a third party may control), to that host. A session issued there is sealed to the
+   * host and read nowhere else, so a cookie taken from it is worthless on any other host, and an
+   * external assertion must name the host. Unset on platform, reserved and other hosts, where a
+   * session sealed to a host is never read.
    */
   sessionHost?: string
   externalLogin?: ExternalLoginConfig
@@ -77,8 +78,6 @@ interface IdTokenClaims {
   _claim_names?: { groups?: unknown }
 }
 
-/** Local development hosts, where no one else controls the name. */
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]'])
 const STATE_COOKIE = '__Secure-corpuskit_oidc'
 const SESSION_COOKIE = '__Secure-corpuskit_session'
 const SESSION_COOKIE_MAX_BYTES = 3800
@@ -167,14 +166,12 @@ async function finishExternalLogin(
     if (!sessionAuthConfigured(config)) throw new ExternalLoginError('configuration')
     if (!services) throw new ExternalLoginError('storage')
     if (url.searchParams.getAll('assertion').length !== 1) throw new ExternalLoginError('encoding')
-    // Outside the platform cookie scope an assertion must name the host it was sent to, whatever
-    // the deployment requires elsewhere; local development hosts are exempt.
+    // On a host sessions are sealed to (a portal's alias or another candidate host) an assertion
+    // must name the host it was sent to, whatever the deployment requires elsewhere.
     const external = config.externalLogin ?? {}
     const claims = await verifyExternalAssertion(
       url.searchParams.get('assertion'),
-      config.sessionHost !== undefined && !LOOPBACK_HOSTS.has(config.sessionHost)
-        ? { ...external, requireHost: true }
-        : external,
+      config.sessionHost !== undefined ? { ...external, requireHost: true } : external,
       Date.now(),
       url.hostname,
     )

@@ -4,6 +4,7 @@ import {
   aliasesFor,
   aliasHostname,
   aliasHostRoute,
+  aliasStartupWarnings,
   applyAlias,
   classifyHost,
   HostPortalCache,
@@ -382,4 +383,38 @@ Deno.test('roles described on an alias host are narrowed to its portal', () => {
     effectiveRoles: undefined,
     provenance: undefined,
   })
+})
+
+Deno.test('start-up warnings name reserved aliases and served unknown hosts', () => {
+  expect(aliasStartupWarnings({ UNKNOWN_HOSTS: 'deny', MAX_PORTAL_ALIASES: '0' }, [])).toEqual([])
+  expect(aliasStartupWarnings({ UNKNOWN_HOSTS: 'deny' }, ['a.example.org'])).toEqual([])
+  const served = aliasStartupWarnings({}, [])
+  expect(served).toHaveLength(1)
+  expect(served[0]).toContain('UNKNOWN_HOSTS is serve')
+  expect(aliasStartupWarnings({ MAX_PORTAL_ALIASES: '0' }, [])).toEqual([])
+  expect(aliasStartupWarnings({ MAX_PORTAL_ALIASES: '0' }, ['a.example.org'])).toHaveLength(1)
+  const reserved = aliasStartupWarnings(
+    {
+      UNKNOWN_HOSTS: 'deny',
+      RESERVED_HOSTNAMES: 'b.example.org,a.example.org',
+      ENTRA_REDIRECT_URI: 'https://c.example.org/auth/callback',
+    },
+    ['c.example.org', 'a.example.org', 'free.example.org'],
+  )
+  expect(reserved).toEqual([
+    '[portal-aliases] Reserved hostnames still registered as portal aliases: a.example.org, ' +
+    "c.example.org. The API serves them as those portals' alias hosts; remove the aliases.",
+  ])
+})
+
+Deno.test('a reserved hostname is never a canonical hostname', () => {
+  const config = new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/t.json` }).get(
+    'marine',
+  )!
+  const aliases = [
+    { hostname: 'shared.example.org', slug: 'marine', primary: true, createdAt: 'x' },
+  ]
+  expect(withPrimaryAlias(config, aliases).hostname).toBe('shared.example.org')
+  expect(withPrimaryAlias(config, aliases, new Set(['shared.example.org'])).hostname)
+    .toBe(config.hostname)
 })

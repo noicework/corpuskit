@@ -60,6 +60,7 @@ import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
 import {
   aliasCacheSeconds,
   aliasHostRoute,
+  aliasStartupWarnings,
   classifyHost,
   HostPortalCache,
   hostPortalFor,
@@ -149,6 +150,13 @@ export class PortalDurableObject extends DurableObject<Env> {
         console.error('Demo portal seeding failed')
       }
     })
+    try {
+      for (const warning of aliasStartupWarnings(bindings, this.stores.tenants.aliasHostnames())) {
+        console.warn(warning)
+      }
+    } catch {
+      // An unreadable registry fails its own requests; it never stops the object starting.
+    }
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
@@ -296,13 +304,9 @@ export class PortalDurableObject extends DurableObject<Env> {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
-        // Deployment-wide sign-in availability. Only a portal's alias host changes it: there,
-        // Entra is offered only when the deployment's redirect URI is on that host.
-        const entra = entraOnHost(
-          this.bindings,
-          new URL(request.url).hostname,
-          hostPortal !== undefined,
-        )
+        // Deployment-wide sign-in availability, except that Entra is never offered on a portal's
+        // alias host: the redirect URI's host is reserved, so it can never be one.
+        const entra = hostPortal === undefined
         const signIn = {
           clientId: entra ? this.bindings.ENTRA_CLIENT_ID : undefined,
           clientSecret: entra ? this.bindings.ENTRA_CLIENT_SECRET : undefined,
@@ -377,11 +381,12 @@ export class PortalDurableObject extends DurableObject<Env> {
    * Worker's cached view. Platform hosts are never aliases.
    */
   private hostPortal(request: Request, workerView?: string): string | undefined {
+    // Narrowed by the object's own alias record even on a reserved host, which the edge never
+    // looks up: a record written before the hostname was reserved still binds it to its portal.
     const recorded = hostPortalFor(
       this.stores.tenants,
       new URL(request.url).hostname,
       getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
-      reservedHostnames(this.bindings),
     )
     if (recorded !== null) return recorded
     return workerView !== undefined && KeyPortalSlugSchema.safeParse(workerView).success
@@ -395,7 +400,6 @@ export class PortalDurableObject extends DurableObject<Env> {
       this.stores.tenants,
       hostname,
       getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
-      reservedHostnames(this.bindings),
     )
   }
 
@@ -511,7 +515,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     hostPortal === null && (host.kind === 'candidate' || host.kind === 'other') &&
     unknownHostsMode(values.UNKNOWN_HOSTS) === 'deny'
   ) return json({ error: 'not_found' }, 404)
-  const auth = authConfig(env, url.hostname, platformDomain, hostPortal !== null)
+  const auth = authConfig(env, url.hostname, platformDomain, {
+    aliasHost: hostPortal !== null,
+    sealHost: host.kind === 'candidate',
+  })
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
   const operator = await authenticateOperator(request, values)
   if (hostPortal !== null) {
@@ -699,7 +706,23 @@ async function cachedHostPortal(candidate: string, env: Env): Promise<string | n
     clearTimeout(timer)
   }
   hostPortals.set(candidate, slug, aliasCacheSeconds(stringEnv(env).ALIAS_CACHE_SECONDS), now)
+  if (slug === null) warnUnregistered(candidate)
   return slug
+}
+
+/** Hosts already reported by `warnUnregistered` in this isolate, a bounded few. */
+const reportedHosts = new Set<string>()
+/**
+ * Say once per isolate when a hostname routes here without being a registered alias or reserved:
+ * it is usually one of the deployment's own custom domains missing from RESERVED_HOSTNAMES.
+ */
+function warnUnregistered(hostname: string): void {
+  if (reportedHosts.has(hostname) || reportedHosts.size >= 100) return
+  reportedHosts.add(hostname)
+  console.warn(
+    `[portal-aliases] ${hostname} reached this deployment but is neither a registered alias nor ` +
+      "reserved. List the deployment's own custom domains in RESERVED_HOSTNAMES.",
+  )
 }
 
 function isPublicDocsPath(pathname: string): boolean {
@@ -848,15 +871,22 @@ async function forwardTrusted(
   }
 }
 
+/**
+ * Sign-in settings for a request host. On a portal's alias host Entra is never offered (the
+ * redirect URI's host is reserved, so it is never an alias). On an alias or any other candidate
+ * host, a hostname a third party may control, a session is sealed to the host and an assertion
+ * must name it. Platform, reserved and other hosts (such as `workers.dev`) keep the
+ * deployment-wide rules.
+ */
 function authConfig(
   env: Env,
   hostname: string,
   platformDomain: string,
-  aliasHost = false,
+  host: { aliasHost?: boolean; sealHost?: boolean } = {},
 ): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
-  const entra = entraOnHost(values, hostname, aliasHost)
+  const entra = !host.aliasHost
   return {
     clientId: entra ? values.ENTRA_CLIENT_ID : undefined,
     clientSecret: entra ? values.ENTRA_CLIENT_SECRET : undefined,
@@ -870,27 +900,9 @@ function authConfig(
     adminEmails: values.ENTRA_ADMIN_EMAILS,
     externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
-    // Outside the platform cookie scope, whether or not the host is a known alias, a session is
-    // sealed to the host it was issued on and read nowhere else.
-    ...(onPlatformDomain ? {} : { sessionHost: normaliseHostname(hostname) }),
-  }
-}
-
-/**
- * Entra sign-in is unchanged on every host except a portal's alias host, where it is offered only
- * when the deployment's redirect URI is on that host. Without it, an alias host offers external
- * sign-in alone and reads no Entra session. Alias hosts never share the platform cookie scope.
- */
-function entraOnHost(
-  values: Record<string, string | undefined>,
-  hostname: string,
-  aliasHost: boolean,
-): boolean {
-  if (!aliasHost) return true
-  try {
-    return new URL(values.ENTRA_REDIRECT_URI ?? '').hostname === hostname.replace(/\.$/, '')
-  } catch {
-    return false
+    // On a candidate host, whether or not the edge knows it as an alias, a session is sealed to
+    // the host it was issued on and read nowhere else.
+    ...(host.sealHost ? { sessionHost: normaliseHostname(hostname) } : {}),
   }
 }
 

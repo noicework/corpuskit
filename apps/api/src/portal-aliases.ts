@@ -193,12 +193,18 @@ export function aliasesFor(aliases: readonly StoredPortalAlias[], slug: string):
     .map(({ hostname, primary, createdAt }) => ({ hostname, primary, createdAt }))
 }
 
-/** A portal's configuration with its primary alias, if it has one, as the canonical hostname. */
+/**
+ * A portal's configuration with its primary alias, if it has one, as the canonical hostname. A
+ * reserved hostname is never canonical, even when a record written before it was reserved says so.
+ */
 export function withPrimaryAlias(
   config: TenantConfig,
   aliases: readonly StoredPortalAlias[],
+  reserved: ReadonlySet<string> = new Set(),
 ): TenantConfig {
-  const primary = aliases.find((alias) => alias.slug === config.slug && alias.primary)
+  const primary = aliases.find((alias) =>
+    alias.slug === config.slug && alias.primary && !reserved.has(alias.hostname)
+  )
   return primary ? { ...config, hostname: primary.hostname } : config
 }
 
@@ -253,17 +259,50 @@ export interface HostPortalLookup {
 }
 
 /**
- * The portal whose registered alias the request host is, or null. Platform hosts, reserved hosts,
- * local hosts and IP literals are never aliases and are not looked up.
+ * The portal an alias record names for the request host, or null. Platform hosts, local hosts
+ * and IP literals never have one. A reserved hostname can still carry a record written before it
+ * was reserved: the stores holding the registry narrow by it all the same (only the edge, which
+ * would need a remote lookup, skips reserved hosts), and a start-up warning names it.
  */
 export function hostPortalFor(
   tenants: HostPortalLookup,
   hostname: string,
   platformDomain: string,
-  reserved: ReadonlySet<string> = new Set(),
 ): string | null {
-  const host = classifyHost(hostname, platformDomain, reserved)
-  return host.kind === 'candidate' ? tenants.aliasPortal(host.hostname) ?? null : null
+  const candidate = aliasHostname(normaliseHostname(hostname), platformDomain)
+  return candidate ? tenants.aliasPortal(candidate) ?? null : null
+}
+
+/**
+ * Start-up warnings about how this deployment handles hosts outside the platform domain: reserved
+ * hostnames that still carry alias records, and unknown hosts served while aliases are enabled.
+ */
+export function aliasStartupWarnings(
+  env: Record<string, string | undefined>,
+  registered: readonly string[],
+): string[] {
+  const warnings: string[] = []
+  const reserved = reservedHostnames(env)
+  const conflicts = registered.filter((hostname) => reserved.has(hostname)).sort()
+  if (conflicts.length) {
+    warnings.push(
+      `[portal-aliases] Reserved hostnames still registered as portal aliases: ${
+        conflicts.join(', ')
+      }. The API serves them as those portals' alias hosts; remove the aliases.`,
+    )
+  }
+  if (
+    unknownHostsMode(env.UNKNOWN_HOSTS) === 'serve' &&
+    (maxPortalAliases(env.MAX_PORTAL_ALIASES) > 0 || registered.length > 0)
+  ) {
+    warnings.push(
+      '[portal-aliases] UNKNOWN_HOSTS is serve while portal host aliases are enabled, so a ' +
+        'routed hostname that is not registered serves the whole deployment. Set ' +
+        'UNKNOWN_HOSTS=deny on a deployment that routes hostnames it does not control, or ' +
+        'MAX_PORTAL_ALIASES=0 on one that uses no aliases.',
+    )
+  }
+  return warnings
 }
 
 /**

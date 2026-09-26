@@ -2,14 +2,18 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
-import { DurableState, type DurableStores } from './state.ts'
+import { DurableState, type DurableStores, DurableTenantStore } from './state.ts'
 import {
   PRINCIPAL_HEADER,
   signPrincipal,
   type TrustedSessionFacts,
 } from '../../api/src/principal.ts'
 import type { PortalDurableObject } from './worker.ts'
-import { reservedHostnames } from '../../api/src/portal-aliases.ts'
+import {
+  normaliseHostname,
+  reservedHostnames,
+  unknownHostsMode,
+} from '../../api/src/portal-aliases.ts'
 
 const operatorKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
 const sessionSecret = 'alias-test-session-secret-longer-than-thirty-two-bytes'
@@ -25,7 +29,11 @@ type WorkerModule = {
   default: { fetch(request: Request, env: Env): Promise<Response> }
 }
 
-async function fixture(overrides: Record<string, string | undefined> = {}) {
+async function fixture(
+  overrides: Record<string, string | undefined> = {},
+  /** Writes to the registry before the object starts, as an earlier release could have. */
+  seed?: (tenants: DurableTenantStore) => void,
+) {
   const database = new DatabaseSync(':memory:')
   const storage: DurableObjectState['storage'] = {
     sql: {
@@ -101,6 +109,11 @@ async function fixture(overrides: Record<string, string | undefined> = {}) {
     PORTAL: { getByName: () => object },
     ...overrides,
   } as unknown as Env
+  if (seed) {
+    const before = new DurableState(storage.sql, storage)
+    before.migrate()
+    seed(new DurableTenantStore(before, 'corpuskit.org'))
+  }
   let initialization: Promise<unknown> = Promise.resolve()
   const object = new workerModule.PortalDurableObject({
     storage,
@@ -618,37 +631,59 @@ Deno.test('alias hosts keep sessions host-only, redirects on the host and Entra 
   }
 })
 
-Deno.test('Entra is offered on an alias host only when its redirect URI is on that host', async () => {
-  const f = await fixture({ ENTRA_REDIRECT_URI: 'https://research.example.org/auth/callback' })
+Deno.test('the Entra redirect host can never be an alias, and Entra is never offered on one', async () => {
+  const f = await fixture({ ENTRA_REDIRECT_URI: 'https://login.example.net/auth/callback' })
   try {
-    await f.operator('/api/admin/t/marine/aliases/research.example.org', body('PUT'))
-    await f.operator('/api/admin/t/grains/aliases/other.example.org', body('PUT'))
-    expect((await (await f.request('research.example.org', '/auth/me')).json()).entraEnabled)
+    const response = await f.operator(
+      '/api/admin/t/marine/aliases/login.example.net',
+      body('PUT'),
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'hostname_reserved' })
+    expect((await (await f.request('login.example.net', '/auth/me')).json()).entraEnabled)
       .toBe(true)
+    await f.operator('/api/admin/t/grains/aliases/other.example.org', body('PUT'))
     expect((await (await f.request('other.example.org', '/auth/me')).json()).entraEnabled)
       .toBe(false)
+    expect((await f.request('other.example.org', '/auth/login')).status).toBe(503)
   } finally {
     f.close()
   }
 })
 
-Deno.test('every deployment configuration reserves its custom domains outside the platform domain', () => {
+Deno.test('every deployment configuration reserves its routed hosts outside the platform domain', () => {
+  type Route = string | { pattern: string }
+  type Settings = { routes?: Route[]; vars?: Record<string, string> }
+  let checked = 0
   for (const file of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
     const config = JSON.parse(
       Deno.readTextFileSync(new URL(`../../../${file}`, import.meta.url)),
-    ) as {
-      routes?: { pattern: string; custom_domain?: boolean }[]
-      vars?: Record<string, string>
+    ) as Settings & { env?: Record<string, Settings> }
+    // The top level and every named environment are separate deployments with their own vars.
+    const deployments: [string, Settings][] = [
+      [file, config],
+      ...Object.entries(config.env ?? {}).map(([name, env]) =>
+        [`${file} env.${name}`, env] as [string, Settings]
+      ),
+    ]
+    for (const [label, deployment] of deployments) {
+      const vars = deployment.vars ?? {}
+      const platform = vars.PLATFORM_DOMAIN ?? 'corpuskit.org'
+      const reserved = reservedHostnames(vars)
+      for (const route of deployment.routes ?? []) {
+        // Every route, custom domain or zone route: the host without its path or wildcards.
+        const pattern = typeof route === 'string' ? route : route.pattern
+        const host = normaliseHostname(pattern.split('/')[0]!.replace(/^\*\.?/, ''))
+        const onPlatform = host === platform || host.endsWith(`.${platform}`)
+        expect(onPlatform || reserved.has(host), `${label}: ${pattern}`).toBe(true)
+        checked++
+      }
+      // Public deployments serve unknown hosts on purpose: they route no third-party hostnames,
+      // and deny would refuse their own unlisted hosts. Turning it on here is deliberately blocked.
+      expect(unknownHostsMode(vars.UNKNOWN_HOSTS), label).toBe('serve')
     }
-    const platform = config.vars?.PLATFORM_DOMAIN ?? 'corpuskit.org'
-    const reserved = reservedHostnames(config.vars ?? {})
-    const outside = (config.routes ?? []).filter((route) => route.custom_domain)
-      .map((route) => route.pattern)
-      .filter((host) => host !== platform && !host.endsWith(`.${platform}`))
-    for (const host of outside) expect(reserved.has(host), `${file}: ${host}`).toBe(true)
-    // Neither public deployment denies unknown hosts.
-    expect(config.vars?.UNKNOWN_HOSTS ?? 'serve', file).toBe('serve')
   }
+  expect(checked).toBeGreaterThan(5)
 })
 
 Deno.test('hosts that are not registered aliases keep exactly their behaviour', async () => {
@@ -958,49 +993,58 @@ const externalLogin = async () => {
 }
 const cookieOf = (response: Response) => response.headers.get('set-cookie')?.split(';')[0]
 
-Deno.test('every session outside the platform cookie scope is sealed to its host', async () => {
+Deno.test('sessions on candidate hosts are sealed; reserved and workers.dev hosts follow the setting', async () => {
   const issuer = await externalLogin()
-  const f = await fixture({ ...issuer.env, RESERVED_HOSTNAMES: 'legacy.example.net' })
-  try {
-    const signedIn = async (on: string, cookie: string) =>
-      (await (await f.request(on, '/auth/me', { headers: { cookie } })).json()).authenticated
-    // An unregistered host that routes here (serve mode), a reserved host and a workers.dev host.
-    const hosts = ['pending.example.net', 'legacy.example.net', 'corpuskit.account.workers.dev']
-    for (const host of hosts) {
-      // An assertion that does not name the host is refused there, whatever the setting.
-      let response = await f.request(
-        host,
-        `/auth/external?assertion=${await assertion(issuer.key)}`,
-        { headers: { 'cf-connecting-ip': `198.51.100.${hosts.indexOf(host) + 1}` } },
-      )
-      expect(response.status, host).toBe(401)
-      expect(response.headers.get('set-cookie')).toBeNull()
-      response = await f.request(
-        host,
-        `/auth/external?assertion=${await assertion(issuer.key, { host })}`,
-      )
-      expect(response.status, host).toBe(303)
-      expect(response.headers.get('set-cookie')).not.toContain('Domain=')
-      expect(response.headers.get('strict-transport-security')).toBe('max-age=63072000')
-      const cookie = cookieOf(response)!
-      expect(await signedIn(host, cookie), host).toBe(true)
-      for (const elsewhere of ['corpuskit.org', 'marine.corpuskit.org', ...hosts]) {
-        if (elsewhere !== host) expect(await signedIn(elsewhere, cookie), elsewhere).toBe(false)
+  for (const requireHost of [undefined, 'true']) {
+    const f = await fixture({
+      ...issuer.env,
+      RESERVED_HOSTNAMES: 'legacy.example.net',
+      EXTERNAL_LOGIN_REQUIRE_HOST: requireHost,
+    })
+    try {
+      let address = 1
+      const handoff = (host: string, claims: Record<string, unknown>) =>
+        assertion(issuer.key, claims).then((token) =>
+          f.request(host, `/auth/external?assertion=${token}`, {
+            headers: { 'cf-connecting-ip': `198.51.100.${address++}` },
+          })
+        )
+      const signedIn = async (on: string, cookie: string) =>
+        (await (await f.request(on, '/auth/me', { headers: { cookie } })).json()).authenticated
+
+      // A candidate host (routed here, not registered, serve mode): a third party may control its
+      // DNS, so an assertion must name it whatever the setting, and its session is sealed to it.
+      const pending = 'pending.example.net'
+      expect((await handoff(pending, {})).status).toBe(401)
+      const sealed = await handoff(pending, { host: pending })
+      expect(sealed.status).toBe(303)
+      expect(sealed.headers.get('set-cookie')).not.toContain('Domain=')
+      expect(sealed.headers.get('strict-transport-security')).toBe('max-age=63072000')
+      const cookie = cookieOf(sealed)!
+      expect(await signedIn(pending, cookie)).toBe(true)
+      for (const elsewhere of ['corpuskit.org', 'marine.corpuskit.org', 'legacy.example.net']) {
+        expect(await signedIn(elsewhere, cookie), elsewhere).toBe(false)
       }
+      // In serve mode a routed but unregistered host still serves the whole deployment, which is
+      // why a deployment that routes third-party hostnames runs UNKNOWN_HOSTS=deny.
+      expect((await f.request(pending, '/api/t/grains/config')).status).toBe(200)
+
+      // Reserved and workers.dev hosts are the deployment's own: they follow the setting, as the
+      // platform hosts do, and their sessions are host-only cookies as before.
+      for (const host of ['legacy.example.net', 'corpuskit.account.workers.dev']) {
+        const hostless = await handoff(host, {})
+        expect(hostless.status, `${requireHost} ${host}`).toBe(requireHost ? 401 : 303)
+        const named = await handoff(host, { host })
+        expect(named.status, host).toBe(303)
+        expect(named.headers.get('set-cookie')).not.toContain('Domain=')
+        expect(named.headers.get('strict-transport-security')).toBe('max-age=63072000')
+        expect(await signedIn(host, cookieOf(named)!)).toBe(true)
+        // A session from a candidate host is never read there.
+        expect(await signedIn(host, cookie)).toBe(false)
+      }
+    } finally {
+      f.close()
     }
-    // A platform session is not read off the platform domain either.
-    const platform = await f.request(
-      'corpuskit.org',
-      `/auth/external?assertion=${await assertion(issuer.key)}`,
-    )
-    expect(platform.headers.get('set-cookie')).toContain('Domain=corpuskit.org')
-    expect(await signedIn('marine.corpuskit.org', cookieOf(platform)!)).toBe(true)
-    expect(await signedIn('pending.example.net', cookieOf(platform)!)).toBe(false)
-    // In serve mode a routed but unregistered host still serves the whole deployment, which is
-    // why a deployment that routes third-party hostnames runs UNKNOWN_HOSTS=deny.
-    expect((await f.request('pending.example.net', '/api/t/grains/config')).status).toBe(200)
-  } finally {
-    f.close()
   }
 })
 
@@ -1310,6 +1354,98 @@ Deno.test('the object warns at start-up when aliases are enabled but assertions 
     }
   } finally {
     console.warn = warn
+  }
+})
+
+const captureWarnings = async <T>(work: () => Promise<T>): Promise<[T, string[]]> => {
+  const warn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: string) => warnings.push(message)
+  try {
+    return [await work(), warnings]
+  } finally {
+    console.warn = warn
+  }
+}
+
+Deno.test('a reserved hostname that still carries an alias record stays narrowed to its portal', async () => {
+  const seed = (tenants: DurableTenantStore) =>
+    expect(tenants.setAlias('marine', 'shared.example.org', true, 5).ok).toBe(true)
+  for (const mode of ['serve', 'deny']) {
+    const [f, warnings] = await captureWarnings(() =>
+      fixture({ RESERVED_HOSTNAMES: 'shared.example.org', UNKNOWN_HOSTS: mode }, seed)
+    )
+    try {
+      // The operator is told at start-up, by name.
+      expect(
+        warnings.filter((message) =>
+          message.includes('Reserved hostnames still registered') &&
+          message.includes('shared.example.org')
+        ),
+      ).toHaveLength(1)
+      // A reserved hostname is never canonical, so the portal links to its own hostname.
+      const config = await (await f.request('corpuskit.org', '/api/t/marine/config')).json()
+      expect(config.hostname).toBe('marine.corpuskit.org')
+      // The edge never looks it up, but the Durable Object narrows by its record: only marine.
+      const host = 'shared.example.org'
+      let response = await f.request(host, '/api/t/grains/config')
+      expect(response.status, mode).toBe(404)
+      expect(await response.json()).toEqual({ error: 'not_found' })
+      expect((await f.request(host, '/api/t/marine/config')).status).toBe(200)
+      response = await f.request(host, '/api/tenants')
+      expect((await response.json()).map((row: { slug: string }) => row.slug)).toEqual(['marine'])
+      response = await f.request(host, '/api/admin/overview', passcode)
+      expect(response.status).toBe(404)
+      // Operator calls are refused there.
+      response = await f.request(host, '/api/admin/t/marine/aliases', {}, `Operator ${operatorKey}`)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'operator_not_allowed' })
+      expect(f.lookups).not.toContain(host)
+      // Removing the record ends it.
+      expect((await f.operator(`/api/admin/t/marine/aliases/${host}`, body('DELETE'))).status)
+        .toBe(200)
+      expect((await f.request(host, '/api/t/grains/config')).status).toBe(200)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('the edge says once when an unregistered, unreserved host reaches the deployment', async () => {
+  const f = await fixture()
+  try {
+    const [, warnings] = await captureWarnings(async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await (await f.request('stray-custom-domain.example.net', '/api/health')).body?.cancel()
+      }
+      await (await f.request('corpuskit.org', '/api/health')).body?.cancel()
+    })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('stray-custom-domain.example.net')
+    expect(warnings[0]).toContain('RESERVED_HOSTNAMES')
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('the object warns at start-up while unknown hosts are served and aliases can exist', async () => {
+  const seed = (tenants: DurableTenantStore) =>
+    expect(tenants.setAlias('marine', 'kept.example.org', false, 5).ok).toBe(true)
+  for (
+    const [settings, seeded, warned] of [
+      [{}, false, true],
+      [{ UNKNOWN_HOSTS: 'serve' }, false, true],
+      [{ MAX_PORTAL_ALIASES: '0' }, false, false],
+      [{ MAX_PORTAL_ALIASES: '0' }, true, true],
+      [{ UNKNOWN_HOSTS: 'deny' }, true, false],
+    ] as const
+  ) {
+    const [f, warnings] = await captureWarnings(() => fixture(settings, seeded ? seed : undefined))
+    f.close()
+    expect(
+      warnings.some((message) => message.includes('UNKNOWN_HOSTS is serve')),
+      JSON.stringify([settings, seeded]),
+    ).toBe(warned)
   }
 })
 
