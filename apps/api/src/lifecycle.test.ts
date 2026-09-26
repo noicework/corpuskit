@@ -23,6 +23,7 @@ Deno.test('lifecycle defaults, replacement, strict input, audit record and porta
       status: 'active',
       limits: null,
       updatedAt: null,
+      suspendedSince: null,
     })
     const response = await f.requestAs(
       platform,

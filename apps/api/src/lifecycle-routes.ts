@@ -44,7 +44,10 @@ export function registerLifecycleRoutes(app: Hono, services: LifecycleRouteServi
     const slug = c.req.param('slug')
     if (!services.tenants.get(slug)) return c.json({ error: 'unknown_tenant' }, 404)
     c.header('Cache-Control', 'private, no-store')
-    return c.json(services.lifecycle.get(slug))
+    return c.json({
+      ...services.lifecycle.get(slug),
+      suspendedSince: services.lifecycle.suspendedSince(slug),
+    })
   })
 
   app.put(declaredRoute('PUT', '/api/admin/t/:slug/lifecycle'), async (c) => {
@@ -54,7 +57,10 @@ export function registerLifecycleRoutes(app: Hono, services: LifecycleRouteServi
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     const lifecycle = await services.update(c, slug, parsed.data)
     c.header('Cache-Control', 'private, no-store')
-    return c.json({ ok: true, lifecycle })
+    return c.json({
+      ok: true,
+      lifecycle: { ...lifecycle, suspendedSince: services.lifecycle.suspendedSince(slug) },
+    })
   })
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/usage'), async (c) => {

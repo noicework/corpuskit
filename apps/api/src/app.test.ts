@@ -363,6 +363,8 @@ describe('independent admin route permission matrix', () => {
     ['DELETE', 'knowledge-box', 'bindings.write'],
     ['POST', '/api/admin/tenants', 'portal.create', { name: 'New portal' }],
     ['DELETE', '/api/admin/tenants/:slug', 'portal.delete'],
+    ['POST', '/api/admin/tenants/:slug/delete-suspended', 'portal.create'],
+    ['POST', '/api/admin/tenants/:slug/erase', 'portal.create'],
     ['POST', 'knowledge-box/create', 'bindings.write', { title: 'Research' }],
     ['GET', 'counters', 'content.write'],
     ['GET', 'recent', 'content.write'],
@@ -638,6 +640,7 @@ describe('independent admin route permission matrix', () => {
         }) as AragProvider
         const fixture = createEnforcementFixture({
           management,
+          operatorDeleteAfterDays: 30,
           domainProvisioner: {
             attach: (hostname) => {
               calls.push('attach')
@@ -678,6 +681,15 @@ describe('independent admin route permission matrix', () => {
           if (method === 'DELETE' && suffix === 'aliases/:hostname') {
             fixture.stores.tenants.setAlias('a', 'research.example.org', undefined, 5)
           }
+          // Retention: a portal suspended past the configured days, and one already deleted.
+          if (suffix.endsWith('/delete-suspended')) {
+            fixture.stores.lifecycle.set(
+              'a',
+              { status: 'suspended', limits: null },
+              fixture.now() - 31 * 86_400_000,
+            )
+          }
+          if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
           const snapshot = () =>
             ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
               fixture.database.all(`SELECT * FROM ${table}`)
@@ -766,7 +778,10 @@ describe('independent admin route permission matrix', () => {
                 expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
               else if (suffix === 'lifecycle') {
-                expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+                expect(JSON.parse(result)).toEqual({
+                  ...fixture.stores.lifecycle.get('a'),
+                  suspendedSince: fixture.stores.lifecycle.suspendedSince('a'),
+                })
               } else if (suffix === 'aliases') {
                 expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
               } else if (suffix === 'usage') {
@@ -786,6 +801,12 @@ describe('independent admin route permission matrix', () => {
                 expect(fixture.stores.tenants.get('a')?.branding.productName).toBe(
                   method === 'DELETE' ? undefined : 'Renamed portal',
                 )
+              }
+              if (suffix.endsWith('/delete-suspended')) {
+                expect(fixture.stores.tenants.isRetired('a')).toBe(true)
+              }
+              if (suffix.endsWith('/erase')) {
+                expect(fixture.stores.sources.list('a')).toEqual([])
               }
               if (suffix === 'knowledge-box') {
                 expect(fixture.stores.bindings.get('a')).toBeUndefined()

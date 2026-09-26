@@ -27,6 +27,9 @@ class MemoryLifecycleState implements LifecycleState {
   delete(key: string): void {
     this.values.delete(key)
   }
+  has(key: string): boolean {
+    return this.values.has(key)
+  }
 }
 
 const instant = (value: string) => Date.parse(value)
@@ -433,7 +436,8 @@ Deno.test('removing a portal clears its lifecycle, usage and ledger', () => {
   store.set('marine', { status: 'suspended', limits: { asksPerDay: 1 } })
   store.consumeAsk('marine')
   store.reserveAdd('marine', { observed: 0, bytes: 1 })
-  expect(state.values.size).toBe(3)
+  // Lifecycle, asks, capacity and the suspension record.
+  expect(state.values.size).toBe(4)
   store.remove('marine')
   expect(state.values.size).toBe(0)
   expect(store.get('marine')).toEqual({ status: 'active', limits: null, updatedAt: null })
@@ -487,4 +491,63 @@ Deno.test('named lifecycle audit completion and local state roll back together',
     database.close()
     Deno.removeSync(directory, { recursive: true })
   }
+})
+
+Deno.test('a suspension is timed from when it began, and records from before tracking fall back safely', () => {
+  const state = new MemoryLifecycleState()
+  const store = new PortalLifecycleStore(state)
+  const day = 86_400_000
+  const start = instant('2026-06-01T00:00:00Z')
+  // A suspended portal recorded before the start of a suspension was tracked.
+  state.put('portal-lifecycle:marine', {
+    v: 1,
+    lifecycle: { status: 'suspended', limits: null, updatedAt: '2026-06-01T00:00:00.000Z' },
+    lastActivityAt: null,
+  })
+  expect(store.suspendedSince('marine')).toBe('2026-06-01T00:00:00.000Z')
+  // A suspension record left by a newer release, followed by a lifecycle write that did not
+  // update it (a rollback), no longer applies: the lifecycle's own change time is used instead.
+  state.put('portal-suspension:marine', {
+    v: 1,
+    since: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-05-01T00:00:00.000Z',
+  })
+  expect(store.suspendedSince('marine')).toBe('2026-06-01T00:00:00.000Z')
+  // Staying suspended keeps the start and records it beside the lifecycle.
+  store.set('marine', { status: 'suspended', limits: { asksPerDay: 1 } }, start + 10 * day)
+  expect(store.suspendedSince('marine')).toBe('2026-06-01T00:00:00.000Z')
+  expect(state.values.get('portal-suspension:marine')).toEqual({
+    v: 1,
+    since: '2026-06-01T00:00:00.000Z',
+    updatedAt: '2026-06-11T00:00:00.000Z',
+  })
+  // The lifecycle record keeps the shape earlier releases read.
+  expect(Object.keys(state.values.get('portal-lifecycle:marine') as object).sort()).toEqual([
+    'lastActivityAt',
+    'lifecycle',
+    'v',
+  ])
+  // A break ends it; the next suspension starts afresh.
+  store.set('marine', { status: 'active', limits: null }, start + 11 * day)
+  expect(store.suspendedSince('marine')).toBeNull()
+  expect(state.values.has('portal-suspension:marine')).toBe(false)
+  store.set('marine', { status: 'read_only', limits: null }, start + 12 * day)
+  expect(store.suspendedSince('marine')).toBeNull()
+  store.set('marine', { status: 'suspended', limits: null }, start + 13 * day)
+  expect(store.suspendedSince('marine')).toBe('2026-06-14T00:00:00.000Z')
+  // A malformed suspension record fails closed, like the other hosting records.
+  state.put('portal-suspension:marine', { v: 1, since: 'yesterday' })
+  expect(() => store.suspendedSince('marine')).toThrow('Invalid persisted portal lifecycle')
+})
+
+Deno.test('erasing a portal removes every hosting record, readable or not', () => {
+  const state = new MemoryLifecycleState()
+  const store = new PortalLifecycleStore(state)
+  store.set('marine', { status: 'suspended', limits: { asksPerDay: 1 } })
+  store.consumeAsk('marine')
+  state.put('portal-capacity:marine', 'not a ledger')
+  store.set('grains', { status: 'active', limits: null })
+  expect(store.erase('marine')).toBe(4)
+  expect([...state.values.keys()]).toEqual(['portal-lifecycle:grains'])
+  expect(store.erase('marine')).toBe(0)
 })

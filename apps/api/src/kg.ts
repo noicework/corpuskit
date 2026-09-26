@@ -107,6 +107,15 @@ export class KgProposalStore {
     this.proposals[slug] = proposal
     writeJsonAtomic(this.path, this.proposals)
   }
+
+  /** Remove the portal's proposal, including one stored in a shape this store cannot read. */
+  erase(slug: string): number {
+    const stored = Object.hasOwn(readJsonSafe<Record<string, unknown>>(this.path, {}), slug)
+    if (!stored && !Object.hasOwn(this.proposals, slug)) return 0
+    delete this.proposals[slug]
+    writeJsonAtomic(this.path, this.proposals)
+    return 1
+  }
 }
 
 /** Public proposal-store contract for alternate durable runtimes. */

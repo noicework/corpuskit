@@ -43,6 +43,7 @@ function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
     remove: (slug, id) => {
       portals.set(slug, sources.list(slug).filter((source) => source.id !== id))
     },
+    erase: (slug) => Number(portals.delete(slug)),
   }
   return startServer({
     ...options,
@@ -61,6 +62,7 @@ function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
         gaps: [],
         recent: [],
       }),
+      erase: () => 0,
     },
   })
 }

@@ -540,6 +540,28 @@ export class TenantStore {
     return true
   }
 
+  /**
+   * Remove whatever the registry still holds for a portal that no longer exists: an override,
+   * a disabled flag or a host alias. The retired slug stays, so the slug is never reused.
+   */
+  erase(slug: string): { configuration: number; aliases: number } {
+    if (this.isLive(slug)) throw new Error('A live portal cannot be erased')
+    const configuration = [Object.hasOwn(this.overrides, slug), this.disabled.has(slug)]
+      .filter(Boolean).length
+    const aliases = this.aliasRecords.filter((alias) => alias.slug === slug).length
+    if (configuration + aliases === 0) return { configuration, aliases }
+    delete this.overrides[slug]
+    this.disabled.delete(slug)
+    this.aliasRecords = this.aliasRecords.filter((alias) => alias.slug !== slug)
+    this.persist()
+    return { configuration, aliases }
+  }
+
+  /** Whether a portal serves under the slug: a seeded one, or one created in the app. */
+  private isLive(slug: string): boolean {
+    return Object.hasOwn(tenantsBySlug, slug) || this.isCustom(slug)
+  }
+
   private persist(): void {
     try {
       ownedWrite(this.path, this.snapshot(), this.boundary)

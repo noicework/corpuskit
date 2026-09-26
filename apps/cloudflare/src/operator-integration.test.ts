@@ -385,6 +385,145 @@ Deno.test('Worker operator reads and sets portal lifecycle and reads usage, and 
   }
 })
 
+Deno.test('Worker operator deletes a portal suspended past OPERATOR_DELETE_AFTER_DAYS and erases it', async () => {
+  const f = await fixture({ OPERATOR_DELETE_AFTER_DAYS: '30' })
+  const DAY = 86_400_000
+  const rows = (query: string, ...values: string[]) =>
+    f.database.prepare(query).all(...values) as Record<string, unknown>[]
+  try {
+    const created = await f.invoke(
+      '/api/admin/tenants',
+      jsonRequest('POST', { name: 'Retired Lab' }),
+    )
+    expect(created.status).toBe(200)
+    const slug = (await created.json()).slug as string
+    expect(slug).toBe('retired-lab')
+    const member = await f.invoke(`/api/admin/t/${slug}/members`, jsonRequest('POST', newMember))
+    expect(member.status).toBe(201)
+    const researcher = { kind: 'user' as const, tenantId: 'tenant-1', oid: 'researcher-1' }
+    f.stores.sessions.put(slug, researcher, {
+      id: 'session-1',
+      title: 'Private history',
+      updatedAt: '2026-09-12',
+      messages: [],
+    })
+    f.stores.sources.add(slug, 'https://example.test/news', true)
+    const suspended = await f.invoke(
+      `/api/admin/t/${slug}/lifecycle`,
+      jsonRequest('PUT', { status: 'suspended', limits: null }),
+    )
+    expect(suspended.status).toBe(200)
+    const since = (await suspended.json()).lifecycle.suspendedSince as string
+    const early = await f.invoke(`/api/admin/tenants/${slug}/delete-suspended`, { method: 'POST' })
+    expect(early.status).toBe(409)
+    expect(await early.json()).toEqual({
+      error: 'not_suspended_long_enough',
+      status: 'suspended',
+      suspendedSince: since,
+      eligibleAt: new Date(Date.parse(since) + 30 * DAY).toISOString(),
+    })
+    // A live portal cannot be erased, and the owner's delete stays closed to the operator.
+    const live = await f.invoke(`/api/admin/tenants/${slug}/erase`, { method: 'POST' })
+    expect(live.status).toBe(409)
+    expect(await live.json()).toEqual({ error: 'portal_active' })
+    const ownerDelete = await f.invoke(`/api/admin/tenants/${slug}`, { method: 'DELETE' })
+    expect(ownerDelete.status).toBe(403)
+    expect(await ownerDelete.json()).toEqual({ error: 'operator_not_allowed' })
+
+    f.stores.lifecycle.set(slug, { status: 'active', limits: null }, Date.now() - 32 * DAY)
+    f.stores.lifecycle.set(slug, { status: 'suspended', limits: null }, Date.now() - 31 * DAY)
+    const deleted = await f.invoke(`/api/admin/tenants/${slug}/delete-suspended`, {
+      method: 'POST',
+    })
+    expect(deleted.status).toBe(200)
+    expect(await deleted.json()).toEqual({
+      ok: true,
+      domain: { status: 'removed', hostname: 'retired-lab.corpuskit.org' },
+    })
+    expect(f.stores.tenants.isRetired(slug)).toBe(true)
+    expect(
+      f.stores.rbac.assignments.list('tenant-1').some((row) =>
+        row.scope.kind === 'portal' && row.scope.slug === slug
+      ),
+    ).toBe(false)
+    // Deletion leaves the portal's research and content under the retired slug until erased.
+    expect(f.stores.sources.list(slug)).toHaveLength(1)
+
+    const erased = await f.invoke(`/api/admin/tenants/${slug}/erase`, { method: 'POST' })
+    expect(erased.status).toBe(200)
+    const body = await erased.json()
+    expect(body.erased).toMatchObject({ sessions: 1, sources: 1 })
+    expect(body.erased.auditEvents).toBeGreaterThan(0)
+    // Only the registry row still names the portal, as a retired slug.
+    expect(rows('SELECT key FROM state WHERE value LIKE ?', `%${slug}%`)).toEqual([
+      { key: 'tenants' },
+    ])
+    expect(rows('SELECT key FROM branding_assets WHERE key LIKE ?', `%${slug}%`)).toEqual([])
+    expect(rows('SELECT * FROM role_assignments WHERE scope_slug = ?', slug)).toEqual([])
+    const keyed = rows(
+      `SELECT request_id, action, actor_id FROM audit_events
+        WHERE scope_slug = ? OR (scope_kind = 'platform' AND target_id = ?)`,
+      slug,
+      slug,
+    )
+    const requestIds = new Set(keyed.map((event) => event.request_id))
+    expect(requestIds.size).toBe(1)
+    expect(keyed.some((event) => event.action === 'portal.erase')).toBe(true)
+    expect(keyed.every((event) => event.actor_id === 'operator:hosting-automation')).toBe(true)
+    expect(
+      rows(
+        "SELECT * FROM audit_events WHERE action = 'local.mutation' AND detail_json LIKE ?",
+        '%erasure.erase%',
+      ),
+    ).toHaveLength(1)
+
+    const again = await f.invoke(`/api/admin/tenants/${slug}/erase`, { method: 'POST' })
+    expect(again.status).toBe(200)
+    expect((await again.json()).total).toBe(0)
+    expect(JSON.stringify(f.events())).not.toContain(operatorKey)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('Worker operator deletion stays off without a usable OPERATOR_DELETE_AFTER_DAYS', async () => {
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '))
+  try {
+    for (
+      const [overrides, warned] of [
+        [{}, false],
+        [{ OPERATOR_DELETE_AFTER_DAYS: '' }, false],
+        [{ OPERATOR_DELETE_AFTER_DAYS: '0' }, true],
+        [{ OPERATOR_DELETE_AFTER_DAYS: 'thirty' }, true],
+      ] as const
+    ) {
+      warnings.length = 0
+      const f = await fixture(overrides)
+      try {
+        f.stores.lifecycle.set(
+          'marine',
+          { status: 'suspended', limits: null },
+          Date.now() - 400 * 86_400_000,
+        )
+        const response = await f.invoke('/api/admin/tenants/marine/delete-suspended', {
+          method: 'POST',
+        })
+        expect(response.status).toBe(409)
+        expect(await response.json()).toEqual({ error: 'operator_delete_disabled' })
+        const lines = warnings.filter((line) => line.includes('OPERATOR_DELETE_AFTER_DAYS'))
+        expect(lines).toHaveLength(warned ? 1 : 0)
+        expect(JSON.stringify(lines)).not.toContain('thirty')
+      } finally {
+        f.close()
+      }
+    }
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
 Deno.test('Worker refuses SVG branding and serves stored branding sandboxed as a download', async () => {
   const f = await fixture()
   try {
