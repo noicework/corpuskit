@@ -971,7 +971,7 @@ export interface BuildAppOptions {
   maxPortalAliases?: number
   /**
    * Bytes a crawled link holds against a byte limit until it is measured. Defaults to env
-   * LINK_PROVISIONAL_BYTES, or the 100 MB upload cap.
+   * LINK_PROVISIONAL_BYTES, or 10 MB.
    */
   linkProvisionalBytes?: number
   /** Hostnames never registered as aliases. Defaults to `reservedHostnames(process.env)`. */

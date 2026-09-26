@@ -10,7 +10,7 @@ export function hostingErrorMessage(body: unknown): string | undefined {
     case 'usage_unavailable':
       return "This portal's usage cannot be checked right now, so new content cannot be added. Try again shortly, or contact your portal administrator."
     case 'links_pending':
-      return 'Links added earlier are still being processed, so this one cannot be added yet. Try again in a few minutes, or upload the document instead.'
+      return 'Links added earlier are still being processed, so this cannot be added yet. Try again in a minute or two.'
     case 'agents_disabled':
       return 'Agents are disabled for this portal. Contact your portal administrator to enable them.'
     case 'limit_exceeded':

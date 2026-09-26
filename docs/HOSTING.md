@@ -426,27 +426,37 @@ so it is admitted like any other text.
 
 A link handed to the platform crawler cannot be sized when it is added: the portal has not seen
 the content the platform will store. It is admitted holding **provisional bytes**,
-`LINK_PROVISIONAL_BYTES` (a whole number of bytes, at least 1; 104857600, the 100 MB upload cap,
-when unset or invalid), so a portal refuses a link it does not have that much room for. Once the
+`LINK_PROVISIONAL_BYTES` (a whole number of bytes, at least 1; 10485760, 10 MB, when unset or
+invalid), so a portal refuses a link it does not have that much room for. A link is measured by
+its extracted text, which is far smaller than the files an upload may bring, so the default
+bounds all but exceptional documents; a hosting operator can raise or lower it. Once the
 platform has settled the resource (`PROCESSED`, `ERROR`, `BLOCKED` or `EXPIRED`), the ledger
-measures it by its extracted text, UTF-8 bytes as for pasted text, and that replaces the
-provisional bytes. A link the knowledge box no longer has counts as nothing. A status CorpusKit
-does not know, or a read that fails, leaves the provisional bytes in place.
+measures its extracted text, UTF-8 bytes as for pasted text, and that replaces the provisional
+bytes. A status CorpusKit does not know, a read that fails, and a 404 (which a knowledge box
+that has not caught up with a write can answer) all leave the provisional bytes in place.
 
-Waiting links are measured only when they matter: when an add would be refused for `maxBytes`
-or for waiting links, the portal measures up to ten of them, those never tried first and then
-the least recently tried, and judges the add once more. The reads run outside the step that
-admits adds, so other adds are not held up while they are made, and a measurement takes at most
-eight seconds. A usage report measures up to 20 for its answer and records nothing. Links hold
-provisional bytes on every portal, limited or not, so links added before a byte limit is set are
-judged at their provisional bytes until they are measured.
+An add that would fit but for the provisional bytes of links still waiting to be measured is
+refused with 503 `{ "error": "links_pending" }`, not with `limit_exceeded`: the portal is not
+full, and the add can be tried again once the links are processed. So is a further link while
+`maxBytes` is set and 20 crawled links are already waiting. Only an add with no room even
+without those links is refused as a limit.
 
-While `maxBytes` is set, a portal holds at most 20 crawled links still waiting to be measured.
-A further link is refused with 503 `{ "error": "links_pending" }` until earlier ones are
-processed. A link still unprocessed, or unreadable, an hour after it was added stops counting
-towards those 20, but it keeps its provisional bytes until it is measured or removed through the
-portal. Without `maxBytes` they are held against nothing, and connecting a different knowledge
-box starts a fresh ledger.
+Waiting links are read when they matter: when an add would be refused for `maxBytes` or for
+waiting links, the portal reads up to ten of them, those never tried first and then the least
+recently tried, and judges the add once more. A usage report reads up to 50, and the link
+route's precheck reads them when it would otherwise refuse. The reads run outside the step that
+admits adds, so other adds are not held up, and a caller waits at most eight seconds for them.
+Reads never write: every admission on the portal, whether or not it reads anything, records
+what earlier reads found. A read the link route's precheck made is not repeated by the add that
+follows. Links hold provisional bytes on every portal, limited or not, so links added before a
+byte limit is set are judged at their provisional bytes until they are measured.
+
+A link still unprocessed, or unreadable, an hour after it was added stops counting towards the
+20, but it keeps its provisional bytes until it is measured or removed through the portal.
+Without `maxBytes` they are held against nothing, and connecting a different knowledge box
+starts a fresh ledger. A ledger written by an earlier build in a form this build does not
+recognise is read, never refused: a link recorded in an unknown form is taken as not yet
+measured and holds the default provisional bytes until it is.
 
 Resource and byte limits apply to every add: uploads, links, pasted text, source syncs, content
 copies, reingest and the built-in help pages. They are checked when the write happens,
@@ -504,14 +514,15 @@ GET /api/admin/t/:slug/usage
   pages. The platform does not report stored source size (its counters report index size,
   which is a different quantity), so the portal keeps this ledger itself. The ledger starts
   the first time the portal observes its knowledge box, and it tracks each resource the portal
-  adds or deletes. A link handed to the platform crawler (including links a content copy brings
-  over) counts at its provisional bytes until it is measured (see `maxBytes` above); a report
-  counts the ones it can measure at their measured size. `bytes` is `null` whenever the box
-  holds a resource the ledger cannot size: content that was there before the ledger started,
-  content added to the box outside CorpusKit, or a write whose outcome could not be sized.
-  Deleting such a resource through the portal brings the count back. Content removed outside CorpusKit is not noticed,
-  so `bytes` can over-count until that resource's entry is cleared. Replacing a built-in help
-  page keeps its recorded size. Connecting a different knowledge box starts a fresh ledger. A
+  adds or deletes. `bytes` reports stored content only: a link handed to the platform crawler
+  (including links a content copy brings over) counts once it is measured (see `maxBytes`
+  above), and its provisional bytes, a reservation against the limit, are never reported. A
+  report reads links that are due, so repeated reports settle on the measured figure without an
+  add. `bytes` is `null` whenever the box holds a resource the ledger cannot size: content that
+  was there before the ledger started, content added to the box outside CorpusKit, or a write
+  whose outcome could not be sized. Deleting such a resource through the portal brings the
+  count back. Content removed outside CorpusKit is not noticed, so `bytes` can over-count until
+  that resource's entry is cleared. Replacing a built-in help page keeps its recorded size. Connecting a different knowledge box starts a fresh ledger. A
   portal with no knowledge box reports `0`.
 - `asksToday` and `asks30d` count admitted asks on today's local date and on the thirty local
   dates ending today, in the portal's timezone.

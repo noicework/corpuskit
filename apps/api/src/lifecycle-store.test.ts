@@ -6,6 +6,7 @@ import {
 } from '@research-portal/core'
 import { join } from 'node:path'
 import {
+  DEFAULT_LINK_PROVISIONAL_BYTES,
   FileLifecycleState,
   FileLifecycleStore,
   type LifecycleState,
@@ -388,6 +389,73 @@ Deno.test('capacity ledger sizes resources, releases deletions and resets per kn
   store.resetCapacity('marine')
   expect(store.hasCapacityLedger('marine')).toBe(false)
   expect(store.bytesUsed('marine', 0)).toBe(0)
+})
+
+Deno.test('links awaiting measurement stored in an earlier or unknown shape are read as unmeasured, never as a failure', () => {
+  const state = new MemoryLifecycleState()
+  const store = new PortalLifecycleStore(state)
+  store.set('marine', { status: 'active', limits: { maxBytes: 100_000_000 } })
+  const token = 'a'.repeat(32)
+  state.put('portal-capacity:marine', {
+    v: 1,
+    observed: 5,
+    // An in-flight link from a build that held no provisional bytes for it.
+    inflight: [{ token, at: Date.now(), bytes: 0, measure: true }],
+    added: [],
+    removed: [],
+    sized: { 'text-1': 40 },
+    unsized: 0,
+    measuring: {
+      // A bare timestamp, as an earlier build stored it.
+      'crawled-1': 1_790_000_000_000,
+      // Something this build does not recognise.
+      'crawled-2': { when: 'yesterday' },
+      // A current entry is read as it is.
+      'crawled-3': { at: 1_790_000_000_500, reserved: 7, checked: 1_790_000_000_600 },
+      // A key that is not a resource id is left for the next observation to count.
+      '../escape': 3,
+    },
+  })
+  // Unrecognised entries hold the default provisional bytes and are measured first.
+  expect(store.pendingMeasurements('marine')).toEqual(['crawled-2', 'crawled-1', 'crawled-3'])
+  const held = 40 + 2 * DEFAULT_LINK_PROVISIONAL_BYTES + 7
+  expect(store.bytesUsed('marine', 4)).toBe(held)
+  expect(store.storedBytes('marine', 4)).toBe(40)
+  // Admission works on the record, counting the old in-flight link at the default too, and the
+  // record it writes is in the current shape.
+  expect(store.reserveAdd('marine', { observed: 5, bytes: 1_000_000_000 })).toEqual({
+    limit: 'maxBytes',
+    value: held + DEFAULT_LINK_PROVISIONAL_BYTES + 1_000_000_000,
+    max: 100_000_000,
+  })
+  expect('admitted' in store.reserveAdd('marine', { observed: 5, bytes: 1 })).toBe(true)
+  const written = state.get<{ measuring: Record<string, unknown>; inflight: { bytes: number }[] }>(
+    'portal-capacity:marine',
+    { measuring: {}, inflight: [] },
+  )
+  expect(written.measuring['crawled-1']).toEqual({
+    at: 1_790_000_000_000,
+    reserved: DEFAULT_LINK_PROVISIONAL_BYTES,
+  })
+  expect(written.measuring['crawled-2']).toEqual({
+    at: 0,
+    reserved: DEFAULT_LINK_PROVISIONAL_BYTES,
+  })
+  expect(Object.keys(written.measuring)).not.toContain('../escape')
+  expect(written.inflight[0]!.bytes).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)
+  // A measuring field that is not a record at all is read as nothing awaiting measurement.
+  state.put('portal-capacity:grains', {
+    v: 1,
+    observed: 0,
+    inflight: [],
+    added: [],
+    removed: [],
+    sized: {},
+    unsized: 0,
+    measuring: 42,
+  })
+  expect(store.pendingMeasurements('grains')).toEqual([])
+  expect(store.bytesUsed('grains', 0)).toBe(0)
 })
 
 Deno.test('capacity admission needs an observation only when a limit or a new ledger needs one', () => {

@@ -46,17 +46,24 @@ Deno.test('all add content transports translate resource and byte limits without
   }
 })
 
-Deno.test('a link refused while earlier links are processed says to wait, not that usage is unknown', async () => {
+Deno.test('an add held back by links still being processed says to wait, not that the portal is full', async () => {
   const original = globalThis.fetch
   globalThis.fetch = () =>
     Promise.resolve(Response.json({ error: 'links_pending' }, { status: 503 }))
   try {
-    await expect(addAdminLink('marine', sessionAccess, { url: 'https://example.test/report' }))
-      .rejects.toMatchObject({
+    for (
+      const action of [
+        () => uploadAdminFile('marine', sessionAccess, new File(['test'], 'test.txt')),
+        () => addAdminLink('marine', sessionAccess, { url: 'https://example.test/report' }),
+        () => addAdminText('marine', sessionAccess, { title: 'Report', body: 'test' }),
+      ]
+    ) {
+      await expect(action()).rejects.toMatchObject({
         status: 503,
         message:
-          'Links added earlier are still being processed, so this one cannot be added yet. Try again in a few minutes, or upload the document instead.',
+          'Links added earlier are still being processed, so this cannot be added yet. Try again in a minute or two.',
       })
+    }
   } finally {
     globalThis.fetch = original
   }

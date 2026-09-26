@@ -64,6 +64,12 @@ export const MAX_UNMEASURED_LINKS = 20
  * removed.
  */
 export const MEASURE_TIMEOUT = 60 * MINUTE
+/**
+ * What a crawled link holds against a byte limit until it is measured, unless the deployment sets
+ * `LINK_PROVISIONAL_BYTES`. A link is measured by its extracted text, which is far smaller than the
+ * files an upload may bring, so 10 MB bounds all but exceptional documents.
+ */
+export const DEFAULT_LINK_PROVISIONAL_BYTES = 10 * 1024 * 1024
 
 /** Every portal the route guard can address; the same rule keys its other stored records. */
 const SlugSchema = KeyPortalSlugSchema
@@ -148,7 +154,10 @@ export type AddAdmission =
   | { admitted: string | null }
   | { unavailable: true }
   | { limit: 'maxResources' | 'maxBytes'; value: number; max: number }
-  /** Too many crawled links are still waiting to be measured. */
+  /**
+   * Crawled links still waiting to be measured stand in the way: too many of them, or the add
+   * would fit but for the provisional bytes they hold.
+   */
   | { unmeasured: true }
 /** A created resource without an id is one whose size the ledger cannot record. */
 export type AddOutcome = { created: false } | { created: true; id?: string }
@@ -264,7 +273,7 @@ export class PortalLifecycleStore {
   private readCapacity(slug: string): StoredCapacity | undefined {
     const raw = this.state.get<unknown>(this.key('capacity', slug), undefined)
     if (raw === undefined) return undefined
-    const parsed = StoredCapacitySchema.safeParse(raw)
+    const parsed = StoredCapacitySchema.safeParse(awaitingMeasurementReadable(raw))
     if (!parsed.success) throw new Error('Invalid persisted portal capacity')
     return parsed.data
   }
@@ -493,6 +502,26 @@ export class PortalLifecycleStore {
   }
 
   /**
+   * Source bytes this portal knows are stored in the knowledge box, or null when it cannot know:
+   * a crawled link counts once it is measured (with `measurements` taken into account), and not
+   * before, since its provisional bytes are a reservation, not stored content. A read: nothing is
+   * recorded.
+   */
+  storedBytes(
+    slug: string,
+    observed: number,
+    measurements: readonly Measurement[] = [],
+  ): number | null {
+    Count.parse(observed)
+    const record = this.readCapacity(slug)
+    if (!record) return observed === 0 ? 0 : null
+    const now = this.clock()
+    this.observe(record, observed, now)
+    this.applyMeasurements(record, measurements, now)
+    return record.unsized === 0 ? sum(Object.values(record.sized)) : null
+  }
+
+  /**
    * Admit one add against the current limits in a single synchronous step, so concurrent
    * requests cannot both take the last slot. `observed` is a fresh resource count; it is
    * required while a capacity limit is set and before the ledger has started. `bytes` is null
@@ -556,7 +585,14 @@ export class PortalLifecycleStore {
       if (used === null || adding === undefined) return refuse({ unavailable: true })
       // A crawled link holds its provisional bytes from admission until it is measured.
       const value = used + sum(record.inflight.map((entry) => entry.bytes)) + adding
-      if (value > maxBytes) return refuse({ limit: 'maxBytes', value, max: maxBytes })
+      if (value > maxBytes) {
+        // When the add would fit but for links still waiting to be measured, it waits for them
+        // rather than being told the portal is full.
+        const held = sum(Object.values(record.measuring ?? {}).map((entry) => entry.reserved)) +
+          sum(record.inflight.filter((entry) => entry.measure).map((entry) => entry.bytes))
+        if (held > 0 && value - held <= maxBytes) return refuse({ unmeasured: true })
+        return refuse({ limit: 'maxBytes', value, max: maxBytes })
+      }
       if (provisional !== undefined) {
         const unmeasured = record.inflight.filter((entry) => entry.measure).length +
           Object.values(record.measuring ?? {}).filter((entry) => !entry.unsized).length
@@ -621,7 +657,7 @@ export class PortalLifecycleStore {
    * Resources awaiting measurement, at most `limit` of them: those never tried first, then the
    * least recently tried, so a resource that stays unprocessed never keeps others waiting.
    */
-  pendingMeasurements(slug: string, limit = MAX_UNMEASURED_LINKS): string[] {
+  pendingMeasurements(slug: string, limit = Number.MAX_SAFE_INTEGER): string[] {
     const measuring = this.readCapacity(slug)?.measuring ?? {}
     return Object.entries(measuring)
       .sort(([, a], [, b]) => (a.checked ?? -1) - (b.checked ?? -1) || a.at - b.at)
@@ -633,6 +669,42 @@ export class PortalLifecycleStore {
   resetCapacity(slug: string): void {
     this.persist(this.key('capacity', slug), undefined)
   }
+}
+
+/**
+ * Read links awaiting measurement in any shape an earlier build stored. An entry this build does
+ * not recognise (such as a bare timestamp) is taken as a link not measured yet: it holds the
+ * default provisional bytes and is measured first. An in-flight link recorded without provisional
+ * bytes holds the default too. An entry whose id is not a resource id is left out, so the next
+ * observation counts that resource as one the ledger cannot size. Nothing here fails the read.
+ */
+function awaitingMeasurementReadable(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const record = { ...(raw as Record<string, unknown>) }
+  if (Array.isArray(record.inflight)) {
+    record.inflight = record.inflight.map((entry) =>
+      entry && typeof entry === 'object' && (entry as { measure?: unknown }).measure === true &&
+        (entry as { bytes?: unknown }).bytes === 0
+        ? { ...entry, bytes: DEFAULT_LINK_PROVISIONAL_BYTES }
+        : entry
+    )
+  }
+  if (!('measuring' in record)) return record
+  const measuring = record.measuring
+  const readable: Record<string, Measuring> = {}
+  if (measuring && typeof measuring === 'object' && !Array.isArray(measuring)) {
+    for (const [id, value] of Object.entries(measuring)) {
+      if (!ResourceIdSchema.safeParse(id).success) continue
+      const entry = MeasuringSchema.safeParse(value)
+      const at = Count.safeParse(value)
+      readable[id] = entry.success
+        ? entry.data
+        : { at: at.success ? at.data : 0, reserved: DEFAULT_LINK_PROVISIONAL_BYTES }
+    }
+  }
+  if (Object.keys(readable).length) record.measuring = readable
+  else delete record.measuring
+  return record
 }
 
 function total(recent: Recent): number {

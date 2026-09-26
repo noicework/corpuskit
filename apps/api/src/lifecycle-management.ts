@@ -4,16 +4,18 @@ import {
   docPageToMarkdown,
   type TenantConfig,
 } from '@research-portal/core'
-import { AragApiError, type AragProvider } from '@research-portal/retrieval'
+import type { AragProvider } from '@research-portal/retrieval'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
   type AddAdmission,
   type AddOutcome,
-  MAX_UNMEASURED_LINKS,
+  DEFAULT_LINK_PROVISIONAL_BYTES,
   type Measurement,
   type PortalLifecycleStore,
 } from './lifecycle-store.ts'
+
+export { DEFAULT_LINK_PROVISIONAL_BYTES }
 
 interface ManagementOptions {
   /**
@@ -28,12 +30,6 @@ interface ManagementOptions {
    */
   linkProvisionalBytes?: number
 }
-
-/**
- * What a crawled link holds against a byte limit until it is measured: the upload cap, so a
- * link counts at least as much as the largest file an upload may bring.
- */
-export const DEFAULT_LINK_PROVISIONAL_BYTES = 100 * 1024 * 1024
 
 /** `LINK_PROVISIONAL_BYTES`: a whole number of bytes, at least 1, otherwise the default. */
 export function linkProvisionalBytes(value: string | undefined): number {
@@ -176,75 +172,134 @@ async function resources(management: AragProvider, config: TenantConfig): Promis
 
 /** Statuses after which a resource's extracted text no longer changes. */
 const SETTLED_STATUSES = new Set(['PROCESSED', 'ERROR', 'BLOCKED', 'EXPIRED'])
-/** Resources a refused add measures before it is judged again. */
+/** Links an add or a precheck reads when links awaiting measurement stand in its way. */
 const MEASURE_PER_CHECK = 10
-/** Reads one measurement makes at once, and how long it may take in all. */
+/** Links a usage report reads at most. */
+const MEASURE_PER_REPORT = 50
+/** Reads one measurement makes at once, and how long a caller waits for them in all. */
 const MEASURE_CONCURRENCY = 4
 const MEASURE_DEADLINE_MS = 8_000
 
 /**
- * Measure resources admitted before their size was known (crawled links). Once the platform has
- * settled one, what it holds is its extracted text, counted as text additions are, and one the
- * knowledge box no longer has holds nothing. One still processing, in a status this code does
- * not know, or whose read fails or is unanswered at the deadline, is pending. Measuring never
- * writes: an admission records the results.
+ * Readings of links awaiting measurement, per portal: the latest finding for each link, not
+ * recorded yet, and the links being read now. They live in memory, so reads (a usage report, a
+ * precheck) can measure without writing; the next admission records them.
+ */
+interface Readings {
+  found: Map<string, Measurement>
+  reading: Set<string>
+}
+const readingsByState = new WeakMap<object, Map<string, Readings>>()
+
+function readingsFor(lifecycle: PortalLifecycleStore, slug: string): Readings {
+  let portals = readingsByState.get(lifecycle.state)
+  if (!portals) readingsByState.set(lifecycle.state, portals = new Map())
+  let readings = portals.get(slug)
+  if (!readings) portals.set(slug, readings = { found: new Map(), reading: new Set() })
+  return readings
+}
+
+/** The findings not recorded yet. */
+function foundReadings(lifecycle: PortalLifecycleStore, slug: string): Measurement[] {
+  return [...readingsFor(lifecycle, slug).found.values()]
+}
+
+/** The findings, for an admission to record. Each is recorded once. */
+function takeReadings(lifecycle: PortalLifecycleStore, slug: string): Measurement[] {
+  const measurements = foundReadings(lifecycle, slug)
+  readingsFor(lifecycle, slug).found.clear()
+  return measurements
+}
+
+/**
+ * Links awaiting measurement worth reading now, the least recently tried first: not being read,
+ * not already found measured, and not among `skip`.
+ */
+function dueReadings(
+  lifecycle: PortalLifecycleStore,
+  slug: string,
+  limit: number,
+  skip: ReadonlySet<string> = new Set(),
+): string[] {
+  const { found, reading } = readingsFor(lifecycle, slug)
+  const measured = (id: string) => {
+    const finding = found.get(id)
+    return finding !== undefined && 'bytes' in finding
+  }
+  return lifecycle.pendingMeasurements(slug)
+    .filter((id) => !reading.has(id) && !measured(id) && !skip.has(id))
+    .slice(0, limit)
+}
+
+/**
+ * Read resources admitted before their size was known (crawled links). Once the platform has
+ * settled one, what it holds is its extracted text, counted as text additions are. One still
+ * processing, in a status this code does not know, or whose read fails, is pending: that
+ * includes a 404, which a box that has not caught up with a write can answer. A few links are
+ * read at once, and the caller waits no longer than the deadline; a read still going on keeps
+ * going and its finding is used later. Reading never writes: an admission records the findings.
  */
 async function measure(
   management: AragProvider,
+  lifecycle: PortalLifecycleStore,
   config: TenantConfig,
   ids: readonly string[],
-): Promise<Measurement[]> {
-  const results: Measurement[] = []
-  const queue = [...ids]
+): Promise<void> {
+  const readings = readingsFor(lifecycle, config.slug)
+  const queue = ids.filter((id) => !readings.reading.has(id))
+  const read = async (id: string) => {
+    readings.reading.add(id)
+    let measurement: Measurement
+    try {
+      const extraction = await management.resourceExtraction(config, id)
+      measurement = SETTLED_STATUSES.has(extraction.status)
+        ? { id, bytes: encoder.encode(extraction.text ?? '').byteLength }
+        : { id, pending: true }
+    } catch {
+      measurement = { id, pending: true }
+    }
+    readings.found.set(id, measurement)
+    readings.reading.delete(id)
+  }
   let open = true
   let timer: ReturnType<typeof setTimeout> | undefined
-  const deadline = new Promise<'deadline'>((resolve) => {
+  const deadline = new Promise<void>((resolve) => {
     timer = setTimeout(() => {
       open = false
-      resolve('deadline')
+      resolve()
     }, MEASURE_DEADLINE_MS)
   })
   const worker = async () => {
-    while (open && queue.length) {
-      const id = queue.shift()!
-      let read: Awaited<ReturnType<AragProvider['resourceExtraction']>> | 'deadline'
-      try {
-        read = await Promise.race([management.resourceExtraction(config, id), deadline])
-      } catch (error) {
-        const missing = error instanceof AragApiError && error.status === 404
-        results.push(missing ? { id, bytes: 0 } : { id, pending: true })
-        continue
-      }
-      if (read === 'deadline' || !SETTLED_STATUSES.has(read.status)) {
-        results.push({ id, pending: true })
-      } else results.push({ id, bytes: encoder.encode(read.text ?? '').byteLength })
-    }
+    while (open && queue.length) await Promise.race([read(queue.shift()!), deadline])
   }
   try {
     await Promise.all(Array.from({ length: Math.min(MEASURE_CONCURRENCY, queue.length) }, worker))
   } finally {
     clearTimeout(timer)
   }
-  return results
 }
 
 /**
- * Resource count from the knowledge box, and source bytes from the portal's ledger. A crawled
- * link still awaiting measurement counts at its provisional bytes, or at what this report
- * measures for it. A report is a read and writes nothing: the ledger records measurements when
- * an add needs them.
+ * Resource count from the knowledge box, and the source bytes it is known to store. A crawled
+ * link counts once it is measured; its provisional bytes are a reservation against a byte limit,
+ * not stored content, so they are never reported. The report reads links that are due, so
+ * repeated reports settle without an add. A report is a read and records nothing: the next
+ * admission records what it found.
  */
 export async function capacityUsage(
   management: AragProvider,
   lifecycle: PortalLifecycleStore,
   config: TenantConfig,
 ): Promise<{ resources: number; bytes: number | null }> {
-  const due = lifecycle.pendingMeasurements(config.slug, MAX_UNMEASURED_LINKS)
-  const [measurements, observed] = await Promise.all([
-    measure(management, config, due),
+  const due = dueReadings(lifecycle, config.slug, MEASURE_PER_REPORT)
+  const [, observed] = await Promise.all([
+    measure(management, lifecycle, config, due),
     resources(management, config),
   ])
-  return { resources: observed, bytes: lifecycle.bytesUsed(config.slug, observed, measurements) }
+  return {
+    resources: observed,
+    bytes: lifecycle.storedBytes(config.slug, observed, foundReadings(lifecycle, config.slug)),
+  }
 }
 
 function refusal(admission: Exclude<AddAdmission, { admitted: string | null }>) {
@@ -253,12 +308,18 @@ function refusal(admission: Exclude<AddAdmission, { admitted: string | null }>) 
   return new PortalLifecycleError(413, { error: 'limit_exceeded', ...admission })
 }
 
+/** A refusal that measuring links awaiting measurement could change. */
+function measurable(admission: AddAdmission): boolean {
+  return ('limit' in admission && admission.limit === 'maxBytes') || 'unmeasured' in admission
+}
+
 /**
  * Admit one add of `bytes` source bytes, or of `provisional` bytes for a crawled link whose size
- * is not known yet, returning the reservation to settle once the write finishes. Refusals: 423
- * for lifecycle state, 413 for a limit, 503 when a limit cannot be checked because the knowledge
- * box cannot be counted or the portal's bytes are unknown, and 503 `links_pending` while too many
- * crawled links wait to be measured.
+ * is not known yet, returning the reservation to settle once the write finishes. Every admission
+ * records the findings of earlier reads. Refusals: 423 for lifecycle state, 413 for a limit, 503
+ * when a limit cannot be checked because the knowledge box cannot be counted or the portal's
+ * bytes are unknown, and 503 `links_pending` while crawled links waiting to be measured stand in
+ * the way.
  */
 async function admitAdd(
   management: AragProvider,
@@ -268,8 +329,9 @@ async function admitAdd(
   options: ManagementOptions,
   provisional?: number,
 ): Promise<string | null> {
-  let measurements: Measurement[] | undefined
+  let measured = false
   while (true) {
+    let recorded: string[] = []
     const admission = await serialCapacity(lifecycle, config.slug, async () => {
       assertManagementWritable(lifecycle, config.slug, options)
       const limits = lifecycle.get(config.slug).limits
@@ -285,18 +347,19 @@ async function admitAdd(
       // The counter request yielded: recheck, then admit in one synchronous store step
       // immediately before the provider write begins.
       assertManagementWritable(lifecycle, config.slug, options)
+      const measurements = takeReadings(lifecycle, config.slug)
+      recorded = measurements.map((measurement) => measurement.id)
       return lifecycle.reserveAdd(config.slug, { observed, bytes, provisional, measurements })
     })
     if ('admitted' in admission) return admission.admitted
     // Crawled links awaiting measurement hold provisional bytes. When those may be what stands
-    // in the way, measure them once, outside the capacity lock so no other add waits on the
-    // reads, and judge this add again with what was found.
-    const measurable = ('limit' in admission && admission.limit === 'maxBytes') ||
-      'unmeasured' in admission
-    if (measurements === undefined && measurable) {
-      const due = lifecycle.pendingMeasurements(config.slug, MEASURE_PER_CHECK)
+    // in the way, read the ones not just recorded, outside the capacity lock so no other add
+    // waits on the reads, and judge this add once more with what was found.
+    if (!measured && measurable(admission)) {
+      const due = dueReadings(lifecycle, config.slug, MEASURE_PER_CHECK, new Set(recorded))
       if (due.length) {
-        measurements = await measure(management, config, due)
+        measured = true
+        await measure(management, lifecycle, config, due)
         continue
       }
     }
@@ -308,8 +371,8 @@ async function admitAdd(
  * Check, without reserving, that one more add could be admitted now. A route that must do
  * remote work before its write, such as fetching a page to add, calls this first so a full
  * portal refuses before anything is fetched. Any add brings at least one byte. When crawled
- * links awaiting measurement may be what fills the portal, they are measured for the answer,
- * which records nothing. The write itself is still admitted by the guard.
+ * links awaiting measurement may be in the way, they are read, and the add that follows records
+ * what was found rather than reading them again. The write itself is still admitted by the guard.
  */
 export async function precheckAdd(
   management: AragProvider,
@@ -322,13 +385,17 @@ export async function precheckAdd(
   if (limits?.maxResources === undefined && limits?.maxBytes === undefined) return
   const observed = await resources(management, config)
   assertManagementWritable(lifecycle, config.slug, options)
-  let admission = lifecycle.checkAdd(config.slug, { observed, bytes: 1 })
-  const due = 'limit' in admission && admission.limit === 'maxBytes'
-    ? lifecycle.pendingMeasurements(config.slug, MEASURE_PER_CHECK)
-    : []
+  const check = () =>
+    lifecycle.checkAdd(config.slug, {
+      observed,
+      bytes: 1,
+      measurements: foundReadings(lifecycle, config.slug),
+    })
+  let admission = check()
+  const due = measurable(admission) ? dueReadings(lifecycle, config.slug, MEASURE_PER_CHECK) : []
   if (due.length) {
-    const measurements = await measure(management, config, due)
-    admission = lifecycle.checkAdd(config.slug, { observed, bytes: 1, measurements })
+    await measure(management, lifecycle, config, due)
+    admission = check()
   }
   if (!('admitted' in admission)) throw refusal(admission)
 }
