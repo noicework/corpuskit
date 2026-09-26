@@ -615,6 +615,8 @@ const sourcePatchSchema = z.object({
   maxPages: z.number().int().min(1).max(MAX_SYNC_CAP).optional(),
 })
 const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
+/** The most recent additions one request may list. */
+const RECENT_LIMIT_MAX = 100
 // Purge is destructive - default TRUE means "just show me the scope", never
 // "go ahead and delete". An explicit { dryRun: false } is required to delete.
 const purgeFailedBodySchema = z.object({ dryRun: z.boolean().optional() })
@@ -4457,7 +4459,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
-    return c.json(await management!.recentResources(config))
+    // An upload batch follows its own files past the default dozen; bounded either way.
+    const requested = c.req.query('limit')
+    const limit = requested === undefined ? undefined : Number(requested)
+    if (
+      limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > RECENT_LIMIT_MAX)
+    ) {
+      return c.json({ error: 'invalid_request' }, 400)
+    }
+    return c.json(await management!.recentResources(config, limit))
   })
 
   app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/link'), async (c) => {

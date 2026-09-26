@@ -1375,7 +1375,6 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           await page!.waitForSelector('[data-admin-overview]')
           await clickText(page!, 'Content')
           const contentStart = requests.length
-          await clickText(page!, 'Add content')
           await clickText(page!, 'Add link')
           await fill(page!, '#link-url-alpha', 'https://example.invalid/research')
           const submit = async (selector: string) => {
@@ -1426,7 +1425,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           await fill(page!, '#text-title-alpha', 'Research note')
           await fill(page!, '#text-body-alpha', 'A research note for the portal.')
           await oneAction(() => submit('#text-title-alpha'), 'add-text')
-          await clickText(page!, 'Upload file')
+          await clickText(page!, 'Upload files')
           const upload = async (count = 1) => {
             await page!.evaluate((count) => {
               const input = document.querySelector<HTMLInputElement>('input[type=file]')!
@@ -1539,8 +1538,18 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await open('manage')
       await page!.waitForSelector('[data-admin-overview]')
       await clickText(page!, 'Content')
-      await clickText(page!, 'Add content')
       const sessionStart = requests.length
+      const uploadsSince = async (count: number) => {
+        // Signed uploads run one after another; wait for the batch rather than a fixed pause.
+        const deadline = Date.now() + 5000
+        const sent = () =>
+          requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length
+        while (sent() < count && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        await settle(page!)
+        return sent()
+      }
       await page!.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>('input[type=file]')!
         const transfer = new DataTransfer()
@@ -1548,10 +1557,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         input.files = transfer.files
         input.dispatchEvent(new Event('change', { bubbles: true }))
       })
-      await settle(page!)
-      expect(
-        requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
-      ).toBe(2)
+      expect(await uploadsSince(2)).toBe(2)
       // Each signed batch request uses the current portal's content.write authority.
       await page!.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>('input[type=file]')!
@@ -1560,10 +1566,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         input.files = transfer.files
         input.dispatchEvent(new Event('change', { bubbles: true }))
       })
-      await settle(page!)
-      expect(
-        requests.slice(sessionStart).filter((r) => r.path.endsWith('/resources/upload')).length,
-      ).toBe(3)
+      expect(await uploadsSince(3)).toBe(3)
       expect(requests.slice(sessionStart).every((r) => !r.emergency)).toBe(true)
       await clickText(page!, 'Crawl site')
       await fill(page!, '#crawl-url-alpha', 'https://example.invalid')

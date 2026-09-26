@@ -362,7 +362,7 @@ test('visual matrix covers management, reading, access and platform surfaces in 
       name: 'manage-add-content',
       path: '/t/marine/manage?tab=content',
       selector: '#link-url-marine',
-      open: ['Add content', 'Add link'],
+      open: ['Add link'],
     },
     {
       name: 'manage-sources',

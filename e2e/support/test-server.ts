@@ -71,6 +71,8 @@ export function startTestServer(options: {
   componentFixture?: { directory: string }
   loginEnv?: Record<string, string>
   componentHtml?: string
+  /** Serve portals whose collection has no documents yet. */
+  emptyCollection?: boolean
 } = {}): TestServer {
   const directory = Deno.makeTempDirSync({ prefix: 'rbac-e2e-' })
   // Legacy JSON stores capture DATA_DIR at module load. Override only their
@@ -215,16 +217,19 @@ export function startTestServer(options: {
     const delays = new Map<string, { entered(): void; wait: Promise<void>; release(): void }>()
     const statuses = new Map<string, number>()
     const providerCalls: string[] = []
-    const provider = new Proxy(new DoubleProvider(), {
-      get(target, property, receiver) {
-        const value = Reflect.get(target, property, receiver)
-        if (typeof value !== 'function') return value
-        return (...args: unknown[]) => {
-          providerCalls.push(String(property))
-          return value.apply(target, args)
-        }
+    const provider = new Proxy(
+      options.emptyCollection ? DoubleProvider.empty() : new DoubleProvider(),
+      {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver)
+          if (typeof value !== 'function') return value
+          return (...args: unknown[]) => {
+            providerCalls.push(String(property))
+            return value.apply(target, args)
+          }
+        },
       },
-    })
+    )
     const app = buildApp({
       ...stores,
       provider,

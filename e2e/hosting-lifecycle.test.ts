@@ -194,7 +194,7 @@ Deno.test('upload, link and text additions explain resource limits and retain en
   const browser = await launch()
   const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
   try {
-    await click(page, 'Add content')
+    await page.waitForSelector('input[type=file]')
     await page.evaluate(() => {
       const input = document.querySelector<HTMLInputElement>('input[type=file]')!
       const transfer = new DataTransfer()
@@ -202,8 +202,10 @@ Deno.test('upload, link and text additions explain resource limits and retain en
       input.files = transfer.files
       input.dispatchEvent(new Event('change', { bubbles: true }))
     })
+    // The file's own row says why the portal refused it.
     await page.waitForFunction(() =>
-      document.querySelector('[role=alert]')?.textContent?.includes('resource limit')
+      document.querySelector('[data-upload-row][data-upload-status=failed] [data-upload-error]')
+        ?.textContent?.includes('resource limit')
     )
     await click(page, 'Add link')
     await fill(page, '#link-url-marine', 'https://example.test/report')

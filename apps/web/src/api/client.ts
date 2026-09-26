@@ -8,6 +8,7 @@ import {
   finishResponse,
 } from './break-glass.ts'
 import type { RequestContext } from './access-lifecycle.ts'
+import type { ProgressRequestInit, UploadProgress } from './upload-transport.ts'
 import type {
   AdminTenantOverview,
   AnalyseEvent,
@@ -588,8 +589,13 @@ export function getAdminCounters(slug: string, passcode: AdminRequestAccess): Pr
 export function getAdminRecent(
   slug: string,
   passcode: AdminRequestAccess,
+  limit?: number,
 ): Promise<RecentResource[]> {
-  return adminRequest<RecentResource[]>(`/api/admin/t/${encodeURIComponent(slug)}/recent`, passcode)
+  const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`
+  return adminRequest<RecentResource[]>(
+    `/api/admin/t/${encodeURIComponent(slug)}/recent${query}`,
+    passcode,
+  )
 }
 
 export function addAdminLink(
@@ -626,15 +632,23 @@ export function uploadAdminFile(
   passcode: AdminRequestAccess,
   file: File,
   options: RequestContext = {},
+  onProgress?: UploadProgress,
 ): Promise<{ id: string }> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/upload`, passcode, {
+  const init: ProgressRequestInit = {
     method: 'POST',
     headers: {
       'content-type': file.type || 'application/octet-stream',
       'x-filename': encodeURIComponent(file.name),
     },
     body: file,
-  }, options)
+    ...(onProgress ? { onUploadProgress: onProgress } : {}),
+  }
+  return adminRequest(
+    `/api/admin/t/${encodeURIComponent(slug)}/resources/upload`,
+    passcode,
+    init,
+    options,
+  )
 }
 
 /**

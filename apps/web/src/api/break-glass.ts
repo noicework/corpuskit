@@ -1,5 +1,6 @@
 import { currentAuthority, type RequestContext } from './access-lifecycle.ts'
 import { errorCode } from './hosting-errors.ts'
+import { wantsUploadProgress, xhrFetch } from './upload-transport.ts'
 
 interface ResponseLifecycle {
   assertCurrent(): void
@@ -128,8 +129,10 @@ export async function authorityFetch(
   input: string,
   init?: RequestInit,
   options: RequestContext = {},
+  // A request that reports upload progress travels over XMLHttpRequest; its Response then passes
+  // through the same lifecycle, denial and publication checks as any fetched one.
   dispatch: (input: string, init?: RequestInit) => Promise<Response> = (input, init) =>
-    fetch(input, init),
+    wantsUploadProgress(init) ? xhrFetch(input, init) : fetch(input, init),
 ): Promise<Response> {
   if (new Headers(init?.headers).has('x-admin-passcode') && !input.startsWith('/api/admin/')) {
     throw new AdminAccessError()

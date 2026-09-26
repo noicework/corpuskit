@@ -8,8 +8,8 @@ import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass
 import { Skeleton } from '../../components/ui.tsx'
 import { errorMessage } from './shared.ts'
 
-async function readRecent(slug: string, access: AdminRequestAccess) {
-  const rows = await getAdminRecent(slug, access)
+export async function readRecent(slug: string, access: AdminRequestAccess, limit?: number) {
+  const rows = await getAdminRecent(slug, access, limit)
   if (
     !Array.isArray(rows) ||
     rows.some((row) =>
