@@ -649,6 +649,66 @@ Deno.test('measurement reads and the resource count can be given up', async () =
   expect(signals.read[0]!.aborted).toBe(false)
 })
 
+Deno.test('404s are timed by when they were read, so an old one never settles a live link', async () => {
+  // A box that lags each write by 5 seconds: a read in that window answers 404, and after it the
+  // link is there, processed, holding 4,000 bytes of text.
+  const scenario = async (staleRead: boolean) => {
+    const start = Date.UTC(2026, 8, 12)
+    let now = start
+    const lifecycle = new PortalLifecycleStore(undefined, () => now)
+    lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 5_000 } }, now)
+    const { state, raw } = crawling()
+    const created = new Map<string, number>()
+    const reads: string[] = []
+    const lagging = Object.assign(raw, {
+      createLink: () => {
+        state.calls++
+        state.count++
+        created.set(`res-${state.calls}`, now)
+        return Promise.resolve({ id: `res-${state.calls}` })
+      },
+      createText: () => {
+        state.calls++
+        state.count++
+        return Promise.resolve({ id: `res-${state.calls}` })
+      },
+      resourceExtraction: (_config: TenantConfig, id: string) => {
+        const behind = now - (created.get(id) ?? now) < 5_000
+        reads.push(`${(now - start) / 1_000}s:${behind ? 404 : 'PROCESSED'}`)
+        if (behind) return Promise.reject(new AragApiError(404, `/resource/${id}`, 'not found'))
+        return Promise.resolve({ status: 'PROCESSED', text: 'x'.repeat(4_000) })
+      },
+    })
+    const guarded = guardManagement(lagging, lifecycle, { linkProvisionalBytes: 1_000 })
+    await guarded.createLink(config, { url: 'https://example.test/big.pdf' })
+    await guarded.createText(config, { title: 't', body: 'n'.repeat(4_000) })
+    now += 1_000
+    await denied(
+      guarded.createText(config, { title: 't', body: 'n'.repeat(1_000) }),
+      503,
+      'links_pending',
+    )
+    now += 1_000
+    // A link route's precheck reads the link again and records nothing.
+    if (staleRead) await denied(precheckAdd(lagging, lifecycle, config), 503, 'links_pending')
+    now += 60 * 60_000 + 5_000
+    // An hour on, the next add must not take the 404s read a second apart as an hour of them:
+    // the link is read afresh, measured at its real size, and the add does not fit.
+    expect(
+      await denied(
+        guarded.createText(config, { title: 't', body: 'n'.repeat(900) }),
+        413,
+        'limit_exceeded',
+      ),
+    ).toMatchObject({ limit: 'maxBytes', max: 5_000 })
+    expect(lifecycle.pendingMeasurements('test')).toEqual([])
+    expect(lifecycle.bytesUsed('test', state.count)).toBe(8_000)
+    expect(reads.at(-1)).toBe('3607s:PROCESSED')
+  }
+  await scenario(false)
+  await scenario(true)
+})
+
 Deno.test('LINK_PROVISIONAL_BYTES is a whole number of bytes, otherwise 10 MB', () => {
   expect(DEFAULT_LINK_PROVISIONAL_BYTES).toBe(10 * 1024 * 1024)
   expect(linkProvisionalBytes(undefined)).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)

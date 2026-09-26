@@ -11,6 +11,7 @@ import {
   type AddAdmission,
   type AddOutcome,
   DEFAULT_LINK_PROVISIONAL_BYTES,
+  MEASURE_TIMEOUT,
   type Measurement,
   type PortalLifecycleStore,
 } from './lifecycle-store.ts'
@@ -185,6 +186,11 @@ const SETTLED_STATUSES = new Set(['PROCESSED', 'ERROR', 'BLOCKED', 'EXPIRED'])
 const MEASURE_PER_CHECK = 10
 /** Links a usage report reads at most. */
 const MEASURE_PER_REPORT = 50
+/**
+ * How old a finding that a link is pending or answered 404 may be when an admission records it.
+ * An older one is dropped and the link read again, so a record never rests on an old read.
+ */
+const STALE_READING_MS = MEASURE_TIMEOUT / 12
 /** Reads one measurement makes at once, and how long a caller waits for them in all. */
 const MEASURE_CONCURRENCY = 4
 const MEASURE_DEADLINE_MS = 8_000
@@ -200,7 +206,8 @@ const READ_TIMEOUT_MS = 30_000
  * precheck) can measure without writing; the next admission records them.
  */
 interface Readings {
-  found: Map<string, Measurement>
+  /** The latest finding for each link, with when it was read on the store's clock. */
+  found: Map<string, { measurement: Measurement; at: number }>
   reading: Set<string>
 }
 const readingsByState = new WeakMap<object, Map<string, Readings>>()
@@ -215,13 +222,21 @@ function readingsFor(lifecycle: PortalLifecycleStore, slug: string): Readings {
 
 /** The findings not recorded yet. */
 function foundReadings(lifecycle: PortalLifecycleStore, slug: string): Measurement[] {
-  return [...readingsFor(lifecycle, slug).found.values()]
+  return [...readingsFor(lifecycle, slug).found.values()].map(({ measurement }) => measurement)
 }
 
-/** The findings, for an admission to record. Each is recorded once. */
+/**
+ * The findings, for an admission to record. Each is recorded once. A size is final whenever it
+ * was read; a finding that a link is pending or answered 404 is dropped once it is stale, and
+ * the link is read again when it is next due.
+ */
 function takeReadings(lifecycle: PortalLifecycleStore, slug: string): Measurement[] {
-  const measurements = foundReadings(lifecycle, slug)
-  readingsFor(lifecycle, slug).found.clear()
+  const { found } = readingsFor(lifecycle, slug)
+  const now = lifecycle.now()
+  const measurements = [...found.values()]
+    .filter(({ measurement, at }) => 'bytes' in measurement || now - at < STALE_READING_MS)
+    .map(({ measurement }) => measurement)
+  found.clear()
   return measurements
 }
 
@@ -238,7 +253,7 @@ function dueReadings(
   const { found, reading } = readingsFor(lifecycle, slug)
   const measured = (id: string) => {
     const finding = found.get(id)
-    return finding !== undefined && 'bytes' in finding
+    return finding !== undefined && 'bytes' in finding.measurement
   }
   return lifecycle.pendingMeasurements(slug)
     .filter((id) => !reading.has(id) && !measured(id) && !skip.has(id))
@@ -293,12 +308,13 @@ async function measure(
         ? { id, bytes: encoder.encode(extraction.text ?? '').byteLength }
         : { id, pending: true }
     } catch (error) {
-      // A 404 is recorded as such: pending at first, and settled once it has lasted.
+      // A 404 is recorded as such, with when it was read: pending at first, and settled once
+      // the 404s have lasted.
       measurement = error instanceof AragApiError && error.status === 404
-        ? { id, missing: true }
+        ? { id, missing: true, readAt: lifecycle.now() }
         : { id, pending: true }
     }
-    readings.found.set(id, measurement)
+    readings.found.set(id, { measurement, at: lifecycle.now() })
     readings.reading.delete(id)
   }
   let open = true

@@ -1518,6 +1518,8 @@ export class AragProvider implements RetrievalProvider {
         origin: { url: input.url },
         links: { link: { uri: input.url } },
         ...(input.hidden ? { hidden: true } : {}),
+        // Answer once the resource is committed, so a read straight after finds it.
+        wait_for_commit: true,
       })
     )
     this.invalidateCatalogue(tenant.slug)
@@ -1543,6 +1545,8 @@ export class AragProvider implements RetrievalProvider {
       icon: 'text/plain',
       texts: { body: { body: input.body, format: input.format ?? 'MARKDOWN' } },
       ...(input.hidden ? { hidden: true } : {}),
+      // Answer once the resource is committed, so a read straight after finds it.
+      wait_for_commit: true,
     }
     if (input.originUrl) body.origin = { url: input.originUrl }
     if (input.slug) body.slug = input.slug

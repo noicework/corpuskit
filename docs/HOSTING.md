@@ -434,9 +434,12 @@ platform has settled the resource (`PROCESSED`, `ERROR`, `BLOCKED` or `EXPIRED`)
 measures its extracted text, UTF-8 bytes as for pasted text, and that replaces the provisional
 bytes. A status CorpusKit does not know, and a read that fails, leave the provisional bytes in
 place. So does a 404 at first, since a knowledge box that has not caught up with a write can
-answer one for a moment. A link whose reads have answered nothing but 404 for an hour is gone:
-it is settled at 0 bytes. Any other reading starts that hour again, and a link already measured
-keeps its measured size whatever its reads answer later.
+answer one for a moment (link and text adds also ask the platform to answer only once the new
+resource is committed). A link whose reads have answered nothing but 404 for an hour, timed
+from when the first of them was read to when the latest was, is gone: it is settled at 0 bytes.
+Any other reading starts that hour again, a finding more than five minutes old is read again
+rather than recorded, and a link already measured keeps its measured size whatever its reads
+answer later.
 
 An add that would fit but for the provisional bytes of links still waiting to be measured is
 refused with 503 `{ "error": "links_pending" }`, not with `limit_exceeded`: the portal is not

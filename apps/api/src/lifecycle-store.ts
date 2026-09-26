@@ -186,11 +186,12 @@ export interface AddInput {
 
 /**
  * What a measurement found for a resource awaiting one: the bytes it holds, that the knowledge
- * box answered 404 for it, or that it is not processed yet or could not be read.
+ * box answered 404 for it (with when that was read, on this store's clock), or that it is not
+ * processed yet or could not be read.
  */
 export type Measurement =
   | { id: string; bytes: number }
-  | { id: string; missing: true }
+  | { id: string; missing: true; readAt: number }
   | { id: string; pending: true }
 
 function dateFormatter(timeZone: string): Intl.DateTimeFormat {
@@ -256,6 +257,11 @@ export class PortalLifecycleStore {
     readonly state: LifecycleState = transientLifecycleState(),
     private readonly clock: () => number = Date.now,
   ) {}
+
+  /** The time on this store's clock, which readings are stamped with. */
+  now(): number {
+    return this.clock()
+  }
 
   private key(kind: LifecycleRecordKind, slug: string): string {
     return `portal-${kind}:${SlugSchema.parse(slug)}`
@@ -482,7 +488,8 @@ export class PortalLifecycleStore {
    * Record measurements: a size replaces the provisional bytes. A resource that is still pending
    * is marked tried, and stops counting as in flight once it has waited `MEASURE_TIMEOUT`. A 404
    * is pending too, unless the reads have answered nothing but 404 for `MEASURE_TIMEOUT`: the
-   * resource is gone, and it holds nothing. Any other reading starts that wait again.
+   * resource is gone, and it holds nothing. That hour runs between the times the 404s were
+   * read, never the times they were recorded. Any other reading starts that wait again.
    */
   private applyMeasurements(
     record: StoredCapacity,
@@ -496,8 +503,8 @@ export class PortalLifecycleStore {
       if (!id.success || !measuring || !Object.hasOwn(measuring, id.data)) continue
       const entry = measuring[id.data]!
       if ('missing' in measurement) {
-        const since = entry.missingSince ?? now
-        if (now - since >= MEASURE_TIMEOUT) {
+        const since = entry.missingSince ?? measurement.readAt
+        if (measurement.readAt - since >= MEASURE_TIMEOUT) {
           delete measuring[id.data]
           record.sized[id.data] = 0
           continue
