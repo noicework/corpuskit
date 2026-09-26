@@ -557,6 +557,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const auth = authConfig(env, url.hostname, platformDomain, {
     aliasHost: hostPortal !== null,
     sealHost: host.kind === 'candidate',
+    reservedHost: host.kind === 'reserved',
   })
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
   const operator = await authenticateOperator(request, values)
@@ -571,7 +572,27 @@ async function route(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
   }
 
-  if (url.pathname.startsWith('/auth/')) return authRoute(request, env, auth, operator)
+  if (url.pathname.startsWith('/auth/')) {
+    // A reserved hostname can still carry an alias record written before it was reserved, and
+    // its DNS may then be a third party's. Only the routes that issue a session look that up, so
+    // pages and session reads there never wait on it; with a record, sign-in is as on an alias
+    // host: sealed to the host, with the host claim required and no Entra.
+    if (host.kind === 'reserved' && SESSION_ISSUING_PATHS.has(url.pathname)) {
+      const recorded = await cachedHostPortal(normaliseHostname(url.hostname), env, false)
+      if (recorded === undefined) {
+        return json({ error: 'host_lookup_failed' }, 503, { 'retry-after': '5' })
+      }
+      if (recorded !== null) {
+        return authRoute(
+          request,
+          env,
+          authConfig(env, url.hostname, platformDomain, { aliasHost: true, sealHost: true }),
+          operator,
+        )
+      }
+    }
+    return authRoute(request, env, auth, operator)
+  }
 
   const aliasLocation = tenantAliasLocation(request)
   if (aliasLocation) {
@@ -713,6 +734,13 @@ function hostTransportSecurity(request: Request, env: Env, response: Response): 
   })
 }
 
+/** The sign-in routes that issue a session cookie. */
+const SESSION_ISSUING_PATHS: ReadonlySet<string> = new Set([
+  '/auth/external',
+  '/auth/callback',
+  '/auth/login',
+])
+
 /** Per-isolate host lookups, positive and negative, each kept for `ALIAS_CACHE_SECONDS`. */
 const hostPortals = new HostPortalCache()
 /** A lookup slower than this fails: the request is answered with 503 and nothing is cached. */
@@ -723,7 +751,11 @@ const HOST_LOOKUP_TIMEOUT_MS = 1000
  * null when it is not registered, or undefined when the lookup failed or timed out. A failure is
  * never cached and never treated as an unregistered host.
  */
-async function cachedHostPortal(candidate: string, env: Env): Promise<string | null | undefined> {
+async function cachedHostPortal(
+  candidate: string,
+  env: Env,
+  warnIfUnregistered = true,
+): Promise<string | null | undefined> {
   const now = Date.now()
   const cached = hostPortals.get(candidate, now)
   if (cached !== undefined) return cached
@@ -745,7 +777,7 @@ async function cachedHostPortal(candidate: string, env: Env): Promise<string | n
     clearTimeout(timer)
   }
   hostPortals.set(candidate, slug, aliasCacheSeconds(stringEnv(env).ALIAS_CACHE_SECONDS), now)
-  if (slug === null) warnUnregistered(candidate)
+  if (slug === null && warnIfUnregistered) warnUnregistered(candidate)
   return slug
 }
 
@@ -931,7 +963,7 @@ function authConfig(
   env: Env,
   hostname: string,
   platformDomain: string,
-  host: { aliasHost?: boolean; sealHost?: boolean } = {},
+  host: { aliasHost?: boolean; sealHost?: boolean; reservedHost?: boolean } = {},
 ): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
@@ -952,6 +984,8 @@ function authConfig(
     // On a candidate host, whether or not the edge knows it as an alias, a session is sealed to
     // the host it was issued on and read nowhere else.
     ...(host.sealHost ? { sessionHost: normaliseHostname(hostname) } : {}),
+    // A reserved host reads the sessions sign-in sealed to it while it carried an alias record.
+    ...(host.reservedHost ? { alsoReadSealedTo: normaliseHostname(hostname) } : {}),
   }
 }
 

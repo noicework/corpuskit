@@ -1581,9 +1581,9 @@ Deno.test('a reserved host that still carries an alias record grants no platform
       }, { requestId: 'grant', actor: { kind: 'system' } }).ok,
     ).toBe(true)
     const host = 'shared.example.org'
-    // A reserved host follows the deployment's setting, so a host-less assertion signs in.
+    // While it carries an alias record, sign-in there is as on an alias host: it names the host.
     const cookie = cookieOf(
-      await f.request(host, `/auth/external?assertion=${await assertion(issuer.key)}`),
+      await f.request(host, `/auth/external?assertion=${await assertion(issuer.key, { host })}`),
     )!
     const as = (path: string) => f.request(host, path, { headers: { cookie } })
     const me = await (await as('/auth/me?portal=marine')).json()
@@ -1596,6 +1596,85 @@ Deno.test('a reserved host that still carries an alias record grants no platform
     }
     expect((await as('/api/admin/t/marine/members')).status).toBe(403)
   } finally {
+    f.close()
+  }
+})
+
+Deno.test('sign-in on a reserved host that still carries an alias record is sealed to it', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture(
+    { ...issuer.env, RESERVED_HOSTNAMES: 'shared.example.org,legacy.example.net' },
+    (tenants) => expect(tenants.setAlias('marine', 'shared.example.org', false, 5).ok).toBe(true),
+  )
+  const error = console.error
+  try {
+    expect(
+      f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true).create({
+        subjectKind: 'pending-email',
+        subjectId: 'reader@example.test',
+        source: 'external',
+        scope: { kind: 'platform' },
+        role: 'platform-admin',
+      }, { requestId: 'grant', actor: { kind: 'system' } }).ok,
+    ).toBe(true)
+    const host = 'shared.example.org'
+    let address = 1
+    const handoff = (on: string, claims: Record<string, unknown>) =>
+      assertion(issuer.key, claims).then((token) =>
+        f.request(on, `/auth/external?assertion=${token}`, {
+          headers: { 'cf-connecting-ip': `198.51.100.${address++}` },
+        })
+      )
+    const me = async (on: string, cookie: string) =>
+      await (await f.request(on, '/auth/me', { headers: { cookie } })).json()
+
+    // Pages and session reads there never look the hostname up; sign-in does.
+    for (const path of ['/', '/api/health', '/auth/me']) {
+      await (await f.request(host, path)).body?.cancel()
+    }
+    expect(f.lookups).not.toContain(host)
+    // As on an alias host: the assertion must name the host, and the session is sealed to it.
+    expect((await handoff(host, {})).status).toBe(401)
+    expect(f.lookups).toContain(host)
+    const signedIn = await handoff(host, { host })
+    expect(signedIn.status).toBe(303)
+    const cookie = cookieOf(signedIn)!
+    const there = await me(host, cookie)
+    expect(there.authenticated).toBe(true)
+    expect(there.effectiveRoles).toEqual({ portalRoles: [] })
+    expect(there.entraEnabled).toBe(false)
+    // The reviewer's replay: harvested there, the cookie is refused on the platform host.
+    expect((await me('corpuskit.org', cookie)).authenticated).toBe(false)
+    expect((await me('marine.corpuskit.org', cookie)).authenticated).toBe(false)
+    expect((await me('corpuskit.account.workers.dev', cookie)).authenticated).toBe(false)
+    const overview = await f.request('corpuskit.org', '/api/admin/overview', {
+      headers: { cookie },
+    })
+    expect(overview.status).toBe(401)
+    expect(
+      f.events().some((event) =>
+        event.action === 'request.denied' &&
+        JSON.parse(event.detail_json).code === 'session_host_mismatch'
+      ),
+    ).toBe(true)
+    // Entra sign-in is not offered there.
+    expect((await f.request(host, '/auth/login')).status).toBe(503)
+
+    // A reserved host without a record keeps the deployment's rules: no claim needed, unsealed.
+    const legacy = await handoff('legacy.example.net', {})
+    expect(legacy.status).toBe(303)
+    expect((await me('legacy.example.net', cookieOf(legacy)!)).authenticated).toBe(true)
+
+    // A failed lookup on a sign-in route fails closed; the host's pages still need none.
+    console.error = () => {}
+    f.object.resolveHostPortal = () => Promise.reject(new Error('unavailable'))
+    const failed = await handoff(host, { host })
+    expect(failed.status).toBe(503)
+    expect(await failed.json()).toEqual({ error: 'host_lookup_failed' })
+    expect(failed.headers.get('set-cookie')).toBeNull()
+    expect((await f.request(host, '/api/health')).status).toBe(200)
+  } finally {
+    console.error = error
     f.close()
   }
 })
