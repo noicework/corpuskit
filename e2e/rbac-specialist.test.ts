@@ -679,6 +679,55 @@ Deno.test('appearance and rename omit behaviour fields and revoke every control 
   }
 })
 
+Deno.test('a logo chosen through the native picker uploads when focus returns just before its change event', async () => {
+  const browser = await launch()
+  const server = startTestServer({
+    identity: { role: 'owner' },
+    management: managementFixture().management,
+  })
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=appearance`)
+  try {
+    await assertCurrentBuild(page)
+    await page.waitForSelector('[data-branding-upload=logo]')
+    const checks = server.requests.filter((r) => r.path === '/auth/me?portal=marine').length
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('[data-branding-upload=logo]')!
+      const files = new DataTransfer()
+      const png = Uint8Array.from(
+        atob(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+        ),
+        (char) => char.charCodeAt(0),
+      )
+      files.items.add(new File([png], 'logo.png', { type: 'image/png' }))
+      input.files = files.files
+      // Activating the input opens its picker, which blurs the window; choosing a file hands
+      // focus back, then the input reports its change.
+      input.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      dispatchEvent(new Event('blur'))
+      dispatchEvent(new Event('focus'))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await page.waitForFunction(() =>
+      document.body.innerText.includes('Uploaded - the portal now uses it.')
+    )
+    expect(server.requests.filter((r) => r.path === '/auth/me?portal=marine').length)
+      .toBeGreaterThan(checks)
+    expect(
+      server.requests.filter((r) =>
+        r.path.endsWith('/branding/logo') && r.method === 'POST' && r.status === 200
+      ),
+    ).toHaveLength(1)
+  } catch (error) {
+    console.error(server.requests.slice(-12), await page.evaluate(() => document.body.innerText))
+    throw error
+  } finally {
+    await page.close()
+    await server.close()
+    await browser.close()
+  }
+})
+
 Deno.test('extraction appearance rename render in light dark wide390 with22px tokens', async () => {
   const browser = await launch()
   try {

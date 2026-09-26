@@ -1,5 +1,10 @@
 import { expect } from '@std/expect'
-import { AuthorityController, registerAuthorityController } from './access-lifecycle.ts'
+import {
+  AuthorityController,
+  FILE_PICKER_BLUR_MS,
+  FilePickerFocus,
+  registerAuthorityController,
+} from './access-lifecycle.ts'
 import { sessionFixture } from './auth.test.ts'
 import { sessionAccess } from './break-glass.ts'
 import {
@@ -386,4 +391,212 @@ Deno.test('scope entries are independent, never replace page scope and die with 
   } finally {
     globalThis.fetch = original
   }
+})
+
+Deno.test('revalidation keeps an unchanged session, its generation and its in-flight requests', async () => {
+  const original = globalThis.fetch
+  const authority = new AuthorityController()
+  authority.setSession(sessionFixture(), 'marine')
+  const context = authority.context
+  const upload = authority.beginRequest()
+  let notified = 0
+  let cleaned = 0
+  authority.subscribe(() => notified++)
+  authority.registerCleanup(() => cleaned++)
+  let reads = 0
+  let resolve!: (response: Response) => void
+  globalThis.fetch = () => {
+    reads++
+    return new Promise((done) => {
+      resolve = done
+    })
+  }
+  try {
+    // A file picker returns focus to the window just before its input's change event: the
+    // upload is dispatched while the re-check is still pending, so authority must stay current.
+    const first = authority.revalidate('marine')
+    const second = authority.revalidate('marine')
+    expect(authority.status).toBe('ready')
+    expect(authority.can('portal.read', { kind: 'portal', slug: 'marine' })).toBe(true)
+    expect(() => authority.assertCurrent(context)).not.toThrow()
+    const dispatched = authority.beginRequest()
+    resolve(Response.json({ ...sessionFixture(), claimAgeSeconds: 42 }))
+    await Promise.all([first, second])
+    expect(reads).toBe(1)
+    expect(authority.context).toBe(context)
+    for (const request of [upload, dispatched]) {
+      expect(request.signal.aborted).toBe(false)
+      expect(() => request.assertCurrent()).not.toThrow()
+    }
+    expect(notified).toBe(0)
+    expect(cleaned).toBe(0)
+    expect(authority.session?.claimAgeSeconds).toBe(42)
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('revalidation withdraws changed identity or authority exactly as a new session does', async () => {
+  const original = globalThis.fetch
+  const revoked = {
+    ...sessionFixture(),
+    portalAccess: {
+      slug: 'marine',
+      permissions: [],
+      effectiveRole: null,
+      available: false,
+      canEnable: false,
+    },
+  }
+  try {
+    for (const next of [sessionFixture('marine', 'two'), revoked]) {
+      const authority = new AuthorityController()
+      authority.setSession(sessionFixture(), 'marine')
+      const context = authority.context
+      const upload = authority.beginRequest()
+      let cleaned = 0
+      authority.registerCleanup(() => cleaned++)
+      globalThis.fetch = () => Promise.resolve(Response.json(next))
+      await authority.revalidate('marine')
+      expect(authority.context.generation).toBeGreaterThan(context.generation)
+      expect(upload.signal.aborted).toBe(true)
+      expect(() => upload.assertCurrent()).toThrow()
+      expect(cleaned).toBe(1)
+      expect(authority.status).toBe('ready')
+      expect(authority.session?.user?.id).toBe(next.user?.id)
+      expect(authority.can('portal.read', { kind: 'portal', slug: 'marine' })).toBe(
+        next !== revoked,
+      )
+    }
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('failed or superseded revalidation never keeps or restores obsolete authority', async () => {
+  const original = globalThis.fetch
+  try {
+    // An unreadable session fails closed, as a refresh does.
+    for (const response of [new Response('unavailable', { status: 503 }), Response.json({})]) {
+      const authority = new AuthorityController()
+      authority.setSession(sessionFixture(), 'marine')
+      const upload = authority.beginRequest()
+      globalThis.fetch = () => Promise.resolve(response)
+      await expect(authority.revalidate('marine')).rejects.toThrow()
+      expect(authority.status).toBe('unavailable')
+      expect(authority.session).toBe(null)
+      expect(upload.signal.aborted).toBe(true)
+    }
+    // A change made while the read is pending owns the state; the late read cannot undo it.
+    const authority = new AuthorityController()
+    authority.setSession(sessionFixture(), 'marine')
+    let resolve!: (response: Response) => void
+    let signal: AbortSignal | undefined
+    globalThis.fetch = (_input, init) => {
+      signal = init?.signal ?? undefined
+      return new Promise((done) => {
+        resolve = done
+      })
+    }
+    const late = authority.revalidate('marine')
+    authority.setSession(sessionFixture('marine', 'two'), 'marine')
+    expect(signal?.aborted).toBe(true)
+    resolve(Response.json(sessionFixture()))
+    await expect(late).rejects.toThrow()
+    expect(authority.status).toBe('ready')
+    expect(authority.session?.user?.id).toBe('two')
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('revalidation without a ready session for the page scope is a full refresh', async () => {
+  const original = globalThis.fetch
+  let resolve!: (response: Response) => void
+  globalThis.fetch = () =>
+    new Promise((done) => {
+      resolve = done
+    })
+  try {
+    for (const setup of ['none', 'other-scope'] as const) {
+      const authority = new AuthorityController()
+      if (setup === 'other-scope') authority.setSession(sessionFixture('grains'), 'grains')
+      const revalidation = authority.revalidate('marine')
+      expect(authority.status).toBe('loading')
+      expect(authority.can('portal.read', { kind: 'portal', slug: 'grains' })).toBe(false)
+      resolve(Response.json(sessionFixture()))
+      await revalidation
+      expect(authority.context.slug).toBe('marine')
+      expect(authority.can('portal.read', { kind: 'portal', slug: 'marine' })).toBe(true)
+    }
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('a failed admin upload says what went wrong instead of a code or a bare failure', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const cases: Array<[Response, string, string | undefined]> = [
+    [
+      new Response('<html>413 Request Entity Too Large</html>', { status: 413 }),
+      'That file is too large to upload.',
+      undefined,
+    ],
+    [Response.json({ error: 'file_too_large' }, { status: 413 }), 'too large', 'file_too_large'],
+    [Response.json({ error: 'empty_file' }, { status: 400 }), 'That file is empty', 'empty_file'],
+    [Response.json({ error: 'not_found' }, { status: 404 }), 'could not be found', 'not_found'],
+    [new Response('<html>Bad gateway</html>', { status: 502 }), 'on our side', undefined],
+    [Response.json({ error: 'new_code' }, { status: 409 }), 'failed (HTTP 409)', 'new_code'],
+    [
+      Response.json({ error: 'unsupported_type', message: 'PDF, Word or text only.' }, {
+        status: 415,
+      }),
+      'PDF, Word or text only.',
+      'unsupported_type',
+    ],
+  ]
+  try {
+    for (const [response, message, code] of cases) {
+      const authority = new AuthorityController()
+      authority.setSession(sessionFixture(), 'marine')
+      const unregister = registerAuthorityController(authority)
+      globalThis.fetch = () => Promise.resolve(response)
+      try {
+        const error = await uploadAdminFile('marine', sessionAccess, new File(['x'], 'a.pdf'))
+          .then(() => null, (error: unknown) => error)
+        expect(error).toMatchObject({ status: response.status, code })
+        expect((error as Error).message).toContain(message)
+        expect((error as Error).message).not.toMatch(/^[a-z_]+$|^Request failed$/)
+        // A refused upload is not a loss of access: the page stays mounted to show the message.
+        expect(authority.status).toBe('ready')
+      } finally {
+        unregister()
+      }
+    }
+  } finally {
+    globalThis.fetch = original
+    restore()
+  }
+})
+
+Deno.test('only the focus a file picker hands back skips withdrawal, and only once', () => {
+  const focus = new FilePickerFocus()
+  // Choosing a file: the input is activated, its picker blurs the window, focus comes back.
+  focus.activated(1_000)
+  focus.blurred(1_020)
+  expect(focus.focused()).toBe('picker')
+  // The next return is an ordinary one.
+  focus.blurred(5_000)
+  expect(focus.focused()).toBe('return')
+  // A focus with no blur since activation (a picker that never took focus) is a return.
+  focus.activated(6_000)
+  expect(focus.focused()).toBe('return')
+  // An activation long before an unrelated blur never excuses the later return.
+  focus.activated(7_000)
+  focus.blurred(7_000 + FILE_PICKER_BLUR_MS + 1)
+  expect(focus.focused()).toBe('return')
+  // Without any activation every focus is a return.
+  focus.blurred(9_000)
+  expect(focus.focused()).toBe('return')
 })

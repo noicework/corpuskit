@@ -36,6 +36,52 @@ function identityOf(session: AuthSession, browserId: () => string): string | nul
   return session.portalAccess?.available ? JSON.stringify(['anonymous', browserId()]) : null
 }
 
+/**
+ * Whether two snapshots grant exactly the same authority to the same identity. Only the claim
+ * age, which grows on every read of an unchanged session, is ignored; any other difference
+ * counts as a change.
+ */
+export function sameAuthority(a: AuthSession, b: AuthSession): boolean {
+  return JSON.stringify({ ...a, claimAgeSeconds: null }) ===
+    JSON.stringify({ ...b, claimAgeSeconds: null })
+}
+
+/** How long after a file input is activated its native picker may take the window's focus. */
+export const FILE_PICKER_BLUR_MS = 1000
+
+/**
+ * Tells the focus a native file picker gives back apart from a person returning to the page.
+ * The picker belongs to the page: activating a file input blurs the window, and choosing (or
+ * cancelling) returns focus to it just before the input's change event. Treating that return
+ * as an observed return would withdraw authority between the choice and its upload, unmount the
+ * form and drop the file. Only the one focus that answers a picker's own blur counts; any other
+ * focus, including one after an unrelated later blur, is an ordinary return.
+ */
+export class FilePickerFocus {
+  #activatedAt: number | null = null
+  #pickerHasFocus = false
+
+  /** A file input was activated (clicked directly, through its label, or by keyboard). */
+  activated(now: number): void {
+    this.#activatedAt = now
+  }
+
+  /** The window lost focus. */
+  blurred(now: number): void {
+    this.#pickerHasFocus = this.#activatedAt !== null &&
+      now - this.#activatedAt <= FILE_PICKER_BLUR_MS
+    this.#activatedAt = null
+  }
+
+  /** The window regained focus: `picker` when it comes back from a file picker, once. */
+  focused(): 'picker' | 'return' {
+    const picker = this.#pickerHasFocus
+    this.#pickerHasFocus = false
+    this.#activatedAt = null
+    return picker ? 'picker' : 'return'
+  }
+}
+
 /** A generation owns every protected cache, request and transient UI value. */
 export class AuthorityController {
   #context: AuthorityContext = Object.freeze({ identityKey: null, slug: null, generation: 0 })
@@ -45,6 +91,7 @@ export class AuthorityController {
   #listeners = new Set<() => void>()
   #cleanups = new Set<() => void>()
   #scopes = new Map<string, { abort: AbortController; promise: Promise<AuthSession> }>()
+  #revalidation: { context: AuthorityContext; promise: Promise<void> } | null = null
   constructor(private readonly browserId: () => string = anonymousBrowserId) {}
 
   get context(): AuthorityContext {
@@ -111,6 +158,46 @@ export class AuthorityController {
     } finally {
       this.#requests.delete(abort)
     }
+  }
+
+  /**
+   * Check the session again without first withdrawing the current authority, for a focus that
+   * is not an observed return (see `FilePickerFocus`). A read that confirms the same identity
+   * and authority keeps the generation, its requests and everything mounted under it, so the
+   * upload of a file just chosen goes ahead. Any difference replaces the session exactly as
+   * `setSession` does, and a failed read withdraws authority as `refresh` does. Without a ready
+   * session for this page scope there is nothing to keep, so this is `refresh`.
+   */
+  revalidate(slug?: string): Promise<void> {
+    const context = this.#context
+    if (this.#status !== 'ready' || !this.#session || context.slug !== (slug ?? null)) {
+      return this.refresh(slug)
+    }
+    if (this.#revalidation?.context === context) return this.#revalidation.promise
+    const abort = new AbortController()
+    // Tracked with the generation's requests, so withdrawing authority also stops this read.
+    this.#requests.add(abort)
+    const promise = (async () => {
+      try {
+        const session = await getAuthSession({ slug, signal: abort.signal })
+        if (context !== this.#context) throw new StaleAuthorityError()
+        if (this.#session && sameAuthority(session, this.#session)) {
+          // Nothing changed: keep the generation. Only the fresher claim age is taken.
+          this.#session = session
+          return
+        }
+        this.setSession(session, slug)
+      } catch (error) {
+        if (context === this.#context) this.invalidate('revalidation failed')
+        throw error
+      } finally {
+        this.#requests.delete(abort)
+        // One read per context, so the entry for this context is this read's.
+        if (this.#revalidation?.context === context) this.#revalidation = null
+      }
+    })()
+    this.#revalidation = { context, promise }
+    return promise
   }
 
   can(permission: Permission, scope: Scope): boolean {
