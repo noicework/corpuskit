@@ -14,6 +14,8 @@ import {
   safePortalProjection,
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
+import { registerAliasRoutes } from './alias-routes.ts'
+import { maxPortalAliases } from './portal-aliases.ts'
 import {
   assertAgentRunAllowed,
   capacityUsage,
@@ -933,6 +935,8 @@ export interface BuildAppOptions {
   enrichments?: EnrichmentStoreApi
   /** Runtime adapter for optional per-portal Worker custom domains. */
   domainProvisioner?: PortalDomainProvisioner | null
+  /** Host aliases each portal may have. Defaults to env MAX_PORTAL_ALIASES, or 5. */
+  maxPortalAliases?: number
   zone?: string
   audit?: AuditStore
   breakGlass?: BreakGlassService
@@ -1435,11 +1439,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     detail = {},
     scope: Scope = classification(c).scope,
     target: { kind: string; id?: string } = { kind: 'request' },
+    classify?: (result: T) => 'success' | 'failure',
   ) =>
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
         audit: requiredAudit(),
         localMutations: opts.localMutations,
+        classify,
         signal: operationSignals.get(c.req.raw) ?? c.req.raw.signal,
         input: {
           requestId: requestContext(c.req.raw).requestId,
@@ -1863,6 +1869,34 @@ export function buildApp(opts: BuildAppOptions): Hono {
         'portal.lifecycle.update',
         () => lifecycle.set(slug, { status: input.status, limits: input.limits }),
         lifecycleAuditDetail(input),
+        { kind: 'platform' },
+        { kind: 'portal', id: slug },
+      ),
+  })
+
+  const aliasLimit = opts.maxPortalAliases ?? maxPortalAliases(process.env.MAX_PORTAL_ALIASES)
+  registerAliasRoutes(app, {
+    tenants,
+    platformDomain,
+    limit: aliasLimit,
+    set: (c, slug, hostname, primary, audited) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/aliases/:hostname',
+        'portal.alias.set',
+        () => tenants.setAlias(slug, hostname, primary, aliasLimit),
+        audited,
+        { kind: 'platform' },
+        { kind: 'portal', id: slug },
+        (result) => result.ok ? 'success' : 'failure',
+      ),
+    remove: (c, slug, hostname, audited) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/aliases/:hostname',
+        'portal.alias.remove',
+        () => tenants.removeAlias(slug, hostname),
+        audited,
         { kind: 'platform' },
         { kind: 'portal', id: slug },
       ),
@@ -4018,8 +4052,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const slug = c.req.param('slug')
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
-    const config = tenants.get(slug)
-    if (config?.hostname) {
+    // Only the portal's own hostname is detached. Its host aliases were routed by the hosting
+    // operator, not by this deployment, and removal drops their records in the same write.
+    const hostname = tenants.assignedHostname(slug)
+    if (hostname) {
       await portalSubAction(c, 'tenant.domain.detach', slug)
       if (!domains) {
         return c.json({
@@ -4035,7 +4071,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           'tenant.domain.detach',
           async () => {
             try {
-              return await domains.detach(config.hostname!)
+              return await domains.detach(hostname)
             } catch (error) {
               remoteFailure = error
               throw error
@@ -4078,9 +4114,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     return c.json({
       ok: true,
-      domain: config?.hostname
-        ? { status: 'removed', hostname: config.hostname }
-        : { status: 'not_configured' },
+      domain: hostname ? { status: 'removed', hostname } : { status: 'not_configured' },
     })
   })
 

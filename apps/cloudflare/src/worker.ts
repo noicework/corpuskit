@@ -56,6 +56,7 @@ import {
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
+import { maxPortalAliases } from '../../api/src/portal-aliases.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -150,6 +151,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       suggestions: this.stores.suggestions,
       enrichments: this.stores.enrichments,
       domainProvisioner: createCloudflareDomainProvisioner(bindings),
+      maxPortalAliases: maxPortalAliases(bindings.MAX_PORTAL_ALIASES),
       kgProposals: this.stores.kgProposals,
       branding: this.stores.branding,
       mcpKeys: this.stores.mcpKeys,
