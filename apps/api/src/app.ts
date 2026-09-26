@@ -15,7 +15,7 @@ import {
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
 import { registerAliasRoutes } from './alias-routes.ts'
-import { maxPortalAliases } from './portal-aliases.ts'
+import { ALIAS_HOST_TRANSPORT_SECURITY, maxPortalAliases } from './portal-aliases.ts'
 import {
   assertAgentRunAllowed,
   capacityUsage,
@@ -1689,7 +1689,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // its own stricter policy, which forbids framing as well.
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
-    c.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains')
+    c.header(
+      'Strict-Transport-Security',
+      opts.requestContext?.(c.req.raw)?.hostPortal === undefined
+        ? 'max-age=63072000; includeSubDomains'
+        : ALIAS_HOST_TRANSPORT_SECURITY,
+    )
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
     if (c.res.headers.get('Content-Security-Policy') !== STORED_FILE_POLICY) {

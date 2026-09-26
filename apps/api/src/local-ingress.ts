@@ -56,6 +56,13 @@ type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
 /** The TCP peer, which keys the per-address failure limits. */
 const peerAddress = (info?: PeerInfo) =>
   info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
+const redirectHost = (uri?: string) => {
+  try {
+    return new URL(uri ?? '').hostname
+  } catch {
+    return undefined
+  }
+}
 class InvalidLocalPrincipal extends Error {}
 class InvalidOperatorCredential extends Error {}
 
@@ -161,6 +168,10 @@ export class LocalIngress {
     try {
       const path = new URL(request.url).pathname
       const hostPortal = this.hostPortal(request)
+      // As in the Worker, a session issued on an alias host is sealed to it and read nowhere else.
+      const auth: AuthConfig = hostPortal === undefined
+        ? this.auth
+        : { ...this.auth, sessionHost: new URL(request.url).hostname.replace(/\.$/, '') }
       const headers = stripIdentityHeaders(request.headers)
       // As in the Worker, an explicit operator credential is decided before sign-in routes or
       // sessions: it is the whole authority, and no session cookie is read beside it.
@@ -198,7 +209,7 @@ export class LocalIngress {
         }
         // Only the external handoff and sign-out are served locally; the Entra flow is unchanged.
         if (path === '/auth/external' || path === '/auth/logout') {
-          return (await handleAuthRequest(request, this.auth, {
+          return (await handleAuthRequest(request, auth, {
             consume: (key, expiresAt) => {
               if (!this.options.externalReplays) throw new Error('Replay store unavailable')
               return this.options.externalReplays.consume(key, expiresAt)
@@ -207,8 +218,8 @@ export class LocalIngress {
           })) ?? Response.json({ error: 'not_found' }, { status: 404 })
         }
         // The local server reads only the sessions it can issue: external handoff cookies.
-        if (!session && this.externalEnabled && sessionAuthConfigured(this.auth)) {
-          const user = await authUser(request, this.auth)
+        if (!session && this.externalEnabled && sessionAuthConfigured(auth)) {
+          const user = await authUser(request, auth)
           if (user?.sessionFacts.provenance === 'external') session = user.sessionFacts
         }
       }
@@ -323,8 +334,10 @@ export class LocalIngress {
             selectedSlug,
             tenant,
           }),
-          enabled: sessionAuthConfigured(this.auth),
-          entraEnabled: authConfigured(this.auth),
+          enabled: sessionAuthConfigured(auth),
+          // On an alias host, Entra only when its redirect URI is on that host, as in the Worker.
+          entraEnabled: authConfigured(auth) &&
+            (auth.sessionHost === undefined || redirectHost(auth.redirectUri) === auth.sessionHost),
           externalLogin: externalLoginPresentation(this.auth.externalLogin),
           externalLoginEnabled: this.externalEnabled,
           sessionProvenance: session ? session.provenance ?? 'entra' : null,

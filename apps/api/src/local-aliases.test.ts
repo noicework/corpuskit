@@ -2,6 +2,7 @@ import { expect } from '@std/expect'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { buildApp } from './app.ts'
 import { LocalIngress } from './local-ingress.ts'
+import { ExternalLoginReplayStore } from './external-login.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
@@ -9,7 +10,7 @@ import { TenantStore } from './tenants.ts'
 
 const operatorKey = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE'
 
-function fixture() {
+function fixture(extra: Record<string, string> = {}) {
   const directory = Deno.makeTempDirSync({ prefix: 'local-aliases-' })
   const database = new LocalRbacDatabase(`${directory}/rbac.sqlite`)
   const rbac = new RbacState(database)
@@ -21,10 +22,16 @@ function fixture() {
     OPERATOR_ID: 'hosting-test',
     ADMIN_PASSCODE: 'fixture-passcode',
     MAX_PORTAL_ALIASES: '3',
+    ...extra,
   }
   const owned = localOwnedStores(directory, database, rbac.audit, env)
   const tenants = owned.tenants!
-  const ingress = new LocalIngress({ rbac, tenants, env })
+  const ingress = new LocalIngress({
+    rbac,
+    tenants,
+    env,
+    externalReplays: new ExternalLoginReplayStore(database),
+  })
   const app = buildApp({
     ...owned,
     rbac,
@@ -156,3 +163,61 @@ Deno.test('the local server serves an alias host as the Worker does', async () =
     f.dispose()
   }
 })
+
+Deno.test('the local server seals an alias host session to that host', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const f = fixture({
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    SESSION_SECRET: 'local-alias-session-secret-longer-than-32-bytes',
+  })
+  try {
+    await f.request('localhost', '/api/admin/t/marine/aliases/research.example.org', {
+      method: 'PUT',
+    }, true)
+    const issue = async (host: string) => {
+      const response = await f.request(
+        host,
+        `/auth/external?assertion=${await assertion(pair.privateKey)}&returnTo=/t/marine`,
+      )
+      expect(response.status).toBe(303)
+      expect(response.headers.get('set-cookie')).not.toContain('Domain=')
+      return response.headers.get('set-cookie')!.split(';')[0]!
+    }
+    const signedIn = async (host: string, cookie: string) =>
+      (await (await f.request(host, '/auth/me', { headers: { cookie } })).json()).authenticated
+    const alias = await issue('research.example.org')
+    expect(await signedIn('research.example.org', alias)).toBe(true)
+    expect(await signedIn('localhost', alias)).toBe(false)
+    const local = await issue('localhost')
+    expect(await signedIn('localhost', local)).toBe(true)
+    expect(await signedIn('research.example.org', local)).toBe(false)
+    expect((await (await f.request('research.example.org', '/auth/me')).json()).entraEnabled)
+      .toBe(false)
+  } finally {
+    f.dispose()
+  }
+})
+
+async function assertion(key: CryptoKey): Promise<string> {
+  const encoder = new TextEncoder()
+  const encode = (value: Uint8Array) =>
+    btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
+  const now = Math.floor(Date.now() / 1000)
+  const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
+    part({
+      iss: 'https://issuer.example',
+      aud: 'corpuskit',
+      sub: 'reader-1',
+      email: 'reader@example.test',
+      email_verified: true,
+      iat: now - 5,
+      exp: now + 60,
+      jti: crypto.randomUUID(),
+    })
+  }`
+  return `${content}.${
+    encode(new Uint8Array(await crypto.subtle.sign('Ed25519', key, encoder.encode(content))))
+  }`
+}

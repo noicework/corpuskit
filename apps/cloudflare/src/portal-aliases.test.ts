@@ -270,6 +270,7 @@ Deno.test('alias routes refuse invalid names, unknown portals, taken names and e
       const hostname of [
         'localhost',
         '192.0.2.1',
+        '127.0.0.0x1',
         'example.123',
         '%5B%3A%3A1%5D',
         'example.org:8443',
@@ -429,6 +430,8 @@ Deno.test('an alias host serves its own portal and nothing else', async () => {
         ['GET', '/api/admin/t/marine/usage'],
         ['GET', '/api/admin/t/marine/aliases'],
         ['DELETE', '/api/admin/t/marine/aliases/research.example.org'],
+        ['DELETE', '/api/admin/tenants/marine'],
+        ['PATCH', '/api/admin/tenants/grains'],
       ] as const
     ) {
       response = await f.request(host, path, { method, ...passcode })
@@ -438,6 +441,23 @@ Deno.test('an alias host serves its own portal and nothing else', async () => {
     // Portal-scoped administration the SPA needs still works on the alias host.
     response = await f.request(host, '/api/admin/t/marine/members', passcode)
     expect(response.status).toBe(200)
+    response = await f.request(host, '/api/admin/tenants/marine', {
+      method: 'PATCH',
+      headers: { ...passcode.headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ tagline: 'Research on this host' }),
+    })
+    expect(response.status).toBe(200)
+    expect(f.stores.tenants.get('marine')?.branding.tagline).toBe('Research on this host')
+
+    // An alias is often a customer's apex, so its answers never force HTTPS on its subdomains.
+    for (const path of ['/', '/t/marine', '/t/grains', '/api/t/marine/config', '/api/t/grains/x']) {
+      response = await f.request(host, path)
+      await response.body?.cancel()
+      expect(response.headers.get('strict-transport-security'), path).toBe('max-age=63072000')
+    }
+    response = await f.request('corpuskit.org', '/api/t/marine/config')
+    await response.body?.cancel()
+    expect(response.headers.get('strict-transport-security')).toContain('includeSubDomains')
     expect(await f.object.resolveHostPortal(host)).toBe('marine')
 
     // The platform host keeps serving every portal.
@@ -564,6 +584,24 @@ Deno.test('alias hosts keep sessions host-only, redirects on the host and Entra 
     response = await f.request(host, '/auth/me?portal=grains')
     expect((await response.json()).portalAccess).toBeNull()
 
+    // A session issued on the alias host is read there and nowhere else, so a cookie taken from
+    // the alias host is worthless on the platform host or another portal's alias.
+    await f.operator('/api/admin/t/grains/aliases/other.example.org', body('PUT'))
+    const issue = async (on: string) =>
+      (await f.request(on, `/auth/external?assertion=${await assertion(pair.privateKey)}`))
+        .headers.get('set-cookie')!.split(';')[0]!
+    const aliasSession = await issue(host)
+    const signedIn = async (on: string, cookie: string) =>
+      (await (await f.request(on, '/auth/me', { headers: { cookie } })).json()).authenticated
+    expect(await signedIn(host, aliasSession)).toBe(true)
+    expect(await signedIn('corpuskit.org', aliasSession)).toBe(false)
+    expect(await signedIn('marine.corpuskit.org', aliasSession)).toBe(false)
+    expect(await signedIn('other.example.org', aliasSession)).toBe(false)
+    expect(await signedIn('unlisted.example.net', aliasSession)).toBe(false)
+    const platformSession = await issue('corpuskit.org')
+    expect(await signedIn('corpuskit.org', platformSession)).toBe(true)
+    expect(await signedIn(host, platformSession)).toBe(false)
+
     // An Entra session cookie is not read on the alias host.
     const cookie = await entraCookie()
     const platform = await (await f.request('corpuskit.org', '/auth/me', {
@@ -643,8 +681,10 @@ Deno.test('hosts that are not registered aliases keep exactly their behaviour', 
           location: response.headers.get('location'),
           cookie: response.headers.get('set-cookie'),
           type: response.headers.get('content-type'),
+          transport: response.headers.get('strict-transport-security'),
           body: text,
         })
+        expect(response.headers.get('strict-transport-security')).toContain('includeSubDomains')
         if (text.includes('corpuskit-host-portal')) expect(hostPortalMeta(text)).toBe('')
       }
     }
@@ -752,6 +792,34 @@ Deno.test('a stale edge lookup narrows requests and never serves another portal'
       ),
     ).toEqual(['grains'])
   } finally {
+    f.close()
+  }
+})
+
+Deno.test('a lookup that does not answer leaves hosts as they were within a second', async () => {
+  const f = await fixture({ ALIAS_CACHE_SECONDS: '30' })
+  const error = console.error
+  const logged: unknown[] = []
+  console.error = (...args: unknown[]) => logged.push(args)
+  try {
+    f.object.resolveHostPortal = () => new Promise(() => {})
+    for (const attempt of [1, 2]) {
+      const started = Date.now()
+      const response = await f.request('slow-lookup.example.net', '/', {})
+      const elapsed = Date.now() - started
+      expect(response.status, `attempt ${attempt}`).toBe(200)
+      expect(await response.text()).toContain('corpuskit-host-portal" content=""')
+      expect(elapsed).toBeGreaterThanOrEqual(900)
+      expect(elapsed).toBeLessThan(3000)
+    }
+    // A timed-out lookup is not remembered, so the next request asks again.
+    expect(logged).toEqual([['Portal host lookup failed'], ['Portal host lookup failed']])
+    // Platform hosts never wait on a lookup.
+    const started = Date.now()
+    expect((await f.request('corpuskit.org', '/api/health')).status).toBe(200)
+    expect(Date.now() - started).toBeLessThan(900)
+  } finally {
+    console.error = error
     f.close()
   }
 })

@@ -883,7 +883,8 @@ The hostname in the path is trimmed, lower-cased and loses one trailing dot. It 
 name of at least two labels and at most 253 characters, each label made of letters, digits and
 inner hyphens, at most 63 characters long. These are refused with `invalid_hostname`:
 
-- IP literals in any spelling, and any name whose last label is numeric;
+- IP literals in any spelling, and any name whose last label is numeric or hexadecimal
+  (`0x...`), which browsers read as an IPv4 address;
 - ports, paths, credentials, wildcards and any character outside the label alphabet;
 - punycode (`xn--`) and every other label with hyphens in its third and fourth places, and
   unicode names, which are refused rather than converted;
@@ -907,19 +908,22 @@ A request whose `Host` is a registered alias reaches that portal only:
 - `GET /` answers 308 with `Location: /t/<slug>` and the original query string, as a platform
   subdomain's root does.
 - The portal's pages (`/t/<slug>/...`), its API (`/api/t/<slug>/...`) and its portal-scoped
-  administration (`/api/admin/t/<slug>/...`) work as on the platform hosts, and so do
-  `/api/health`, static assets and the SPA shell.
+  administration (`/api/admin/t/<slug>/...` and `PATCH /api/admin/tenants/<slug>`) work as on
+  the platform hosts, and so do `/api/health`, static assets and the SPA shell.
 - `GET /api/tenants` lists that portal alone. `GET /auth/me?portal=` answers for that portal alone.
 - Every other portal's pages answer a plain-text 404, and its API
   `404 { "error": "not_found" }`, before any credential is read.
 - Platform-scope API routes answer `404 { "error": "not_found" }` too, whoever calls them:
   `/api/admin/tenants`, `/api/admin/overview`, people, groups and platform audit, content
-  migration, cross-portal asks, and the portal's own lifecycle, usage and alias routes.
+  migration, cross-portal asks, portal deletion, and the portal's own lifecycle, usage and alias
+  routes.
 - Platform pages (`/admin`, `/about`, `/docs`, `/home`) answer a plain-text 404.
 - The operator credential is refused with `403 operator_not_allowed` and audited, whatever the
   route; a wrong key is refused with `401 invalid_operator` as anywhere else.
 - The [lifecycle](#portal-lifecycle-limits-and-usage) applies unchanged: a suspended portal shows
   its paused screen and a read-only one refuses writes.
+- Answers send `Strict-Transport-Security: max-age=63072000` without `includeSubDomains`, because
+  an alias may be a customer's apex domain whose other hosts are not this deployment's to secure.
 
 The SPA calls the API with relative URLs, so it works unchanged on an alias host. The server fills
 a `corpuskit-host-portal` shell setting with the portal's slug on its alias hosts and leaves it
@@ -933,7 +937,10 @@ pages, which are not served on an alias host.
 
 `/auth/external`, `/auth/me` and `/auth/logout` behave as on a platform host, with a session
 cookie that is always host-only on an alias host: it is never shared with the platform domain or
-another alias. [External sign-in](#external-sign-in-handoff) returns to a same-origin path only,
+another alias. The session inside it is also sealed to the alias host. It is read on that host
+and nowhere else, and a session issued on any other host is not read there. Whoever controls an
+alias hostname's DNS could collect the cookies browsers send to it, but those cookies are
+worthless on the platform hosts and on every other alias. [External sign-in](#external-sign-in-handoff) returns to a same-origin path only,
 so `returnTo` cannot send a person to another host. Entra sign-in is offered on an alias host only
 when `ENTRA_REDIRECT_URI` is on that host; otherwise the host reports `entraEnabled: false`,
 refuses `/auth/login` with `503 microsoft_sign_in_not_configured`, and reads no Entra session
@@ -947,8 +954,9 @@ that could be an alias, that is every valid hostname outside the platform domain
 `workers.dev`, and caches each answer, positive or negative, in the isolate for
 `ALIAS_CACHE_SECONDS`. That runtime variable is a whole number of
 seconds from 0 to 300, 30 when unset or invalid; 0 turns the cache off. Platform hosts, IP
-addresses and `workers.dev` hosts are never looked up. If a lookup fails, the Worker treats the
-host as unregistered for that request and does not cache the failure.
+addresses and `workers.dev` hosts are never looked up. If a lookup fails or takes longer than
+one second, the Worker treats the host as unregistered for that request and does not cache the
+answer.
 
 The Durable Object checks every API request against its own record of the host as well, and
 applies the Worker's cached answer only to narrow a request further. So a stale edge answer can

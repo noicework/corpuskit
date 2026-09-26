@@ -16,6 +16,12 @@ export interface AuthConfig {
   redirectUri?: string
   adminEmails?: string
   cookieDomain?: string
+  /**
+   * Set on a portal's alias host, to that host. A session issued there is sealed to the host and
+   * read nowhere else, so a cookie taken from the alias host is worthless on any other host.
+   * Unset elsewhere, where a session sealed to a host is never read.
+   */
+  sessionHost?: string
   externalLogin?: ExternalLoginConfig
 }
 
@@ -40,6 +46,8 @@ interface OidcState {
 
 interface SessionPayload extends AuthUser {
   expiresAt: number
+  /** The alias host the session was issued on; absent for every other host. */
+  host?: string
 }
 
 interface OpenIdConfiguration {
@@ -105,9 +113,10 @@ export async function authUser(request: Request, config: AuthConfig): Promise<Au
       : !authConfigured(config) || session.tenantId !== config.tenantId) ||
     session.tenantId !== session.sessionFacts.tenantId ||
     session.id !== session.sessionFacts.oid ||
-    JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles)
+    JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles) ||
+    (session.host ?? null) !== (config.sessionHost ?? null)
   ) return null
-  const { expiresAt: _expiresAt, ...user } = session
+  const { expiresAt: _expiresAt, host: _host, ...user } = session
   return user
 }
 
@@ -182,8 +191,8 @@ async function finishExternalLogin(
         expiresAt: now + 8 * 3600_000,
       },
     }
-    const session = await seal(
-      { ...user, expiresAt: user.sessionFacts.expiresAt },
+    const session = await seal<SessionPayload>(
+      { ...user, expiresAt: user.sessionFacts.expiresAt, ...hostScope(config) },
       config.sessionSecret,
       SESSION_COOKIE,
     )
@@ -358,7 +367,7 @@ async function finishLogin(request: Request, url: URL, config: AuthConfig): Prom
     },
   }
   let session = await seal<SessionPayload>(
-    { ...user, expiresAt: user.sessionFacts.expiresAt },
+    { ...user, expiresAt: user.sessionFacts.expiresAt, ...hostScope(config) },
     config.sessionSecret,
     SESSION_COOKIE,
   )
@@ -368,7 +377,7 @@ async function finishLogin(request: Request, url: URL, config: AuthConfig): Prom
     user.sessionFacts.groups = []
     user.sessionFacts.groupStatus = 'overage'
     session = await seal<SessionPayload>(
-      { ...user, expiresAt: user.sessionFacts.expiresAt },
+      { ...user, expiresAt: user.sessionFacts.expiresAt, ...hostScope(config) },
       config.sessionSecret,
       SESSION_COOKIE,
     )
@@ -490,6 +499,11 @@ function safeReturnTo(value: string | null, requestUrl: URL, cookieDomain?: stri
   const domain = cookieDomain.toLowerCase()
   if (hostname !== domain && !hostname.endsWith(`.${domain}`)) return fallback
   return target.toString()
+}
+
+/** The host a new session is sealed to: only a portal's alias host sets one. */
+function hostScope(config: Partial<AuthConfig>): { host?: string } {
+  return config.sessionHost ? { host: config.sessionHost } : {}
 }
 
 function setCookie(name: string, value: string, maxAge: number, domain?: string): string {

@@ -54,6 +54,12 @@ Deno.test('alias hostnames refuse IP literals, ports, wildcards, encodings and p
       '192.0.2.1.',
       '0x7f.1',
       'example.123',
+      // Hexadecimal last labels, which a URL parser also reads as IPv4.
+      '1.0x1',
+      '10.0.0.0x1',
+      '0x7f.0x1',
+      '127.0.0.0x',
+      'example.0X1F',
       '[::1]',
       '::1',
       '2001:db8::1',
@@ -194,7 +200,7 @@ Deno.test('an alias host routes to its portal only', () => {
   // A write to the root is left to the page route, which refuses it.
   expect(route('/', 'POST')).toEqual({ kind: 'page' })
   for (
-    const path of ['/t/marine', '/t/marine/', '/t/marine/library/res-1', '/app.js', '/og/x.png']
+    const path of ['/t/marine', '/t/marine/', '/T/marine/library', '/app.js', '/og/x.png']
   ) {
     expect(route(path), path).toEqual({ kind: 'page' })
   }
@@ -209,6 +215,7 @@ Deno.test('an alias host routes to its portal only', () => {
       '/api/t/marine/config',
       '/api/t/marine/mcp',
       '/api/admin/t/marine/members',
+      '/api/admin/tenants/marine',
     ]
   ) {
     expect(route(path), path).toEqual({ kind: 'api' })
@@ -223,6 +230,8 @@ Deno.test('an alias host routes to its portal only', () => {
       '/api/admin/t/grains/members',
       '/api/admin/t/marine',
       '/api/admin/tenants',
+      '/api/admin/tenants/grains',
+      '/api/admin/tenants/marine/extra',
       '/api/admin/overview',
       '/api/admin/people',
       '/api/admin/migrate',
@@ -234,11 +243,15 @@ Deno.test('an alias host routes to its portal only', () => {
   for (
     const path of [
       '/t/grains',
+      '/T/grains',
+      '/t/Marine',
       '/t/grains/library',
       '/t/',
       '/t/marine-2',
       '/t/%6darine',
       '/admin',
+      '/Admin',
+      '/ADMIN/people',
       '/admin/people',
       '/about',
       '/about.html',

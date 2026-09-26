@@ -15,6 +15,11 @@ import {
 export const DEFAULT_MAX_PORTAL_ALIASES = 5
 const MAX_PORTAL_ALIASES_CEILING = 100
 export const DEFAULT_ALIAS_CACHE_SECONDS = 30
+/**
+ * `Strict-Transport-Security` on an alias host. An alias is often a customer's apex domain, so it
+ * never asks browsers to force HTTPS on every subdomain of it, as the platform hosts do.
+ */
+export const ALIAS_HOST_TRANSPORT_SECURITY = 'max-age=63072000'
 const ALIAS_CACHE_SECONDS_CEILING = 300
 
 /** An alias as the hosting routes return it. */
@@ -46,7 +51,8 @@ const DNS_NAME =
  * outright, rather than decoded or guessed at:
  * - any label with hyphens in its third and fourth places, which covers every punycode (`xn--`)
  *   label and the other reserved encodings;
- * - a numeric last label, which no DNS name has and which covers every IPv4 spelling;
+ * - a last label that is numeric or hexadecimal (`0x...`), which no DNS name has and which
+ *   covers every IPv4 spelling, and any name a URL parser would rewrite;
  * - ports, paths, wildcards, IPv6 literals and anything else outside the label alphabet;
  * - the platform domain and every name under it, which the platform routes itself;
  * - `workers.dev` names, which a hosting operator keeps for reaching the deployment directly.
@@ -59,7 +65,12 @@ export function aliasHostname(value: unknown, platformDomain: string): string | 
   const labels = hostname.split('.')
   if (labels.length < 2 || !labels.every((label) => DNS_LABEL.test(label))) return null
   if (labels.some((label) => label.slice(2, 4) === '--')) return null
-  if (/^[0-9]+$/.test(labels[labels.length - 1]!)) return null
+  if (/^(?:[0-9]+|0x[0-9a-f]*)$/.test(labels[labels.length - 1]!)) return null
+  try {
+    if (new URL(`https://${hostname}/`).hostname !== hostname) return null
+  } catch {
+    return null
+  }
   if (isPlatformHostname(hostname, getPlatformDomain(platformDomain))) return null
   if (hostname === 'workers.dev' || hostname.endsWith('.workers.dev')) return null
   return hostname
@@ -207,20 +218,24 @@ export function aliasHostRoute(method: string, url: URL, slug: string): AliasHos
   if (path === '/api' || path.startsWith('/api/')) {
     return aliasApiPath(path, slug) ? { kind: 'api' } : { kind: 'not_found', api: true }
   }
-  if (path.startsWith('/t/')) {
+  // The SPA router matches paths without regard to case, so this does too.
+  if (path.toLowerCase().startsWith('/t/')) {
     return path.slice('/t/'.length).split('/')[0] === slug
       ? { kind: 'page' }
       : { kind: 'not_found', api: false }
   }
-  if (PLATFORM_PAGE.test(path)) return { kind: 'not_found', api: false }
+  if (PLATFORM_PAGE.test(path.toLowerCase())) return { kind: 'not_found', api: false }
   return { kind: 'page' }
 }
 
-/** API paths an alias host forwards: this portal's routes, the portal list and health. */
+/**
+ * API paths an alias host forwards: this portal's routes, its appearance route, the portal list
+ * and health. The API still refuses the platform-scope routes among them, such as portal deletion.
+ */
 export function aliasApiPath(path: string, slug: string): boolean {
   return path === '/api/health' || path === '/api/tenants' ||
     path === `/api/t/${slug}` || path.startsWith(`/api/t/${slug}/`) ||
-    path.startsWith(`/api/admin/t/${slug}/`)
+    path.startsWith(`/api/admin/t/${slug}/`) || path === `/api/admin/tenants/${slug}`
 }
 
 /**

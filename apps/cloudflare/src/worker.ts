@@ -57,6 +57,7 @@ import {
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
 import {
+  ALIAS_HOST_TRANSPORT_SECURITY,
   aliasCacheSeconds,
   aliasHostname,
   aliasHostRoute,
@@ -467,13 +468,22 @@ async function route(request: Request, env: Env): Promise<Response> {
   // Only a registered alias host changes routing (see `routeAliasHost`); platform hosts are never
   // looked up, and every other host keeps its behaviour.
   const hostPortal = await cachedHostPortal(url.hostname, platformDomain, env)
-  const auth = authConfig(env, url.hostname, platformDomain, hostPortal !== null)
+  const auth = authConfig(
+    env,
+    url.hostname,
+    platformDomain,
+    hostPortal === null ? null : aliasHostname(url.hostname, platformDomain),
+  )
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
   const operator = await authenticateOperator(request, stringEnv(env))
-  if (operator.kind !== 'absent') {
-    return forwardTrusted(request, env, auth, operator, hostPortal)
+  if (hostPortal !== null) {
+    return aliasHostSecurity(
+      operator.kind === 'absent'
+        ? await routeAliasHost(request, env, auth, platformDomain, hostPortal)
+        : await forwardTrusted(request, env, auth, operator, hostPortal),
+    )
   }
-  if (hostPortal !== null) return routeAliasHost(request, env, auth, platformDomain, hostPortal)
+  if (operator.kind !== 'absent') return forwardTrusted(request, env, auth, operator)
   const hostnameLocation = platformHostnameLocation(request, platformDomain)
   if (hostnameLocation) {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
@@ -596,8 +606,24 @@ async function pageRoute(
   return secureAssetResponse(asset, unknownShell ? 404 : asset.status)
 }
 
+/**
+ * An alias host is often a customer's apex domain, so its answers never ask browsers to force
+ * HTTPS on every subdomain of it (`includeSubDomains`), as the platform hosts do.
+ */
+function aliasHostSecurity(response: Response): Response {
+  const headers = new Headers(response.headers)
+  headers.set('strict-transport-security', ALIAS_HOST_TRANSPORT_SECURITY)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
 /** Per-isolate host lookups, positive and negative, each kept for `ALIAS_CACHE_SECONDS`. */
 const hostPortals = new HostPortalCache()
+/** A lookup slower than this leaves the host unregistered for the request, uncached. */
+const HOST_LOOKUP_TIMEOUT_MS = 1000
 
 /**
  * The portal whose registered alias the request host is, or null. Only hosts that could be an
@@ -615,13 +641,21 @@ async function cachedHostPortal(
   const cached = hostPortals.get(candidate, now)
   if (cached !== undefined) return cached
   let slug: string | null
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const found = await env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
-      .resolveHostPortal(candidate)
+    const found = await Promise.race([
+      env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
+        .resolveHostPortal(candidate),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), HOST_LOOKUP_TIMEOUT_MS)
+      }),
+    ])
     slug = typeof found === 'string' && KeyPortalSlugSchema.safeParse(found).success ? found : null
   } catch {
     console.error('Portal host lookup failed')
     return null
+  } finally {
+    clearTimeout(timer)
   }
   hostPortals.set(candidate, slug, aliasCacheSeconds(stringEnv(env).ALIAS_CACHE_SECONDS), now)
   return slug
@@ -777,11 +811,11 @@ function authConfig(
   env: Env,
   hostname: string,
   platformDomain: string,
-  aliasHost = false,
+  aliasHost: string | null = null,
 ): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
-  const entra = entraOnHost(values, hostname, aliasHost)
+  const entra = entraOnHost(values, hostname, aliasHost !== null)
   return {
     clientId: entra ? values.ENTRA_CLIENT_ID : undefined,
     clientSecret: entra ? values.ENTRA_CLIENT_SECRET : undefined,
@@ -795,6 +829,7 @@ function authConfig(
     adminEmails: values.ENTRA_ADMIN_EMAILS,
     externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
+    ...(aliasHost === null ? {} : { sessionHost: aliasHost }),
   }
 }
 
