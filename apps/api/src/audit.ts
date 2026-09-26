@@ -159,6 +159,7 @@ const codes = [
   'hostname_reserved',
   'hostname_taken',
   'alias_limit',
+  'session_host_mismatch',
 ] as const
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/
 type DetailValue = string | number | boolean

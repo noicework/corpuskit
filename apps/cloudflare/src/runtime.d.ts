@@ -44,6 +44,7 @@ interface DurableObjectStub extends Fetcher {
   ): Promise<{ limited: false } | { limited: true; retryAfterSec: number }>
   consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean>
   resolveHostPortal(hostname: string): Promise<string | null>
+  auditSessionHostMismatch(request: Request, oid: string, clientIp?: string): Promise<void>
   auditExternalFailure(
     reason: import('../../api/src/external-login.ts').ExternalLoginFailure,
     clientIp?: string,

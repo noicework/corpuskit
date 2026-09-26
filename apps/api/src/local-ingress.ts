@@ -43,8 +43,11 @@ import {
   narrowRolesToPortal,
   normaliseHostname,
   reservedHostnames,
+  SESSION_HOST_MISMATCH,
+  SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
   unknownHostsMode,
 } from './portal-aliases.ts'
+import { SlidingWindowLimiter } from './rate-limit.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import {
   authenticateOperator,
@@ -81,6 +84,10 @@ export class LocalIngress {
   readonly breakGlassEnabled: boolean
   readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
+  private readonly hostMismatches = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
   private readonly externalFailures: ExternalFailureAudit
 
   constructor(private readonly options: LocalIngressOptions) {
@@ -256,7 +263,22 @@ export class LocalIngress {
         }
         // The local server reads only the sessions it can issue: external handoff cookies.
         if (!session && this.externalEnabled && sessionAuthConfigured(auth)) {
-          const user = await authUser(request, auth)
+          // A session carried off the host it was sealed to is refused, and recorded.
+          const user = await authUser(request, auth, (oid) => {
+            if (!this.hostMismatches.check(peerAddress(info)).allowed) return
+            appendAudit(
+              rbac.audit,
+              createAuditEvent({
+                requestId,
+                actor: { kind: 'user', id: oid },
+                action: 'request.denied',
+                scope: { kind: 'platform' },
+                target: { kind: 'request' },
+                outcome: 'denied',
+                detail: { code: SESSION_HOST_MISMATCH, method: request.method },
+              }),
+            )
+          })
           if (user?.sessionFacts.provenance === 'external') session = user.sessionFacts
         }
       }
@@ -323,6 +345,20 @@ export class LocalIngress {
           audience: this.audience,
           externalLoginEnabled: this.externalEnabled,
         }, this.tenantId)
+        // As in the Durable Object: no platform authority on an alias host, only the caller's own
+        // grants in its portal.
+        if (hostPortal !== undefined) {
+          const narrowed = narrowRolesToPortal(
+            resolution.effectiveRoles,
+            resolution.provenance,
+            hostPortal,
+          )
+          resolution = {
+            ...resolution,
+            effectiveRoles: narrowed.effectiveRoles!,
+            provenance: narrowed.provenance!,
+          }
+        }
         principal = {
           requestId,
           session,
@@ -362,10 +398,6 @@ export class LocalIngress {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
-        // An alias host describes the caller's roles in its own portal only, as in the Worker.
-        const described = hostPortal === undefined
-          ? { effectiveRoles: resolution.effectiveRoles, provenance: resolution.provenance }
-          : narrowRolesToPortal(resolution.effectiveRoles, resolution.provenance, hostPortal)
         return Response.json({
           ...buildUiAccessSnapshot({
             externalLoginEnabled: this.externalEnabled,
@@ -389,8 +421,8 @@ export class LocalIngress {
               isAdmin: principal.coarseAdminEligible,
             }
             : null,
-          effectiveRoles: described.effectiveRoles,
-          provenance: described.provenance,
+          effectiveRoles: resolution.effectiveRoles,
+          provenance: resolution.provenance,
           claimAgeSeconds: session
             ? Math.max(0, Math.floor((Date.now() - session.claimIssuedAt) / 1000))
             : null,
@@ -401,6 +433,8 @@ export class LocalIngress {
         }, { headers: { 'cache-control': 'no-store' } })
       }
       const cleanHeaders = stripIdentityHeaders(headers)
+      // The break-glass passcode is platform authority, which an alias host never grants.
+      if (hostPortal !== undefined) cleanHeaders.delete('x-admin-passcode')
       // Preserve explicit credentials so the shared gate refuses and audits ineligible attempts.
       const forwarded = new Request(request, { headers: cleanHeaders })
       if (hostPortal !== undefined) principal.hostPortal = hostPortal

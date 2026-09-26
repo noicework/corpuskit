@@ -1002,8 +1002,14 @@ A request whose `Host` is a registered alias reaches that portal only:
   administration (`/api/admin/t/<slug>/...` and `PATCH /api/admin/tenants/<slug>`) work as on
   the platform hosts, and so do `/api/health`, static assets and the SPA shell.
 - `GET /api/tenants` lists that portal alone. `GET /auth/me` answers for that portal alone: a
-  `?portal=` selection of another portal is ignored, and `effectiveRoles.portalRoles` and
-  `provenance` list only this portal's grants, besides any platform-scope role.
+  `?portal=` selection of another portal is ignored.
+- **No platform authority.** A third party may control the host's DNS and so hold a session
+  harvested there, and nothing legitimate needs platform authority on it. For authorisation and
+  in `/auth/me`, a caller's platform role, their platform-scope grants and the portal-admin role a
+  platform role implies on every portal are all dropped; only their own grants in this portal
+  count, and `effectiveRoles` and `provenance` describe only those. A platform administrator is
+  paused out of a suspended portal there like anyone else, and the break-glass passcode
+  (`x-admin-passcode`) is ignored.
 - Every other portal's pages answer a plain-text 404, and its API
   `404 { "error": "not_found" }`, before any credential is read.
 - Platform-scope API routes answer `404 { "error": "not_found" }` too, whoever calls them:
@@ -1034,7 +1040,10 @@ Worker recognises it as an alias, so a slow lookup or a stale cache cannot weake
 - **Sessions are sealed to the host.** A session issued there is read on that host and nowhere
   else, and a session issued on any other host, platform hosts included, is not read there. The
   cookie is host-only. Whoever controls the hostname's DNS could collect the cookies browsers send
-  to it, but those cookies are worthless on every other host.
+  to it, but those cookies are worthless on every other host. A session refused because it was
+  sealed to another host (or to none, where one is required) is audited as `request.denied` with
+  `code: "session_host_mismatch"` under the session's own identity, at most 10 records per client
+  address a minute; the request carries on unauthenticated.
 - **External sign-in assertions must name the host.** `/auth/external` refuses an assertion
   without a `host` claim there, whatever `EXTERNAL_LOGIN_REQUIRE_HOST` says (reason `host`).
 - [External sign-in](#external-sign-in-handoff) returns to a same-origin path only, so `returnTo`

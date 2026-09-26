@@ -69,9 +69,12 @@ import {
   normaliseHostname,
   OFF_PLATFORM_TRANSPORT_SECURITY,
   reservedHostnames,
+  SESSION_HOST_MISMATCH,
+  SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
   transportSecurityFor,
   unknownHostsMode,
 } from '../../api/src/portal-aliases.ts'
+import { SlidingWindowLimiter } from '../../api/src/rate-limit.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -114,6 +117,10 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
   private readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
+  private readonly hostMismatches = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
   private readonly externalReplays: ExternalLoginReplayStore
   private readonly externalFailures: ExternalFailureAudit
 
@@ -281,7 +288,19 @@ export class PortalDurableObject extends DurableObject<Env> {
         await this.auditDenial(request, 403, principal, 'operator_not_allowed')
         return json({ error: 'operator_not_allowed' }, 403)
       }
-      if (hostPortal !== undefined) principal.hostPortal = hostPortal
+      if (hostPortal !== undefined) {
+        principal.hostPortal = hostPortal
+        // Nothing legitimate needs platform authority on an alias host, where a third party may
+        // hold a harvested session: only the caller's own grants in this portal count here.
+        const narrowed = narrowRolesToPortal(
+          principal.effectiveRoles,
+          principal.provenance,
+          hostPortal,
+        )
+        principal.effectiveRoles = narrowed.effectiveRoles
+        principal.provenance = narrowed.provenance
+        principal.coarseAdminEligible = false
+      }
       if (new URL(request.url).pathname.startsWith('/__corpuskit/')) {
         return json({ error: 'not_found' }, 404)
       }
@@ -314,10 +333,6 @@ export class PortalDurableObject extends DurableObject<Env> {
           sessionSecret: this.bindings.SESSION_SECRET,
           externalLogin: externalLoginConfig(this.bindings),
         }
-        // An alias host describes the caller's roles in its own portal only.
-        const described = hostPortal === undefined
-          ? { effectiveRoles: principal.effectiveRoles, provenance: principal.provenance }
-          : narrowRolesToPortal(principal.effectiveRoles, principal.provenance, hostPortal)
         return json({
           ...buildUiAccessSnapshot({
             externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
@@ -340,8 +355,8 @@ export class PortalDurableObject extends DurableObject<Env> {
               isAdmin: principal.coarseAdminEligible,
             }
             : null,
-          effectiveRoles: described.effectiveRoles,
-          provenance: described.provenance,
+          effectiveRoles: principal.effectiveRoles,
+          provenance: principal.provenance,
           claimAgeSeconds: principal.session
             ? Math.max(0, Math.floor((Date.now() - principal.session.claimIssuedAt) / 1000))
             : null,
@@ -351,7 +366,10 @@ export class PortalDurableObject extends DurableObject<Env> {
           breakGlassEnabled: this.breakGlass.enabled,
         }, 200)
       }
-      const forwarded = new Request(request, { headers: stripIdentityHeaders(request.headers) })
+      const headers = stripIdentityHeaders(request.headers)
+      // The break-glass passcode is platform authority, which an alias host never grants.
+      if (hostPortal !== undefined) headers.delete('x-admin-passcode')
+      const forwarded = new Request(request, { headers })
       this.contexts.set(forwarded, principal)
       try {
         const response = await this.app.fetch(forwarded)
@@ -454,6 +472,27 @@ export class PortalDurableObject extends DurableObject<Env> {
     if (!allowed) return { limited: true, retryAfterSec }
     await this.auditDenial(request, 401)
     return { limited: false }
+  }
+
+  /**
+   * Worker RPC for a session refused because it was sealed to another host: recorded as
+   * `session_host_mismatch` under the session's own identity, at most a few times a minute per
+   * client address, so a looping replay cannot grow the audit log without bound.
+   */
+  async auditSessionHostMismatch(request: Request, oid: string, clientIp?: string): Promise<void> {
+    if (!this.hostMismatches.check(clientIp ?? 'unknown').allowed) return
+    appendAudit(
+      this.stores.audit,
+      createAuditEvent({
+        requestId: crypto.randomUUID(),
+        actor: { kind: 'user', id: oid },
+        action: 'request.denied',
+        scope: { kind: 'platform' },
+        target: { kind: 'request' },
+        outcome: 'denied',
+        detail: { code: SESSION_HOST_MISMATCH, method: request.method },
+      }),
+    )
   }
 
   async consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean> {
@@ -833,10 +872,20 @@ async function forwardTrusted(
   }
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
   // An operator credential is the whole authority: no session cookie is read beside it.
-  const user = !hasOperatorScheme(request) && sessionAuthConfigured(auth)
-    ? await authUser(request, auth)
-    : null
   const clientIp = request.headers.get('cf-connecting-ip') ?? undefined
+  let user: AuthUser | null = null
+  if (!hasOperatorScheme(request) && sessionAuthConfigured(auth)) {
+    try {
+      // A session carried off the host it was sealed to is refused, and recorded.
+      user = await authUser(
+        request,
+        auth,
+        (oid) => stub.auditSessionHostMismatch(refusalRecord(request), oid, clientIp),
+      )
+    } catch {
+      return json({ error: 'audit_write_failed' }, 500)
+    }
+  }
   let forwarded: Request
   try {
     forwarded = await forwardPortalRequest(request, user, env, operator)

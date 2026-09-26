@@ -2,7 +2,11 @@ import { expect } from '@std/expect'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { buildApp } from './app.ts'
 import { LocalIngress } from './local-ingress.ts'
-import { ExternalLoginReplayStore } from './external-login.ts'
+import {
+  externalLoginConfig,
+  externalLoginConfigured,
+  ExternalLoginReplayStore,
+} from './external-login.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { LocalRbacDatabase } from './rbac-local.ts'
 import { RbacState } from './rbac-state.ts'
@@ -42,6 +46,8 @@ function fixture(
     rbac,
     tenants,
     configuredTenantId: 'tenant-1',
+    // The same identity configuration the local server derives from its environment.
+    externalLoginEnabled: externalLoginConfigured(externalLoginConfig(env)),
     audience: 'corpuskit',
     provider: new DoubleProvider(),
     audit: rbac.audit,
@@ -317,6 +323,63 @@ Deno.test('the local server narrows a reserved host by its alias record and warn
     console.warn = warn
   }
   expect(quiet.some((message) => message.includes('UNKNOWN_HOSTS is serve'))).toBe(false)
+})
+
+Deno.test('the local server grants no platform authority on an alias host and audits carried sessions', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const f = fixture({
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    SESSION_SECRET: 'local-alias-session-secret-longer-than-32-bytes',
+  })
+  try {
+    f.rbac.assignmentService('tenant-1', 'corpuskit', true).create({
+      subjectKind: 'pending-email',
+      subjectId: 'reader@example.test',
+      source: 'external',
+      scope: { kind: 'platform' },
+      role: 'platform-admin',
+    }, { requestId: 'grant', actor: { kind: 'system' } })
+    await f.request('localhost', '/api/admin/t/marine/aliases/research.example.org', {
+      method: 'PUT',
+    }, true)
+    const host = 'research.example.org'
+    const aliasCookie = (await f.request(
+      host,
+      `/auth/external?assertion=${await assertion(pair.privateKey, { host })}`,
+    )).headers.get('set-cookie')!.split(';')[0]!
+    const me = await (await f.request(host, '/auth/me?portal=marine', {
+      headers: { cookie: aliasCookie },
+    })).json()
+    expect(me.effectiveRoles).toEqual({ portalRoles: [] })
+    expect(me.platformPermissions).toEqual([])
+    const members = await f.request(host, '/api/admin/t/marine/members', {
+      headers: { cookie: aliasCookie, 'x-admin-passcode': 'fixture-passcode' },
+    })
+    expect(members.status).toBe(403)
+    // The same person keeps platform authority on the server's own host.
+    const localCookie = (await f.request(
+      'localhost',
+      `/auth/external?assertion=${await assertion(pair.privateKey)}`,
+    )).headers.get('set-cookie')!.split(';')[0]!
+    expect(
+      (await f.request('localhost', '/api/admin/t/marine/members', {
+        headers: { cookie: localCookie },
+      })).status,
+    ).toBe(200)
+    // The same session carried to another host is refused and recorded.
+    const elsewhere = await (await f.request('other.example.org', '/auth/me', {
+      headers: { cookie: aliasCookie },
+    })).json()
+    expect(elsewhere.authenticated).toBe(false)
+    const mismatch = f.events().filter((event) =>
+      event.action === 'request.denied' &&
+      JSON.parse(event.detail_json).code === 'session_host_mismatch'
+    )
+    expect(mismatch.map((event) => event.actor_id)).toEqual(['ext:reader-1'])
+  } finally {
+    f.dispose()
+  }
 })
 
 async function assertion(key: CryptoKey, extra: Record<string, unknown> = {}): Promise<string> {

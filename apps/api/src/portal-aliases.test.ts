@@ -365,19 +365,47 @@ Deno.test('HSTS includes subdomains inside the platform domain only', () => {
   }
 })
 
-Deno.test('roles described on an alias host are narrowed to its portal', () => {
+Deno.test("an alias host keeps only the caller's own grants in its portal", () => {
+  // A platform administrator's resolved roles: the platform role, portal-admin on every portal it
+  // implies, and their own grants.
   const roles = {
-    platformRole: 'platform-admin',
-    portalRoles: [{ slug: 'grains', role: 'portal-admin' }, { slug: 'marine', role: 'viewer' }],
+    platformRole: 'platform-admin' as const,
+    portalRoles: [
+      { slug: 'grains', role: 'portal-admin' as const },
+      { slug: 'marine', role: 'portal-admin' as const },
+    ],
   }
   const provenance = [
-    { source: 'local', scope: { kind: 'platform' }, role: 'platform-admin' },
-    { source: 'local', scope: { kind: 'portal', slug: 'grains' }, role: 'portal-admin' },
-    { source: 'local', scope: { kind: 'portal', slug: 'marine' }, role: 'viewer' },
+    {
+      source: 'local' as const,
+      scope: { kind: 'platform' as const },
+      role: 'platform-admin' as const,
+    },
+    {
+      source: 'local' as const,
+      scope: { kind: 'portal' as const, slug: 'grains' },
+      role: 'portal-admin' as const,
+    },
+    {
+      source: 'local' as const,
+      scope: { kind: 'portal' as const, slug: 'marine' },
+      role: 'viewer' as const,
+    },
+    {
+      source: 'group' as const,
+      scope: { kind: 'portal' as const, slug: 'marine' },
+      role: 'analyst' as const,
+    },
   ]
+  // No platform role, nothing it implies: the highest of their own marine grants.
   expect(narrowRolesToPortal(roles, provenance, 'marine')).toEqual({
-    effectiveRoles: { platformRole: 'platform-admin', portalRoles: [roles.portalRoles[1]] },
-    provenance: [provenance[0], provenance[2]],
+    effectiveRoles: { portalRoles: [{ slug: 'marine', role: 'analyst' }] },
+    provenance: [provenance[2], provenance[3]],
+  })
+  // Without a grant in the host's portal, no role there at all.
+  expect(narrowRolesToPortal(roles, provenance.slice(0, 2), 'marine')).toEqual({
+    effectiveRoles: { portalRoles: [] },
+    provenance: [],
   })
   expect(narrowRolesToPortal(undefined, undefined, 'marine')).toEqual({
     effectiveRoles: undefined,

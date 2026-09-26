@@ -1,4 +1,10 @@
-import type { TenantConfig } from '@research-portal/core'
+import {
+  type EffectiveRoles,
+  PORTAL_ROLES,
+  type PortalRole,
+  type TenantConfig,
+} from '@research-portal/core'
+import type { RoleProvenance } from './assignments.ts'
 import {
   getPlatformDomain,
   isPlatformHostname,
@@ -306,28 +312,36 @@ export function aliasStartupWarnings(
 }
 
 /**
- * On an alias host, `/auth/me` describes the caller's roles in that portal only: portal roles and
- * their provenance elsewhere are left out. Platform-scope entries stay, because authorisation on
- * the host still honours them.
+ * A caller's roles on a portal's alias host, where a third party may control the DNS and so may
+ * hold a session harvested there. Nothing legitimate needs platform authority on such a host, so
+ * the platform role and every platform-scope grant are dropped, and so is the portal authority a
+ * platform role implies. What remains is the caller's own grants in that portal: its role is the
+ * highest one they give, and only they are described. Authorisation and `/auth/me` both use this.
  */
-export function narrowRolesToPortal<
-  R extends { portalRoles: { slug: string }[] },
-  P extends { scope: { kind: string; slug?: string } },
->(
-  effectiveRoles: R | undefined,
-  provenance: P[] | undefined,
+export function narrowRolesToPortal(
+  effectiveRoles: EffectiveRoles | undefined,
+  provenance: RoleProvenance[] | undefined,
   slug: string,
-): { effectiveRoles: R | undefined; provenance: P[] | undefined } {
+): { effectiveRoles: EffectiveRoles | undefined; provenance: RoleProvenance[] | undefined } {
+  const grants = (provenance ?? []).filter((entry) =>
+    entry.scope.kind === 'portal' && entry.scope.slug === slug
+  )
+  let role: PortalRole | undefined
+  for (const grant of grants) {
+    const next = grant.role as PortalRole
+    if (!PORTAL_ROLES.includes(next)) continue
+    if (!role || PORTAL_ROLES.indexOf(next) > PORTAL_ROLES.indexOf(role)) role = next
+  }
   return {
-    effectiveRoles: effectiveRoles && {
-      ...effectiveRoles,
-      portalRoles: effectiveRoles.portalRoles.filter((grant) => grant.slug === slug),
-    },
-    provenance: provenance?.filter((entry) =>
-      entry.scope.kind === 'platform' || entry.scope.slug === slug
-    ),
+    effectiveRoles: effectiveRoles && { portalRoles: role ? [{ slug, role }] : [] },
+    provenance: provenance && grants,
   }
 }
+
+/** The audit code of a session refused because it was sealed to another host. */
+export const SESSION_HOST_MISMATCH = 'session_host_mismatch'
+/** Host-mismatch records written per client address a minute; further ones are not recorded. */
+export const SESSION_HOST_MISMATCH_AUDITS_PER_MIN = 10
 
 /** How the edge answers a request that arrives on one portal's alias host. */
 export type AliasHostRoute =

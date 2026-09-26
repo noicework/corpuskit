@@ -718,6 +718,9 @@ function workerHarness(
           resolveHostPortal() {
             return Promise.resolve(null)
           },
+          auditSessionHostMismatch() {
+            return Promise.resolve()
+          },
           auditExternalFailure() {
             return Promise.resolve()
           },

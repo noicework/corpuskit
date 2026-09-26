@@ -103,7 +103,17 @@ export interface ExternalLoginServices {
   auditFailure(reason: ExternalLoginFailure): void | Promise<void>
 }
 
-export async function authUser(request: Request, config: AuthConfig): Promise<AuthUser | null> {
+/**
+ * The signed-in user, or null. `onHostMismatch` hears of an otherwise valid session that was
+ * sealed to a different host than this one (or to none where one is required), which is refused:
+ * a session carried off the host it was issued for. The caller audits it as
+ * `session_host_mismatch`; if that throws, so does this.
+ */
+export async function authUser(
+  request: Request,
+  config: AuthConfig,
+  onHostMismatch?: (oid: string) => void | Promise<void>,
+): Promise<AuthUser | null> {
   const token = cookie(request, SESSION_COOKIE)
   if (!token) return null
   const session = await unseal<SessionPayload>(token, config.sessionSecret, SESSION_COOKIE)
@@ -115,9 +125,12 @@ export async function authUser(request: Request, config: AuthConfig): Promise<Au
       : !authConfigured(config) || session.tenantId !== config.tenantId) ||
     session.tenantId !== session.sessionFacts.tenantId ||
     session.id !== session.sessionFacts.oid ||
-    JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles) ||
-    (session.host ?? null) !== (config.sessionHost ?? null)
+    JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles)
   ) return null
+  if ((session.host ?? null) !== (config.sessionHost ?? null)) {
+    await onHostMismatch?.(session.sessionFacts.oid)
+    return null
+  }
   const { expiresAt: _expiresAt, host: _host, ...user } = session
   return user
 }

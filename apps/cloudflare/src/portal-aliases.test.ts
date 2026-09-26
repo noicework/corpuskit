@@ -396,7 +396,8 @@ Deno.test('concurrent registrations admit exactly one portal and respect the lim
 })
 
 Deno.test('an alias host serves its own portal and nothing else', async () => {
-  const f = await fixture()
+  const issuer = await externalLogin()
+  const f = await fixture(issuer.env)
   try {
     await f.operator('/api/admin/t/marine/aliases/research.example.org', body('PUT'))
     const host = 'research.example.org'
@@ -452,12 +453,25 @@ Deno.test('an alias host serves its own portal and nothing else', async () => {
       expect(response.status, `${method} ${path}`).toBe(404)
       expect(await response.json()).toEqual({ error: 'not_found' })
     }
-    // Portal-scoped administration the SPA needs still works on the alias host.
+    // Portal-scoped administration the SPA needs still works on the alias host, for the portal's
+    // own administrator. The break-glass passcode is platform authority and grants nothing here.
     response = await f.request(host, '/api/admin/t/marine/members', passcode)
+    expect(response.status).toBe(401)
+    f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true).create({
+      subjectKind: 'pending-email',
+      subjectId: 'reader@example.test',
+      source: 'external',
+      scope: { kind: 'portal', slug: 'marine' },
+      role: 'portal-admin',
+    }, { requestId: 'grant-admin', actor: { kind: 'system' } })
+    const admin = cookieOf(
+      await f.request(host, `/auth/external?assertion=${await assertion(issuer.key, { host })}`),
+    )!
+    response = await f.request(host, '/api/admin/t/marine/members', { headers: { cookie: admin } })
     expect(response.status).toBe(200)
     response = await f.request(host, '/api/admin/tenants/marine', {
       method: 'PATCH',
-      headers: { ...passcode.headers, 'content-type': 'application/json' },
+      headers: { cookie: admin, 'content-type': 'application/json' },
       body: JSON.stringify({ tagline: 'Research on this host' }),
     })
     expect(response.status).toBe(200)
@@ -1423,6 +1437,135 @@ Deno.test('the edge says once when an unregistered, unreserved host reaches the 
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('stray-custom-domain.example.net')
     expect(warnings[0]).toContain('RESERVED_HOSTNAMES')
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a platform administrator has no platform authority on an alias host', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture(issuer.env)
+  try {
+    const assignments = f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true)
+    const grant = (scope: { kind: 'platform' } | { kind: 'portal'; slug: string }, role: string) =>
+      expect(
+        assignments.create({
+          subjectKind: 'pending-email',
+          subjectId: 'reader@example.test',
+          source: 'external',
+          scope,
+          role: role as 'viewer',
+        }, { requestId: `grant-${role}`, actor: { kind: 'system' } }).ok,
+      ).toBe(true)
+    grant({ kind: 'platform' }, 'platform-admin')
+    await f.operator('/api/admin/t/marine/aliases/research.example.org', body('PUT'))
+    const host = 'research.example.org'
+    const signIn = async (on: string) =>
+      cookieOf(
+        await f.request(
+          on,
+          `/auth/external?assertion=${await assertion(issuer.key, { host: on })}`,
+        ),
+      )!
+    const platform = await signIn('corpuskit.org')
+    const alias = await signIn(host)
+    const as = (on: string, cookie: string, path: string, init: RequestInit = {}) =>
+      f.request(on, path, { ...init, headers: { ...init.headers, cookie } })
+
+    // On the platform the same person is a platform administrator.
+    let me = await (await as('corpuskit.org', platform, '/auth/me?portal=marine')).json()
+    expect(me.effectiveRoles.platformRole).toBe('platform-admin')
+    expect(me.platformPermissions).toContain('portal.create')
+    expect((await as('corpuskit.org', platform, '/api/admin/overview')).status).toBe(200)
+    expect((await as('corpuskit.org', platform, '/api/admin/t/marine/members')).status).toBe(200)
+
+    // On the alias host: no platform role, no platform permission, nothing it implies.
+    me = await (await as(host, alias, '/auth/me?portal=marine')).json()
+    expect(me.effectiveRoles).toEqual({ portalRoles: [] })
+    expect(me.provenance).toEqual([])
+    expect(me.platformPermissions).toEqual([])
+    expect(me.user.isAdmin).toBe(false)
+    expect(me.coarseAdminEligible).toBe(false)
+    for (
+      const path of [
+        '/api/admin/overview',
+        '/api/admin/people',
+        '/api/admin/t/marine/lifecycle',
+        '/api/admin/t/marine/aliases',
+      ]
+    ) {
+      expect((await as(host, alias, path)).status, path).toBe(404)
+    }
+    expect((await as(host, alias, '/api/admin/t/marine/members')).status).toBe(403)
+    // A suspended portal pauses them out on the alias host, as it does any portal user.
+    await f.operator(
+      '/api/admin/t/marine/lifecycle',
+      body('PUT', { status: 'suspended', limits: null }),
+    )
+    expect((await as(host, alias, '/api/t/marine/config')).status).toBe(423)
+    expect((await as('corpuskit.org', platform, '/api/t/marine/config')).status).toBe(200)
+    await f.operator(
+      '/api/admin/t/marine/lifecycle',
+      body('PUT', { status: 'active', limits: null }),
+    )
+
+    // Their own grant in the portal is all that counts there.
+    grant({ kind: 'portal', slug: 'marine' }, 'curator')
+    me = await (await as(host, alias, '/auth/me?portal=marine')).json()
+    expect(me.effectiveRoles).toEqual({ portalRoles: [{ slug: 'marine', role: 'curator' }] })
+    expect(me.portalAccess.effectiveRole).toBe('curator')
+    expect((await as(host, alias, '/api/admin/t/marine/sources')).status).toBe(200)
+    expect((await as(host, alias, '/api/admin/t/marine/members')).status).toBe(403)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a session carried off its host is refused and audited as session_host_mismatch', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture(issuer.env)
+  try {
+    await f.operator('/api/admin/t/marine/aliases/research.example.org', body('PUT'))
+    const host = 'research.example.org'
+    const harvested = cookieOf(
+      await f.request(host, `/auth/external?assertion=${await assertion(issuer.key, { host })}`),
+    )!
+    const platform = cookieOf(
+      await f.request('corpuskit.org', `/auth/external?assertion=${await assertion(issuer.key)}`),
+    )!
+    const mismatches = () =>
+      f.events().filter((event) =>
+        event.action === 'request.denied' &&
+        JSON.parse(event.detail_json).code === 'session_host_mismatch'
+      )
+    const replay = async (on: string, cookie: string, address: string) => {
+      const response = await f.request(on, '/auth/me', {
+        headers: { cookie, 'cf-connecting-ip': address },
+      })
+      return (await response.json()).authenticated
+    }
+    // The alias session replayed on the platform, and a platform session on the alias host.
+    expect(await replay('corpuskit.org', harvested, '198.51.100.1')).toBe(false)
+    expect(await replay('marine.corpuskit.org', harvested, '198.51.100.1')).toBe(false)
+    expect(await replay(host, platform, '198.51.100.2')).toBe(false)
+    const recorded = mismatches()
+    expect(recorded).toHaveLength(3)
+    for (const event of recorded) {
+      expect(event.actor_kind).toBe('user')
+      expect(event.actor_id).toBe('ext:reader-1')
+      expect(JSON.parse(event.detail_json)).toEqual({
+        code: 'session_host_mismatch',
+        method: 'GET',
+      })
+    }
+    // A session used on its own host is not a mismatch.
+    expect(await replay(host, harvested, '198.51.100.3')).toBe(true)
+    expect(mismatches()).toHaveLength(3)
+    // A looping replay is recorded a few times a minute per address, not without bound.
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await replay('corpuskit.org', harvested, '198.51.100.9')
+    }
+    expect(mismatches()).toHaveLength(13)
   } finally {
     f.close()
   }
