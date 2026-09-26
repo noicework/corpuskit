@@ -1376,7 +1376,7 @@ Deno.test('adding a link reads each waiting link once, not in its precheck and a
   }
 })
 
-Deno.test('on a 500 MB trial, links still processing never block other adds', async () => {
+Deno.test('on a 500 MB portal, links still processing never block other adds', async () => {
   let processed = false
   const { box, management } = crawlingBox(() => processed ? 'PROCESSED' : 'PENDING')
   const { f, link, text } = await crawlingPortal(management, 524_288_000)
