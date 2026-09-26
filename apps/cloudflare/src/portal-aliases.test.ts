@@ -9,6 +9,7 @@ import {
   type TrustedSessionFacts,
 } from '../../api/src/principal.ts'
 import type { PortalDurableObject } from './worker.ts'
+import { reservedHostnames } from '../../api/src/portal-aliases.ts'
 
 const operatorKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
 const sessionSecret = 'alias-test-session-secret-longer-than-thirty-two-bytes'
@@ -631,6 +632,25 @@ Deno.test('Entra is offered on an alias host only when its redirect URI is on th
   }
 })
 
+Deno.test('every deployment configuration reserves its custom domains outside the platform domain', () => {
+  for (const file of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
+    const config = JSON.parse(
+      Deno.readTextFileSync(new URL(`../../../${file}`, import.meta.url)),
+    ) as {
+      routes?: { pattern: string; custom_domain?: boolean }[]
+      vars?: Record<string, string>
+    }
+    const platform = config.vars?.PLATFORM_DOMAIN ?? 'corpuskit.org'
+    const reserved = reservedHostnames(config.vars ?? {})
+    const outside = (config.routes ?? []).filter((route) => route.custom_domain)
+      .map((route) => route.pattern)
+      .filter((host) => host !== platform && !host.endsWith(`.${platform}`))
+    for (const host of outside) expect(reserved.has(host), `${file}: ${host}`).toBe(true)
+    // Neither public deployment denies unknown hosts.
+    expect(config.vars?.UNKNOWN_HOSTS ?? 'serve', file).toBe('serve')
+  }
+})
+
 Deno.test('hosts that are not registered aliases keep exactly their behaviour', async () => {
   const configured = ['wrangler.jsonc', 'wrangler.demo.jsonc'].flatMap((file) =>
     (JSON.parse(Deno.readTextFileSync(new URL(`../../../${file}`, import.meta.url))) as {
@@ -1024,6 +1044,16 @@ Deno.test('UNKNOWN_HOSTS=deny answers only platform, reserved and alias hosts', 
     // Platform and reserved hosts are served as before; the operator keeps its direct host.
     expect((await f.request('corpuskit.org', '/api/t/grains/config')).status).toBe(200)
     expect((await f.request('grains.corpuskit.org', '/')).status).toBe(308)
+    // Any platform subdomain is served, whether or not a portal owns it, and so is the operator
+    // calling there.
+    for (const host of ['portal.corpuskit.org', 'unowned.corpuskit.org', 'a.b.corpuskit.org']) {
+      response = await f.request(host, '/api/t/grains/config')
+      expect(response.status, host).toBe(200)
+      response = await f.request(host, '/api/admin/t/marine/aliases', {}, operatorKeyHeader)
+      expect(response.status, host).toBe(200)
+      response = await f.request(host, '/app.js')
+      expect(response.status, host).toBe(200)
+    }
     expect((await f.request('legacy.example.net', '/api/t/grains/config')).status).toBe(200)
     response = await f.request(
       'corpuskit.account.workers.dev',
