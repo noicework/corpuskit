@@ -4,6 +4,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import {
   ExternalFailureAudit,
+  externalHostWarning,
   externalLoginConfig,
   externalLoginConfigured,
   type ExternalLoginFailure,
@@ -56,6 +57,24 @@ import {
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
+import {
+  aliasCacheSeconds,
+  aliasHostRoute,
+  aliasStartupWarnings,
+  classifyHost,
+  HostPortalCache,
+  hostPortalFor,
+  maxPortalAliases,
+  narrowRolesToPortal,
+  normaliseHostname,
+  OFF_PLATFORM_TRANSPORT_SECURITY,
+  reservedHostnames,
+  SESSION_HOST_MISMATCH,
+  SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+  transportSecurityFor,
+  unknownHostsMode,
+} from '../../api/src/portal-aliases.ts'
+import { SlidingWindowLimiter } from '../../api/src/rate-limit.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -77,6 +96,12 @@ const SECURITY_HEADERS: Record<string, string> = {
 export interface TrustedRequestContext {
   session?: TrustedSessionFacts | null
   clientIp?: string
+  /**
+   * The Worker's cached view of the portal whose alias the request host is. It only ever narrows
+   * a request: the object's own record decides first, and this applies when that record has no
+   * alias for the host (a lookup made just before the alias was removed).
+   */
+  hostPortal?: string
 }
 
 /**
@@ -92,6 +117,14 @@ export class PortalDurableObject extends DurableObject<Env> {
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
   private readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
+  private readonly hostMismatches = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
+  private readonly hostConflicts = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
   private readonly externalReplays: ExternalLoginReplayStore
   private readonly externalFailures: ExternalFailureAudit
 
@@ -104,6 +137,8 @@ export class PortalDurableObject extends DurableObject<Env> {
     this.bindings = bindings
     const operatorWarning = operatorConfigurationWarning(bindings)
     if (operatorWarning) console.warn(operatorWarning)
+    const hostWarning = externalHostWarning(bindings)
+    if (hostWarning) console.warn(hostWarning)
     this.stores = durableStores(state, bindings)
     this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
@@ -126,6 +161,13 @@ export class PortalDurableObject extends DurableObject<Env> {
         console.error('Demo portal seeding failed')
       }
     })
+    try {
+      for (const warning of aliasStartupWarnings(bindings, this.stores.tenants.aliasHostnames())) {
+        console.warn(warning)
+      }
+    } catch {
+      // An unreadable registry fails its own requests; it never stops the object starting.
+    }
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
@@ -150,6 +192,8 @@ export class PortalDurableObject extends DurableObject<Env> {
       suggestions: this.stores.suggestions,
       enrichments: this.stores.enrichments,
       domainProvisioner: createCloudflareDomainProvisioner(bindings),
+      maxPortalAliases: maxPortalAliases(bindings.MAX_PORTAL_ALIASES),
+      reservedHostnames: reservedHostnames(bindings),
       kgProposals: this.stores.kgProposals,
       branding: this.stores.branding,
       mcpKeys: this.stores.mcpKeys,
@@ -236,17 +280,41 @@ export class PortalDurableObject extends DurableObject<Env> {
 
   async handleTrustedRequest(request: Request, context: TrustedRequestContext): Promise<Response> {
     try {
+      const hostPortal = this.hostPortal(request, context.hostPortal)
+      if (hostPortal === undefined && this.deniedHost(request)) {
+        return json({ error: 'not_found' }, 404)
+      }
       const principal = await this.requestPrincipal(request, context)
-      if (principal.operator && !new URL(request.url).pathname.startsWith('/api/')) {
+      if (
+        principal.operator &&
+        (hostPortal !== undefined || !new URL(request.url).pathname.startsWith('/api/'))
+      ) {
         await this.auditDenial(request, 403, principal, 'operator_not_allowed')
         return json({ error: 'operator_not_allowed' }, 403)
+      }
+      if (hostPortal !== undefined) {
+        principal.hostPortal = hostPortal
+        // Nothing legitimate needs platform authority on an alias host, where a third party may
+        // hold a harvested session: only the caller's own grants in this portal count here.
+        const narrowed = narrowRolesToPortal(
+          principal.effectiveRoles,
+          principal.provenance,
+          hostPortal,
+        )
+        principal.effectiveRoles = narrowed.effectiveRoles
+        principal.provenance = narrowed.provenance
+        principal.coarseAdminEligible = false
       }
       if (new URL(request.url).pathname.startsWith('/__corpuskit/')) {
         return json({ error: 'not_found' }, 404)
       }
       if (new URL(request.url).pathname === '/auth/me' && request.method === 'GET') {
         const selections = new URL(request.url).searchParams.getAll('portal')
-        const selectedSlug = selections.length === 1 ? selections[0] : undefined
+        // An alias host answers for its own portal only.
+        const selectedSlug = selections.length === 1 &&
+            (hostPortal === undefined || selections[0] === hostPortal)
+          ? selections[0]
+          : undefined
         const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
         let tenant: unknown
         try {
@@ -259,11 +327,13 @@ export class PortalDurableObject extends DurableObject<Env> {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
-        // Deployment-wide sign-in availability; hostname-specific settings do not change it.
+        // Deployment-wide sign-in availability, except that Entra is never offered on a portal's
+        // alias host: the redirect URI's host is reserved, so it can never be one.
+        const entra = hostPortal === undefined
         const signIn = {
-          clientId: this.bindings.ENTRA_CLIENT_ID,
-          clientSecret: this.bindings.ENTRA_CLIENT_SECRET,
-          tenantId: this.bindings.ENTRA_TENANT_ID,
+          clientId: entra ? this.bindings.ENTRA_CLIENT_ID : undefined,
+          clientSecret: entra ? this.bindings.ENTRA_CLIENT_SECRET : undefined,
+          tenantId: entra ? this.bindings.ENTRA_TENANT_ID : undefined,
           sessionSecret: this.bindings.SESSION_SECRET,
           externalLogin: externalLoginConfig(this.bindings),
         }
@@ -300,7 +370,10 @@ export class PortalDurableObject extends DurableObject<Env> {
           breakGlassEnabled: this.breakGlass.enabled,
         }, 200)
       }
-      const forwarded = new Request(request, { headers: stripIdentityHeaders(request.headers) })
+      const headers = stripIdentityHeaders(request.headers)
+      // The break-glass passcode is platform authority, which an alias host never grants.
+      if (hostPortal !== undefined) headers.delete('x-admin-passcode')
+      const forwarded = new Request(request, { headers })
       this.contexts.set(forwarded, principal)
       try {
         const response = await this.app.fetch(forwarded)
@@ -323,6 +396,44 @@ export class PortalDurableObject extends DurableObject<Env> {
       console.error('Trusted request failed')
       return json({ error: 'internal_error' }, 500)
     }
+  }
+
+  /**
+   * The portal whose registered alias the request host is: this object's own record, or else the
+   * Worker's cached view. Platform hosts are never aliases.
+   */
+  private hostPortal(request: Request, workerView?: string): string | undefined {
+    // Narrowed by the object's own alias record even on a reserved host, which the edge never
+    // looks up: a record written before the hostname was reserved still binds it to its portal.
+    const recorded = hostPortalFor(
+      this.stores.tenants,
+      new URL(request.url).hostname,
+      getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+    )
+    if (recorded !== null) return recorded
+    return workerView !== undefined && KeyPortalSlugSchema.safeParse(workerView).success
+      ? workerView
+      : undefined
+  }
+
+  /** Worker RPC: the portal a normalised host is a registered alias of, or null. */
+  async resolveHostPortal(hostname: string): Promise<string | null> {
+    return hostPortalFor(
+      this.stores.tenants,
+      hostname,
+      getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+    )
+  }
+
+  /** With `UNKNOWN_HOSTS=deny`, a host that is neither a platform nor a reserved host. */
+  private deniedHost(request: Request): boolean {
+    if (unknownHostsMode(this.bindings.UNKNOWN_HOSTS) !== 'deny') return false
+    const host = classifyHost(
+      new URL(request.url).hostname,
+      getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+      reservedHostnames(this.bindings),
+    )
+    return host.kind === 'candidate' || host.kind === 'other'
   }
 
   /** Internal audit entry for Worker denials that never enter Hono. */
@@ -367,6 +478,47 @@ export class PortalDurableObject extends DurableObject<Env> {
     return { limited: false }
   }
 
+  /**
+   * Worker RPC for a session refused because it was sealed to another host: recorded as
+   * `session_host_mismatch` under the session's own identity, at most a few times a minute per
+   * client address, so a looping replay cannot grow the audit log without bound.
+   */
+  async auditSessionHostMismatch(request: Request, oid: string, clientIp?: string): Promise<void> {
+    if (!this.hostMismatches.check(clientIp ?? 'unknown').allowed) return
+    appendAudit(
+      this.stores.audit,
+      createAuditEvent({
+        requestId: crypto.randomUUID(),
+        actor: { kind: 'user', id: oid },
+        action: 'request.denied',
+        scope: { kind: 'platform' },
+        target: { kind: 'request' },
+        outcome: 'denied',
+        detail: { code: SESSION_HOST_MISMATCH, method: request.method },
+      }),
+    )
+  }
+
+  /**
+   * Worker RPC for sign-in refused on a reserved host that still carries an alias record, recorded
+   * as `host_conflict` at most a few times a minute per client address.
+   */
+  async auditHostConflict(request: Request, clientIp?: string): Promise<void> {
+    if (!this.hostConflicts.check(clientIp ?? 'unknown').allowed) return
+    appendAudit(
+      this.stores.audit,
+      createAuditEvent({
+        requestId: crypto.randomUUID(),
+        actor: { kind: 'anonymous' },
+        action: 'request.denied',
+        scope: { kind: 'platform' },
+        target: { kind: 'request' },
+        outcome: 'denied',
+        detail: { code: 'host_conflict', method: request.method },
+      }),
+    )
+  }
+
   async consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean> {
     return this.externalReplays.consume(key, expiresAt)
   }
@@ -386,7 +538,7 @@ export class PortalDurableObject extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return withSecurityHeaders(await route(request, env))
+    return withSecurityHeaders(hostTransportSecurity(request, env, await route(request, env)))
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -409,40 +561,63 @@ async function route(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: 'platform_domain_invalid' }, 503)
   }
-  // Explicit hosting credentials are handled before redirects, sessions or static assets.
-  const operator = await authenticateOperator(request, stringEnv(env))
-  if (operator.kind !== 'absent') {
-    return forwardTrusted(request, env, authConfig(env, url.hostname, platformDomain), operator)
+  // The request host decides everything else. Platform and reserved hosts are never looked up; a
+  // host that could be a registered alias is, and a failed lookup never falls back to treating
+  // it as unregistered.
+  const values = stringEnv(env)
+  const host = classifyHost(url.hostname, platformDomain, reservedHostnames(values))
+  let hostPortal: string | null = null
+  if (host.kind === 'candidate') {
+    const found = await cachedHostPortal(host.hostname, env)
+    if (found === undefined) {
+      return json({ error: 'host_lookup_failed' }, 503, { 'retry-after': '5' })
+    }
+    hostPortal = found
   }
+  if (
+    hostPortal === null && (host.kind === 'candidate' || host.kind === 'other') &&
+    unknownHostsMode(values.UNKNOWN_HOSTS) === 'deny'
+  ) return json({ error: 'not_found' }, 404)
+  const auth = authConfig(env, url.hostname, platformDomain, {
+    aliasHost: hostPortal !== null,
+    sealHost: host.kind === 'candidate',
+  })
+  // Explicit hosting credentials are handled before redirects, sessions or static assets.
+  const operator = await authenticateOperator(request, values)
+  if (hostPortal !== null) {
+    return operator.kind === 'absent'
+      ? routeAliasHost(request, env, auth, platformDomain, hostPortal)
+      : forwardTrusted(request, env, auth, operator, hostPortal)
+  }
+  if (operator.kind !== 'absent') return forwardTrusted(request, env, auth, operator)
   const hostnameLocation = platformHostnameLocation(request, platformDomain)
   if (hostnameLocation) {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
   }
 
-  const auth = authConfig(env, url.hostname, platformDomain)
-
-  if (url.pathname === '/auth/me' && request.method === 'GET') {
-    return forwardTrusted(request, env, auth, operator)
-  }
-
   if (url.pathname.startsWith('/auth/')) {
-    if (!sessionAuthConfigured(auth) && url.pathname !== '/auth/external') {
-      return json({ error: 'microsoft_sign_in_not_configured' }, 503)
-    }
-    const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
-    const response = (await handleAuthRequest(request, auth, {
-      consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
-      auditFailure: (reason) =>
-        stub.auditExternalFailure(reason, request.headers.get('cf-connecting-ip') ?? undefined),
-    })) ?? json({ error: 'not_found' }, 404)
-    if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
-      try {
-        await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
-      } catch {
-        return json({ error: 'audit_write_failed' }, 500)
+    // A reserved hostname can still carry an alias record written before it was reserved, and
+    // its DNS may then be a third party's. That is a misconfiguration the start-up warning names,
+    // and such a host issues no session until the alias is removed. Only the routes that issue a
+    // session look it up, so pages and session reads there never wait on a lookup.
+    if (host.kind === 'reserved' && SESSION_ISSUING_PATHS.has(url.pathname)) {
+      const recorded = await cachedHostPortal(normaliseHostname(url.hostname), env, false)
+      if (recorded === undefined) {
+        return json({ error: 'host_lookup_failed' }, 503, { 'retry-after': '5' })
+      }
+      if (recorded !== null) {
+        try {
+          await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditHostConflict(
+            refusalRecord(request),
+            request.headers.get('cf-connecting-ip') ?? undefined,
+          )
+        } catch {
+          return json({ error: 'audit_write_failed' }, 500)
+        }
+        return json({ error: 'host_conflict' }, 409)
       }
     }
-    return response
+    return authRoute(request, env, auth, operator)
   }
 
   const aliasLocation = tenantAliasLocation(request)
@@ -454,6 +629,78 @@ async function route(request: Request, env: Env): Promise<Response> {
     return forwardTrusted(request, env, auth, operator)
   }
 
+  return pageRoute(request, env, platformDomain)
+}
+
+/**
+ * A request on a portal's registered alias host. Only that portal is served: its pages and API,
+ * sign-in with a host-only session cookie, the SPA shell and static assets. The root redirects to
+ * the portal's home; other portals, platform-scope API routes and platform pages are not found.
+ * The Durable Object checks each API route again against its own record of the alias.
+ */
+async function routeAliasHost(
+  request: Request,
+  env: Env,
+  auth: Partial<AuthConfig>,
+  platformDomain: string,
+  slug: string,
+): Promise<Response> {
+  const decision = aliasHostRoute(request.method, new URL(request.url), slug)
+  switch (decision.kind) {
+    case 'redirect':
+      return new Response(null, { status: 308, headers: { location: decision.location } })
+    case 'not_found':
+      return decision.api ? json({ error: 'not_found' }, 404) : plain('Not found', 404)
+    case 'auth':
+      return authRoute(request, env, auth, { kind: 'absent' }, slug)
+    case 'api':
+      return forwardTrusted(request, env, auth, { kind: 'absent' }, slug)
+  }
+  const aliasLocation = tenantAliasLocation(request)
+  if (aliasLocation) {
+    return new Response(null, { status: 308, headers: { location: aliasLocation } })
+  }
+  return pageRoute(request, env, platformDomain, slug)
+}
+
+async function authRoute(
+  request: Request,
+  env: Env,
+  auth: Partial<AuthConfig>,
+  operator: OperatorAuthentication,
+  hostPortal: string | null = null,
+): Promise<Response> {
+  const url = new URL(request.url)
+  if (url.pathname === '/auth/me' && request.method === 'GET') {
+    return forwardTrusted(request, env, auth, operator, hostPortal)
+  }
+  if (!sessionAuthConfigured(auth) && url.pathname !== '/auth/external') {
+    return json({ error: 'microsoft_sign_in_not_configured' }, 503)
+  }
+  const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
+  const response = (await handleAuthRequest(request, auth, {
+    consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
+    auditFailure: (reason) =>
+      stub.auditExternalFailure(reason, request.headers.get('cf-connecting-ip') ?? undefined),
+  })) ?? json({ error: 'not_found' }, 404)
+  if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
+    try {
+      await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
+    } catch {
+      return json({ error: 'audit_write_failed' }, 500)
+    }
+  }
+  return response
+}
+
+/** Pages, the SPA shell and static assets. */
+async function pageRoute(
+  request: Request,
+  env: Env,
+  platformDomain: string,
+  hostPortal?: string,
+): Promise<Response> {
+  const url = new URL(request.url)
   // The shared asset bundle is also bound to tenant hosts. Keep the marketing
   // documents (including raw asset aliases) on the platform apex only.
   if (
@@ -478,6 +725,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const asset = platformShellResponse(
     await env.ASSETS.fetch(marketingHomeRequest(request, platformDomain)),
     platformDomain,
+    hostPortal,
   )
   // Assets answers every unknown path with the app shell and a 200. Keep
   // the shell, so a person still sees the app's own not-found page, but say
@@ -485,6 +733,93 @@ async function route(request: Request, env: Env): Promise<Response> {
   const unknownShell = asset.status === 200 && !documentPath(url.pathname) &&
     (asset.headers.get('content-type') ?? '').includes('text/html')
   return secureAssetResponse(asset, unknownShell ? 404 : asset.status)
+}
+
+/**
+ * `includeSubDomains` only inside the platform domain. Every other host (an alias, a reserved or
+ * unknown host, or one whose lookup failed) may be a customer's apex domain, so its answers never
+ * force HTTPS on every subdomain of it.
+ */
+function hostTransportSecurity(request: Request, env: Env, response: Response): Response {
+  let value = OFF_PLATFORM_TRANSPORT_SECURITY
+  try {
+    value = transportSecurityFor(
+      new URL(request.url).hostname,
+      getPlatformDomain(stringEnv(env).PLATFORM_DOMAIN),
+    )
+  } catch {
+    // Without a valid platform domain no host is inside it.
+  }
+  if (response.headers.get('strict-transport-security') === value) return response
+  const headers = new Headers(response.headers)
+  headers.set('strict-transport-security', value)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+/** The sign-in routes that issue a session cookie. */
+const SESSION_ISSUING_PATHS: ReadonlySet<string> = new Set([
+  '/auth/external',
+  '/auth/callback',
+  '/auth/login',
+])
+
+/** Per-isolate host lookups, positive and negative, each kept for `ALIAS_CACHE_SECONDS`. */
+const hostPortals = new HostPortalCache()
+/** A lookup slower than this fails: the request is answered with 503 and nothing is cached. */
+const HOST_LOOKUP_TIMEOUT_MS = 1000
+
+/**
+ * The portal a candidate host (a normalised hostname that could be an alias) is registered to,
+ * null when it is not registered, or undefined when the lookup failed or timed out. A failure is
+ * never cached and never treated as an unregistered host.
+ */
+async function cachedHostPortal(
+  candidate: string,
+  env: Env,
+  warnIfUnregistered = true,
+): Promise<string | null | undefined> {
+  const now = Date.now()
+  const cached = hostPortals.get(candidate, now)
+  if (cached !== undefined) return cached
+  let slug: string | null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const found = await Promise.race([
+      env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
+        .resolveHostPortal(candidate),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('timeout')), HOST_LOOKUP_TIMEOUT_MS)
+      }),
+    ])
+    slug = typeof found === 'string' && KeyPortalSlugSchema.safeParse(found).success ? found : null
+  } catch {
+    console.error('Portal host lookup failed')
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+  hostPortals.set(candidate, slug, aliasCacheSeconds(stringEnv(env).ALIAS_CACHE_SECONDS), now)
+  if (slug === null && warnIfUnregistered) warnUnregistered(candidate)
+  return slug
+}
+
+/** Hosts already reported by `warnUnregistered` in this isolate, a bounded few. */
+const reportedHosts = new Set<string>()
+/**
+ * Say once per isolate when a hostname routes here without being a registered alias or reserved:
+ * it is usually one of the deployment's own custom domains missing from RESERVED_HOSTNAMES.
+ */
+function warnUnregistered(hostname: string): void {
+  if (reportedHosts.has(hostname) || reportedHosts.size >= 100) return
+  reportedHosts.add(hostname)
+  console.warn(
+    `[portal-aliases] ${hostname} reached this deployment but is neither a registered alias nor ` +
+      "reserved. List the deployment's own custom domains in RESERVED_HOSTNAMES.",
+  )
 }
 
 function isPublicDocsPath(pathname: string): boolean {
@@ -586,6 +921,7 @@ async function forwardTrusted(
   env: Env,
   auth: Partial<AuthConfig>,
   operator: OperatorAuthentication,
+  hostPortal: string | null = null,
 ): Promise<Response> {
   // A malformed key is a deployment fault, not a data fault: say so on every portal request,
   // health included, rather than letting stored credentials look lost or be replaced.
@@ -594,10 +930,20 @@ async function forwardTrusted(
   }
   const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
   // An operator credential is the whole authority: no session cookie is read beside it.
-  const user = !hasOperatorScheme(request) && sessionAuthConfigured(auth)
-    ? await authUser(request, auth)
-    : null
   const clientIp = request.headers.get('cf-connecting-ip') ?? undefined
+  let user: AuthUser | null = null
+  if (!hasOperatorScheme(request) && sessionAuthConfigured(auth)) {
+    try {
+      // A session carried off the host it was sealed to is refused, and recorded.
+      user = await authUser(
+        request,
+        auth,
+        (oid) => stub.auditSessionHostMismatch(refusalRecord(request), oid, clientIp),
+      )
+    } catch {
+      return json({ error: 'audit_write_failed' }, 500)
+    }
+  }
   let forwarded: Request
   try {
     forwarded = await forwardPortalRequest(request, user, env, operator)
@@ -625,19 +971,33 @@ async function forwardTrusted(
     return await stub.handleTrustedRequest(forwarded, {
       session: user?.sessionFacts ?? null,
       clientIp,
+      ...(hostPortal === null ? {} : { hostPortal }),
     })
   } catch {
     return json({ error: 'internal_error' }, 500)
   }
 }
 
-function authConfig(env: Env, hostname: string, platformDomain: string): Partial<AuthConfig> {
+/**
+ * Sign-in settings for a request host. On a portal's alias host Entra is never offered (the
+ * redirect URI's host is reserved, so it is never an alias). On an alias or any other candidate
+ * host, a hostname a third party may control, a session is sealed to the host and an assertion
+ * must name it. Platform, reserved and other hosts (such as `workers.dev`) keep the
+ * deployment-wide rules.
+ */
+function authConfig(
+  env: Env,
+  hostname: string,
+  platformDomain: string,
+  host: { aliasHost?: boolean; sealHost?: boolean } = {},
+): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
+  const entra = !host.aliasHost
   return {
-    clientId: values.ENTRA_CLIENT_ID,
-    clientSecret: values.ENTRA_CLIENT_SECRET,
-    tenantId: values.ENTRA_TENANT_ID,
+    clientId: entra ? values.ENTRA_CLIENT_ID : undefined,
+    clientSecret: entra ? values.ENTRA_CLIENT_SECRET : undefined,
+    tenantId: entra ? values.ENTRA_TENANT_ID : undefined,
     sessionSecret: values.SESSION_SECRET,
     redirectUri: onPlatformDomain
       ? values.ENTRA_REDIRECT_URI
@@ -647,6 +1007,9 @@ function authConfig(env: Env, hostname: string, platformDomain: string): Partial
     adminEmails: values.ENTRA_ADMIN_EMAILS,
     externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
+    // On a candidate host, whether or not the edge knows it as an alias, a session is sealed to
+    // the host it was issued on and read nowhere else.
+    ...(host.sealHost ? { sessionHost: normaliseHostname(hostname) } : {}),
   }
 }
 

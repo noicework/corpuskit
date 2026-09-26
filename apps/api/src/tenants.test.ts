@@ -2,6 +2,7 @@ import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import { showsRegionalDiscovery } from '@research-portal/core'
 import { tenantConfig, TenantStore } from './tenants.ts'
+import { checkAliasRegistry } from './alias-store-fixture.ts'
 
 const storeAt = (path: string) => new TenantStore({ TENANTS_PATH: path })
 const tempPath = () => `${Deno.makeTempDirSync()}/tenants.json`
@@ -64,4 +65,30 @@ describe('regional discovery on the file store', () => {
     Deno.writeTextFileSync(path, JSON.stringify({ custom: { legacy } }))
     expect(showsRegionalDiscovery(storeAt(path).get('legacy')!)).toBe(false)
   })
+})
+
+Deno.test('portal host aliases persist with the registry and leave with their portal', () => {
+  const path = `${Deno.makeTempDirSync()}/tenants.json`
+  checkAliasRegistry(() => storeAt(path))
+})
+
+Deno.test('the registry file gains an alias list only while a portal has aliases', () => {
+  const path = `${Deno.makeTempDirSync()}/tenants.json`
+  const store = storeAt(path)
+  const slug = store.add({ name: 'Acme' }).slug
+  const keys = () => Object.keys(JSON.parse(Deno.readTextFileSync(path))).sort()
+  expect(keys()).toEqual(['custom', 'disabled', 'overrides', 'retired'])
+  expect(store.setAlias(slug, 'research.example.org', undefined, 5).ok).toBe(true)
+  expect(keys()).toEqual(['aliases', 'custom', 'disabled', 'overrides', 'retired'])
+  store.removeAlias(slug, 'research.example.org')
+  expect(keys()).toEqual(['custom', 'disabled', 'overrides', 'retired'])
+})
+
+Deno.test('a malformed stored alias list fails closed instead of dropping aliases', () => {
+  const path = `${Deno.makeTempDirSync()}/tenants.json`
+  Deno.writeTextFileSync(
+    path,
+    JSON.stringify({ custom: {}, aliases: [{ hostname: 'Bad Host', slug: 'marine' }] }),
+  )
+  expect(() => storeAt(path)).toThrow('Invalid persisted portal configuration')
 })

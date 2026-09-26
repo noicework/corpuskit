@@ -82,6 +82,19 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/usage', 'portal.create', 'platform', {
     operator: true,
   }),
+  // Portal host aliases are hosting control, like the lifecycle: a portal role could otherwise
+  // claim a hostname the deployment already answers on and take it over for its own portal.
+  entry('http', 'GET', '/api/admin/t/:slug/aliases', 'portal.create', 'platform', {
+    operator: true,
+  }),
+  entry('http', 'PUT', '/api/admin/t/:slug/aliases/:hostname', 'portal.create', 'platform', {
+    operator: true,
+    subActions: [{ action: 'portal.alias.set', permission: 'portal.create', scope: 'platform' }],
+  }),
+  entry('http', 'DELETE', '/api/admin/t/:slug/aliases/:hostname', 'portal.create', 'platform', {
+    operator: true,
+    subActions: [{ action: 'portal.alias.remove', permission: 'portal.create', scope: 'platform' }],
+  }),
   entry('http', 'PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal', {
     operator: true,
     subActions: [{
@@ -123,6 +136,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['lifecycle', ['resetCapacity'], 'bindings.write', 'portal'],
     ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
+    ['tenants', ['setAlias', 'removeAlias'], 'portal.create', 'platform'],
     ['tenants', ['remove'], 'portal.delete', 'platform'],
     ['tenants', ['setDisabled', 'patch'], 'behaviour.write', 'portal'],
     ['tenants', ['patchBranding'], 'appearance.write', 'portal'],

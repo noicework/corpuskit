@@ -94,3 +94,29 @@ Deno.test('portalHref keeps local, preview and same-host navigation relative', (
     currentHostname: 'marine.corpuskit.org',
   })).toBe('/t/marine')
 })
+
+Deno.test('portalHref on an alias host keeps its portal there and sends others to their home', () => {
+  const alias = {
+    platformDomain: 'research.example.org',
+    currentHostname: 'portal.customer.example',
+    hostPortal: 'marine',
+  }
+  // The host's own portal stays relative, whatever its canonical hostname.
+  for (const hostname of [undefined, 'portal.customer.example', 'marine.research.example.org']) {
+    expect(portalHref('marine', { ...alias, hostname, suffix: '/library' }))
+      .toBe('/t/marine/library')
+  }
+  // Any other portal is not served here: its canonical hostname, else the platform domain.
+  expect(portalHref('grains', { ...alias, hostname: 'grains.research.example.org' }))
+    .toBe('https://grains.research.example.org/t/grains')
+  expect(portalHref('grains', { ...alias, hostname: 'Research.Grains.Example' }))
+    .toBe('https://research.grains.example/t/grains')
+  for (const hostname of [undefined, 'not a host', 'https://evil.example']) {
+    expect(portalHref('grains', { ...alias, hostname })).toBe(
+      'https://research.example.org/t/grains',
+    )
+  }
+  expect(portalHref('grains', { ...alias, platformDomain: '' })).toBe('/t/grains')
+  // Without a host portal, links behave exactly as before.
+  expect(portalHref('grains', { ...alias, hostPortal: '' })).toBe('/t/grains')
+})

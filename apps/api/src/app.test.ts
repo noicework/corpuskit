@@ -351,6 +351,9 @@ describe('independent admin route permission matrix', () => {
     ['GET', 'lifecycle', 'portal.create'],
     ['PUT', 'lifecycle', 'portal.create', { status: 'read_only', limits: { asksPerDay: 5 } }],
     ['GET', 'usage', 'portal.create'],
+    ['GET', 'aliases', 'portal.create'],
+    ['PUT', 'aliases/:hostname', 'portal.create', { primary: true }],
+    ['DELETE', 'aliases/:hostname', 'portal.create'],
     ['GET', 'extraction/methods', 'content.write'],
     ['POST', 'extraction/profile', 'content.write', { resourceId: 'res-1' }],
     ['POST', 'extraction/compare', 'content.write', { resourceId: 'res-1', methods: ['default'] }],
@@ -672,6 +675,9 @@ describe('independent admin route permission matrix', () => {
           }])
           fixture.stores.kgProposals.set('a', proposal)
           if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
+          if (method === 'DELETE' && suffix === 'aliases/:hostname') {
+            fixture.stores.tenants.setAlias('a', 'research.example.org', undefined, 5)
+          }
           const snapshot = () =>
             ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
               fixture.database.all(`SELECT * FROM ${table}`)
@@ -697,6 +703,7 @@ describe('independent admin route permission matrix', () => {
           Deno.env.set('ARAG_ACCOUNT', 'fixture-account')
           const path =
             template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
+              .replace(':hostname', 'research.example.org')
               .replace(
                 ':id',
                 suffix.startsWith('sources')
@@ -760,6 +767,8 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
               else if (suffix === 'lifecycle') {
                 expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+              } else if (suffix === 'aliases') {
+                expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
               } else if (suffix === 'usage') {
                 expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
               } else throw new Error(`Missing positive assertion for ${template}`)
@@ -2297,11 +2306,17 @@ describe('GET /api/admin-prefill', () => {
 describe('security headers', () => {
   it('sets baseline security headers on every response', async () => {
     const app = makeApp()
-    const response = await app.request('/api/tenants')
+    const response = await app.request('https://corpuskit.org/api/tenants')
 
     expect(response.headers.get('strict-transport-security')).toBe(
       'max-age=63072000; includeSubDomains',
     )
+    // Outside the platform domain a host may be someone's apex, so no includeSubDomains.
+    for (const host of ['localhost', 'research.example.org', 'corpuskit.org.evil.test']) {
+      expect(
+        (await app.request(`https://${host}/api/tenants`)).headers.get('strict-transport-security'),
+      ).toBe('max-age=63072000')
+    }
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin')
     expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'")

@@ -66,6 +66,8 @@
     "ENVIRONMENT": "production",
     "ENTRA_CLIENT_ID": "147a13c9-2a9e-4e32-aa01-3f020d2a18cd",
     "ENTRA_TENANT_ID": "15c1eb19-1f38-4a09-bb25-7ff9892387b8",
-    "ENTRA_REDIRECT_URI": "https://corpuskit.org/auth/callback"
+    "ENTRA_REDIRECT_URI": "https://corpuskit.org/auth/callback",
+    "RESERVED_HOSTNAMES": "corpuskit.noice.net.au",
+    "MAX_PORTAL_ALIASES": "0"
   }
 }

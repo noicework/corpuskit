@@ -7,6 +7,7 @@ import {
 } from '../../cloudflare/src/auth.ts'
 import {
   ExternalFailureAudit,
+  externalHostWarning,
   externalLoginConfig,
   externalLoginConfigured,
   externalLoginPresentation,
@@ -34,6 +35,21 @@ import type { TenantStoreApi } from './tenants.ts'
 import { buildUiAccessSnapshot } from './ui-access.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import {
+  aliasHostRoute,
+  aliasStartupWarnings,
+  classifyHost,
+  type HostKind,
+  hostPortalFor,
+  narrowRolesToPortal,
+  normaliseHostname,
+  reservedHostnames,
+  SESSION_HOST_MISMATCH,
+  SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+  unknownHostsMode,
+} from './portal-aliases.ts'
+import { SlidingWindowLimiter } from './rate-limit.ts'
+import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
+import {
   authenticateOperator,
   configuredOperatorId,
   operatorConfigurationWarning,
@@ -44,7 +60,9 @@ import {
 
 interface LocalIngressOptions {
   rbac: RbacState
-  tenants: { list(): { slug: string }[] } & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled'>>
+  tenants:
+    & { list(): { slug: string }[] }
+    & Partial<Pick<TenantStoreApi, 'get' | 'isDisabled' | 'aliasPortal' | 'aliasHostnames'>>
   externalReplays?: ExternalLoginReplayStore
   env: Record<string, string | undefined>
 }
@@ -66,6 +84,14 @@ export class LocalIngress {
   readonly breakGlassEnabled: boolean
   readonly breakGlass: BreakGlassService
   private readonly operatorFailures = operatorFailureLimiter()
+  private readonly hostMismatches = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
+  private readonly hostConflicts = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
   private readonly externalFailures: ExternalFailureAudit
 
   constructor(private readonly options: LocalIngressOptions) {
@@ -73,6 +99,14 @@ export class LocalIngress {
     this.externalFailures = new ExternalFailureAudit(rbac.audit)
     const operatorWarning = operatorConfigurationWarning(env)
     if (operatorWarning) console.warn(operatorWarning)
+    const hostWarning = externalHostWarning(env)
+    if (hostWarning) console.warn(hostWarning)
+    try {
+      const registered = options.tenants.aliasHostnames?.() ?? []
+      for (const warning of aliasStartupWarnings(env, registered)) console.warn(warning)
+    } catch {
+      // An unreadable registry fails its own requests; it never stops the server starting.
+    }
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -113,6 +147,36 @@ export class LocalIngress {
   readonly requestContext = (request: Request): PortalRequestContext | undefined =>
     this.contexts.get(request)
 
+  /**
+   * The portal whose registered alias the request host is, or undefined. Read from the portal
+   * registry on every request, so a change applies at once; platform and local hosts never are.
+   */
+  hostPortal(request: Request): string | undefined {
+    const tenants = this.options.tenants
+    const platformDomain = this.platformDomain()
+    if (!tenants.aliasPortal || platformDomain === null) return undefined
+    const lookup = { aliasPortal: (hostname: string) => tenants.aliasPortal!(hostname) }
+    // As in the Durable Object, an alias record narrows even a reserved host.
+    return hostPortalFor(lookup, new URL(request.url).hostname, platformDomain) ?? undefined
+  }
+
+  private platformDomain(): string | null {
+    try {
+      return getPlatformDomain(this.options.env.PLATFORM_DOMAIN)
+    } catch {
+      return null
+    }
+  }
+
+  private hostKind(request: Request): HostKind {
+    const platformDomain = this.platformDomain()
+    return platformDomain === null ? { kind: 'other' } : classifyHost(
+      new URL(request.url).hostname,
+      platformDomain,
+      reservedHostnames(this.options.env),
+    )
+  }
+
   async handle(
     request: Request,
     dispatch: (request: Request) => Response | Promise<Response>,
@@ -139,6 +203,23 @@ export class LocalIngress {
       )
     try {
       const path = new URL(request.url).pathname
+      const hostPortal = this.hostPortal(request)
+      const host = this.hostKind(request)
+      // As in the Worker: with UNKNOWN_HOSTS=deny, only platform, reserved and alias hosts answer.
+      if (
+        hostPortal === undefined && (host.kind === 'candidate' || host.kind === 'other') &&
+        unknownHostsMode(this.options.env.UNKNOWN_HOSTS) === 'deny'
+      ) {
+        return Response.json({ error: 'not_found' }, {
+          status: 404,
+          headers: { 'cache-control': 'no-store' },
+        })
+      }
+      // As in the Worker, a session issued on an alias or other candidate host is sealed to it
+      // and read nowhere else, and an external assertion there must name it.
+      const auth: AuthConfig = host.kind === 'candidate'
+        ? { ...this.auth, sessionHost: normaliseHostname(new URL(request.url).hostname) }
+        : this.auth
       const headers = stripIdentityHeaders(request.headers)
       // As in the Worker, an explicit operator credential is decided before sign-in routes or
       // sessions: it is the whole authority, and no session cookie is read beside it.
@@ -159,9 +240,46 @@ export class LocalIngress {
           throw new InvalidLocalPrincipal()
         }
       } else {
+        // A portal's alias host serves that portal alone, as in the Worker.
+        if (hostPortal !== undefined) {
+          const decision = aliasHostRoute(request.method, new URL(request.url), hostPortal)
+          if (decision.kind === 'redirect') {
+            return new Response(null, { status: 308, headers: { location: decision.location } })
+          }
+          if (decision.kind === 'not_found') {
+            return decision.api
+              ? Response.json({ error: 'not_found' }, { status: 404 })
+              : new Response('Not found', {
+                status: 404,
+                headers: { 'content-type': 'text/plain; charset=utf-8' },
+              })
+          }
+        }
+        // As in the Worker: a reserved host that still carries an alias record issues no session
+        // until the alias is removed.
+        if (path === '/auth/external' && host.kind === 'reserved' && hostPortal !== undefined) {
+          if (this.hostConflicts.check(peerAddress(info)).allowed) {
+            appendAudit(
+              rbac.audit,
+              createAuditEvent({
+                requestId,
+                actor: { kind: 'anonymous' },
+                action: 'request.denied',
+                scope: { kind: 'platform' },
+                target: { kind: 'request' },
+                outcome: 'denied',
+                detail: { code: 'host_conflict', method: request.method },
+              }),
+            )
+          }
+          return Response.json({ error: 'host_conflict' }, {
+            status: 409,
+            headers: { 'cache-control': 'no-store' },
+          })
+        }
         // Only the external handoff and sign-out are served locally; the Entra flow is unchanged.
         if (path === '/auth/external' || path === '/auth/logout') {
-          return (await handleAuthRequest(request, this.auth, {
+          return (await handleAuthRequest(request, auth, {
             consume: (key, expiresAt) => {
               if (!this.options.externalReplays) throw new Error('Replay store unavailable')
               return this.options.externalReplays.consume(key, expiresAt)
@@ -170,8 +288,23 @@ export class LocalIngress {
           })) ?? Response.json({ error: 'not_found' }, { status: 404 })
         }
         // The local server reads only the sessions it can issue: external handoff cookies.
-        if (!session && this.externalEnabled && sessionAuthConfigured(this.auth)) {
-          const user = await authUser(request, this.auth)
+        if (!session && this.externalEnabled && sessionAuthConfigured(auth)) {
+          // A session carried off the host it was sealed to is refused, and recorded.
+          const user = await authUser(request, auth, (oid) => {
+            if (!this.hostMismatches.check(peerAddress(info)).allowed) return
+            appendAudit(
+              rbac.audit,
+              createAuditEvent({
+                requestId,
+                actor: { kind: 'user', id: oid },
+                action: 'request.denied',
+                scope: { kind: 'platform' },
+                target: { kind: 'request' },
+                outcome: 'denied',
+                detail: { code: SESSION_HOST_MISMATCH, method: request.method },
+              }),
+            )
+          })
           if (user?.sessionFacts.provenance === 'external') session = user.sessionFacts
         }
       }
@@ -227,7 +360,7 @@ export class LocalIngress {
           throw new InvalidLocalPrincipal()
         }
         principal = operatorRequestContext(verified.envelope.id, requestId, clientIp)
-        if (!path.startsWith('/api/')) {
+        if (!path.startsWith('/api/') || hostPortal !== undefined) {
           denial(403, 'operator_not_allowed')
           return Response.json({ error: 'operator_not_allowed' }, { status: 403 })
         }
@@ -238,6 +371,20 @@ export class LocalIngress {
           audience: this.audience,
           externalLoginEnabled: this.externalEnabled,
         }, this.tenantId)
+        // As in the Durable Object: no platform authority on an alias host, only the caller's own
+        // grants in its portal.
+        if (hostPortal !== undefined) {
+          const narrowed = narrowRolesToPortal(
+            resolution.effectiveRoles,
+            resolution.provenance,
+            hostPortal,
+          )
+          resolution = {
+            ...resolution,
+            effectiveRoles: narrowed.effectiveRoles!,
+            provenance: narrowed.provenance!,
+          }
+        }
         principal = {
           requestId,
           session,
@@ -260,7 +407,11 @@ export class LocalIngress {
       }
       if (resolution && path === '/auth/me' && request.method === 'GET') {
         const selections = new URL(request.url).searchParams.getAll('portal')
-        const selectedSlug = selections.length === 1 ? selections[0] : undefined
+        // An alias host answers for its own portal only.
+        const selectedSlug = selections.length === 1 &&
+            (hostPortal === undefined || selections[0] === hostPortal)
+          ? selections[0]
+          : undefined
         const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
         let tenant: unknown
         try {
@@ -282,8 +433,9 @@ export class LocalIngress {
             selectedSlug,
             tenant,
           }),
-          enabled: sessionAuthConfigured(this.auth),
-          entraEnabled: authConfigured(this.auth),
+          enabled: sessionAuthConfigured(auth),
+          // Never on an alias host, as in the Worker.
+          entraEnabled: authConfigured(auth) && hostPortal === undefined,
           externalLogin: externalLoginPresentation(this.auth.externalLogin),
           externalLoginEnabled: this.externalEnabled,
           sessionProvenance: session ? session.provenance ?? 'entra' : null,
@@ -307,8 +459,11 @@ export class LocalIngress {
         }, { headers: { 'cache-control': 'no-store' } })
       }
       const cleanHeaders = stripIdentityHeaders(headers)
+      // The break-glass passcode is platform authority, which an alias host never grants.
+      if (hostPortal !== undefined) cleanHeaders.delete('x-admin-passcode')
       // Preserve explicit credentials so the shared gate refuses and audits ineligible attempts.
       const forwarded = new Request(request, { headers: cleanHeaders })
+      if (hostPortal !== undefined) principal.hostPortal = hostPortal
       this.contexts.set(forwarded, principal)
       try {
         const response = await dispatch(forwarded)

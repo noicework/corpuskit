@@ -5,6 +5,8 @@ import {
   EXTERNAL_FAILURE_AUDIT_WINDOW_MS,
   EXTERNAL_LOGIN_FAILURES,
   ExternalFailureAudit,
+  externalHostWarning,
+  externalLoginConfig,
   externalLoginConfigured,
   externalLoginPresentation,
   ExternalLoginReplayStore,
@@ -275,7 +277,8 @@ Deno.test('local ingress caps failed handoff records per peer and never limits a
       expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
     }
     expect(records()).toEqual([{ externalReason: 'encoding' }])
-    const signedIn = await send(await mint(), '192.0.2.10')
+    // Off the platform domain an assertion names the host it is sent to.
+    const signedIn = await send(await mint({ host: 'portal.example' }), '192.0.2.10')
     expect(signedIn.status).toBe(303)
     const elsewhere = await send('not-a-signed-assertion', '198.51.100.20')
     expect(elsewhere.status).toBe(401)
@@ -580,7 +583,7 @@ Deno.test('local ingress exchanges, reads and logs out external sessions using d
         externalReplays: new ExternalLoginReplayStore(db),
       })
     const ingress = makeIngress()
-    const token = await mint()
+    const token = await mint({ host: 'portal.example' })
     const response = await ingress.handle(request(token), () => new Response('unexpected'))
     expect(response.status).toBe(303)
     const cookie = response.headers.get('set-cookie')!.split(';')[0]!
@@ -677,4 +680,111 @@ Deno.test('external login presentation needs both trust settings and a safe star
   }
   expect(externalLoginPresentation({ ...base, startUrl: 'http://localhost:8000/start' })).not
     .toBeNull()
+})
+
+Deno.test('a host claim binds an assertion to the hostname it arrives on', async () => {
+  const { config, mint } = await fixture()
+  const attempt = async (
+    assertion: string,
+    host: string,
+    settings: AuthConfig = config,
+  ) => {
+    const reasons: string[] = []
+    let consumes = 0
+    const response = (await handleAuthRequest(
+      new Request(`https://${host}/auth/external?${new URLSearchParams({ assertion })}`),
+      settings,
+      {
+        consume: () => {
+          consumes++
+          return true
+        },
+        auditFailure: (reason) => {
+          reasons.push(reason)
+        },
+      },
+    ))!
+    if (response.status === 401) {
+      expect(await response.json()).toEqual({ error: 'external_login_invalid' })
+      expect(response.headers.get('set-cookie')).toBeNull()
+      expect(consumes).toBe(0)
+    }
+    return { status: response.status, reasons }
+  }
+  const signedIn = { status: 303, reasons: [] }
+  const refused = (reason: string) => ({ status: 401, reasons: [reason] })
+
+  // A matching host signs in, whatever the case or trailing dot on either side.
+  for (
+    const [claim, host] of [
+      ['research.example.org', 'research.example.org'],
+      ['Research.Example.ORG.', 'research.example.org'],
+      ['research.example.org', 'research.example.org.'],
+      ['research.example.org', 'RESEARCH.Example.org'],
+      ['localhost', 'localhost'],
+    ]
+  ) {
+    expect(await attempt(await mint({ host: claim }), host!), `${claim} on ${host}`)
+      .toEqual(signedIn)
+  }
+  // Replayed on any other host of the deployment, the assertion is refused.
+  for (
+    const host of [
+      'marine.platform.example',
+      'platform.example',
+      'other.example.org',
+      'research.example.org.evil.test',
+      'sub.research.example.org',
+    ]
+  ) {
+    expect(await attempt(await mint({ host: 'research.example.org' }), host), host)
+      .toEqual(refused('host'))
+  }
+  // A host claim that is not a hostname is a malformed assertion.
+  for (
+    const claim of [
+      '',
+      '.',
+      'research.example.org:443',
+      'https://research.example.org',
+      '*.example.org',
+      'research example.org',
+      42,
+      null,
+    ]
+  ) {
+    expect(await attempt(await mint({ host: claim }), 'research.example.org'), String(claim))
+      .toEqual(refused('claims'))
+  }
+
+  // Without the requirement an assertion may omit the claim; with it, it may not.
+  const required = { ...config, externalLogin: { ...config.externalLogin, requireHost: true } }
+  expect(await attempt(await mint(), 'research.example.org')).toEqual(signedIn)
+  expect(await attempt(await mint(), 'research.example.org', required)).toEqual(refused('host'))
+  expect(
+    await attempt(await mint({ host: 'research.example.org' }), 'research.example.org', required),
+  ).toEqual(signedIn)
+  expect(
+    await attempt(await mint({ host: 'research.example.org' }), 'platform.example', required),
+  ).toEqual(refused('host'))
+})
+
+Deno.test('EXTERNAL_LOGIN_REQUIRE_HOST is off only when absent, empty or false', () => {
+  for (const value of [undefined, '', ' ', 'false', 'FALSE', ' false ']) {
+    expect(externalLoginConfig({ EXTERNAL_LOGIN_REQUIRE_HOST: value }).requireHost, String(value))
+      .toBe(false)
+  }
+  for (const value of ['true', 'TRUE', ' true', '1', 'yes', 'ture']) {
+    expect(externalLoginConfig({ EXTERNAL_LOGIN_REQUIRE_HOST: value }).requireHost, value)
+      .toBe(true)
+  }
+})
+
+Deno.test('a start-up warning names the host requirement while aliases are enabled', () => {
+  const issuer = { EXTERNAL_LOGIN_ISSUER: 'https://issuer.example', EXTERNAL_LOGIN_JWK: '{}' }
+  expect(externalHostWarning(issuer)).toContain('EXTERNAL_LOGIN_REQUIRE_HOST')
+  expect(externalHostWarning({ ...issuer, MAX_PORTAL_ALIASES: '3' })).not.toBeNull()
+  expect(externalHostWarning({ ...issuer, EXTERNAL_LOGIN_REQUIRE_HOST: 'true' })).toBeNull()
+  expect(externalHostWarning({ ...issuer, MAX_PORTAL_ALIASES: '0' })).toBeNull()
+  expect(externalHostWarning({})).toBeNull()
 })

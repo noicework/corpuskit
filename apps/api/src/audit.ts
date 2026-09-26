@@ -153,6 +153,14 @@ const codes = [
   'deadline_exceeded',
   'response_too_large',
   'client_aborted',
+  'invalid_hostname',
+  'invalid_request',
+  'unknown_tenant',
+  'hostname_reserved',
+  'hostname_taken',
+  'alias_limit',
+  'session_host_mismatch',
+  'host_conflict',
 ] as const
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/
 type DetailValue = string | number | boolean
@@ -177,6 +185,7 @@ const fields = {
     'claims',
     'issuer',
     'audience',
+    'host',
     'lifetime',
     'email',
     'replay',
@@ -184,6 +193,11 @@ const fields = {
     'session',
   ]),
   lifecycleStatus: member(['active', 'read_only', 'suspended']),
+  aliasHostname: (value: unknown): value is string =>
+    typeof value === 'string' &&
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+      .test(value),
+  aliasPrimary: flag,
   maxResources: count,
   maxBytes: count,
   asksPerDay: count,
@@ -239,6 +253,8 @@ const actionFields = {
     'note',
     'code',
   ],
+  'portal.alias.set': ['permission', 'aliasHostname', 'aliasPrimary', 'code'],
+  'portal.alias.remove': ['permission', 'aliasHostname', 'aliasPrimary', 'code'],
   'local.mutation': ['permission', 'operation', 'mutation', 'sessionOid', 'sessionTenantId'],
   'assignment.create': ['role', 'subjectKind'],
   'assignment.update': ['role', 'previousRole', 'subjectKind'],

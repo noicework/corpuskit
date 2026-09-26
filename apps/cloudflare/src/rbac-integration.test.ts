@@ -54,6 +54,8 @@ async function sessionCookie(session: TrustedSessionFacts): Promise<string> {
         isAdmin: false,
         expiresAt: session.expiresAt,
         sessionFacts: session,
+        // Sessions outside the platform domain are sealed to their host.
+        host: 'corpuskit.test',
       }),
     ),
   )

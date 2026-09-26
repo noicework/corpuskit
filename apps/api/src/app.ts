@@ -14,6 +14,8 @@ import {
   safePortalProjection,
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
+import { registerAliasRoutes } from './alias-routes.ts'
+import { maxPortalAliases, reservedHostnames, transportSecurityFor } from './portal-aliases.ts'
 import {
   assertAgentRunAllowed,
   capacityUsage,
@@ -888,6 +890,11 @@ export interface PortalRequestContext {
   requestId: string
   /** Populated only by ingress after signed operator envelope verification. */
   operator?: { id: string }
+  /**
+   * Populated only by ingress: the portal whose registered alias the request host is. Such a
+   * request reaches only that portal's routes (docs/HOSTING.md, "Portal host aliases").
+   */
+  hostPortal?: string
   session: import('./principal.ts').TrustedSessionFacts | null
   clientIp?: string
   coarseAdminEligible: boolean
@@ -933,6 +940,10 @@ export interface BuildAppOptions {
   enrichments?: EnrichmentStoreApi
   /** Runtime adapter for optional per-portal Worker custom domains. */
   domainProvisioner?: PortalDomainProvisioner | null
+  /** Host aliases each portal may have. Defaults to env MAX_PORTAL_ALIASES, or 5. */
+  maxPortalAliases?: number
+  /** Hostnames never registered as aliases. Defaults to `reservedHostnames(process.env)`. */
+  reservedHostnames?: ReadonlySet<string>
   zone?: string
   audit?: AuditStore
   breakGlass?: BreakGlassService
@@ -1435,11 +1446,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     detail = {},
     scope: Scope = classification(c).scope,
     target: { kind: string; id?: string } = { kind: 'request' },
+    classify?: (result: T) => 'success' | 'failure',
   ) =>
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
         audit: requiredAudit(),
         localMutations: opts.localMutations,
+        classify,
         signal: operationSignals.get(c.req.raw) ?? c.req.raw.signal,
         input: {
           requestId: requestContext(c.req.raw).requestId,
@@ -1678,7 +1691,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // its own stricter policy, which forbids framing as well.
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
-    c.header('Strict-Transport-Security', 'max-age=63072000; includeSubDomains')
+    // `includeSubDomains` only inside the platform domain: any other host may be a customer's apex.
+    c.header(
+      'Strict-Transport-Security',
+      transportSecurityFor(new URL(c.req.url).hostname, platformDomain),
+    )
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
     if (c.res.headers.get('Content-Security-Policy') !== STORED_FILE_POLICY) {
@@ -1694,11 +1711,41 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const authority = await selectRequestAuthority(c.req.raw, context, authorityDependencies)
       context.actor = authority.actor
       try {
-        authoriseOperatorRoute(authority, classification(c).declaration)
+        authoriseOperatorRoute(
+          authority,
+          classification(c).declaration,
+          context.hostPortal !== undefined,
+        )
       } finally {
         if (context.denialAudited) markDenialAudited(c.req.raw)
       }
     }
+    await next()
+  })
+
+  // A request on a portal's alias host reaches only that portal's routes, the portal list
+  // (narrowed to that portal) and health. Every other route, including platform-scope
+  // administration and other portals, is not found. This is decided from the matched declaration
+  // before the guard reads any credential, so the answer says nothing about access.
+  const aliasHostAllows = (c: Context, slug: string): boolean => {
+    if (isInfrastructurePreflight(c)) return c.req.path.startsWith(`/api/admin/t/${slug}/`)
+    let declaration: Declaration
+    try {
+      declaration = matchedDeclaration(c)
+    } catch {
+      return false
+    }
+    if (declaration.scope === 'public') return true
+    if (declaration.aggregate) return declaration.path === '/api/tenants'
+    if (declaration.scope !== 'portal' || declaration.portalTarget !== 'url-slug') return false
+    return c.req.path.split('/')[declaration.path.split('/').indexOf(':slug')] === slug
+  }
+  registerInfrastructure(app, '*', async (c, next) => {
+    const { hostPortal } = requestContext(c.req.raw)
+    if (
+      hostPortal !== undefined && (c.req.path === '/api' || c.req.path.startsWith('/api/')) &&
+      !aliasHostAllows(c, hostPortal)
+    ) return c.json({ error: 'not_found' }, 404)
     await next()
   })
 
@@ -1868,6 +1915,57 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ),
   })
 
+  const aliasLimit = opts.maxPortalAliases ?? maxPortalAliases(process.env.MAX_PORTAL_ALIASES)
+  registerAliasRoutes(app, {
+    tenants,
+    platformDomain,
+    limit: aliasLimit,
+    reserved: opts.reservedHostnames ?? reservedHostnames(process.env),
+    refused: (c, action, slug, code, hostname) => {
+      const { requestId, actor } = requestContext(c.req.raw)
+      appendAudit(
+        requiredAudit(),
+        createAuditEvent({
+          requestId,
+          actor: actor!,
+          action,
+          scope: { kind: 'platform' },
+          target: {
+            kind: 'portal',
+            ...(KeyPortalSlugSchema.safeParse(slug).success ? { id: slug } : {}),
+          },
+          outcome: 'denied',
+          detail: {
+            permission: 'portal.create',
+            code,
+            ...(hostname === undefined ? {} : { aliasHostname: hostname }),
+          },
+        }, opts.now),
+      )
+    },
+    set: (c, slug, hostname, primary, audited) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/aliases/:hostname',
+        'portal.alias.set',
+        () => tenants.setAlias(slug, hostname, primary, aliasLimit),
+        audited,
+        { kind: 'platform' },
+        { kind: 'portal', id: slug },
+        (result) => result.ok ? 'success' : 'failure',
+      ),
+    remove: (c, slug, hostname, audited) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/aliases/:hostname',
+        'portal.alias.remove',
+        () => tenants.removeAlias(slug, hostname),
+        audited,
+        { kind: 'platform' },
+        { kind: 'portal', id: slug },
+      ),
+  })
+
   registerAuditRoutes(app, {
     authorise: authoriseDeclared,
     state: () => {
@@ -2021,7 +2119,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   app.get(declaredRoute('GET', '/api/tenants'), async (c) => {
-    const targets = await requestAuthorisation(c).aggregate()
+    // On a portal's alias host the list holds that portal only.
+    const { hostPortal } = requestContext(c.req.raw)
+    const targets = await requestAuthorisation(c).aggregate(
+      hostPortal === undefined ? undefined : [hostPortal],
+    )
     return c.json(
       targets.flatMap((config) => {
         // A portal whose lifecycle cannot be read is left out on its own.
@@ -4018,8 +4120,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const slug = c.req.param('slug')
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
-    const config = tenants.get(slug)
-    if (config?.hostname) {
+    // Only the portal's own hostname is detached. Its host aliases were routed by the hosting
+    // operator, not by this deployment, and removal drops their records in the same write.
+    const hostname = tenants.assignedHostname(slug)
+    if (hostname) {
       await portalSubAction(c, 'tenant.domain.detach', slug)
       if (!domains) {
         return c.json({
@@ -4035,7 +4139,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           'tenant.domain.detach',
           async () => {
             try {
-              return await domains.detach(config.hostname!)
+              return await domains.detach(hostname)
             } catch (error) {
               remoteFailure = error
               throw error
@@ -4078,9 +4182,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     return c.json({
       ok: true,
-      domain: config?.hostname
-        ? { status: 'removed', hostname: config.hostname }
-        : { status: 'not_configured' },
+      domain: hostname ? { status: 'removed', hostname } : { status: 'not_configured' },
     })
   })
 
