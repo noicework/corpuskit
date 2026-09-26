@@ -7,10 +7,12 @@ import {
 } from '@research-portal/core'
 import { AragApiError, AragProvider } from '@research-portal/retrieval'
 import { PortalLifecycleError } from './lifecycle-error.ts'
-import { PortalLifecycleStore } from './lifecycle-store.ts'
+import { MAX_UNMEASURED_LINKS, MEASURE_TIMEOUT, PortalLifecycleStore } from './lifecycle-store.ts'
 import {
   capacityUsage,
+  DEFAULT_LINK_PROVISIONAL_BYTES,
   guardManagement,
+  linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
   withRequestAuthority,
@@ -340,102 +342,182 @@ Deno.test('byte ledger counts source bytes, refuses the add that would exceed, a
   expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 10 })
 })
 
-Deno.test('a crawled link is admitted against the bytes already known and measured once processed', async () => {
-  const { state, raw } = box(0)
-  const extractions = new Map<string, { status: string; text: string } | 'missing'>()
-  let reads = 0
+/** A knowledge box whose crawled links report a processing status and their extracted text. */
+function crawling(count = 0) {
+  const { state, raw } = box(count)
+  const extractions = new Map<string, { status: string; text: string } | 'missing' | 'fail'>()
+  const reads: string[] = []
   const measured = Object.assign(raw, {
     resourceExtraction: (_config: TenantConfig, id: string) => {
-      reads++
+      reads.push(id)
       const value = extractions.get(id)
       if (value === 'missing') {
         return Promise.reject(new AragApiError(404, `/resource/${id}`, 'not found'))
       }
+      if (value === 'fail') return Promise.reject(new Error('upstream unavailable'))
       return Promise.resolve(value ?? { status: 'PENDING', text: '' })
     },
   })
+  return { state, raw: measured, extractions, reads }
+}
+
+Deno.test('a crawled link holds provisional bytes until it is measured, and only a refusal waits on measuring', async () => {
+  const { state, raw, extractions, reads } = crawling()
   const lifecycle = store('active', { maxBytes: 1_000 })
-  const guarded = guardManagement(measured, lifecycle)
-  await guarded.createText(config, { title: 'a', body: 'x'.repeat(900) })
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 100 })
+  await guarded.createText(config, { title: 'a', body: 'x'.repeat(800) })
   state.count = 1
-  // The portal cannot see a crawled document before the platform processes it, so the link is
-  // admitted against the bytes already known and counts as nothing until it is measured.
+  // The portal cannot see a crawled document before the platform processes it, so the link
+  // holds its provisional bytes from admission until it is measured.
   await guarded.createLink(config, { url: 'https://example.test/report.pdf' })
   state.count = 2
-  expect(await capacityUsage(measured, lifecycle, config)).toEqual({ resources: 2, bytes: 900 })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 900 })
   expect(lifecycle.pendingMeasurements('test')).toEqual(['res-2'])
-  // Other additions are still admitted: the link does not make the byte count unknown.
+  // An add that fits is admitted without reading anything.
+  reads.length = 0
   await guarded.createText(config, { title: 'b', body: 'y'.repeat(50) })
   state.count = 3
-  // Once processed, its extracted text is what it holds. A usage report counts it without
-  // writing anything; the next admission records it and holds it against the limit.
+  expect(reads).toEqual([])
+  // One that does not fit measures the waiting link first; unprocessed, it keeps its bytes.
+  expect(
+    await denied(
+      guarded.createText(config, { title: 'c', body: 'w'.repeat(60) }),
+      413,
+      'limit_exceeded',
+    ),
+  ).toEqual({ error: 'limit_exceeded', limit: 'maxBytes', value: 1_010, max: 1_000 })
+  expect(reads).toEqual(['res-2'])
+  // Once processed, its extracted text replaces the provisional bytes. A usage report counts it
+  // without recording anything; the add it held back records it and is admitted.
   extractions.set('res-2', { status: 'PROCESSED', text: 'z'.repeat(40) })
-  expect(await capacityUsage(measured, lifecycle, config)).toEqual({ resources: 3, bytes: 990 })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 3, bytes: 890 })
   expect(lifecycle.pendingMeasurements('test')).toEqual(['res-2'])
-  await denied(
-    guarded.createText(config, { title: 'c', body: 'w'.repeat(11) }),
-    413,
-    'limit_exceeded',
-  )
-  expect(lifecycle.pendingMeasurements('test')).toEqual([])
-  await guarded.createText(config, { title: 'd', body: 'v'.repeat(10) })
+  await guarded.createText(config, { title: 'c', body: 'w'.repeat(60) })
   state.count = 4
-  // A full portal refuses a link as well: any addition brings at least one byte.
+  expect(lifecycle.pendingMeasurements('test')).toEqual([])
+  // A link needs room for its provisional bytes.
   expect(
     await denied(
       guarded.createLink(config, { url: 'https://example.test/more' }),
       413,
       'limit_exceeded',
     ),
-  ).toEqual({ error: 'limit_exceeded', limit: 'maxBytes', value: 1_001, max: 1_000 })
-  // A link the platform could not process holds nothing; one no longer in the box is dropped.
-  lifecycle.set('test', { status: 'active', limits: { maxBytes: 10_000 } })
+  ).toEqual({ error: 'limit_exceeded', limit: 'maxBytes', value: 1_050, max: 1_000 })
+  // Any settled status counts the text the resource holds, and one the box no longer has holds
+  // nothing.
+  lifecycle.set('test', { status: 'active', limits: { maxBytes: 1_300 } })
   await guarded.createLink(config, { url: 'https://example.test/broken' })
+  await guarded.createLink(config, { url: 'https://example.test/blocked' })
   await guarded.createLink(config, { url: 'https://example.test/gone' })
+  state.count = 7
   extractions.set('res-5', { status: 'ERROR', text: '' })
-  extractions.set('res-6', 'missing')
-  state.count = 5
-  expect(await capacityUsage(measured, lifecycle, config)).toEqual({ resources: 5, bytes: 1_000 })
-  await guarded.createText(config, { title: 'e', body: 'u' })
-  state.count = 6
+  extractions.set('res-6', { status: 'BLOCKED', text: 'b'.repeat(7) })
+  extractions.set('res-7', 'missing')
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 7, bytes: 957 })
+  await guarded.createText(config, { title: 'd', body: 'v'.repeat(100) })
+  state.count = 8
   expect(lifecycle.pendingMeasurements('test')).toEqual([])
-  expect(await capacityUsage(measured, lifecycle, config)).toEqual({ resources: 6, bytes: 1_001 })
-  // The resource limit still applies to links, and an unlimited portal measures nothing.
-  lifecycle.set('test', { status: 'active', limits: { maxResources: 6 } })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 8, bytes: 1_057 })
+  // The resource limit still applies to links.
+  lifecycle.set('test', { status: 'active', limits: { maxResources: 8 } })
   await denied(
-    guarded.createLink(config, { url: 'https://example.test/sixth' }),
+    guarded.createLink(config, { url: 'https://example.test/ninth' }),
     413,
     'limit_exceeded',
   )
-  const before = reads
+  // Without a byte limit nothing is read, but the link still holds its provisional bytes, so a
+  // byte limit set later judges it conservatively until it is measured.
+  reads.length = 0
   lifecycle.set('test', { status: 'active', limits: null })
   await guarded.createLink(config, { url: 'https://example.test/unlimited' })
-  expect(reads).toBe(before)
-  expect(state.calls).toBe(8)
+  state.count = 9
+  expect(reads).toEqual([])
+  lifecycle.set('test', { status: 'active', limits: { maxBytes: 1_157 } })
+  await denied(guarded.createText(config, { title: 'e', body: 'u' }), 413, 'limit_exceeded')
+  expect(reads).toEqual(['res-9'])
+  extractions.set('res-9', { status: 'PROCESSED', text: 'q' })
+  await guarded.createText(config, { title: 'e', body: 'u' })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 9, bytes: 1_059 })
+  expect(state.calls).toBe(10)
 })
 
-Deno.test('deleting a link still being measured releases it, and a failed read is retried later', async () => {
-  const { state, raw } = box(0)
-  let fail = true
-  const measured = Object.assign(raw, {
-    resourceExtraction: () =>
-      fail
-        ? Promise.reject(new Error('upstream unavailable'))
-        : Promise.resolve({ status: 'PROCESSED', text: 'abc' }),
-  })
+Deno.test('links waiting to be measured are capped, tried in turn, and stop counting as in flight when stuck', async () => {
+  let now = Date.UTC(2026, 8, 26)
+  const lifecycle = new PortalLifecycleStore(undefined, () => now)
+  lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 1_000_000 } })
+  const { state, raw, extractions, reads } = crawling()
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 10 })
+  const link = (n: number) => guarded.createLink(config, { url: `https://example.test/${n}` })
+  const stored = () =>
+    lifecycle.state.get<{ measuring?: Record<string, { unsized?: true }> }>(
+      'portal-capacity:test',
+      {},
+    ).measuring ?? {}
+  for (let n = 1; n <= MAX_UNMEASURED_LINKS; n++) {
+    await link(n)
+    state.count = n
+  }
+  expect(reads).toEqual([])
+  // The next link waits for earlier ones: measuring finds none of them processed yet.
+  await denied(link(21), 503, 'links_pending')
+  expect(reads.length).toBeGreaterThan(0)
+  expect(reads.length).toBeLessThan(MAX_UNMEASURED_LINKS)
+  // Other additions are not held back by links waiting to be measured.
+  await guarded.createText(config, text)
+  state.count = 21
+  // The least recently tried go first, so links that stay unprocessed never keep a processed
+  // one from being measured.
+  extractions.set('res-20', { status: 'PROCESSED', text: 'p'.repeat(5) })
+  reads.length = 0
+  await link(22)
+  state.count = 22
+  expect(reads).toContain('res-20')
+  expect(reads).not.toContain('res-1')
+  expect(Object.keys(stored())).not.toContain('res-20')
+  // Past the timeout, a link still unprocessed stops counting as in flight, but it keeps its
+  // provisional bytes until it is measured or removed.
+  now += MEASURE_TIMEOUT
+  await link(23)
+  state.count = 23
+  const unsized = Object.entries(stored()).filter(([, entry]) => entry.unsized)
+  expect(unsized.length).toBeGreaterThan(0)
+  const before = (await capacityUsage(raw, lifecycle, config)).bytes!
+  const [stuck] = unsized[0]!
+  await guarded.deleteResource(config, stuck)
+  state.count = 22
+  expect((await capacityUsage(raw, lifecycle, config)).bytes).toBe(before - 10)
+  // One that is processed after all is still measured.
+  const [late] = unsized[1]!
+  extractions.set(late, { status: 'PROCESSED', text: '' })
+  expect((await capacityUsage(raw, lifecycle, config)).bytes).toBe(before - 20)
+})
+
+Deno.test('deleting a link still being measured releases its bytes, and a failed read is retried later', async () => {
+  const { state, raw, extractions } = crawling()
   const lifecycle = store('active', { maxBytes: 100 })
-  const guarded = guardManagement(measured, lifecycle)
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 30 })
   await guarded.createLink(config, { url: 'https://example.test/one' })
   await guarded.createLink(config, { url: 'https://example.test/two' })
   state.count = 2
-  // A read that fails is not a measurement: the links wait for a later check.
-  expect(await capacityUsage(measured, lifecycle, config)).toEqual({ resources: 2, bytes: 0 })
+  extractions.set('res-1', 'fail')
+  extractions.set('res-2', 'fail')
+  // A read that fails is not a measurement: the links keep their provisional bytes.
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 60 })
   expect(lifecycle.pendingMeasurements('test')).toEqual(['res-1', 'res-2'])
   await guarded.deleteResource(config, 'res-1')
   state.count = 1
   expect(lifecycle.pendingMeasurements('test')).toEqual(['res-2'])
-  fail = false
-  expect(await capacityUsage(measured, lifecycle, config)).toEqual({ resources: 1, bytes: 3 })
+  extractions.set('res-2', { status: 'PROCESSED', text: 'abc' })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 3 })
+})
+
+Deno.test('LINK_PROVISIONAL_BYTES is a whole number of bytes, otherwise the upload cap', () => {
+  expect(DEFAULT_LINK_PROVISIONAL_BYTES).toBe(100 * 1024 * 1024)
+  expect(linkProvisionalBytes(undefined)).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)
+  expect(linkProvisionalBytes(' 5000000 ')).toBe(5_000_000)
+  for (const value of ['', '0', '-1', '1.5', '10MB', '1e6']) {
+    expect(linkProvisionalBytes(value), value).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)
+  }
 })
 
 Deno.test('changing or removing a knowledge box starts a fresh ledger whichever path writes it', async () => {

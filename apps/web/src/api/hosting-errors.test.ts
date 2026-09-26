@@ -46,6 +46,22 @@ Deno.test('all add content transports translate resource and byte limits without
   }
 })
 
+Deno.test('a link refused while earlier links are processed says to wait, not that usage is unknown', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({ error: 'links_pending' }, { status: 503 }))
+  try {
+    await expect(addAdminLink('marine', sessionAccess, { url: 'https://example.test/report' }))
+      .rejects.toMatchObject({
+        status: 503,
+        message:
+          'Links added earlier are still being processed, so this one cannot be added yet. Try again in a few minutes, or upload the document instead.',
+      })
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 Deno.test('daily ask quotas carry a distinct code and reset time while burst limits keep their retry copy', async () => {
   const error = await askError(
     Response.json({

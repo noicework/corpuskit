@@ -1099,53 +1099,249 @@ Deno.test('the add routes answer a full portal with the exact limit body and no 
   }
 })
 
-Deno.test('a link the platform crawls is added on a byte-limited portal and counted once processed', async () => {
-  const writes: string[] = []
-  let count = 0
-  let processed = false
+/**
+ * A knowledge box double for crawled links: each link gets the next id, and `status` decides
+ * what the platform reports for it, with `text` as its extracted text once settled.
+ */
+function crawlingBox(
+  status: (id: string) => string,
+  text: (id: string) => string = () => 'x'.repeat(900),
+) {
+  const box = { count: 0, links: 0, reads: [] as string[] }
   const management = new AragProvider({ resolveBinding: () => undefined })
   Object.assign(management, {
-    resourceCount: () => Promise.resolve(count),
+    resourceCount: () => Promise.resolve(box.count),
     createLink: () => {
-      writes.push('createLink')
-      return Promise.resolve({ id: 'crawled-1' })
+      box.count++
+      return Promise.resolve({ id: `crawled-${++box.links}` })
     },
-    resourceExtraction: () =>
-      Promise.resolve(
-        processed
-          ? { status: 'PROCESSED', text: 'x'.repeat(120) }
-          : { status: 'PENDING', text: '' },
-      ),
+    createText: () => {
+      box.count++
+      return Promise.resolve({ id: `text-${box.count}` })
+    },
+    resourceExtraction: (_config: unknown, id: string) => {
+      box.reads.push(id)
+      return Promise.resolve({ status: status(id), text: text(id) })
+    },
   })
-  const f = createEnforcementFixture({ management })
-  try {
-    await f.stores.bindings.set('a', {
-      baseUrl: 'https://example.test/kb/a',
-      token: 'fixture',
-      kbId: 'a',
-    })
-    f.stores.lifecycle.set('a', { status: 'active', limits: { maxBytes: 1_000 } })
-    const curator = f.sessionFor('portal-admin')
-    const platform = f.sessionFor('platform-admin')
-    // The page cannot be fetched and cleaned here, so the platform crawls it. Its size is not
-    // known yet, and the add is admitted instead of refused as usage it cannot check.
-    const added = await f.requestAs(
+  return { box, management }
+}
+
+async function crawlingPortal(
+  management: AragProvider,
+  maxBytes: number | undefined,
+  options: { linkProvisionalBytes?: number } = {},
+  adapter: 'durable' | 'local' = 'durable',
+) {
+  const f = createEnforcementFixture({ management, ...options }, adapter)
+  await f.stores.bindings.set('a', {
+    baseUrl: 'https://example.test/kb/a',
+    token: 'fixture',
+    kbId: 'a',
+  })
+  f.stores.lifecycle.set('a', {
+    status: 'active',
+    limits: maxBytes === undefined ? null : { maxBytes },
+  })
+  const curator = f.sessionFor('portal-admin')
+  const platform = f.sessionFor('platform-admin')
+  const link = async (n: number | string) => {
+    const response = await f.requestAs(
       curator,
       '/api/admin/t/a/resources/link',
-      json('POST', { url: 'https://example.test/report.pdf' }),
+      json('POST', { url: `https://example.test/${n}.pdf` }),
     )
-    expect(added.status).toBe(200)
-    expect(await added.json()).toEqual({ id: 'crawled-1' })
-    expect(writes).toEqual(['createLink'])
-    count = 1
-    const usage = async () =>
-      (await (await f.requestAs(platform, '/api/admin/t/a/usage')).json()) as {
-        resources: number
-        bytes: number | null
-      }
-    expect(await usage()).toMatchObject({ resources: 1, bytes: 0 })
+    return { status: response.status, body: await response.json() }
+  }
+  const text = async (bytes: number) => {
+    const response = await f.requestAs(
+      curator,
+      '/api/admin/t/a/resources/text',
+      json('POST', { title: 'Notes', body: 'n'.repeat(bytes) }),
+    )
+    return { status: response.status, body: await response.json() }
+  }
+  const usage = async () =>
+    (await (await f.requestAs(platform, '/api/admin/t/a/usage')).json()) as {
+      resources: number
+      bytes: number | null
+    }
+  return { f, link, text, usage }
+}
+
+Deno.test('a link the platform crawls is added on a byte-limited portal and counted once processed', async () => {
+  let processed = false
+  const { box, management } = crawlingBox(
+    () => processed ? 'PROCESSED' : 'PENDING',
+    () => 'x'.repeat(120),
+  )
+  const { f, link, usage } = await crawlingPortal(management, 1_000, { linkProvisionalBytes: 500 })
+  try {
+    // The page cannot be fetched and cleaned here, so the platform crawls it. Its size is not
+    // known yet, so it is admitted holding its provisional bytes.
+    expect(await link('report')).toEqual({ status: 200, body: { id: 'crawled-1' } })
+    expect(box.links).toBe(1)
+    expect(await usage()).toMatchObject({ resources: 1, bytes: 500 })
     processed = true
     expect(await usage()).toMatchObject({ resources: 1, bytes: 120 })
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a burst of crawled links is admitted only as far as their provisional bytes allow', async () => {
+  // Twenty links added before the first is processed, each 900 bytes once it is: the portal's
+  // 1,000 bytes cannot take them all.
+  for (const provisional of [undefined, 500]) {
+    let processed = false
+    const { box, management } = crawlingBox(() => processed ? 'PROCESSED' : 'PENDING')
+    const { f, link, text, usage } = await crawlingPortal(
+      management,
+      1_000,
+      provisional === undefined ? {} : { linkProvisionalBytes: provisional },
+    )
+    try {
+      const statuses: number[] = []
+      for (let n = 0; n < 20; n++) statuses.push((await link(n)).status)
+      // By default a link holds the 100 MB upload cap, which no 1,000-byte portal has room for.
+      // Holding 500 bytes, two fit.
+      const admitted = provisional === undefined ? 0 : 2
+      expect(statuses).toEqual([...Array(admitted).fill(200), ...Array(20 - admitted).fill(413)])
+      expect(box.links).toBe(admitted)
+      processed = true
+      // Usage reports every processed link at its measured size, not a partial count.
+      expect(await usage()).toMatchObject({ resources: admitted, bytes: 900 * admitted })
+      // Nothing more is admitted once the measured links fill the portal.
+      if (admitted) expect((await text(1)).status).toBe(413)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('links that never finish processing do not stop later links from being measured', async () => {
+  // Five links stay stuck, blocked or never processed; the ten after them are processed at 900
+  // bytes each. Every processed link is measured, and the ledger never reads as empty.
+  for (const stuck of ['BLOCKED', 'PENDING'] as const) {
+    const { box, management } = crawlingBox((id) =>
+      Number(id.split('-')[1]) <= 5 ? stuck : 'PROCESSED'
+    )
+    const { f, link, text, usage } = await crawlingPortal(management, 15_000, {
+      linkProvisionalBytes: 1_000,
+    })
+    try {
+      for (let n = 0; n < 15; n++) expect((await link(n)).status).toBe(200)
+      // A blocked link is settled and measured by the text it holds; one never processed keeps
+      // its provisional bytes.
+      const settled = stuck === 'BLOCKED' ? 15 * 900 : 5 * 1_000 + 10 * 900
+      expect(await usage()).toMatchObject({ resources: 15, bytes: settled })
+      // Adds that need room measure the waiting links in turn, the least recently tried first,
+      // so the stuck ones never hold the others back.
+      const first = await text(600)
+      const second = await text(600)
+      expect([first.status, second.status]).toEqual(
+        stuck === 'BLOCKED' ? [200, 200] : [413, 200],
+      )
+      const pending = f.stores.lifecycle.pendingMeasurements('a')
+      expect(pending.sort()).toEqual(
+        stuck === 'BLOCKED'
+          ? []
+          : ['crawled-1', 'crawled-2', 'crawled-3', 'crawled-4', 'crawled-5'],
+      )
+      const added = stuck === 'BLOCKED' ? 1_200 : 600
+      expect(await usage()).toMatchObject({ resources: 15 + added / 600, bytes: settled + added })
+      expect(box.reads.length).toBeGreaterThan(0)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('recording a measured link is an audited admission on every storage adapter', async () => {
+  for (const adapter of ['durable', 'local'] as const) {
+    let processed = false
+    const { management } = crawlingBox(
+      () => processed ? 'PROCESSED' : 'PENDING',
+      () => 'x'.repeat(10),
+    )
+    const { f, link, usage } = await crawlingPortal(
+      management,
+      1_000,
+      { linkProvisionalBytes: 500 },
+      adapter,
+    )
+    try {
+      expect((await link(1)).status, adapter).toBe(200)
+      expect((await link(2)).status, adapter).toBe(200)
+      processed = true
+      // No room is left for a third, so it measures the first two, records them and fits.
+      expect(await link(3), adapter).toEqual({ status: 200, body: { id: 'crawled-3' } })
+      expect(f.stores.lifecycle.pendingMeasurements('a'), adapter).toEqual(['crawled-3'])
+      expect(await usage(), adapter).toMatchObject({ resources: 3, bytes: 30 })
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('an add is not held up while another add waits on measuring links', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => release = resolve)
+  const { box, management } = crawlingBox(() => 'PROCESSED', () => 'x'.repeat(10))
+  Object.assign(management, {
+    resourceExtraction: async (_config: unknown, id: string) => {
+      box.reads.push(id)
+      await gate
+      return { status: 'PROCESSED', text: 'x'.repeat(10) }
+    },
+  })
+  const { f, link, text } = await crawlingPortal(management, 1_100, {
+    linkProvisionalBytes: 500,
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    expect((await link(1)).status).toBe(200)
+    expect((await link(2)).status).toBe(200)
+    // A third link needs the first two measured, and the platform is slow to answer.
+    const third = link(3)
+    while (box.reads.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+    // An add that fits is decided without waiting for those reads.
+    const fits = await Promise.race([
+      text(50),
+      new Promise<'waiting'>((resolve) => timer = setTimeout(() => resolve('waiting'), 2_000)),
+    ])
+    expect(fits).toMatchObject({ status: 200 })
+    release()
+    expect((await third).status).toBe(200)
+  } finally {
+    clearTimeout(timer)
+    release()
+    f.close()
+  }
+})
+
+Deno.test('links added while a portal had no byte limit hold their provisional bytes once one is set', async () => {
+  let processed = false
+  const { box, management } = crawlingBox(
+    () => processed ? 'PROCESSED' : 'PENDING',
+    () => 'x'.repeat(100),
+  )
+  const { f, link, text, usage } = await crawlingPortal(management, undefined, {
+    linkProvisionalBytes: 1_000,
+  })
+  try {
+    for (let n = 0; n < 5; n++) expect((await link(n)).status).toBe(200)
+    expect(box.reads).toEqual([])
+    // The limit judges the unprocessed backlog conservatively, not as empty.
+    f.stores.lifecycle.set('a', { status: 'active', limits: { maxBytes: 4_000 } })
+    expect(await text(10)).toEqual({
+      status: 413,
+      body: { error: 'limit_exceeded', limit: 'maxBytes', value: 5_010, max: 4_000 },
+    })
+    processed = true
+    expect((await text(10)).status).toBe(200)
+    expect(f.stores.lifecycle.pendingMeasurements('a')).toEqual([])
+    expect(await usage()).toMatchObject({ resources: 6, bytes: 510 })
   } finally {
     f.close()
   }

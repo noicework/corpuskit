@@ -53,6 +53,17 @@ const RESERVATION_TTL = 6 * 60 * MINUTE
 const MAX_IN_FLIGHT = 1_000
 /** Beyond this many sized resources the ledger stops sizing and reports bytes as unknown. */
 const MAX_SIZED = 50_000
+/**
+ * Crawled links admitted but not yet measured, at once, on a portal with a byte limit. Beyond
+ * this a link waits for earlier ones to be processed (503 `links_pending`).
+ */
+export const MAX_UNMEASURED_LINKS = 20
+/**
+ * How long after it was added a crawled link may stay unprocessed, or unreadable, before the
+ * ledger stops counting it as in flight. It keeps its provisional bytes until it is measured or
+ * removed.
+ */
+export const MEASURE_TIMEOUT = 60 * MINUTE
 
 /** Every portal the route guard can address; the same rule keys its other stored records. */
 const SlugSchema = KeyPortalSlugSchema
@@ -88,13 +99,29 @@ type StoredAsks = z.infer<typeof StoredAsksSchema>
 
 const RecentSchema = z.array(z.object({ at: Count, count: Count.positive() }).strict())
   .max(RESERVATION_TTL / MINUTE + 1)
+/** A crawled link the ledger has not measured yet. */
+const MeasuringSchema = z.object({
+  /** When it was added. */
+  at: Count,
+  /** Provisional bytes held against a byte limit until it is measured. */
+  reserved: Count,
+  /** When a measurement was last tried; the least recently tried are tried first. */
+  checked: Count.optional(),
+  /**
+   * Still unprocessed or unreadable `MEASURE_TIMEOUT` after it was added. It no longer counts as
+   * in flight, but keeps its provisional bytes until it is measured or removed.
+   */
+  unsized: z.literal(true).optional(),
+}).strict()
+type Measuring = z.infer<typeof MeasuringSchema>
 const StoredCapacitySchema = z.object({
   v: z.literal(1),
   /** Resource count the knowledge box last reported. */
   observed: Count,
   /**
    * Admitted adds whose write has not settled yet, with their source bytes. `measure` marks an
-   * add whose size is known only once the platform has processed it, such as a crawled link.
+   * add whose size is known only once the platform has processed it, such as a crawled link:
+   * its bytes are the provisional bytes it holds until then.
    */
   inflight: z.array(
     z.object({ token: TokenSchema, at: Count, bytes: Count, measure: z.literal(true).optional() })
@@ -109,10 +136,10 @@ const StoredCapacitySchema = z.object({
   /** Resources in the knowledge box whose size the ledger does not know. */
   unsized: Count,
   /**
-   * Resources this portal added whose size is measured once the platform has processed them,
-   * with when each was added. They count as no bytes until measured. Absent when empty.
+   * Resources this portal added whose size is measured once the platform has processed them.
+   * Each holds its provisional bytes until then. Absent when empty.
    */
-  measuring: z.record(ResourceIdSchema, Count).optional(),
+  measuring: z.record(ResourceIdSchema, MeasuringSchema).optional(),
 }).strict()
 type StoredCapacity = z.infer<typeof StoredCapacitySchema>
 type Recent = StoredCapacity['added']
@@ -121,17 +148,27 @@ export type AddAdmission =
   | { admitted: string | null }
   | { unavailable: true }
   | { limit: 'maxResources' | 'maxBytes'; value: number; max: number }
+  /** Too many crawled links are still waiting to be measured. */
+  | { unmeasured: true }
 /** A created resource without an id is one whose size the ledger cannot record. */
 export type AddOutcome = { created: false } | { created: true; id?: string }
 export interface AddInput {
   observed?: number
   bytes: number | null
   /**
-   * The add's size is unknown now but can be measured after it settles (a crawled link). A byte
-   * limit then admits it against the bytes already known, and the ledger measures it later.
+   * For an add whose size is unknown until the platform has processed it (a crawled link, whose
+   * `bytes` is null): the provisional bytes it holds against a byte limit until it is measured.
    */
-  measure?: boolean
+  provisional?: number
+  /** Measurements taken since the ledger was last written, recorded before the add is judged. */
+  measurements?: readonly Measurement[]
 }
+
+/**
+ * What a measurement found for a resource awaiting one: the bytes it holds, or that it is not
+ * processed yet or could not be read.
+ */
+export type Measurement = { id: string; bytes: number } | { id: string; pending: true }
 
 function dateFormatter(timeZone: string): Intl.DateTimeFormat {
   // Invalid configured timezones fail instead of resetting quotas in another timezone.
@@ -399,16 +436,59 @@ export class PortalLifecycleStore {
     if (observed > known) record.unsized += observed - known
   }
 
+  /**
+   * Source bytes the knowledge box holds as far as the ledger knows, counting each resource
+   * still awaiting measurement at its provisional bytes, or null when it cannot know.
+   */
   private bytesOf(record: StoredCapacity): number | null {
-    return record.unsized === 0 ? sum(Object.values(record.sized)) : null
+    if (record.unsized !== 0) return null
+    return sum(Object.values(record.sized)) +
+      sum(Object.values(record.measuring ?? {}).map((entry) => entry.reserved))
   }
 
-  /** Source bytes this portal knows the knowledge box holds, or null when it cannot know. */
-  bytesUsed(slug: string, observed: number): number | null {
+  /**
+   * Record measurements: a size replaces the provisional bytes. A resource that is still pending
+   * is marked tried, and stops counting as in flight once it has waited `MEASURE_TIMEOUT`.
+   */
+  private applyMeasurements(
+    record: StoredCapacity,
+    measurements: readonly Measurement[],
+    now: number,
+  ): void {
+    for (const measurement of measurements) {
+      const id = ResourceIdSchema.safeParse(measurement.id)
+      const measuring = record.measuring
+      // Only a resource still awaiting measurement; one removed meanwhile has nothing to record.
+      if (!id.success || !measuring || !Object.hasOwn(measuring, id.data)) continue
+      const entry = measuring[id.data]!
+      if ('pending' in measurement) {
+        const checked: Measuring = { ...entry, checked: now }
+        if (now - entry.at >= MEASURE_TIMEOUT) checked.unsized = true
+        measuring[id.data] = checked
+        continue
+      }
+      delete measuring[id.data]
+      record.sized[id.data] = Count.parse(measurement.bytes)
+    }
+    if (record.measuring && Object.keys(record.measuring).length === 0) delete record.measuring
+  }
+
+  /**
+   * Source bytes this portal knows the knowledge box holds, or null when it cannot know. A
+   * resource awaiting measurement counts at its provisional bytes, or at what `measurements`
+   * found. This is a read: nothing is recorded.
+   */
+  bytesUsed(
+    slug: string,
+    observed: number,
+    measurements: readonly Measurement[] = [],
+  ): number | null {
     Count.parse(observed)
     const record = this.readCapacity(slug)
     if (!record) return observed === 0 ? 0 : null
-    this.observe(record, observed, this.clock())
+    const now = this.clock()
+    this.observe(record, observed, now)
+    this.applyMeasurements(record, measurements, now)
     return this.bytesOf(record)
   }
 
@@ -417,13 +497,14 @@ export class PortalLifecycleStore {
    * requests cannot both take the last slot. `observed` is a fresh resource count; it is
    * required while a capacity limit is set and before the ledger has started. `bytes` is null
    * for an add whose size the portal cannot know, which a byte limit refuses as unavailable
-   * unless the add is one the ledger can `measure` once it has settled.
+   * unless the add holds `provisional` bytes until the ledger measures it. `measurements` are
+   * recorded first, in the same step, whether or not the add is admitted.
    */
   reserveAdd(slug: string, input: AddInput): AddAdmission {
     return this.admit(slug, input, true)
   }
 
-  /** The same decision as `reserveAdd`, without reserving or writing anything. */
+  /** The same decision as `reserveAdd`, without reserving or recording anything. */
   checkAdd(slug: string, input: AddInput): AddAdmission {
     return this.admit(slug, input, false)
   }
@@ -433,6 +514,9 @@ export class PortalLifecycleStore {
     timestamp(now)
     const bytes = input.bytes === null ? null : Count.parse(input.bytes)
     const observed = input.observed === undefined ? undefined : Count.parse(input.observed)
+    const provisional = bytes === null && input.provisional !== undefined
+      ? Count.parse(input.provisional)
+      : undefined
     const limits = this.get(slug).limits
     const limited = limits?.maxResources !== undefined || limits?.maxBytes !== undefined
     let record = this.readCapacity(slug)
@@ -450,6 +534,8 @@ export class PortalLifecycleStore {
         unsized: observed,
       }
     } else this.observe(record, observed, now)
+    // Recorded with the admission; a check only judges with them and records nothing.
+    if (input.measurements?.length) this.applyMeasurements(record, input.measurements, now)
     const key = this.key('capacity', slug)
     // A refusal still records the observation it made, so later decisions start from it.
     const refuse = (admission: AddAdmission) => {
@@ -464,18 +550,27 @@ export class PortalLifecycleStore {
       if (value > maxResources) return refuse({ limit: 'maxResources', value, max: maxResources })
     }
     const maxBytes = limits?.maxBytes
-    const measure = bytes === null && input.measure === true
     if (maxBytes !== undefined) {
       const used = this.bytesOf(record)
-      if (used === null || (bytes === null && !measure)) return refuse({ unavailable: true })
-      // An add to be measured brings at least one byte, so a full portal refuses it too.
-      const value = used + sum(record.inflight.map((entry) => entry.bytes)) + (bytes ?? 1)
+      const adding = bytes ?? provisional
+      if (used === null || adding === undefined) return refuse({ unavailable: true })
+      // A crawled link holds its provisional bytes from admission until it is measured.
+      const value = used + sum(record.inflight.map((entry) => entry.bytes)) + adding
       if (value > maxBytes) return refuse({ limit: 'maxBytes', value, max: maxBytes })
+      if (provisional !== undefined) {
+        const unmeasured = record.inflight.filter((entry) => entry.measure).length +
+          Object.values(record.measuring ?? {}).filter((entry) => !entry.unsized).length
+        if (unmeasured >= MAX_UNMEASURED_LINKS) return refuse({ unmeasured: true })
+      }
     }
     if (record.inflight.length >= MAX_IN_FLIGHT) return refuse({ unavailable: true })
     if (!reserve) return { admitted: null }
     const token = crypto.randomUUID().replaceAll('-', '')
-    record.inflight.push({ token, at: now, bytes: bytes ?? 0, ...(measure ? { measure } : {}) })
+    record.inflight.push(
+      provisional === undefined
+        ? { token, at: now, bytes: bytes ?? 0 }
+        : { token, at: now, bytes: provisional, measure: true },
+    )
     this.persist(key, record)
     return { admitted: token }
   }
@@ -498,7 +593,7 @@ export class PortalLifecycleStore {
       if (!entry || !id.success || tracked >= MAX_SIZED) {
         record.unsized++
       } else if (entry.measure) {
-        record.measuring = { ...record.measuring, [id.data]: now }
+        record.measuring = { ...record.measuring, [id.data]: { at: now, reserved: entry.bytes } }
       } else record.sized[id.data] = entry.bytes
       record.added = bump(record.added, now)
     }
@@ -522,24 +617,16 @@ export class PortalLifecycleStore {
     this.persist(this.key('capacity', slug), record)
   }
 
-  /** Resources awaiting measurement, oldest first, at most `limit` of them. */
-  pendingMeasurements(slug: string, limit = 10): string[] {
-    const measuring = this.readCapacity(slug)?.measuring ?? {}
-    return Object.entries(measuring).sort(([, a], [, b]) => a - b).slice(0, limit)
-      .map(([id]) => id)
-  }
-
   /**
-   * Settle a measurement: record the processed resource's size, or, when `bytes` is null, drop
-   * a resource the knowledge box no longer holds.
+   * Resources awaiting measurement, at most `limit` of them: those never tried first, then the
+   * least recently tried, so a resource that stays unprocessed never keeps others waiting.
    */
-  measured(slug: string, id: string, bytes: number | null): void {
-    const record = this.readCapacity(slug)
-    if (!record?.measuring || !Object.hasOwn(record.measuring, id)) return
-    delete record.measuring[id]
-    if (Object.keys(record.measuring).length === 0) delete record.measuring
-    if (bytes !== null) record.sized[id] = Count.parse(bytes)
-    this.persist(this.key('capacity', slug), record)
+  pendingMeasurements(slug: string, limit = MAX_UNMEASURED_LINKS): string[] {
+    const measuring = this.readCapacity(slug)?.measuring ?? {}
+    return Object.entries(measuring)
+      .sort(([, a], [, b]) => (a.checked ?? -1) - (b.checked ?? -1) || a.at - b.at)
+      .slice(0, limit)
+      .map(([id]) => id)
   }
 
   /** A different knowledge box starts a fresh ledger. */

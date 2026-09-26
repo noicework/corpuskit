@@ -21,6 +21,7 @@ import {
   capacityUsage,
   guardManagement,
   guardPortalWrites,
+  linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
   withRequestAuthority,
@@ -964,6 +965,11 @@ export interface BuildAppOptions {
   domainProvisioner?: PortalDomainProvisioner | null
   /** Host aliases each portal may have. Defaults to env MAX_PORTAL_ALIASES, or 5. */
   maxPortalAliases?: number
+  /**
+   * Bytes a crawled link holds against a byte limit until it is measured. Defaults to env
+   * LINK_PROVISIONAL_BYTES, or the 100 MB upload cap.
+   */
+  linkProvisionalBytes?: number
   /** Hostnames never registered as aliases. Defaults to `reservedHostnames(process.env)`. */
   reservedHostnames?: ReadonlySet<string>
   zone?: string
@@ -1043,7 +1049,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     ...opts,
     bindings: resetCapacityOnRebind(opts.bindings ?? new BindingStore({}), lifecycle),
     ...(rawManagement
-      ? { management: guardManagement(rawManagement, lifecycle, { platformRequests: true }) }
+      ? {
+        management: guardManagement(rawManagement, lifecycle, {
+          platformRequests: true,
+          linkProvisionalBytes: opts.linkProvisionalBytes ??
+            linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES),
+        }),
+      }
       : {}),
   }
   const { provider } = opts

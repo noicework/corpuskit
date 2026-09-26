@@ -57,6 +57,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   platformDomain: { noPortalRecords: 'deployment configuration' },
   domainProvisioner: { noPortalRecords: 'detaches the hostname on deletion; holds nothing' },
   maxPortalAliases: { noPortalRecords: 'deployment configuration' },
+  linkProvisionalBytes: { noPortalRecords: 'deployment configuration' },
   reservedHostnames: { noPortalRecords: 'deployment configuration' },
   zone: { noPortalRecords: 'deployment configuration' },
   breakGlass: { noPortalRecords: 'attempts and lockouts per client address' },

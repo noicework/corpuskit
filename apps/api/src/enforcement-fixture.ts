@@ -505,6 +505,7 @@ export function createEnforcementFixture(
       | 'lifecycle'
       | 'rateLimitAskPerMin'
       | 'operatorDeleteAfterDays'
+      | 'linkProvisionalBytes'
     >
     & {
       bindingKey?: string

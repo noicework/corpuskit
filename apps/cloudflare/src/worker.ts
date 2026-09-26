@@ -47,6 +47,7 @@ import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
 import { operatorDeleteAfterDays, operatorDeleteWarning } from '../../api/src/portal-erasure.ts'
 import type { BreakGlassService } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
+import { linkProvisionalBytes } from '../../api/src/lifecycle-management.ts'
 import { AragProvider } from '@research-portal/retrieval'
 import {
   type AuthConfig,
@@ -196,6 +197,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       enrichments: this.stores.enrichments,
       domainProvisioner: createCloudflareDomainProvisioner(bindings),
       maxPortalAliases: maxPortalAliases(bindings.MAX_PORTAL_ALIASES),
+      linkProvisionalBytes: linkProvisionalBytes(bindings.LINK_PROVISIONAL_BYTES),
       reservedHostnames: reservedHostnames(bindings),
       kgProposals: this.stores.kgProposals,
       branding: this.stores.branding,
