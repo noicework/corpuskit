@@ -92,9 +92,14 @@ const StoredCapacitySchema = z.object({
   v: z.literal(1),
   /** Resource count the knowledge box last reported. */
   observed: Count,
-  /** Admitted adds whose write has not settled yet, with their source bytes. */
-  inflight: z.array(z.object({ token: TokenSchema, at: Count, bytes: Count }).strict())
-    .max(MAX_IN_FLIGHT),
+  /**
+   * Admitted adds whose write has not settled yet, with their source bytes. `measure` marks an
+   * add whose size is known only once the platform has processed it, such as a crawled link.
+   */
+  inflight: z.array(
+    z.object({ token: TokenSchema, at: Count, bytes: Count, measure: z.literal(true).optional() })
+      .strict(),
+  ).max(MAX_IN_FLIGHT),
   /** Settled adds the reported count may not include yet, per minute. */
   added: RecentSchema,
   /** Deletions the reported count may still include, per minute. */
@@ -103,6 +108,11 @@ const StoredCapacitySchema = z.object({
   sized: z.record(ResourceIdSchema, Count),
   /** Resources in the knowledge box whose size the ledger does not know. */
   unsized: Count,
+  /**
+   * Resources this portal added whose size is measured once the platform has processed them,
+   * with when each was added. They count as no bytes until measured. Absent when empty.
+   */
+  measuring: z.record(ResourceIdSchema, Count).optional(),
 }).strict()
 type StoredCapacity = z.infer<typeof StoredCapacitySchema>
 type Recent = StoredCapacity['added']
@@ -116,6 +126,11 @@ export type AddOutcome = { created: false } | { created: true; id?: string }
 export interface AddInput {
   observed?: number
   bytes: number | null
+  /**
+   * The add's size is unknown now but can be measured after it settles (a crawled link). A byte
+   * limit then admits it against the bytes already known, and the ledger measures it later.
+   */
+  measure?: boolean
 }
 
 function dateFormatter(timeZone: string): Intl.DateTimeFormat {
@@ -380,7 +395,7 @@ export class PortalLifecycleStore {
     // The box holds no more resources than the ledger knows of, plus writes in flight and
     // deletions it has not counted yet; anything beyond that was added outside this portal.
     const known = Object.keys(record.sized).length + record.unsized + record.inflight.length +
-      total(record.removed)
+      Object.keys(record.measuring ?? {}).length + total(record.removed)
     if (observed > known) record.unsized += observed - known
   }
 
@@ -401,7 +416,8 @@ export class PortalLifecycleStore {
    * Admit one add against the current limits in a single synchronous step, so concurrent
    * requests cannot both take the last slot. `observed` is a fresh resource count; it is
    * required while a capacity limit is set and before the ledger has started. `bytes` is null
-   * for an add whose size the portal cannot know, which a byte limit refuses as unavailable.
+   * for an add whose size the portal cannot know, which a byte limit refuses as unavailable
+   * unless the add is one the ledger can `measure` once it has settled.
    */
   reserveAdd(slug: string, input: AddInput): AddAdmission {
     return this.admit(slug, input, true)
@@ -448,16 +464,18 @@ export class PortalLifecycleStore {
       if (value > maxResources) return refuse({ limit: 'maxResources', value, max: maxResources })
     }
     const maxBytes = limits?.maxBytes
+    const measure = bytes === null && input.measure === true
     if (maxBytes !== undefined) {
       const used = this.bytesOf(record)
-      if (used === null || bytes === null) return refuse({ unavailable: true })
-      const value = used + sum(record.inflight.map((entry) => entry.bytes)) + bytes
+      if (used === null || (bytes === null && !measure)) return refuse({ unavailable: true })
+      // An add to be measured brings at least one byte, so a full portal refuses it too.
+      const value = used + sum(record.inflight.map((entry) => entry.bytes)) + (bytes ?? 1)
       if (value > maxBytes) return refuse({ limit: 'maxBytes', value, max: maxBytes })
     }
     if (record.inflight.length >= MAX_IN_FLIGHT) return refuse({ unavailable: true })
     if (!reserve) return { admitted: null }
     const token = crypto.randomUUID().replaceAll('-', '')
-    record.inflight.push({ token, at: now, bytes: bytes ?? 0 })
+    record.inflight.push({ token, at: now, bytes: bytes ?? 0, ...(measure ? { measure } : {}) })
     this.persist(key, record)
     return { admitted: token }
   }
@@ -475,8 +493,12 @@ export class PortalLifecycleStore {
       const id = ResourceIdSchema.safeParse(outcome.id)
       // A write that settled after its reservation expired, or returned no usable id,
       // exists with an unknown size.
-      if (!entry || !id.success || Object.keys(record.sized).length >= MAX_SIZED) {
+      const tracked = Object.keys(record.sized).length +
+        Object.keys(record.measuring ?? {}).length
+      if (!entry || !id.success || tracked >= MAX_SIZED) {
         record.unsized++
+      } else if (entry.measure) {
+        record.measuring = { ...record.measuring, [id.data]: now }
       } else record.sized[id.data] = entry.bytes
       record.added = bump(record.added, now)
     }
@@ -492,8 +514,31 @@ export class PortalLifecycleStore {
     const parsed = ResourceIdSchema.safeParse(id)
     if (parsed.success && Object.hasOwn(record.sized, parsed.data)) {
       delete record.sized[parsed.data]
+    } else if (parsed.success && record.measuring && Object.hasOwn(record.measuring, parsed.data)) {
+      delete record.measuring[parsed.data]
+      if (Object.keys(record.measuring).length === 0) delete record.measuring
     } else if (record.unsized > 0) record.unsized--
     record.removed = bump(record.removed, now)
+    this.persist(this.key('capacity', slug), record)
+  }
+
+  /** Resources awaiting measurement, oldest first, at most `limit` of them. */
+  pendingMeasurements(slug: string, limit = 10): string[] {
+    const measuring = this.readCapacity(slug)?.measuring ?? {}
+    return Object.entries(measuring).sort(([, a], [, b]) => a - b).slice(0, limit)
+      .map(([id]) => id)
+  }
+
+  /**
+   * Settle a measurement: record the processed resource's size, or, when `bytes` is null, drop
+   * a resource the knowledge box no longer holds.
+   */
+  measured(slug: string, id: string, bytes: number | null): void {
+    const record = this.readCapacity(slug)
+    if (!record?.measuring || !Object.hasOwn(record.measuring, id)) return
+    delete record.measuring[id]
+    if (Object.keys(record.measuring).length === 0) delete record.measuring
+    if (bytes !== null) record.sized[id] = Count.parse(bytes)
     this.persist(this.key('capacity', slug), record)
   }
 

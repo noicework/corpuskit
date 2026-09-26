@@ -4,7 +4,7 @@ import {
   docPageToMarkdown,
   type TenantConfig,
 } from '@research-portal/core'
-import type { AragProvider } from '@research-portal/retrieval'
+import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import type { AddOutcome, PortalLifecycleStore } from './lifecycle-store.ts'
@@ -150,14 +150,66 @@ async function resources(management: AragProvider, config: TenantConfig): Promis
   }
 }
 
-/** Resource count from the knowledge box, and source bytes from the portal's ledger. */
+/** How many awaiting resources one check measures, so no add waits on a long list. */
+const MEASURE_PER_CHECK = 5
+
+/**
+ * Measure resources admitted before their size was known (crawled links) once the platform has
+ * processed them: what they hold is their extracted text, counted as text additions are. One
+ * that failed processing holds nothing, and one the knowledge box no longer has is missing
+ * (null). One still processing, or whose read fails, is left for a later check.
+ */
+async function measurePending(
+  management: AragProvider,
+  lifecycle: PortalLifecycleStore,
+  config: TenantConfig,
+): Promise<{ id: string; bytes: number | null }[]> {
+  const settled: { id: string; bytes: number | null }[] = []
+  for (const id of lifecycle.pendingMeasurements(config.slug, MEASURE_PER_CHECK)) {
+    let extraction: { status: string; text: string }
+    try {
+      extraction = await management.resourceExtraction(config, id)
+    } catch (error) {
+      if (error instanceof AragApiError && error.status === 404) settled.push({ id, bytes: null })
+      continue
+    }
+    if (extraction.status === 'PROCESSED') {
+      settled.push({ id, bytes: encoder.encode(extraction.text ?? '').byteLength })
+    } else if (extraction.status === 'ERROR') settled.push({ id, bytes: 0 })
+  }
+  return settled
+}
+
+/** Record the sizes of processed resources the ledger was waiting to measure. */
+export async function reconcileMeasurements(
+  management: AragProvider,
+  lifecycle: PortalLifecycleStore,
+  config: TenantConfig,
+): Promise<void> {
+  for (const { id, bytes } of await measurePending(management, lifecycle, config)) {
+    lifecycle.measured(config.slug, id, bytes)
+  }
+}
+
+/**
+ * Resource count from the knowledge box, and source bytes from the portal's ledger. A report is
+ * a read and writes nothing: resources still awaiting measurement are measured for the answer,
+ * and the ledger records them at its next admission.
+ */
 export async function capacityUsage(
   management: AragProvider,
   lifecycle: PortalLifecycleStore,
   config: TenantConfig,
 ): Promise<{ resources: number; bytes: number | null }> {
+  const measured = await measurePending(management, lifecycle, config)
   const observed = await resources(management, config)
-  return { resources: observed, bytes: lifecycle.bytesUsed(config.slug, observed) }
+  const bytes = lifecycle.bytesUsed(config.slug, observed)
+  return {
+    resources: observed,
+    bytes: bytes === null
+      ? null
+      : bytes + measured.reduce((sum, item) => sum + (item.bytes ?? 0), 0),
+  }
 }
 
 /**
@@ -171,11 +223,14 @@ async function admitAdd(
   config: TenantConfig,
   bytes: number | null,
   options: ManagementOptions,
+  measure = false,
 ): Promise<string | null> {
   return await serialCapacity(lifecycle, config.slug, async () => {
     assertManagementWritable(lifecycle, config.slug, options)
     const limits = lifecycle.get(config.slug).limits
     const limited = limits?.maxResources !== undefined || limits?.maxBytes !== undefined
+    // A byte limit decides on the bytes the ledger knows: measure what has since been processed.
+    if (limits?.maxBytes !== undefined) await reconcileMeasurements(management, lifecycle, config)
     let observed: number | undefined
     if (limited || !lifecycle.hasCapacityLedger(config.slug)) {
       try {
@@ -187,7 +242,7 @@ async function admitAdd(
     // The counter request yielded: recheck, then admit in one synchronous store step
     // immediately before the provider write begins.
     assertManagementWritable(lifecycle, config.slug, options)
-    const admission = lifecycle.reserveAdd(config.slug, { observed, bytes })
+    const admission = lifecycle.reserveAdd(config.slug, { observed, bytes, measure })
     if ('unavailable' in admission) throw unavailable()
     if ('limit' in admission) {
       throw new PortalLifecycleError(413, { error: 'limit_exceeded', ...admission })
@@ -248,8 +303,8 @@ function createdId(result: unknown): AddOutcome {
 
 /**
  * Source bytes an add sends: file bytes and text bytes. A link the platform crawls stores
- * content the portal never sees, so its size is unknown (null). An add whose size cannot be
- * read is refused rather than admitted unmeasured.
+ * content the portal has not seen yet, so its size is unknown (null) until the ledger measures
+ * the processed resource. An add whose size cannot be read is refused rather than admitted.
  */
 function addBytes(name: string, input: unknown): number | null {
   const value = input as { body?: unknown; bytes?: unknown } | undefined
@@ -311,14 +366,21 @@ export function guardManagement(
           }
           if (ADDS.has(name)) {
             const bytes = addBytes(name, args[0])
-            const token = await admitAdd(management, lifecycle, config, bytes, options)
+            const token = await admitAdd(
+              management,
+              lifecycle,
+              config,
+              bytes,
+              options,
+              name === 'createLink',
+            )
             return await settled(
               lifecycle,
               config.slug,
               token,
               () => value.call(receiver, config, ...args),
-              // A crawled link is recorded as a resource the ledger cannot size.
-              bytes === null ? () => ({ created: true }) : createdId,
+              // A crawled link is recorded by id, for the ledger to measure once processed.
+              createdId,
             )
           }
           const result = await value.call(receiver, config, ...args)

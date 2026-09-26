@@ -1099,6 +1099,58 @@ Deno.test('the add routes answer a full portal with the exact limit body and no 
   }
 })
 
+Deno.test('a link the platform crawls is added on a byte-limited portal and counted once processed', async () => {
+  const writes: string[] = []
+  let count = 0
+  let processed = false
+  const management = new AragProvider({ resolveBinding: () => undefined })
+  Object.assign(management, {
+    resourceCount: () => Promise.resolve(count),
+    createLink: () => {
+      writes.push('createLink')
+      return Promise.resolve({ id: 'crawled-1' })
+    },
+    resourceExtraction: () =>
+      Promise.resolve(
+        processed
+          ? { status: 'PROCESSED', text: 'x'.repeat(120) }
+          : { status: 'PENDING', text: '' },
+      ),
+  })
+  const f = createEnforcementFixture({ management })
+  try {
+    await f.stores.bindings.set('a', {
+      baseUrl: 'https://example.test/kb/a',
+      token: 'fixture',
+      kbId: 'a',
+    })
+    f.stores.lifecycle.set('a', { status: 'active', limits: { maxBytes: 1_000 } })
+    const curator = f.sessionFor('portal-admin')
+    const platform = f.sessionFor('platform-admin')
+    // The page cannot be fetched and cleaned here, so the platform crawls it. Its size is not
+    // known yet, and the add is admitted instead of refused as usage it cannot check.
+    const added = await f.requestAs(
+      curator,
+      '/api/admin/t/a/resources/link',
+      json('POST', { url: 'https://example.test/report.pdf' }),
+    )
+    expect(added.status).toBe(200)
+    expect(await added.json()).toEqual({ id: 'crawled-1' })
+    expect(writes).toEqual(['createLink'])
+    count = 1
+    const usage = async () =>
+      (await (await f.requestAs(platform, '/api/admin/t/a/usage')).json()) as {
+        resources: number
+        bytes: number | null
+      }
+    expect(await usage()).toMatchObject({ resources: 1, bytes: 0 })
+    processed = true
+    expect(await usage()).toMatchObject({ resources: 1, bytes: 120 })
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('a paused portal serves its logo and projects the same logo as its sign-in screen', async () => {
   const f = createEnforcementFixture()
   try {
