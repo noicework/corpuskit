@@ -10,6 +10,7 @@ import {
 } from '../../api/src/principal.ts'
 import type { PortalDurableObject } from './worker.ts'
 import {
+  maxPortalAliases,
   normaliseHostname,
   reservedHostnames,
   unknownHostsMode,
@@ -695,6 +696,8 @@ Deno.test('every deployment configuration reserves its routed hosts outside the 
       // Public deployments serve unknown hosts on purpose: they route no third-party hostnames,
       // and deny would refuse their own unlisted hosts. Turning it on here is deliberately blocked.
       expect(unknownHostsMode(vars.UNKNOWN_HOSTS), label).toBe('serve')
+      // The public showcase deployments use no aliases, so they offer none.
+      expect(maxPortalAliases(vars.MAX_PORTAL_ALIASES), label).toBe(0)
     }
   }
   expect(checked).toBeGreaterThan(5)
@@ -1516,6 +1519,77 @@ Deno.test('a platform administrator has no platform authority on an alias host',
     expect(me.portalAccess.effectiveRole).toBe('curator')
     expect((await as(host, alias, '/api/admin/t/marine/sources')).status).toBe(200)
     expect((await as(host, alias, '/api/admin/t/marine/members')).status).toBe(403)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('with MAX_PORTAL_ALIASES=0 every registration is refused as alias_limit', async () => {
+  const f = await fixture({ MAX_PORTAL_ALIASES: '0' })
+  try {
+    for (const slug of ['marine', 'grains']) {
+      const response = await f.operator(
+        `/api/admin/t/${slug}/aliases/research.example.org`,
+        body('PUT', { primary: true }),
+      )
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({ error: 'alias_limit' })
+      expect(response.headers.get('cache-control')).toBe('private, no-store')
+    }
+    expect(f.stores.tenants.aliasHostnames()).toEqual([])
+    expect(await f.object.resolveHostPortal('research.example.org')).toBeNull()
+    // Reading and removing still answer normally.
+    expect(await (await f.operator('/api/admin/t/marine/aliases')).json()).toEqual({
+      aliases: [],
+      hostname: 'marine.corpuskit.org',
+    })
+    expect(
+      (await f.operator('/api/admin/t/marine/aliases/research.example.org', body('DELETE')))
+        .status,
+    ).toBe(200)
+    const denied = f.events().filter((event) =>
+      event.action === 'portal.alias.set' && event.outcome === 'denied'
+    )
+    expect(denied.map((event) => JSON.parse(event.detail_json).code)).toEqual([
+      'alias_limit',
+      'alias_limit',
+    ])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a reserved host that still carries an alias record grants no platform authority', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture(
+    { ...issuer.env, RESERVED_HOSTNAMES: 'shared.example.org' },
+    (tenants) => expect(tenants.setAlias('marine', 'shared.example.org', false, 5).ok).toBe(true),
+  )
+  try {
+    expect(
+      f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true).create({
+        subjectKind: 'pending-email',
+        subjectId: 'reader@example.test',
+        source: 'external',
+        scope: { kind: 'platform' },
+        role: 'platform-admin',
+      }, { requestId: 'grant', actor: { kind: 'system' } }).ok,
+    ).toBe(true)
+    const host = 'shared.example.org'
+    // A reserved host follows the deployment's setting, so a host-less assertion signs in.
+    const cookie = cookieOf(
+      await f.request(host, `/auth/external?assertion=${await assertion(issuer.key)}`),
+    )!
+    const as = (path: string) => f.request(host, path, { headers: { cookie } })
+    const me = await (await as('/auth/me?portal=marine')).json()
+    expect(me.authenticated).toBe(true)
+    expect(me.effectiveRoles).toEqual({ portalRoles: [] })
+    expect(me.provenance).toEqual([])
+    expect(me.platformPermissions).toEqual([])
+    for (const path of ['/api/admin/overview', '/api/admin/t/marine/lifecycle']) {
+      expect((await as(path)).status, path).toBe(404)
+    }
+    expect((await as('/api/admin/t/marine/members')).status).toBe(403)
   } finally {
     f.close()
   }

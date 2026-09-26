@@ -58,6 +58,7 @@
   "vars": {
     "WORKER_NAME": "corpuskit-demo",
     "ENVIRONMENT": "demo",
-    "ARAG_DA_AGENT_MODEL": "openai-compatible"
+    "ARAG_DA_AGENT_MODEL": "openai-compatible",
+    "MAX_PORTAL_ALIASES": "0"
   }
 }
