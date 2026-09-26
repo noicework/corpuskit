@@ -1544,10 +1544,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
       char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127
     ) &&
     id !== '.' && id !== '..'
-  const scopedResource = async (config: TenantConfig, id: string) => {
+  /**
+   * The resource a route addresses, or null. A hidden resource (a draft) is null unless `hidden`
+   * is set, which only routes that manage content (and are guarded by content.write) pass: every
+   * reader-facing route answers 404 for a draft, whoever asks.
+   */
+  const scopedResource = async (config: TenantConfig, id: string, hidden = false) => {
     if (!resourceIdentifier(id)) return null
     try {
-      const resource = await provider.resource(config, id)
+      const resource = await provider.resource(config, id, hidden ? { hidden: true } : {})
       return resource?.id === id ? resource : null
     } catch {
       return null
@@ -1612,8 +1617,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       yield event
     }
   }
-  const adminResource = async (c: Context, config: TenantConfig, id: string) => {
-    if (!await scopedResource(config, id)) return false
+  const adminResource = async (c: Context, config: TenantConfig, id: string, hidden = false) => {
+    if (!await scopedResource(config, id, hidden)) return false
     const fieldId = c.req.query('fieldId')
     if (fieldId !== undefined) {
       if (!opts.management) return false
@@ -5146,7 +5151,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     assertAgentsEnabled(lifecycle, config.slug)
     const id = c.req.param('id')
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
-    if (!await adminResource(c, config, id)) return adminNotFound(c)
+    if (!await adminResource(c, config, id, true)) return adminNotFound(c)
     try {
       const agentId = new URL(c.req.url).searchParams.get('agentId')
       const agent = ENRICHMENT_AGENTS.find((a) => a.id === agentId) ?? DEFAULT_RESEARCH_ENRICHMENT
@@ -5154,7 +5159,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const enrichment = await generateEnrichment(management!, config, id, agent, proceed)
       proceed()
       generated.put(config.slug, id, enrichment)
-      const resource = await provider.resource(config, id)
+      const resource = await provider.resource(config, id, { hidden: true })
       return c.json({
         ok: true,
         enrichment,
@@ -5381,11 +5386,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!body?.resourceId || !body.html || body.html.length > 4 * 1024 * 1024) {
       return c.json({ error: 'invalid_request' }, 400)
     }
-    const [summary, full] = await Promise.all([
+    const [summary, published, full] = await Promise.all([
+      provider.resource(config, body.resourceId, { hidden: true }).catch(() => null),
       provider.resource(config, body.resourceId).catch(() => null),
       management!.resourceFull(config, body.resourceId).catch(() => null),
     ])
     if (!summary || !full) return c.json({ error: 'not_found' }, 404)
+    // A draft is found only when asked for hidden resources; its replacement stays a draft.
+    const draft = published === null
     const cleaned = extractMainContent(body.html)
     if (!cleaned) {
       return c.json({
@@ -5398,6 +5406,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       body: cleaned.body,
       format: 'MARKDOWN',
       originUrl: full.originUrl,
+      ...(draft ? { hidden: true } : {}),
     })
     // Carry the labels across, then retire the chrome-laden original.
     const classifications = [
@@ -5465,7 +5474,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailable) return unavailable
     const parsed = hiddenBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    if (!await adminResource(c, config, c.req.param('id'))) return adminNotFound(c)
+    // Managing content: a draft is found so it can be published.
+    if (!await adminResource(c, config, c.req.param('id'), true)) return adminNotFound(c)
     try {
       await hideResource(config, c.req.param('id'), parsed.data.hidden)
     } catch (err) {
