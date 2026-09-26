@@ -365,12 +365,15 @@ export function evaluateOperation(
 export function authoriseOperatorRoute(
   authority: RequestAuthority,
   declaration: Declaration | undefined,
+  aliasHost = false,
 ): void {
   if (authority.kind !== 'operator') return
   const state = stateFor(authority)
+  // The operator uses the platform hostname, never a portal's alias host.
   if (
-    !declaration || declaration.kind !== 'http' || !declaration.path.startsWith('/api/admin/') ||
-    declaration.operator !== true || declaration.scope === 'public'
+    aliasHost || !declaration || declaration.kind !== 'http' ||
+    !declaration.path.startsWith('/api/admin/') || declaration.operator !== true ||
+    declaration.scope === 'public'
   ) {
     const slug = /^\/api\/(?:admin\/)?t\/([A-Za-z0-9_-]{1,64})\//
       .exec(new URL(state.request.url).pathname)?.[1]

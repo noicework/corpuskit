@@ -890,6 +890,11 @@ export interface PortalRequestContext {
   requestId: string
   /** Populated only by ingress after signed operator envelope verification. */
   operator?: { id: string }
+  /**
+   * Populated only by ingress: the portal whose registered alias the request host is. Such a
+   * request reaches only that portal's routes (docs/HOSTING.md, "Portal host aliases").
+   */
+  hostPortal?: string
   session: import('./principal.ts').TrustedSessionFacts | null
   clientIp?: string
   coarseAdminEligible: boolean
@@ -1700,11 +1705,41 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const authority = await selectRequestAuthority(c.req.raw, context, authorityDependencies)
       context.actor = authority.actor
       try {
-        authoriseOperatorRoute(authority, classification(c).declaration)
+        authoriseOperatorRoute(
+          authority,
+          classification(c).declaration,
+          context.hostPortal !== undefined,
+        )
       } finally {
         if (context.denialAudited) markDenialAudited(c.req.raw)
       }
     }
+    await next()
+  })
+
+  // A request on a portal's alias host reaches only that portal's routes, the portal list
+  // (narrowed to that portal) and health. Every other route, including platform-scope
+  // administration and other portals, is not found. This is decided from the matched declaration
+  // before the guard reads any credential, so the answer says nothing about access.
+  const aliasHostAllows = (c: Context, slug: string): boolean => {
+    if (isInfrastructurePreflight(c)) return c.req.path.startsWith(`/api/admin/t/${slug}/`)
+    let declaration: Declaration
+    try {
+      declaration = matchedDeclaration(c)
+    } catch {
+      return false
+    }
+    if (declaration.scope === 'public') return true
+    if (declaration.aggregate) return declaration.path === '/api/tenants'
+    if (declaration.scope !== 'portal' || declaration.portalTarget !== 'url-slug') return false
+    return c.req.path.split('/')[declaration.path.split('/').indexOf(':slug')] === slug
+  }
+  registerInfrastructure(app, '*', async (c, next) => {
+    const { hostPortal } = requestContext(c.req.raw)
+    if (
+      hostPortal !== undefined && (c.req.path === '/api' || c.req.path.startsWith('/api/')) &&
+      !aliasHostAllows(c, hostPortal)
+    ) return c.json({ error: 'not_found' }, 404)
     await next()
   })
 
@@ -2055,7 +2090,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   })
 
   app.get(declaredRoute('GET', '/api/tenants'), async (c) => {
-    const targets = await requestAuthorisation(c).aggregate()
+    // On a portal's alias host the list holds that portal only.
+    const { hostPortal } = requestContext(c.req.raw)
+    const targets = await requestAuthorisation(c).aggregate(
+      hostPortal === undefined ? undefined : [hostPortal],
+    )
     return c.json(
       targets.flatMap((config) => {
         // A portal whose lifecycle cannot be read is left out on its own.

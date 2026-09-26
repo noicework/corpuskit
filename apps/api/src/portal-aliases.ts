@@ -14,6 +14,8 @@ import {
 
 export const DEFAULT_MAX_PORTAL_ALIASES = 5
 const MAX_PORTAL_ALIASES_CEILING = 100
+export const DEFAULT_ALIAS_CACHE_SECONDS = 30
+const ALIAS_CACHE_SECONDS_CEILING = 300
 
 /** An alias as the hosting routes return it. */
 export interface PortalAlias {
@@ -66,6 +68,11 @@ export function aliasHostname(value: unknown, platformDomain: string): string | 
 /** `MAX_PORTAL_ALIASES`: a whole number from 0 to 100, otherwise the default of 5. */
 export function maxPortalAliases(value: string | undefined): number {
   return wholeNumber(value, DEFAULT_MAX_PORTAL_ALIASES, MAX_PORTAL_ALIASES_CEILING)
+}
+
+/** `ALIAS_CACHE_SECONDS`: a whole number from 0 to 300, otherwise the default of 30. */
+export function aliasCacheSeconds(value: string | undefined): number {
+  return wholeNumber(value, DEFAULT_ALIAS_CACHE_SECONDS, ALIAS_CACHE_SECONDS_CEILING)
 }
 
 function wholeNumber(value: string | undefined, fallback: number, ceiling: number): number {
@@ -154,4 +161,99 @@ export function withoutAlias(
   hostname: string,
 ): StoredPortalAlias[] {
   return aliases.filter((alias) => !(alias.slug === slug && alias.hostname === hostname))
+}
+
+/** The registry lookup a request host resolves through. */
+export interface HostPortalLookup {
+  aliasPortal(hostname: string): string | undefined
+}
+
+/**
+ * The portal whose registered alias the request host is, or null. Platform hosts, local hosts
+ * and IP literals are never aliases and are not looked up.
+ */
+export function hostPortalFor(
+  tenants: HostPortalLookup,
+  hostname: string,
+  platformDomain: string,
+): string | null {
+  const candidate = aliasHostname(hostname, platformDomain)
+  return candidate ? tenants.aliasPortal(candidate) ?? null : null
+}
+
+/** How the edge answers a request that arrives on one portal's alias host. */
+export type AliasHostRoute =
+  | { kind: 'redirect'; location: string }
+  | { kind: 'auth' }
+  | { kind: 'api' }
+  | { kind: 'page' }
+  | { kind: 'not_found'; api: boolean }
+
+/** Platform pages (administration, marketing and documentation) belong to platform hosts only. */
+const PLATFORM_PAGE = /^\/(?:admin|about|docs|home)(?:[/.]|$)/
+
+/**
+ * Route a request on the alias host of `slug`. Only that portal is served: its pages and API,
+ * the sign-in routes, the SPA shell and static assets. Every other portal's pages and API, the
+ * platform-scope API and the platform pages are not found. The API checks each route against its
+ * permission declaration as well (see `aliasHostAllows`).
+ */
+export function aliasHostRoute(method: string, url: URL, slug: string): AliasHostRoute {
+  const path = url.pathname
+  if ((method === 'GET' || method === 'HEAD') && path === '/') {
+    return { kind: 'redirect', location: `/t/${slug}${url.search}` }
+  }
+  if (path.startsWith('/auth/')) return { kind: 'auth' }
+  if (path === '/api' || path.startsWith('/api/')) {
+    return aliasApiPath(path, slug) ? { kind: 'api' } : { kind: 'not_found', api: true }
+  }
+  if (path.startsWith('/t/')) {
+    return path.slice('/t/'.length).split('/')[0] === slug
+      ? { kind: 'page' }
+      : { kind: 'not_found', api: false }
+  }
+  if (PLATFORM_PAGE.test(path)) return { kind: 'not_found', api: false }
+  return { kind: 'page' }
+}
+
+/** API paths an alias host forwards: this portal's routes, the portal list and health. */
+export function aliasApiPath(path: string, slug: string): boolean {
+  return path === '/api/health' || path === '/api/tenants' ||
+    path === `/api/t/${slug}` || path.startsWith(`/api/t/${slug}/`) ||
+    path.startsWith(`/api/admin/t/${slug}/`)
+}
+
+/**
+ * Per-isolate memory of host lookups, positive and negative, each for at most its time to live.
+ * Bounded, so a stream of distinct hosts cannot grow it without limit.
+ */
+export class HostPortalCache {
+  private readonly entries = new Map<string, { slug: string | null; expiresAt: number }>()
+
+  constructor(private readonly maxEntries = 1000) {}
+
+  get(hostname: string, now: number): string | null | undefined {
+    const entry = this.entries.get(hostname)
+    if (!entry) return undefined
+    if (entry.expiresAt <= now) {
+      this.entries.delete(hostname)
+      return undefined
+    }
+    return entry.slug
+  }
+
+  set(hostname: string, slug: string | null, ttlSeconds: number, now: number): void {
+    this.entries.delete(hostname)
+    if (ttlSeconds <= 0) return
+    while (this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value
+      if (oldest === undefined) break
+      this.entries.delete(oldest)
+    }
+    this.entries.set(hostname, { slug, expiresAt: now + ttlSeconds * 1000 })
+  }
+
+  clear(): void {
+    this.entries.clear()
+  }
 }

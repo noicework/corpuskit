@@ -715,6 +715,9 @@ function workerHarness(
           consumeExternalAssertion() {
             return Promise.resolve(false)
           },
+          resolveHostPortal() {
+            return Promise.resolve(null)
+          },
           auditExternalFailure() {
             return Promise.resolve()
           },

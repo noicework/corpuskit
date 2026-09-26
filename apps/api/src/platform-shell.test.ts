@@ -56,3 +56,31 @@ Deno.test('shell configuration rejects injection before emitting HTML', () => {
   expect(() => platformShellResponse(new Response(shell), '"><script>alert(1)</script>'))
     .toThrow('Invalid PLATFORM_DOMAIN')
 })
+
+Deno.test('the shell names the alias host portal, and nothing on every other host', async () => {
+  const both = `${shell}<meta name="corpuskit-host-portal" content="__CORPUSKIT_HOST_PORTAL__">` +
+    '<p>__CORPUSKIT_HOST_PORTAL__ __CORPUSKIT_PLATFORM_DOMAIN__</p>'
+  const bytes = new TextEncoder().encode(both)
+  const chunked = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          // Every chunk size splits the markers somewhere.
+          for (let at = 0; at < bytes.length; at += 7) controller.enqueue(bytes.slice(at, at + 7))
+          controller.close()
+        },
+      }),
+      { headers: { 'content-type': 'text/html' } },
+    )
+  const expected = (portal: string) =>
+    both.replaceAll('__CORPUSKIT_HOST_PORTAL__', portal).replaceAll(
+      '__CORPUSKIT_PLATFORM_DOMAIN__',
+      'research.example.org',
+    )
+  expect(await platformShellResponse(chunked(), 'research.example.org', 'marine').text())
+    .toBe(expected('marine'))
+  for (const portal of [undefined, '', '"><script>', 'a b', 'x'.repeat(65)]) {
+    expect(await platformShellResponse(chunked(), 'research.example.org', portal).text(), portal)
+      .toBe(expected(''))
+  }
+})

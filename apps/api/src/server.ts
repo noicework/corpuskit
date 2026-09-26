@@ -185,4 +185,5 @@ Deno.serve({ port }, async (request, info) =>
   platformShellResponse(
     await ingress.handle(request, (clean) => app.fetch(clean), info),
     platformDomain,
+    ingress.hostPortal(request),
   ))

@@ -56,7 +56,14 @@ import {
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
-import { maxPortalAliases } from '../../api/src/portal-aliases.ts'
+import {
+  aliasCacheSeconds,
+  aliasHostname,
+  aliasHostRoute,
+  HostPortalCache,
+  hostPortalFor,
+  maxPortalAliases,
+} from '../../api/src/portal-aliases.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -78,6 +85,12 @@ const SECURITY_HEADERS: Record<string, string> = {
 export interface TrustedRequestContext {
   session?: TrustedSessionFacts | null
   clientIp?: string
+  /**
+   * The Worker's cached view of the portal whose alias the request host is. It only ever narrows
+   * a request: the object's own record decides first, and this applies when that record has no
+   * alias for the host (a lookup made just before the alias was removed).
+   */
+  hostPortal?: string
 }
 
 /**
@@ -238,17 +251,26 @@ export class PortalDurableObject extends DurableObject<Env> {
 
   async handleTrustedRequest(request: Request, context: TrustedRequestContext): Promise<Response> {
     try {
+      const hostPortal = this.hostPortal(request, context.hostPortal)
       const principal = await this.requestPrincipal(request, context)
-      if (principal.operator && !new URL(request.url).pathname.startsWith('/api/')) {
+      if (
+        principal.operator &&
+        (hostPortal !== undefined || !new URL(request.url).pathname.startsWith('/api/'))
+      ) {
         await this.auditDenial(request, 403, principal, 'operator_not_allowed')
         return json({ error: 'operator_not_allowed' }, 403)
       }
+      if (hostPortal !== undefined) principal.hostPortal = hostPortal
       if (new URL(request.url).pathname.startsWith('/__corpuskit/')) {
         return json({ error: 'not_found' }, 404)
       }
       if (new URL(request.url).pathname === '/auth/me' && request.method === 'GET') {
         const selections = new URL(request.url).searchParams.getAll('portal')
-        const selectedSlug = selections.length === 1 ? selections[0] : undefined
+        // An alias host answers for its own portal only.
+        const selectedSlug = selections.length === 1 &&
+            (hostPortal === undefined || selections[0] === hostPortal)
+          ? selections[0]
+          : undefined
         const slug = KeyPortalSlugSchema.safeParse(selectedSlug)
         let tenant: unknown
         try {
@@ -261,11 +283,17 @@ export class PortalDurableObject extends DurableObject<Env> {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
-        // Deployment-wide sign-in availability; hostname-specific settings do not change it.
+        // Deployment-wide sign-in availability. Only a portal's alias host changes it: there,
+        // Entra is offered only when the deployment's redirect URI is on that host.
+        const entra = entraOnHost(
+          this.bindings,
+          new URL(request.url).hostname,
+          hostPortal !== undefined,
+        )
         const signIn = {
-          clientId: this.bindings.ENTRA_CLIENT_ID,
-          clientSecret: this.bindings.ENTRA_CLIENT_SECRET,
-          tenantId: this.bindings.ENTRA_TENANT_ID,
+          clientId: entra ? this.bindings.ENTRA_CLIENT_ID : undefined,
+          clientSecret: entra ? this.bindings.ENTRA_CLIENT_SECRET : undefined,
+          tenantId: entra ? this.bindings.ENTRA_TENANT_ID : undefined,
           sessionSecret: this.bindings.SESSION_SECRET,
           externalLogin: externalLoginConfig(this.bindings),
         }
@@ -325,6 +353,31 @@ export class PortalDurableObject extends DurableObject<Env> {
       console.error('Trusted request failed')
       return json({ error: 'internal_error' }, 500)
     }
+  }
+
+  /**
+   * The portal whose registered alias the request host is: this object's own record, or else the
+   * Worker's cached view. Platform hosts are never aliases.
+   */
+  private hostPortal(request: Request, workerView?: string): string | undefined {
+    const recorded = hostPortalFor(
+      this.stores.tenants,
+      new URL(request.url).hostname,
+      getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+    )
+    if (recorded !== null) return recorded
+    return workerView !== undefined && KeyPortalSlugSchema.safeParse(workerView).success
+      ? workerView
+      : undefined
+  }
+
+  /** Worker RPC: the portal a normalised host is a registered alias of, or null. */
+  async resolveHostPortal(hostname: string): Promise<string | null> {
+    return hostPortalFor(
+      this.stores.tenants,
+      hostname,
+      getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+    )
   }
 
   /** Internal audit entry for Worker denials that never enter Hono. */
@@ -411,41 +464,22 @@ async function route(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: 'platform_domain_invalid' }, 503)
   }
+  // Only a registered alias host changes routing (see `routeAliasHost`); platform hosts are never
+  // looked up, and every other host keeps its behaviour.
+  const hostPortal = await cachedHostPortal(url.hostname, platformDomain, env)
+  const auth = authConfig(env, url.hostname, platformDomain, hostPortal !== null)
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
   const operator = await authenticateOperator(request, stringEnv(env))
   if (operator.kind !== 'absent') {
-    return forwardTrusted(request, env, authConfig(env, url.hostname, platformDomain), operator)
+    return forwardTrusted(request, env, auth, operator, hostPortal)
   }
+  if (hostPortal !== null) return routeAliasHost(request, env, auth, platformDomain, hostPortal)
   const hostnameLocation = platformHostnameLocation(request, platformDomain)
   if (hostnameLocation) {
     return new Response(null, { status: 308, headers: { location: hostnameLocation } })
   }
 
-  const auth = authConfig(env, url.hostname, platformDomain)
-
-  if (url.pathname === '/auth/me' && request.method === 'GET') {
-    return forwardTrusted(request, env, auth, operator)
-  }
-
-  if (url.pathname.startsWith('/auth/')) {
-    if (!sessionAuthConfigured(auth) && url.pathname !== '/auth/external') {
-      return json({ error: 'microsoft_sign_in_not_configured' }, 503)
-    }
-    const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
-    const response = (await handleAuthRequest(request, auth, {
-      consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
-      auditFailure: (reason) =>
-        stub.auditExternalFailure(reason, request.headers.get('cf-connecting-ip') ?? undefined),
-    })) ?? json({ error: 'not_found' }, 404)
-    if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
-      try {
-        await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
-      } catch {
-        return json({ error: 'audit_write_failed' }, 500)
-      }
-    }
-    return response
-  }
+  if (url.pathname.startsWith('/auth/')) return authRoute(request, env, auth, operator)
 
   const aliasLocation = tenantAliasLocation(request)
   if (aliasLocation) {
@@ -456,6 +490,78 @@ async function route(request: Request, env: Env): Promise<Response> {
     return forwardTrusted(request, env, auth, operator)
   }
 
+  return pageRoute(request, env, platformDomain)
+}
+
+/**
+ * A request on a portal's registered alias host. Only that portal is served: its pages and API,
+ * sign-in with a host-only session cookie, the SPA shell and static assets. The root redirects to
+ * the portal's home; other portals, platform-scope API routes and platform pages are not found.
+ * The Durable Object checks each API route again against its own record of the alias.
+ */
+async function routeAliasHost(
+  request: Request,
+  env: Env,
+  auth: Partial<AuthConfig>,
+  platformDomain: string,
+  slug: string,
+): Promise<Response> {
+  const decision = aliasHostRoute(request.method, new URL(request.url), slug)
+  switch (decision.kind) {
+    case 'redirect':
+      return new Response(null, { status: 308, headers: { location: decision.location } })
+    case 'not_found':
+      return decision.api ? json({ error: 'not_found' }, 404) : plain('Not found', 404)
+    case 'auth':
+      return authRoute(request, env, auth, { kind: 'absent' }, slug)
+    case 'api':
+      return forwardTrusted(request, env, auth, { kind: 'absent' }, slug)
+  }
+  const aliasLocation = tenantAliasLocation(request)
+  if (aliasLocation) {
+    return new Response(null, { status: 308, headers: { location: aliasLocation } })
+  }
+  return pageRoute(request, env, platformDomain, slug)
+}
+
+async function authRoute(
+  request: Request,
+  env: Env,
+  auth: Partial<AuthConfig>,
+  operator: OperatorAuthentication,
+  hostPortal: string | null = null,
+): Promise<Response> {
+  const url = new URL(request.url)
+  if (url.pathname === '/auth/me' && request.method === 'GET') {
+    return forwardTrusted(request, env, auth, operator, hostPortal)
+  }
+  if (!sessionAuthConfigured(auth) && url.pathname !== '/auth/external') {
+    return json({ error: 'microsoft_sign_in_not_configured' }, 503)
+  }
+  const stub = env.PORTAL.getByName(PORTAL_OBJECT_NAME)
+  const response = (await handleAuthRequest(request, auth, {
+    consume: (key, expiresAt) => stub.consumeExternalAssertion(key, expiresAt),
+    auditFailure: (reason) =>
+      stub.auditExternalFailure(reason, request.headers.get('cf-connecting-ip') ?? undefined),
+  })) ?? json({ error: 'not_found' }, 404)
+  if (url.pathname !== '/auth/external' && (response.status === 401 || response.status === 403)) {
+    try {
+      await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditDenial(request, response.status)
+    } catch {
+      return json({ error: 'audit_write_failed' }, 500)
+    }
+  }
+  return response
+}
+
+/** Pages, the SPA shell and static assets. */
+async function pageRoute(
+  request: Request,
+  env: Env,
+  platformDomain: string,
+  hostPortal?: string,
+): Promise<Response> {
+  const url = new URL(request.url)
   // The shared asset bundle is also bound to tenant hosts. Keep the marketing
   // documents (including raw asset aliases) on the platform apex only.
   if (
@@ -480,6 +586,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const asset = platformShellResponse(
     await env.ASSETS.fetch(marketingHomeRequest(request, platformDomain)),
     platformDomain,
+    hostPortal,
   )
   // Assets answers every unknown path with the app shell and a 200. Keep
   // the shell, so a person still sees the app's own not-found page, but say
@@ -487,6 +594,37 @@ async function route(request: Request, env: Env): Promise<Response> {
   const unknownShell = asset.status === 200 && !documentPath(url.pathname) &&
     (asset.headers.get('content-type') ?? '').includes('text/html')
   return secureAssetResponse(asset, unknownShell ? 404 : asset.status)
+}
+
+/** Per-isolate host lookups, positive and negative, each kept for `ALIAS_CACHE_SECONDS`. */
+const hostPortals = new HostPortalCache()
+
+/**
+ * The portal whose registered alias the request host is, or null. Only hosts that could be an
+ * alias are looked up. A failed lookup leaves the host as it was before aliases existed: the
+ * Durable Object still decides every API request from its own record of the alias.
+ */
+async function cachedHostPortal(
+  hostname: string,
+  platformDomain: string,
+  env: Env,
+): Promise<string | null> {
+  const candidate = aliasHostname(hostname, platformDomain)
+  if (!candidate) return null
+  const now = Date.now()
+  const cached = hostPortals.get(candidate, now)
+  if (cached !== undefined) return cached
+  let slug: string | null
+  try {
+    const found = await env.PORTAL.getByName(PORTAL_OBJECT_NAME, { locationHint: 'oc' })
+      .resolveHostPortal(candidate)
+    slug = typeof found === 'string' && KeyPortalSlugSchema.safeParse(found).success ? found : null
+  } catch {
+    console.error('Portal host lookup failed')
+    return null
+  }
+  hostPortals.set(candidate, slug, aliasCacheSeconds(stringEnv(env).ALIAS_CACHE_SECONDS), now)
+  return slug
 }
 
 function isPublicDocsPath(pathname: string): boolean {
@@ -588,6 +726,7 @@ async function forwardTrusted(
   env: Env,
   auth: Partial<AuthConfig>,
   operator: OperatorAuthentication,
+  hostPortal: string | null = null,
 ): Promise<Response> {
   // A malformed key is a deployment fault, not a data fault: say so on every portal request,
   // health included, rather than letting stored credentials look lost or be replaced.
@@ -627,19 +766,26 @@ async function forwardTrusted(
     return await stub.handleTrustedRequest(forwarded, {
       session: user?.sessionFacts ?? null,
       clientIp,
+      ...(hostPortal === null ? {} : { hostPortal }),
     })
   } catch {
     return json({ error: 'internal_error' }, 500)
   }
 }
 
-function authConfig(env: Env, hostname: string, platformDomain: string): Partial<AuthConfig> {
+function authConfig(
+  env: Env,
+  hostname: string,
+  platformDomain: string,
+  aliasHost = false,
+): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
+  const entra = entraOnHost(values, hostname, aliasHost)
   return {
-    clientId: values.ENTRA_CLIENT_ID,
-    clientSecret: values.ENTRA_CLIENT_SECRET,
-    tenantId: values.ENTRA_TENANT_ID,
+    clientId: entra ? values.ENTRA_CLIENT_ID : undefined,
+    clientSecret: entra ? values.ENTRA_CLIENT_SECRET : undefined,
+    tenantId: entra ? values.ENTRA_TENANT_ID : undefined,
     sessionSecret: values.SESSION_SECRET,
     redirectUri: onPlatformDomain
       ? values.ENTRA_REDIRECT_URI
@@ -649,6 +795,24 @@ function authConfig(env: Env, hostname: string, platformDomain: string): Partial
     adminEmails: values.ENTRA_ADMIN_EMAILS,
     externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
+  }
+}
+
+/**
+ * Entra sign-in is unchanged on every host except a portal's alias host, where it is offered only
+ * when the deployment's redirect URI is on that host. Without it, an alias host offers external
+ * sign-in alone and reads no Entra session. Alias hosts never share the platform cookie scope.
+ */
+function entraOnHost(
+  values: Record<string, string | undefined>,
+  hostname: string,
+  aliasHost: boolean,
+): boolean {
+  if (!aliasHost) return true
+  try {
+    return new URL(values.ENTRA_REDIRECT_URI ?? '').hostname === hostname.replace(/\.$/, '')
+  } catch {
+    return false
   }
 }
 
