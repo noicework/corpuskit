@@ -12,7 +12,11 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useLocation } from 'react-router-dom'
 import type { Permission, Scope } from '@research-portal/core'
-import { AuthorityController, registerAuthorityController } from '../api/access-lifecycle.ts'
+import {
+  AuthorityController,
+  FilePickerFocus,
+  registerAuthorityController,
+} from '../api/access-lifecycle.ts'
 import type { AuthSession } from '../api/auth.ts'
 
 interface AccessValue {
@@ -69,12 +73,31 @@ export function AccessProvider(
     return () => controller.invalidate('page scope changed', 'loading')
   }, [controller, refresh])
   useEffect(() => {
-    const revalidate = () => {
-      void refresh().catch(() => {})
+    // An observed return withdraws authority until the session is read again. The focus a
+    // native file picker hands back just before its change event is not a return: withdrawing
+    // then would drop the chosen file, so that one is re-checked without withdrawal.
+    const picker = new FilePickerFocus()
+    const activated = (event: Event) => {
+      if (event.target instanceof HTMLInputElement && event.target.type === 'file') {
+        picker.activated(Date.now())
+      }
     }
+    const blurred = () => picker.blurred(Date.now())
+    const revalidate = () => {
+      const check = picker.focused() === 'picker'
+        ? controller.revalidate(slug ?? undefined)
+        : refresh()
+      void check.catch(() => {})
+    }
+    document.addEventListener('click', activated, true)
+    globalThis.addEventListener('blur', blurred)
     globalThis.addEventListener('focus', revalidate)
-    return () => globalThis.removeEventListener('focus', revalidate)
-  }, [refresh])
+    return () => {
+      document.removeEventListener('click', activated, true)
+      globalThis.removeEventListener('blur', blurred)
+      globalThis.removeEventListener('focus', revalidate)
+    }
+  }, [controller, refresh, slug])
 
   const matches = context.slug === slug
   const status = controller.status === 'ready' && !matches ? 'loading' : controller.status

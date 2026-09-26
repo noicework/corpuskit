@@ -113,6 +113,21 @@ const ERROR_COPY: Record<string, string> = {
   internal_error: 'Something went wrong on our side - try again shortly.',
   invalid_request: 'The request was not valid - check the details and try again.',
   invalid_query: 'The request was not valid - check the details and try again.',
+  empty_file: 'That file is empty - choose another file.',
+  file_too_large: 'That file is too large to upload.',
+  not_found: 'That could not be found - refresh the page and try again.',
+}
+
+/**
+ * Copy for a failed administration response whose body names no known cause, such as an HTML
+ * error page from a proxy in front of the API. It says what happened instead of repeating a
+ * machine code or a bare "Request failed".
+ */
+export function adminFailureMessage(status: number): string {
+  if (status === 413) return ERROR_COPY.file_too_large!
+  if (status === 404) return ERROR_COPY.not_found!
+  if (status >= 500) return ERROR_COPY.internal_error!
+  return `The request failed (HTTP ${status}) - try again, or contact your administrator.`
 }
 
 function friendlyError(body: unknown, fallback: string): string {
@@ -496,13 +511,9 @@ export async function adminRequest<T>(
   const body: unknown = await res.json().catch(() => null)
   assertResponseCurrent(res)
   if (!res.ok) {
-    const fallback = body && typeof body === 'object' && 'message' in body &&
-        typeof body.message === 'string'
-      ? body.message
-      : body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
-      ? body.error
-      : 'Request failed'
-    throw new ApiError(res.status, friendlyError(body, fallback))
+    const error = new ApiError(res.status, friendlyError(body, adminFailureMessage(res.status)))
+    error.code = errorCode(body)
+    throw error
   }
   return body as T
 }

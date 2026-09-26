@@ -577,6 +577,68 @@ Deno.test('signed viewers emit no content administration requests; curator compl
   }
 })
 
+/**
+ * Choose a file the way a person does through a native picker: activating the input blurs the
+ * window, and choosing a file returns focus to it just before the input fires `change`.
+ */
+async function pickFile(page: Page, name: string) {
+  await page.evaluate((name) => {
+    const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+    input.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    dispatchEvent(new Event('blur'))
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['Marine research evidence'], name, { type: 'text/plain' }))
+    input.files = transfer.files
+    dispatchEvent(new Event('focus'))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  }, { args: [name] })
+}
+
+Deno.test('a file chosen through the native picker uploads while an ordinary return still withdraws access', async () => {
+  const browser = await launch()
+  const { management, calls } = contentManagement()
+  const server = startTestServer({ identity: { role: 'curator' }, management })
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+  const checks = () => server.requests.filter((r) => r.path === '/auth/me?portal=marine').length
+  const uploads = () =>
+    server.requests.filter((r) =>
+      r.method === 'POST' && r.path === '/api/admin/t/marine/resources/upload' && r.status === 200
+    ).length
+  try {
+    await assertCurrentBuild(page)
+    for (const name of ['first.txt', 'second.txt']) {
+      await click(page, 'Add content')
+      const before = checks()
+      await pickFile(page, name)
+      await textShown(page, `Uploaded "${name}"`)
+      // The picker's return is still checked against the server, without withdrawing access:
+      // once that check has answered, the panel that chose the file is still mounted.
+      const deadline = Date.now() + 5000
+      while (checks() <= before) {
+        if (Date.now() > deadline) throw new Error('The picker return was not checked')
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
+      expect(await page.evaluate(() => !!document.querySelector('input[type=file]'))).toBe(true)
+      await textShown(page, `Uploaded "${name}"`)
+      // A later ordinary return withdraws access until the session is read again, which
+      // remounts the page and closes the panel.
+      await page.evaluate(() => dispatchEvent(new Event('focus')))
+      await page.waitForFunction(() => !document.querySelector('input[type=file]'))
+    }
+    expect(uploads()).toBe(2)
+    expect(calls.filter((call) => call === 'uploadFile')).toHaveLength(2)
+    expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+  } catch (error) {
+    console.error(server.requests.slice(-12), await page.evaluate(() => document.body.innerText))
+    throw error
+  } finally {
+    await page.close()
+    await server.close()
+    await browser.close()
+  }
+})
+
 Deno.test('pending uploads and refreshes cannot publish after revocation', async () => {
   const browser = await launch()
   try {

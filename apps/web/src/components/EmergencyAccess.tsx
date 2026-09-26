@@ -44,6 +44,16 @@ interface PendingOperation {
 
 const AdminAccessContext = createContext<AdminAccess | null>(null)
 
+/** An administrative action refused in the browser because the account lacks its permission. */
+export class MissingPermissionError extends Error {
+  constructor() {
+    super(
+      'Your account does not have permission to make this change. Ask an administrator for access.',
+    )
+    this.name = 'MissingPermissionError'
+  }
+}
+
 export function useAdminAccess(): AdminAccess {
   const access = useContext(AdminAccessContext)
   if (!access) throw new Error('Admin access requires EmergencyAccessProvider.')
@@ -74,6 +84,9 @@ export function usePermissionAdminAccess(permission: Permission, scope: Scope) {
     runExplicit<T>(label: string, action: (access: AdminRequestAccess) => Promise<T>) {
       authority.controller.assertCurrent(context)
       if (allowed()) return action(permittedAccess)
+      // Without emergency access there is no other way to act: say why, rather than failing
+      // with a message about a mechanism the person never used.
+      if (!emergency.breakGlassEnabled) return Promise.reject(new MissingPermissionError())
       return emergency.runEmergency(label, action)
     },
   }
