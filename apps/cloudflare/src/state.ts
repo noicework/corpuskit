@@ -51,6 +51,16 @@ import {
   validateTenantPatch,
   withPlatformHostname,
 } from '../../api/src/tenants.ts'
+import {
+  aliasesFor,
+  type AliasWriteResult,
+  applyAlias,
+  type PortalAlias,
+  storedAliases,
+  type StoredPortalAlias,
+  withoutAlias,
+  withPrimaryAlias,
+} from '../../api/src/portal-aliases.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   appendAudit,
@@ -149,6 +159,10 @@ export class DurableState {
       return this.rbacDatabase.transactionSync(() => {
         this.mutating = true
         const result = work()
+        // A refused alias write changed nothing, so it records no mutation.
+        if (operation === 'tenants.setAlias' && (result as { ok?: boolean }).ok === false) {
+          return result
+        }
         const first = args[0] as
           | { tenant?: string; slug?: string; id?: string }
           | string
@@ -201,7 +215,9 @@ export class DurableState {
         )
         if (
           (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
-          (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update')
+          (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update') ||
+          (operation === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
+          (operation === 'tenants.removeAlias' && context.input.action === 'portal.alias.remove')
         ) {
           appendAudit(this.rbac.audit, createAuditEvent({ ...context.input, outcome: 'success' }))
         }
@@ -748,6 +764,8 @@ interface TenantState {
   disabled: string[]
   /** Slugs of removed portals; see `TenantStore`. */
   retired: string[]
+  /** Registered host aliases of every portal; see `portal-aliases.ts`. */
+  aliases: StoredPortalAlias[]
 }
 
 const DEFAULT_COLOURS = {
@@ -767,11 +785,14 @@ export class DurableTenantStore implements TenantStoreApi {
       overrides: Object.hasOwn(raw, 'overrides') ? tenantRecord(raw.overrides) : {},
       disabled: Array.isArray(raw.disabled) ? raw.disabled : [],
       retired: retiredSlugs(raw.retired),
+      aliases: storedAliases(raw.aliases),
     }
   }
 
   private save(value: TenantState): void {
-    this.state.put('tenants', value)
+    const { aliases, ...rest } = value
+    // Written only once a portal has an alias, so the stored row keeps its shape until then.
+    this.state.put('tenants', aliases.length ? { ...rest, aliases } : rest)
   }
 
   /**
@@ -789,8 +810,15 @@ export class DurableTenantStore implements TenantStoreApi {
     this.save(data)
   }
 
+  /** The portal's configuration, with its primary alias as the canonical hostname. */
   get(slug: string): TenantConfig | undefined {
     const data = this.load()
+    const config = this.own(data, slug)
+    return config && withPrimaryAlias(config, data.aliases)
+  }
+
+  /** The portal's configuration before its aliases apply. */
+  private own(data: TenantState, slug: string): TenantConfig | undefined {
     const custom = Object.hasOwn(data.custom, slug)
       ? TenantConfigSchema.parse(data.custom[slug])
       : undefined
@@ -809,6 +837,66 @@ export class DurableTenantStore implements TenantStoreApi {
   promptsFor(slug: string): { ask?: string; images?: boolean } {
     this.get(slug)
     return this.existingPatch(this.load(), slug).prompts ?? {}
+  }
+
+  /** See `TenantStore.assignedHostname`. */
+  assignedHostname(slug: string): string | undefined {
+    return this.own(this.load(), slug)?.hostname
+  }
+
+  portalAliases(slug: string): PortalAlias[] {
+    return aliasesFor(this.load().aliases, slug)
+  }
+
+  aliasPortal(hostname: string): string | undefined {
+    const data = this.load()
+    const alias = data.aliases.find((record) => record.hostname === hostname)
+    return alias && this.own(data, alias.slug) ? alias.slug : undefined
+  }
+
+  /**
+   * See `TenantStore.setAlias`. The load, the check and the save below run without an await, and
+   * the audited store wrapper runs them in one SQLite transaction, so two concurrent requests
+   * for one hostname cannot both pass the check.
+   */
+  setAlias(
+    slug: string,
+    hostname: string,
+    primary: boolean | undefined,
+    limit: number,
+  ): AliasWriteResult {
+    const data = this.load()
+    if (!this.own(data, slug)) return { ok: false, error: 'unknown_tenant' }
+    const result = applyAlias(data.aliases, {
+      slug,
+      hostname,
+      primary,
+      limit,
+      createdAt: new Date().toISOString(),
+      claimed: (candidate) => this.claimedByAnother(data, slug, candidate),
+    })
+    if (!result.ok) return result
+    this.save({ ...data, aliases: result.aliases })
+    return { ok: true, aliases: aliasesFor(result.aliases, slug) }
+  }
+
+  removeAlias(slug: string, hostname: string): PortalAlias[] {
+    const data = this.load()
+    const aliases = withoutAlias(data.aliases, slug, hostname)
+    if (aliases.length !== data.aliases.length) this.save({ ...data, aliases })
+    return aliasesFor(aliases, slug)
+  }
+
+  private claimedByAnother(data: TenantState, slug: string, hostname: string): boolean {
+    for (const other of new Set([...tenantSlugs(), ...Object.keys(data.custom)])) {
+      if (other === slug) continue
+      try {
+        if (this.own(data, other)?.hostname === hostname) return true
+      } catch {
+        // A corrupt portal serves nothing, so it claims nothing.
+      }
+    }
+    return false
   }
 
   private existingPatch(data: TenantState, slug: string): TenantPatch {
@@ -931,6 +1019,7 @@ export class DurableTenantStore implements TenantStoreApi {
     return config
   }
 
+  /** Remove a portal, retire its slug and drop its aliases in one write. */
   remove(slug: string): boolean {
     const data = this.load()
     if (!data.custom[slug] || tenantConfig(slug)) return false
@@ -938,6 +1027,7 @@ export class DurableTenantStore implements TenantStoreApi {
     delete data.overrides[slug]
     data.disabled = data.disabled.filter((item) => item !== slug)
     if (!data.retired.includes(slug)) data.retired.push(slug)
+    data.aliases = data.aliases.filter((alias) => alias.slug !== slug)
     this.save(data)
     return true
   }

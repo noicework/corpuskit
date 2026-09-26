@@ -32,6 +32,7 @@ import {
   seedOwned,
 } from '../../api/src/owned-store-fixture.ts'
 import { ACMD_DEMO_TENANT, initialiseAcmdDemo } from './acmd-demo.ts'
+import { checkAliasRegistry } from '../../api/src/alias-store-fixture.ts'
 
 Deno.test('Durable owned mutations roll back authoritative append and real SQL commit failures', async () => {
   for (const failure of ['append', 'commit']) {
@@ -1711,4 +1712,87 @@ Deno.test('Durable prefix listing refuses a prefix it cannot bound', () => {
   state.migrate()
   state.put('research-v2:portal:sessions:owner:1', { id: '1' })
   expect(() => state.list('')).toThrow('Unboundable storage prefix')
+})
+
+Deno.test('Durable portal host aliases persist with the registry and leave with their portal', () => {
+  const sql = new TestSqlStorage()
+  try {
+    new DurableState(sql, sql).migrate()
+    checkAliasRegistry(() => new DurableTenantStore(new DurableState(sql, sql), 'corpuskit.org'))
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable registry row gains an alias list only while a portal has aliases', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const store = new DurableTenantStore(state, 'corpuskit.org')
+    const slug = store.add({ name: 'Acme' }).slug
+    const keys = () => Object.keys(state.get<Record<string, unknown>>('tenants', {})).sort()
+    expect(keys()).toEqual(['custom', 'disabled', 'overrides', 'retired'])
+    expect(store.setAlias(slug, 'research.example.org', undefined, 5).ok).toBe(true)
+    expect(keys()).toEqual(['aliases', 'custom', 'disabled', 'overrides', 'retired'])
+    store.removeAlias(slug, 'research.example.org')
+    expect(keys()).toEqual(['custom', 'disabled', 'overrides', 'retired'])
+    // A malformed alias list fails closed rather than silently dropping aliases.
+    state.put('tenants', { custom: {}, aliases: [{ hostname: 'Bad Host', slug: 'marine' }] })
+    expect(() => store.get('marine')).toThrow('Invalid persisted portal configuration')
+    expect(() => store.aliasPortal('bad.example.org')).toThrow()
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable alias writes are audited in their transaction and a refusal records nothing', async () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const stores = durableStores(state, {})
+    const input = (action: 'portal.alias.set' | 'portal.alias.remove'): Omit<
+      AuditInput,
+      'outcome'
+    > => ({
+      requestId: `alias-${action}`,
+      actor: { kind: 'operator', id: 'operator:hosting' },
+      action,
+      scope: { kind: 'platform' },
+      target: { kind: 'portal', id: 'marine' },
+      detail: { permission: 'portal.create', aliasHostname: 'research.example.org' },
+    })
+    const signal = new AbortController().signal
+    const events = () => state.rbac.audit.read({ scope: { kind: 'platform' } })
+    await state.localMutations.run(
+      input('portal.alias.set'),
+      signal,
+      () => stores.tenants.setAlias('marine', 'research.example.org', true, 5),
+    )
+    expect(events().map((event) => [event.action, event.outcome]).sort()).toEqual([
+      ['local.mutation', 'success'],
+      ['portal.alias.set', 'success'],
+    ])
+    const before = events().length
+    const row = () => sql.database.prepare("SELECT value FROM state WHERE key = 'tenants'").all()
+    const stored = row()
+    const refused = await state.localMutations.run(
+      input('portal.alias.set'),
+      signal,
+      () => stores.tenants.setAlias('grains', 'research.example.org', true, 5),
+    )
+    expect(refused).toEqual({ ok: false, error: 'hostname_taken' })
+    expect(events().length).toBe(before)
+    expect(row()).toEqual(stored)
+    await state.localMutations.run(
+      input('portal.alias.remove'),
+      signal,
+      () => stores.tenants.removeAlias('marine', 'research.example.org'),
+    )
+    expect(events().filter((event) => event.action === 'portal.alias.remove')).toHaveLength(1)
+    expect(stores.tenants.aliasPortal('research.example.org')).toBeUndefined()
+  } finally {
+    sql.database.close()
+  }
 })

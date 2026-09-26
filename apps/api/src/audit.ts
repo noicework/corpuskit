@@ -184,6 +184,11 @@ const fields = {
     'session',
   ]),
   lifecycleStatus: member(['active', 'read_only', 'suspended']),
+  aliasHostname: (value: unknown): value is string =>
+    typeof value === 'string' &&
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+      .test(value),
+  aliasPrimary: flag,
   maxResources: count,
   maxBytes: count,
   asksPerDay: count,
@@ -239,6 +244,8 @@ const actionFields = {
     'note',
     'code',
   ],
+  'portal.alias.set': ['permission', 'aliasHostname', 'aliasPrimary', 'code'],
+  'portal.alias.remove': ['permission', 'aliasHostname', 'aliasPrimary', 'code'],
   'local.mutation': ['permission', 'operation', 'mutation', 'sessionOid', 'sessionTenantId'],
   'assignment.create': ['role', 'subjectKind'],
   'assignment.update': ['role', 'previousRole', 'subjectKind'],

@@ -123,6 +123,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['lifecycle', ['resetCapacity'], 'bindings.write', 'portal'],
     ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
+    ['tenants', ['setAlias', 'removeAlias'], 'portal.create', 'platform'],
     ['tenants', ['remove'], 'portal.delete', 'platform'],
     ['tenants', ['setDisabled', 'patch'], 'behaviour.write', 'portal'],
     ['tenants', ['patchBranding'], 'appearance.write', 'portal'],

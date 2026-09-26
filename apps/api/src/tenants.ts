@@ -9,6 +9,16 @@ import {
 } from '@research-portal/core'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { type OwnedMutationBoundary, ownedWrite } from './stores.ts'
+import {
+  aliasesFor,
+  type AliasWriteResult,
+  applyAlias,
+  type PortalAlias,
+  storedAliases,
+  type StoredPortalAlias,
+  withoutAlias,
+  withPrimaryAlias,
+} from './portal-aliases.ts'
 
 // ---------------------------------------------------------------------------
 // Seed tenant configs - the single source of truth for tenant-driven theming
@@ -255,6 +265,8 @@ export class TenantStore {
    * portal never takes one of these and cannot inherit what the removed portal left behind.
    */
   private retired = new Set<string>()
+  /** Registered host aliases of every portal; see `portal-aliases.ts`. */
+  private aliasRecords: StoredPortalAlias[] = []
   private readonly path: string
   private readonly platformDomain: string
 
@@ -263,6 +275,7 @@ export class TenantStore {
     overrides: Record<string, unknown>
     disabled: string[]
     retired: string[]
+    aliases?: StoredPortalAlias[]
   }
 
   constructor(
@@ -285,10 +298,19 @@ export class TenantStore {
       this.disabled = new Set(raw.disabled.filter((s): s is string => typeof s === 'string'))
     }
     this.retired = new Set(retiredSlugs(raw.retired))
+    // Only the v2 format has aliases; in v1 an `aliases` key would be a portal's slug.
+    if (Object.hasOwn(raw, 'custom')) this.aliasRecords = storedAliases(raw.aliases)
     this.committed = structuredClone(this.snapshot())
   }
 
+  /** The portal's configuration, with its primary alias as the canonical hostname. */
   get(slug: string): TenantConfig | undefined {
+    const config = this.own(slug)
+    return config && withPrimaryAlias(config, this.aliasRecords)
+  }
+
+  /** The portal's configuration before its aliases apply. */
+  private own(slug: string): TenantConfig | undefined {
     // Validate even a shadowed custom record: corruption cannot reveal a seed.
     const custom = Object.hasOwn(this.custom, slug)
       ? TenantConfigSchema.parse(this.custom[slug])
@@ -303,6 +325,73 @@ export class TenantStore {
       TenantConfigSchema.parse({ ...base, ...configPatch }),
       this.platformDomain,
     )
+  }
+
+  /**
+   * The hostname the portal has of its own (attached through hostname automation, or a showcase
+   * hostname), whatever its aliases. Portal removal detaches only this one.
+   */
+  assignedHostname(slug: string): string | undefined {
+    return this.own(slug)?.hostname
+  }
+
+  /** The portal's registered host aliases, oldest first. */
+  portalAliases(slug: string): PortalAlias[] {
+    return aliasesFor(this.aliasRecords, slug)
+  }
+
+  /** The existing portal a normalised hostname is registered to, if any. */
+  aliasPortal(hostname: string): string | undefined {
+    const alias = this.aliasRecords.find((record) => record.hostname === hostname)
+    return alias && this.own(alias.slug) ? alias.slug : undefined
+  }
+
+  /**
+   * Register or update one of the portal's aliases (a normalised hostname). The check that the
+   * hostname is free and the write happen in this one synchronous call.
+   */
+  setAlias(
+    slug: string,
+    hostname: string,
+    primary: boolean | undefined,
+    limit: number,
+  ): AliasWriteResult {
+    if (!this.get(slug)) return { ok: false, error: 'unknown_tenant' }
+    const result = applyAlias(this.aliasRecords, {
+      slug,
+      hostname,
+      primary,
+      limit,
+      createdAt: new Date().toISOString(),
+      claimed: (candidate) => this.claimedByAnother(slug, candidate),
+    })
+    if (!result.ok) return result
+    this.aliasRecords = result.aliases
+    this.persist()
+    return { ok: true, aliases: this.portalAliases(slug) }
+  }
+
+  /** Remove one of the portal's aliases. Removing a hostname it does not have changes nothing. */
+  removeAlias(slug: string, hostname: string): PortalAlias[] {
+    const next = withoutAlias(this.aliasRecords, slug, hostname)
+    if (next.length !== this.aliasRecords.length) {
+      this.aliasRecords = next
+      this.persist()
+    }
+    return this.portalAliases(slug)
+  }
+
+  /** Whether another portal uses the hostname as its own. */
+  private claimedByAnother(slug: string, hostname: string): boolean {
+    for (const other of new Set([...Object.keys(tenantsBySlug), ...Object.keys(this.custom)])) {
+      if (other === slug) continue
+      try {
+        if (this.own(other)?.hostname === hostname) return true
+      } catch {
+        // A corrupt portal serves nothing, so it claims nothing.
+      }
+    }
+    return false
   }
 
   /** App-side settings that never reach the public config payload. */
@@ -430,13 +519,14 @@ export class TenantStore {
     return config
   }
 
-  /** Remove a portal created in the app and retire its slug in the same write. */
+  /** Remove a portal created in the app, retire its slug and drop its aliases in the same write. */
   remove(slug: string): boolean {
     if (!this.isCustom(slug)) return false
     delete this.custom[slug]
     delete this.overrides[slug]
     this.disabled.delete(slug)
     this.retired.add(slug)
+    this.aliasRecords = this.aliasRecords.filter((alias) => alias.slug !== slug)
     this.persist()
     return true
   }
@@ -451,6 +541,7 @@ export class TenantStore {
       this.overrides = before.overrides
       this.disabled = new Set(before.disabled)
       this.retired = new Set(before.retired)
+      this.aliasRecords = before.aliases ?? []
       throw error
     }
   }
@@ -461,6 +552,8 @@ export class TenantStore {
       overrides: this.overrides,
       disabled: [...this.disabled],
       retired: [...this.retired],
+      // Written only once a portal has an alias, so existing files keep their shape.
+      ...(this.aliasRecords.length ? { aliases: this.aliasRecords } : {}),
     }
   }
 }

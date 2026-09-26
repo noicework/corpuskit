@@ -99,7 +99,10 @@ export function localOwnedStores(
       )
       if (
         (operation.name === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
-        (operation.name === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update')
+        (operation.name === 'lifecycle.set' &&
+          context.input.action === 'portal.lifecycle.update') ||
+        (operation.name === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
+        (operation.name === 'tenants.removeAlias' && context.input.action === 'portal.alias.remove')
       ) {
         appendAudit(audit, createAuditEvent({ ...context.input, outcome: 'success' }))
       }
