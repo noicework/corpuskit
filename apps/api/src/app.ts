@@ -3760,7 +3760,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!evidence) return adminNotFound(c)
     const parsed = evidencePatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
+    // Judging kept evidence acts on the researcher's own row and reads nothing from the document,
+    // so it still works once the document is unpublished or gone.
     const ok = investigations.updateEvidence(
       config.slug,
       owner,
@@ -3782,7 +3783,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const evidence = investigation?.evidence.find((item) => item.id === c.req.param('eid'))
       if (!evidence) return adminNotFound(c)
       if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
-      if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
+      // Removing kept evidence reads nothing from the document, so it works whatever became of it.
       investigations.removeEvidence(config.slug, owner, c.req.param('id'), c.req.param('eid'))
       return c.json({ ok: true })
     },
@@ -3825,9 +3826,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           for (const id of ids as string[]) {
             if (key.startsWith('resource')) resources.add(id)
             else if (key.startsWith('evidence')) {
-              const evidence = investigation.evidence.find((item) => item.id === id)
-              if (!evidence) return adminNotFound(c)
-              resources.add(evidence.resourceId)
+              // Evidence already in this investigation was read when it was kept; the document
+              // behind it is not read again, so an unpublished one does not block the save.
+              if (!investigation.evidence.some((item) => item.id === id)) return adminNotFound(c)
             } else if (key.startsWith('artefact')) {
               if (!investigation.artefacts.some((item) => item.id === id)) return adminNotFound(c)
             } else if (id !== investigation.id) return adminNotFound(c)
@@ -3867,17 +3868,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // Evidence the researcher judged not relevant is left out; what is left
       // carries the researcher's verdict, tags and note so the synthesis works
       // from their judgement, not just the raw passage.
-      const kept = investigation.evidence
-        .filter((item) => item.verdict !== 'not-relevant')
-        .slice(0, 40)
-      if (kept.length === 0) {
+      const relevant = investigation.evidence.filter((item) => item.verdict !== 'not-relevant')
+      if (relevant.length === 0) {
         return c.json({
           error: 'no_evidence',
           message: 'Every saved passage is marked not relevant - judge or add evidence first.',
         }, 400)
       }
-      for (const id of new Set(kept.map((item) => item.resourceId))) {
-        if (!await adminResource(c, config, id)) return adminNotFound(c)
+      // Evidence from a document readers can no longer see (unpublished, or gone) is left out,
+      // so a draft's text never enters a synthesis; the rest is synthesised as usual.
+      const readable = new Set<string>()
+      for (const id of new Set(relevant.map((item) => item.resourceId))) {
+        if (await adminResource(c, config, id)) readable.add(id)
+      }
+      const kept = relevant.filter((item) => readable.has(item.resourceId)).slice(0, 40)
+      if (kept.length === 0) {
+        return c.json({
+          error: 'no_evidence',
+          message:
+            'The documents behind the kept passages are no longer available - add evidence first.',
+        }, 400)
       }
       const numbered = kept.map((item, index) => {
         const head = [
@@ -5403,14 +5413,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!body?.resourceId || !body.html || body.html.length > 4 * 1024 * 1024) {
       return c.json({ error: 'invalid_request' }, 400)
     }
-    const [summary, published, full] = await Promise.all([
-      provider.resource(config, body.resourceId, { hidden: true }).catch(() => null),
-      provider.resource(config, body.resourceId).catch(() => null),
-      management!.resourceFull(config, body.resourceId).catch(() => null),
-    ])
+    // One read, hidden resources included, says what the resource is and whether it is a draft.
+    // If it fails, nothing is changed: a guess could publish a draft or hide a published one.
+    let summary: Awaited<ReturnType<typeof provider.resource>>
+    try {
+      summary = await provider.resource(config, body.resourceId, { hidden: true })
+    } catch {
+      return c.json({
+        error: 'upstream_unavailable',
+        message: 'The document could not be read, so it was left unchanged. Try again shortly.',
+      }, 502)
+    }
+    const full = await management!.resourceFull(config, body.resourceId).catch(() => null)
     if (!summary || !full) return c.json({ error: 'not_found' }, 404)
-    // A draft is found only when asked for hidden resources; its replacement stays a draft.
-    const draft = published === null
+    // Its replacement keeps its visibility: a draft stays a draft.
+    const draft = summary.hidden === true
     const cleaned = extractMainContent(body.html)
     if (!cleaned) {
       return c.json({

@@ -1279,6 +1279,7 @@ export class AragProvider implements RetrievalProvider {
       // pmcid field of its own.
       ...(raw.origin?.url ? { originUrl: raw.origin.url } : {}),
       enriched: false,
+      ...((raw as { hidden?: boolean }).hidden === true ? { hidden: true } : {}),
     })
   }
 

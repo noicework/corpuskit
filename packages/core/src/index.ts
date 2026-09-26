@@ -569,6 +569,11 @@ export const ResourceSummarySchema = z.object({
    * title). Merchandising never replaces a curated title with a generated one.
    */
   titleCurated: z.boolean().optional(),
+  /**
+   * Set only on a hidden resource (a draft), which only callers managing content are given, so
+   * a route that recreates the resource keeps it hidden.
+   */
+  hidden: z.literal(true).optional(),
 })
 
 // ---------------------------------------------------------------------------

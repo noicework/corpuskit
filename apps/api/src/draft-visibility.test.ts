@@ -11,7 +11,11 @@ const PUBLISHED = 'Published report'
  * `/catalog` returns hidden resources unless the request says `hidden=false`, and a single
  * resource read returns a resource whatever its visibility, with `hidden` among its basic fields.
  */
-function draftBox() {
+function draftBox(
+  /** Answer the nth summary read of a resource with a 503, as a platform under strain can. */
+  failRead: (id: string, nth: number) => boolean = () => false,
+) {
+  const summaryReads = new Map<string, number>()
   const resources: Record<string, { title: string; hidden: boolean; created: string }> = {
     'pub-1': { title: PUBLISHED, hidden: false, created: '2026-09-01T00:00:00Z' },
     'draft-1': { title: DRAFT, hidden: true, created: '2026-09-02T00:00:00Z' },
@@ -81,6 +85,11 @@ function draftBox() {
         const body = JSON.parse(String(init.body)) as { hidden?: boolean }
         if (body.hidden !== undefined) resources[id]!.hidden = body.hidden
         return reply({})
+      }
+      if (url.search === '?show=basic&show=extra&show=origin') {
+        const nth = (summaryReads.get(id) ?? 0) + 1
+        summaryReads.set(id, nth)
+        if (failRead(id, nth)) return reply({ detail: 'upstream timeout' }, 503)
       }
       return reply(raw(id))
     }
@@ -196,6 +205,133 @@ Deno.test('reingesting a draft keeps it a draft, and a published document stays 
     // Viewers see the reingested published document, never the draft.
     const list = await (await f.requestAs(f.sessionFor('viewer'), '/api/t/a/resources')).json()
     expect(titles(list)).toEqual([PUBLISHED])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('reingest takes visibility from one read of the document, and changes nothing when it fails', async () => {
+  const paragraph = '<p>' + 'The findings are set out here in full detail. '.repeat(12) + '</p>'
+  const html = `<html><body><main><h1>Findings</h1>${paragraph.repeat(3)}</main></body></html>`
+  const reingest = (f: ReturnType<typeof createEnforcementFixture>, id: string) =>
+    f.requestAs(f.sessionFor('portal-admin'), '/api/admin/t/a/reingest', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resourceId: id, html }),
+    })
+  // A failure on a second read of a published document no longer makes it a draft.
+  {
+    const { provider, resources } = draftBox((id, nth) => id === 'pub-1' && nth === 2)
+    const f = createEnforcementFixture({ provider, management: provider })
+    try {
+      const response = await reingest(f, 'pub-1')
+      expect(response.status).toBe(200)
+      const { newId } = await response.json() as { newId: string }
+      expect(resources[newId]?.hidden).toBe(false)
+      const list = await (await f.requestAs(f.sessionFor('viewer'), '/api/t/a/resources')).json()
+      expect(titles(list)).toEqual([PUBLISHED])
+    } finally {
+      f.close()
+    }
+  }
+  // When the one read fails, the answer says so and the document is left as it was.
+  {
+    const { provider, resources } = draftBox((id, nth) => id === 'pub-1' && nth === 1)
+    const f = createEnforcementFixture({ provider, management: provider })
+    try {
+      const response = await reingest(f, 'pub-1')
+      expect(response.status).toBe(502)
+      expect((await response.json()).error).toBe('upstream_unavailable')
+      expect(Object.keys(resources).sort()).toEqual(['draft-1', 'pub-1'])
+      expect(resources['pub-1']!.hidden).toBe(false)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('an investigation citing a document that is unpublished keeps working without it', async () => {
+  const { provider } = draftBox()
+  const prompts: string[] = []
+  Object.assign(provider, {
+    askStructured: (_config: unknown, _schema: unknown, prompt: string) => {
+      prompts.push(prompt)
+      return Promise.resolve({
+        object: { summary: 'The findings hold [1].', supported: [], contested: [], gaps: [] },
+      })
+    },
+  })
+  const f = createEnforcementFixture({ provider, management: provider })
+  const manager = f.sessionFor('portal-admin')
+  const analyst = f.sessionFor('analyst')
+  const send = async (
+    session: typeof analyst,
+    method: string,
+    path: string,
+    body?: unknown,
+  ) => {
+    const response = await f.requestAs(session, path, {
+      method,
+      ...(body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    })
+    return { status: response.status, body: await response.json() }
+  }
+  const visibility = (id: string, hidden: boolean) =>
+    send(manager, 'POST', `/api/admin/t/a/resources/${id}/hidden`, { hidden })
+  try {
+    // Both documents are published while the analyst keeps a passage from each.
+    expect((await visibility('draft-1', false)).status).toBe(200)
+    const created = await send(analyst, 'POST', '/api/t/a/investigations', { name: 'Stocks' })
+    expect(created.status).toBe(200)
+    const base = `/api/t/a/investigations/${created.body.id}`
+    const keep = async (resourceId: string, title: string, passage: string) => {
+      const kept = await send(analyst, 'POST', `${base}/evidence`, {
+        resourceId,
+        resourceTitle: title,
+        passage,
+      })
+      expect(kept.status, resourceId).toBe(200)
+      return kept.body.id as string
+    }
+    const fromReport = await keep('pub-1', PUBLISHED, 'The report sets the catch at 40 tonnes.')
+    const fromFindings = await keep('draft-1', DRAFT, 'The findings put stocks at a low.')
+    // The report is unpublished.
+    expect((await visibility('pub-1', true)).status).toBe(200)
+    // Its evidence can still be judged, saved in an artefact, and synthesis goes on without it.
+    expect(
+      (await send(analyst, 'PATCH', `${base}/evidence/${fromReport}`, { verdict: 'supports' }))
+        .status,
+    ).toBe(200)
+    const artefact = await send(analyst, 'POST', `${base}/artefacts`, {
+      kind: 'note',
+      title: 'Passages',
+      data: { evidenceIds: [fromReport, fromFindings] },
+    })
+    expect(artefact.status).toBe(200)
+    const synthesis = await send(analyst, 'POST', `${base}/synthesise`)
+    expect(synthesis.status).toBe(200)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('The findings put stocks at a low.')
+    expect(prompts[0]).not.toContain('40 tonnes')
+    expect(JSON.stringify(synthesis.body.artefact.data.references)).not.toContain('pub-1')
+    // A direct reference to the unpublished document still reads as unknown, so an artefact
+    // cannot be used to tell whether it exists.
+    const direct = await send(analyst, 'POST', `${base}/artefacts`, {
+      kind: 'note',
+      title: 'Direct',
+      data: { resourceId: 'pub-1' },
+    })
+    expect(direct.status).toBe(404)
+    // Marking it not relevant and removing it work too.
+    expect(
+      (await send(analyst, 'PATCH', `${base}/evidence/${fromReport}`, { verdict: 'not-relevant' }))
+        .status,
+    ).toBe(200)
+    expect((await send(analyst, 'DELETE', `${base}/evidence/${fromReport}`)).status).toBe(200)
+    const after = await send(analyst, 'GET', base)
+    expect(after.body.evidence.map((item: { id: string }) => item.id)).toEqual([fromFindings])
   } finally {
     f.close()
   }
