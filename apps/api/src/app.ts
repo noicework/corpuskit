@@ -647,6 +647,9 @@ const investigationPatchSchema = z.object({
   notes: z.string().max(20000).optional(),
   status: z.enum(['active', 'closed']).optional(),
 }).strict()
+/** Kept passages one synthesis reads at most, and documents it reads at once to find them. */
+const SYNTHESIS_PASSAGES = 40
+const SYNTHESIS_READS_AT_ONCE = 4
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
@@ -3876,12 +3879,46 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }, 400)
       }
       // Evidence from a document readers can no longer see (unpublished, or gone) is left out,
-      // so a draft's text never enters a synthesis; the rest is synthesised as usual.
-      const readable = new Set<string>()
-      for (const id of new Set(relevant.map((item) => item.resourceId))) {
-        if (await adminResource(c, config, id)) readable.add(id)
+      // so a draft's text never enters a synthesis; the rest is synthesised as usual. A read that
+      // fails is not "gone": nothing is synthesised, rather than quietly leaving a passage out.
+      // Documents are read once each, in evidence order and a few at a time, only until
+      // SYNTHESIS_PASSAGES readable passages are found.
+      const checks = new Map<string, Promise<{ readable: boolean } | { failed: true }>>()
+      const check = (id: string) => {
+        let result = checks.get(id)
+        if (!result) {
+          result = (async () => {
+            if (!resourceIdentifier(id)) return { readable: false }
+            const resource = await provider.resource(config, id)
+            return { readable: resource?.id === id }
+          })().catch(() => ({ failed: true as const }))
+          checks.set(id, result)
+        }
+        return result
       }
-      const kept = relevant.filter((item) => readable.has(item.resourceId)).slice(0, 40)
+      const kept: typeof relevant = []
+      for (let index = 0; index < relevant.length && kept.length < SYNTHESIS_PASSAGES; index++) {
+        // Start the next few documents' reads together, then take this passage's answer.
+        const ahead = new Set<string>()
+        for (
+          let next = index;
+          next < relevant.length && ahead.size < SYNTHESIS_READS_AT_ONCE;
+          next++
+        ) {
+          ahead.add(relevant[next]!.resourceId)
+        }
+        for (const id of ahead) void check(id)
+        const item = relevant[index]!
+        const answer = await check(item.resourceId)
+        if ('failed' in answer) {
+          return c.json({
+            error: 'upstream_unavailable',
+            message:
+              'A document behind the kept passages could not be read, so nothing was synthesised. Try again shortly.',
+          }, 502)
+        }
+        if (answer.readable) kept.push(item)
+      }
       if (kept.length === 0) {
         return c.json({
           error: 'no_evidence',

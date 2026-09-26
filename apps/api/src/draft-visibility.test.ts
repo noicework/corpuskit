@@ -336,3 +336,124 @@ Deno.test('an investigation citing a document that is unpublished keeps working 
     f.close()
   }
 })
+
+Deno.test('a synthesis whose document cannot be read right now fails rather than leaving it out', async () => {
+  let failing = false
+  const { provider } = draftBox((id) => failing && id === 'draft-1')
+  const prompts: string[] = []
+  Object.assign(provider, {
+    askStructured: (_config: unknown, _schema: unknown, prompt: string) => {
+      prompts.push(prompt)
+      return Promise.resolve({
+        object: { summary: 'Both hold [1] [2].', supported: [], contested: [], gaps: [] },
+      })
+    },
+  })
+  const f = createEnforcementFixture({ provider, management: provider })
+  const manager = f.sessionFor('portal-admin')
+  const analyst = f.sessionFor('analyst')
+  const send = async (session: typeof analyst, method: string, path: string, body?: unknown) => {
+    const response = await f.requestAs(session, path, {
+      method,
+      ...(body === undefined
+        ? {}
+        : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    })
+    return { status: response.status, body: await response.json() }
+  }
+  try {
+    // Two published documents, a passage kept from each.
+    expect(
+      (await send(manager, 'POST', '/api/admin/t/a/resources/draft-1/hidden', {
+        hidden: false,
+      })).status,
+    ).toBe(200)
+    const created = await send(analyst, 'POST', '/api/t/a/investigations', { name: 'Stocks' })
+    const base = `/api/t/a/investigations/${created.body.id}`
+    for (
+      const [resourceId, resourceTitle, passage] of [
+        ['pub-1', PUBLISHED, 'The report sets the catch at 40 tonnes.'],
+        ['draft-1', DRAFT, 'The findings put stocks at a low.'],
+      ]
+    ) {
+      expect(
+        (await send(analyst, 'POST', `${base}/evidence`, { resourceId, resourceTitle, passage }))
+          .status,
+      ).toBe(200)
+    }
+    // One of them cannot be read for a moment: nothing is generated, and the answer says why.
+    failing = true
+    const refused = await send(analyst, 'POST', `${base}/synthesise`)
+    expect(refused.status).toBe(502)
+    expect(refused.body.error).toBe('upstream_unavailable')
+    expect(prompts).toEqual([])
+    // Once it can be read again, both passages are synthesised.
+    failing = false
+    const synthesis = await send(analyst, 'POST', `${base}/synthesise`)
+    expect(synthesis.status).toBe(200)
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('40 tonnes')
+    expect(prompts[0]).toContain('stocks at a low')
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a synthesis reads documents only until it has the passages it uses, in evidence order', async () => {
+  const prompts: string[] = []
+  const f = createEnforcementFixture({
+    management: {
+      askStructured: (_config: unknown, _schema: unknown, prompt: string) => {
+        prompts.push(prompt)
+        return Promise.resolve({ object: { summary: 'Held [1].' } })
+      },
+    } as unknown as AragProvider,
+  })
+  try {
+    const reads: string[] = []
+    const resolve = f.provider.resource.bind(f.provider)
+    // Every document is readable; the first ten are drafts readers cannot see.
+    f.provider.resource = async (config, id) => {
+      reads.push(id)
+      const n = Number(id.split('-')[1])
+      if (n <= 10) return null
+      const resource = await resolve(config, 'res-1')
+      return resource && { ...resource, id }
+    }
+    const analyst = f.sessionFor('analyst')
+    const owner = { kind: 'user' as const, tenantId: analyst.tenantId, oid: analyst.oid }
+    const investigation = f.stores.investigations.create('a', owner, { name: 'Many' })
+    for (let n = 1; n <= 60; n++) {
+      f.stores.investigations.addEvidence('a', owner, investigation.id, {
+        resourceId: `doc-${n}`,
+        resourceTitle: `Document ${n}`,
+        passage: `Passage number ${n}.`,
+        score: null,
+        question: '',
+        verdict: null,
+        aiRelevance: null,
+        note: '',
+        tags: [],
+      })
+    }
+    const response = await f.requestAs(
+      analyst,
+      `/api/t/a/investigations/${investigation.id}/synthesise`,
+      { method: 'POST', headers: { 'x-rp-client': analyst.oid } },
+    )
+    expect(response.status).toBe(200)
+    // Passages 11 to 50 are used, in order; documents past them are barely read.
+    expect(prompts[0]).toContain('Passage number 11.')
+    expect(prompts[0]).toContain('Passage number 50.')
+    expect(prompts[0]).not.toContain('Passage number 10.')
+    expect(prompts[0]).not.toContain('Passage number 51.')
+    expect(prompts[0]!.indexOf('Passage number 11.')).toBeLessThan(
+      prompts[0]!.indexOf('Passage number 12.'),
+    )
+    expect(new Set(reads).size).toBe(reads.length)
+    expect(reads.length).toBeLessThanOrEqual(53)
+    expect(reads.length).toBeGreaterThanOrEqual(50)
+  } finally {
+    f.close()
+  }
+})
