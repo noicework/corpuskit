@@ -432,8 +432,11 @@ its extracted text, which is far smaller than the files an upload may bring, so 
 bounds all but exceptional documents; a hosting operator can raise or lower it. Once the
 platform has settled the resource (`PROCESSED`, `ERROR`, `BLOCKED` or `EXPIRED`), the ledger
 measures its extracted text, UTF-8 bytes as for pasted text, and that replaces the provisional
-bytes. A status CorpusKit does not know, a read that fails, and a 404 (which a knowledge box
-that has not caught up with a write can answer) all leave the provisional bytes in place.
+bytes. A status CorpusKit does not know, and a read that fails, leave the provisional bytes in
+place. So does a 404 at first, since a knowledge box that has not caught up with a write can
+answer one for a moment. A link whose reads have answered nothing but 404 for an hour is gone:
+it is settled at 0 bytes. Any other reading starts that hour again, and a link already measured
+keeps its measured size whatever its reads answer later.
 
 An add that would fit but for the provisional bytes of links still waiting to be measured is
 refused with 503 `{ "error": "links_pending" }`, not with `limit_exceeded`: the portal is not
@@ -457,10 +460,12 @@ byte limit is set are judged at their provisional bytes until they are measured.
 A link still unprocessed, or unreadable, an hour after it was added is stuck: it stops counting
 towards the 20, but it keeps its provisional bytes until it is measured, which happens as soon
 as the platform settles it. An add that would fit but for stuck links is refused with 413
-`{ "error": "links_stuck" }`: waiting will not make room, and the app says so. CorpusKit has no
-route to remove a resource, so a stuck link the platform never settles is released by the
-hosting operator: raising `maxBytes`, clearing it (without `maxBytes` provisional bytes are
-held against nothing), or connecting a different knowledge box, which starts a fresh ledger. A
+`{ "error": "links_stuck" }`: waiting will not make room, and the app asks the curator to have
+the hosting operator check the link or raise the storage limit. CorpusKit has no route to
+remove a resource. To release a stuck link, the hosting operator deletes its resource on the
+platform: an hour of 404s later it holds nothing (see above). Otherwise its bytes can only be
+worked around: by raising `maxBytes`, by clearing it (without `maxBytes` provisional bytes are
+held against nothing), or by connecting a different knowledge box, which starts a fresh ledger. A
 ledger written by an earlier build in a form this build does not recognise is read, never
 refused: a link recorded in an unknown form is taken as not yet measured and holds the
 deployment's `LINK_PROVISIONAL_BYTES` until it is.

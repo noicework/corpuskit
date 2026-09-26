@@ -114,6 +114,12 @@ const MeasuringSchema = z.object({
   /** When a measurement was last tried; the least recently tried are tried first. */
   checked: Count.optional(),
   /**
+   * When the reads of it began answering 404 without a break. A box that has not caught up with
+   * a write answers 404 for moments; one that has answered 404 for `MEASURE_TIMEOUT` no longer
+   * has the resource, which then holds nothing.
+   */
+  missingSince: Count.optional(),
+  /**
    * Still unprocessed or unreadable `MEASURE_TIMEOUT` after it was added. It no longer counts as
    * in flight, but keeps its provisional bytes until it is measured or removed.
    */
@@ -179,10 +185,13 @@ export interface AddInput {
 }
 
 /**
- * What a measurement found for a resource awaiting one: the bytes it holds, or that it is not
- * processed yet or could not be read.
+ * What a measurement found for a resource awaiting one: the bytes it holds, that the knowledge
+ * box answered 404 for it, or that it is not processed yet or could not be read.
  */
-export type Measurement = { id: string; bytes: number } | { id: string; pending: true }
+export type Measurement =
+  | { id: string; bytes: number }
+  | { id: string; missing: true }
+  | { id: string; pending: true }
 
 function dateFormatter(timeZone: string): Intl.DateTimeFormat {
   // Invalid configured timezones fail instead of resetting quotas in another timezone.
@@ -471,7 +480,9 @@ export class PortalLifecycleStore {
 
   /**
    * Record measurements: a size replaces the provisional bytes. A resource that is still pending
-   * is marked tried, and stops counting as in flight once it has waited `MEASURE_TIMEOUT`.
+   * is marked tried, and stops counting as in flight once it has waited `MEASURE_TIMEOUT`. A 404
+   * is pending too, unless the reads have answered nothing but 404 for `MEASURE_TIMEOUT`: the
+   * resource is gone, and it holds nothing. Any other reading starts that wait again.
    */
   private applyMeasurements(
     record: StoredCapacity,
@@ -484,8 +495,21 @@ export class PortalLifecycleStore {
       // Only a resource still awaiting measurement; one removed meanwhile has nothing to record.
       if (!id.success || !measuring || !Object.hasOwn(measuring, id.data)) continue
       const entry = measuring[id.data]!
+      if ('missing' in measurement) {
+        const since = entry.missingSince ?? now
+        if (now - since >= MEASURE_TIMEOUT) {
+          delete measuring[id.data]
+          record.sized[id.data] = 0
+          continue
+        }
+        const checked: Measuring = { ...entry, checked: now, missingSince: since }
+        if (now - entry.at >= MEASURE_TIMEOUT) checked.unsized = true
+        measuring[id.data] = checked
+        continue
+      }
       if ('pending' in measurement) {
-        const checked: Measuring = { ...entry, checked: now }
+        const { missingSince: _missing, ...rest } = entry
+        const checked: Measuring = { ...rest, checked: now }
         if (now - entry.at >= MEASURE_TIMEOUT) checked.unsized = true
         measuring[id.data] = checked
         continue

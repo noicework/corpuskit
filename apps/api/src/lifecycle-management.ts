@@ -4,7 +4,7 @@ import {
   docPageToMarkdown,
   type TenantConfig,
 } from '@research-portal/core'
-import type { AragProvider } from '@research-portal/retrieval'
+import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
@@ -292,8 +292,11 @@ async function measure(
       measurement = SETTLED_STATUSES.has(extraction.status)
         ? { id, bytes: encoder.encode(extraction.text ?? '').byteLength }
         : { id, pending: true }
-    } catch {
-      measurement = { id, pending: true }
+    } catch (error) {
+      // A 404 is recorded as such: pending at first, and settled once it has lasted.
+      measurement = error instanceof AragApiError && error.status === 404
+        ? { id, missing: true }
+        : { id, pending: true }
     }
     readings.found.set(id, measurement)
     readings.reading.delete(id)
