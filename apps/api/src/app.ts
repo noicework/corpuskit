@@ -1048,6 +1048,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // which lets a write reach a suspended portal only while it runs for a request the route
   // guard admitted for a platform principal. Without a configured store the state is transient.
   const lifecycle = opts.lifecycle ?? new PortalLifecycleStore(undefined, opts.now)
+  const provisionalBytes = opts.linkProvisionalBytes ??
+    linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES)
+  // Links an earlier build recorded without provisional bytes hold the deployment's amount too.
+  lifecycle.linkProvisionalBytes = provisionalBytes
   const rawManagement = opts.management
   opts = {
     ...opts,
@@ -1056,8 +1060,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? {
         management: guardManagement(rawManagement, lifecycle, {
           platformRequests: true,
-          linkProvisionalBytes: opts.linkProvisionalBytes ??
-            linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES),
+          linkProvisionalBytes: provisionalBytes,
         }),
       }
       : {}),
@@ -4505,25 +4508,34 @@ export function buildApp(opts: BuildAppOptions): Hono {
 
   /**
    * Turn on the knowledge box's hidden resources (they ship off) when this server holds the
-   * account key. Without it, or when the platform refuses, they stay off (`HiddenResourcesOff`).
+   * account key, recorded in the request's audit as its own step. Without the key, or when the
+   * platform refuses, they stay off (`HiddenResourcesOff`).
    */
-  const enableHidden = async (config: TenantConfig) => {
+  const enableHidden = async (c: Context, config: TenantConfig) => {
     const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
     if (!kbId || !accountOpsAvailable()) throw new HiddenResourcesOff()
     try {
-      await enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId)
+      await subAction(
+        c,
+        matchedDeclaration(c).path,
+        'tenant.hidden_resources.enable',
+        () => enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId),
+        {},
+        { kind: 'portal', slug: config.slug },
+        { kind: 'tenant', id: config.slug },
+      )
     } catch {
       throw new HiddenResourcesOff()
     }
   }
 
   /** Hide (or show) a resource, turning hidden resources on first where they are off. */
-  const hideResource = async (config: TenantConfig, id: string, hidden: boolean) => {
+  const hideResource = async (c: Context, config: TenantConfig, id: string, hidden: boolean) => {
     try {
       await management!.setResourceHidden(config, id, hidden)
     } catch (err) {
       if (!hiddenResourcesOff(err)) throw err
-      await enableHidden(config)
+      await enableHidden(c, config)
       await management!.setResourceHidden(config, id, hidden)
     }
   }
@@ -4533,12 +4545,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
    * without hidden resources, and creates nothing: they are turned on and the create is made
    * again, or the draft is refused. It is never created public instead.
    */
-  const createDraft = async <T>(config: TenantConfig, create: () => Promise<T>): Promise<T> => {
+  const createDraft = async <T>(
+    c: Context,
+    config: TenantConfig,
+    create: () => Promise<T>,
+  ): Promise<T> => {
     try {
       return await create()
     } catch (err) {
       if (!hiddenResourcesOff(err)) throw err
-      await enableHidden(config)
+      await enableHidden(c, config)
       return await create()
     }
   }
@@ -4550,11 +4566,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
    * it. Returns undefined when the draft is hidden.
    */
   const keepDraft = async (
+    c: Context,
     config: TenantConfig,
     id: string,
   ): Promise<{ status: 409 | 502; body: Record<string, string> } | undefined> => {
     try {
-      await hideResource(config, id, true)
+      await hideResource(c, config, id, true)
       return undefined
     } catch (err) {
       const off = err instanceof HiddenResourcesOff
@@ -4613,9 +4630,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 originUrl: parsed.data.url,
                 ...(draft ? { hidden: true } : {}),
               })
-            const created = draft ? await createDraft(config, create) : await create()
+            const created = draft ? await createDraft(c, config, create) : await create()
             if (draft) {
-              const refused = await keepDraft(config, created.id)
+              const refused = await keepDraft(c, config, created.id)
               if (refused) return c.json(refused.body, refused.status)
             }
             return c.json(created)
@@ -4641,10 +4658,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // Any other failure (network, parsing) falls through to the platform crawler.
       }
       const created = parsed.data.hidden
-        ? await createDraft(config, () => management!.createLink(config, parsed.data))
+        ? await createDraft(c, config, () => management!.createLink(config, parsed.data))
         : await management!.createLink(config, parsed.data)
       if (parsed.data.hidden) {
-        const refused = await keepDraft(config, created.id)
+        const refused = await keepDraft(c, config, created.id)
         if (refused) return c.json(refused.body, refused.status)
       }
       return c.json(created)
@@ -5477,7 +5494,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Managing content: a draft is found so it can be published.
     if (!await adminResource(c, config, c.req.param('id'), true)) return adminNotFound(c)
     try {
-      await hideResource(config, c.req.param('id'), parsed.data.hidden)
+      await hideResource(c, config, c.req.param('id'), parsed.data.hidden)
     } catch (err) {
       if (err instanceof HiddenResourcesOff) return c.json(HIDDEN_RESOURCES_OFF, 409)
       throw err

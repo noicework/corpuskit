@@ -1458,6 +1458,15 @@ Deno.test('a link the box answers 404 for right after it is added is never count
   }
 })
 
+Deno.test('the provisional bytes a deployment sets reach links an earlier build recorded', () => {
+  const f = createEnforcementFixture({ linkProvisionalBytes: 4_321 })
+  try {
+    expect(f.stores.lifecycle.linkProvisionalBytes).toBe(4_321)
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('a paused portal serves its logo and projects the same logo as its sign-in screen', async () => {
   const f = createEnforcementFixture()
   try {

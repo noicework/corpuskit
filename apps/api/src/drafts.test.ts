@@ -188,6 +188,14 @@ Deno.test('with the account key, a draft turns hidden resources on and is create
               body: { hidden_resources_enabled: true },
             },
           ])
+          // Turning them on is recorded in the request's audit, as its own step.
+          const events = f.rbac.audit.read({ scope: { kind: 'portal', slug: 'a' } })
+          expect(
+            events.filter((event) =>
+              event.action === 'tenant.hidden_resources.enable' && event.outcome === 'success'
+            ),
+            page,
+          ).toHaveLength(1)
         })
       } finally {
         f.close()

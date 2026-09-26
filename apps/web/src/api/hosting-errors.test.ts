@@ -69,6 +69,21 @@ Deno.test('an add held back by links still being processed says to wait, not tha
   }
 })
 
+Deno.test('an add held back by a link that could not be processed says who can release it', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = () => Promise.resolve(Response.json({ error: 'links_stuck' }, { status: 413 }))
+  try {
+    await expect(addAdminText('marine', sessionAccess, { title: 'Report', body: 'test' })).rejects
+      .toMatchObject({
+        status: 413,
+        message:
+          'A link added earlier could not be processed, and the storage set aside for it is still held, so this cannot be added. Contact your hosting operator to release it or to raise the storage limit.',
+      })
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 Deno.test('daily ask quotas carry a distinct code and reset time while burst limits keep their retry copy', async () => {
   const error = await askError(
     Response.json({

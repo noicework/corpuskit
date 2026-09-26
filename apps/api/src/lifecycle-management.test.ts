@@ -15,6 +15,7 @@ import {
   linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
+  withinTimeout,
   withRequestAuthority,
 } from './lifecycle-management.ts'
 
@@ -531,12 +532,12 @@ Deno.test('a link the box answers 404 for stays pending, and past the timeout is
   expect(stored()['res-1']).toMatchObject({ reserved: 100 })
   expect(stored()['res-1']?.unsized).toBeUndefined()
   // Past the timeout it follows the rule for any stuck link: it stops counting as in flight and
-  // keeps its provisional bytes until it is measured or removed.
+  // keeps its provisional bytes. The add is still refused, now saying that waiting will not help.
   now += MEASURE_TIMEOUT
   await denied(
     guarded.createText(config, { title: 't', body: 'x'.repeat(950) }),
-    503,
-    'links_pending',
+    413,
+    'links_stuck',
   )
   expect(stored()['res-1']).toMatchObject({ reserved: 100, unsized: true })
   expect(lifecycle.bytesUsed('test', 1)).toBe(100)
@@ -562,6 +563,49 @@ Deno.test('deleting a link still being measured releases its bytes, and a failed
   expect(lifecycle.bytesUsed('test', 1)).toBe(30)
   extractions.set('res-2', { status: 'PROCESSED', text: 'abc' })
   expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 3 })
+})
+
+Deno.test('a read that never answers is given up at its timeout, even if it ignores its signal', async () => {
+  let seen: AbortSignal | undefined
+  const never = withinTimeout((signal) => {
+    seen = signal
+    return new Promise<never>(() => {})
+  }, 10)
+  await expect(never).rejects.toMatchObject({ name: 'TimeoutError' })
+  expect(seen?.aborted).toBe(true)
+  // One that answers in time is unaffected, and leaves no timer behind.
+  expect(await withinTimeout(() => Promise.resolve('read'), 60_000)).toBe('read')
+})
+
+Deno.test('measurement reads and the resource count can be given up', async () => {
+  const signals: { read: AbortSignal[]; count: AbortSignal[] } = { read: [], count: [] }
+  const { state, raw } = crawling()
+  const timed = Object.assign(raw, {
+    resourceCount: (_config: TenantConfig, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.count.push(options.signal)
+      return Promise.resolve(state.count)
+    },
+    resourceExtraction: (
+      _config: TenantConfig,
+      _id: string,
+      options?: { signal?: AbortSignal },
+    ) => {
+      if (options?.signal) signals.read.push(options.signal)
+      return Promise.resolve({ status: 'PENDING', text: '' })
+    },
+  })
+  const lifecycle = store('active', { maxBytes: 100 })
+  const guarded = guardManagement(timed, lifecycle, { linkProvisionalBytes: 60 })
+  await guarded.createLink(config, { url: 'https://example.test/one' })
+  state.count = 1
+  await denied(
+    guarded.createText(config, { title: 't', body: 'x'.repeat(50) }),
+    503,
+    'links_pending',
+  )
+  expect(signals.count.length).toBeGreaterThan(0)
+  expect(signals.read).toHaveLength(1)
+  expect(signals.read[0]!.aborted).toBe(false)
 })
 
 Deno.test('LINK_PROVISIONAL_BYTES is a whole number of bytes, otherwise 10 MB', () => {

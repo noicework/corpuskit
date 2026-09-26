@@ -159,6 +159,11 @@ export type AddAdmission =
    * would fit but for the provisional bytes they hold.
    */
   | { unmeasured: true }
+  /**
+   * The add would fit but for the provisional bytes of links still unprocessed past
+   * `MEASURE_TIMEOUT`: waiting will not make room.
+   */
+  | { stuck: true }
 /** A created resource without an id is one whose size the ledger cannot record. */
 export type AddOutcome = { created: false } | { created: true; id?: string }
 export interface AddInput {
@@ -231,6 +236,13 @@ type LifecycleRecordKind = typeof LIFECYCLE_RECORD_KINDS[number]
  * timezone, the last activity time, and a capacity ledger that admits resource and byte usage.
  */
 export class PortalLifecycleStore {
+  /**
+   * What a link recorded without provisional bytes (by an earlier build, or in a shape this
+   * build does not recognise) holds: the deployment's `LINK_PROVISIONAL_BYTES`, which the
+   * application sets when it starts.
+   */
+  linkProvisionalBytes = DEFAULT_LINK_PROVISIONAL_BYTES
+
   constructor(
     readonly state: LifecycleState = transientLifecycleState(),
     private readonly clock: () => number = Date.now,
@@ -273,7 +285,9 @@ export class PortalLifecycleStore {
   private readCapacity(slug: string): StoredCapacity | undefined {
     const raw = this.state.get<unknown>(this.key('capacity', slug), undefined)
     if (raw === undefined) return undefined
-    const parsed = StoredCapacitySchema.safeParse(awaitingMeasurementReadable(raw))
+    const parsed = StoredCapacitySchema.safeParse(
+      awaitingMeasurementReadable(raw, this.linkProvisionalBytes),
+    )
     if (!parsed.success) throw new Error('Invalid persisted portal capacity')
     return parsed.data
   }
@@ -587,11 +601,20 @@ export class PortalLifecycleStore {
       const value = used + sum(record.inflight.map((entry) => entry.bytes)) + adding
       if (value > maxBytes) {
         // When the add would fit but for links still waiting to be measured, it waits for them
-        // rather than being told the portal is full.
-        const held = sum(Object.values(record.measuring ?? {}).map((entry) => entry.reserved)) +
+        // rather than being told the portal is full. When only links stuck past the timeout
+        // stand in the way, waiting will not help, and the refusal says so. Either way their
+        // provisional bytes still count: the add is refused.
+        const entries = Object.values(record.measuring ?? {})
+        const waiting = sum(
+          entries.filter((entry) => !entry.unsized).map((entry) => entry.reserved),
+        ) +
           sum(record.inflight.filter((entry) => entry.measure).map((entry) => entry.bytes))
-        if (held > 0 && value - held <= maxBytes) return refuse({ unmeasured: true })
-        return refuse({ limit: 'maxBytes', value, max: maxBytes })
+        const stuck = sum(entries.filter((entry) => entry.unsized).map((entry) => entry.reserved))
+        if (value - waiting - stuck > maxBytes) {
+          return refuse({ limit: 'maxBytes', value, max: maxBytes })
+        }
+        if (waiting > 0 && value - waiting <= maxBytes) return refuse({ unmeasured: true })
+        return refuse({ stuck: true })
       }
       if (provisional !== undefined) {
         const unmeasured = record.inflight.filter((entry) => entry.measure).length +
@@ -673,19 +696,19 @@ export class PortalLifecycleStore {
 
 /**
  * Read links awaiting measurement in any shape an earlier build stored. An entry this build does
- * not recognise (such as a bare timestamp) is taken as a link not measured yet: it holds the
- * default provisional bytes and is measured first. An in-flight link recorded without provisional
- * bytes holds the default too. An entry whose id is not a resource id is left out, so the next
+ * not recognise (such as a bare timestamp) is taken as a link not measured yet: it holds
+ * `provisional` bytes and is measured first. An in-flight link recorded without provisional
+ * bytes holds them too. An entry whose id is not a resource id is left out, so the next
  * observation counts that resource as one the ledger cannot size. Nothing here fails the read.
  */
-function awaitingMeasurementReadable(raw: unknown): unknown {
+function awaitingMeasurementReadable(raw: unknown, provisional: number): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
   const record = { ...(raw as Record<string, unknown>) }
   if (Array.isArray(record.inflight)) {
     record.inflight = record.inflight.map((entry) =>
       entry && typeof entry === 'object' && (entry as { measure?: unknown }).measure === true &&
         (entry as { bytes?: unknown }).bytes === 0
-        ? { ...entry, bytes: DEFAULT_LINK_PROVISIONAL_BYTES }
+        ? { ...entry, bytes: provisional }
         : entry
     )
   }
@@ -699,7 +722,7 @@ function awaitingMeasurementReadable(raw: unknown): unknown {
       const at = Count.safeParse(value)
       readable[id] = entry.success
         ? entry.data
-        : { at: at.success ? at.data : 0, reserved: DEFAULT_LINK_PROVISIONAL_BYTES }
+        : { at: at.success ? at.data : 0, reserved: provisional }
     }
   }
   if (Object.keys(readable).length) record.measuring = readable

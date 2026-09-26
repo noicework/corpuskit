@@ -1455,8 +1455,11 @@ export class AragProvider implements RetrievalProvider {
   }
 
   /** The knowledge box's resource count, refusing a response that does not carry one. */
-  async resourceCount(tenant: TenantConfig): Promise<number> {
-    const raw = await this.client(tenant).getJson<{ resources?: unknown }>('/counters')
+  async resourceCount(
+    tenant: TenantConfig,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<number> {
+    const raw = await this.client(tenant).getJson<{ resources?: unknown }>('/counters', options)
     const count = raw?.resources
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
       throw new Error('Knowledge box resource count is unavailable')
@@ -2193,6 +2196,7 @@ export class AragProvider implements RetrievalProvider {
   async resourceExtraction(
     tenant: TenantConfig,
     id: string,
+    options: { signal?: AbortSignal } = {},
   ): Promise<
     { status: string; text: string; chars: number; paragraphs: number; tableRows: number }
   > {
@@ -2210,7 +2214,7 @@ export class AragProvider implements RetrievalProvider {
           }
         >
       >
-    }>(`/resource/${id}?show=basic&show=extracted&extracted=text&extracted=metadata`)
+    }>(`/resource/${id}?show=basic&show=extracted&extracted=text&extracted=metadata`, options)
     const texts: string[] = []
     let paragraphs = 0
     for (const [group, fields] of Object.entries(full.data ?? {})) {

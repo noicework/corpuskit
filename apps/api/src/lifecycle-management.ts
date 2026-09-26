@@ -158,10 +158,19 @@ function unavailable(): PortalLifecycleError {
   return new PortalLifecycleError(503, { error: 'usage_unavailable' })
 }
 
+/**
+ * How long the resource count may take. Admission waits for it while holding the portal's
+ * capacity lock, so a count that never answers must not hold every other add.
+ */
+const COUNT_TIMEOUT_MS = 15_000
+
 /** The knowledge box's own resource count, the authority for `maxResources`. */
 async function resources(management: AragProvider, config: TenantConfig): Promise<number> {
   try {
-    const value = await management.resourceCount(config)
+    const value = await withinTimeout(
+      (signal) => management.resourceCount(config, { signal }),
+      COUNT_TIMEOUT_MS,
+    )
     if (!Number.isSafeInteger(value) || value < 0) throw unavailable()
     return value
   } catch {
@@ -179,6 +188,11 @@ const MEASURE_PER_REPORT = 50
 /** Reads one measurement makes at once, and how long a caller waits for them in all. */
 const MEASURE_CONCURRENCY = 4
 const MEASURE_DEADLINE_MS = 8_000
+/**
+ * How long one read may go on after its caller stopped waiting. A read that takes longer is
+ * given up (and its request aborted), counts as a failed read, and the link can be read again.
+ */
+const READ_TIMEOUT_MS = 30_000
 
 /**
  * Readings of links awaiting measurement, per portal: the latest finding for each link, not
@@ -232,6 +246,26 @@ function dueReadings(
 }
 
 /**
+ * Run a read that is given up after `ms`: its signal is aborted and the answer is a
+ * `TimeoutError`, even when the read itself ignores the signal and never settles.
+ */
+export function withinTimeout<T>(
+  read: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+): Promise<T> {
+  const abort = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const reason = new DOMException('The read timed out.', 'TimeoutError')
+      abort.abort(reason)
+      reject(reason)
+    }, ms)
+  })
+  return Promise.race([read(abort.signal), timedOut]).finally(() => clearTimeout(timer))
+}
+
+/**
  * Read resources admitted before their size was known (crawled links). Once the platform has
  * settled one, what it holds is its extracted text, counted as text additions are. One still
  * processing, in a status this code does not know, or whose read fails, is pending: that
@@ -251,7 +285,10 @@ async function measure(
     readings.reading.add(id)
     let measurement: Measurement
     try {
-      const extraction = await management.resourceExtraction(config, id)
+      const extraction = await withinTimeout(
+        (signal) => management.resourceExtraction(config, id, { signal }),
+        READ_TIMEOUT_MS,
+      )
       measurement = SETTLED_STATUSES.has(extraction.status)
         ? { id, bytes: encoder.encode(extraction.text ?? '').byteLength }
         : { id, pending: true }
@@ -304,13 +341,15 @@ export async function capacityUsage(
 
 function refusal(admission: Exclude<AddAdmission, { admitted: string | null }>) {
   if ('unmeasured' in admission) return new PortalLifecycleError(503, { error: 'links_pending' })
+  if ('stuck' in admission) return new PortalLifecycleError(413, { error: 'links_stuck' })
   if ('unavailable' in admission) return unavailable()
   return new PortalLifecycleError(413, { error: 'limit_exceeded', ...admission })
 }
 
 /** A refusal that measuring links awaiting measurement could change. */
 function measurable(admission: AddAdmission): boolean {
-  return ('limit' in admission && admission.limit === 'maxBytes') || 'unmeasured' in admission
+  return ('limit' in admission && admission.limit === 'maxBytes') || 'unmeasured' in admission ||
+    'stuck' in admission
 }
 
 /**

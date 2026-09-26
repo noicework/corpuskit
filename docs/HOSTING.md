@@ -446,17 +446,24 @@ waiting links, the portal reads up to ten of them, those never tried first and t
 recently tried, and judges the add once more. A usage report reads up to 50, and the link
 route's precheck reads them when it would otherwise refuse. The reads run outside the step that
 admits adds, so other adds are not held up, and a caller waits at most eight seconds for them.
+A read still unanswered after 30 seconds is given up and counts as a failed read. The resource
+count an admission waits for is given up after 15 seconds, and the add is then refused with
+503 `usage_unavailable`.
 Reads never write: every admission on the portal, whether or not it reads anything, records
 what earlier reads found. A read the link route's precheck made is not repeated by the add that
 follows. Links hold provisional bytes on every portal, limited or not, so links added before a
 byte limit is set are judged at their provisional bytes until they are measured.
 
-A link still unprocessed, or unreadable, an hour after it was added stops counting towards the
-20, but it keeps its provisional bytes until it is measured or removed through the portal.
-Without `maxBytes` they are held against nothing, and connecting a different knowledge box
-starts a fresh ledger. A ledger written by an earlier build in a form this build does not
-recognise is read, never refused: a link recorded in an unknown form is taken as not yet
-measured and holds the default provisional bytes until it is.
+A link still unprocessed, or unreadable, an hour after it was added is stuck: it stops counting
+towards the 20, but it keeps its provisional bytes until it is measured, which happens as soon
+as the platform settles it. An add that would fit but for stuck links is refused with 413
+`{ "error": "links_stuck" }`: waiting will not make room, and the app says so. CorpusKit has no
+route to remove a resource, so a stuck link the platform never settles is released by the
+hosting operator: raising `maxBytes`, clearing it (without `maxBytes` provisional bytes are
+held against nothing), or connecting a different knowledge box, which starts a fresh ledger. A
+ledger written by an earlier build in a form this build does not recognise is read, never
+refused: a link recorded in an unknown form is taken as not yet measured and holds the
+deployment's `LINK_PROVISIONAL_BYTES` until it is.
 
 Resource and byte limits apply to every add: uploads, links, pasted text, source syncs, content
 copies, reingest and the built-in help pages. They are checked when the write happens,
