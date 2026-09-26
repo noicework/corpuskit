@@ -6,6 +6,12 @@ import { MissingPermissionError } from '../../components/EmergencyAccess.tsx'
 import { errorMessage } from './shared.ts'
 import { applyProcessing, refuseFile, type UploadRow } from './upload-queue.ts'
 
+/** An unfinished upload whose person no longer holds access here: its file was not kept. */
+export const UPLOAD_INTERRUPTED = 'Upload interrupted, choose the file again.'
+/** An upload whose answer was withheld when access changed: the file may have arrived. */
+export const UPLOAD_UNCONFIRMED =
+  'We could not confirm this upload. Check Recent additions before trying again.'
+
 /** Runs one upload with the access a caller chose: its own session, or one emergency request. */
 export type UploadRunner = <T>(
   label: string,
@@ -16,8 +22,9 @@ export type UploadRunner = <T>(
  * The uploads one person is making to one portal. It lives outside the page, so an upload in
  * flight outlives a re-check of access that confirms the same person (which redraws the page):
  * its row, progress and outcome are there when the page returns, and files still waiting go on.
- * It belongs to one identity and one authority controller; queues of anyone else are dropped as
- * soon as another identity asks for one. It never judges permission itself: the panel showing it
+ * It belongs to one identity and one authority controller. The moment the controller holds access
+ * for anyone else, or for nobody, the queue is closed: nothing in it is sent or kept, and its
+ * person chooses the files again. It never judges permission itself: the panel showing it
  * attaches its own permission-checked access, and nothing is sent while access is being checked,
  * while no panel is attached, or for anyone but its identity.
  */
@@ -30,6 +37,7 @@ export class UploadQueue {
   #running = false
   #percent = new Map<string, number>()
   #access: AdminRequestAccess | null = null
+  #closed = false
 
   constructor(
     readonly identityKey: string,
@@ -62,6 +70,39 @@ export class UploadQueue {
     this.#set(this.#rows.map((row) => row.key === key ? { ...row, ...patch } : row))
   }
 
+  /** Whether the queue was closed because its identity no longer holds access here. */
+  get closed(): boolean {
+    return this.#closed
+  }
+
+  /**
+   * Close the queue: another identity, or none, now holds access here. Files still waiting are
+   * dropped unsent, an upload in flight was already cut off by the change, and every unfinished
+   * row says it was interrupted. Nothing it held can be sent or tried again.
+   */
+  close(): void {
+    if (this.#closed) return
+    this.#closed = true
+    this.#pending = []
+    this.#files.clear()
+    this.#runners.clear()
+    this.#percent.clear()
+    this.#access = null
+    this.#set(
+      this.#rows.map((row) =>
+        row.status === 'queued' || row.status === 'uploading'
+          ? {
+            ...row,
+            status: 'failed',
+            progress: null,
+            error: UPLOAD_INTERRUPTED,
+            retryable: false,
+          }
+          : row
+      ),
+    )
+  }
+
   /** This identity still holds the controller's ready authority. */
   #current(): boolean {
     return this.controller.status === 'ready' &&
@@ -73,6 +114,7 @@ export class UploadQueue {
    * Returns the detach for when that panel goes.
    */
   attach(access: AdminRequestAccess): () => void {
+    if (this.#closed) return () => {}
     this.#access = access
     void this.#pump()
     return () => {
@@ -82,6 +124,7 @@ export class UploadQueue {
 
   /** Queue files; ones the portal would refuse fail at once with the reason. */
   add(files: File[], runner?: UploadRunner): UploadRow[] {
+    if (this.#closed) return []
     const added = files.map((file): UploadRow => {
       const refusal = refuseFile(file)
       return {
@@ -110,7 +153,7 @@ export class UploadQueue {
   }
 
   retry(key: string, runner?: UploadRunner): void {
-    if (!this.#files.has(key)) return
+    if (this.#closed || !this.#files.has(key)) return
     if (runner) this.#runners.set(key, runner)
     this.#update(key, { status: 'queued', progress: null, error: undefined })
     this.#pending.push(key)
@@ -142,6 +185,7 @@ export class UploadQueue {
       while (this.#pending.length) {
         // Nothing starts while access is being checked, or for anyone who may not add content.
         await this.controller.settled()
+        if (this.#closed) return
         // Waiting files resume when a panel for this identity attaches again.
         if (!this.emergency && (!this.#current() || !this.#access)) return
         await this.#uploadOne(this.#pending.shift()!)
@@ -172,6 +216,7 @@ export class UploadQueue {
     try {
       if (!runner && !access) throw new MissingPermissionError()
       const result = runner ? await runner(`Upload ${file.name}`, send) : await send(access!)
+      if (this.#closed) return
       if (result === undefined) {
         this.#update(key, {
           status: 'failed',
@@ -190,12 +235,17 @@ export class UploadQueue {
       })
       this.#runners.delete(key)
     } catch (err) {
-      // An answer withheld from changed authority is not this person's failure to report.
-      if (!this.emergency && this.controller.context.identityKey !== this.identityKey) return
+      // Closing already settled the row for someone who no longer holds access here.
+      if (this.#closed) return
+      // Access changed while the file was on its way, and its answer was withheld: the file may
+      // have arrived, so trying again blindly could add it twice.
+      const withheld = err instanceof Error && err.name === 'AbortError'
       this.#update(key, {
         status: 'failed',
         progress: null,
-        error: errorMessage(err, 'The upload failed - please try again.'),
+        error: withheld
+          ? UPLOAD_UNCONFIRMED
+          : errorMessage(err, 'The upload failed - please try again.'),
         retryable: true,
       })
     }
@@ -203,21 +253,51 @@ export class UploadQueue {
 }
 
 const queues = new Map<string, UploadQueue>()
+const watched = new WeakSet<AuthorityController>()
 
 /**
- * The upload queue for the current identity on a portal, or null while no identity holds
- * ready authority. Queues belonging to anyone else, or to another controller, are dropped.
+ * Close every queue of `controller` whose identity no longer holds its ready authority. This runs
+ * whenever the controller changes, so a queue is closed the moment someone else (or nobody) is
+ * signed in here, not when a panel is next opened.
  */
-export function uploadQueueFor(controller: AuthorityController, slug: string): UploadQueue | null {
+function closeOthers(controller: AuthorityController): void {
+  if (controller.status !== 'ready') return
+  for (const [key, queue] of queues) {
+    if (queue.controller === controller && queue.identityKey !== controller.context.identityKey) {
+      queues.delete(key)
+      queue.close()
+    }
+  }
+}
+
+/**
+ * The upload queue for the current identity on a portal, or null while no identity holds ready
+ * authority. The store watches the controller from the first call and closes a queue as soon as
+ * its identity loses access; queues of a replaced controller are closed too. `upload` is the
+ * transport a new queue sends with.
+ */
+export function uploadQueueFor(
+  controller: AuthorityController,
+  slug: string,
+  upload: typeof uploadAdminFile = uploadAdminFile,
+): UploadQueue | null {
+  for (const [key, queue] of queues) {
+    if (queue.controller !== controller) {
+      queues.delete(key)
+      queue.close()
+    }
+  }
+  if (!watched.has(controller)) {
+    watched.add(controller)
+    controller.subscribe(() => closeOthers(controller))
+  }
+  closeOthers(controller)
   const identityKey = controller.context.identityKey
   if (controller.status !== 'ready' || !identityKey) return null
-  for (const [key, queue] of queues) {
-    if (queue.identityKey !== identityKey || queue.controller !== controller) queues.delete(key)
-  }
   const key = JSON.stringify([identityKey, slug])
   let queue = queues.get(key)
   if (!queue) {
-    queue = new UploadQueue(identityKey, slug, controller)
+    queue = new UploadQueue(identityKey, slug, controller, upload)
     queues.set(key, queue)
   }
   return queue

@@ -8,6 +8,7 @@ import {
 import { sessionFixture } from './auth.test.ts'
 import { sessionAccess } from './break-glass.ts'
 import {
+  addAdminLink,
   addAdminText,
   analysePortal,
   compareExtraction,
@@ -698,6 +699,62 @@ Deno.test('a held add is dropped when the check finds another person, other auth
         await expect(add).rejects.toThrow()
       } finally {
         unregister()
+      }
+    }
+  } finally {
+    globalThis.fetch = original
+    restore()
+  }
+})
+
+Deno.test('a held answer that arrived mid-check never publishes when the check ends anywhere else', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const outcomes: [string, (authority: AuthorityController) => Promise<unknown>, () => Response][] =
+    [
+      [
+        'another person',
+        (a) => a.refresh('marine'),
+        () => Response.json(sessionFixture('marine', 'two')),
+      ],
+      ['another portal', (a) => a.refresh('other'), () => Response.json(sessionFixture('other'))],
+      [
+        'a sign-out',
+        (a) => Promise.resolve(a.invalidate('sign out')),
+        () => Response.json(sessionFixture()),
+      ],
+      ['a failed check', (a) => a.refresh('marine'), () => new Response('x', { status: 503 })],
+    ]
+  try {
+    for (const [name, end, answer] of outcomes) {
+      for (const kind of ['upload', 'link'] as const) {
+        const routed = routedFetch(answer)
+        globalThis.fetch = routed.fetch
+        const authority = new AuthorityController()
+        authority.setSession(sessionFixture(), 'marine')
+        const unregister = registerAuthorityController(authority)
+        try {
+          const add: Promise<unknown> = kind === 'upload'
+            ? uploadAdminFile('marine', sessionAccess, new File(['x'], 'a.pdf'))
+            : addAdminLink('marine', sessionAccess, { url: 'https://example.test/report' })
+          let outcome: unknown = 'pending'
+          add.then((value) => outcome = value, (error: Error) => outcome = error.name)
+          while (routed.admin.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+          routed.gateAuth()
+          authority.invalidate('observed return', 'loading')
+          const check = end(authority).catch(() => {})
+          // The answer is already here, waiting for the check.
+          routed.admin[0]!.resolve(Response.json({ id: 'res-1' }))
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          // A sign-out ends the add at once; a check waits for its result first.
+          expect(outcome, `${name}, ${kind}`).toBe(name === 'a sign-out' ? 'AbortError' : 'pending')
+          routed.releaseAuth()
+          await check
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          expect(outcome, `${name}, ${kind}`).toBe('AbortError')
+        } finally {
+          unregister()
+        }
       }
     }
   } finally {
