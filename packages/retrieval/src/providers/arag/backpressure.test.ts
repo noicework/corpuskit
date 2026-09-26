@@ -143,6 +143,19 @@ describe('createLink - back-pressure retry', () => {
   })
 })
 
+describe('createLink / createText - committed before the answer', () => {
+  it('asks the platform to answer once the new resource is committed', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const provider = providerWithFetch((_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      return Promise.resolve(jsonResponse({ uuid: `created-${bodies.length}` }))
+    })
+    await provider.createLink(TENANT, { url: 'https://example.org/report' })
+    await provider.createText(TENANT, { title: 'A report', body: 'Body text' })
+    expect(bodies.map((body) => body.wait_for_commit)).toEqual([true, true])
+  })
+})
+
 describe('createText - back-pressure retry', () => {
   it('retries once and succeeds when the platform clears the queue', async () => {
     let calls = 0

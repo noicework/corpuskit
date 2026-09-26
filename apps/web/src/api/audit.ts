@@ -32,6 +32,7 @@ export const AUDIT_ACTIONS = [
   'tenant.access.update',
   'tenant.domain.attach',
   'tenant.domain.detach',
+  'tenant.hidden_resources.enable',
   'suggestion.graph.write',
   'suggestion.taxonomy.write',
   'suggestion.content.write',

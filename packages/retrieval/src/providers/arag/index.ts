@@ -1279,6 +1279,7 @@ export class AragProvider implements RetrievalProvider {
       // pmcid field of its own.
       ...(raw.origin?.url ? { originUrl: raw.origin.url } : {}),
       enriched: false,
+      ...((raw as { hidden?: boolean }).hidden === true ? { hidden: true } : {}),
     })
   }
 
@@ -1385,14 +1386,20 @@ export class AragProvider implements RetrievalProvider {
     const resources: ResourceSummary[] = []
     const items: CatalogItem[] = []
     for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
-      const catalog = await client.getJson<{ resources?: Record<string, RawResource> }>(
-        `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin`,
+      // Hidden resources (drafts) are left out: the platform returns them unless
+      // asked not to, and this listing reaches every reader of the portal.
+      const catalog = await client.getJson<
+        { resources?: Record<string, RawResource & { hidden?: boolean }> }
+      >(
+        `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin&hidden=false`,
       )
       const batch = Object.entries(catalog.resources ?? {})
       for (const [id, raw] of batch) {
         // Failed ingests and junk (hash/bot-challenge) titles never reach a
         // user-facing list - see isDisplayableResource. In-app documentation
         // is research-invisible: it never appears in the research catalogue.
+        // A hidden resource that comes back regardless is left out too.
+        if (raw.hidden === true) continue
         if (!isDisplayableResource(raw) || isDocumentationResource(raw)) continue
         resources.push(this.toSummary(id, raw))
         items.push(catalogItemFromRaw(id, raw))
@@ -1405,11 +1412,21 @@ export class AragProvider implements RetrievalProvider {
     return entry
   }
 
-  async resource(tenant: TenantConfig, id: string): Promise<ResourceSummary | null> {
+  /**
+   * One resource by id, or null when the box does not have it. A hidden resource (a draft) is
+   * null too unless `hidden` is set, which only a caller managing content may ask for: a single
+   * read returns a resource whatever its visibility, so this is where readers are kept from it.
+   */
+  async resource(
+    tenant: TenantConfig,
+    id: string,
+    options: { hidden?: boolean } = {},
+  ): Promise<ResourceSummary | null> {
     try {
-      const raw = await this.client(tenant).getJson<RawResource>(
+      const raw = await this.client(tenant).getJson<RawResource & { hidden?: boolean }>(
         `/resource/${id}?show=basic&show=extra&show=origin`,
       )
+      if (raw.hidden === true && options.hidden !== true) return null
       return this.toSummary(id, raw)
     } catch (err) {
       if (err instanceof Error && 'status' in err && (err as { status: number }).status === 404) {
@@ -1439,8 +1456,11 @@ export class AragProvider implements RetrievalProvider {
   }
 
   /** The knowledge box's resource count, refusing a response that does not carry one. */
-  async resourceCount(tenant: TenantConfig): Promise<number> {
-    const raw = await this.client(tenant).getJson<{ resources?: unknown }>('/counters')
+  async resourceCount(
+    tenant: TenantConfig,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<number> {
+    const raw = await this.client(tenant).getJson<{ resources?: unknown }>('/counters', options)
     const count = raw?.resources
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
       throw new Error('Knowledge box resource count is unavailable')
@@ -1498,6 +1518,8 @@ export class AragProvider implements RetrievalProvider {
         origin: { url: input.url },
         links: { link: { uri: input.url } },
         ...(input.hidden ? { hidden: true } : {}),
+        // Answer once the resource is committed, so a read straight after finds it.
+        wait_for_commit: true,
       })
     )
     this.invalidateCatalogue(tenant.slug)
@@ -1514,12 +1536,17 @@ export class AragProvider implements RetrievalProvider {
       topicId?: string
       extraMetadata?: Record<string, unknown>
       originUrl?: string
+      /** Create the resource hidden (a draft), where the knowledge box has hidden resources on. */
+      hidden?: boolean
     },
   ): Promise<{ id: string }> {
     const body: Record<string, unknown> = {
       title: input.title,
       icon: 'text/plain',
       texts: { body: { body: input.body, format: input.format ?? 'MARKDOWN' } },
+      ...(input.hidden ? { hidden: true } : {}),
+      // Answer once the resource is committed, so a read straight after finds it.
+      wait_for_commit: true,
     }
     if (input.originUrl) body.origin = { url: input.originUrl }
     if (input.slug) body.slug = input.slug
@@ -2072,7 +2099,8 @@ export class AragProvider implements RetrievalProvider {
       remaining = labelsets.filter((id) => id !== 'kind')
       if (remaining.length === 0) return out
     }
-    const params = new URLSearchParams({ page_size: '0' })
+    // Hidden resources (drafts) are never counted: the platform counts them unless asked not to.
+    const params = new URLSearchParams({ page_size: '0', hidden: 'false' })
     for (const id of remaining) params.append('faceted', `/classification.labels/${id}`)
     for (const f of filters ?? []) params.append('filters', f)
     const raw = await this.client(tenant).getJson<{
@@ -2173,6 +2201,7 @@ export class AragProvider implements RetrievalProvider {
   async resourceExtraction(
     tenant: TenantConfig,
     id: string,
+    options: { signal?: AbortSignal } = {},
   ): Promise<
     { status: string; text: string; chars: number; paragraphs: number; tableRows: number }
   > {
@@ -2190,7 +2219,7 @@ export class AragProvider implements RetrievalProvider {
           }
         >
       >
-    }>(`/resource/${id}?show=basic&show=extracted&extracted=text&extracted=metadata`)
+    }>(`/resource/${id}?show=basic&show=extracted&extracted=text&extracted=metadata`, options)
     const texts: string[] = []
     let paragraphs = 0
     for (const [group, fields] of Object.entries(full.data ?? {})) {

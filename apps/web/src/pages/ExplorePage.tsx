@@ -9,6 +9,7 @@ import {
 import { getCatalog, getFacets, getTopicResources } from '../api/client.ts'
 import { topicsWithFacetCounts } from '../lib/topic-rows.ts'
 import { EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
+import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { RegionMap, REGIONS } from '../components/RegionMap.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
@@ -575,11 +576,14 @@ export function ExplorePage() {
           ? (
             <EmptyState
               title='Nothing to browse yet'
-              description='This portal has no resources filed against its topics. Add content in the management screen, or run a corpus analysis to build the taxonomy.'
+              description='This portal has no resources filed against its topics yet. Topics appear here once documents are added and analysed.'
             >
-              <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-primary'>
-                Open the library
-              </Link>
+              <div className='flex flex-wrap gap-3'>
+                <AddDocumentsLink slug={config.slug} />
+                <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-outline'>
+                  Open the library
+                </Link>
+              </div>
             </EmptyState>
           )
           : null}

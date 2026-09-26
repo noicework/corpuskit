@@ -1,21 +1,17 @@
 import { useAccess } from '../../components/AccessProvider.tsx'
-import { type ChangeEvent, type DragEvent, type FormEvent, useState } from 'react'
-import {
-  addAdminLink,
-  addAdminText,
-  ApiError,
-  discoverCrawl,
-  uploadAdminFile,
-} from '../../api/client.ts'
+import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { addAdminLink, addAdminText, ApiError, discoverCrawl } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { UploadFiles } from './UploadFiles.tsx'
 
 type Tab = 'upload' | 'link' | 'text' | 'crawl'
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'upload', label: 'Upload file' },
+  { id: 'upload', label: 'Upload files' },
   { id: 'link', label: 'Add link' },
   { id: 'text', label: 'Paste text' },
   { id: 'crawl', label: 'Crawl site' },
@@ -268,11 +264,13 @@ function CrawlTab({
   )
 }
 
+/** The panel's anchor: other pages link to it and it takes focus when linked to. */
+export const ADD_DOCUMENTS_ANCHOR = 'add-documents'
+
 /**
- * Collapsible "Add content" panel with four ways to add a resource to a
- * tenant's knowledge box: upload a file, add a link, paste text, or discover
- * and ingest links from a crawled site. Closed by default so a stats-only
- * glance at the card stays uncluttered.
+ * The "Add documents" panel: upload files, add a link, paste text, or discover and ingest a
+ * site's pages. Open by default with uploads first, since adding documents is the main reason
+ * to be here; a link to its anchor scrolls it into view and moves focus to it.
  */
 function AddContentContent({
   slug,
@@ -281,18 +279,18 @@ function AddContentContent({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
-  const { runExplicit, sessionAllowed, sessionAccess } = usePermissionAdminAccess('content.write', {
-    kind: 'portal',
-    slug,
-  })
+  const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
   const assertCurrent = () => authority.controller.assertCurrent(context)
-  const [open, setOpen] = useState(false)
+  const location = useLocation()
+  const panel = useRef<HTMLElement>(null)
+  const tabRefs = useRef(new Map<Tab, HTMLButtonElement>())
+  const headingId = useId()
+  const idFor = (kind: 'tab' | 'panel', id: Tab) => `add-${kind}-${id}-${slug}`
   const [tab, setTab] = useState<Tab>('upload')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
-  const [dragOver, setDragOver] = useState(false)
 
   const [url, setUrl] = useState('')
   const [linkTitle, setLinkTitle] = useState('')
@@ -300,17 +298,43 @@ function AddContentContent({
   const [textTitle, setTextTitle] = useState('')
   const [textBody, setTextBody] = useState('')
 
+  useEffect(() => {
+    if (location.hash !== `#${ADD_DOCUMENTS_ANCHOR}`) return
+    panel.current?.scrollIntoView({ block: 'start' })
+    panel.current?.focus({ preventScroll: true })
+  }, [location.hash, location.key])
+
+  const choose = (id: Tab, focus = false) => {
+    setTab(id)
+    setMessage(null)
+    if (focus) tabRefs.current.get(id)?.focus()
+  }
+  // Arrow keys, Home and End move between the tabs, as a tab list does.
+  const onTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const index = TABS.findIndex((item) => item.id === tab)
+    const target = event.key === 'ArrowRight'
+      ? (index + 1) % TABS.length
+      : event.key === 'ArrowLeft'
+      ? (index - 1 + TABS.length) % TABS.length
+      : event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+      ? TABS.length - 1
+      : null
+    if (target === null) return
+    event.preventDefault()
+    choose(TABS[target]!.id, true)
+  }
+
   const run = async (
     action: (access: AdminRequestAccess) => Promise<{ id: string }>,
     successText: string,
     label: string,
-    sessionOnly = false,
   ): Promise<boolean> => {
-    if (sessionOnly && !sessionAllowed) return false
     setBusy(true)
     setMessage(null)
     try {
-      const result = sessionOnly ? await action(sessionAccess) : await runExplicit(label, action)
+      const result = await runExplicit(label, action)
       assertCurrent()
       if (result === undefined) return false
       if (!result || typeof result.id !== 'string' || !result.id) {
@@ -331,47 +355,6 @@ function AddContentContent({
     } finally {
       setBusy(false)
     }
-  }
-
-  const uploadMany = (files: File[]) => {
-    if (files.length === 0) return
-    if (files.length > 1 && !sessionAllowed) {
-      setMessage({
-        tone: 'error',
-        text:
-          'Choose one file for emergency access. Sign in with an administrator account to upload multiple files.',
-      })
-      return
-    }
-    // Session-only batches remain sequential; an emergency upload dispatches one file.
-    void run(
-      async (access) => {
-        let result = { id: '' }
-        for (const file of files) {
-          result = await uploadAdminFile(slug, access, file)
-          if (!result || typeof result.id !== 'string' || !result.id) throw new AdminAccessError()
-        }
-        return result
-      },
-      files.length === 1
-        ? `Uploaded "${files[0]?.name}" - it will appear below once processed.`
-        : `Uploaded ${files.length} files - they will appear below once processed.`,
-      'Upload one file',
-      files.length > 1,
-    )
-  }
-
-  const onChooseFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? [])
-    event.target.value = ''
-    uploadMany(files)
-  }
-
-  const onDrop = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    setDragOver(false)
-    const files = Array.from(event.dataTransfer.files)
-    uploadMany(files)
   }
 
   const onSubmitLink = async (event: FormEvent) => {
@@ -409,178 +392,156 @@ function AddContentContent({
   }
 
   return (
-    <div>
-      <button
-        type='button'
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-        className='inline-flex items-center gap-1.5 text-sm font-medium text-ink-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+    <section
+      ref={panel}
+      id={ADD_DOCUMENTS_ANCHOR}
+      tabIndex={-1}
+      aria-labelledby={headingId}
+      className='scroll-mt-24 outline-none'
+      data-add-documents-panel
+    >
+      <h2 id={headingId} className='text-base font-semibold text-ink'>Add documents</h2>
+      <p className='mt-1 text-sm text-ink-2'>
+        Upload files, add a web page, paste text or crawl a site. New documents become searchable
+        once they are processed.
+      </p>
+
+      <div
+        role='tablist'
+        aria-label='Ways to add documents'
+        className='mt-4 flex flex-wrap gap-1 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-1'
       >
-        <span aria-hidden='true'>{open ? '▾' : '▸'}</span>
-        Add content
-      </button>
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            ref={(node) => {
+              if (node) tabRefs.current.set(t.id, node)
+              else tabRefs.current.delete(t.id)
+            }}
+            type='button'
+            role='tab'
+            id={idFor('tab', t.id)}
+            aria-selected={tab === t.id}
+            aria-controls={tab === t.id ? idFor('panel', t.id) : undefined}
+            tabIndex={tab === t.id ? 0 : -1}
+            onClick={() => choose(t.id)}
+            onKeyDown={onTabKey}
+            className={`rp-focus shrink-0 rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
+              tab === t.id
+                ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
+                : 'text-ink-2 hover:bg-[var(--rp-surface)] hover:text-[var(--rp-ink)]'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {open && (
-        <div className='mt-3 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
-          <div className='flex flex-wrap gap-1 rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type='button'
-                aria-pressed={tab === t.id}
-                onClick={() => {
-                  setTab(t.id)
-                  setMessage(null)
-                }}
-                className={`shrink-0 rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
-                  tab === t.id
-                    ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
-                    : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
-                }`}
+      <div
+        role='tabpanel'
+        id={idFor('panel', tab)}
+        aria-labelledby={idFor('tab', tab)}
+        className='mt-4'
+      >
+        {tab === 'upload' && <UploadFiles slug={slug} onAdded={onAdded} />}
+
+        {tab === 'link' && (
+          <form onSubmit={onSubmitLink} className='space-y-3'>
+            <div>
+              <label
+                htmlFor={`link-url-${slug}`}
+                className='mb-1.5 block text-sm font-medium text-ink'
               >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className='mt-4'>
-            {tab === 'upload' && (
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  setDragOver(true)
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={onDrop}
-                className={`rounded-[calc(var(--rp-radius)+4px)] border-2 px-4 py-8 text-center transition-colors duration-150 ${
-                  dragOver ? 'bg-surface-3' : ''
-                }`}
-                style={{
-                  borderStyle: 'dashed',
-                  borderColor: dragOver ? 'var(--rp-ink-3)' : 'var(--rp-line)',
-                }}
+                URL
+              </label>
+              <input
+                id={`link-url-${slug}`}
+                type='url'
+                className='rp-input'
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder='https://example.com/report'
+                autoComplete='off'
+                required
+              />
+            </div>
+            <div>
+              <label
+                htmlFor={`link-title-${slug}`}
+                className='mb-1.5 block text-sm font-medium text-ink'
               >
-                <p className='text-sm text-ink-2'>Drag a file here, or choose one to upload.</p>
-                {!sessionAllowed && (
-                  <p className='mt-2 text-xs text-ink-3'>
-                    Emergency access uploads one file per confirmation. Multiple files require an
-                    administrator sign-in.
-                  </p>
-                )}
-                <label
-                  className='rp-btn rp-btn-primary mt-3 cursor-pointer'
-                  style={{ height: 'auto', minHeight: '44px', paddingBlock: '0.5rem' }}
-                >
-                  {busy ? 'Uploading…' : 'Choose file'}
-                  <input
-                    type='file'
-                    multiple={sessionAllowed}
-                    className='sr-only'
-                    disabled={busy}
-                    onChange={onChooseFile}
-                  />
-                </label>
-                <p className='mt-2 text-xs text-ink-3'>Up to 100 MB.</p>
-              </div>
-            )}
+                Title (optional)
+              </label>
+              <input
+                id={`link-title-${slug}`}
+                className='rp-input'
+                value={linkTitle}
+                onChange={(e) => setLinkTitle(e.target.value)}
+                placeholder='Leave blank to use the page title'
+                autoComplete='off'
+              />
+            </div>
+            <label className='flex items-center gap-2 text-sm text-ink-2'>
+              <input
+                type='checkbox'
+                checked={linkDraft}
+                onChange={(e) => setLinkDraft(e.target.checked)}
+              />
+              Ingest as draft (hidden until published)
+            </label>
+            <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
+              {busy ? 'Adding…' : 'Add link'}
+            </button>
+          </form>
+        )}
 
-            {tab === 'link' && (
-              <form onSubmit={onSubmitLink} className='space-y-3'>
-                <div>
-                  <label
-                    htmlFor={`link-url-${slug}`}
-                    className='mb-1.5 block text-sm font-medium text-ink'
-                  >
-                    URL
-                  </label>
-                  <input
-                    id={`link-url-${slug}`}
-                    type='url'
-                    className='rp-input'
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder='https://example.com/report'
-                    autoComplete='off'
-                    required
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor={`link-title-${slug}`}
-                    className='mb-1.5 block text-sm font-medium text-ink'
-                  >
-                    Title (optional)
-                  </label>
-                  <input
-                    id={`link-title-${slug}`}
-                    className='rp-input'
-                    value={linkTitle}
-                    onChange={(e) => setLinkTitle(e.target.value)}
-                    placeholder='Leave blank to use the page title'
-                    autoComplete='off'
-                  />
-                </div>
-                <label className='flex items-center gap-2 text-sm text-ink-2'>
-                  <input
-                    type='checkbox'
-                    checked={linkDraft}
-                    onChange={(e) => setLinkDraft(e.target.checked)}
-                  />
-                  Ingest as draft (hidden until published)
-                </label>
-                <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-                  {busy ? 'Adding…' : 'Add link'}
-                </button>
-              </form>
-            )}
+        {tab === 'text' && (
+          <form onSubmit={onSubmitText} className='space-y-3'>
+            <div>
+              <label
+                htmlFor={`text-title-${slug}`}
+                className='mb-1.5 block text-sm font-medium text-ink'
+              >
+                Title
+              </label>
+              <input
+                id={`text-title-${slug}`}
+                className='rp-input'
+                value={textTitle}
+                onChange={(e) => setTextTitle(e.target.value)}
+                autoComplete='off'
+                required
+              />
+            </div>
+            <div>
+              <label
+                htmlFor={`text-body-${slug}`}
+                className='mb-1.5 block text-sm font-medium text-ink'
+              >
+                Text
+              </label>
+              <textarea
+                id={`text-body-${slug}`}
+                className='rp-input'
+                rows={6}
+                value={textBody}
+                onChange={(e) => setTextBody(e.target.value)}
+                required
+              />
+            </div>
+            <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
+              {busy ? 'Adding…' : 'Add text'}
+            </button>
+          </form>
+        )}
 
-            {tab === 'text' && (
-              <form onSubmit={onSubmitText} className='space-y-3'>
-                <div>
-                  <label
-                    htmlFor={`text-title-${slug}`}
-                    className='mb-1.5 block text-sm font-medium text-ink'
-                  >
-                    Title
-                  </label>
-                  <input
-                    id={`text-title-${slug}`}
-                    className='rp-input'
-                    value={textTitle}
-                    onChange={(e) => setTextTitle(e.target.value)}
-                    autoComplete='off'
-                    required
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor={`text-body-${slug}`}
-                    className='mb-1.5 block text-sm font-medium text-ink'
-                  >
-                    Text
-                  </label>
-                  <textarea
-                    id={`text-body-${slug}`}
-                    className='rp-input'
-                    rows={6}
-                    value={textBody}
-                    onChange={(e) => setTextBody(e.target.value)}
-                    required
-                  />
-                </div>
-                <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-                  {busy ? 'Adding…' : 'Add text'}
-                </button>
-              </form>
-            )}
+        {tab === 'crawl' && <CrawlTab slug={slug} onAdded={onAdded} />}
+      </div>
 
-            {tab === 'crawl' && <CrawlTab slug={slug} onAdded={onAdded} />}
-          </div>
-
-          {tab !== 'crawl' && message && <MessagePanel message={message} className='mt-4' />}
-        </div>
+      {(tab === 'link' || tab === 'text') && message && (
+        <MessagePanel message={message} className='mt-4' />
       )}
-    </div>
+    </section>
   )
 }
 

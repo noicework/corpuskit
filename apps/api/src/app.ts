@@ -21,6 +21,7 @@ import {
   capacityUsage,
   guardManagement,
   guardPortalWrites,
+  linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
   withRequestAuthority,
@@ -615,6 +616,24 @@ const sourcePatchSchema = z.object({
   maxPages: z.number().int().min(1).max(MAX_SYNC_CAP).optional(),
 })
 const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
+/** The most recent additions one request may list. */
+const RECENT_LIMIT_MAX = 100
+/** A knowledge box without hidden resources, which this server cannot turn on. */
+class HiddenResourcesOff extends Error {}
+/** The platform's refusal to hide a resource, on create or later, where hidden resources are off. */
+const hiddenResourcesOff = (err: unknown) =>
+  err instanceof HiddenResourcesOff ||
+  (err instanceof Error && /hidden resources enabled/i.test(err.message))
+const HIDDEN_RESOURCES_OFF = {
+  error: 'hidden_resources_off',
+  message:
+    'Hiding needs hidden resources, which are not turned on for this knowledge box. Ask the hosting operator to turn them on.',
+} as const
+const DRAFTS_OFF = {
+  error: 'draft_unavailable',
+  message:
+    'The link was not added: drafts need hidden resources, which are not turned on for this knowledge box. Add it without drafting, or ask the hosting operator to turn hidden resources on.',
+} as const
 // Purge is destructive - default TRUE means "just show me the scope", never
 // "go ahead and delete". An explicit { dryRun: false } is required to delete.
 const purgeFailedBodySchema = z.object({ dryRun: z.boolean().optional() })
@@ -628,6 +647,9 @@ const investigationPatchSchema = z.object({
   notes: z.string().max(20000).optional(),
   status: z.enum(['active', 'closed']).optional(),
 }).strict()
+/** Kept passages one synthesis reads at most, and documents it reads at once to find them. */
+const SYNTHESIS_PASSAGES = 40
+const SYNTHESIS_READS_AT_ONCE = 4
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
@@ -950,6 +972,11 @@ export interface BuildAppOptions {
   domainProvisioner?: PortalDomainProvisioner | null
   /** Host aliases each portal may have. Defaults to env MAX_PORTAL_ALIASES, or 5. */
   maxPortalAliases?: number
+  /**
+   * Bytes a crawled link holds against a byte limit until it is measured. Defaults to env
+   * LINK_PROVISIONAL_BYTES, or 10 MB.
+   */
+  linkProvisionalBytes?: number
   /** Hostnames never registered as aliases. Defaults to `reservedHostnames(process.env)`. */
   reservedHostnames?: ReadonlySet<string>
   zone?: string
@@ -1024,12 +1051,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // which lets a write reach a suspended portal only while it runs for a request the route
   // guard admitted for a platform principal. Without a configured store the state is transient.
   const lifecycle = opts.lifecycle ?? new PortalLifecycleStore(undefined, opts.now)
+  const provisionalBytes = opts.linkProvisionalBytes ??
+    linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES)
+  // Links an earlier build recorded without provisional bytes hold the deployment's amount too.
+  lifecycle.linkProvisionalBytes = provisionalBytes
   const rawManagement = opts.management
   opts = {
     ...opts,
     bindings: resetCapacityOnRebind(opts.bindings ?? new BindingStore({}), lifecycle),
     ...(rawManagement
-      ? { management: guardManagement(rawManagement, lifecycle, { platformRequests: true }) }
+      ? {
+        management: guardManagement(rawManagement, lifecycle, {
+          platformRequests: true,
+          linkProvisionalBytes: provisionalBytes,
+        }),
+      }
       : {}),
   }
   const { provider } = opts
@@ -1514,10 +1550,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
       char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127
     ) &&
     id !== '.' && id !== '..'
-  const scopedResource = async (config: TenantConfig, id: string) => {
+  /**
+   * The resource a route addresses, or null. A hidden resource (a draft) is null unless `hidden`
+   * is set, which only routes that manage content (and are guarded by content.write) pass: every
+   * reader-facing route answers 404 for a draft, whoever asks.
+   */
+  const scopedResource = async (config: TenantConfig, id: string, hidden = false) => {
     if (!resourceIdentifier(id)) return null
     try {
-      const resource = await provider.resource(config, id)
+      const resource = await provider.resource(config, id, hidden ? { hidden: true } : {})
       return resource?.id === id ? resource : null
     } catch {
       return null
@@ -1582,8 +1623,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       yield event
     }
   }
-  const adminResource = async (c: Context, config: TenantConfig, id: string) => {
-    if (!await scopedResource(config, id)) return false
+  const adminResource = async (c: Context, config: TenantConfig, id: string, hidden = false) => {
+    if (!await scopedResource(config, id, hidden)) return false
     const fieldId = c.req.query('fieldId')
     if (fieldId !== undefined) {
       if (!opts.management) return false
@@ -3722,7 +3763,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!evidence) return adminNotFound(c)
     const parsed = evidencePatchSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
+    // Judging kept evidence acts on the researcher's own row and reads nothing from the document,
+    // so it still works once the document is unpublished or gone.
     const ok = investigations.updateEvidence(
       config.slug,
       owner,
@@ -3744,7 +3786,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const evidence = investigation?.evidence.find((item) => item.id === c.req.param('eid'))
       if (!evidence) return adminNotFound(c)
       if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
-      if (!await adminResource(c, config, evidence.resourceId)) return adminNotFound(c)
+      // Removing kept evidence reads nothing from the document, so it works whatever became of it.
       investigations.removeEvidence(config.slug, owner, c.req.param('id'), c.req.param('eid'))
       return c.json({ ok: true })
     },
@@ -3787,9 +3829,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           for (const id of ids as string[]) {
             if (key.startsWith('resource')) resources.add(id)
             else if (key.startsWith('evidence')) {
-              const evidence = investigation.evidence.find((item) => item.id === id)
-              if (!evidence) return adminNotFound(c)
-              resources.add(evidence.resourceId)
+              // Evidence already in this investigation was read when it was kept; the document
+              // behind it is not read again, so an unpublished one does not block the save.
+              if (!investigation.evidence.some((item) => item.id === id)) return adminNotFound(c)
             } else if (key.startsWith('artefact')) {
               if (!investigation.artefacts.some((item) => item.id === id)) return adminNotFound(c)
             } else if (id !== investigation.id) return adminNotFound(c)
@@ -3829,17 +3871,60 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // Evidence the researcher judged not relevant is left out; what is left
       // carries the researcher's verdict, tags and note so the synthesis works
       // from their judgement, not just the raw passage.
-      const kept = investigation.evidence
-        .filter((item) => item.verdict !== 'not-relevant')
-        .slice(0, 40)
-      if (kept.length === 0) {
+      const relevant = investigation.evidence.filter((item) => item.verdict !== 'not-relevant')
+      if (relevant.length === 0) {
         return c.json({
           error: 'no_evidence',
           message: 'Every saved passage is marked not relevant - judge or add evidence first.',
         }, 400)
       }
-      for (const id of new Set(kept.map((item) => item.resourceId))) {
-        if (!await adminResource(c, config, id)) return adminNotFound(c)
+      // Evidence from a document readers can no longer see (unpublished, or gone) is left out,
+      // so a draft's text never enters a synthesis; the rest is synthesised as usual. A read that
+      // fails is not "gone": nothing is synthesised, rather than quietly leaving a passage out.
+      // Documents are read once each, in evidence order and a few at a time, only until
+      // SYNTHESIS_PASSAGES readable passages are found.
+      const checks = new Map<string, Promise<{ readable: boolean } | { failed: true }>>()
+      const check = (id: string) => {
+        let result = checks.get(id)
+        if (!result) {
+          result = (async () => {
+            if (!resourceIdentifier(id)) return { readable: false }
+            const resource = await provider.resource(config, id)
+            return { readable: resource?.id === id }
+          })().catch(() => ({ failed: true as const }))
+          checks.set(id, result)
+        }
+        return result
+      }
+      const kept: typeof relevant = []
+      for (let index = 0; index < relevant.length && kept.length < SYNTHESIS_PASSAGES; index++) {
+        // Start the next few documents' reads together, then take this passage's answer.
+        const ahead = new Set<string>()
+        for (
+          let next = index;
+          next < relevant.length && ahead.size < SYNTHESIS_READS_AT_ONCE;
+          next++
+        ) {
+          ahead.add(relevant[next]!.resourceId)
+        }
+        for (const id of ahead) void check(id)
+        const item = relevant[index]!
+        const answer = await check(item.resourceId)
+        if ('failed' in answer) {
+          return c.json({
+            error: 'upstream_unavailable',
+            message:
+              'A document behind the kept passages could not be read, so nothing was synthesised. Try again shortly.',
+          }, 502)
+        }
+        if (answer.readable) kept.push(item)
+      }
+      if (kept.length === 0) {
+        return c.json({
+          error: 'no_evidence',
+          message:
+            'The documents behind the kept passages are no longer available - add evidence first.',
+        }, 400)
       }
       const numbered = kept.map((item, index) => {
         const head = [
@@ -4457,8 +4542,109 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
-    return c.json(await management!.recentResources(config))
+    // An upload batch follows its own files past the default dozen; bounded either way.
+    const requested = c.req.query('limit')
+    const limit = requested === undefined ? undefined : Number(requested)
+    if (
+      limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > RECENT_LIMIT_MAX)
+    ) {
+      return c.json({ error: 'invalid_request' }, 400)
+    }
+    return c.json(await management!.recentResources(config, limit))
   })
+
+  /**
+   * Turn on the knowledge box's hidden resources (they ship off) when this server holds the
+   * account key, recorded in the request's audit as its own step. Without the key, or when the
+   * platform refuses, they stay off (`HiddenResourcesOff`).
+   */
+  const enableHidden = async (c: Context, config: TenantConfig) => {
+    const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
+    if (!kbId || !accountOpsAvailable()) throw new HiddenResourcesOff()
+    try {
+      await subAction(
+        c,
+        matchedDeclaration(c).path,
+        'tenant.hidden_resources.enable',
+        () => enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId),
+        {},
+        { kind: 'portal', slug: config.slug },
+        { kind: 'tenant', id: config.slug },
+      )
+    } catch {
+      throw new HiddenResourcesOff()
+    }
+  }
+
+  /** Hide (or show) a resource, turning hidden resources on first where they are off. */
+  const hideResource = async (c: Context, config: TenantConfig, id: string, hidden: boolean) => {
+    try {
+      await management!.setResourceHidden(config, id, hidden)
+    } catch (err) {
+      if (!hiddenResourcesOff(err)) throw err
+      await enableHidden(c, config)
+      await management!.setResourceHidden(config, id, hidden)
+    }
+  }
+
+  /**
+   * Create a resource as a draft. The platform refuses to create a hidden resource on a box
+   * without hidden resources, and creates nothing: they are turned on and the create is made
+   * again, or the draft is refused. It is never created public instead.
+   */
+  const createDraft = async <T>(
+    c: Context,
+    config: TenantConfig,
+    create: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await create()
+    } catch (err) {
+      if (!hiddenResourcesOff(err)) throw err
+      await enableHidden(c, config)
+      return await create()
+    }
+  }
+
+  /**
+   * Keep a resource just added as a draft, or take it back. A draft that cannot be hidden is
+   * never left published: it is removed and the refusal says why. Only when removing it fails
+   * too does the answer name the resource that stayed, so the administrator can hide or remove
+   * it. Returns undefined when the draft is hidden.
+   */
+  const keepDraft = async (
+    c: Context,
+    config: TenantConfig,
+    id: string,
+  ): Promise<{ status: 409 | 502; body: Record<string, string> } | undefined> => {
+    try {
+      await hideResource(c, config, id, true)
+      return undefined
+    } catch (err) {
+      const off = err instanceof HiddenResourcesOff
+      try {
+        await management!.deleteResource(config, id)
+      } catch {
+        return {
+          status: 502,
+          body: {
+            error: 'draft_not_hidden',
+            message:
+              'The link was added, but it could not be confirmed as a draft and removing it failed. Check it in Recent additions, and hide or remove it.',
+            id,
+          },
+        }
+      }
+      return {
+        status: off ? 409 : 502,
+        body: off ? { ...DRAFTS_OFF } : {
+          error: 'draft_unavailable',
+          message:
+            'The link was not added: it could not be kept as a draft. Try again, or add it without drafting.',
+        },
+      }
+    }
+  }
 
   app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/link'), async (c) => {
     const config = tenant(c.req.param('slug'))
@@ -4482,14 +4668,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
           const html = await res.text()
           const cleaned = extractMainContent(html)
           if (cleaned) {
-            const created = await management!.createText(config, {
-              title: parsed.data.title?.trim() || cleaned.title,
-              body: cleaned.body,
-              format: 'MARKDOWN',
-              originUrl: parsed.data.url,
-            })
-            if (parsed.data.hidden) {
-              await management!.setResourceHidden(config, created.id, true).catch(() => {})
+            const draft = parsed.data.hidden === true
+            const create = () =>
+              management!.createText(config, {
+                title: parsed.data.title?.trim() || cleaned.title,
+                body: cleaned.body,
+                format: 'MARKDOWN',
+                originUrl: parsed.data.url,
+                ...(draft ? { hidden: true } : {}),
+              })
+            const created = draft ? await createDraft(c, config, create) : await create()
+            if (draft) {
+              const refused = await keepDraft(c, config, created.id)
+              if (refused) return c.json(refused.body, refused.status)
             }
             return c.json(created)
           }
@@ -4504,14 +4695,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
       } catch (err) {
         // A knowledge-box back-pressure error is not a fetch/parse failure -
         // falling through to createLink below would just hit the same full
-        // queue again. Let it escape to the outer catch instead.
+        // queue again. Let it escape to the outer catch instead. Neither is a
+        // draft the box refused to hide: the crawler would be refused too.
         if (
-          err instanceof PortalLifecycleError || (err instanceof AragApiError && err.backpressure)
+          err instanceof PortalLifecycleError ||
+          (err instanceof AragApiError && err.backpressure) ||
+          hiddenResourcesOff(err)
         ) throw err
         // Any other failure (network, parsing) falls through to the platform crawler.
       }
-      return c.json(await management!.createLink(config, parsed.data))
+      const created = parsed.data.hidden
+        ? await createDraft(c, config, () => management!.createLink(config, parsed.data))
+        : await management!.createLink(config, parsed.data)
+      if (parsed.data.hidden) {
+        const refused = await keepDraft(c, config, created.id)
+        if (refused) return c.json(refused.body, refused.status)
+      }
+      return c.json(created)
     } catch (err) {
+      // Nothing was created: the box refused a hidden resource and this server cannot turn
+      // hidden resources on.
+      if (parsed.data.hidden && hiddenResourcesOff(err)) return c.json({ ...DRAFTS_OFF }, 409)
       const handled = ingestErrorResponse(err)
       if (handled) return c.json(handled.body, handled.status)
       throw err
@@ -5011,7 +5215,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     assertAgentsEnabled(lifecycle, config.slug)
     const id = c.req.param('id')
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
-    if (!await adminResource(c, config, id)) return adminNotFound(c)
+    if (!await adminResource(c, config, id, true)) return adminNotFound(c)
     try {
       const agentId = new URL(c.req.url).searchParams.get('agentId')
       const agent = ENRICHMENT_AGENTS.find((a) => a.id === agentId) ?? DEFAULT_RESEARCH_ENRICHMENT
@@ -5019,7 +5223,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const enrichment = await generateEnrichment(management!, config, id, agent, proceed)
       proceed()
       generated.put(config.slug, id, enrichment)
-      const resource = await provider.resource(config, id)
+      const resource = await provider.resource(config, id, { hidden: true })
       return c.json({
         ok: true,
         enrichment,
@@ -5246,11 +5450,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!body?.resourceId || !body.html || body.html.length > 4 * 1024 * 1024) {
       return c.json({ error: 'invalid_request' }, 400)
     }
-    const [summary, full] = await Promise.all([
-      provider.resource(config, body.resourceId).catch(() => null),
-      management!.resourceFull(config, body.resourceId).catch(() => null),
-    ])
+    // One read, hidden resources included, says what the resource is and whether it is a draft.
+    // If it fails, nothing is changed: a guess could publish a draft or hide a published one.
+    let summary: Awaited<ReturnType<typeof provider.resource>>
+    try {
+      summary = await provider.resource(config, body.resourceId, { hidden: true })
+    } catch {
+      return c.json({
+        error: 'upstream_unavailable',
+        message: 'The document could not be read, so it was left unchanged. Try again shortly.',
+      }, 502)
+    }
+    const full = await management!.resourceFull(config, body.resourceId).catch(() => null)
     if (!summary || !full) return c.json({ error: 'not_found' }, 404)
+    // Its replacement keeps its visibility: a draft stays a draft.
+    const draft = summary.hidden === true
     const cleaned = extractMainContent(body.html)
     if (!cleaned) {
       return c.json({
@@ -5263,6 +5477,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       body: cleaned.body,
       format: 'MARKDOWN',
       originUrl: full.originUrl,
+      ...(draft ? { hidden: true } : {}),
     })
     // Carry the labels across, then retire the chrome-laden original.
     const classifications = [
@@ -5330,16 +5545,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailable) return unavailable
     const parsed = hiddenBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    if (!await adminResource(c, config, c.req.param('id'))) return adminNotFound(c)
+    // Managing content: a draft is found so it can be published.
+    if (!await adminResource(c, config, c.req.param('id'), true)) return adminNotFound(c)
     try {
-      await management!.setResourceHidden(config, c.req.param('id'), parsed.data.hidden)
+      await hideResource(c, config, c.req.param('id'), parsed.data.hidden)
     } catch (err) {
-      // Boxes ship with the hidden-resources feature off - enable and retry.
-      const message = err instanceof Error ? err.message : ''
-      const kbId = bindings.get(config.slug)?.baseUrl.split('/kb/')[1]
-      if (!/hidden resources enabled/i.test(message) || !kbId) throw err
-      await enableHiddenResources(opts.zone ?? 'aws-ap-southeast-2-1', kbId)
-      await management!.setResourceHidden(config, c.req.param('id'), parsed.data.hidden)
+      if (err instanceof HiddenResourcesOff) return c.json(HIDDEN_RESOURCES_OFF, 409)
+      throw err
     }
     return c.json({ ok: true })
   })

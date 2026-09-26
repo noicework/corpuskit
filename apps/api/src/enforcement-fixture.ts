@@ -505,9 +505,12 @@ export function createEnforcementFixture(
       | 'lifecycle'
       | 'rateLimitAskPerMin'
       | 'operatorDeleteAfterDays'
+      | 'linkProvisionalBytes'
     >
     & {
       bindingKey?: string
+      /** The retrieval provider readers use; the fixture's test double when omitted. */
+      provider?: BuildAppOptions['provider']
       /** Binding records already in storage when the stores start, as after a restart. */
       storedBindings?: Record<string, unknown>
       breakGlassPolicy?: BreakGlassPolicy
@@ -595,7 +598,8 @@ export function createEnforcementFixture(
   }
   const otherTenant = { ...unassigned, tenantId: 'other-tenant', oid: 'other-tenant-user' }
   const providerCalls: ProviderCall[] = []
-  const provider = new Proxy(new DoubleProvider(), {
+  // Tests reassign the double's methods by its own type; a provider passed in is used as it is.
+  const provider = new Proxy((options.provider ?? new DoubleProvider()) as DoubleProvider, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver)
       if (typeof value !== 'function') return value
@@ -630,6 +634,7 @@ export function createEnforcementFixture(
   const {
     identityConfigured: _identityConfigured,
     storedBindings: _storedBindings,
+    provider: _provider,
     ...appOptions
   } = options
   const app = buildApp({

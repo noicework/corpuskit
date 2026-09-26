@@ -167,7 +167,15 @@ export interface CatalogOptions {
  */
 export interface RetrievalProvider {
   listResources(tenant: TenantConfig): Promise<ResourceSummary[]>
-  resource(tenant: TenantConfig, id: string): Promise<ResourceSummary | null>
+  /**
+   * One resource by id. A hidden resource (a draft) is null unless `hidden` is set, which only a
+   * caller managing content may ask for.
+   */
+  resource(
+    tenant: TenantConfig,
+    id: string,
+    options?: { hidden?: boolean },
+  ): Promise<ResourceSummary | null>
   search(tenant: TenantConfig, query: string, opts?: SearchOptions): Promise<SearchResults>
   /**
    * Suggested questions for the ask box. With a query, the ones that share a

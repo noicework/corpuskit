@@ -1388,8 +1388,11 @@ body {
   color-scheme: light;
 }
 
-/* `divide-y divide-line` - Tailwind has no divide-line; bind it to the token. */
-.divide-line > :not([hidden]) ~ :not([hidden]) {
+/* `divide-y divide-line` - Tailwind has no divide-line; bind it to the token. Tailwind 4 draws
+ * the divider under every child but the last, so colour those as well as the later siblings the
+ * older top-border form used: otherwise the first row's divider falls back to currentColor. */
+.divide-line > :not([hidden]) ~ :not([hidden]),
+.divide-line > :not(:last-child) {
   border-color: var(--rp-line);
 }
 

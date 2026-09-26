@@ -49,6 +49,17 @@ const MATCHED_PASSAGE =
 export class DoubleProvider implements RetrievalProvider {
   private resources: ResourceSummary[] = [RESOURCE_ONE, RESOURCE_TWO]
 
+  /**
+   * A provider for portals whose collection is still empty. A factory, not a constructor
+   * argument: Worker fixtures subclass this class and construct it as the Worker constructs its
+   * real provider.
+   */
+  static empty(): DoubleProvider {
+    const provider = new DoubleProvider()
+    provider.resources = []
+    return provider
+  }
+
   listResources(_tenant: TenantConfig): Promise<ResourceSummary[]> {
     return Promise.resolve(this.resources)
   }
@@ -98,6 +109,7 @@ export class DoubleProvider implements RetrievalProvider {
 
   facets(_tenant: TenantConfig, labelsets: string[]): Promise<FacetCounts> {
     const counts: FacetCounts = {}
+    if (this.resources.length === 0) return Promise.resolve(counts)
     for (const ls of labelsets) {
       if (ls === 'topic') {
         counts.topic = { 'stock-assessment': 1, 'marine-sustainability': 1, 'post-harvest': 1 }

@@ -8,9 +8,12 @@ import {
 import { sessionFixture } from './auth.test.ts'
 import { sessionAccess } from './break-glass.ts'
 import {
+  addAdminLink,
+  addAdminText,
   analysePortal,
   compareExtraction,
   generateArtifact,
+  getAdminCounters,
   getResourceContent,
   implementKg,
   listServerSessions,
@@ -599,4 +602,194 @@ Deno.test('only the focus a file picker hands back skips withdrawal, and only on
   // Without any activation every focus is a return.
   focus.blurred(9_000)
   expect(focus.focused()).toBe('return')
+})
+
+/** A fetch double that answers the session read and holds each admin request until told. */
+function routedFetch(session: () => Response | Promise<Response>) {
+  const admin: { url: string; signal?: AbortSignal; resolve: (response: Response) => void }[] = []
+  let authReads = 0
+  let releaseAuth: (() => void) | undefined
+  let authGate: Promise<void> | undefined
+  const fetchDouble = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input)
+    if (url.startsWith('/auth/me')) {
+      authReads++
+      return (authGate ?? Promise.resolve()).then(() => session())
+    }
+    return new Promise<Response>((resolve, reject) => {
+      const signal = init?.signal ?? undefined
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      admin.push({ url, signal, resolve })
+    })
+  }
+  return {
+    fetch: fetchDouble as typeof fetch,
+    admin,
+    reads: () => authReads,
+    gateAuth: () => {
+      authGate = new Promise((resolve) => {
+        releaseAuth = resolve
+      })
+    },
+    releaseAuth: () => releaseAuth?.(),
+  }
+}
+
+Deno.test('an add in flight is held through an access check and published to the same authority', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const routed = routedFetch(() => Response.json(sessionFixture()))
+  globalThis.fetch = routed.fetch
+  const authority = new AuthorityController()
+  authority.setSession(sessionFixture(), 'marine')
+  const unregister = registerAuthorityController(authority)
+  try {
+    const upload = uploadAdminFile('marine', sessionAccess, new File(['x'], 'a.pdf'))
+    let settled = false
+    upload.then(() => settled = true, () => settled = true)
+    while (routed.admin.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+    // An observed return: reads and the page are withdrawn, the write is not cut off.
+    routed.gateAuth()
+    const check = authority.refresh('marine')
+    expect(authority.status).toBe('loading')
+    expect(routed.admin[0]!.signal?.aborted).toBe(false)
+    // Its answer arrives mid-check and waits: nothing publishes while access is unknown.
+    routed.admin[0]!.resolve(Response.json({ id: 'res-1' }))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(settled).toBe(false)
+    routed.releaseAuth()
+    await check
+    expect(await upload).toEqual({ id: 'res-1' })
+  } finally {
+    unregister()
+    globalThis.fetch = original
+    restore()
+  }
+})
+
+Deno.test('a held add is dropped when the check finds another person, other authority or no answer', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const narrower = {
+    ...sessionFixture(),
+    portalAccess: { ...sessionFixture().portalAccess, permissions: ['portal.read'] },
+  }
+  const outcomes: [string, () => Response][] = [
+    ['identity', () => Response.json(sessionFixture('marine', 'two'))],
+    ['authority', () => Response.json(narrower)],
+    ['failure', () => new Response('unavailable', { status: 503 })],
+  ]
+  try {
+    for (const [name, answer] of outcomes) {
+      const routed = routedFetch(answer)
+      globalThis.fetch = routed.fetch
+      const authority = new AuthorityController()
+      authority.setSession(sessionFixture(), 'marine')
+      const unregister = registerAuthorityController(authority)
+      try {
+        const add = addAdminText('marine', sessionAccess, { title: 't', body: 'b' })
+        while (routed.admin.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+        routed.gateAuth()
+        const check = authority.refresh('marine').catch(() => {})
+        expect(routed.admin[0]!.signal?.aborted, name).toBe(false)
+        routed.releaseAuth()
+        await check
+        // Anything but the same authority ends the write's answer: it never publishes.
+        expect(routed.admin[0]!.signal?.aborted, name).toBe(true)
+        await expect(add).rejects.toThrow()
+      } finally {
+        unregister()
+      }
+    }
+  } finally {
+    globalThis.fetch = original
+    restore()
+  }
+})
+
+Deno.test('a held answer that arrived mid-check never publishes when the check ends anywhere else', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const outcomes: [string, (authority: AuthorityController) => Promise<unknown>, () => Response][] =
+    [
+      [
+        'another person',
+        (a) => a.refresh('marine'),
+        () => Response.json(sessionFixture('marine', 'two')),
+      ],
+      ['another portal', (a) => a.refresh('other'), () => Response.json(sessionFixture('other'))],
+      [
+        'a sign-out',
+        (a) => Promise.resolve(a.invalidate('sign out')),
+        () => Response.json(sessionFixture()),
+      ],
+      ['a failed check', (a) => a.refresh('marine'), () => new Response('x', { status: 503 })],
+    ]
+  try {
+    for (const [name, end, answer] of outcomes) {
+      for (const kind of ['upload', 'link'] as const) {
+        const routed = routedFetch(answer)
+        globalThis.fetch = routed.fetch
+        const authority = new AuthorityController()
+        authority.setSession(sessionFixture(), 'marine')
+        const unregister = registerAuthorityController(authority)
+        try {
+          const add: Promise<unknown> = kind === 'upload'
+            ? uploadAdminFile('marine', sessionAccess, new File(['x'], 'a.pdf'))
+            : addAdminLink('marine', sessionAccess, { url: 'https://example.test/report' })
+          let outcome: unknown = 'pending'
+          add.then((value) => outcome = value, (error: Error) => outcome = error.name)
+          while (routed.admin.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+          routed.gateAuth()
+          authority.invalidate('observed return', 'loading')
+          const check = end(authority).catch(() => {})
+          // The answer is already here, waiting for the check.
+          routed.admin[0]!.resolve(Response.json({ id: 'res-1' }))
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          // A sign-out ends the add at once; a check waits for its result first.
+          expect(outcome, `${name}, ${kind}`).toBe(name === 'a sign-out' ? 'AbortError' : 'pending')
+          routed.releaseAuth()
+          await check
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          expect(outcome, `${name}, ${kind}`).toBe('AbortError')
+        } finally {
+          unregister()
+        }
+      }
+    }
+  } finally {
+    globalThis.fetch = original
+    restore()
+  }
+})
+
+Deno.test('reads, streams and adds not marked to be held still end the moment access is withdrawn', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const routed = routedFetch(() => Response.json(sessionFixture()))
+  globalThis.fetch = routed.fetch
+  const authority = new AuthorityController()
+  authority.setSession(sessionFixture(), 'marine')
+  const unregister = registerAuthorityController(authority)
+  try {
+    const read = getAdminCounters('marine', sessionAccess)
+    const toggle = setPortalDisabled('marine', sessionAccess, true)
+    const held = uploadAdminFile('marine', sessionAccess, new File(['x'], 'a.pdf'))
+    while (routed.admin.length < 3) await new Promise((resolve) => setTimeout(resolve, 0))
+    routed.gateAuth()
+    const check = authority.refresh('marine')
+    expect(routed.admin.map((request) => request.signal?.aborted)).toEqual([true, true, false])
+    await expect(read).rejects.toThrow()
+    await expect(toggle).rejects.toThrow()
+    // A denial, unlike a check, ends a held add too.
+    authority.invalidate('denied')
+    expect(routed.admin[2]!.signal?.aborted).toBe(true)
+    await expect(held).rejects.toThrow()
+    routed.releaseAuth()
+    await check.catch(() => {})
+  } finally {
+    unregister()
+    globalThis.fetch = original
+    restore()
+  }
 })

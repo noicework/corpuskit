@@ -359,10 +359,12 @@ for (const adapter of ['local', 'durable'] as const) {
 
   Deno.test(`${adapter} all investigation methods enforce owner, portal and nested references`, async () => {
     let generations = 0
+    const prompts: string[] = []
     const f = createEnforcementFixture({
       management: {
-        askStructured: async () => {
+        askStructured: async (_config: unknown, _schema: unknown, prompt: string) => {
           generations++
+          prompts.push(prompt)
           return { object: { summary: 'Cited evidence [1].' } }
         },
       } as unknown as AragProvider,
@@ -534,9 +536,31 @@ for (const adapter of ['local', 'durable'] as const) {
         resourceId: 'foreign-resource',
         passage: 'Foreign evidence',
       })
+      // Evidence naming a resource this portal cannot read is left out of the synthesis: it never
+      // reaches the model or the saved references, and the rest is synthesised.
       const count = generations
-      expect((await f.requestAs(writer, root + '/synthesise', body('POST'))).status).toBe(404)
-      expect(generations).toBe(count)
+      const synthesis = await f.requestAs(writer, root + '/synthesise', body('POST'))
+      expect(synthesis.status).toBe(200)
+      expect(generations).toBe(count + 1)
+      expect(prompts.at(-1)).not.toContain('Foreign evidence')
+      expect(JSON.stringify((await synthesis.json()).artefact.data.references)).not.toContain(
+        'foreign-resource',
+      )
+      // With nothing readable left, nothing is generated.
+      const foreignOnly = seed('Foreign only')
+      f.stores.investigations.addEvidence('public-a', owner, foreignOnly.id, {
+        ...invalid,
+        resourceId: 'foreign-resource',
+        passage: 'Foreign evidence',
+      })
+      expect(
+        (await f.requestAs(
+          writer,
+          `/api/t/public-a/investigations/${foreignOnly.id}/synthesise`,
+          body('POST'),
+        )).status,
+      ).toBe(400)
+      expect(generations).toBe(count + 1)
       expect(
         (await f.requestAs(
           writer,

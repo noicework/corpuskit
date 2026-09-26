@@ -5,14 +5,17 @@ import {
   type PortalLifecycle,
   type TenantConfig,
 } from '@research-portal/core'
-import { AragProvider } from '@research-portal/retrieval'
+import { AragApiError, AragProvider } from '@research-portal/retrieval'
 import { PortalLifecycleError } from './lifecycle-error.ts'
-import { PortalLifecycleStore } from './lifecycle-store.ts'
+import { MAX_UNMEASURED_LINKS, MEASURE_TIMEOUT, PortalLifecycleStore } from './lifecycle-store.ts'
 import {
   capacityUsage,
+  DEFAULT_LINK_PROVISIONAL_BYTES,
   guardManagement,
+  linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
+  withinTimeout,
   withRequestAuthority,
 } from './lifecycle-management.ts'
 
@@ -340,32 +343,379 @@ Deno.test('byte ledger counts source bytes, refuses the add that would exceed, a
   expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 10 })
 })
 
-Deno.test('a crawled link cannot be sized: a byte limit refuses it and bytes become unknown', async () => {
-  const { state, raw } = box(0)
+/** A knowledge box whose crawled links report a processing status and their extracted text. */
+function crawling(count = 0) {
+  const { state, raw } = box(count)
+  const extractions = new Map<string, { status: string; text: string } | 'missing' | 'fail'>()
+  const reads: string[] = []
+  const measured = Object.assign(raw, {
+    resourceExtraction: (_config: TenantConfig, id: string) => {
+      reads.push(id)
+      const value = extractions.get(id)
+      if (value === 'missing') {
+        return Promise.reject(new AragApiError(404, `/resource/${id}`, 'not found'))
+      }
+      if (value === 'fail') return Promise.reject(new Error('upstream unavailable'))
+      return Promise.resolve(value ?? { status: 'PENDING', text: '' })
+    },
+  })
+  return { state, raw: measured, extractions, reads }
+}
+
+Deno.test('a crawled link holds provisional bytes until it is measured, and a report shows only stored bytes', async () => {
+  const { state, raw, extractions, reads } = crawling()
   const lifecycle = store('active', { maxBytes: 1_000 })
-  const guarded = guardManagement(raw, lifecycle)
-  await guarded.createText(config, { title: 'a', body: 'x'.repeat(999) })
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 100 })
+  await guarded.createText(config, { title: 'a', body: 'x'.repeat(800) })
   state.count = 1
-  // However large the linked document is, the portal never sees it, so it is not admitted.
-  await denied(
-    guarded.createLink(config, { url: 'https://example.test/large.pdf' }),
-    503,
-    'usage_unavailable',
-  )
-  expect(state.calls).toBe(1)
-  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 999 })
-  // Without a byte limit the link is added, and usage then reports bytes as unknown.
-  lifecycle.set('test', { status: 'active', limits: { maxResources: 10 } })
-  await guarded.createLink(config, { url: 'https://example.test/large.pdf' })
+  // The portal cannot see a crawled document before the platform processes it, so the link
+  // holds its provisional bytes against the limit from admission until it is measured. They
+  // are a reservation, not stored content, so a usage report never counts them.
+  await guarded.createLink(config, { url: 'https://example.test/report.pdf' })
   state.count = 2
-  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: null })
-  lifecycle.set('test', { status: 'active', limits: { maxBytes: 1_000_000 } })
-  await denied(guarded.createText(config, text), 503, 'usage_unavailable')
-  // Deleting the link through the portal makes the byte count known again.
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 800 })
+  expect(lifecycle.bytesUsed('test', 2)).toBe(900)
+  expect(lifecycle.pendingMeasurements('test')).toEqual(['res-2'])
+  // An add that fits is admitted without reading anything.
+  reads.length = 0
+  await guarded.createText(config, { title: 'b', body: 'y'.repeat(50) })
+  state.count = 3
+  expect(reads).toEqual([])
+  // One that would fit but for the waiting link reads it first, then waits for it: the portal
+  // is not full, so the refusal says so.
+  await denied(
+    guarded.createText(config, { title: 'c', body: 'w'.repeat(60) }),
+    503,
+    'links_pending',
+  )
+  expect(reads).toEqual(['res-2'])
+  // Once processed, a report counts its extracted text without recording it, and the next add
+  // records what the report found without reading again.
+  extractions.set('res-2', { status: 'PROCESSED', text: 'z'.repeat(40) })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 3, bytes: 890 })
+  expect(lifecycle.pendingMeasurements('test')).toEqual(['res-2'])
+  reads.length = 0
+  await guarded.createText(config, { title: 'c', body: 'w'.repeat(60) })
+  state.count = 4
+  expect(reads).toEqual([])
+  expect(lifecycle.pendingMeasurements('test')).toEqual([])
+  // A portal with no room for a link's own provisional bytes is full: that is a limit.
+  expect(
+    await denied(
+      guarded.createLink(config, { url: 'https://example.test/more' }),
+      413,
+      'limit_exceeded',
+    ),
+  ).toEqual({ error: 'limit_exceeded', limit: 'maxBytes', value: 1_050, max: 1_000 })
+  // A settled status counts the text the resource holds. A 404 proves nothing yet, since a box
+  // that has not caught up with a write can answer it: that link keeps its provisional bytes.
+  lifecycle.set('test', { status: 'active', limits: { maxBytes: 1_300 } })
+  await guarded.createLink(config, { url: 'https://example.test/broken' })
+  await guarded.createLink(config, { url: 'https://example.test/blocked' })
+  await guarded.createLink(config, { url: 'https://example.test/lagging' })
+  state.count = 7
+  extractions.set('res-5', { status: 'ERROR', text: '' })
+  extractions.set('res-6', { status: 'BLOCKED', text: 'b'.repeat(7) })
+  extractions.set('res-7', 'missing')
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 7, bytes: 957 })
+  await guarded.createText(config, { title: 'd', body: 'v'.repeat(100) })
+  state.count = 8
+  expect(lifecycle.pendingMeasurements('test')).toEqual(['res-7'])
+  expect(lifecycle.bytesUsed('test', 8)).toBe(1_157)
+  extractions.set('res-7', { status: 'PROCESSED', text: 'q'.repeat(3) })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 8, bytes: 1_060 })
+  // The resource limit still applies to links.
+  lifecycle.set('test', { status: 'active', limits: { maxResources: 8 } })
+  await denied(
+    guarded.createLink(config, { url: 'https://example.test/ninth' }),
+    413,
+    'limit_exceeded',
+  )
+  // Without a byte limit an add reads nothing, but it records what earlier reads found, and a
+  // link still holds provisional bytes for a byte limit set later.
+  reads.length = 0
   lifecycle.set('test', { status: 'active', limits: null })
-  await guarded.deleteResource(config, 'res-2')
+  await guarded.createLink(config, { url: 'https://example.test/unlimited' })
+  state.count = 9
+  expect(reads).toEqual([])
+  expect(lifecycle.pendingMeasurements('test')).toEqual(['res-9'])
+  lifecycle.set('test', { status: 'active', limits: { maxBytes: 1_160 } })
+  await denied(guarded.createText(config, { title: 'e', body: 'u' }), 503, 'links_pending')
+  expect(reads).toEqual(['res-9'])
+  extractions.set('res-9', { status: 'PROCESSED', text: 'q' })
+  await guarded.createText(config, { title: 'e', body: 'u' })
+  state.count = 10
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 10, bytes: 1_062 })
+  expect(lifecycle.bytesUsed('test', 10)).toBe(1_062)
+  expect(state.calls).toBe(10)
+})
+
+Deno.test('links waiting to be measured are capped, tried in turn, and stop counting as in flight when stuck', async () => {
+  let now = Date.UTC(2026, 8, 26)
+  const lifecycle = new PortalLifecycleStore(undefined, () => now)
+  lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 1_000_000 } })
+  const { state, raw, extractions, reads } = crawling()
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 10 })
+  const link = (n: number) => guarded.createLink(config, { url: `https://example.test/${n}` })
+  const stored = () =>
+    lifecycle.state.get<{ measuring?: Record<string, { unsized?: true }> }>(
+      'portal-capacity:test',
+      {},
+    ).measuring ?? {}
+  for (let n = 1; n <= MAX_UNMEASURED_LINKS; n++) {
+    await link(n)
+    state.count = n
+  }
+  expect(reads).toEqual([])
+  // The next link waits for earlier ones: measuring finds none of them processed yet.
+  await denied(link(21), 503, 'links_pending')
+  expect(reads.length).toBeGreaterThan(0)
+  expect(reads.length).toBeLessThan(MAX_UNMEASURED_LINKS)
+  // Other additions are not held back by links waiting to be measured.
+  await guarded.createText(config, text)
+  state.count = 21
+  // The least recently tried go first, so links that stay unprocessed never keep a processed
+  // one from being measured.
+  extractions.set('res-20', { status: 'PROCESSED', text: 'p'.repeat(5) })
+  reads.length = 0
+  await link(22)
+  state.count = 22
+  expect(reads).toContain('res-20')
+  expect(reads).not.toContain('res-1')
+  expect(Object.keys(stored())).not.toContain('res-20')
+  // Past the timeout, a link still unprocessed stops counting as in flight, but it keeps its
+  // provisional bytes until it is measured or removed.
+  now += MEASURE_TIMEOUT
+  await link(23)
+  state.count = 23
+  const unsized = Object.entries(stored()).filter(([, entry]) => entry.unsized)
+  expect(unsized.length).toBeGreaterThan(0)
+  const held = lifecycle.bytesUsed('test', 23)!
+  const [stuck] = unsized[0]!
+  await guarded.deleteResource(config, stuck)
+  state.count = 22
+  expect(lifecycle.bytesUsed('test', 22)).toBe(held - 10)
+  // One that is processed after all is still measured: a report counts it, and the next add
+  // records it in place of its provisional bytes.
+  const [late] = unsized[1]!
+  extractions.set(late, { status: 'PROCESSED', text: 'L' })
+  const before = (await capacityUsage(raw, lifecycle, config)).bytes!
+  extractions.delete(late)
+  expect(Object.keys(stored())).toContain(late)
+  await guarded.createText(config, text)
+  state.count = 23
+  expect(Object.keys(stored())).not.toContain(late)
+  expect(lifecycle.bytesUsed('test', 23)).toBe(held - 10 - 10 + 1 + 4)
+  expect((await capacityUsage(raw, lifecycle, config)).bytes).toBe(before + 4)
+})
+
+Deno.test('a 404 stays pending at first, and a link that answers only 404 for the whole wait holds nothing', async () => {
+  const start = Date.UTC(2026, 8, 26)
+  let now = start
+  const lifecycle = new PortalLifecycleStore(undefined, () => now)
+  lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 1_000 } })
+  const { state, raw, extractions } = crawling()
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 100 })
+  const stored = () =>
+    lifecycle.state.get<{ measuring?: Record<string, Record<string, unknown>> }>(
+      'portal-capacity:test',
+      {},
+    ).measuring ?? {}
+  await guarded.createLink(config, { url: 'https://example.test/report' })
   state.count = 1
-  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 999 })
+  extractions.set('res-1', 'missing')
+  // Right after an add a box can answer 404 for a resource it has: that proves nothing yet, so
+  // the link keeps its provisional bytes and an add that needs its room waits.
+  const note = { title: 't', body: 'x'.repeat(950) }
+  await denied(guarded.createText(config, note), 503, 'links_pending')
+  expect(stored()['res-1']).toMatchObject({ reserved: 100, missingSince: start })
+  // Answering nothing but 404 for the whole wait, it is gone: it holds nothing, and the add
+  // goes through. Deleting a stuck link's resource on the platform releases it this way.
+  now += MEASURE_TIMEOUT
+  await guarded.createText(config, note)
+  state.count = 2
+  expect(stored()['res-1']).toBeUndefined()
+  expect(lifecycle.bytesUsed('test', 2)).toBe(950)
+})
+
+Deno.test('any reading other than 404 starts the wait again, and a later 404 never undercuts a measurement', async () => {
+  const start = Date.UTC(2026, 8, 26)
+  let now = start
+  const lifecycle = new PortalLifecycleStore(undefined, () => now)
+  lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 1_000 } })
+  const { state, raw, extractions } = crawling()
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 100 })
+  const stored = () =>
+    lifecycle.state.get<{ measuring?: Record<string, Record<string, unknown>> }>(
+      'portal-capacity:test',
+      {},
+    ).measuring ?? {}
+  const note = { title: 't', body: 'x'.repeat(950) }
+  await guarded.createLink(config, { url: 'https://example.test/report' })
+  state.count = 1
+  extractions.set('res-1', 'missing')
+  await denied(guarded.createText(config, note), 503, 'links_pending')
+  // The resource is there after all, still processing: the 404s stop counting.
+  now += 30 * 60_000
+  extractions.set('res-1', { status: 'PENDING', text: '' })
+  await denied(guarded.createText(config, note), 503, 'links_pending')
+  expect(stored()['res-1']?.missingSince).toBeUndefined()
+  // A 404 past the hour starts a new wait, so the link is held, now as a stuck one.
+  now += 31 * 60_000
+  extractions.set('res-1', 'missing')
+  await denied(guarded.createText(config, note), 413, 'links_stuck')
+  expect(stored()['res-1']).toMatchObject({ missingSince: now, unsized: true, reserved: 100 })
+  // A link measured once keeps what it measured, whatever its reads answer later.
+  lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 10_000 } })
+  await guarded.createLink(config, { url: 'https://example.test/measured' })
+  state.count = 2
+  extractions.set('res-2', { status: 'PROCESSED', text: 'm'.repeat(40) })
+  expect((await capacityUsage(raw, lifecycle, config)).bytes).toBe(40)
+  await guarded.createText(config, { title: 'u', body: 'u' })
+  state.count = 3
+  expect(Object.keys(stored())).not.toContain('res-2')
+  extractions.set('res-2', 'missing')
+  now += 2 * MEASURE_TIMEOUT
+  expect((await capacityUsage(raw, lifecycle, config)).bytes).toBe(41)
+  await guarded.createText(config, { title: 'v', body: 'v' })
+  state.count = 4
+  // Meanwhile the stuck link has answered 404 for more than the wait, so it now holds nothing.
+  expect(Object.keys(stored())).toEqual([])
+  expect(lifecycle.bytesUsed('test', 4)).toBe(40 + 1 + 1)
+})
+
+Deno.test('deleting a link still being measured releases its bytes, and a failed read is retried later', async () => {
+  const { state, raw, extractions } = crawling()
+  const lifecycle = store('active', { maxBytes: 100 })
+  const guarded = guardManagement(raw, lifecycle, { linkProvisionalBytes: 30 })
+  await guarded.createLink(config, { url: 'https://example.test/one' })
+  await guarded.createLink(config, { url: 'https://example.test/two' })
+  state.count = 2
+  extractions.set('res-1', 'fail')
+  extractions.set('res-2', 'fail')
+  // A read that fails is not a measurement: the links keep their provisional bytes, and a
+  // report counts neither as stored.
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 2, bytes: 0 })
+  expect(lifecycle.bytesUsed('test', 2)).toBe(60)
+  expect(lifecycle.pendingMeasurements('test')).toEqual(['res-1', 'res-2'])
+  await guarded.deleteResource(config, 'res-1')
+  state.count = 1
+  expect(lifecycle.pendingMeasurements('test')).toEqual(['res-2'])
+  expect(lifecycle.bytesUsed('test', 1)).toBe(30)
+  extractions.set('res-2', { status: 'PROCESSED', text: 'abc' })
+  expect(await capacityUsage(raw, lifecycle, config)).toEqual({ resources: 1, bytes: 3 })
+})
+
+Deno.test('a read that never answers is given up at its timeout, even if it ignores its signal', async () => {
+  let seen: AbortSignal | undefined
+  const never = withinTimeout((signal) => {
+    seen = signal
+    return new Promise<never>(() => {})
+  }, 10)
+  await expect(never).rejects.toMatchObject({ name: 'TimeoutError' })
+  expect(seen?.aborted).toBe(true)
+  // One that answers in time is unaffected, and leaves no timer behind.
+  expect(await withinTimeout(() => Promise.resolve('read'), 60_000)).toBe('read')
+})
+
+Deno.test('measurement reads and the resource count can be given up', async () => {
+  const signals: { read: AbortSignal[]; count: AbortSignal[] } = { read: [], count: [] }
+  const { state, raw } = crawling()
+  const timed = Object.assign(raw, {
+    resourceCount: (_config: TenantConfig, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) signals.count.push(options.signal)
+      return Promise.resolve(state.count)
+    },
+    resourceExtraction: (
+      _config: TenantConfig,
+      _id: string,
+      options?: { signal?: AbortSignal },
+    ) => {
+      if (options?.signal) signals.read.push(options.signal)
+      return Promise.resolve({ status: 'PENDING', text: '' })
+    },
+  })
+  const lifecycle = store('active', { maxBytes: 100 })
+  const guarded = guardManagement(timed, lifecycle, { linkProvisionalBytes: 60 })
+  await guarded.createLink(config, { url: 'https://example.test/one' })
+  state.count = 1
+  await denied(
+    guarded.createText(config, { title: 't', body: 'x'.repeat(50) }),
+    503,
+    'links_pending',
+  )
+  expect(signals.count.length).toBeGreaterThan(0)
+  expect(signals.read).toHaveLength(1)
+  expect(signals.read[0]!.aborted).toBe(false)
+})
+
+Deno.test('404s are timed by when they were read, so an old one never settles a live link', async () => {
+  // A box that lags each write by 5 seconds: a read in that window answers 404, and after it the
+  // link is there, processed, holding 4,000 bytes of text.
+  const scenario = async (staleRead: boolean) => {
+    const start = Date.UTC(2026, 8, 12)
+    let now = start
+    const lifecycle = new PortalLifecycleStore(undefined, () => now)
+    lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 5_000 } }, now)
+    const { state, raw } = crawling()
+    const created = new Map<string, number>()
+    const reads: string[] = []
+    const lagging = Object.assign(raw, {
+      createLink: () => {
+        state.calls++
+        state.count++
+        created.set(`res-${state.calls}`, now)
+        return Promise.resolve({ id: `res-${state.calls}` })
+      },
+      createText: () => {
+        state.calls++
+        state.count++
+        return Promise.resolve({ id: `res-${state.calls}` })
+      },
+      resourceExtraction: (_config: TenantConfig, id: string) => {
+        const behind = now - (created.get(id) ?? now) < 5_000
+        reads.push(`${(now - start) / 1_000}s:${behind ? 404 : 'PROCESSED'}`)
+        if (behind) return Promise.reject(new AragApiError(404, `/resource/${id}`, 'not found'))
+        return Promise.resolve({ status: 'PROCESSED', text: 'x'.repeat(4_000) })
+      },
+    })
+    const guarded = guardManagement(lagging, lifecycle, { linkProvisionalBytes: 1_000 })
+    await guarded.createLink(config, { url: 'https://example.test/big.pdf' })
+    await guarded.createText(config, { title: 't', body: 'n'.repeat(4_000) })
+    now += 1_000
+    await denied(
+      guarded.createText(config, { title: 't', body: 'n'.repeat(1_000) }),
+      503,
+      'links_pending',
+    )
+    now += 1_000
+    // A link route's precheck reads the link again and records nothing.
+    if (staleRead) await denied(precheckAdd(lagging, lifecycle, config), 503, 'links_pending')
+    now += 60 * 60_000 + 5_000
+    // An hour on, the next add must not take the 404s read a second apart as an hour of them:
+    // the link is read afresh, measured at its real size, and the add does not fit.
+    expect(
+      await denied(
+        guarded.createText(config, { title: 't', body: 'n'.repeat(900) }),
+        413,
+        'limit_exceeded',
+      ),
+    ).toMatchObject({ limit: 'maxBytes', max: 5_000 })
+    expect(lifecycle.pendingMeasurements('test')).toEqual([])
+    expect(lifecycle.bytesUsed('test', state.count)).toBe(8_000)
+    expect(reads.at(-1)).toBe('3607s:PROCESSED')
+  }
+  await scenario(false)
+  await scenario(true)
+})
+
+Deno.test('LINK_PROVISIONAL_BYTES is a whole number of bytes, otherwise 10 MB', () => {
+  expect(DEFAULT_LINK_PROVISIONAL_BYTES).toBe(10 * 1024 * 1024)
+  expect(linkProvisionalBytes(undefined)).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)
+  expect(linkProvisionalBytes(' 5000000 ')).toBe(5_000_000)
+  for (const value of ['', '0', '-1', '1.5', '10MB', '1e6']) {
+    expect(linkProvisionalBytes(value), value).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)
+  }
 })
 
 Deno.test('changing or removing a knowledge box starts a fresh ledger whichever path writes it', async () => {

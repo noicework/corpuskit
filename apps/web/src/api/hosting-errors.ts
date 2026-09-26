@@ -9,6 +9,10 @@ export function hostingErrorMessage(body: unknown): string | undefined {
       return 'This portal is paused. Contact your portal administrator for help.'
     case 'usage_unavailable':
       return "This portal's usage cannot be checked right now, so new content cannot be added. Try again shortly, or contact your portal administrator."
+    case 'links_pending':
+      return 'Links added earlier are still being processed, so this cannot be added yet. Try again in a minute or two.'
+    case 'links_stuck':
+      return 'A link added earlier could not be processed, so its space is still counted and this cannot be added. Ask your hosting operator to check it, or to raise the storage limit.'
     case 'agents_disabled':
       return 'Agents are disabled for this portal. Contact your portal administrator to enable them.'
     case 'limit_exceeded':

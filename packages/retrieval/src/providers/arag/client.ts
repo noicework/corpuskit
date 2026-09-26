@@ -125,9 +125,13 @@ export class KbClient {
     }
   }
 
-  async getJson<T = unknown>(path: string): Promise<T> {
+  /** A read; `signal` lets a caller give up on it, as a timeout does. */
+  async getJson<T = unknown>(path: string, options: { signal?: AbortSignal } = {}): Promise<T> {
     const url = this.url(path)
-    const res = await this.fetchImpl(url, { headers: this.headers() })
+    const res = await this.fetchImpl(url, {
+      headers: this.headers(),
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json()) as T
   }

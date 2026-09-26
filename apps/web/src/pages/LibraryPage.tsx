@@ -9,6 +9,8 @@ import { SearchField } from '../components/SearchField.tsx'
 import { GridDensity, ViewToggle } from '../components/ViewControls.tsx'
 import { useViewMode, type ViewMode } from '../components/useViewMode.ts'
 import { EmptyState, ErrorCard, prettyLabel, sameLabel, Skeleton } from '../components/ui.tsx'
+import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
+import { useAccess } from '../components/AccessProvider.tsx'
 import { plainDashes, presentTitle } from '../lib/display-title.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
@@ -304,6 +306,7 @@ export function LibraryBrowser(
   } = {},
 ) {
   const { config } = useOutletContext<TenantOutletContext>()
+  const access = useAccess()
 
   // Uncontrolled, the layout starts from the viewport - a phone opens in list -
   // and switches to whatever the toggle is set to from the first click on. A
@@ -446,20 +449,29 @@ export function LibraryBrowser(
 
   const hasMore = accumulated.length < total
   const isInitialLoading = isLoading && page === 0
+  // With no search or filter applied, an empty listing is an empty collection.
+  const unfiltered = !debouncedQuery && selectedTopics.length === 0 && selectedKinds.length === 0 &&
+    selectedFormats.length === 0
+  const canAdd = access.can('content.write', { kind: 'portal', slug: config.slug })
+  // The empty collection's own prompt carries the action; the header need not repeat it.
+  const emptyCollection = !isInitialLoading && !isError && accumulated.length === 0 && unfiltered
   const importDay = useMemo(() => bulkImportDay(accumulated), [accumulated])
 
   return (
     <main className={bare ? '' : 'rp-shell py-8'}>
       {!bare && (
-        <div className='flex flex-wrap items-baseline justify-between gap-2'>
+        <div className='flex flex-wrap items-center justify-between gap-3'>
           <h1 className='rp-display text-2xl text-ink'>Library</h1>
-          {!isInitialLoading && !isError
-            ? (
-              <p className='text-sm font-medium tabular-nums text-ink-3'>
-                {total.toLocaleString()} {total === 1 ? 'resource' : 'resources'}
-              </p>
-            )
-            : null}
+          <div className='flex flex-wrap items-center gap-3'>
+            {!isInitialLoading && !isError
+              ? (
+                <p className='text-sm font-medium tabular-nums text-ink-3'>
+                  {total.toLocaleString()} {total === 1 ? 'resource' : 'resources'}
+                </p>
+              )
+              : null}
+            {emptyCollection ? null : <AddDocumentsLink slug={config.slug} />}
+          </div>
         </div>
       )}
 
@@ -778,10 +790,23 @@ export function LibraryBrowser(
 
           {!isInitialLoading && !isError && accumulated.length === 0
             ? (
-              <EmptyState
-                title='No resources match these filters'
-                description='Try a different search term, or clear a filter.'
-              />
+              emptyCollection
+                ? (
+                  <EmptyState
+                    title='No documents yet'
+                    description={canAdd
+                      ? 'This collection is empty. Add documents to make them searchable here.'
+                      : 'Documents appear here once they have been added to this collection.'}
+                  >
+                    {canAdd ? <AddDocumentsLink slug={config.slug} /> : null}
+                  </EmptyState>
+                )
+                : (
+                  <EmptyState
+                    title='No resources match these filters'
+                    description='Try a different search term, or clear a filter.'
+                  />
+                )
             )
             : null}
 

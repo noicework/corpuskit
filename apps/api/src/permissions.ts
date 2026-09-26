@@ -67,6 +67,16 @@ function entry(
 }
 
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
+/**
+ * Turning on the knowledge box's hidden resources, which adding a draft or hiding a resource does
+ * when they are off and this server holds the account key: recorded in the same request.
+ */
+const HIDDEN_RESOURCES_ENABLE = {
+  action: 'tenant.hidden_resources.enable',
+  permission: 'content.write',
+  scope: 'portal',
+} as const
+
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
     operator: true,
@@ -335,7 +345,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     operator: true,
   }),
   entry('http', 'GET', '/api/admin/t/:slug/recent', 'content.write', 'portal'),
-  entry('http', 'POST', '/api/admin/t/:slug/resources/link', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/resources/link', 'content.write', 'portal', {
+    subActions: [HIDDEN_RESOURCES_ENABLE],
+  }),
   entry('http', 'POST', '/api/admin/t/:slug/resources/text', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/upload', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/disable', 'behaviour.write', 'portal'),
@@ -414,7 +426,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/corpus-health', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/purge-failed', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/insights', 'content.write', 'portal'),
-  entry('http', 'POST', '/api/admin/t/:slug/resources/:id/hidden', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/resources/:id/hidden', 'content.write', 'portal', {
+    subActions: [HIDDEN_RESOURCES_ENABLE],
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'PATCH', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),

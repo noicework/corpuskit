@@ -5,6 +5,7 @@ import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
 import type { Source, SourceStoreApi } from '../apps/api/src/stores.ts'
+import { PortalLifecycleError } from '../apps/api/src/lifecycle-error.ts'
 
 /** Isolate fixture storage while exercising the real HTTP handlers and declarations. */
 function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
@@ -155,6 +156,22 @@ async function textShown(page: Page, text: string) {
     })
   } catch (error) {
     console.error('Missing text', text, await page.evaluate(() => document.body.innerText))
+    throw error
+  }
+}
+/** An upload row for `name` that the portal accepted: processing, or already ready. */
+async function uploadShown(page: Page, name: string) {
+  try {
+    await page.waitForFunction(
+      (name: string) =>
+        [...document.querySelectorAll('[data-upload-row]')].some((row) =>
+          row.textContent?.includes(name) &&
+          ['processing', 'ready'].includes(row.getAttribute('data-upload-status') ?? '')
+        ),
+      { args: [name] },
+    )
+  } catch (error) {
+    console.error('Missing upload', name, await page.evaluate(() => document.body.innerText))
     throw error
   }
 }
@@ -532,9 +549,8 @@ Deno.test('signed viewers emit no content administration requests; curator compl
             expect(calls).toEqual([])
             continue
           }
-          await click(page, 'Add content')
           await upload(page)
-          await textShown(page, 'Uploaded "marine.txt"')
+          await uploadShown(page, 'marine.txt')
           await click(page, 'Paste text')
           await fill(page, '#text-title-marine', 'Marine text')
           await fill(page, '#text-body-marine', 'Verified marine evidence')
@@ -609,10 +625,10 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
   try {
     await assertCurrentBuild(page)
     for (const name of ['first.txt', 'second.txt']) {
-      await click(page, 'Add content')
+      await page.waitForSelector('input[type=file]')
       const before = checks()
       await pickFile(page, name)
-      await textShown(page, `Uploaded "${name}"`)
+      await uploadShown(page, name)
       // The picker's return is still checked against the server, without withdrawing access:
       // once that check has answered, the panel that chose the file is still mounted.
       const deadline = Date.now() + 5000
@@ -622,11 +638,14 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
       }
       await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
       expect(await page.evaluate(() => !!document.querySelector('input[type=file]'))).toBe(true)
-      await textShown(page, `Uploaded "${name}"`)
+      await uploadShown(page, name)
       // A later ordinary return withdraws access until the session is read again, which
-      // remounts the page and closes the panel.
-      await page.evaluate(() => dispatchEvent(new Event('focus')))
-      await page.waitForFunction(() => !document.querySelector('input[type=file]'))
+      // remounts the page: the panel that chose the file is replaced.
+      await page.evaluate(() => {
+        document.querySelector('input[type=file]')!.setAttribute('data-before-return', '')
+        dispatchEvent(new Event('focus'))
+      })
+      await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
     }
     expect(uploads()).toBe(2)
     expect(calls.filter((call) => call === 'uploadFile')).toHaveLength(2)
@@ -635,6 +654,53 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
     console.error(server.requests.slice(-12), await page.evaluate(() => document.body.innerText))
     throw error
   } finally {
+    await page.close()
+    await server.close()
+    await browser.close()
+  }
+})
+
+Deno.test('an upload running when the person comes back finishes once and survives the check', async () => {
+  const browser = await launch()
+  const { management, calls } = contentManagement()
+  const server = startTestServer({ identity: { role: 'curator' }, management })
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+  let delay: ReturnType<typeof server.delayResponse> | undefined
+  const posts = () =>
+    server.requests.filter((r) =>
+      r.method === 'POST' && r.path === '/api/admin/t/marine/resources/upload'
+    )
+  try {
+    await assertCurrentBuild(page)
+    await page.waitForSelector('input[type=file]')
+    delay = server.delayResponse('/api/admin/t/marine/resources/upload')
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['Marine research evidence'], 'inflight.txt'))
+      input.files = transfer.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await delay.entered
+    // The person switches away and back mid-upload: the page is withdrawn and access checked.
+    await page.evaluate(() => {
+      document.querySelector('input[type=file]')!.setAttribute('data-before-return', '')
+      dispatchEvent(new Event('focus'))
+    })
+    await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
+    await page.waitForSelector('[data-upload-row][data-upload-status=uploading]')
+    // The write was never cut off, so it lands once and its row carries on in the new page.
+    delay.release()
+    await uploadShown(page, 'inflight.txt')
+    expect(posts()).toHaveLength(1)
+    expect(posts()[0]!.status).toBe(200)
+    expect(calls.filter((call) => call === 'uploadFile')).toHaveLength(1)
+    expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+  } catch (error) {
+    console.error(server.requests.slice(-12), await page.evaluate(() => document.body.innerText))
+    throw error
+  } finally {
+    delay?.release()
     await page.close()
     await server.close()
     await browser.close()
@@ -652,7 +718,7 @@ Deno.test('pending uploads and refreshes cannot publish after revocation', async
       const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
       let delay: ReturnType<typeof server.delayResponse> | undefined
       try {
-        await click(page, 'Add content')
+        await page.waitForSelector('input[type=file]')
         delay = server.delayResponse(`/api/admin/t/marine/${path}`)
         if (path === 'resources/upload') await upload(page)
         else await click(page, path === 'recent' ? 'Refresh recent additions' : 'Scan corpus')
@@ -663,7 +729,7 @@ Deno.test('pending uploads and refreshes cannot publish after revocation', async
         delay.release()
         await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
         expect(await page.evaluate(() => document.body.innerText)).not.toMatch(
-          /Uploaded|Marine research|words extracted|Add content/,
+          /Uploaded|Processing|Ready|Marine research|words extracted|Add documents/,
         )
       } finally {
         delay?.release()
@@ -737,7 +803,7 @@ Deno.test('content controls fit light and Observatory at wide and390 with22px an
         })
         const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
         try {
-          await click(page, 'Add content')
+          await page.waitForSelector('input[type=file]')
           await page.evaluate(() =>
             document.querySelector<HTMLButtonElement>('button[aria-label="Switch to light mode"]')
               ?.click()
@@ -770,7 +836,7 @@ Deno.test('content controls fit light and Observatory at wide and390 with22px an
             )
             await captureBoundary(page, dir, `metrics-${dark ? 'dark' : 'light'}-${width}`, width)
             await navigate(page, 'content')
-            await click(page, 'Add content')
+            await page.waitForSelector('input[type=file]')
             await page.evaluate(() => scrollTo(0, 0))
           }
         } finally {
@@ -781,6 +847,324 @@ Deno.test('content controls fit light and Observatory at wide and390 with22px an
       }
     }
   } finally {
+    await browser.close()
+  }
+})
+
+/** Wait, up to `ms`, for a condition evaluated in the page. */
+async function until(page: Page, condition: () => boolean | undefined, ms: number) {
+  const deadline = Date.now() + ms
+  while (!(await page.evaluate(condition))) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${condition}`)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
+/**
+ * A knowledge box that processes uploads: each upload is pending for its first reads of the
+ * newest additions and processed after that, a file named "scanned" fails processing, and one
+ * named "over-limit" is refused by the portal's storage limit.
+ */
+function processingManagement() {
+  const items: { id: string; title: string; reads: number; bad: boolean }[] = []
+  const calls: string[] = []
+  const limits: unknown[] = []
+  const processed = () => items.filter((item) => item.reads >= 2 && !item.bad).length
+  const management = new Proxy({}, {
+    get: (_target, method) => (...args: unknown[]) => {
+      calls.push(String(method))
+      switch (method) {
+        case 'counters':
+          return Promise.resolve({
+            resources: processed(),
+            paragraphs: processed() * 14,
+            sentences: processed() * 28,
+            indexMb: processed(),
+          })
+        case 'resourceCount':
+          return Promise.resolve(processed())
+        case 'recentResources':
+          limits.push(args[1])
+          return Promise.resolve(
+            items.slice().reverse().map((item) => {
+              item.reads += 1
+              return {
+                id: item.id,
+                title: item.title,
+                status: item.reads < 2 ? 'pending' : item.bad ? 'error' : 'processed',
+                created: '2026-09-26T00:00:00.000Z',
+                hidden: false,
+              }
+            }),
+          )
+        case 'uploadFile': {
+          const { filename } = args[1] as { filename: string }
+          if (filename.includes('over-limit')) {
+            throw new PortalLifecycleError(413, { error: 'limit_exceeded', limit: 'maxBytes' })
+          }
+          const id = `upload-${items.length + 1}`
+          items.push({ id, title: filename, reads: 0, bad: filename.includes('scanned') })
+          return Promise.resolve({ id })
+        }
+        case 'corpusHealth':
+        case 'agentConfigs':
+          return Promise.resolve([])
+        default:
+          return Promise.reject(new Error(`Unsupported processing fixture: ${String(method)}`))
+      }
+    },
+  }) as NonNullable<BuildAppOptions['management']>
+  return { management, calls, limits }
+}
+
+Deno.test('the recent additions list takes a bounded limit for following an upload batch', async () => {
+  const { management, limits } = processingManagement()
+  const server = startTestServer({ identity: { role: 'curator' }, management, apiOnly: true })
+  try {
+    for (const limit of ['0', '101', '2.5', 'many']) {
+      const response = await fetch(`${server.url}/api/admin/t/marine/recent?limit=${limit}`)
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({ error: 'invalid_request' })
+    }
+    for (const query of ['?limit=40', '']) {
+      const response = await fetch(`${server.url}/api/admin/t/marine/recent${query}`)
+      expect(response.status).toBe(200)
+      await response.json()
+    }
+    expect(limits).toEqual([40, undefined])
+  } finally {
+    await server.close()
+  }
+})
+
+Deno.test('adding documents is one click from the library, the overview and any empty collection', async () => {
+  const browser = await launch()
+  try {
+    for (const role of ['curator', 'viewer'] as const) {
+      const server = startTestServer({
+        identity: { role },
+        management: processingManagement().management,
+        emptyCollection: true,
+      })
+      const page = await browser.newPage(`${server.url}/t/marine/library`)
+      try {
+        await textShown(page, 'No documents yet')
+        if (role === 'viewer') {
+          await textShown(page, 'Documents appear here once they have been added')
+          expect(
+            await page.evaluate(() => document.querySelectorAll('[data-add-documents]').length),
+          )
+            .toBe(0)
+          await page.goto(`${server.url}/t/marine`)
+          await textShown(page, 'Nothing to browse yet')
+          expect(
+            await page.evaluate(() => document.querySelectorAll('[data-add-documents]').length),
+          )
+            .toBe(0)
+          continue
+        }
+        // One action on an empty library: the prompt carries it, the header does not repeat it.
+        expect(await page.evaluate(() => document.querySelectorAll('[data-add-documents]').length))
+          .toBe(1)
+        await page.evaluate(() =>
+          document.querySelector<HTMLAnchorElement>('[data-add-documents]')!.click()
+        )
+        await page.waitForSelector('[data-add-documents-panel] [data-drop-zone]')
+        expect(await page.evaluate(() => `${location.pathname}${location.search}${location.hash}`))
+          .toBe('/t/marine/manage?tab=content#add-documents')
+        await page.waitForFunction(() => document.activeElement?.id === 'add-documents')
+        expect(
+          await page.evaluate(() =>
+            document.querySelector('[role=tab][aria-selected=true]')?.textContent
+          ),
+        ).toBe('Upload files')
+        // The tabs are a tab list: arrow keys, Home and End move the selection and focus.
+        const key = (key: string) =>
+          page.evaluate((key) => {
+            document.activeElement!.dispatchEvent(
+              new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+            )
+          }, { args: [key] })
+        const selected = () =>
+          page.evaluate(() => [
+            document.querySelector('[role=tab][aria-selected=true]')?.textContent,
+            document.activeElement?.textContent,
+          ])
+        await page.evaluate(() =>
+          document.querySelector<HTMLButtonElement>('[role=tab][aria-selected=true]')!.focus()
+        )
+        await key('ArrowRight')
+        expect(await selected()).toEqual(['Add link', 'Add link'])
+        await key('End')
+        expect(await selected()).toEqual(['Crawl site', 'Crawl site'])
+        await key('ArrowRight')
+        expect(await selected()).toEqual(['Upload files', 'Upload files'])
+        await key('ArrowLeft')
+        expect(await selected()).toEqual(['Crawl site', 'Crawl site'])
+        await key('Home')
+        expect(await selected()).toEqual(['Upload files', 'Upload files'])
+        expect(
+          await page.evaluate(() =>
+            document.querySelector('[role=tabpanel]')?.getAttribute('aria-labelledby') ===
+              document.querySelector('[role=tab][aria-selected=true]')?.id
+          ),
+        ).toBe(true)
+        // The overview leads with the empty collection and its action.
+        await navigate(page, 'overview')
+        await page.waitForSelector('[data-overview-add-documents][data-collection-empty=true]')
+        await page.evaluate(() =>
+          document.querySelector<HTMLAnchorElement>(
+            '[data-overview-add-documents] [data-add-documents]',
+          )!.click()
+        )
+        await page.waitForSelector('[data-add-documents-panel] [data-drop-zone]')
+        // The portal home offers it too while there is nothing to browse.
+        await page.goto(`${server.url}/t/marine`)
+        await textShown(page, 'Nothing to browse yet')
+        await page.waitForSelector('[data-add-documents]')
+      } finally {
+        await page.close()
+        await server.close()
+      }
+    }
+  } finally {
+    await browser.close()
+  }
+})
+
+Deno.test('dropped files upload one row each: progress, processing, ready or the exact reason, then fresh counts', async () => {
+  const { management, calls } = processingManagement()
+  const server = startTestServer({
+    identity: { role: 'curator' },
+    management,
+    emptyCollection: true,
+  })
+  const browser = await launch()
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+  const rows = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('[data-upload-row]')].map((row) => ({
+        name: row.querySelector('span')?.textContent,
+        status: row.getAttribute('data-upload-status'),
+        error: row.querySelector('[data-upload-error]')?.textContent ?? null,
+      }))
+    )
+  try {
+    await assertCurrentBuild(page)
+    await page.waitForSelector('[data-drop-zone]')
+    await page.waitForFunction(() =>
+      document.querySelector('[data-manage-counts]')?.textContent?.includes('0 documents')
+    )
+    // Slow the upload so its progress is visible.
+    const cdp = page.unsafelyGetCelestialBindings()
+    await cdp.Network.enable({})
+    await cdp.Network.emulateNetworkConditions({
+      offline: false,
+      latency: 10,
+      downloadThroughput: -1,
+      uploadThroughput: 256 * 1024,
+    })
+    await page.evaluate(() => {
+      const zone = document.querySelector('[data-drop-zone]')!
+      const transfer = new DataTransfer()
+      const file = (name: string, size: number) =>
+        new File([new Uint8Array(size).fill(65)], name, { type: 'application/pdf' })
+      transfer.items.add(file('survey.pdf', 1_200_000))
+      transfer.items.add(file('over-limit.pdf', 2_000))
+      transfer.items.add(file('scanned.pdf', 2_000))
+      transfer.items.add(file('notes.pdf', 2_000))
+      transfer.items.add(new File([], 'empty.txt', { type: 'text/plain' }))
+      Object.assign(globalThis, { dropped: transfer })
+      for (const type of ['dragenter', 'dragover']) {
+        zone.dispatchEvent(
+          new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
+        )
+      }
+    })
+    // Dragging files over the zone marks it as the drop target.
+    await page.waitForSelector('[data-drop-zone][data-drop-active=true]')
+    await page.evaluate(() => {
+      const transfer = (globalThis as unknown as { dropped: DataTransfer }).dropped
+      document.querySelector('[data-drop-zone]')!.dispatchEvent(
+        new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }),
+      )
+    })
+    // Every file has its row at once; the empty one is refused before anything is sent.
+    await page.waitForFunction(() => document.querySelectorAll('[data-upload-row]').length === 5)
+    expect((await rows()).find((row) => row.name === 'empty.txt')).toEqual({
+      name: 'empty.txt',
+      status: 'failed',
+      error: 'That file is empty - choose another file.',
+    })
+    await until(page, () => {
+      const bar = document.querySelector('[data-upload-row] [role=progressbar]')
+      const value = Number(bar?.getAttribute('aria-valuenow'))
+      return value > 0 && value < 100
+    }, 20_000)
+    await cdp.Network.emulateNetworkConditions({
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    })
+    await until(
+      page,
+      () =>
+        [...document.querySelectorAll('[data-upload-row]')].every((row) =>
+          ['ready', 'failed'].includes(row.getAttribute('data-upload-status') ?? '')
+        ),
+      30_000,
+    )
+    expect(await rows()).toEqual([
+      { name: 'survey.pdf', status: 'ready', error: null },
+      {
+        name: 'over-limit.pdf',
+        status: 'failed',
+        error:
+          'This content would exceed the portal storage limit. Choose a smaller file, remove existing content or contact your portal administrator.',
+      },
+      {
+        name: 'scanned.pdf',
+        status: 'failed',
+        error:
+          'The file was uploaded but could not be processed. Check that it opens, or try another format.',
+      },
+      { name: 'notes.pdf', status: 'ready', error: null },
+      { name: 'empty.txt', status: 'failed', error: 'That file is empty - choose another file.' },
+    ])
+    expect(calls.filter((call) => call === 'uploadFile')).toHaveLength(4)
+    // The document count follows without a reload.
+    await until(
+      page,
+      () => document.querySelector('[data-manage-counts]')?.textContent?.includes('2 documents'),
+      20_000,
+    )
+    expect(
+      await page.evaluate(() => document.querySelector('[data-upload-queue] h4')?.textContent),
+    ).toBe('5 files: 2 ready, 3 failed')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('[data-upload-files] [role=status][aria-live=polite]')
+          ?.textContent
+      ),
+    ).toMatch(/is ready\.|failed\./)
+    // A refused file can be tried again; clearing leaves only work still in progress.
+    expect(
+      await page.evaluate(() =>
+        [...document.querySelectorAll('[data-upload-row][data-upload-status=failed]')].map((row) =>
+          !!row.querySelector('button')
+        )
+      ),
+    ).toEqual([true, false, false])
+    await click(page, 'Clear finished')
+    await page.waitForFunction(() => !document.querySelector('[data-upload-queue]'))
+    expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+  } catch (error) {
+    console.error(await rows(), server.requests.slice(-12))
+    throw error
+  } finally {
+    await page.close()
+    await server.close()
     await browser.close()
   }
 })

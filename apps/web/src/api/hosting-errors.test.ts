@@ -46,6 +46,44 @@ Deno.test('all add content transports translate resource and byte limits without
   }
 })
 
+Deno.test('an add held back by links still being processed says to wait, not that the portal is full', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = () =>
+    Promise.resolve(Response.json({ error: 'links_pending' }, { status: 503 }))
+  try {
+    for (
+      const action of [
+        () => uploadAdminFile('marine', sessionAccess, new File(['test'], 'test.txt')),
+        () => addAdminLink('marine', sessionAccess, { url: 'https://example.test/report' }),
+        () => addAdminText('marine', sessionAccess, { title: 'Report', body: 'test' }),
+      ]
+    ) {
+      await expect(action()).rejects.toMatchObject({
+        status: 503,
+        message:
+          'Links added earlier are still being processed, so this cannot be added yet. Try again in a minute or two.',
+      })
+    }
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('an add held back by a link that could not be processed says whom to ask', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = () => Promise.resolve(Response.json({ error: 'links_stuck' }, { status: 413 }))
+  try {
+    await expect(addAdminText('marine', sessionAccess, { title: 'Report', body: 'test' })).rejects
+      .toMatchObject({
+        status: 413,
+        message:
+          'A link added earlier could not be processed, so its space is still counted and this cannot be added. Ask your hosting operator to check it, or to raise the storage limit.',
+      })
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
 Deno.test('daily ask quotas carry a distinct code and reset time while burst limits keep their retry copy', async () => {
   const error = await askError(
     Response.json({

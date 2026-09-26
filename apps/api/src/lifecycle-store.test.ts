@@ -6,6 +6,7 @@ import {
 } from '@research-portal/core'
 import { join } from 'node:path'
 import {
+  DEFAULT_LINK_PROVISIONAL_BYTES,
   FileLifecycleState,
   FileLifecycleStore,
   type LifecycleState,
@@ -388,6 +389,139 @@ Deno.test('capacity ledger sizes resources, releases deletions and resets per kn
   store.resetCapacity('marine')
   expect(store.hasCapacityLedger('marine')).toBe(false)
   expect(store.bytesUsed('marine', 0)).toBe(0)
+})
+
+Deno.test('links awaiting measurement stored in an earlier or unknown shape are read as unmeasured, never as a failure', () => {
+  const state = new MemoryLifecycleState()
+  const store = new PortalLifecycleStore(state)
+  store.set('marine', { status: 'active', limits: { maxBytes: 100_000_000 } })
+  const token = 'a'.repeat(32)
+  state.put('portal-capacity:marine', {
+    v: 1,
+    observed: 5,
+    // An in-flight link from a build that held no provisional bytes for it.
+    inflight: [{ token, at: Date.now(), bytes: 0, measure: true }],
+    added: [],
+    removed: [],
+    sized: { 'text-1': 40 },
+    unsized: 0,
+    measuring: {
+      // A bare timestamp, as an earlier build stored it.
+      'crawled-1': 1_790_000_000_000,
+      // Something this build does not recognise.
+      'crawled-2': { when: 'yesterday' },
+      // A current entry is read as it is.
+      'crawled-3': { at: 1_790_000_000_500, reserved: 7, checked: 1_790_000_000_600 },
+      // A key that is not a resource id is left for the next observation to count.
+      '../escape': 3,
+    },
+  })
+  // Unrecognised entries hold the default provisional bytes and are measured first.
+  expect(store.pendingMeasurements('marine')).toEqual(['crawled-2', 'crawled-1', 'crawled-3'])
+  const held = 40 + 2 * DEFAULT_LINK_PROVISIONAL_BYTES + 7
+  expect(store.bytesUsed('marine', 4)).toBe(held)
+  expect(store.storedBytes('marine', 4)).toBe(40)
+  // Admission works on the record, counting the old in-flight link at the default too, and the
+  // record it writes is in the current shape.
+  expect(store.reserveAdd('marine', { observed: 5, bytes: 1_000_000_000 })).toEqual({
+    limit: 'maxBytes',
+    value: held + DEFAULT_LINK_PROVISIONAL_BYTES + 1_000_000_000,
+    max: 100_000_000,
+  })
+  expect('admitted' in store.reserveAdd('marine', { observed: 5, bytes: 1 })).toBe(true)
+  const written = state.get<{ measuring: Record<string, unknown>; inflight: { bytes: number }[] }>(
+    'portal-capacity:marine',
+    { measuring: {}, inflight: [] },
+  )
+  expect(written.measuring['crawled-1']).toEqual({
+    at: 1_790_000_000_000,
+    reserved: DEFAULT_LINK_PROVISIONAL_BYTES,
+  })
+  expect(written.measuring['crawled-2']).toEqual({
+    at: 0,
+    reserved: DEFAULT_LINK_PROVISIONAL_BYTES,
+  })
+  expect(Object.keys(written.measuring)).not.toContain('../escape')
+  expect(written.inflight[0]!.bytes).toBe(DEFAULT_LINK_PROVISIONAL_BYTES)
+  // A measuring field that is not a record at all is read as nothing awaiting measurement.
+  state.put('portal-capacity:grains', {
+    v: 1,
+    observed: 0,
+    inflight: [],
+    added: [],
+    removed: [],
+    sized: {},
+    unsized: 0,
+    measuring: 42,
+  })
+  expect(store.pendingMeasurements('grains')).toEqual([])
+  expect(store.bytesUsed('grains', 0)).toBe(0)
+})
+
+Deno.test('an add held back only by a link stuck past the timeout is told so, and still refused', () => {
+  const start = Date.UTC(2026, 8, 12)
+  let now = start
+  const store = new PortalLifecycleStore(new MemoryLifecycleState(), () => now)
+  store.set('marine', { status: 'active', limits: { maxBytes: 5_000 } }, now)
+  let count = 0
+  const add = (bytes: number | null, provisional?: number) => {
+    const admission = store.reserveAdd('marine', { observed: count, bytes, provisional })
+    if ('admitted' in admission && admission.admitted !== null) {
+      count++
+      store.settleAdd('marine', admission.admitted, {
+        created: true,
+        id: bytes === null ? 'stuck-link' : `text-${count}`,
+      })
+    }
+    return admission
+  }
+  expect('admitted' in add(null, 1_000)).toBe(true)
+  expect('admitted' in add(3_500)).toBe(true)
+  const pending = [{ id: 'stuck-link', pending: true as const }]
+  // While the link may still be processed, an add that fits only without it waits for it.
+  expect(store.reserveAdd('marine', { observed: count, bytes: 1_000, measurements: pending }))
+    .toEqual({ unmeasured: true })
+  // Once it has stayed unprocessed past the timeout, waiting will not help, whenever it is asked.
+  for (const hours of [2, 48, 24 * 30]) {
+    now = start + hours * 3_600_000
+    expect(
+      store.reserveAdd('marine', { observed: count, bytes: 1_000, measurements: pending }),
+      `${hours}h`,
+    ).toEqual({ stuck: true })
+  }
+  // Its provisional bytes still count: an add that fits beside it is admitted, and one that does
+  // not fit even without it is a limit.
+  expect('admitted' in add(400)).toBe(true)
+  expect(store.reserveAdd('marine', { observed: count, bytes: 2_000 })).toEqual({
+    limit: 'maxBytes',
+    value: 6_900,
+    max: 5_000,
+  })
+  expect(store.bytesUsed('marine', count)).toBe(4_900)
+})
+
+Deno.test('links an earlier build recorded hold the provisional bytes the deployment sets', () => {
+  const state = new MemoryLifecycleState()
+  const store = new PortalLifecycleStore(state)
+  store.linkProvisionalBytes = 4_321
+  state.put('portal-capacity:marine', {
+    v: 1,
+    observed: 2,
+    inflight: [{ token: 'b'.repeat(32), at: Date.now(), bytes: 0, measure: true }],
+    added: [],
+    removed: [],
+    sized: {},
+    unsized: 0,
+    measuring: { 'crawled-1': 1_790_000_000_000 },
+  })
+  expect(store.bytesUsed('marine', 1)).toBe(4_321)
+  // Both the stored link and the in-flight one hold the deployment's amount against a limit.
+  store.set('marine', { status: 'active', limits: { maxBytes: 10_000 } })
+  expect(store.reserveAdd('marine', { observed: 1, bytes: 10_001 })).toEqual({
+    limit: 'maxBytes',
+    value: 2 * 4_321 + 10_001,
+    max: 10_000,
+  })
 })
 
 Deno.test('capacity admission needs an observation only when a limit or a new ledger needs one', () => {

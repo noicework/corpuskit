@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import { Skeleton } from '../components/ui.tsx'
 import { AddContent } from './admin/AddContent.tsx'
+import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { AnalysePanel } from './admin/AnalysePanel.tsx'
 import { InterrogatePanel } from './admin/InterrogatePanel.tsx'
 import { AppearancePanel } from './admin/AppearancePanel.tsx'
@@ -42,6 +43,29 @@ const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'access', label: 'Access', permission: 'members.manage' },
   { id: 'audit', label: 'Audit', permission: 'audit.read' },
 ]
+
+/** The overview's way into adding documents, and the empty-collection prompt. */
+function AddDocumentsCard({ slug, empty }: { slug: string; empty: boolean }) {
+  return (
+    <div
+      className='rp-card flex flex-wrap items-center justify-between gap-4 p-5'
+      data-overview-add-documents
+      data-collection-empty={empty ? 'true' : undefined}
+    >
+      <div className='min-w-0'>
+        <h2 className='text-base font-semibold text-ink'>
+          {empty ? 'No documents yet' : 'Add documents'}
+        </h2>
+        <p className='mt-1 max-w-prose text-sm text-ink-2'>
+          {empty
+            ? 'This collection is empty. Upload files or add web pages to start building it.'
+            : 'Upload files, add web pages, paste text or crawl a site.'}
+        </p>
+      </div>
+      <AddDocumentsLink slug={slug} />
+    </div>
+  )
+}
 
 export function ManagePage() {
   return (
@@ -223,6 +247,12 @@ function ManageContent() {
             {tab === 'audit' && <AuditPanel scope={scope} name={config.branding.productName} />}
             {tab === 'overview' && can('content.write') && (
               <>
+                {reachable && (
+                  <AddDocumentsCard
+                    slug={slug}
+                    empty={content.data?.counters.resources === 0}
+                  />
+                )}
                 {can('content.write') && reachable && (
                   <div className='rp-card p-5'>
                     <StatTiles slug={slug} resourceCount={content.data?.counters.resources ?? 0} />

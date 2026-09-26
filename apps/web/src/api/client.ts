@@ -8,6 +8,7 @@ import {
   finishResponse,
 } from './break-glass.ts'
 import type { RequestContext } from './access-lifecycle.ts'
+import type { ProgressRequestInit, UploadProgress } from './upload-transport.ts'
 import type {
   AdminTenantOverview,
   AnalyseEvent,
@@ -588,8 +589,13 @@ export function getAdminCounters(slug: string, passcode: AdminRequestAccess): Pr
 export function getAdminRecent(
   slug: string,
   passcode: AdminRequestAccess,
+  limit?: number,
 ): Promise<RecentResource[]> {
-  return adminRequest<RecentResource[]>(`/api/admin/t/${encodeURIComponent(slug)}/recent`, passcode)
+  const query = limit === undefined ? '' : `?limit=${encodeURIComponent(String(limit))}`
+  return adminRequest<RecentResource[]>(
+    `/api/admin/t/${encodeURIComponent(slug)}/recent${query}`,
+    passcode,
+  )
 }
 
 export function addAdminLink(
@@ -597,11 +603,13 @@ export function addAdminLink(
   passcode: AdminRequestAccess,
   input: { url: string; title?: string; hidden?: boolean },
 ): Promise<{ id: string }> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/link`, passcode, {
+  const init: ProgressRequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+    holdThroughRecheck: true,
+  }
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/link`, passcode, init)
 }
 
 export function addAdminText(
@@ -609,11 +617,13 @@ export function addAdminText(
   passcode: AdminRequestAccess,
   input: { title: string; body: string },
 ): Promise<{ id: string }> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/text`, passcode, {
+  const init: ProgressRequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+    holdThroughRecheck: true,
+  }
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/text`, passcode, init)
 }
 
 /**
@@ -626,15 +636,25 @@ export function uploadAdminFile(
   passcode: AdminRequestAccess,
   file: File,
   options: RequestContext = {},
+  onProgress?: UploadProgress,
 ): Promise<{ id: string }> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/upload`, passcode, {
+  const init: ProgressRequestInit = {
     method: 'POST',
     headers: {
       'content-type': file.type || 'application/octet-stream',
       'x-filename': encodeURIComponent(file.name),
     },
     body: file,
-  }, options)
+    // The write is on its way: an access check in progress holds its result, not cancels it.
+    holdThroughRecheck: true,
+    ...(onProgress ? { onUploadProgress: onProgress } : {}),
+  }
+  return adminRequest(
+    `/api/admin/t/${encodeURIComponent(slug)}/resources/upload`,
+    passcode,
+    init,
+    options,
+  )
 }
 
 /**
