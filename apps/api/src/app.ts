@@ -341,6 +341,12 @@ import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
 import {
+  erasePortal,
+  type ErasureTransaction,
+  operatorDeleteAfterDays as parseOperatorDeleteAfterDays,
+  type PortalErasureResult,
+} from './portal-erasure.ts'
+import {
   createCloudflareDomainProvisioner,
   type PortalDomainProvisioner,
   portalHostnameForSlug,
@@ -884,6 +890,8 @@ export interface BrandingAsset {
 export interface BrandingAssetStore {
   get(slug: string, kind: BrandingKind): BrandingAsset | null
   put(slug: string, kind: BrandingKind, asset: BrandingAsset): void
+  /** Remove every asset of a deleted portal; returns how many there were. */
+  erase(slug: string): number
 }
 
 export interface PortalRequestContext {
@@ -962,6 +970,16 @@ export interface BuildAppOptions {
   branding?: BrandingAssetStore
   /** Called after a tenant is rebound so the provider can drop its caches. */
   invalidate?: (slug: string) => void
+  /**
+   * Makes a portal erasure one atomic unit where the runtime can (the Durable Object's SQLite
+   * transaction). Without it, file stores are erased first and the audit log last.
+   */
+  erasureTransaction?: ErasureTransaction
+  /**
+   * Days a portal must stay suspended before a platform administrator or the operator credential
+   * may delete it; null turns that off. Defaults to env OPERATOR_DELETE_AFTER_DAYS.
+   */
+  operatorDeleteAfterDays?: number | null
   /** Requests/min/IP for the paid-LLM routes (ask, generate, summarize, subqueries, verdicts,
    *  synthesise). Defaults to env RATE_LIMIT_ASK_PER_MIN, or 20. 0 disables. */
   rateLimitAskPerMin?: number
@@ -1908,7 +1926,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         c,
         '/api/admin/t/:slug/lifecycle',
         'portal.lifecycle.update',
-        () => lifecycle.set(slug, { status: input.status, limits: input.limits }),
+        () => lifecycle.set(slug, { status: input.status, limits: input.limits }, opts.now?.()),
         lifecycleAuditDetail(input),
         { kind: 'platform' },
         { kind: 'portal', id: slug },
@@ -2146,6 +2164,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (existsSync(path)) return path
     }
     return null
+  }
+  /** Remove every uploaded branding file of a deleted portal, returning how many there were. */
+  const eraseBrandingFiles = (slug: string): number => {
+    if (!KeyPortalSlugSchema.safeParse(slug).success) return 0
+    let erased = 0
+    for (const kind of ['logo', 'hero', 'font-heading', 'font-body'] as const) {
+      for (const ext of brandingExts(kind)) {
+        try {
+          Deno.removeSync(`${brandingDir}/${slug}-${kind}.${ext}`)
+          erased++
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error
+        }
+      }
+    }
+    return erased
   }
   // mtime-versioned so replacing a file behind the stable path busts caches.
   const brandingUrl = (slug: string, kind: BrandingKind): string | null => {
@@ -4116,10 +4150,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.delete(declaredRoute('DELETE', '/api/admin/tenants/:slug'), async (c) => {
-    const slug = c.req.param('slug')
-    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
-    if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
+  /**
+   * Delete a portal: detach its own hostname, retire its slug and drop its aliases, then remove
+   * its binding and lifecycle records and revoke its members, group mappings and data keys.
+   * Shared by the owner's delete and the operator's delete of a long-suspended portal, which
+   * passes `stillAllowed` to recheck its gate once the hostname has been detached.
+   */
+  const removePortal = async (
+    c: Context,
+    slug: string,
+    path: '/api/admin/tenants/:slug' | '/api/admin/tenants/:slug/delete-suspended',
+    stillAllowed?: (domain: { status: 'removed'; hostname: string } | undefined) => Response | null,
+  ): Promise<Response | { domain: Record<string, string> }> => {
     // Only the portal's own hostname is detached. Its host aliases were routed by the hosting
     // operator, not by this deployment, and removal drops their records in the same write.
     const hostname = tenants.assignedHostname(slug)
@@ -4135,7 +4177,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       try {
         await subAction(
           c,
-          '/api/admin/tenants/:slug',
+          path,
           'tenant.domain.detach',
           async () => {
             try {
@@ -4159,6 +4201,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return c.json({ error: 'domain_removal_failed', message }, 502)
       }
     }
+    const refusal = stillAllowed?.(hostname ? { status: 'removed', hostname } : undefined)
+    if (refusal) return refusal
     const { requestId, actor } = requestContext(c.req.raw)
     const grants = portalAssignments(slug)
     if (grants.length > 0 && !actor) throw new AuthorisationError(403)
@@ -4180,10 +4224,195 @@ export function buildApp(opts: BuildAppOptions): Hono {
         if (!key.revokedAt) mcpKeys.revoke(slug, key.id, revokedAt)
       }
     }
+    return {
+      domain: hostname ? { status: 'removed', hostname } : { status: 'not_configured' },
+    }
+  }
+
+  app.delete(declaredRoute('DELETE', '/api/admin/tenants/:slug'), async (c) => {
+    const slug = c.req.param('slug')
+    if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
+    if (!tenants.isCustom(slug)) return c.json({ error: 'not_removable' }, 400)
+    const removed = await removePortal(c, slug, '/api/admin/tenants/:slug')
+    if (removed instanceof Response) return removed
+    return c.json({ ok: true, domain: removed.domain })
+  })
+
+  // Hosting retention (docs/HOSTING.md, "Deleting and erasing portals").
+  const operatorDeleteDays = opts.operatorDeleteAfterDays === undefined
+    ? parseOperatorDeleteAfterDays(process.env.OPERATOR_DELETE_AFTER_DAYS)
+    : opts.operatorDeleteAfterDays
+  const DAY_MS = 86_400_000
+  /** Record a refused retention call at platform scope, with the portal as its target. */
+  const retentionRefused = (
+    c: Context,
+    action: 'portal.erase' | 'portal.delete.suspended',
+    slug: string,
+    code: string,
+    detail: Record<string, unknown> = {},
+  ) => {
+    const { requestId, actor } = requestContext(c.req.raw)
+    appendAudit(
+      requiredAudit(),
+      createAuditEvent({
+        requestId,
+        actor: actor!,
+        action,
+        scope: { kind: 'platform' },
+        target: {
+          kind: 'portal',
+          ...(KeyPortalSlugSchema.safeParse(slug).success ? { id: slug } : {}),
+        },
+        outcome: 'denied',
+        detail: { permission: 'portal.create', code, ...detail },
+      }, opts.now),
+    )
+  }
+  /** Whether a slug serves a portal: a seeded one, one created in the app, or a corrupt one. */
+  const servesPortal = (slug: string) => {
+    if (tenants.isCustom(slug)) return true
+    try {
+      return tenants.get(slug) !== undefined
+    } catch {
+      return true
+    }
+  }
+  const erasureStores = {
+    tenants,
+    bindings,
+    lifecycle,
+    sessions,
+    investigations,
+    watches,
+    sources,
+    insights,
+    suggestions,
+    enrichments,
+    kgProposals,
+    branding: opts.branding ?? { erase: (slug: string) => eraseBrandingFiles(slug) },
+    routing,
+    mcpKeys,
+    rbac: opts.rbac,
+    audit: {
+      append: (event: import('./audit.ts').AuditEvent) => requiredAudit().append(event),
+    },
+  }
+  /** Erase a retired portal's records within the current request, and drop provider caches. */
+  const eraseRetired = (c: Context, slug: string): PortalErasureResult => {
+    const { requestId, actor } = requestContext(c.req.raw)
+    const result = erasePortal(
+      erasureStores,
+      slug,
+      { requestId, actor: actor!, now: opts.now },
+      opts.erasureTransaction,
+    )
+    opts.invalidate?.(slug)
+    return result
+  }
+
+  app.post(declaredRoute('POST', '/api/admin/tenants/:slug/delete-suspended'), async (c) => {
+    const slug = c.req.param('slug')
+    c.header('Cache-Control', 'private, no-store')
+    const eraseParameter = c.req.query('erase')
+    const erase = eraseParameter === 'true'
+    const days = operatorDeleteDays
+    const refuse = (
+      status: 400 | 404 | 409,
+      code: string,
+      body: Record<string, unknown> = {},
+      detail: Record<string, unknown> = {},
+    ) => {
+      retentionRefused(c, 'portal.delete.suspended', slug, code, {
+        eraseRequested: erase,
+        ...(days === null ? {} : { operatorDeleteAfterDays: days }),
+        ...detail,
+      })
+      return c.json({ error: code, ...body }, status)
+    }
+    if (
+      !await emptyAdminBody(c) ||
+      (eraseParameter !== undefined && eraseParameter !== 'true' && eraseParameter !== 'false')
+    ) return refuse(400, 'invalid_request')
+    if (days === null) return refuse(409, 'operator_delete_disabled')
+    if (!servesPortal(slug)) return refuse(404, 'unknown_tenant')
+    if (!tenants.isCustom(slug)) return refuse(400, 'not_removable')
+    /** The time gate: suspended, without a break, for at least `days` whole days. */
+    const gate = () => {
+      const { status } = lifecycle.get(slug)
+      const since = lifecycle.suspendedSince(slug)
+      const elapsed = since === null ? null : (opts.now?.() ?? Date.now()) - Date.parse(since)
+      return {
+        allowed: elapsed !== null && elapsed >= days * DAY_MS,
+        body: {
+          status,
+          suspendedSince: since,
+          eligibleAt: since === null
+            ? null
+            : new Date(Date.parse(since) + days * DAY_MS).toISOString(),
+        },
+        detail: {
+          lifecycleStatus: status,
+          ...(elapsed === null ? {} : { suspendedDays: Math.max(0, Math.floor(elapsed / DAY_MS)) }),
+        },
+      }
+    }
+    const first = gate()
+    if (!first.allowed) {
+      return refuse(409, 'not_suspended_long_enough', first.body, first.detail)
+    }
+    const removed = await removePortal(
+      c,
+      slug,
+      '/api/admin/tenants/:slug/delete-suspended',
+      // The hostname detach awaits a remote call; the portal must still qualify afterwards.
+      (domain) => {
+        const again = gate()
+        return again.allowed ? null : refuse(
+          409,
+          'not_suspended_long_enough',
+          { ...again.body, ...(domain ? { domain } : {}) },
+          again.detail,
+        )
+      },
+    )
+    if (removed instanceof Response) return removed
+    const { requestId, actor } = requestContext(c.req.raw)
+    appendAudit(
+      requiredAudit(),
+      createAuditEvent({
+        requestId,
+        actor: actor!,
+        action: 'portal.delete.suspended',
+        scope: { kind: 'platform' },
+        target: { kind: 'portal', id: slug },
+        outcome: 'success',
+        detail: {
+          permission: 'portal.create',
+          operatorDeleteAfterDays: days,
+          eraseRequested: erase,
+          ...first.detail,
+        },
+      }, opts.now),
+    )
     return c.json({
       ok: true,
-      domain: hostname ? { status: 'removed', hostname } : { status: 'not_configured' },
+      domain: removed.domain,
+      ...(erase ? { erasure: eraseRetired(c, slug) } : {}),
     })
+  })
+
+  app.post(declaredRoute('POST', '/api/admin/tenants/:slug/erase'), async (c) => {
+    const slug = c.req.param('slug')
+    c.header('Cache-Control', 'private, no-store')
+    const refuse = (status: 400 | 404 | 409, code: string) => {
+      retentionRefused(c, 'portal.erase', slug, code)
+      return c.json({ error: code }, status)
+    }
+    if (!await emptyAdminBody(c)) return refuse(400, 'invalid_request')
+    if (!KeyPortalSlugSchema.safeParse(slug).success) return refuse(404, 'unknown_tenant')
+    if (servesPortal(slug)) return refuse(409, 'portal_active')
+    if (!tenants.isRetired(slug)) return refuse(404, 'unknown_tenant')
+    return c.json({ ok: true, ...eraseRetired(c, slug) })
   })
 
   app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box/create'), async (c) => {

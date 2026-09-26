@@ -44,6 +44,7 @@ import {
   operatorRequestContext,
 } from '../../api/src/operator.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
+import { operatorDeleteAfterDays, operatorDeleteWarning } from '../../api/src/portal-erasure.ts'
 import type { BreakGlassService } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { AragProvider } from '@research-portal/retrieval'
@@ -139,6 +140,8 @@ export class PortalDurableObject extends DurableObject<Env> {
     if (operatorWarning) console.warn(operatorWarning)
     const hostWarning = externalHostWarning(bindings)
     if (hostWarning) console.warn(hostWarning)
+    const deleteWarning = operatorDeleteWarning(bindings)
+    if (deleteWarning) console.warn(deleteWarning)
     this.stores = durableStores(state, bindings)
     this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
@@ -201,6 +204,8 @@ export class PortalDurableObject extends DurableObject<Env> {
       zone: bindings.ARAG_ZONE,
       audit: this.stores.audit,
       localMutations: this.stores.localMutations,
+      erasureTransaction: this.stores.erasureTransaction,
+      operatorDeleteAfterDays: operatorDeleteAfterDays(bindings.OPERATOR_DELETE_AFTER_DAYS),
       breakGlass: this.breakGlass,
       requestContext: (request) => this.contexts.get(request),
       invalidate: (slug) => this.provider.invalidate(slug),

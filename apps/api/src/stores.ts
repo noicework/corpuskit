@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -207,6 +208,60 @@ function ownedFiles(dir: string): string[] {
   }
 }
 
+/**
+ * The one-file-per-portal name a store uses for `slug`, or undefined when sanitising would change
+ * the slug: such a file may hold another portal's records, so erasure leaves it alone.
+ */
+function portalSegment(slug: string): string | undefined {
+  return safeSegment(slug) === slug ? slug : undefined
+}
+
+/** Remove one file, reporting whether it was there. */
+function eraseFile(path: string | undefined): number {
+  if (path === undefined) return 0
+  try {
+    rmSync(path)
+    return 1
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+    throw error
+  }
+}
+
+/** Remove a directory tree, returning how many files it held that `counted` accepts. */
+function eraseTree(dir: string | undefined, counted: (name: string) => boolean): number {
+  if (dir === undefined) return 0
+  let files: number
+  try {
+    files = readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && counted(entry.name)).length
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+    throw error
+  }
+  rmSync(dir, { recursive: true, force: true })
+  return files
+}
+
+/** Remove now-empty directories from `dir` up to, but not including, `root`. */
+function pruneEmpty(dir: string, root: string): void {
+  for (let current = dir; current.startsWith(root + '/') && current !== root;) {
+    try {
+      rmdirSync(current)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOTEMPTY' || code === 'EEXIST') return
+      if (code !== 'ENOENT') throw error
+    }
+    current = dirname(current)
+  }
+}
+
+/** The directory holding a portal's owner-scoped research records. */
+function ownedPortalDirectory(root: string, slug: string): string {
+  return join(root, 'research-v2', storageIdentifierPath(encodeStorageIdentifier(slug)))
+}
+
 // --- Ask insights -----------------------------------------------------------
 
 export interface AskInsight {
@@ -232,8 +287,16 @@ export interface InsightsSummary {
 }
 
 export class InsightsStore {
+  constructor(private readonly dataDir = DATA_DIR) {}
+
   private pathFor(slug: string): string {
-    return join(DATA_DIR, 'insights', `${safeSegment(slug)}.jsonl`)
+    return join(this.dataDir, 'insights', `${safeSegment(slug)}.jsonl`)
+  }
+
+  /** Remove the portal's ask log (see `PortalErasure`). */
+  erase(slug: string): number {
+    const segment = portalSegment(slug)
+    return eraseFile(segment && this.pathFor(segment))
   }
 
   record(slug: string, insight: AskInsight): void {
@@ -396,6 +459,16 @@ export class SessionsStore {
     ]
     if (changes.length) ownedMutation(changes, this.boundary)
   }
+
+  /** Remove every owner's sessions in the portal, current and pre-phase. */
+  erase(slug: string): number {
+    const portal = ownedPortalDirectory(this.dataDir, slug)
+    const legacy = legacySegment(slug)
+    const count = eraseTree(join(portal, 'sessions'), (name) => name === 'record.json') +
+      eraseTree(legacy && join(this.dataDir, 'sessions', legacy), (name) => name.endsWith('.json'))
+    pruneEmpty(portal, join(this.dataDir, 'research-v2'))
+    return count
+  }
 }
 
 // --- Saved searches / watches ------------------------------------------------
@@ -498,6 +571,16 @@ export class WatchStore {
     )
     if (next.length !== all.length) this.write(slug, next)
   }
+
+  /** Remove the portal's watch collection, current and pre-phase. */
+  erase(slug: string): number {
+    const portal = ownedPortalDirectory(this.dataDir, slug)
+    const legacy = legacySegment(slug)
+    const count = eraseFile(join(portal, 'watches.json')) +
+      eraseFile(legacy && join(this.dataDir, 'watches', `${legacy}.json`))
+    pruneEmpty(portal, join(this.dataDir, 'research-v2'))
+    return count
+  }
 }
 
 // --- Source registry (scheduled re-syncs) ------------------------------------
@@ -538,8 +621,16 @@ export interface Source {
 export type SourceSummary = Omit<Source, 'synced'> & { itemCount: number }
 
 export class SourceStore {
+  constructor(private readonly dataDir = DATA_DIR) {}
+
   private pathFor(slug: string): string {
-    return join(DATA_DIR, 'sources', `${safeSegment(slug)}.json`)
+    return join(this.dataDir, 'sources', `${safeSegment(slug)}.json`)
+  }
+
+  /** Remove the portal's source registry. */
+  erase(slug: string): number {
+    const segment = portalSegment(slug)
+    return eraseFile(segment && this.pathFor(segment))
   }
 
   list(slug: string): Source[] {
@@ -566,7 +657,7 @@ export class SourceStore {
   /** Slugs that have at least one source registered. */
   slugs(): string[] {
     try {
-      return readdirSync(join(DATA_DIR, 'sources'))
+      return readdirSync(join(this.dataDir, 'sources'))
         .filter((f) => f.endsWith('.json'))
         .map((f) => f.replace(/\.json$/, ''))
     } catch {
@@ -764,6 +855,19 @@ export class InvestigationStore {
     if (changes.length) ownedMutation(changes, this.boundary)
   }
 
+  /** Remove every owner's investigations in the portal, current and pre-phase. */
+  erase(slug: string): number {
+    const portal = ownedPortalDirectory(this.dataDir, slug)
+    const legacy = legacySegment(slug)
+    const count = eraseTree(join(portal, 'investigations'), (name) => name === 'record.json') +
+      eraseTree(
+        legacy && join(this.dataDir, 'investigations', legacy),
+        (name) => name.endsWith('.json'),
+      )
+    pruneEmpty(portal, join(this.dataDir, 'research-v2'))
+    return count
+  }
+
   addEvidence(
     slug: string,
     clientId: ResearchOwner | string,
@@ -952,6 +1056,11 @@ export class McpKeyStore implements ScopedKeyStore {
     ownedWrite(this.pathFor(slug), all, this.boundary)
     return true
   }
+
+  /** Remove the portal's key records, revoked ones included. */
+  erase(slug: string): number {
+    return KeyPortalSlugSchema.safeParse(slug).success ? eraseFile(this.pathFor(slug)) : 0
+  }
 }
 
 /** Public store contracts used by runtimes without a local filesystem. */
@@ -960,7 +1069,10 @@ export type SessionsStoreApi = Pick<SessionsStore, keyof SessionsStore>
 export type WatchStoreApi = Pick<WatchStore, keyof WatchStore>
 export type SourceStoreApi = Pick<SourceStore, keyof SourceStore>
 export type InvestigationStoreApi = Pick<InvestigationStore, keyof InvestigationStore>
-export type McpKeyStoreApi = ScopedKeyStore
+export type McpKeyStoreApi = ScopedKeyStore & {
+  /** Remove every key record of a deleted portal, revoked ones included; returns the count. */
+  erase(slug: string): number
+}
 export type RoutingLogApi = Pick<RoutingLog, keyof RoutingLog>
 
 // --- Enrichment import/export ----------------------------------------------
@@ -1064,8 +1176,16 @@ export interface RoutingRecord {
 }
 
 export class RoutingLog {
+  constructor(private readonly dataDir = DATA_DIR) {}
+
   private pathFor(slug: string): string {
-    return join(DATA_DIR, 'routing', `${safeSegment(slug)}.jsonl`)
+    return join(this.dataDir, 'routing', `${safeSegment(slug)}.jsonl`)
+  }
+
+  /** Remove the portal's routing decisions. */
+  erase(slug: string): number {
+    const segment = portalSegment(slug)
+    return eraseFile(segment && this.pathFor(segment))
   }
 
   record(slug: string, entry: RoutingRecord): void {

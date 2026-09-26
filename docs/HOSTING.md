@@ -15,6 +15,7 @@ install.
 | Sign-in through a trusted outside identity issuer | [External sign-in handoff](#external-sign-in-handoff) |
 | The hostname portals and sessions live under | [Configurable platform domain](#configurable-platform-domain) |
 | Serving a portal on hostnames outside the platform domain | [Portal host aliases](#portal-host-aliases) |
+| Deleting finished portals and erasing what they stored | [Deleting and erasing portals](#deleting-and-erasing-portals) |
 
 ## Knowledge box credential encryption
 
@@ -183,6 +184,8 @@ The current allowlist is:
 | List, register or remove portal host aliases | `GET /api/admin/t/:slug/aliases`, `PUT`, `DELETE /api/admin/t/:slug/aliases/:hostname` |
 | Upload branding | `POST /api/admin/t/:slug/branding/:kind` |
 | Migrate content between portals | `POST /api/admin/migrate` |
+| Delete a portal suspended for `OPERATOR_DELETE_AFTER_DAYS` | `POST /api/admin/tenants/:slug/delete-suspended` |
+| Erase a deleted portal's records | `POST /api/admin/tenants/:slug/erase` |
 
 Create an email assignment with a body such as
 `{"subjectKind":"pending-email","subjectId":"reader@example.org","role":"viewer"}`.
@@ -211,8 +214,9 @@ and validates the binding with the provider before saving it. The existing `url`
 available; supply exactly one of `endpoint` or `url`.
 
 Portal creation can attach the automatically derived hostname when the domain provisioner is
-configured, and portal deletion, which requires `owner` and is therefore refused for operators,
-detaches it. Hostnames outside the platform domain are routed by the hosting operator and
+configured, and portal deletion detaches it. Ordinary deletion requires `owner` and is refused for
+operators; the operator can delete only a portal that has stayed suspended for
+`OPERATOR_DELETE_AFTER_DAYS` (see [Deleting and erasing portals](#deleting-and-erasing-portals)). Hostnames outside the platform domain are routed by the hosting operator and
 registered with the [portal host alias](#portal-host-aliases) routes.
 
 Operator calls are refused on a portal's alias host with `403 operator_not_allowed`, whatever the
@@ -282,7 +286,13 @@ PUT /api/admin/t/:slug/lifecycle
 }
 ```
 
-The response is `{ "ok": true, "lifecycle": { "status", "limits", "updatedAt" } }`. The body
+The response is
+`{ "ok": true, "lifecycle": { "status", "limits", "updatedAt", "suspendedSince" } }`, and
+`GET /api/admin/t/:slug/lifecycle` answers the same `lifecycle` object. `suspendedSince` is the
+ISO time the portal's current, unbroken suspension began, or `null` when it is not suspended.
+Replacing the lifecycle of a suspended portal with another suspended one, to change its limits for
+example, keeps that time; any other status ends the suspension, and the next one starts afresh.
+It is what the [operator delete](#operator-delete-of-a-suspended-portal) counts from. The body
 replaces the whole lifecycle. A portal with no lifecycle record is `active` with no limits.
 Every limit field is optional and an absent field means unlimited, so `limits: null` and
 `limits: {}` both mean unlimited. Limits are whole numbers from zero upwards. A zero limit is
@@ -540,9 +550,15 @@ The two are independent:
 ### Storage
 
 On Cloudflare, lifecycle state lives in the `PortalDurableObject` SQLite `state` table under
-three keys per portal: `portal-lifecycle:<slug>` (status, limits, last activity),
-`portal-asks:<slug>` (ask counts in quarter-hour buckets, kept for 32 days) and
-`portal-capacity:<slug>` (reservations and the byte ledger). The local Deno server keeps the
+four keys per portal: `portal-lifecycle:<slug>` (status, limits, last activity),
+`portal-asks:<slug>` (ask counts in quarter-hour buckets, kept for 32 days),
+`portal-capacity:<slug>` (reservations and the byte ledger) and `portal-suspension:<slug>` (when
+the current suspension began). The suspension start is kept beside the lifecycle record rather
+than in it, so a release from before it was tracked still reads the lifecycle. Such a release
+ignores the suspension record and does not update it, so once the lifecycle has been replaced
+without it the record no longer applies. A suspended portal with no applicable record, including
+one suspended before this was tracked, counts its suspension from the lifecycle's last change,
+which is never earlier than the suspension really began. The local Deno server keeps the
 same records as JSON files under `DATA_DIR/lifecycle/`. An application built without a
 lifecycle store (an embedded or test app) keeps this state in memory for its own lifetime and
 writes nothing to disk. Records are kept for every slug the route guard can address (letters,
@@ -564,8 +580,9 @@ left to the hosting operator that routed them. After that it revokes every
 member row and group mapping scoped to the portal, each recorded as an `assignment.delete` audit
 event, and every data key issued for it. The portal's other records (sources, enrichments, insights,
 suggestions, knowledge graph proposals, research sessions, investigations, watches and branding)
-stay stored under the retired slug, where no portal route can reach them. Its audit events stay
-in the platform audit log.
+stay stored under the retired slug, where no portal route can reach them, until they are
+[erased](#erasing-a-deleted-portal). Its audit events stay in the platform audit log until then
+too.
 
 A new portal never takes a retired slug: `POST /api/admin/tenants` moves on to the next free
 slug for the same name (`acme`, then `acme-2`). It also passes over a slug that still has member
@@ -1163,3 +1180,204 @@ other hosts in `RESERVED_HOSTNAMES`:
 
 To retire a hostname, remove the route and the custom hostname, then `DELETE` the alias, and wait
 longer than `ALIAS_CACHE_SECONDS` before registering it for another portal.
+
+## Deleting and erasing portals
+
+A hosting operator that promises its customers their data is deleted within a set period after
+their portal ends needs two things the owner's delete does not give it: a way to delete a finished
+portal without the owner, and a way to remove everything a deleted portal left stored. Three routes
+cover the whole path.
+
+| Method and route | Who may call it | What it does |
+|---|---|---|
+| `DELETE /api/admin/tenants/:slug` | Owner | Deletes a portal ([owner delete](#owner-delete)) |
+| `POST /api/admin/tenants/:slug/delete-suspended` | Platform administrator, operator credential | Deletes a portal that has stayed suspended for `OPERATOR_DELETE_AFTER_DAYS` |
+| `POST /api/admin/tenants/:slug/erase` | Platform administrator, operator credential | Erases every record a deleted portal left |
+
+The two retention routes need `portal.create` at platform scope and are declared with
+`operator: true`, so hosting automation can call them with the
+[operator credential](#operator-credential). Neither can reach a live portal that is not
+suspended: one deletes only a portal that has been suspended for as long as the deployment
+allows, and the other touches only what an already deleted portal left. Portal roles and `ck_`
+keys are refused, answers are `private, no-store`, and like every platform route they are not
+served on a portal's alias host. Both take an empty body or `{}`.
+
+### Owner delete
+
+`DELETE /api/admin/tenants/<slug>` is unchanged and stays owner-only (see
+[Deleting a portal](#deleting-a-portal)). It detaches the portal's own hostname, retires the slug,
+removes the portal's host aliases, knowledge box binding and lifecycle records, and revokes its
+members, group mappings and data keys. Everything else the portal stored stays under the retired
+slug, out of reach of every route, until it is erased.
+
+### Operator delete of a suspended portal
+
+| Variable | Meaning |
+|---|---|
+| `OPERATOR_DELETE_AFTER_DAYS` | Whole days a portal must stay suspended, without a break, before a platform administrator or the operator credential may delete it: 1 to 36500. Unset or empty turns the route off. Any other value also turns it off, and the Durable Object and the local server log one start-up warning naming the setting, never its value. |
+
+Set it as a Worker variable, or in the local server's environment and restart it.
+
+`POST /api/admin/tenants/<slug>/delete-suspended` deletes the portal exactly as the owner delete
+does, when the portal's [lifecycle](#portal-lifecycle-limits-and-usage) status is `suspended` and
+its `suspendedSince` is at least `OPERATOR_DELETE_AFTER_DAYS` × 24 hours ago. Exactly that long is
+enough. A change to any other status ends the suspension, and the count starts again at the next
+one; replacing the limits of a suspended portal does not. The route checks the gate again once the
+portal's hostname has been detached, because detaching waits on the hosting provider.
+
+Add `?erase=true` to [erase](#erasing-a-deleted-portal) the portal's records in the same call.
+`erase` accepts only `true` or `false`.
+
+```json
+200 { "ok": true,
+      "domain": { "status": "removed", "hostname": "acme.research.example" }
+              | { "status": "not_configured" },
+      "erasure": { "slug": "acme", "erased": { ... }, "total": 57 } }
+```
+
+`erasure` is present only with `?erase=true`, and has the shape of the erase response below.
+
+| Refusal | Status | Body |
+|---|---|---|
+| A body that is not empty or `{}`, or `erase` other than `true` or `false` | 400 | `{ "error": "invalid_request" }` |
+| `OPERATOR_DELETE_AFTER_DAYS` is unset or unusable | 409 | `{ "error": "operator_delete_disabled" }` |
+| No portal serves the slug, including one already deleted | 404 | `{ "error": "unknown_tenant" }` |
+| A portal that ships with the deployment rather than one created in it | 400 | `{ "error": "not_removable" }` |
+| Not suspended, or not for long enough | 409 | `{ "error": "not_suspended_long_enough", "status", "suspendedSince", "eligibleAt" }` |
+| Domain removal is not configured | 503 | `{ "error": "domain_removal_unavailable" }`, as for the owner delete |
+| The hosting provider refused to detach the hostname | 502 | `{ "error": "domain_removal_failed" }`, as for the owner delete |
+
+`suspendedSince` and `eligibleAt` are ISO times, or `null` when the portal is not suspended. A
+`not_suspended_long_enough` refusal that came after the hostname was detached, because the
+lifecycle changed while it was being detached, also carries
+`"domain": { "status": "removed", "hostname" }`.
+
+Each call is audited at platform scope as `portal.delete.suspended`, with the portal as the
+target: a success with `lifecycleStatus`, `suspendedDays`, `operatorDeleteAfterDays` and
+`eraseRequested`, and each refusal as `denied` with its `code` and whichever of those were known.
+The deletion itself writes the same records as the owner delete, such as one `assignment.delete`
+for each member revoked.
+
+### Erasing a deleted portal
+
+`POST /api/admin/tenants/<slug>/erase` permanently deletes every record stored under the slug of
+a portal that has already been deleted, by the owner or by the operator route.
+
+| Kind | What | Durable Object | Local server |
+|---|---|---|---|
+| `configuration` | An override or disabled flag left in the portal registry | `tenants` row | `TENANTS_PATH` |
+| `aliases` | Host alias records | `tenants` row | `TENANTS_PATH` |
+| `bindings` | The knowledge box endpoint and sealed service account token | `bindings` row | `BINDINGS_PATH` |
+| `lifecycle` | Status, limits, ask counts, capacity ledger and suspension start | `portal-*:<slug>` rows | `DATA_DIR/lifecycle/` |
+| `sessions` | Every member's and visitor's saved research sessions, including pre-owner-scope records | `research-v2:…:sessions:` and `session:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/sessions/<slug>/` |
+| `investigations` | Investigations with their evidence, notes and artefacts | `research-v2:…:investigations:` and `investigation:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/investigations/<slug>/` |
+| `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |
+| `sources` | The source registry | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
+| `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
+| `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
+| `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
+| `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |
+| `branding` | Uploaded logo, hero image and fonts | `branding_assets` rows | `BRANDING_PATH/<slug>-<kind>.<ext>` |
+| `routing` | Question routing decisions | `routing_records` rows | `DATA_DIR/routing/<slug>.jsonl` |
+| `mcpKeys` | Data key records, revoked ones included | `mcp-keys:<slug>` row | `DATA_DIR/mcp-keys/<slug>.json` |
+| `assignments` | Member rows, pending email invitations and group mappings, under any directory tenant | `role_assignments` rows | `rbac.sqlite` |
+| `auditEvents` | Every audit event in the portal's scope, and every platform event whose target is the portal, with the member identities and email addresses they carry; open paged audit queries of the portal | `audit_events` rows and their ordering rows | `rbac.sqlite` |
+
+Branding is the only binary data CorpusKit keeps for a portal: on Cloudflare it is stored in the
+Durable Object's SQLite database, not in R2 or another blob store, and locally it is files under
+`BRANDING_PATH`. Stores that cache records in memory (bindings, enrichments, knowledge graph
+proposals and the local portal registry) drop them too.
+
+```json
+200 { "ok": true, "slug": "acme",
+      "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0,
+                  "sessions": 12, "investigations": 3, "watches": 1, "sources": 1,
+                  "insights": 1, "suggestions": 1, "enrichments": 214, "kgProposals": 1,
+                  "branding": 2, "routing": 1, "mcpKeys": 1, "assignments": 0,
+                  "auditEvents": 318 },
+      "total": 557 }
+```
+
+`erased` always lists the kinds above, in that order. Each count is the number of stored records
+(rows, files or keys) removed. A store that keeps a collection in one record counts one, so the
+same portal can count differently on the Durable Object and on the local server. After an owner or
+operator delete, `configuration`, `aliases`, `bindings`, `lifecycle` and the current directory
+tenant's `assignments` are usually already zero, because deletion removed them.
+
+| Refusal | Status | Body |
+|---|---|---|
+| A body that is not empty or `{}` | 400 | `{ "error": "invalid_request" }` |
+| The slug is not a retired portal's, including one that never held a portal | 404 | `{ "error": "unknown_tenant" }` |
+| A portal serves the slug: a live, seeded or unreadable portal | 409 | `{ "error": "portal_active" }` |
+| The stored binding set cannot be read (see [Unavailable bindings](#unavailable-bindings)) | 503 | `{ "error": "binding_storage_invalid" }` |
+
+Each refusal of the first three kinds is audited as `portal.erase` with outcome `denied` and its
+`code`. With unreadable binding storage nothing is erased, because a binding for the portal might
+remain; repair the storage and call it again.
+
+Erasure is idempotent. Calling it again erases nothing more and answers 200 with every count 0.
+On Cloudflare the whole erasure, including its audit line, is one SQLite transaction, so it
+happens completely or not at all. The local server removes the files first and then commits the
+database part with the audit line, so a failure part-way leaves some files removed and no audit
+line; call it again to finish.
+
+### What is kept
+
+- **The retired slug**, in the portal registry's `retired` list, so the slug is never given to
+  another portal. The one exception is a demo Worker's own seeded portals (see
+  [Deleting a portal](#deleting-a-portal)), which are live again after a restart and so cannot be
+  erased.
+- **The erasure's own audit records.** Each erase call records one `portal.erase` line at
+  platform scope with the portal as the target: the actor, the time and a count for each kind
+  (`erasedSessions`, `erasedAuditEvents` and so on, and `count` for the total), never what was
+  erased. The request that erased it keeps its other records too: its `request.privileged`
+  records, and the `local.mutation` records of the stores it changed (on Cloudflare, one
+  `erasure.erase` record for the whole transaction). With `?erase=true` so do the deletion's
+  records made in the same request. These name the actor, the slug and opaque record ids, never a
+  member or any content. A later erase of the same slug keeps the earlier erasures' records.
+
+Nothing else about the portal is kept. Audit events of other portals, and platform events that do
+not target this one, are untouched. All audit records, erasure lines included, still age out under
+`AUDIT_RETENTION_DAYS` (see [RBAC](RBAC.md)).
+
+### What erasure cannot reach
+
+- **The knowledge box.** It lives with the retrieval provider. Deletion and erasure remove the
+  portal's binding to it, not the box and the documents in it; delete the box with the provider
+  as part of the same retention job.
+- **Point-in-time recovery on Cloudflare.** A SQLite-backed Durable Object can be restored to any
+  point in the previous 30 days, so erased rows stay recoverable from that history for up to 30
+  days after the erasure. Count that window in the period you promise.
+- **Storage below the application on the local server.** SQLite can keep freed pages in the
+  database file until they are reused, and filesystem snapshots and backups keep what they
+  captured.
+- **Everything outside the deployment**: your backups and exports, your logs and the hosting
+  control plane's own records. Invocation logs are off in the deployment configurations, so
+  request URLs are not logged, but check what your log and telemetry exports retain.
+
+### A retention policy
+
+For a promise such as "a portal's data is deleted within 60 days after the portal ends", with a
+28-day grace period in which the customer can still come back:
+
+1. When a portal ends, suspend it:
+   `PUT /api/admin/t/<slug>/lifecycle` with `{"status": "suspended", "limits": null, "note": "Portal ended"}`.
+   Visitors see the paused screen, nothing is lost, and one call restores it.
+2. Set `OPERATOR_DELETE_AFTER_DAYS=28`.
+3. Run a daily job over the portals your control plane has marked as ended. For each, call
+   `POST /api/admin/tenants/<slug>/delete-suspended?erase=true`:
+   - 200: the portal is deleted and erased; keep the counts with your records.
+   - 409 `not_suspended_long_enough`: not yet; `eligibleAt` says when. A `status` other than
+     `suspended` means someone restored the portal, so take it off the list.
+   - 404 `unknown_tenant`: it was already deleted, for example by its owner, or an earlier call's
+     answer was lost. Call `POST /api/admin/tenants/<slug>/erase` to be sure; it is idempotent.
+4. Delete the portal's knowledge box with the retrieval provider.
+
+The data is then gone from the application within 29 days of the portal ending (28 days of
+suspension, plus up to a day until the job runs), and out of Cloudflare's point-in-time recovery 30
+days after that: 59 days at most. In general, the period you can promise is at least
+`OPERATOR_DELETE_AFTER_DAYS`, plus the job's interval, plus 30 days of point-in-time recovery,
+plus whatever your own backups keep.
+
+When an owner deletes a portal themselves, erase it straight away, or on the same schedule. The
+deployment does not list retired slugs, so keep your own record of the portals you delete.

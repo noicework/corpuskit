@@ -138,6 +138,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
     ['tenants', ['setAlias', 'removeAlias'], 'portal.create', 'platform'],
     ['tenants', ['remove'], 'portal.delete', 'platform'],
+    // Erasure of a deleted portal's records; `erasure.erase` is the one atomic unit around them.
+    ['erasure', ['erase'], 'portal.create', 'platform'],
+    ['lifecycle', ['erase'], 'portal.create', 'platform'],
+    ['tenants', ['erase'], 'portal.create', 'platform'],
     ['tenants', ['setDisabled', 'patch'], 'behaviour.write', 'portal'],
     ['tenants', ['patchBranding'], 'appearance.write', 'portal'],
     ['sessions', ['put', 'remove'], 'portal.ask', 'portal'],
@@ -314,6 +318,17 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   }),
   entry('http', 'DELETE', '/api/admin/tenants/:slug', 'portal.delete', 'platform', {
     subActions: [{ action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' }],
+  }),
+  // Hosting retention (docs/HOSTING.md, "Deleting and erasing portals"). Ordinary deletion stays
+  // owner-only. A platform administrator, and so the operator credential, may delete only a portal
+  // that has stayed suspended for OPERATOR_DELETE_AFTER_DAYS, and may erase only what a portal
+  // that is already deleted left stored. Neither can reach a live, unsuspended portal.
+  entry('http', 'POST', '/api/admin/tenants/:slug/delete-suspended', 'portal.create', 'platform', {
+    operator: true,
+    subActions: [{ action: 'tenant.domain.detach', permission: 'domains.write', scope: 'portal' }],
+  }),
+  entry('http', 'POST', '/api/admin/tenants/:slug/erase', 'portal.create', 'platform', {
+    operator: true,
   }),
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box/create', 'bindings.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/counters', 'content.write', 'portal', {

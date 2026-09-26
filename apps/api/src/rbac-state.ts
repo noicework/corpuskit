@@ -302,6 +302,55 @@ export class RbacState {
     })
   }
 
+  /** Run synchronous work in one transaction of this database. */
+  transaction<T>(work: () => T): T {
+    return this.database.transactionSync(work)
+  }
+
+  /**
+   * Delete the role assignments and audit events a deleted portal left under its slug. Call it
+   * inside a transaction, with the erasure's own audit record appended in the same one.
+   *
+   * Audit events keyed to the slug are those in the portal's scope and the platform events whose
+   * target is the portal. The events of every erasure request are kept: the current one's and
+   * those of each earlier request that recorded a successful `portal.erase` of this slug. They
+   * name the actor and the slug and carry counts only.
+   */
+  erasePortalRecords(
+    slug: string,
+    requestId: string,
+  ): { assignments: number; auditEvents: number } {
+    const keyed = `((scope_kind = 'portal' AND scope_slug = ?) OR
+      (scope_kind = 'platform' AND target_id = ?)) AND request_id != ? AND request_id NOT IN (
+        SELECT request_id FROM audit_events WHERE action = 'portal.erase' AND outcome = 'success'
+          AND scope_kind = 'platform' AND target_kind = 'portal' AND target_id = ?)`
+    const bindings = [slug, slug, requestId, slug]
+    const auditEvents = this.database.all<{ n: number }>(
+      `SELECT count(*) AS n FROM audit_events WHERE ${keyed}`,
+      ...bindings,
+    )[0]!.n
+    this.database.exec(
+      `DELETE FROM audit_event_order WHERE event_id IN (SELECT id FROM audit_events WHERE ${keyed})`,
+      ...bindings,
+    )
+    this.database.exec(`DELETE FROM audit_events WHERE ${keyed}`, ...bindings)
+    // A paged audit query of the portal holds only a watermark and its filters, but the filters
+    // can name a member, so an open one goes too.
+    this.database.exec(
+      'DELETE FROM audit_query_snapshots WHERE scope_json = ?',
+      JSON.stringify(canonicalAuditScope({ kind: 'portal', slug })),
+    )
+    const assignments = this.database.all<{ n: number }>(
+      "SELECT count(*) AS n FROM role_assignments WHERE scope_kind = 'portal' AND scope_slug = ?",
+      slug,
+    )[0]!.n
+    this.database.exec(
+      "DELETE FROM role_assignments WHERE scope_kind = 'portal' AND scope_slug = ?",
+      slug,
+    )
+    return { assignments, auditEvents }
+  }
+
   /** Deployment evidence is configured internally, never by incoming claims. */
   groupCapability(audience: string): 'disabled' | 'verified-supported' {
     const row = this.database.all<{ status: string; verified_at: number | null }>(

@@ -5,7 +5,7 @@ import {
   PortalLifecycleSchema,
 } from '@research-portal/core'
 import { z } from 'zod'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ownedMutation, type OwnedMutationBoundary } from './stores.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
@@ -15,6 +15,8 @@ export interface LifecycleState {
   get<T>(key: string, fallback: T): T
   put(key: string, value: unknown): void
   delete(key: string): void
+  /** Whether a record is stored under the key, whether or not it can be read. */
+  has(key: string): boolean
 }
 
 /** An unconfigured embedded application has isolated state for its own lifetime. */
@@ -29,6 +31,9 @@ function transientLifecycleState(): LifecycleState {
     },
     delete(key: string): void {
       records.delete(key)
+    },
+    has(key: string): boolean {
+      return records.has(key)
     },
   }
 }
@@ -61,6 +66,19 @@ const StoredLifecycleSchema = z.object({
   lastActivityAt: z.string().datetime().nullable(),
 }).strict()
 type StoredLifecycle = z.infer<typeof StoredLifecycleSchema>
+
+/**
+ * When the portal's current suspension began. Kept beside the lifecycle record rather than in it,
+ * so code from before this record reads the lifecycle unchanged. `updatedAt` names the lifecycle
+ * write it describes: once another write replaces the lifecycle without updating this record, as
+ * a rolled-back release would, the record no longer applies.
+ */
+const StoredSuspensionSchema = z.object({
+  v: z.literal(1),
+  since: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict()
+type StoredSuspension = z.infer<typeof StoredSuspensionSchema>
 
 const StoredAsksSchema = z.object({
   v: z.literal(1),
@@ -143,6 +161,10 @@ const sum = (values: Iterable<number>) => {
   return total
 }
 
+/** The records kept per portal, each under `portal-<kind>:<slug>`. */
+export const LIFECYCLE_RECORD_KINDS = ['lifecycle', 'asks', 'capacity', 'suspension'] as const
+type LifecycleRecordKind = typeof LIFECYCLE_RECORD_KINDS[number]
+
 /**
  * Hosting state for each portal: lifecycle status and limits, daily ask counts in the portal's
  * timezone, the last activity time, and a capacity ledger that admits resource and byte usage.
@@ -153,7 +175,7 @@ export class PortalLifecycleStore {
     private readonly clock: () => number = Date.now,
   ) {}
 
-  private key(kind: 'lifecycle' | 'asks' | 'capacity', slug: string): string {
+  private key(kind: LifecycleRecordKind, slug: string): string {
     return `portal-${kind}:${SlugSchema.parse(slug)}`
   }
 
@@ -167,6 +189,14 @@ export class PortalLifecycleStore {
       }
     }
     const parsed = StoredLifecycleSchema.safeParse(raw)
+    if (!parsed.success) throw new Error('Invalid persisted portal lifecycle')
+    return parsed.data
+  }
+
+  private readSuspension(slug: string): StoredSuspension | undefined {
+    const raw = this.state.get<unknown>(this.key('suspension', slug), undefined)
+    if (raw === undefined) return undefined
+    const parsed = StoredSuspensionSchema.safeParse(raw)
     if (!parsed.success) throw new Error('Invalid persisted portal lifecycle')
     return parsed.data
   }
@@ -203,19 +233,53 @@ export class PortalLifecycleStore {
     return this.read(slug).lifecycle
   }
 
-  set(slug: string, input: Pick<PortalLifecycle, 'status' | 'limits'>): PortalLifecycle {
-    const lifecycle = PortalLifecycleSchema.parse({ ...input, updatedAt: timestamp(this.clock()) })
+  set(
+    slug: string,
+    input: Pick<PortalLifecycle, 'status' | 'limits'>,
+    now = this.clock(),
+  ): PortalLifecycle {
+    const lifecycle = PortalLifecycleSchema.parse({ ...input, updatedAt: timestamp(now) })
+    // A portal that stays suspended keeps the time its suspension began.
+    const since = lifecycle.status !== 'suspended'
+      ? undefined
+      : this.suspendedSince(slug) ?? lifecycle.updatedAt!
     const record = this.read(slug)
     record.lifecycle = lifecycle
-    this.persist(this.key('lifecycle', slug), record)
+    this.persistAll([
+      [this.key('lifecycle', slug), record],
+      [
+        this.key('suspension', slug),
+        since === undefined ? undefined : { v: 1, since, updatedAt: lifecycle.updatedAt },
+      ],
+    ])
     return structuredClone(lifecycle)
+  }
+
+  /**
+   * When the portal's current, unbroken suspension began, or null when it is not suspended. A
+   * suspension recorded before this was tracked, or by a release that did not track it, counts
+   * from the lifecycle's last change, which is never earlier than the suspension really began.
+   */
+  suspendedSince(slug: string): string | null {
+    const { lifecycle } = this.read(slug)
+    if (lifecycle.status !== 'suspended' || lifecycle.updatedAt === null) return null
+    const suspension = this.readSuspension(slug)
+    return suspension && suspension.updatedAt === lifecycle.updatedAt &&
+        suspension.since <= suspension.updatedAt
+      ? suspension.since
+      : lifecycle.updatedAt
   }
 
   /** A removed portal leaves nothing behind for a later portal with the same slug. */
   remove(slug: string): void {
-    this.persistAll(
-      (['lifecycle', 'asks', 'capacity'] as const).map((kind) => [this.key(kind, slug), undefined]),
-    )
+    this.persistAll(LIFECYCLE_RECORD_KINDS.map((kind) => [this.key(kind, slug), undefined]))
+  }
+
+  /** Remove every hosting record kept for the slug, readable or not, and count them. */
+  erase(slug: string): number {
+    const present = LIFECYCLE_RECORD_KINDS.filter((kind) => this.state.has(this.key(kind, slug)))
+    if (present.length) this.persistAll(present.map((kind) => [this.key(kind, slug), undefined]))
+    return present.length
   }
 
   usage(slug: string, timeZone = 'UTC', now = this.clock()): PortalAskUsage {
@@ -467,7 +531,7 @@ export class FileLifecycleState implements LifecycleState {
   constructor(private readonly dataDir: string) {}
 
   path(key: string): string {
-    if (!/^portal-(?:lifecycle|asks|capacity):[A-Za-z0-9_-]{1,64}$/.test(key)) {
+    if (!/^portal-(?:lifecycle|asks|capacity|suspension):[A-Za-z0-9_-]{1,64}$/.test(key)) {
       throw new Error('Invalid portal lifecycle storage key')
     }
     return join(this.dataDir, 'lifecycle', `${key.replace(':', '-')}.json`)
@@ -488,6 +552,10 @@ export class FileLifecycleState implements LifecycleState {
 
   delete(key: string): void {
     ownedMutation([{ path: this.path(key), value: undefined }])
+  }
+
+  has(key: string): boolean {
+    return existsSync(this.path(key))
   }
 }
 

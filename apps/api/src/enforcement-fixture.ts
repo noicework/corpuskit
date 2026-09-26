@@ -164,6 +164,8 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
     'GET /api/admin/t/:slug/aliases',
     'PUT /api/admin/t/:slug/aliases/:hostname',
     'DELETE /api/admin/t/:slug/aliases/:hostname',
+    'POST /api/admin/tenants/:slug/delete-suspended',
+    'POST /api/admin/tenants/:slug/erase',
   ])
   for (const row of rows) {
     expect(
@@ -497,7 +499,12 @@ export function createEnforcementFixture(
   options:
     & Pick<
       BuildAppOptions,
-      'management' | 'domainProvisioner' | 'platformDomain' | 'lifecycle' | 'rateLimitAskPerMin'
+      | 'management'
+      | 'domainProvisioner'
+      | 'platformDomain'
+      | 'lifecycle'
+      | 'rateLimitAskPerMin'
+      | 'operatorDeleteAfterDays'
     >
     & {
       bindingKey?: string
@@ -782,6 +789,8 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['DELETE', 'knowledge-box', 'bindings.write'],
   ['POST', '/api/admin/tenants', 'portal.create', { name: 'New portal' }],
   ['DELETE', '/api/admin/tenants/:slug', 'portal.delete'],
+  ['POST', '/api/admin/tenants/:slug/delete-suspended', 'portal.create'],
+  ['POST', '/api/admin/tenants/:slug/erase', 'portal.create'],
   ['POST', 'knowledge-box/create', 'bindings.write', { title: 'Research' }],
   ['GET', 'counters', 'content.write'],
   ['GET', 'recent', 'content.write'],
@@ -1005,6 +1014,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
     }) as AragProvider
     const fixture = createEnforcementFixture({
       management,
+      operatorDeleteAfterDays: 30,
       domainProvisioner: {
         attach: (hostname) => {
           calls.push('attach')
@@ -1045,6 +1055,16 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       if (method === 'DELETE' && suffix === 'aliases/:hostname') {
         fixture.stores.tenants.setAlias('a', 'research.example.org', undefined, 5)
       }
+      // Retention: the operator's delete needs a portal suspended past the configured days, and
+      // erasure needs a portal that is already deleted.
+      if (suffix.endsWith('/delete-suspended')) {
+        fixture.stores.lifecycle.set(
+          'a',
+          { status: 'suspended', limits: null },
+          fixture.now() - 31 * 86_400_000,
+        )
+      }
+      if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
       const snapshot = () =>
         ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
           fixture.database.all(`SELECT * FROM ${table}`)
@@ -1131,7 +1151,10 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
           } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
           else if (suffix === 'lifecycle') {
-            expect(JSON.parse(result)).toEqual(fixture.stores.lifecycle.get('a'))
+            expect(JSON.parse(result)).toEqual({
+              ...fixture.stores.lifecycle.get('a'),
+              suspendedSince: fixture.stores.lifecycle.suspendedSince('a'),
+            })
           } else if (suffix === 'aliases') {
             expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
           } else if (suffix === 'usage') {
@@ -1151,6 +1174,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             expect(fixture.stores.tenants.get('a')?.branding.productName).toBe(
               method === 'DELETE' ? undefined : 'Renamed portal',
             )
+          }
+          if (suffix.endsWith('/delete-suspended')) {
+            expect(fixture.stores.tenants.get('a')).toBeUndefined()
+            expect(fixture.stores.tenants.isRetired('a')).toBe(true)
+          }
+          if (suffix.endsWith('/erase')) {
+            expect(fixture.stores.sources.list('a')).toEqual([])
+            expect(fixture.stores.kgProposals.get('a')).toBeUndefined()
+            expect(JSON.parse(result).total).toBeGreaterThan(0)
           }
           if (suffix === 'knowledge-box') {
             expect(fixture.stores.bindings.get('a')).toBeUndefined()

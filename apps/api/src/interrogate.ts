@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import process from 'node:process'
 import type { TenantConfig } from '@research-portal/core'
@@ -34,9 +34,23 @@ export interface Suggestion {
 const DATA_DIR = process.env.DATA_DIR ?? './data'
 
 export class SuggestionStore {
+  constructor(private readonly dataDir = DATA_DIR) {}
+
   private pathFor(slug: string): string {
     const safe = slug.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'unknown'
-    return join(DATA_DIR, 'suggestions', `${safe}.json`)
+    return join(this.dataDir, 'suggestions', `${safe}.json`)
+  }
+
+  /** Remove the portal's setup suggestions. A slug the file name would change is left alone. */
+  erase(slug: string): number {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(slug)) return 0
+    try {
+      rmSync(this.pathFor(slug))
+      return 1
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
   }
 
   list(slug: string): Suggestion[] {

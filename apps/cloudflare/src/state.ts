@@ -70,6 +70,7 @@ import {
   createAuditEvent,
 } from '../../api/src/audit.ts'
 import type { LocalMutationScope } from '../../api/src/audit-execution.ts'
+import type { ErasureTransaction } from '../../api/src/portal-erasure.ts'
 import { DECLARATIONS } from '../../api/src/permissions.ts'
 import {
   decodeScopedKeyRecords,
@@ -247,6 +248,15 @@ export class DurableState {
     }
   }
 
+  /**
+   * Run a declared mutation as one SQLite transaction. Inside a request it is audited like any
+   * other store mutation; outside one it still commits or rolls back as a whole.
+   */
+  atomically<T>(operation: string, args: unknown[], work: () => T): T {
+    if (this.localContext.getStore()) return this.localMutation(operation, args, work)
+    return this.rbacDatabase.transactionSync(work)
+  }
+
   /** Join an existing synchronous mutation, or atomically commit cache and completion. */
   completeEnrichmentMutation(work: () => void): void {
     if (this.mutating) work()
@@ -396,7 +406,7 @@ export class DurableState {
       return JSON.parse(row.value) as T
     } catch (error) {
       if (key === 'bindings') throw new BindingCryptoError('binding_storage_invalid')
-      if (/^portal-(?:lifecycle|asks|capacity):/.test(key)) {
+      if (/^portal-(?:lifecycle|asks|capacity|suspension):/.test(key)) {
         throw new Error('Invalid persisted portal lifecycle')
       }
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
@@ -423,6 +433,14 @@ export class DurableState {
     this.sql.exec('DELETE FROM state WHERE key = ?', key)
   }
 
+  /** Whether a row is stored under the key, whether or not its value can be read. */
+  has(key: string): boolean {
+    return this.sql.exec<{ found: number }>(
+      'SELECT count(*) AS found FROM state WHERE key = ?',
+      key,
+    ).one().found > 0
+  }
+
   list<T>(prefix: string): { key: string; value: T }[] {
     return this.sql.exec<{ key: string; value: string }>(
       'SELECT key, value FROM state WHERE key >= ? AND key < ? ORDER BY key',
@@ -439,6 +457,42 @@ export class DurableState {
         return []
       }
     })
+  }
+
+  /** Delete the listed state rows, counting those that were there. */
+  eraseKeys(keys: readonly (string | undefined)[]): number {
+    this.guardLocalWrite()
+    let erased = 0
+    for (const key of keys) {
+      if (key === undefined || !this.has(key)) continue
+      this.sql.exec('DELETE FROM state WHERE key = ?', key)
+      erased++
+    }
+    return erased
+  }
+
+  /** Delete every row of `table` whose key starts with `prefix`, counting them. */
+  erasePrefix(table: 'state' | 'branding_assets', prefix: string | undefined): number {
+    this.guardLocalWrite()
+    if (prefix === undefined) return 0
+    const range = [prefix, prefixUpperBound(prefix)]
+    const erased = this.sql.exec<{ n: number }>(
+      `SELECT count(*) AS n FROM ${table} WHERE key >= ? AND key < ?`,
+      ...range,
+    ).one().n
+    if (erased) this.sql.exec(`DELETE FROM ${table} WHERE key >= ? AND key < ?`, ...range)
+    return erased
+  }
+
+  /** Delete every row a table keeps for the portal in its `tenant_slug` column, counting them. */
+  eraseTenantRows(table: 'enrichment_records' | 'routing_records', slug: string): number {
+    this.guardLocalWrite()
+    const erased = this.sql.exec<{ n: number }>(
+      `SELECT count(*) AS n FROM ${table} WHERE tenant_slug = ?`,
+      slug,
+    ).one().n
+    if (erased) this.sql.exec(`DELETE FROM ${table} WHERE tenant_slug = ?`, slug)
+    return erased
   }
 
   /** Append one routing decision and trim the tenant's log to `keep` rows. */
@@ -725,6 +779,14 @@ function prefixUpperBound(prefix: string): string {
 
 function segment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'unknown'
+}
+
+/**
+ * The key segment a one-record-per-portal store uses for `slug`, or undefined when sanitising
+ * would change the slug: that record may be another portal's, so erasure leaves it alone.
+ */
+function portalSegment(slug: string): string | undefined {
+  return segment(slug) === slug ? slug : undefined
 }
 
 function key(...parts: string[]): string {
@@ -1042,6 +1104,23 @@ export class DurableTenantStore implements TenantStoreApi {
     this.save(data)
     return true
   }
+
+  /** See `TenantStore.erase`. The retired slug stays, so the slug is never reused. */
+  erase(slug: string): { configuration: number; aliases: number } {
+    const data = this.load()
+    if (tenantConfig(slug) || Object.hasOwn(data.custom, slug)) {
+      throw new Error('A live portal cannot be erased')
+    }
+    const configuration = [Object.hasOwn(data.overrides, slug), data.disabled.includes(slug)]
+      .filter(Boolean).length
+    const aliases = data.aliases.filter((alias) => alias.slug === slug).length
+    if (configuration + aliases === 0) return { configuration, aliases }
+    delete data.overrides[slug]
+    data.disabled = data.disabled.filter((item) => item !== slug)
+    data.aliases = data.aliases.filter((alias) => alias.slug !== slug)
+    this.save(data)
+    return { configuration, aliases }
+  }
 }
 
 export class DurableInsightsStore implements InsightsStoreApi {
@@ -1049,6 +1128,11 @@ export class DurableInsightsStore implements InsightsStoreApi {
 
   private all(slug: string): AskInsight[] {
     return this.state.get(key('insights', slug), [])
+  }
+
+  erase(slug: string): number {
+    const plain = portalSegment(slug)
+    return this.state.eraseKeys([plain && key('insights', plain)])
   }
 
   record(slug: string, insight: AskInsight): void {
@@ -1191,6 +1275,15 @@ export class DurableSessionsStore implements SessionsStoreApi {
     const legacy = this.legacyKey(slug, clientId, id)
     if (legacy && this.legacyGet(slug, clientId, id)) this.state.delete(legacy)
   }
+
+  /** Remove every owner's sessions in the portal, current and pre-phase. */
+  erase(slug: string): number {
+    const plain = legacySegment(slug)
+    return this.state.erasePrefix(
+      'state',
+      'research-v2:' + encodeStorageIdentifier(slug) + ':sessions:',
+    ) + this.state.erasePrefix('state', plain && `session:${plain}:`)
+  }
 }
 
 export class DurableWatchStore implements WatchStoreApi {
@@ -1270,6 +1363,12 @@ export class DurableWatchStore implements WatchStoreApi {
     )
     if (next.length !== all.length) this.write(slug, next)
   }
+
+  /** Remove the portal's watch collection, current and pre-phase. */
+  erase(slug: string): number {
+    const plain = legacySegment(slug)
+    return this.state.eraseKeys([this.storageKey(slug), plain && `watches:${plain}`])
+  }
 }
 
 export class DurableSourceStore implements SourceStoreApi {
@@ -1296,6 +1395,11 @@ export class DurableSourceStore implements SourceStoreApi {
 
   findByUrl(slug: string, url: string): Source | undefined {
     return this.list(slug).find((source) => source.url === url)
+  }
+
+  erase(slug: string): number {
+    const plain = portalSegment(slug)
+    return this.state.eraseKeys([plain && this.storageKey(plain)])
   }
 
   slugs(): string[] {
@@ -1460,6 +1564,15 @@ export class DurableInvestigationStore implements InvestigationStoreApi {
     if (legacy && this.legacyGet(slug, clientId, id)) this.state.delete(legacy)
   }
 
+  /** Remove every owner's investigations in the portal, current and pre-phase. */
+  erase(slug: string): number {
+    const plain = legacySegment(slug)
+    return this.state.erasePrefix(
+      'state',
+      'research-v2:' + encodeStorageIdentifier(slug) + ':investigations:',
+    ) + this.state.erasePrefix('state', plain && `investigation:${plain}:`)
+  }
+
   addEvidence(
     slug: string,
     clientId: ResearchOwner | string,
@@ -1545,6 +1658,11 @@ export class DurableSuggestionStore implements SuggestionStoreApi {
     return this.state.get(key('suggestions', slug), [])
   }
 
+  erase(slug: string): number {
+    const plain = portalSegment(slug)
+    return this.state.eraseKeys([plain && key('suggestions', plain)])
+  }
+
   replacePending(slug: string, fresh: Suggestion[]): Suggestion[] {
     const kept = this.list(slug).filter((suggestion) => suggestion.status !== 'pending').slice(-40)
     const next = [...fresh, ...kept]
@@ -1628,6 +1746,13 @@ export class DurableEnrichmentStore implements EnrichmentStoreApi {
     this.migrateLegacy(slug)
     return this.state.importEnrichments(slug, records, collision)
   }
+
+  /** Remove the portal's enrichment rows and any pre-table record. */
+  erase(slug: string): number {
+    const plain = portalSegment(slug)
+    return this.state.eraseTenantRows('enrichment_records', slug) +
+      this.state.eraseKeys([plain && key('enrichments', plain)])
+  }
 }
 
 export class DurableKgProposalStore implements KgProposalStoreApi {
@@ -1645,6 +1770,15 @@ export class DurableKgProposalStore implements KgProposalStoreApi {
     all[slug] = proposal
     this.state.put('kg-proposals', all)
   }
+
+  /** Remove the portal's proposal, including one stored in a shape this store cannot read. */
+  erase(slug: string): number {
+    const all = this.state.get<Record<string, unknown>>('kg-proposals', {})
+    if (!Object.hasOwn(all, slug)) return 0
+    delete all[slug]
+    this.state.put('kg-proposals', all)
+    return 1
+  }
 }
 
 export class DurableBrandingStore implements BrandingAssetStore {
@@ -1656,6 +1790,12 @@ export class DurableBrandingStore implements BrandingAssetStore {
 
   put(slug: string, kind: BrandingKind, asset: BrandingAsset): void {
     this.state.putAsset(key('branding', slug, kind), asset)
+  }
+
+  /** Remove every uploaded asset of the portal: logo, hero image and fonts. */
+  erase(slug: string): number {
+    const plain = portalSegment(slug)
+    return this.state.erasePrefix('branding_assets', plain && `${key('branding', plain)}:`)
   }
 }
 
@@ -1694,6 +1834,12 @@ export class DurableMcpKeyStore implements McpKeyStoreApi {
     this.state.put(this.storageKey(slug), all)
     return true
   }
+
+  erase(slug: string): number {
+    return KeyPortalSlugSchema.safeParse(slug).success
+      ? this.state.eraseKeys([this.storageKey(slug)])
+      : 0
+  }
 }
 
 /**
@@ -1717,6 +1863,10 @@ export class DurableRoutingLog implements RoutingLogApi {
     return this.state.routingRecords<RoutingRecord>(slug, limit)
   }
 
+  erase(slug: string): number {
+    return this.state.eraseTenantRows('routing_records', slug)
+  }
+
   summary(
     slug: string,
   ): { total: number; byIntent: Record<string, number>; byStage: Record<string, number> } {
@@ -1734,6 +1884,8 @@ export class DurableRoutingLog implements RoutingLogApi {
 export interface DurableStores extends RbacStores {
   lifecycle: PortalLifecycleStore
   localMutations: LocalMutationScope
+  /** One SQLite transaction around a whole portal erasure, audited as `erasure.erase`. */
+  erasureTransaction: ErasureTransaction
   rbac: RbacState
   bindings: DurableBindingStore
   tenants: DurableTenantStore
@@ -1757,6 +1909,7 @@ export function durableStores(
   return {
     lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
     localMutations: state.localMutations,
+    erasureTransaction: (slug, work) => state.atomically('erasure.erase', [slug], work),
     rbac: state.rbac,
     audit: state.rbac.audit,
     assignments: state.rbac.assignments,

@@ -115,6 +115,19 @@ export class EnrichmentStore {
   count(slug: string, schemaId = DEFAULT_RESEARCH_ENRICHMENT.id): number {
     return Object.keys(this.load(slug)[schemaId] ?? {}).length
   }
+
+  /** Remove the portal's enrichments and cached suggested questions, on disk and in memory. */
+  erase(slug: string): number {
+    this.cache.delete(slug)
+    if (safeSegment(slug) !== slug) return 0
+    try {
+      rmSync(this.pathFor(slug))
+      return 1
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+  }
 }
 
 /** Public enrichment-store contract for alternate durable runtimes. */
