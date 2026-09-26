@@ -9,6 +9,8 @@ export interface ExternalLoginConfig {
   audience?: string
   name?: string
   startUrl?: string
+  /** Refuse assertions that carry no `host` claim (`EXTERNAL_LOGIN_REQUIRE_HOST`). */
+  requireHost?: boolean
 }
 
 export function externalLoginConfig(env: Record<string, string | undefined>): ExternalLoginConfig {
@@ -18,7 +20,25 @@ export function externalLoginConfig(env: Record<string, string | undefined>): Ex
     audience: env.WORKER_NAME,
     name: env.EXTERNAL_LOGIN_NAME,
     startUrl: env.EXTERNAL_LOGIN_START_URL,
+    requireHost: requireHostSetting(env.EXTERNAL_LOGIN_REQUIRE_HOST),
   }
+}
+
+/** Only an absent, empty or `false` value leaves the requirement off, so a typo fails closed. */
+function requireHostSetting(value: string | undefined): boolean {
+  const setting = value?.trim().toLowerCase()
+  return !(setting === undefined || setting === '' || setting === 'false')
+}
+
+const HOSTNAME =
+  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
+
+/** A hostname lower-cased and without one trailing dot, or null when it is not a hostname. */
+function assertionHost(value: string | undefined): string | null {
+  if (value === undefined) return null
+  let host = value.toLowerCase()
+  if (host.endsWith('.')) host = host.slice(0, -1)
+  return HOSTNAME.test(host) ? host : null
 }
 
 export function externalLoginConfigured(config?: ExternalLoginConfig): boolean {
@@ -48,6 +68,7 @@ export const EXTERNAL_LOGIN_FAILURES = [
   'claims',
   'issuer',
   'audience',
+  'host',
   'lifetime',
   'email',
   'replay',
@@ -75,6 +96,7 @@ const claimsSchema = z.object({
   iat: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   exp: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   jti: z.string().min(16),
+  host: z.string().max(254).optional(),
 })
 
 function decode(part: string): Uint8Array<ArrayBuffer> {
@@ -96,11 +118,15 @@ function decode(part: string): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
-/** No discovery or key fetching: only the deployment's pinned public key can verify assertions. */
+/**
+ * No discovery or key fetching: only the deployment's pinned public key can verify assertions.
+ * `requestHost` is the hostname the assertion arrived on, which a `host` claim must name.
+ */
 export async function verifyExternalAssertion(
   token: string | null,
   config: ExternalLoginConfig,
   now = Date.now(),
+  requestHost?: string,
 ) {
   if (!externalLoginConfigured(config) || !config.audience) {
     throw new ExternalLoginError('configuration')
@@ -158,6 +184,15 @@ export async function verifyExternalAssertion(
   const claims = parsed.data
   if (claims.iss !== config.issuer) throw new ExternalLoginError('issuer')
   if (claims.aud !== config.audience) throw new ExternalLoginError('audience')
+  // The audience is shared by every host of the deployment. A `host` claim binds the assertion to
+  // the one hostname the issuer handed the person to, so it cannot be replayed on another host.
+  if (claims.host === undefined) {
+    if (config.requireHost) throw new ExternalLoginError('host')
+  } else {
+    const host = assertionHost(claims.host)
+    if (host === null) throw new ExternalLoginError('claims')
+    if (host !== assertionHost(requestHost)) throw new ExternalLoginError('host')
+  }
   if (
     !Number.isSafeInteger(now) || claims.exp < claims.iat || claims.exp - claims.iat > 120 ||
     now / 1000 < claims.iat - 30 || now / 1000 > claims.exp

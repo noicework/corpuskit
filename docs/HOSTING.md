@@ -613,6 +613,7 @@ Configure the same values in the Worker environment or the local server's `.env`
 | `EXTERNAL_LOGIN_NAME` | Optional sign-in button label. Defaults to `Continue with your organisation account`. |
 | `EXTERNAL_LOGIN_START_URL` | HTTPS URL on the issuer that starts sign-in; HTTP is accepted only for localhost development. Optional for the handoff itself, but the portal shows an external sign-in button only when it is set, so an external-only deployment needs it. |
 | `WORKER_NAME` | Deployment-specific assertion audience and principal-envelope audience. Local development defaults to `corpuskit`. |
+| `EXTERNAL_LOGIN_REQUIRE_HOST` | Optional. `true` refuses every assertion without a `host` claim (see [Host-bound assertions](#host-bound-assertions)). Only an absent, empty or `false` value leaves it off, so a mistyped value fails closed. Off by default, for issuers that do not send the claim yet. |
 | `SESSION_SECRET` | Random secret of at least 32 bytes, used to seal the normal session cookie and sign the internal principal envelope. |
 
 The Worker and a production local server require `SESSION_SECRET`. For local development only,
@@ -646,6 +647,7 @@ The issuer signs a compact JWS with Ed25519. Its protected header must have `alg
 | `name` | Optional display name. |
 | `iat`, `exp` | Numeric dates in seconds. Lifetime is at most 120 seconds; the current time must be within `[iat - 30 seconds, exp]`. |
 | `jti` | Unique identifier of at least 16 characters. Accepted once only and retained until expiry has passed. |
+| `host` | Optional, required when `EXTERNAL_LOGIN_REQUIRE_HOST` is on. The hostname the issuer hands the person to. It must equal the hostname `/auth/external` is requested on; case and one trailing dot are ignored. A value that is not a hostname is refused. |
 
 Successful verification creates an encrypted session with `provenance: "external"` that expires
 eight hours after creation. The identity has `tid: "external"`, `oid: "ext:<sub>"`, the verified
@@ -682,6 +684,24 @@ the existing `provenance` array that describes role grants. It also reports `ent
 `externalLogin: { "name": "...", "startUrl": "..." }` when the external button is configured,
 or `externalLogin: null` otherwise. Existing Entra sign-in and its session flow remain unchanged.
 
+### Host-bound assertions
+
+The audience, `WORKER_NAME`, is shared by every host the deployment answers on. Without a `host`
+claim, an assertion minted for one host is accepted on any other: an assertion meant for a
+[portal's alias host](#portal-host-aliases) could be replayed on a platform host, where the
+session it creates shares the platform domain's cookie scope. Whoever controls an alias
+hostname's DNS can point it at their own server and collect the assertions sent there, so this is
+not only a theoretical risk.
+
+The `host` claim closes it. With `host`, `/auth/external` accepts the assertion only on that
+hostname, and anywhere else refuses it with the usual `401 {"error":"external_login_invalid"}`;
+the audit record names the reason `host`. A refused assertion is not consumed. An issuer that
+knows the claim should always send it, set to the hostname of the handoff URL it redirects to.
+
+**Set `EXTERNAL_LOGIN_REQUIRE_HOST=true` on every deployment that registers portal host
+aliases,** once its issuer sends `host`. It then refuses every assertion without the claim, with
+the reason `host`, so an issuer that omits it by mistake cannot open the gap again.
+
 ### Issuer responsibilities
 
 The handoff is not bound to the browser that began sign-in: CorpusKit issues no state or nonce for
@@ -692,7 +712,8 @@ browser to `/auth/external` with it. That person would then work as the sender's
 research trails, saved sessions or uploads they create would belong to the sender, who could read
 them later. The short lifetime and single-use `jti` do not prevent this, because a new assertion
 can be requested on demand. The audience is the Worker's `WORKER_NAME`, so an assertion is valid
-for every portal served by that Worker.
+for every portal served by that Worker, on every host, unless it is
+[bound to a host](#host-bound-assertions).
 
 An issuer that CorpusKit trusts must therefore:
 
@@ -700,7 +721,8 @@ An issuer that CorpusKit trusts must therefore:
   an API that returns assertions to a caller;
 - deliver it at once by top-level navigation of that same browser to `/auth/external`, for
   example with a `303` redirect, never as a link that can be copied, shared or embedded;
-- send the person only to the portal host they started from.
+- send the person only to the portal host they started from;
+- name that host in the assertion's `host` claim.
 
 A later version may bind the handoff to a portal-issued state value, or refuse to replace a live
 session that belongs to a different person. Until then these obligations are the protection
@@ -937,7 +959,9 @@ pages, which are not served on an alias host.
 
 `/auth/external`, `/auth/me` and `/auth/logout` behave as on a platform host, with a session
 cookie that is always host-only on an alias host: it is never shared with the platform domain or
-another alias. The session inside it is also sealed to the alias host. It is read on that host
+another alias. Set `EXTERNAL_LOGIN_REQUIRE_HOST=true` so that an assertion sent to an alias host
+cannot be replayed on another host (see [Host-bound assertions](#host-bound-assertions)). The
+session inside the cookie is also sealed to the alias host. It is read on that host
 and nowhere else, and a session issued on any other host is not read there. Whoever controls an
 alias hostname's DNS could collect the cookies browsers send to it, but those cookies are
 worthless on the platform hosts and on every other alias. [External sign-in](#external-sign-in-handoff) returns to a same-origin path only,

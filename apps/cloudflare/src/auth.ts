@@ -167,6 +167,8 @@ async function finishExternalLogin(
     const claims = await verifyExternalAssertion(
       url.searchParams.get('assertion'),
       config.externalLogin ?? {},
+      Date.now(),
+      url.hostname,
     )
     const now = Date.now()
     const user: AuthUser = {

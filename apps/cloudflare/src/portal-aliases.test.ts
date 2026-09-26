@@ -824,7 +824,67 @@ Deno.test('a lookup that does not answer leaves hosts as they were within a seco
   }
 })
 
-async function assertion(key: CryptoKey): Promise<string> {
+Deno.test('an assertion bound to an alias host cannot be replayed on another host', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const jwk = JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey))
+  for (const requireHost of [undefined, 'true']) {
+    const f = await fixture({
+      EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+      EXTERNAL_LOGIN_JWK: jwk,
+      EXTERNAL_LOGIN_REQUIRE_HOST: requireHost,
+    })
+    try {
+      await f.operator('/api/admin/t/marine/aliases/research.example.org', body('PUT'))
+      // Refusals are recorded once per client address a minute, so each attempt has its own.
+      let address = 10
+      const handoff = async (host: string, extra: Record<string, unknown>) => {
+        const before = new Set(f.events().map((event) => event.id))
+        const response = await f.request(
+          host,
+          `/auth/external?assertion=${await assertion(pair.privateKey, extra)}&returnTo=/t/marine`,
+          { headers: { 'cf-connecting-ip': `198.51.100.${address++}` } },
+        )
+        const denied = f.events().find((event) =>
+          !before.has(event.id) && event.action === 'auth.external.denied'
+        )
+        return {
+          status: response.status,
+          cookie: response.headers.get('set-cookie') !== null,
+          reason: denied ? JSON.parse(denied.detail_json).externalReason : undefined,
+        }
+      }
+      const bound = { host: 'research.example.org' }
+      expect(await handoff('research.example.org', bound)).toEqual({
+        status: 303,
+        cookie: true,
+        reason: undefined,
+      })
+      // The same kind of assertion, replayed on a platform subdomain or the apex, is refused.
+      for (const host of ['marine.corpuskit.org', 'grains.corpuskit.org', 'corpuskit.org']) {
+        expect(await handoff(host, bound), host).toEqual({
+          status: 401,
+          cookie: false,
+          reason: 'host',
+        })
+      }
+      // Case and a trailing dot on the claim do not matter.
+      expect((await handoff('research.example.org', { host: 'RESEARCH.example.org.' })).status)
+        .toBe(303)
+      // Without a host claim, only the requirement decides.
+      for (const host of ['research.example.org', 'marine.corpuskit.org']) {
+        expect(await handoff(host, {}), `${requireHost} ${host}`).toEqual(
+          requireHost
+            ? { status: 401, cookie: false, reason: 'host' }
+            : { status: 303, cookie: true, reason: undefined },
+        )
+      }
+    } finally {
+      f.close()
+    }
+  }
+})
+
+async function assertion(key: CryptoKey, extra: Record<string, unknown> = {}): Promise<string> {
   const encoder = new TextEncoder()
   const encode = (value: Uint8Array) =>
     btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -840,6 +900,7 @@ async function assertion(key: CryptoKey): Promise<string> {
       iat: now - 5,
       exp: now + 60,
       jti: crypto.randomUUID(),
+      ...extra,
     })
   }`
   return `${content}.${

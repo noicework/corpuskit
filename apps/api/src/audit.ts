@@ -177,6 +177,7 @@ const fields = {
     'claims',
     'issuer',
     'audience',
+    'host',
     'lifetime',
     'email',
     'replay',
