@@ -5,10 +5,15 @@ import {
   aliasHostname,
   aliasHostRoute,
   applyAlias,
+  classifyHost,
   HostPortalCache,
   hostPortalFor,
   maxPortalAliases,
+  narrowRolesToPortal,
+  reservedHostnames,
   storedAliases,
+  transportSecurityFor,
+  unknownHostsMode,
   withoutAlias,
   withPrimaryAlias,
 } from './portal-aliases.ts'
@@ -301,4 +306,80 @@ Deno.test('the host lookup cache keeps answers for their lifetime only and stays
   expect(cache.get('a.example.org', 3_000)).toBeUndefined()
   expect(cache.get('b.example.org', 3_000)).toBe('grains')
   expect(cache.get('c.example.org', 3_000)).toBeNull()
+})
+
+Deno.test('reserved hostnames come from the setting and the deployment sign-in URLs', () => {
+  expect(reservedHostnames({})).toEqual(new Set())
+  expect(
+    reservedHostnames({
+      RESERVED_HOSTNAMES: ' Legacy.Example.NET. ,,not a host!, *.example.org, second.example.net ',
+      ENTRA_REDIRECT_URI: 'https://Login.Example.net/auth/callback',
+      EXTERNAL_LOGIN_START_URL: 'https://issuer.example/start',
+    }),
+  ).toEqual(
+    new Set([
+      'legacy.example.net',
+      'second.example.net',
+      'login.example.net',
+      'issuer.example',
+    ]),
+  )
+  expect(reservedHostnames({ ENTRA_REDIRECT_URI: 'not a url' })).toEqual(new Set())
+})
+
+Deno.test('unknown hosts are served by default and denied for any other value', () => {
+  for (const value of [undefined, '', ' ', 'serve', 'SERVE', ' Serve ']) {
+    expect(unknownHostsMode(value), String(value)).toBe('serve')
+  }
+  for (const value of ['deny', 'DENY', 'blocked', 'false', 'off']) {
+    expect(unknownHostsMode(value), value).toBe('deny')
+  }
+})
+
+Deno.test('hosts are platform, reserved, alias candidates or other', () => {
+  const reserved = new Set(['legacy.example.net'])
+  const kind = (host: string) => classifyHost(host, 'corpuskit.org', reserved)
+  expect(kind('corpuskit.org')).toEqual({ kind: 'platform' })
+  expect(kind('Marine.CorpusKit.org.')).toEqual({ kind: 'platform' })
+  expect(kind('legacy.example.net.')).toEqual({ kind: 'reserved' })
+  expect(kind('Research.Example.org')).toEqual({
+    kind: 'candidate',
+    hostname: 'research.example.org',
+  })
+  for (const host of ['localhost', '192.0.2.1', '[::1]', 'corpuskit.account.workers.dev']) {
+    expect(kind(host), host).toEqual({ kind: 'other' })
+  }
+})
+
+Deno.test('HSTS includes subdomains inside the platform domain only', () => {
+  for (const host of ['corpuskit.org', 'marine.corpuskit.org', 'CORPUSKIT.ORG.']) {
+    expect(transportSecurityFor(host, 'corpuskit.org'), host).toBe(
+      'max-age=63072000; includeSubDomains',
+    )
+  }
+  for (
+    const host of ['research.example.org', 'corpuskit.org.evil.test', 'localhost', '192.0.2.1']
+  ) {
+    expect(transportSecurityFor(host, 'corpuskit.org'), host).toBe('max-age=63072000')
+  }
+})
+
+Deno.test('roles described on an alias host are narrowed to its portal', () => {
+  const roles = {
+    platformRole: 'platform-admin',
+    portalRoles: [{ slug: 'grains', role: 'portal-admin' }, { slug: 'marine', role: 'viewer' }],
+  }
+  const provenance = [
+    { source: 'local', scope: { kind: 'platform' }, role: 'platform-admin' },
+    { source: 'local', scope: { kind: 'portal', slug: 'grains' }, role: 'portal-admin' },
+    { source: 'local', scope: { kind: 'portal', slug: 'marine' }, role: 'viewer' },
+  ]
+  expect(narrowRolesToPortal(roles, provenance, 'marine')).toEqual({
+    effectiveRoles: { platformRole: 'platform-admin', portalRoles: [roles.portalRoles[1]] },
+    provenance: [provenance[0], provenance[2]],
+  })
+  expect(narrowRolesToPortal(undefined, undefined, 'marine')).toEqual({
+    effectiveRoles: undefined,
+    provenance: undefined,
+  })
 })

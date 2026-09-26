@@ -4,6 +4,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import {
   ExternalFailureAudit,
+  externalHostWarning,
   externalLoginConfig,
   externalLoginConfigured,
   type ExternalLoginFailure,
@@ -57,13 +58,18 @@ import {
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
 import {
-  ALIAS_HOST_TRANSPORT_SECURITY,
   aliasCacheSeconds,
-  aliasHostname,
   aliasHostRoute,
+  classifyHost,
   HostPortalCache,
   hostPortalFor,
   maxPortalAliases,
+  narrowRolesToPortal,
+  normaliseHostname,
+  OFF_PLATFORM_TRANSPORT_SECURITY,
+  reservedHostnames,
+  transportSecurityFor,
+  unknownHostsMode,
 } from '../../api/src/portal-aliases.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
@@ -119,6 +125,8 @@ export class PortalDurableObject extends DurableObject<Env> {
     this.bindings = bindings
     const operatorWarning = operatorConfigurationWarning(bindings)
     if (operatorWarning) console.warn(operatorWarning)
+    const hostWarning = externalHostWarning(bindings)
+    if (hostWarning) console.warn(hostWarning)
     this.stores = durableStores(state, bindings)
     this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
@@ -166,6 +174,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       enrichments: this.stores.enrichments,
       domainProvisioner: createCloudflareDomainProvisioner(bindings),
       maxPortalAliases: maxPortalAliases(bindings.MAX_PORTAL_ALIASES),
+      reservedHostnames: reservedHostnames(bindings),
       kgProposals: this.stores.kgProposals,
       branding: this.stores.branding,
       mcpKeys: this.stores.mcpKeys,
@@ -253,6 +262,9 @@ export class PortalDurableObject extends DurableObject<Env> {
   async handleTrustedRequest(request: Request, context: TrustedRequestContext): Promise<Response> {
     try {
       const hostPortal = this.hostPortal(request, context.hostPortal)
+      if (hostPortal === undefined && this.deniedHost(request)) {
+        return json({ error: 'not_found' }, 404)
+      }
       const principal = await this.requestPrincipal(request, context)
       if (
         principal.operator &&
@@ -298,6 +310,10 @@ export class PortalDurableObject extends DurableObject<Env> {
           sessionSecret: this.bindings.SESSION_SECRET,
           externalLogin: externalLoginConfig(this.bindings),
         }
+        // An alias host describes the caller's roles in its own portal only.
+        const described = hostPortal === undefined
+          ? { effectiveRoles: principal.effectiveRoles, provenance: principal.provenance }
+          : narrowRolesToPortal(principal.effectiveRoles, principal.provenance, hostPortal)
         return json({
           ...buildUiAccessSnapshot({
             externalLoginEnabled: externalLoginConfigured(externalLoginConfig(this.bindings)),
@@ -320,8 +336,8 @@ export class PortalDurableObject extends DurableObject<Env> {
               isAdmin: principal.coarseAdminEligible,
             }
             : null,
-          effectiveRoles: principal.effectiveRoles,
-          provenance: principal.provenance,
+          effectiveRoles: described.effectiveRoles,
+          provenance: described.provenance,
           claimAgeSeconds: principal.session
             ? Math.max(0, Math.floor((Date.now() - principal.session.claimIssuedAt) / 1000))
             : null,
@@ -365,6 +381,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       this.stores.tenants,
       new URL(request.url).hostname,
       getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+      reservedHostnames(this.bindings),
     )
     if (recorded !== null) return recorded
     return workerView !== undefined && KeyPortalSlugSchema.safeParse(workerView).success
@@ -378,7 +395,19 @@ export class PortalDurableObject extends DurableObject<Env> {
       this.stores.tenants,
       hostname,
       getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+      reservedHostnames(this.bindings),
     )
+  }
+
+  /** With `UNKNOWN_HOSTS=deny`, a host that is neither a platform nor a reserved host. */
+  private deniedHost(request: Request): boolean {
+    if (unknownHostsMode(this.bindings.UNKNOWN_HOSTS) !== 'deny') return false
+    const host = classifyHost(
+      new URL(request.url).hostname,
+      getPlatformDomain(this.bindings.PLATFORM_DOMAIN),
+      reservedHostnames(this.bindings),
+    )
+    return host.kind === 'candidate' || host.kind === 'other'
   }
 
   /** Internal audit entry for Worker denials that never enter Hono. */
@@ -442,7 +471,7 @@ export class PortalDurableObject extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return withSecurityHeaders(await route(request, env))
+    return withSecurityHeaders(hostTransportSecurity(request, env, await route(request, env)))
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -465,23 +494,30 @@ async function route(request: Request, env: Env): Promise<Response> {
   } catch {
     return json({ error: 'platform_domain_invalid' }, 503)
   }
-  // Only a registered alias host changes routing (see `routeAliasHost`); platform hosts are never
-  // looked up, and every other host keeps its behaviour.
-  const hostPortal = await cachedHostPortal(url.hostname, platformDomain, env)
-  const auth = authConfig(
-    env,
-    url.hostname,
-    platformDomain,
-    hostPortal === null ? null : aliasHostname(url.hostname, platformDomain),
-  )
+  // The request host decides everything else. Platform and reserved hosts are never looked up; a
+  // host that could be a registered alias is, and a failed lookup never falls back to treating
+  // it as unregistered.
+  const values = stringEnv(env)
+  const host = classifyHost(url.hostname, platformDomain, reservedHostnames(values))
+  let hostPortal: string | null = null
+  if (host.kind === 'candidate') {
+    const found = await cachedHostPortal(host.hostname, env)
+    if (found === undefined) {
+      return json({ error: 'host_lookup_failed' }, 503, { 'retry-after': '5' })
+    }
+    hostPortal = found
+  }
+  if (
+    hostPortal === null && (host.kind === 'candidate' || host.kind === 'other') &&
+    unknownHostsMode(values.UNKNOWN_HOSTS) === 'deny'
+  ) return json({ error: 'not_found' }, 404)
+  const auth = authConfig(env, url.hostname, platformDomain, hostPortal !== null)
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
-  const operator = await authenticateOperator(request, stringEnv(env))
+  const operator = await authenticateOperator(request, values)
   if (hostPortal !== null) {
-    return aliasHostSecurity(
-      operator.kind === 'absent'
-        ? await routeAliasHost(request, env, auth, platformDomain, hostPortal)
-        : await forwardTrusted(request, env, auth, operator, hostPortal),
-    )
+    return operator.kind === 'absent'
+      ? routeAliasHost(request, env, auth, platformDomain, hostPortal)
+      : forwardTrusted(request, env, auth, operator, hostPortal)
   }
   if (operator.kind !== 'absent') return forwardTrusted(request, env, auth, operator)
   const hostnameLocation = platformHostnameLocation(request, platformDomain)
@@ -607,12 +643,23 @@ async function pageRoute(
 }
 
 /**
- * An alias host is often a customer's apex domain, so its answers never ask browsers to force
- * HTTPS on every subdomain of it (`includeSubDomains`), as the platform hosts do.
+ * `includeSubDomains` only inside the platform domain. Every other host (an alias, a reserved or
+ * unknown host, or one whose lookup failed) may be a customer's apex domain, so its answers never
+ * force HTTPS on every subdomain of it.
  */
-function aliasHostSecurity(response: Response): Response {
+function hostTransportSecurity(request: Request, env: Env, response: Response): Response {
+  let value = OFF_PLATFORM_TRANSPORT_SECURITY
+  try {
+    value = transportSecurityFor(
+      new URL(request.url).hostname,
+      getPlatformDomain(stringEnv(env).PLATFORM_DOMAIN),
+    )
+  } catch {
+    // Without a valid platform domain no host is inside it.
+  }
+  if (response.headers.get('strict-transport-security') === value) return response
   const headers = new Headers(response.headers)
-  headers.set('strict-transport-security', ALIAS_HOST_TRANSPORT_SECURITY)
+  headers.set('strict-transport-security', value)
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -622,21 +669,15 @@ function aliasHostSecurity(response: Response): Response {
 
 /** Per-isolate host lookups, positive and negative, each kept for `ALIAS_CACHE_SECONDS`. */
 const hostPortals = new HostPortalCache()
-/** A lookup slower than this leaves the host unregistered for the request, uncached. */
+/** A lookup slower than this fails: the request is answered with 503 and nothing is cached. */
 const HOST_LOOKUP_TIMEOUT_MS = 1000
 
 /**
- * The portal whose registered alias the request host is, or null. Only hosts that could be an
- * alias are looked up. A failed lookup leaves the host as it was before aliases existed: the
- * Durable Object still decides every API request from its own record of the alias.
+ * The portal a candidate host (a normalised hostname that could be an alias) is registered to,
+ * null when it is not registered, or undefined when the lookup failed or timed out. A failure is
+ * never cached and never treated as an unregistered host.
  */
-async function cachedHostPortal(
-  hostname: string,
-  platformDomain: string,
-  env: Env,
-): Promise<string | null> {
-  const candidate = aliasHostname(hostname, platformDomain)
-  if (!candidate) return null
+async function cachedHostPortal(candidate: string, env: Env): Promise<string | null | undefined> {
   const now = Date.now()
   const cached = hostPortals.get(candidate, now)
   if (cached !== undefined) return cached
@@ -653,7 +694,7 @@ async function cachedHostPortal(
     slug = typeof found === 'string' && KeyPortalSlugSchema.safeParse(found).success ? found : null
   } catch {
     console.error('Portal host lookup failed')
-    return null
+    return undefined
   } finally {
     clearTimeout(timer)
   }
@@ -811,11 +852,11 @@ function authConfig(
   env: Env,
   hostname: string,
   platformDomain: string,
-  aliasHost: string | null = null,
+  aliasHost = false,
 ): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
-  const entra = entraOnHost(values, hostname, aliasHost !== null)
+  const entra = entraOnHost(values, hostname, aliasHost)
   return {
     clientId: entra ? values.ENTRA_CLIENT_ID : undefined,
     clientSecret: entra ? values.ENTRA_CLIENT_SECRET : undefined,
@@ -829,7 +870,9 @@ function authConfig(
     adminEmails: values.ENTRA_ADMIN_EMAILS,
     externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
-    ...(aliasHost === null ? {} : { sessionHost: aliasHost }),
+    // Outside the platform cookie scope, whether or not the host is a known alias, a session is
+    // sealed to the host it was issued on and read nowhere else.
+    ...(onPlatformDomain ? {} : { sessionHost: normaliseHostname(hostname) }),
   }
 }
 

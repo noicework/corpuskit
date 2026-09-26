@@ -558,7 +558,7 @@ Deno.test('alias hosts keep sessions host-only, redirects on the host and Entra 
     ) {
       response = await f.request(
         host,
-        `/auth/external?assertion=${await assertion(pair.privateKey)}&returnTo=${
+        `/auth/external?assertion=${await assertion(pair.privateKey, { host })}&returnTo=${
           encodeURIComponent(returnTo!)
         }`,
       )
@@ -588,8 +588,10 @@ Deno.test('alias hosts keep sessions host-only, redirects on the host and Entra 
     // the alias host is worthless on the platform host or another portal's alias.
     await f.operator('/api/admin/t/grains/aliases/other.example.org', body('PUT'))
     const issue = async (on: string) =>
-      (await f.request(on, `/auth/external?assertion=${await assertion(pair.privateKey)}`))
-        .headers.get('set-cookie')!.split(';')[0]!
+      (await f.request(
+        on,
+        `/auth/external?assertion=${await assertion(pair.privateKey, { host: on })}`,
+      )).headers.get('set-cookie')!.split(';')[0]!
     const aliasSession = await issue(host)
     const signedIn = async (on: string, cookie: string) =>
       (await (await f.request(on, '/auth/me', { headers: { cookie } })).json()).authenticated
@@ -684,7 +686,12 @@ Deno.test('hosts that are not registered aliases keep exactly their behaviour', 
           transport: response.headers.get('strict-transport-security'),
           body: text,
         })
-        expect(response.headers.get('strict-transport-security')).toContain('includeSubDomains')
+        // includeSubDomains inside the platform domain only; any other host may be an apex.
+        expect(response.headers.get('strict-transport-security')).toBe(
+          host === 'corpuskit.org' || host.endsWith('.corpuskit.org')
+            ? 'max-age=63072000; includeSubDomains'
+            : 'max-age=63072000',
+        )
         if (text.includes('corpuskit-host-portal')) expect(hostPortalMeta(text)).toBe('')
       }
     }
@@ -796,27 +803,58 @@ Deno.test('a stale edge lookup narrows requests and never serves another portal'
   }
 })
 
-Deno.test('a lookup that does not answer leaves hosts as they were within a second', async () => {
-  const f = await fixture({ ALIAS_CACHE_SECONDS: '30' })
+Deno.test('a lookup that fails or does not answer is a 503, never an unregistered host', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const f = await fixture({
+    ALIAS_CACHE_SECONDS: '30',
+    RESERVED_HOSTNAMES: 'legacy.example.net',
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+  })
   const error = console.error
   const logged: unknown[] = []
   console.error = (...args: unknown[]) => logged.push(args)
   try {
+    await f.operator('/api/admin/t/marine/aliases/slow.example.org', body('PUT'))
+    const lookup = f.object.resolveHostPortal
     f.object.resolveHostPortal = () => new Promise(() => {})
-    for (const attempt of [1, 2]) {
+    const host = 'slow.example.org'
+    const assertionFor = await assertion(pair.privateKey, { host })
+    for (
+      const path of [
+        `/auth/external?assertion=${assertionFor}`,
+        '/',
+        '/api/t/grains/config',
+        '/app.js',
+      ]
+    ) {
       const started = Date.now()
-      const response = await f.request('slow-lookup.example.net', '/', {})
+      const response = await f.request(host, path)
       const elapsed = Date.now() - started
-      expect(response.status, `attempt ${attempt}`).toBe(200)
-      expect(await response.text()).toContain('corpuskit-host-portal" content=""')
+      expect(response.status, path).toBe(503)
+      expect(await response.json()).toEqual({ error: 'host_lookup_failed' })
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(response.headers.get('retry-after')).toBe('5')
+      expect(response.headers.get('set-cookie')).toBeNull()
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=63072000')
       expect(elapsed).toBeGreaterThanOrEqual(900)
       expect(elapsed).toBeLessThan(3000)
     }
-    // A timed-out lookup is not remembered, so the next request asks again.
-    expect(logged).toEqual([['Portal host lookup failed'], ['Portal host lookup failed']])
-    // Platform hosts never wait on a lookup.
+    // A failure is never remembered: each request asks again.
+    expect(logged).toHaveLength(4)
+    // The same assertion was never consumed, so it still works once the lookup answers.
+    f.object.resolveHostPortal = lookup
+    const response = await f.request(host, `/auth/external?assertion=${assertionFor}`)
+    expect(response.status).toBe(303)
+    expect(response.headers.get('set-cookie')).toContain('__Secure-corpuskit_session=')
+    // A lookup that throws is a 503 too.
+    f.object.resolveHostPortal = () => Promise.reject(new Error('unavailable'))
+    expect((await f.request('thrown.example.org', '/')).status).toBe(503)
+    // Platform and reserved hosts never wait on a lookup.
+    f.object.resolveHostPortal = () => new Promise(() => {})
     const started = Date.now()
     expect((await f.request('corpuskit.org', '/api/health')).status).toBe(200)
+    expect((await f.request('legacy.example.net', '/api/health')).status).toBe(200)
     expect(Date.now() - started).toBeLessThan(900)
   } finally {
     console.error = error
@@ -870,17 +908,378 @@ Deno.test('an assertion bound to an alias host cannot be replayed on another hos
       // Case and a trailing dot on the claim do not matter.
       expect((await handoff('research.example.org', { host: 'RESEARCH.example.org.' })).status)
         .toBe(303)
-      // Without a host claim, only the requirement decides.
-      for (const host of ['research.example.org', 'marine.corpuskit.org']) {
-        expect(await handoff(host, {}), `${requireHost} ${host}`).toEqual(
-          requireHost
-            ? { status: 401, cookie: false, reason: 'host' }
-            : { status: 303, cookie: true, reason: undefined },
-        )
-      }
+      // Without a host claim: refused on the alias host whatever the setting, and on a platform
+      // host only when the setting requires the claim.
+      expect(await handoff('research.example.org', {}), `${requireHost} alias`).toEqual({
+        status: 401,
+        cookie: false,
+        reason: 'host',
+      })
+      expect(await handoff('marine.corpuskit.org', {}), `${requireHost} platform`).toEqual(
+        requireHost
+          ? { status: 401, cookie: false, reason: 'host' }
+          : { status: 303, cookie: true, reason: undefined },
+      )
     } finally {
       f.close()
     }
+  }
+})
+
+const externalLogin = async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  return {
+    key: pair.privateKey,
+    env: {
+      EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+      EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    },
+  }
+}
+const cookieOf = (response: Response) => response.headers.get('set-cookie')?.split(';')[0]
+
+Deno.test('every session outside the platform cookie scope is sealed to its host', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture({ ...issuer.env, RESERVED_HOSTNAMES: 'legacy.example.net' })
+  try {
+    const signedIn = async (on: string, cookie: string) =>
+      (await (await f.request(on, '/auth/me', { headers: { cookie } })).json()).authenticated
+    // An unregistered host that routes here (serve mode), a reserved host and a workers.dev host.
+    const hosts = ['pending.example.net', 'legacy.example.net', 'corpuskit.account.workers.dev']
+    for (const host of hosts) {
+      // An assertion that does not name the host is refused there, whatever the setting.
+      let response = await f.request(
+        host,
+        `/auth/external?assertion=${await assertion(issuer.key)}`,
+        { headers: { 'cf-connecting-ip': `198.51.100.${hosts.indexOf(host) + 1}` } },
+      )
+      expect(response.status, host).toBe(401)
+      expect(response.headers.get('set-cookie')).toBeNull()
+      response = await f.request(
+        host,
+        `/auth/external?assertion=${await assertion(issuer.key, { host })}`,
+      )
+      expect(response.status, host).toBe(303)
+      expect(response.headers.get('set-cookie')).not.toContain('Domain=')
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=63072000')
+      const cookie = cookieOf(response)!
+      expect(await signedIn(host, cookie), host).toBe(true)
+      for (const elsewhere of ['corpuskit.org', 'marine.corpuskit.org', ...hosts]) {
+        if (elsewhere !== host) expect(await signedIn(elsewhere, cookie), elsewhere).toBe(false)
+      }
+    }
+    // A platform session is not read off the platform domain either.
+    const platform = await f.request(
+      'corpuskit.org',
+      `/auth/external?assertion=${await assertion(issuer.key)}`,
+    )
+    expect(platform.headers.get('set-cookie')).toContain('Domain=corpuskit.org')
+    expect(await signedIn('marine.corpuskit.org', cookieOf(platform)!)).toBe(true)
+    expect(await signedIn('pending.example.net', cookieOf(platform)!)).toBe(false)
+    // In serve mode a routed but unregistered host still serves the whole deployment, which is
+    // why a deployment that routes third-party hostnames runs UNKNOWN_HOSTS=deny.
+    expect((await f.request('pending.example.net', '/api/t/grains/config')).status).toBe(200)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('UNKNOWN_HOSTS=deny answers only platform, reserved and alias hosts', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture({
+    ...issuer.env,
+    UNKNOWN_HOSTS: 'deny',
+    RESERVED_HOSTNAMES: 'legacy.example.net,corpuskit.account.workers.dev',
+  })
+  try {
+    const refused = async (host: string, path: string, init: RequestInit = {}, auth?: string) => {
+      const assets = f.assets.length
+      const response = await f.request(host, path, init, auth)
+      expect(response.status, `${host}${path}`).toBe(404)
+      expect(await response.json()).toEqual({ error: 'not_found' })
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(response.headers.get('set-cookie')).toBeNull()
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=63072000')
+      expect(f.assets.length).toBe(assets)
+    }
+    const operatorKeyHeader = `Operator ${operatorKey}`
+    for (const host of ['pending.example.net', 'other.account.workers.dev', '192.0.2.44']) {
+      await refused(host, '/')
+      await refused(host, '/t/marine')
+      await refused(host, '/app.js')
+      await refused(host, '/api/health')
+      await refused(host, '/api/t/grains/config')
+      await refused(host, '/auth/me')
+      await refused(
+        host,
+        `/auth/external?assertion=${await assertion(issuer.key, { host })}`,
+      )
+      await refused(host, '/api/admin/t/marine/aliases', {}, operatorKeyHeader)
+    }
+    // Registering the host opens it, as that portal's alias.
+    await f.operator('/api/admin/t/marine/aliases/pending.example.net', body('PUT'))
+    let response = await f.request('pending.example.net', '/')
+    expect(response.status).toBe(308)
+    expect(response.headers.get('location')).toBe('/t/marine')
+    // Platform and reserved hosts are served as before; the operator keeps its direct host.
+    expect((await f.request('corpuskit.org', '/api/t/grains/config')).status).toBe(200)
+    expect((await f.request('grains.corpuskit.org', '/')).status).toBe(308)
+    expect((await f.request('legacy.example.net', '/api/t/grains/config')).status).toBe(200)
+    response = await f.request(
+      'corpuskit.account.workers.dev',
+      '/api/admin/t/marine/aliases',
+      {},
+      operatorKeyHeader,
+    )
+    expect(response.status).toBe(200)
+    // The Durable Object applies the same rule to a request the edge let through.
+    const direct = await f.object.handleTrustedRequest(
+      new Request('https://pending-too.example.net/api/t/grains/config'),
+      { session: null },
+    )
+    expect(direct.status).toBe(404)
+  } finally {
+    f.close()
+  }
+  // A mistyped mode fails closed; `serve` in any case keeps the default.
+  for (const [mode, status] of [['blocked', 404], [' Deny ', 404], ['SERVE', 200], ['', 200]]) {
+    const g = await fixture({ UNKNOWN_HOSTS: mode as string })
+    try {
+      const response = await g.request('pending.example.net', '/api/t/grains/config')
+      await response.body?.cancel()
+      expect(response.status, String(mode)).toBe(status)
+    } finally {
+      g.close()
+    }
+  }
+})
+
+Deno.test('a negative cache entry never yields a portable session, and deny keeps the host shut', async () => {
+  const issuer = await externalLogin()
+  for (const mode of ['serve', 'deny']) {
+    const f = await fixture({ ...issuer.env, ALIAS_CACHE_SECONDS: '30', UNKNOWN_HOSTS: mode })
+    try {
+      const host = `late-${mode}.example.org`
+      // The edge remembers the host as unregistered, then the alias is registered.
+      await (await f.request(host, '/api/health')).body?.cancel()
+      await f.operator(`/api/admin/t/marine/aliases/${host}`, body('PUT'))
+      const lookups = f.lookups.length
+      const handoff = await f.request(
+        host,
+        `/auth/external?assertion=${await assertion(issuer.key, { host })}`,
+      )
+      expect(f.lookups.length).toBe(lookups)
+      if (mode === 'deny') {
+        // Within the window the host stays shut rather than serving as unregistered.
+        expect(handoff.status).toBe(404)
+        expect((await f.request(host, '/api/t/marine/config')).status).toBe(404)
+        continue
+      }
+      // Serve mode: the edge still treats the host as unregistered, but the session is sealed to
+      // it and the Durable Object narrows the API to the registered portal.
+      expect(handoff.status).toBe(303)
+      const cookie = cookieOf(handoff)!
+      const me = async (on: string) =>
+        (await (await f.request(on, '/auth/me', { headers: { cookie } })).json()).authenticated
+      expect(await me(host)).toBe(true)
+      expect(await me('corpuskit.org')).toBe(false)
+      expect(await me('marine.corpuskit.org')).toBe(false)
+      expect((await f.request(host, '/api/t/grains/config')).status).toBe(404)
+      expect((await f.request(host, '/api/t/marine/config')).status).toBe(200)
+    } finally {
+      f.close()
+    }
+  }
+})
+
+Deno.test('/auth/me on an alias host describes roles in its own portal only', async () => {
+  const issuer = await externalLogin()
+  const f = await fixture(issuer.env)
+  try {
+    const assignments = f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true)
+    for (const [slug, role] of [['marine', 'viewer'], ['grains', 'portal-admin']] as const) {
+      const created = assignments.create({
+        subjectKind: 'pending-email',
+        subjectId: 'reader@example.test',
+        source: 'external',
+        scope: { kind: 'portal', slug },
+        role,
+      }, { requestId: `grant-${slug}`, actor: { kind: 'system' } })
+      expect(created.ok).toBe(true)
+    }
+    await f.operator('/api/admin/t/marine/aliases/research.example.org', body('PUT'))
+    const describe = async (host: string, portal: string) => {
+      const handoff = await f.request(
+        host,
+        `/auth/external?assertion=${await assertion(issuer.key, { host })}`,
+      )
+      const cookie = cookieOf(handoff)!
+      return await (await f.request(host, `/auth/me?portal=${portal}`, { headers: { cookie } }))
+        .json()
+    }
+    const platform = await describe('corpuskit.org', 'marine')
+    expect(platform.effectiveRoles.portalRoles.map((grant: { slug: string }) => grant.slug))
+      .toEqual(['grains', 'marine'])
+    expect(platform.provenance.map((entry: { scope: { slug: string } }) => entry.scope.slug).sort())
+      .toEqual(['grains', 'marine'])
+    const alias = await describe('research.example.org', 'marine')
+    expect(alias.effectiveRoles).toEqual({ portalRoles: [{ slug: 'marine', role: 'viewer' }] })
+    expect(alias.provenance).toEqual([
+      { source: 'local', scope: { kind: 'portal', slug: 'marine' }, role: 'viewer' },
+    ])
+    expect(alias.portalAccess.effectiveRole).toBe('viewer')
+    expect(JSON.stringify(alias)).not.toContain('grains')
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('reserved hostnames are never registered, looked up or denied', async () => {
+  const f = await fixture({
+    RESERVED_HOSTNAMES: ' Legacy.Example.NET. , not a host!, other.example.net',
+    ENTRA_REDIRECT_URI: 'https://login.example.net/auth/callback',
+    EXTERNAL_LOGIN_START_URL: 'https://issuer.example/start',
+    UNKNOWN_HOSTS: 'deny',
+  })
+  try {
+    const reserved = [
+      'legacy.example.net',
+      'other.example.net',
+      'login.example.net',
+      'issuer.example',
+    ]
+    for (const hostname of [...reserved, 'LEGACY.example.net.']) {
+      const response = await f.operator(`/api/admin/t/marine/aliases/${hostname}`, body('PUT'))
+      expect(response.status, hostname).toBe(400)
+      expect(await response.json()).toEqual({ error: 'hostname_reserved' })
+    }
+    expect(f.stores.tenants.portalAliases('marine')).toEqual([])
+    // Removing one is still an idempotent success.
+    expect(
+      (await f.operator('/api/admin/t/marine/aliases/legacy.example.net', body('DELETE'))).status,
+    ).toBe(200)
+    // Served in deny mode, and never looked up.
+    for (const host of reserved) {
+      const response = await f.request(host, '/api/health')
+      expect(response.status, host).toBe(200)
+    }
+    expect(f.lookups.filter((host) => reserved.includes(host))).toEqual([])
+    const denied = f.events().filter((event) =>
+      event.action === 'portal.alias.set' && event.outcome === 'denied'
+    )
+    expect(denied.map((event) => JSON.parse(event.detail_json).code)).toEqual(
+      Array(5).fill('hostname_reserved'),
+    )
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('every refused alias call is audited with its code', async () => {
+  const f = await fixture({ MAX_PORTAL_ALIASES: '1', RESERVED_HOSTNAMES: 'kept.example.net' })
+  try {
+    await f.operator('/api/admin/t/marine/aliases/taken.example.org', body('PUT'))
+    const cases: [string, string, RequestInit, number, string, string | undefined][] = [
+      ['PUT', '/api/admin/t/marine/aliases/192.0.2.1', {}, 400, 'invalid_hostname', undefined],
+      [
+        'PUT',
+        '/api/admin/t/marine/aliases/body.example.org',
+        { body: '{"primary":"yes"}' },
+        400,
+        'invalid_request',
+        'body.example.org',
+      ],
+      ['PUT', '/api/admin/t/missing/aliases/a.example.org', {}, 404, 'unknown_tenant', undefined],
+      [
+        'PUT',
+        '/api/admin/t/marine/aliases/kept.example.net',
+        {},
+        400,
+        'hostname_reserved',
+        'kept.example.net',
+      ],
+      [
+        'PUT',
+        '/api/admin/t/grains/aliases/taken.example.org',
+        {},
+        409,
+        'hostname_taken',
+        'taken.example.org',
+      ],
+      [
+        'PUT',
+        '/api/admin/t/marine/aliases/second.example.org',
+        {},
+        409,
+        'alias_limit',
+        'second.example.org',
+      ],
+      [
+        'DELETE',
+        '/api/admin/t/marine/aliases/*.example.org',
+        {},
+        400,
+        'invalid_hostname',
+        undefined,
+      ],
+      [
+        'DELETE',
+        '/api/admin/t/missing/aliases/a.example.org',
+        {},
+        404,
+        'unknown_tenant',
+        undefined,
+      ],
+    ]
+    for (const [method, path, init, status, code, hostname] of cases) {
+      const seen = new Set(f.events().map((event) => event.id))
+      const response = await f.operator(path, {
+        method,
+        ...init,
+        ...(init.body ? { headers: { 'content-type': 'application/json' } } : {}),
+      })
+      expect(response.status, path).toBe(status)
+      expect(await response.json()).toEqual({ error: code })
+      const denied = f.events().filter((event) =>
+        !seen.has(event.id) && event.outcome === 'denied' &&
+        event.action === (method === 'PUT' ? 'portal.alias.set' : 'portal.alias.remove')
+      )
+      expect(denied, path).toHaveLength(1)
+      expect(denied[0]!.actor_id).toBe('operator:hosting-automation')
+      expect(denied[0]!.target_id).toBe(path.split('/')[4])
+      expect(JSON.parse(denied[0]!.detail_json)).toEqual({
+        permission: 'portal.create',
+        code,
+        ...(hostname ? { aliasHostname: hostname } : {}),
+      })
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('the object warns at start-up when aliases are enabled but assertions need no host', async () => {
+  const issuer = await externalLogin()
+  const warn = console.warn
+  try {
+    for (
+      const [settings, warned] of [
+        [issuer.env, true],
+        [{ ...issuer.env, EXTERNAL_LOGIN_REQUIRE_HOST: 'true' }, false],
+        [{ ...issuer.env, MAX_PORTAL_ALIASES: '0' }, false],
+        [{}, false],
+      ] as const
+    ) {
+      const warnings: string[] = []
+      console.warn = (message: string) => warnings.push(message)
+      const f = await fixture(settings)
+      f.close()
+      expect(warnings.some((message) => message.includes('EXTERNAL_LOGIN_REQUIRE_HOST'))).toBe(
+        warned,
+      )
+    }
+  } finally {
+    console.warn = warn
   }
 })
 

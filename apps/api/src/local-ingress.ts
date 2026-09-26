@@ -7,6 +7,7 @@ import {
 } from '../../cloudflare/src/auth.ts'
 import {
   ExternalFailureAudit,
+  externalHostWarning,
   externalLoginConfig,
   externalLoginConfigured,
   externalLoginPresentation,
@@ -33,7 +34,16 @@ import type { RbacState } from './rbac-state.ts'
 import type { TenantStoreApi } from './tenants.ts'
 import { buildUiAccessSnapshot } from './ui-access.ts'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
-import { aliasHostRoute, hostPortalFor } from './portal-aliases.ts'
+import {
+  aliasHostRoute,
+  classifyHost,
+  type HostKind,
+  hostPortalFor,
+  narrowRolesToPortal,
+  normaliseHostname,
+  reservedHostnames,
+  unknownHostsMode,
+} from './portal-aliases.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import {
   authenticateOperator,
@@ -84,6 +94,8 @@ export class LocalIngress {
     this.externalFailures = new ExternalFailureAudit(rbac.audit)
     const operatorWarning = operatorConfigurationWarning(env)
     if (operatorWarning) console.warn(operatorWarning)
+    const hostWarning = externalHostWarning(env)
+    if (hostWarning) console.warn(hostWarning)
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -130,15 +142,32 @@ export class LocalIngress {
    */
   hostPortal(request: Request): string | undefined {
     const tenants = this.options.tenants
-    if (!tenants.aliasPortal) return undefined
-    let platformDomain: string
-    try {
-      platformDomain = getPlatformDomain(this.options.env.PLATFORM_DOMAIN)
-    } catch {
-      return undefined
-    }
+    const platformDomain = this.platformDomain()
+    if (!tenants.aliasPortal || platformDomain === null) return undefined
     const lookup = { aliasPortal: (hostname: string) => tenants.aliasPortal!(hostname) }
-    return hostPortalFor(lookup, new URL(request.url).hostname, platformDomain) ?? undefined
+    return hostPortalFor(
+      lookup,
+      new URL(request.url).hostname,
+      platformDomain,
+      reservedHostnames(this.options.env),
+    ) ?? undefined
+  }
+
+  private platformDomain(): string | null {
+    try {
+      return getPlatformDomain(this.options.env.PLATFORM_DOMAIN)
+    } catch {
+      return null
+    }
+  }
+
+  private hostKind(request: Request): HostKind {
+    const platformDomain = this.platformDomain()
+    return platformDomain === null ? { kind: 'other' } : classifyHost(
+      new URL(request.url).hostname,
+      platformDomain,
+      reservedHostnames(this.options.env),
+    )
   }
 
   async handle(
@@ -168,10 +197,22 @@ export class LocalIngress {
     try {
       const path = new URL(request.url).pathname
       const hostPortal = this.hostPortal(request)
-      // As in the Worker, a session issued on an alias host is sealed to it and read nowhere else.
-      const auth: AuthConfig = hostPortal === undefined
+      const host = this.hostKind(request)
+      // As in the Worker: with UNKNOWN_HOSTS=deny, only platform, reserved and alias hosts answer.
+      if (
+        hostPortal === undefined && (host.kind === 'candidate' || host.kind === 'other') &&
+        unknownHostsMode(this.options.env.UNKNOWN_HOSTS) === 'deny'
+      ) {
+        return Response.json({ error: 'not_found' }, {
+          status: 404,
+          headers: { 'cache-control': 'no-store' },
+        })
+      }
+      // As in the Worker, a session issued outside the platform domain is sealed to its host and
+      // read nowhere else.
+      const auth: AuthConfig = host.kind === 'platform'
         ? this.auth
-        : { ...this.auth, sessionHost: new URL(request.url).hostname.replace(/\.$/, '') }
+        : { ...this.auth, sessionHost: normaliseHostname(new URL(request.url).hostname) }
       const headers = stripIdentityHeaders(request.headers)
       // As in the Worker, an explicit operator credential is decided before sign-in routes or
       // sessions: it is the whole authority, and no session cookie is read beside it.
@@ -325,6 +366,10 @@ export class LocalIngress {
         } catch {
           // Unavailable policy has the same safe projection as a missing portal.
         }
+        // An alias host describes the caller's roles in its own portal only, as in the Worker.
+        const described = hostPortal === undefined
+          ? { effectiveRoles: resolution.effectiveRoles, provenance: resolution.provenance }
+          : narrowRolesToPortal(resolution.effectiveRoles, resolution.provenance, hostPortal)
         return Response.json({
           ...buildUiAccessSnapshot({
             externalLoginEnabled: this.externalEnabled,
@@ -337,7 +382,7 @@ export class LocalIngress {
           enabled: sessionAuthConfigured(auth),
           // On an alias host, Entra only when its redirect URI is on that host, as in the Worker.
           entraEnabled: authConfigured(auth) &&
-            (auth.sessionHost === undefined || redirectHost(auth.redirectUri) === auth.sessionHost),
+            (hostPortal === undefined || redirectHost(auth.redirectUri) === auth.sessionHost),
           externalLogin: externalLoginPresentation(this.auth.externalLogin),
           externalLoginEnabled: this.externalEnabled,
           sessionProvenance: session ? session.provenance ?? 'entra' : null,
@@ -349,8 +394,8 @@ export class LocalIngress {
               isAdmin: principal.coarseAdminEligible,
             }
             : null,
-          effectiveRoles: resolution.effectiveRoles,
-          provenance: resolution.provenance,
+          effectiveRoles: described.effectiveRoles,
+          provenance: described.provenance,
           claimAgeSeconds: session
             ? Math.max(0, Math.floor((Date.now() - session.claimIssuedAt) / 1000))
             : null,

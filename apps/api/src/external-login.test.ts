@@ -5,6 +5,7 @@ import {
   EXTERNAL_FAILURE_AUDIT_WINDOW_MS,
   EXTERNAL_LOGIN_FAILURES,
   ExternalFailureAudit,
+  externalHostWarning,
   externalLoginConfig,
   externalLoginConfigured,
   externalLoginPresentation,
@@ -276,7 +277,8 @@ Deno.test('local ingress caps failed handoff records per peer and never limits a
       expect(await refused.json()).toEqual({ error: 'external_login_invalid' })
     }
     expect(records()).toEqual([{ externalReason: 'encoding' }])
-    const signedIn = await send(await mint(), '192.0.2.10')
+    // Off the platform domain an assertion names the host it is sent to.
+    const signedIn = await send(await mint({ host: 'portal.example' }), '192.0.2.10')
     expect(signedIn.status).toBe(303)
     const elsewhere = await send('not-a-signed-assertion', '198.51.100.20')
     expect(elsewhere.status).toBe(401)
@@ -581,7 +583,7 @@ Deno.test('local ingress exchanges, reads and logs out external sessions using d
         externalReplays: new ExternalLoginReplayStore(db),
       })
     const ingress = makeIngress()
-    const token = await mint()
+    const token = await mint({ host: 'portal.example' })
     const response = await ingress.handle(request(token), () => new Response('unexpected'))
     expect(response.status).toBe(303)
     const cookie = response.headers.get('set-cookie')!.split(';')[0]!
@@ -776,4 +778,13 @@ Deno.test('EXTERNAL_LOGIN_REQUIRE_HOST is off only when absent, empty or false',
     expect(externalLoginConfig({ EXTERNAL_LOGIN_REQUIRE_HOST: value }).requireHost, value)
       .toBe(true)
   }
+})
+
+Deno.test('a start-up warning names the host requirement while aliases are enabled', () => {
+  const issuer = { EXTERNAL_LOGIN_ISSUER: 'https://issuer.example', EXTERNAL_LOGIN_JWK: '{}' }
+  expect(externalHostWarning(issuer)).toContain('EXTERNAL_LOGIN_REQUIRE_HOST')
+  expect(externalHostWarning({ ...issuer, MAX_PORTAL_ALIASES: '3' })).not.toBeNull()
+  expect(externalHostWarning({ ...issuer, EXTERNAL_LOGIN_REQUIRE_HOST: 'true' })).toBeNull()
+  expect(externalHostWarning({ ...issuer, MAX_PORTAL_ALIASES: '0' })).toBeNull()
+  expect(externalHostWarning({})).toBeNull()
 })

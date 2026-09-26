@@ -15,7 +15,7 @@ import {
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
 import { registerAliasRoutes } from './alias-routes.ts'
-import { ALIAS_HOST_TRANSPORT_SECURITY, maxPortalAliases } from './portal-aliases.ts'
+import { maxPortalAliases, reservedHostnames, transportSecurityFor } from './portal-aliases.ts'
 import {
   assertAgentRunAllowed,
   capacityUsage,
@@ -942,6 +942,8 @@ export interface BuildAppOptions {
   domainProvisioner?: PortalDomainProvisioner | null
   /** Host aliases each portal may have. Defaults to env MAX_PORTAL_ALIASES, or 5. */
   maxPortalAliases?: number
+  /** Hostnames never registered as aliases. Defaults to `reservedHostnames(process.env)`. */
+  reservedHostnames?: ReadonlySet<string>
   zone?: string
   audit?: AuditStore
   breakGlass?: BreakGlassService
@@ -1689,11 +1691,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // its own stricter policy, which forbids framing as well.
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
+    // `includeSubDomains` only inside the platform domain: any other host may be a customer's apex.
     c.header(
       'Strict-Transport-Security',
-      opts.requestContext?.(c.req.raw)?.hostPortal === undefined
-        ? 'max-age=63072000; includeSubDomains'
-        : ALIAS_HOST_TRANSPORT_SECURITY,
+      transportSecurityFor(new URL(c.req.url).hostname, platformDomain),
     )
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
@@ -1919,6 +1920,29 @@ export function buildApp(opts: BuildAppOptions): Hono {
     tenants,
     platformDomain,
     limit: aliasLimit,
+    reserved: opts.reservedHostnames ?? reservedHostnames(process.env),
+    refused: (c, action, slug, code, hostname) => {
+      const { requestId, actor } = requestContext(c.req.raw)
+      appendAudit(
+        requiredAudit(),
+        createAuditEvent({
+          requestId,
+          actor: actor!,
+          action,
+          scope: { kind: 'platform' },
+          target: {
+            kind: 'portal',
+            ...(KeyPortalSlugSchema.safeParse(slug).success ? { id: slug } : {}),
+          },
+          outcome: 'denied',
+          detail: {
+            permission: 'portal.create',
+            code,
+            ...(hostname === undefined ? {} : { aliasHostname: hostname }),
+          },
+        }, opts.now),
+      )
+    },
     set: (c, slug, hostname, primary, audited) =>
       subAction(
         c,

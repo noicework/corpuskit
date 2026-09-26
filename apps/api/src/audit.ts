@@ -153,6 +153,12 @@ const codes = [
   'deadline_exceeded',
   'response_too_large',
   'client_aborted',
+  'invalid_hostname',
+  'invalid_request',
+  'unknown_tenant',
+  'hostname_reserved',
+  'hostname_taken',
+  'alias_limit',
 ] as const
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/
 type DetailValue = string | number | boolean

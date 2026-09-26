@@ -17,9 +17,10 @@ export interface AuthConfig {
   adminEmails?: string
   cookieDomain?: string
   /**
-   * Set on a portal's alias host, to that host. A session issued there is sealed to the host and
-   * read nowhere else, so a cookie taken from the alias host is worthless on any other host.
-   * Unset elsewhere, where a session sealed to a host is never read.
+   * Set on every host outside the platform cookie scope (an alias, a reserved or an unknown host),
+   * to that host. A session issued there is sealed to the host and read nowhere else, so a cookie
+   * taken from it is worthless on any other host. Unset on platform hosts, where a session sealed
+   * to a host is never read.
    */
   sessionHost?: string
   externalLogin?: ExternalLoginConfig
@@ -76,6 +77,8 @@ interface IdTokenClaims {
   _claim_names?: { groups?: unknown }
 }
 
+/** Local development hosts, where no one else controls the name. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]'])
 const STATE_COOKIE = '__Secure-corpuskit_oidc'
 const SESSION_COOKIE = '__Secure-corpuskit_session'
 const SESSION_COOKIE_MAX_BYTES = 3800
@@ -164,9 +167,14 @@ async function finishExternalLogin(
     if (!sessionAuthConfigured(config)) throw new ExternalLoginError('configuration')
     if (!services) throw new ExternalLoginError('storage')
     if (url.searchParams.getAll('assertion').length !== 1) throw new ExternalLoginError('encoding')
+    // Outside the platform cookie scope an assertion must name the host it was sent to, whatever
+    // the deployment requires elsewhere; local development hosts are exempt.
+    const external = config.externalLogin ?? {}
     const claims = await verifyExternalAssertion(
       url.searchParams.get('assertion'),
-      config.externalLogin ?? {},
+      config.sessionHost !== undefined && !LOOPBACK_HOSTS.has(config.sessionHost)
+        ? { ...external, requireHost: true }
+        : external,
       Date.now(),
       url.hostname,
     )

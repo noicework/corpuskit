@@ -772,6 +772,8 @@ async function sessionCookie(session: TrustedSessionFacts): Promise<string> {
         isAdmin: false,
         expiresAt: session.expiresAt,
         sessionFacts: session,
+        // Sessions outside the platform domain are sealed to their host.
+        host: 'corpuskit.test',
       }),
     ),
   )
@@ -1427,6 +1429,7 @@ Deno.test('external handoff reaches the real Worker and durable roles across obj
         iat: now - 20,
         exp: now + 60,
         jti: crypto.randomUUID(),
+        host: 'corpuskit.test',
         roles: ['CorpusKit.Owner'],
       })
     }`
@@ -1542,6 +1545,7 @@ Deno.test('external-only Worker sets up its first owner through break-glass and 
       iat: now - 5,
       exp: now + 60,
       jti: crypto.randomUUID(),
+      host: 'corpuskit.test',
     })
   }`
   const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
@@ -1631,6 +1635,7 @@ Deno.test('Worker refuses external handoffs, cookies and envelopes once the issu
         iat: now - 5,
         exp: now + 60,
         jti: crypto.randomUUID(),
+        host: 'corpuskit.test',
       })
     }`
     const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
@@ -1743,7 +1748,8 @@ async function externalIssuer(audience = 'corpuskit') {
   const encode = (value: Uint8Array) =>
     btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
   const part = (value: unknown) => encode(encoder.encode(JSON.stringify(value)))
-  const mint = async () => {
+  // Off the platform domain an assertion must name its host; the test host is `corpuskit.test`.
+  const mint = async (host = 'corpuskit.test') => {
     const now = Math.floor(Date.now() / 1000)
     const content = `${part({ alg: 'EdDSA', typ: 'JWT' })}.${
       part({
@@ -1755,6 +1761,7 @@ async function externalIssuer(audience = 'corpuskit') {
         iat: now - 5,
         exp: now + 60,
         jti: crypto.randomUUID(),
+        host,
       })
     }`
     const signature = await crypto.subtle.sign('Ed25519', pair.privateKey, encoder.encode(content))
@@ -1965,7 +1972,7 @@ Deno.test('Worker serves /auth/external without Entra after platform-domain and 
   })
   try {
     const origin = 'https://research.example.org'
-    const assertion = await issuer.mint()
+    const assertion = await issuer.mint('research.example.org')
     // Platform-domain validation comes first and leaves the assertion unused.
     const invalid = await worker.fetch(
       new Request(issuer.url(assertion, origin)),

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
 import type { SqlExecutor } from './rbac-state.ts'
 import { SlidingWindowLimiter } from './rate-limit.ts'
+import { maxPortalAliases } from './portal-aliases.ts'
 
 export interface ExternalLoginConfig {
   issuer?: string
@@ -22,6 +23,19 @@ export function externalLoginConfig(env: Record<string, string | undefined>): Ex
     startUrl: env.EXTERNAL_LOGIN_START_URL,
     requireHost: requireHostSetting(env.EXTERNAL_LOGIN_REQUIRE_HOST),
   }
+}
+
+/**
+ * A start-up warning for a deployment that can have portal host aliases while assertions need not
+ * name a host: platform hosts then still accept an assertion sent to an alias and replayed there.
+ */
+export function externalHostWarning(env: Record<string, string | undefined>): string | null {
+  const config = externalLoginConfig(env)
+  if (!externalLoginConfigured(config) || config.requireHost) return null
+  if (maxPortalAliases(env.MAX_PORTAL_ALIASES) === 0) return null
+  return '[external-login] EXTERNAL_LOGIN_REQUIRE_HOST is off while portal host aliases are ' +
+    'enabled, so platform hosts accept assertions without a host claim. Set ' +
+    'EXTERNAL_LOGIN_REQUIRE_HOST=true once the issuer sends host.'
 }
 
 /** Only an absent, empty or `false` value leaves the requirement off, so a typo fails closed. */

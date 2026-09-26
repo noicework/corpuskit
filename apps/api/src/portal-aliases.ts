@@ -16,10 +16,83 @@ export const DEFAULT_MAX_PORTAL_ALIASES = 5
 const MAX_PORTAL_ALIASES_CEILING = 100
 export const DEFAULT_ALIAS_CACHE_SECONDS = 30
 /**
- * `Strict-Transport-Security` on an alias host. An alias is often a customer's apex domain, so it
- * never asks browsers to force HTTPS on every subdomain of it, as the platform hosts do.
+ * `Strict-Transport-Security` on every host outside the platform domain. Such a host may be a
+ * customer's apex domain, so it never asks browsers to force HTTPS on every subdomain of it
+ * (`includeSubDomains`), as the platform hosts do.
  */
-export const ALIAS_HOST_TRANSPORT_SECURITY = 'max-age=63072000'
+export const OFF_PLATFORM_TRANSPORT_SECURITY = 'max-age=63072000'
+export const PLATFORM_TRANSPORT_SECURITY = 'max-age=63072000; includeSubDomains'
+
+/** The HSTS value for a request host: `includeSubDomains` only inside the platform domain. */
+export function transportSecurityFor(hostname: string, platformDomain: string): string {
+  return isPlatformHostname(normaliseHostname(hostname), platformDomain)
+    ? PLATFORM_TRANSPORT_SECURITY
+    : OFF_PLATFORM_TRANSPORT_SECURITY
+}
+
+/** A request or configured hostname, lower-cased and without one trailing dot. */
+export function normaliseHostname(value: string): string {
+  const hostname = value.trim().toLowerCase()
+  return hostname.endsWith('.') ? hostname.slice(0, -1) : hostname
+}
+
+/**
+ * Hostnames the deployment keeps for itself, which are never registered as aliases, never looked
+ * up, and always served: every `RESERVED_HOSTNAMES` entry (comma-separated) and the hosts of
+ * `ENTRA_REDIRECT_URI` and `EXTERNAL_LOGIN_START_URL`. Entries that are not hostnames are ignored.
+ */
+export function reservedHostnames(env: Record<string, string | undefined>): Set<string> {
+  const reserved = new Set<string>()
+  for (const entry of (env.RESERVED_HOSTNAMES ?? '').split(',')) {
+    const hostname = normaliseHostname(entry)
+    if (HOSTNAME.test(hostname)) reserved.add(hostname)
+  }
+  for (const url of [env.ENTRA_REDIRECT_URI, env.EXTERNAL_LOGIN_START_URL]) {
+    try {
+      const hostname = normaliseHostname(new URL(url ?? '').hostname)
+      if (hostname) reserved.add(hostname)
+    } catch {
+      // No URL, no reserved host.
+    }
+  }
+  return reserved
+}
+const HOSTNAME =
+  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/
+
+/**
+ * `UNKNOWN_HOSTS`: `serve` (the default) answers any host as before; `deny` answers every host
+ * that is not a platform host, a registered alias or a reserved hostname with 404. Any value other
+ * than absent, empty or `serve` means `deny`, so a mistyped value fails closed.
+ */
+export function unknownHostsMode(value: string | undefined): 'serve' | 'deny' {
+  const setting = value?.trim().toLowerCase()
+  return setting === undefined || setting === '' || setting === 'serve' ? 'serve' : 'deny'
+}
+
+/** How a request host relates to the deployment, before any alias lookup. */
+export type HostKind =
+  | { kind: 'platform' }
+  | { kind: 'reserved' }
+  | { kind: 'candidate'; hostname: string }
+  | { kind: 'other' }
+
+/**
+ * Platform hosts share the platform cookie scope; reserved hosts are the deployment's own; a
+ * candidate is a hostname that could be a registered alias and is looked up; everything else
+ * (IP addresses, local and `workers.dev` hosts) is never an alias.
+ */
+export function classifyHost(
+  hostname: string,
+  platformDomain: string,
+  reserved: ReadonlySet<string>,
+): HostKind {
+  const normalised = normaliseHostname(hostname)
+  if (isPlatformHostname(normalised, getPlatformDomain(platformDomain))) return { kind: 'platform' }
+  if (reserved.has(normalised)) return { kind: 'reserved' }
+  const candidate = aliasHostname(normalised, platformDomain)
+  return candidate ? { kind: 'candidate', hostname: candidate } : { kind: 'other' }
+}
 const ALIAS_CACHE_SECONDS_CEILING = 300
 
 /** An alias as the hosting routes return it. */
@@ -180,16 +253,41 @@ export interface HostPortalLookup {
 }
 
 /**
- * The portal whose registered alias the request host is, or null. Platform hosts, local hosts
- * and IP literals are never aliases and are not looked up.
+ * The portal whose registered alias the request host is, or null. Platform hosts, reserved hosts,
+ * local hosts and IP literals are never aliases and are not looked up.
  */
 export function hostPortalFor(
   tenants: HostPortalLookup,
   hostname: string,
   platformDomain: string,
+  reserved: ReadonlySet<string> = new Set(),
 ): string | null {
-  const candidate = aliasHostname(hostname, platformDomain)
-  return candidate ? tenants.aliasPortal(candidate) ?? null : null
+  const host = classifyHost(hostname, platformDomain, reserved)
+  return host.kind === 'candidate' ? tenants.aliasPortal(host.hostname) ?? null : null
+}
+
+/**
+ * On an alias host, `/auth/me` describes the caller's roles in that portal only: portal roles and
+ * their provenance elsewhere are left out. Platform-scope entries stay, because authorisation on
+ * the host still honours them.
+ */
+export function narrowRolesToPortal<
+  R extends { portalRoles: { slug: string }[] },
+  P extends { scope: { kind: string; slug?: string } },
+>(
+  effectiveRoles: R | undefined,
+  provenance: P[] | undefined,
+  slug: string,
+): { effectiveRoles: R | undefined; provenance: P[] | undefined } {
+  return {
+    effectiveRoles: effectiveRoles && {
+      ...effectiveRoles,
+      portalRoles: effectiveRoles.portalRoles.filter((grant) => grant.slug === slug),
+    },
+    provenance: provenance?.filter((entry) =>
+      entry.scope.kind === 'platform' || entry.scope.slug === slug
+    ),
+  }
 }
 
 /** How the edge answers a request that arrives on one portal's alias host. */

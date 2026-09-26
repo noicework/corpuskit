@@ -178,7 +178,9 @@ Deno.test('the local server seals an alias host session to that host', async () 
     const issue = async (host: string) => {
       const response = await f.request(
         host,
-        `/auth/external?assertion=${await assertion(pair.privateKey)}&returnTo=/t/marine`,
+        `/auth/external?assertion=${await assertion(pair.privateKey, {
+          host,
+        })}&returnTo=/t/marine`,
       )
       expect(response.status).toBe(303)
       expect(response.headers.get('set-cookie')).not.toContain('Domain=')
@@ -199,7 +201,85 @@ Deno.test('the local server seals an alias host session to that host', async () 
   }
 })
 
-async function assertion(key: CryptoKey): Promise<string> {
+Deno.test('the local server seals unknown-host sessions, denies unknown hosts and narrows roles', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const issuer = {
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    SESSION_SECRET: 'local-alias-session-secret-longer-than-32-bytes',
+  }
+  const warn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: string) => warnings.push(message)
+  const f = fixture(issuer)
+  console.warn = warn
+  try {
+    expect(warnings.some((message) => message.includes('EXTERNAL_LOGIN_REQUIRE_HOST'))).toBe(true)
+    const handoff = (host: string, claims: Record<string, unknown> = { host }) =>
+      assertion(pair.privateKey, claims).then((token) =>
+        f.request(host, `/auth/external?assertion=${token}`)
+      )
+    const signedIn = async (host: string, cookie: string) =>
+      (await (await f.request(host, '/auth/me', { headers: { cookie } })).json()).authenticated
+    // An unknown host: host-less assertions are refused, and its sessions are sealed to it.
+    expect((await handoff('pending.example.net', {})).status).toBe(401)
+    const pending = await handoff('pending.example.net')
+    expect(pending.status).toBe(303)
+    const cookie = pending.headers.get('set-cookie')!.split(';')[0]!
+    expect(await signedIn('pending.example.net', cookie)).toBe(true)
+    expect(await signedIn('corpuskit.org', cookie)).toBe(false)
+    // Local development hosts do not need the claim.
+    expect((await handoff('localhost', {})).status).toBe(303)
+
+    // Roles described on an alias host are that portal's only.
+    const assignments = f.rbac.assignmentService('tenant-1', 'corpuskit', true)
+    for (const [slug, role] of [['marine', 'viewer'], ['grains', 'portal-admin']] as const) {
+      assignments.create({
+        subjectKind: 'pending-email',
+        subjectId: 'reader@example.test',
+        source: 'external',
+        scope: { kind: 'portal', slug },
+        role,
+      }, { requestId: `grant-${slug}`, actor: { kind: 'system' } })
+    }
+    await f.request('localhost', '/api/admin/t/marine/aliases/research.example.org', {
+      method: 'PUT',
+    }, true)
+    const aliasCookie = (await handoff('research.example.org')).headers.get('set-cookie')!
+      .split(';')[0]!
+    const me = await (await f.request('research.example.org', '/auth/me?portal=marine', {
+      headers: { cookie: aliasCookie },
+    })).json()
+    expect(me.effectiveRoles).toEqual({ portalRoles: [{ slug: 'marine', role: 'viewer' }] })
+    expect(me.provenance.map((entry: { scope: { slug: string } }) => entry.scope.slug))
+      .toEqual(['marine'])
+  } finally {
+    f.dispose()
+  }
+  const g = fixture({ UNKNOWN_HOSTS: 'deny', RESERVED_HOSTNAMES: 'localhost' })
+  try {
+    for (const path of ['/', '/api/t/grains/config', '/auth/me']) {
+      const response = await g.request('pending.example.net', path)
+      expect(response.status, path).toBe(404)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+    }
+    // Reserved hosts, including the local one here, still answer.
+    expect((await g.request('localhost', '/api/t/grains/config')).status).toBe(200)
+    await g.request('localhost', '/api/admin/t/marine/aliases/research.example.org', {
+      method: 'PUT',
+    }, true)
+    expect((await g.request('research.example.org', '/')).status).toBe(308)
+    // A reserved hostname cannot be registered.
+    const reserved = await g.request('localhost', '/api/admin/t/marine/aliases/localhost', {
+      method: 'PUT',
+    }, true)
+    expect(reserved.status).toBe(400)
+  } finally {
+    g.dispose()
+  }
+})
+
+async function assertion(key: CryptoKey, extra: Record<string, unknown> = {}): Promise<string> {
   const encoder = new TextEncoder()
   const encode = (value: Uint8Array) =>
     btoa(String.fromCharCode(...value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -215,6 +295,7 @@ async function assertion(key: CryptoKey): Promise<string> {
       iat: now - 5,
       exp: now + 60,
       jti: crypto.randomUUID(),
+      ...extra,
     })
   }`
   return `${content}.${

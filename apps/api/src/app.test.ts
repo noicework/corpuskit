@@ -2306,11 +2306,17 @@ describe('GET /api/admin-prefill', () => {
 describe('security headers', () => {
   it('sets baseline security headers on every response', async () => {
     const app = makeApp()
-    const response = await app.request('/api/tenants')
+    const response = await app.request('https://corpuskit.org/api/tenants')
 
     expect(response.headers.get('strict-transport-security')).toBe(
       'max-age=63072000; includeSubDomains',
     )
+    // Outside the platform domain a host may be someone's apex, so no includeSubDomains.
+    for (const host of ['localhost', 'research.example.org', 'corpuskit.org.evil.test']) {
+      expect(
+        (await app.request(`https://${host}/api/tenants`)).headers.get('strict-transport-security'),
+      ).toBe('max-age=63072000')
+    }
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin')
     expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'")
