@@ -9,7 +9,9 @@ import {
   type TrustedSessionFacts,
 } from '../../api/src/principal.ts'
 import type { PortalDurableObject } from './worker.ts'
+import { externalHostWarning } from '../../api/src/external-login.ts'
 import {
+  aliasStartupWarnings,
   maxPortalAliases,
   normaliseHostname,
   reservedHostnames,
@@ -696,8 +698,11 @@ Deno.test('every deployment configuration reserves its routed hosts outside the 
       // Public deployments serve unknown hosts on purpose: they route no third-party hostnames,
       // and deny would refuse their own unlisted hosts. Turning it on here is deliberately blocked.
       expect(unknownHostsMode(vars.UNKNOWN_HOSTS), label).toBe('serve')
-      // The public showcase deployments use no aliases, so they offer none.
+      // The public showcase deployments use no aliases, so they offer none, and neither the
+      // serve-mode nor any other alias start-up warning fires for them.
       expect(maxPortalAliases(vars.MAX_PORTAL_ALIASES), label).toBe(0)
+      expect(aliasStartupWarnings(vars, []), label).toEqual([])
+      expect(externalHostWarning(vars), label).toBeNull()
     }
   }
   expect(checked).toBeGreaterThan(5)
