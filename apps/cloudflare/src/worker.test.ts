@@ -721,6 +721,9 @@ function workerHarness(
           auditSessionHostMismatch() {
             return Promise.resolve()
           },
+          auditHostConflict() {
+            return Promise.resolve()
+          },
           auditExternalFailure() {
             return Promise.resolve()
           },

@@ -24,11 +24,6 @@ export interface AuthConfig {
    * session sealed to a host is never read.
    */
   sessionHost?: string
-  /**
-   * Set on a reserved host, to that host: besides unsealed sessions, a session sealed to this host
-   * is read too. Sign-in seals sessions there while the hostname still carries an alias record.
-   */
-  alsoReadSealedTo?: string
   externalLogin?: ExternalLoginConfig
 }
 
@@ -132,10 +127,7 @@ export async function authUser(
     session.id !== session.sessionFacts.oid ||
     JSON.stringify(session.roles) !== JSON.stringify(session.sessionFacts.roles)
   ) return null
-  if (
-    (session.host ?? null) !== (config.sessionHost ?? null) &&
-    !(session.host !== undefined && session.host === config.alsoReadSealedTo)
-  ) {
+  if ((session.host ?? null) !== (config.sessionHost ?? null)) {
     await onHostMismatch?.(session.sessionFacts.oid)
     return null
   }

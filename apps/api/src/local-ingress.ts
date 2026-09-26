@@ -88,6 +88,10 @@ export class LocalIngress {
     limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
     windowMs: 60_000,
   })
+  private readonly hostConflicts = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
   private readonly externalFailures: ExternalFailureAudit
 
   constructor(private readonly options: LocalIngressOptions) {
@@ -213,7 +217,7 @@ export class LocalIngress {
       }
       // As in the Worker, a session issued on an alias or other candidate host is sealed to it
       // and read nowhere else, and an external assertion there must name it.
-      const auth: AuthConfig = host.kind === 'candidate' || hostPortal !== undefined
+      const auth: AuthConfig = host.kind === 'candidate'
         ? { ...this.auth, sessionHost: normaliseHostname(new URL(request.url).hostname) }
         : this.auth
       const headers = stripIdentityHeaders(request.headers)
@@ -250,6 +254,28 @@ export class LocalIngress {
                 headers: { 'content-type': 'text/plain; charset=utf-8' },
               })
           }
+        }
+        // As in the Worker: a reserved host that still carries an alias record issues no session
+        // until the alias is removed.
+        if (path === '/auth/external' && host.kind === 'reserved' && hostPortal !== undefined) {
+          if (this.hostConflicts.check(peerAddress(info)).allowed) {
+            appendAudit(
+              rbac.audit,
+              createAuditEvent({
+                requestId,
+                actor: { kind: 'anonymous' },
+                action: 'request.denied',
+                scope: { kind: 'platform' },
+                target: { kind: 'request' },
+                outcome: 'denied',
+                detail: { code: 'host_conflict', method: request.method },
+              }),
+            )
+          }
+          return Response.json({ error: 'host_conflict' }, {
+            status: 409,
+            headers: { 'cache-control': 'no-store' },
+          })
         }
         // Only the external handoff and sign-out are served locally; the Entra flow is unchanged.
         if (path === '/auth/external' || path === '/auth/logout') {

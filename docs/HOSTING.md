@@ -907,20 +907,23 @@ never looked up by the Worker, and always served, in `deny` mode too. Like a pla
 follows `EXTERNAL_LOGIN_REQUIRE_HOST` for the `host` claim and its sessions are not sealed to it.
 
 A hostname can be reserved after it was registered as an alias, for example when it is added to
-`RESERVED_HOSTNAMES` or becomes the Entra redirect host. Its DNS may then still be the customer's,
-so its alias record still binds it, and the start-up warning names it:
+`RESERVED_HOSTNAMES` or becomes the Entra redirect host. Its DNS may then still be the customer's.
+This is a misconfiguration: **remove the alias with `DELETE` first.** Until then:
 
+- The start-up warning names the hostname.
 - The API narrows the host to that portal, as on any alias host: other portals, platform routes,
   platform authority and operator calls are refused there.
-- Sign-in there is as on an alias host. An external assertion must name the host, the session is
-  sealed to it (so a cookie harvested there is worthless on the platform hosts), and Entra is not
-  offered. The Worker learns of the record by looking the hostname up only on the routes that
-  issue a session (`/auth/external`, `/auth/callback` and `/auth/login`); a failed lookup there
-  answers `503 host_lookup_failed`. Pages and every other request on a reserved host never wait on
-  a lookup, and a reserved host reads both unsealed sessions and sessions sealed to itself.
+- Sign-in there is refused. Every route that issues a session (`/auth/external`,
+  `/auth/callback` and `/auth/login`) answers `409 {"error":"host_conflict"}` with
+  `Cache-Control: no-store` and no cookie, audited as `request.denied` with
+  `code: "host_conflict"`, and an assertion sent there is not consumed. The Worker learns of the
+  record by looking the hostname up on those routes only; a failed lookup there answers
+  `503 host_lookup_failed`. Pages and every other request on a reserved host never wait on a
+  lookup.
 - The hostname is never the portal's canonical hostname.
 
-Remove the alias with `DELETE` to end the conflict.
+A reserved host never reads a session sealed to a host, its own name included. Once the alias is
+removed, sign-in there follows the deployment's rules for a reserved host.
 
 ### Upgrading
 

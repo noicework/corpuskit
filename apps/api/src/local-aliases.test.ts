@@ -291,13 +291,19 @@ Deno.test('the local server seals unknown-host sessions, denies unknown hosts an
 })
 
 Deno.test('the local server narrows a reserved host by its alias record and warns at start-up', async () => {
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const issuer = {
+    EXTERNAL_LOGIN_ISSUER: 'https://issuer.example',
+    EXTERNAL_LOGIN_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey)),
+    SESSION_SECRET: 'local-alias-session-secret-longer-than-32-bytes',
+  }
   const warn = console.warn
   const warnings: string[] = []
   console.warn = (message: string) => warnings.push(message)
   let f: ReturnType<typeof fixture>
   try {
     f = fixture(
-      { RESERVED_HOSTNAMES: 'shared.example.org' },
+      { ...issuer, RESERVED_HOSTNAMES: 'shared.example.org' },
       (tenants) => expect(tenants.setAlias('marine', 'shared.example.org', true, 5).ok).toBe(true),
     )
   } finally {
@@ -312,6 +318,20 @@ Deno.test('the local server narrows a reserved host by its alias record and warn
     expect((await f.request('shared.example.org', '/api/t/marine/config')).status).toBe(200)
     const operator = await f.request('shared.example.org', '/api/admin/t/marine/aliases', {}, true)
     expect(operator.status).toBe(403)
+    // It issues no session while the record exists; once removed, sign-in works as reserved.
+    const token = await assertion(pair.privateKey)
+    const refused = await f.request('shared.example.org', `/auth/external?assertion=${token}`)
+    expect(refused.status).toBe(409)
+    expect(await refused.json()).toEqual({ error: 'host_conflict' })
+    expect(refused.headers.get('set-cookie')).toBeNull()
+    expect(
+      f.events().some((event) => JSON.parse(event.detail_json).code === 'host_conflict'),
+    ).toBe(true)
+    await f.request('localhost', '/api/admin/t/marine/aliases/shared.example.org', {
+      method: 'DELETE',
+    }, true)
+    expect((await f.request('shared.example.org', `/auth/external?assertion=${token}`)).status)
+      .toBe(303)
   } finally {
     f.dispose()
   }

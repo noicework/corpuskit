@@ -121,6 +121,10 @@ export class PortalDurableObject extends DurableObject<Env> {
     limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
     windowMs: 60_000,
   })
+  private readonly hostConflicts = new SlidingWindowLimiter({
+    limit: SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
+    windowMs: 60_000,
+  })
   private readonly externalReplays: ExternalLoginReplayStore
   private readonly externalFailures: ExternalFailureAudit
 
@@ -495,6 +499,26 @@ export class PortalDurableObject extends DurableObject<Env> {
     )
   }
 
+  /**
+   * Worker RPC for sign-in refused on a reserved host that still carries an alias record, recorded
+   * as `host_conflict` at most a few times a minute per client address.
+   */
+  async auditHostConflict(request: Request, clientIp?: string): Promise<void> {
+    if (!this.hostConflicts.check(clientIp ?? 'unknown').allowed) return
+    appendAudit(
+      this.stores.audit,
+      createAuditEvent({
+        requestId: crypto.randomUUID(),
+        actor: { kind: 'anonymous' },
+        action: 'request.denied',
+        scope: { kind: 'platform' },
+        target: { kind: 'request' },
+        outcome: 'denied',
+        detail: { code: 'host_conflict', method: request.method },
+      }),
+    )
+  }
+
   async consumeExternalAssertion(key: string, expiresAt: number): Promise<boolean> {
     return this.externalReplays.consume(key, expiresAt)
   }
@@ -557,7 +581,6 @@ async function route(request: Request, env: Env): Promise<Response> {
   const auth = authConfig(env, url.hostname, platformDomain, {
     aliasHost: hostPortal !== null,
     sealHost: host.kind === 'candidate',
-    reservedHost: host.kind === 'reserved',
   })
   // Explicit hosting credentials are handled before redirects, sessions or static assets.
   const operator = await authenticateOperator(request, values)
@@ -574,21 +597,24 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname.startsWith('/auth/')) {
     // A reserved hostname can still carry an alias record written before it was reserved, and
-    // its DNS may then be a third party's. Only the routes that issue a session look that up, so
-    // pages and session reads there never wait on it; with a record, sign-in is as on an alias
-    // host: sealed to the host, with the host claim required and no Entra.
+    // its DNS may then be a third party's. That is a misconfiguration the start-up warning names,
+    // and such a host issues no session until the alias is removed. Only the routes that issue a
+    // session look it up, so pages and session reads there never wait on a lookup.
     if (host.kind === 'reserved' && SESSION_ISSUING_PATHS.has(url.pathname)) {
       const recorded = await cachedHostPortal(normaliseHostname(url.hostname), env, false)
       if (recorded === undefined) {
         return json({ error: 'host_lookup_failed' }, 503, { 'retry-after': '5' })
       }
       if (recorded !== null) {
-        return authRoute(
-          request,
-          env,
-          authConfig(env, url.hostname, platformDomain, { aliasHost: true, sealHost: true }),
-          operator,
-        )
+        try {
+          await env.PORTAL.getByName(PORTAL_OBJECT_NAME).auditHostConflict(
+            refusalRecord(request),
+            request.headers.get('cf-connecting-ip') ?? undefined,
+          )
+        } catch {
+          return json({ error: 'audit_write_failed' }, 500)
+        }
+        return json({ error: 'host_conflict' }, 409)
       }
     }
     return authRoute(request, env, auth, operator)
@@ -963,7 +989,7 @@ function authConfig(
   env: Env,
   hostname: string,
   platformDomain: string,
-  host: { aliasHost?: boolean; sealHost?: boolean; reservedHost?: boolean } = {},
+  host: { aliasHost?: boolean; sealHost?: boolean } = {},
 ): Partial<AuthConfig> {
   const values = stringEnv(env)
   const onPlatformDomain = isPlatformHostname(hostname, platformDomain)
@@ -984,8 +1010,6 @@ function authConfig(
     // On a candidate host, whether or not the edge knows it as an alias, a session is sealed to
     // the host it was issued on and read nowhere else.
     ...(host.sealHost ? { sessionHost: normaliseHostname(hostname) } : {}),
-    // A reserved host reads the sessions sign-in sealed to it while it carried an alias record.
-    ...(host.reservedHost ? { alsoReadSealedTo: normaliseHostname(hostname) } : {}),
   }
 }
 

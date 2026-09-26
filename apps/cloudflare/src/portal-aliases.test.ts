@@ -1565,114 +1565,101 @@ Deno.test('with MAX_PORTAL_ALIASES=0 every registration is refused as alias_limi
 })
 
 Deno.test('a reserved host that still carries an alias record grants no platform authority', async () => {
-  const issuer = await externalLogin()
   const f = await fixture(
-    { ...issuer.env, RESERVED_HOSTNAMES: 'shared.example.org' },
+    { RESERVED_HOSTNAMES: 'shared.example.org' },
     (tenants) => expect(tenants.setAlias('marine', 'shared.example.org', false, 5).ok).toBe(true),
   )
   try {
-    expect(
-      f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true).create({
-        subjectKind: 'pending-email',
-        subjectId: 'reader@example.test',
-        source: 'external',
-        scope: { kind: 'platform' },
-        role: 'platform-admin',
-      }, { requestId: 'grant', actor: { kind: 'system' } }).ok,
-    ).toBe(true)
-    const host = 'shared.example.org'
-    // While it carries an alias record, sign-in there is as on an alias host: it names the host.
-    const cookie = cookieOf(
-      await f.request(host, `/auth/external?assertion=${await assertion(issuer.key, { host })}`),
-    )!
-    const as = (path: string) => f.request(host, path, { headers: { cookie } })
-    const me = await (await as('/auth/me?portal=marine')).json()
+    // An unsealed session of a platform administrator, as a reserved host reads.
+    const cookie = await entraCookie({ roles: ['CorpusKit.Admin'] })
+    const as = (on: string, path: string) => f.request(on, path, { headers: { cookie } })
+    const platform = await (await as('corpuskit.org', '/auth/me?portal=marine')).json()
+    expect(platform.effectiveRoles.platformRole).toBe('platform-admin')
+    const me = await (await as('shared.example.org', '/auth/me?portal=marine')).json()
     expect(me.authenticated).toBe(true)
     expect(me.effectiveRoles).toEqual({ portalRoles: [] })
     expect(me.provenance).toEqual([])
     expect(me.platformPermissions).toEqual([])
     for (const path of ['/api/admin/overview', '/api/admin/t/marine/lifecycle']) {
-      expect((await as(path)).status, path).toBe(404)
+      expect((await as('shared.example.org', path)).status, path).toBe(404)
     }
-    expect((await as('/api/admin/t/marine/members')).status).toBe(403)
+    expect((await as('shared.example.org', '/api/admin/t/marine/members')).status).toBe(403)
   } finally {
     f.close()
   }
 })
 
-Deno.test('sign-in on a reserved host that still carries an alias record is sealed to it', async () => {
+Deno.test('a reserved host that still carries an alias record refuses sign-in until it is removed', async () => {
   const issuer = await externalLogin()
   const f = await fixture(
-    { ...issuer.env, RESERVED_HOSTNAMES: 'shared.example.org,legacy.example.net' },
+    { ...issuer.env, RESERVED_HOSTNAMES: 'shared.example.org' },
     (tenants) => expect(tenants.setAlias('marine', 'shared.example.org', false, 5).ok).toBe(true),
   )
   const error = console.error
   try {
-    expect(
-      f.stores.rbac.assignmentService('tenant-1', 'corpuskit', true).create({
-        subjectKind: 'pending-email',
-        subjectId: 'reader@example.test',
-        source: 'external',
-        scope: { kind: 'platform' },
-        role: 'platform-admin',
-      }, { requestId: 'grant', actor: { kind: 'system' } }).ok,
-    ).toBe(true)
     const host = 'shared.example.org'
-    let address = 1
-    const handoff = (on: string, claims: Record<string, unknown>) =>
-      assertion(issuer.key, claims).then((token) =>
-        f.request(on, `/auth/external?assertion=${token}`, {
-          headers: { 'cf-connecting-ip': `198.51.100.${address++}` },
-        })
+    const conflicts = () =>
+      f.events().filter((event) =>
+        event.action === 'request.denied' &&
+        JSON.parse(event.detail_json).code === 'host_conflict'
       )
-    const me = async (on: string, cookie: string) =>
-      await (await f.request(on, '/auth/me', { headers: { cookie } })).json()
-
-    // Pages and session reads there never look the hostname up; sign-in does.
-    for (const path of ['/', '/api/health', '/auth/me']) {
+    // Pages and session reads there never look the hostname up.
+    for (const path of ['/', '/t/marine', '/api/health', '/auth/me', '/auth/logout']) {
       await (await f.request(host, path)).body?.cancel()
     }
     expect(f.lookups).not.toContain(host)
-    // As on an alias host: the assertion must name the host, and the session is sealed to it.
-    expect((await handoff(host, {})).status).toBe(401)
+
+    // Every route that issues a session is refused while the record exists, and no assertion is
+    // consumed.
+    const named = await assertion(issuer.key, { host })
+    const hostless = await assertion(issuer.key)
+    for (
+      const path of [
+        `/auth/external?assertion=${named}`,
+        `/auth/external?assertion=${hostless}`,
+        '/auth/login',
+        '/auth/callback?code=x&state=y',
+      ]
+    ) {
+      const response = await f.request(host, path)
+      expect(response.status, path).toBe(409)
+      expect(await response.json()).toEqual({ error: 'host_conflict' })
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(response.headers.get('set-cookie')).toBeNull()
+    }
     expect(f.lookups).toContain(host)
-    const signedIn = await handoff(host, { host })
+    expect(conflicts()).toHaveLength(4)
+    expect(JSON.parse(conflicts()[0]!.detail_json)).toEqual({
+      code: 'host_conflict',
+      method: 'GET',
+    })
+
+    // A reserved host never reads a session sealed to a host, its own name included.
+    for (const sealedTo of [host, 'research.example.org']) {
+      const cookie = await entraCookie({ host: sealedTo })
+      const me = await (await f.request(host, '/auth/me', { headers: { cookie } })).json()
+      expect(me.authenticated, sealedTo).toBe(false)
+    }
+
+    // A failed lookup on a sign-in route fails closed.
+    console.error = () => {}
+    const lookup = f.object.resolveHostPortal
+    f.object.resolveHostPortal = () => Promise.reject(new Error('unavailable'))
+    expect((await f.request(host, `/auth/external?assertion=${named}`)).status).toBe(503)
+    f.object.resolveHostPortal = lookup
+
+    // Once the alias is removed, sign-in follows the deployment's rules for a reserved host:
+    // the setting is off, so a host-less assertion signs in, with an unsealed session.
+    expect((await f.operator(`/api/admin/t/marine/aliases/${host}`, body('DELETE'))).status)
+      .toBe(200)
+    const signedIn = await f.request(host, `/auth/external?assertion=${hostless}`)
     expect(signedIn.status).toBe(303)
     const cookie = cookieOf(signedIn)!
-    const there = await me(host, cookie)
-    expect(there.authenticated).toBe(true)
-    expect(there.effectiveRoles).toEqual({ portalRoles: [] })
-    expect(there.entraEnabled).toBe(false)
-    // The reviewer's replay: harvested there, the cookie is refused on the platform host.
-    expect((await me('corpuskit.org', cookie)).authenticated).toBe(false)
-    expect((await me('marine.corpuskit.org', cookie)).authenticated).toBe(false)
-    expect((await me('corpuskit.account.workers.dev', cookie)).authenticated).toBe(false)
-    const overview = await f.request('corpuskit.org', '/api/admin/overview', {
-      headers: { cookie },
-    })
-    expect(overview.status).toBe(401)
     expect(
-      f.events().some((event) =>
-        event.action === 'request.denied' &&
-        JSON.parse(event.detail_json).code === 'session_host_mismatch'
-      ),
-    ).toBe(true)
-    // Entra sign-in is not offered there.
-    expect((await f.request(host, '/auth/login')).status).toBe(503)
-
-    // A reserved host without a record keeps the deployment's rules: no claim needed, unsealed.
-    const legacy = await handoff('legacy.example.net', {})
-    expect(legacy.status).toBe(303)
-    expect((await me('legacy.example.net', cookieOf(legacy)!)).authenticated).toBe(true)
-
-    // A failed lookup on a sign-in route fails closed; the host's pages still need none.
-    console.error = () => {}
-    f.object.resolveHostPortal = () => Promise.reject(new Error('unavailable'))
-    const failed = await handoff(host, { host })
-    expect(failed.status).toBe(503)
-    expect(await failed.json()).toEqual({ error: 'host_lookup_failed' })
-    expect(failed.headers.get('set-cookie')).toBeNull()
-    expect((await f.request(host, '/api/health')).status).toBe(200)
+      (await (await f.request(host, '/auth/me', { headers: { cookie } })).json()).authenticated,
+    )
+      .toBe(true)
+    expect((await f.request(host, `/auth/external?assertion=${named}`)).status).toBe(303)
   } finally {
     console.error = error
     f.close()
@@ -1774,13 +1761,14 @@ async function assertion(key: CryptoKey, extra: Record<string, unknown> = {}): P
   }`
 }
 
-async function entraCookie(): Promise<string> {
+/** An Entra session cookie; `host` seals it to a host, `roles` carries app roles. */
+async function entraCookie(options: { host?: string; roles?: string[] } = {}): Promise<string> {
   const session: TrustedSessionFacts = {
     verified: true,
     tenantId: 'tenant-1',
     oid: 'entra-user',
     email: 'person@example.test',
-    roles: [],
+    roles: options.roles ?? [],
     groups: [],
     groupStatus: 'absent',
     claimIssuedAt: Date.now() - 60_000,
@@ -1809,6 +1797,7 @@ async function entraCookie(): Promise<string> {
       isAdmin: false,
       expiresAt: session.expiresAt,
       sessionFacts: session,
+      ...(options.host ? { host: options.host } : {}),
     })),
   )
   return `__Secure-corpuskit_session=v1.${encode(iv)}.${encode(new Uint8Array(encrypted))}`
