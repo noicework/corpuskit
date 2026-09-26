@@ -217,6 +217,8 @@ registered with the [portal host alias](#portal-host-aliases) routes.
 
 Operator calls are refused on a portal's alias host with `403 operator_not_allowed`, whatever the
 route. Use the platform hostname, the Worker's own `workers.dev` hostname or a service binding.
+With `UNKNOWN_HOSTS=deny`, list the `workers.dev` hostname in `RESERVED_HOSTNAMES` to keep using
+it.
 
 `POST /api/admin/migrate` is declared with `portal.create` (platform-admin) rather than the
 owner-only `platform.settings.write`, for every caller, so that the operator can use it. The
@@ -613,7 +615,7 @@ Configure the same values in the Worker environment or the local server's `.env`
 | `EXTERNAL_LOGIN_NAME` | Optional sign-in button label. Defaults to `Continue with your organisation account`. |
 | `EXTERNAL_LOGIN_START_URL` | HTTPS URL on the issuer that starts sign-in; HTTP is accepted only for localhost development. Optional for the handoff itself, but the portal shows an external sign-in button only when it is set, so an external-only deployment needs it. |
 | `WORKER_NAME` | Deployment-specific assertion audience and principal-envelope audience. Local development defaults to `corpuskit`. |
-| `EXTERNAL_LOGIN_REQUIRE_HOST` | Optional. `true` refuses every assertion without a `host` claim (see [Host-bound assertions](#host-bound-assertions)). Only an absent, empty or `false` value leaves it off, so a mistyped value fails closed. Off by default, for issuers that do not send the claim yet. |
+| `EXTERNAL_LOGIN_REQUIRE_HOST` | Optional. `true` refuses every assertion without a `host` claim, on platform hosts too (see [Host-bound assertions](#host-bound-assertions)). Only an absent, empty or `false` value leaves it off, so a mistyped value fails closed. Off by default, for issuers that do not send the claim yet; hosts outside the platform domain require the claim either way. |
 | `SESSION_SECRET` | Random secret of at least 32 bytes, used to seal the normal session cookie and sign the internal principal envelope. |
 
 The Worker and a production local server require `SESSION_SECRET`. For local development only,
@@ -698,9 +700,16 @@ hostname, and anywhere else refuses it with the usual `401 {"error":"external_lo
 the audit record names the reason `host`. A refused assertion is not consumed. An issuer that
 knows the claim should always send it, set to the hostname of the handoff URL it redirects to.
 
+On every host outside the platform domain (an alias, a custom domain, a `workers.dev` host or an
+unknown host) an assertion without `host` is always refused, so sign-in there needs an issuer
+that sends it; local development hosts are exempt. On platform hosts the claim is optional unless
+`EXTERNAL_LOGIN_REQUIRE_HOST` is on.
+
 **Set `EXTERNAL_LOGIN_REQUIRE_HOST=true` on every deployment that registers portal host
-aliases,** once its issuer sends `host`. It then refuses every assertion without the claim, with
-the reason `host`, so an issuer that omits it by mistake cannot open the gap again.
+aliases,** once its issuer sends `host`. It then refuses every assertion without the claim on
+platform hosts too, with the reason `host`, so an assertion collected on an alias host can never
+be replayed on the platform. The Durable Object and the local server log a start-up warning while
+aliases are enabled and it is off.
 
 ### Issuer responsibilities
 
@@ -816,8 +825,10 @@ in the SPA and shared session-cookie scope derive from the same value. The serve
 domain into each HTML response at runtime, before the SPA loads, so a single web bundle can serve
 different deployments without a rebuild. The same value fills the canonical and share-card URLs of
 the app shell, homepage, About page and documentation. Custom hostnames outside the platform
-domain retain host-only cookies; lookalike suffixes are never included in the platform cookie
-scope. The SPA only links across origins to hostnames within the platform domain, except on a
+domain retain host-only cookies, and the sessions in them are sealed to their host (see
+[Every host outside the platform domain](#every-host-outside-the-platform-domain)); lookalike
+suffixes are never included in the platform cookie scope. The SPA only links across origins to
+hostnames within the platform domain, except on a
 [portal's alias host](#portal-host-aliases), where links to other portals go to their canonical
 hostnames.
 
@@ -858,9 +869,34 @@ removed (`domain_removal_failed`) until that hostname is detached or moved.
 
 A hosting operator can serve a portal on hostnames outside the platform domain, such as
 `research.example.org`. The portal never creates DNS records, certificates or routes for these
-hostnames. The operator first routes a hostname to this Worker, by whatever means it likes, and
-then registers it here as one of the portal's aliases. Removing an alias here does not remove the
-operator's routing either.
+hostnames. The operator routes a hostname to this Worker by whatever means it likes, and registers
+it here as one of the portal's aliases. Removing an alias here does not remove the operator's
+routing either.
+
+**A deployment that routes hostnames it does not control to this Worker must run with:**
+
+| Setting | Why |
+|---|---|
+| `UNKNOWN_HOSTS=deny` | A routed hostname that is not registered, or no longer is, answers 404 for everything instead of serving the whole deployment. |
+| `EXTERNAL_LOGIN_REQUIRE_HOST=true` | An assertion sent to one host cannot be replayed on another (see [Host-bound assertions](#host-bound-assertions)). |
+| `RESERVED_HOSTNAMES` | Lists the deployment's own hosts outside the platform domain, such as other custom domains and the `workers.dev` host, so they are served in `deny` mode and can never be registered as a portal's alias. |
+
+The Durable Object and the local server log a start-up warning while aliases are enabled
+(`MAX_PORTAL_ALIASES` above 0) and external sign-in is configured without
+`EXTERNAL_LOGIN_REQUIRE_HOST`.
+
+### Settings
+
+| Variable | Meaning |
+|---|---|
+| `MAX_PORTAL_ALIASES` | Aliases each portal may have: a whole number from 0 to 100, 5 when unset or invalid. 0 disables new aliases. |
+| `ALIAS_CACHE_SECONDS` | How long the Worker remembers a host lookup in each isolate: a whole number of seconds from 0 to 300, 30 when unset or invalid. 0 turns the cache off. |
+| `UNKNOWN_HOSTS` | `serve` (the default) or `deny`. With `deny`, a request on any host that is not the platform domain, a platform subdomain, a registered alias or a reserved hostname answers `404 {"error":"not_found"}` with `Cache-Control: no-store`, for pages, API, sign-in and assets alike, before any credential is read. Only an absent, empty or `serve` value (any case) serves unknown hosts, so a mistyped value fails closed. |
+| `RESERVED_HOSTNAMES` | Optional, comma-separated hostnames the deployment keeps for itself. Case and one trailing dot are ignored; entries that are not hostnames are ignored. |
+
+The hosts of `ENTRA_REDIRECT_URI` and `EXTERNAL_LOGIN_START_URL` are reserved too. A reserved
+hostname is never registered as an alias (`400 hostname_reserved`), never looked up, and always
+served, in `deny` mode too.
 
 ### Routes
 
@@ -888,16 +924,20 @@ portal is suspended, read-only or disabled.
 | Refusal | Status | Body |
 |---|---|---|
 | The hostname cannot be an alias (see below) | 400 | `{ "error": "invalid_hostname" }` |
+| The hostname is reserved (`PUT` only) | 400 | `{ "error": "hostname_reserved" }` |
 | The `PUT` body is not empty, `{}` or `{ "primary": <boolean> }` | 400 | `{ "error": "invalid_request" }` |
 | No such portal | 404 | `{ "error": "unknown_tenant" }` |
 | The hostname is another portal's alias, or another portal's own hostname | 409 | `{ "error": "hostname_taken" }` |
 | The portal already has `MAX_PORTAL_ALIASES` aliases | 409 | `{ "error": "alias_limit" }` |
 
-`MAX_PORTAL_ALIASES` is a runtime variable: a whole number from 0 to 100, 5 when unset or invalid.
 Updating an alias the portal already has is never refused by the limit. The check that a hostname
 is free and the write that registers it happen in one synchronous store call inside the Durable
 Object's SQLite transaction, so two concurrent registrations of one hostname, or of a portal's
 last free alias, admit exactly one.
+
+**Verify that the customer controls a hostname before the `PUT`,** for example with the hosting
+provider's hostname validation. The portal cannot tell who owns a name, and registering one
+hands its traffic to the portal.
 
 ### Valid hostnames
 
@@ -932,7 +972,9 @@ A request whose `Host` is a registered alias reaches that portal only:
 - The portal's pages (`/t/<slug>/...`), its API (`/api/t/<slug>/...`) and its portal-scoped
   administration (`/api/admin/t/<slug>/...` and `PATCH /api/admin/tenants/<slug>`) work as on
   the platform hosts, and so do `/api/health`, static assets and the SPA shell.
-- `GET /api/tenants` lists that portal alone. `GET /auth/me?portal=` answers for that portal alone.
+- `GET /api/tenants` lists that portal alone. `GET /auth/me` answers for that portal alone: a
+  `?portal=` selection of another portal is ignored, and `effectiveRoles.portalRoles` and
+  `provenance` list only this portal's grants, besides any platform-scope role.
 - Every other portal's pages answer a plain-text 404, and its API
   `404 { "error": "not_found" }`, before any credential is read.
 - Platform-scope API routes answer `404 { "error": "not_found" }` too, whoever calls them:
@@ -944,8 +986,6 @@ A request whose `Host` is a registered alias reaches that portal only:
   route; a wrong key is refused with `401 invalid_operator` as anywhere else.
 - The [lifecycle](#portal-lifecycle-limits-and-usage) applies unchanged: a suspended portal shows
   its paused screen and a read-only one refuses writes.
-- Answers send `Strict-Transport-Security: max-age=63072000` without `includeSubDomains`, because
-  an alias may be a customer's apex domain whose other hosts are not this deployment's to secure.
 
 The SPA calls the API with relative URLs, so it works unchanged on an alias host. The server fills
 a `corpuskit-host-portal` shell setting with the portal's slug on its alias hosts and leaves it
@@ -955,42 +995,69 @@ when it has none. The portal switcher lists only the alias host's portal, becaus
 does. Platform administration links, which only platform administrators see, lead to the platform
 pages, which are not served on an alias host.
 
-### Sign-in on an alias host
+### Every host outside the platform domain
 
-`/auth/external`, `/auth/me` and `/auth/logout` behave as on a platform host, with a session
-cookie that is always host-only on an alias host: it is never shared with the platform domain or
-another alias. Set `EXTERNAL_LOGIN_REQUIRE_HOST=true` so that an assertion sent to an alias host
-cannot be replayed on another host (see [Host-bound assertions](#host-bound-assertions)). The
-session inside the cookie is also sealed to the alias host. It is read on that host
-and nowhere else, and a session issued on any other host is not read there. Whoever controls an
-alias hostname's DNS could collect the cookies browsers send to it, but those cookies are
-worthless on the platform hosts and on every other alias. [External sign-in](#external-sign-in-handoff) returns to a same-origin path only,
-so `returnTo` cannot send a person to another host. Entra sign-in is offered on an alias host only
-when `ENTRA_REDIRECT_URI` is on that host; otherwise the host reports `entraEnabled: false`,
-refuses `/auth/login` with `503 microsoft_sign_in_not_configured`, and reads no Entra session
-cookie. A hosting operator that uses external sign-in should send each person back to the host
-they started from, as [its responsibilities](#issuer-responsibilities) already require.
+These rules hold on every host outside the platform domain: an alias, a reserved host, a
+`workers.dev` host, and, in `serve` mode, any unknown host. They do not depend on the Worker
+recognising the host, so a slow lookup or a stale cache cannot weaken them.
+
+- **Sessions are sealed to the host.** A session issued there is read on that host and nowhere
+  else, and a session issued on any other host, platform hosts included, is not read there. The
+  cookie is host-only. Whoever controls the hostname's DNS could collect the cookies browsers send
+  to it, but those cookies are worthless on every other host. Sessions issued on such a host
+  before this release carry no host, so they are not read any more: people signed in on a custom
+  domain or the `workers.dev` host sign in once again.
+- **External sign-in assertions must name the host.** `/auth/external` refuses an assertion
+  without a `host` claim there, whatever `EXTERNAL_LOGIN_REQUIRE_HOST` says (reason `host`).
+  Local development hosts (`localhost`, `127.0.0.1`, `[::1]`) are exempt.
+- **HSTS never includes subdomains.** Answers send `Strict-Transport-Security: max-age=63072000`,
+  because the host may be a customer's apex domain whose other hosts are not this deployment's to
+  secure. Only platform hosts send `includeSubDomains`.
+- [External sign-in](#external-sign-in-handoff) returns to a same-origin path only, so `returnTo`
+  cannot send a person to another host.
+
+Entra sign-in is offered on an alias host only when `ENTRA_REDIRECT_URI` is on that host;
+otherwise the host reports `entraEnabled: false`, refuses `/auth/login` with
+`503 microsoft_sign_in_not_configured`, and reads no Entra session cookie. A hosting operator
+that uses external sign-in should send each person back to the host they started from, naming it
+in `host`, as [its responsibilities](#issuer-responsibilities) already require.
 
 ### Lookup, caching and consistency
 
 The Durable Object holds the alias records and is authoritative. The Worker looks up every host
-that could be an alias, that is every valid hostname outside the platform domain and
-`workers.dev`, and caches each answer, positive or negative, in the isolate for
-`ALIAS_CACHE_SECONDS`. That runtime variable is a whole number of
-seconds from 0 to 300, 30 when unset or invalid; 0 turns the cache off. Platform hosts, IP
-addresses and `workers.dev` hosts are never looked up. If a lookup fails or takes longer than
-one second, the Worker treats the host as unregistered for that request and does not cache the
-answer.
+that could be an alias, that is every valid hostname outside the platform domain that is not
+reserved or a `workers.dev` host, and caches each answer, positive or negative, in the isolate
+for `ALIAS_CACHE_SECONDS`. Platform hosts, reserved hosts, IP addresses and `workers.dev` hosts
+are never looked up.
 
-The Durable Object checks every API request against its own record of the host as well, and
-applies the Worker's cached answer only to narrow a request further. So a stale edge answer can
-send a visitor to the wrong portal's home page for up to `ALIAS_CACHE_SECONDS`, but never serves
-another portal's data, and an operator credential is refused as soon as the alias exists. The
-local server reads the registry on every request and caches nothing.
+A lookup that fails or takes longer than one second is never treated as an unregistered host: the
+request is answered `503 {"error":"host_lookup_failed"}` with `Cache-Control: no-store` and
+`Retry-After: 5`, and nothing is remembered, so the next request asks again. An assertion sent in
+that moment is not consumed and still works on retry.
 
-**Operator rule:** after deleting an alias, wait longer than `ALIAS_CACHE_SECONDS` before
-registering the same hostname on a different portal. Within that window the hostname can still
-redirect to the previous portal and serve neither portal's data.
+The Durable Object checks every request against its own record of the host as well: in `deny`
+mode it refuses an unknown host itself, and it applies the Worker's cached answer only to narrow a
+request further. So a stale edge answer can send a visitor to the wrong portal's home page, or
+keep a newly registered host shut, for up to `ALIAS_CACHE_SECONDS`, but it never serves another
+portal's data, and an operator credential is refused as soon as the alias exists. The local
+server reads the registry on every request and caches nothing.
+
+### Onboarding and retiring a hostname
+
+In `serve` mode, a hostname that routes here but is not registered is an unknown host: it serves
+the whole deployment, every portal's pages and API, under the rules above. So order the steps to
+keep that window closed:
+
+1. **To add a hostname,** verify the customer controls it, register the alias (harmless while no
+   traffic arrives), and only then route the hostname to the Worker.
+2. **To retire a hostname,** remove the route and the hosting provider's custom hostname first,
+   and only then `DELETE` the alias.
+3. Wait longer than `ALIAS_CACHE_SECONDS` before registering the same hostname for another
+   portal. Within that window the hostname can still redirect to the previous portal and serve
+   neither portal's data.
+
+With `UNKNOWN_HOSTS=deny` a routed but unregistered hostname answers 404, so either order is
+safe; the order above still avoids visitors meeting a 404.
 
 ### Lifecycle, audit and storage
 
@@ -998,10 +1065,16 @@ Deleting a portal deletes its aliases in the same write, and a deleted portal's 
 resolving at once. Portal deletion detaches only the portal's own hostname from the Worker.
 
 Every `PUT` and `DELETE` is audited at platform scope with the portal as the target, as
-`portal.alias.set` or `portal.alias.remove`. The record names the actor (`operator:<OPERATOR_ID>`
-for the operator credential), `aliasHostname`, and `aliasPrimary`: the primary flag the alias has
-after a `PUT`, or had before a `DELETE`. A successful change is recorded in the same transaction as
-the change itself. A refused `PUT` is recorded with outcome `failure`.
+`portal.alias.set` or `portal.alias.remove`, naming the actor (`operator:<OPERATOR_ID>` for the
+operator credential):
+
+- A successful change is recorded with `aliasHostname` and `aliasPrimary` (the primary flag the
+  alias has after a `PUT`, or had before a `DELETE`), in the same transaction as the change.
+- Every refusal is recorded with outcome `denied` and its `code` (`invalid_hostname`,
+  `invalid_request`, `unknown_tenant`, `hostname_reserved`, `hostname_taken` or `alias_limit`),
+  plus `aliasHostname` when the hostname was valid. A registration refused inside the store,
+  because another request took the name or the last free alias first, is also recorded as a
+  `failure` of the attempted change.
 
 On Cloudflare the aliases are stored in the Durable Object's `tenants` state row, as an `aliases`
 list that appears once a portal has an alias. The local server stores the same list in its
@@ -1013,18 +1086,17 @@ at its next registry write, so register the aliases again after rolling forward.
 ### Example: Cloudflare for SaaS
 
 One way to route customer hostnames to this Worker, in the Cloudflare zone that holds the
-platform domain:
+platform domain, with `UNKNOWN_HOSTS=deny`, `EXTERNAL_LOGIN_REQUIRE_HOST=true` and the Worker's
+other hosts in `RESERVED_HOSTNAMES`:
 
 1. Enable Cloudflare for SaaS on the zone and create its fallback origin, for example a proxied
    originless record `fallback.<platform domain> AAAA 100::`. Publish a CNAME target for
    customers, such as `customers.<platform domain>`, that points at the fallback origin.
-2. For each customer hostname, add a custom hostname such as `research.example.org` and let
-   Cloudflare validate it and issue its certificate. The customer creates
-   `research.example.org CNAME customers.<platform domain>` in their own DNS.
-3. Add a Worker route with the exact pattern `research.example.org/*` for the Worker named by
-   `WORKER_NAME`. An exact route per hostname keeps every other hostname in the zone away from
-   the Worker.
-4. Register the alias on the platform hostname with the operator credential:
+2. For each customer hostname, add a custom hostname such as `research.example.org`. The
+   customer creates `research.example.org CNAME customers.<platform domain>` in their own DNS, and
+   Cloudflare validates it and issues its certificate. Validation is the proof of control the
+   `PUT` relies on.
+3. Register the alias on the platform hostname with the operator credential:
 
    ```http
    PUT /api/admin/t/<slug>/aliases/research.example.org
@@ -1034,5 +1106,9 @@ platform domain:
    {"primary": true}
    ```
 
-To retire a hostname, delete the alias first, then remove the route and the custom hostname, and
-wait longer than `ALIAS_CACHE_SECONDS` before registering it for another portal.
+4. Add a Worker route with the exact pattern `research.example.org/*` for the Worker named by
+   `WORKER_NAME`. An exact route per hostname keeps every other hostname in the zone away from
+   the Worker.
+
+To retire a hostname, remove the route and the custom hostname, then `DELETE` the alias, and wait
+longer than `ALIAS_CACHE_SECONDS` before registering it for another portal.
