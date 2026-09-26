@@ -615,7 +615,7 @@ Configure the same values in the Worker environment or the local server's `.env`
 | `EXTERNAL_LOGIN_NAME` | Optional sign-in button label. Defaults to `Continue with your organisation account`. |
 | `EXTERNAL_LOGIN_START_URL` | HTTPS URL on the issuer that starts sign-in; HTTP is accepted only for localhost development. Optional for the handoff itself, but the portal shows an external sign-in button only when it is set, so an external-only deployment needs it. |
 | `WORKER_NAME` | Deployment-specific assertion audience and principal-envelope audience. Local development defaults to `corpuskit`. |
-| `EXTERNAL_LOGIN_REQUIRE_HOST` | Optional. `true` refuses every assertion without a `host` claim, on platform hosts too (see [Host-bound assertions](#host-bound-assertions)). Only an absent, empty or `false` value leaves it off, so a mistyped value fails closed. Off by default, for issuers that do not send the claim yet; hosts outside the platform domain require the claim either way. |
+| `EXTERNAL_LOGIN_REQUIRE_HOST` | Optional. `true` refuses every assertion without a `host` claim, on platform hosts too (see [Host-bound assertions](#host-bound-assertions)). Only an absent, empty or `false` value leaves it off, so a mistyped value fails closed. Off by default, for issuers that do not send the claim yet; alias and other candidate hosts require the claim either way. |
 | `SESSION_SECRET` | Random secret of at least 32 bytes, used to seal the normal session cookie and sign the internal principal envelope. |
 
 The Worker and a production local server require `SESSION_SECRET`. For local development only,
@@ -700,9 +700,10 @@ hostname, and anywhere else refuses it with the usual `401 {"error":"external_lo
 the audit record names the reason `host`. A refused assertion is not consumed. An issuer that
 knows the claim should always send it, set to the hostname of the handoff URL it redirects to.
 
-On every host outside the platform domain (an alias, a custom domain, a `workers.dev` host or an
-unknown host) an assertion without `host` is always refused, so sign-in there needs an issuer
-that sends it; local development hosts are exempt. On platform hosts the claim is optional unless
+On a portal's alias host and on any other candidate host (a hostname outside the platform domain
+that is not reserved or a `workers.dev` host, and so may be controlled by a third party), an
+assertion without `host` is always refused, so sign-in there needs an issuer that sends it. On
+platform hosts, reserved hosts, `workers.dev` hosts and local hosts the claim is optional unless
 `EXTERNAL_LOGIN_REQUIRE_HOST` is on.
 
 **Set `EXTERNAL_LOGIN_REQUIRE_HOST=true` on every deployment that registers portal host
@@ -825,8 +826,8 @@ in the SPA and shared session-cookie scope derive from the same value. The serve
 domain into each HTML response at runtime, before the SPA loads, so a single web bundle can serve
 different deployments without a rebuild. The same value fills the canonical and share-card URLs of
 the app shell, homepage, About page and documentation. Custom hostnames outside the platform
-domain retain host-only cookies, and the sessions in them are sealed to their host (see
-[Every host outside the platform domain](#every-host-outside-the-platform-domain)); lookalike
+domain retain host-only cookies, and on alias and other candidate hosts the sessions in them are
+sealed to their host (see [Alias and candidate hosts](#alias-and-candidate-hosts)); lookalike
 suffixes are never included in the platform cookie scope. The SPA only links across origins to
 hostnames within the platform domain, except on a
 [portal's alias host](#portal-host-aliases), where links to other portals go to their canonical
@@ -881,9 +882,13 @@ routing either.
 | `EXTERNAL_LOGIN_REQUIRE_HOST=true` | An assertion sent to one host cannot be replayed on another (see [Host-bound assertions](#host-bound-assertions)). |
 | `RESERVED_HOSTNAMES` | Lists the deployment's own hosts outside the platform domain, such as other custom domains and the `workers.dev` host, so they are served in `deny` mode and can never be registered as a portal's alias. |
 
-The Durable Object and the local server log a start-up warning while aliases are enabled
-(`MAX_PORTAL_ALIASES` above 0) and external sign-in is configured without
-`EXTERNAL_LOGIN_REQUIRE_HOST`.
+The Durable Object and the local server log a start-up warning in each of these cases:
+
+- aliases are enabled (`MAX_PORTAL_ALIASES` above 0) and external sign-in is configured without
+  `EXTERNAL_LOGIN_REQUIRE_HOST`;
+- `UNKNOWN_HOSTS` is `serve` while aliases are enabled or any alias is registered (set
+  `MAX_PORTAL_ALIASES=0` on a deployment that uses no aliases);
+- a reserved hostname still carries an alias record (see [Reserved hostnames](#reserved-hostnames)).
 
 ### Settings
 
@@ -894,9 +899,33 @@ The Durable Object and the local server log a start-up warning while aliases are
 | `UNKNOWN_HOSTS` | `serve` (the default) or `deny`. With `deny`, a request on any host that is not the platform domain, a platform subdomain, a registered alias or a reserved hostname answers `404 {"error":"not_found"}` with `Cache-Control: no-store`, for pages, API, sign-in and assets alike, before any credential is read. Only an absent, empty or `serve` value (any case) serves unknown hosts, so a mistyped value fails closed. |
 | `RESERVED_HOSTNAMES` | Optional, comma-separated hostnames the deployment keeps for itself. Case and one trailing dot are ignored; entries that are not hostnames are ignored. |
 
+### Reserved hostnames
+
 The hosts of `ENTRA_REDIRECT_URI` and `EXTERNAL_LOGIN_START_URL` are reserved too. A reserved
-hostname is never registered as an alias (`400 hostname_reserved`), never looked up, and always
-served, in `deny` mode too.
+hostname is the deployment's own: it is never registered as an alias (`400 hostname_reserved`),
+never looked up by the Worker, and always served, in `deny` mode too. Like a platform host, it
+follows `EXTERNAL_LOGIN_REQUIRE_HOST` for the `host` claim and its sessions are not sealed to it.
+
+A hostname can be reserved after it was registered as an alias, for example when it is added to
+`RESERVED_HOSTNAMES` or becomes the Entra redirect host. Its alias record then still binds it:
+the API narrows the host to that portal (other portals, platform routes and operator calls are
+refused there as on any alias host), but the hostname is never the portal's canonical hostname,
+and the start-up warning names it. Remove the alias with `DELETE` to end the conflict.
+
+### Upgrading
+
+Before upgrading a deployment that answers on hostnames outside its platform domain:
+
+- **List every custom domain outside the platform domain in `RESERVED_HOSTNAMES`.** An unlisted
+  one becomes a candidate host: the Worker looks it up (answering 503 when the lookup fails),
+  seals its sessions to it (so people sign in once more), requires a `host` claim for external
+  sign-in there, and drops `includeSubDomains` from its HSTS. The Worker logs once per isolate
+  when a hostname that is neither registered nor reserved reaches the deployment.
+- **Self-hosting on a hostname outside `PLATFORM_DOMAIN`** (which defaults to `corpuskit.org`):
+  set `PLATFORM_DOMAIN` to your own domain, or list your hostname in `RESERVED_HOSTNAMES`.
+  Otherwise it is a candidate host, with the effects above.
+- Reserved hosts, `workers.dev` hosts and local hosts keep their sessions and follow
+  `EXTERNAL_LOGIN_REQUIRE_HOST`, as platform hosts do.
 
 ### Routes
 
@@ -995,29 +1024,29 @@ when it has none. The portal switcher lists only the alias host's portal, becaus
 does. Platform administration links, which only platform administrators see, lead to the platform
 pages, which are not served on an alias host.
 
-### Every host outside the platform domain
+### Alias and candidate hosts
 
-These rules hold on every host outside the platform domain: an alias, a reserved host, a
-`workers.dev` host, and, in `serve` mode, any unknown host. They do not depend on the Worker
-recognising the host, so a slow lookup or a stale cache cannot weaken them.
+A candidate host is a hostname outside the platform domain that is not reserved and not a
+`workers.dev` host: a portal's alias, or a hostname that routes here without being registered.
+A third party may control its DNS. These rules hold on every candidate host, whether or not the
+Worker recognises it as an alias, so a slow lookup or a stale cache cannot weaken them:
 
 - **Sessions are sealed to the host.** A session issued there is read on that host and nowhere
   else, and a session issued on any other host, platform hosts included, is not read there. The
   cookie is host-only. Whoever controls the hostname's DNS could collect the cookies browsers send
-  to it, but those cookies are worthless on every other host. Sessions issued on such a host
-  before this release carry no host, so they are not read any more: people signed in on a custom
-  domain or the `workers.dev` host sign in once again.
+  to it, but those cookies are worthless on every other host.
 - **External sign-in assertions must name the host.** `/auth/external` refuses an assertion
   without a `host` claim there, whatever `EXTERNAL_LOGIN_REQUIRE_HOST` says (reason `host`).
-  Local development hosts (`localhost`, `127.0.0.1`, `[::1]`) are exempt.
-- **HSTS never includes subdomains.** Answers send `Strict-Transport-Security: max-age=63072000`,
-  because the host may be a customer's apex domain whose other hosts are not this deployment's to
-  secure. Only platform hosts send `includeSubDomains`.
 - [External sign-in](#external-sign-in-handoff) returns to a same-origin path only, so `returnTo`
   cannot send a person to another host.
 
-Entra sign-in is offered on an alias host only when `ENTRA_REDIRECT_URI` is on that host;
-otherwise the host reports `entraEnabled: false`, refuses `/auth/login` with
+On every host outside the platform domain, candidate, reserved or other, **HSTS never includes
+subdomains**: answers send `Strict-Transport-Security: max-age=63072000`, because the host may be
+a customer's apex domain whose other hosts are not this deployment's to secure. Only platform
+hosts send `includeSubDomains`.
+
+Entra sign-in is never offered on an alias host (the redirect URI's host is reserved, so it can
+never be one): the host reports `entraEnabled: false`, refuses `/auth/login` with
 `503 microsoft_sign_in_not_configured`, and reads no Entra session cookie. A hosting operator
 that uses external sign-in should send each person back to the host they started from, naming it
 in `host`, as [its responsibilities](#issuer-responsibilities) already require.
@@ -1035,9 +1064,9 @@ request is answered `503 {"error":"host_lookup_failed"}` with `Cache-Control: no
 `Retry-After: 5`, and nothing is remembered, so the next request asks again. An assertion sent in
 that moment is not consumed and still works on retry.
 
-The Durable Object checks every request against its own record of the host as well: in `deny`
-mode it refuses an unknown host itself, and it applies the Worker's cached answer only to narrow a
-request further. So a stale edge answer can send a visitor to the wrong portal's home page, or
+The Durable Object checks every request against its own record of the host as well, a reserved
+host's included: in `deny` mode it refuses an unknown host itself, and it applies the Worker's
+cached answer only to narrow a request further. So a stale edge answer can send a visitor to the wrong portal's home page, or
 keep a newly registered host shut, for up to `ALIAS_CACHE_SECONDS`, but it never serves another
 portal's data, and an operator credential is refused as soon as the alias exists. The local
 server reads the registry on every request and caches nothing.
