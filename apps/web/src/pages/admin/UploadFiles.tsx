@@ -5,26 +5,30 @@ import {
   useId,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { LiveStatus } from '../../components/ui.tsx'
-import { AdminAccessError } from '../../api/break-glass.ts'
-import { uploadAdminFile } from '../../api/client.ts'
+import type { AdminRequestAccess } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { readRecent } from './RecentList.tsx'
-import { errorMessage, type Message } from './shared.ts'
+import type { Message } from './shared.ts'
 import {
   announce,
-  applyProcessing,
   followed,
   formatBytes,
   recentWindow,
-  refuseFile,
   summarise,
   type UploadRow,
 } from './upload-queue.ts'
+import { UploadQueue, uploadQueueFor, type UploadRunner } from './upload-store.ts'
+
+/** Stand-ins while no identity holds authority, stable so nothing resubscribes. */
+const NO_ROWS: UploadRow[] = []
+const noRows = () => NO_ROWS
+const noSubscription = () => () => {}
 
 /** How often followed uploads are checked, and how often the collection counts are re-read. */
 const STATUS_POLL_MS = 3000
@@ -112,94 +116,42 @@ export function UploadFiles({ slug, onAdded }: {
     { kind: 'portal', slug },
   )
   const authority = useAccess()
-  const context = authority.controller.context
   const queryClient = useQueryClient()
   const inputId = useId()
   const hintId = useId()
   const queueHeadingId = useId()
-  const [rows, setRows] = useState<UploadRow[]>([])
   const [dragActive, setDragActive] = useState(false)
   const [announcement, setAnnouncement] = useState('')
   const [notice, setNotice] = useState<Message | null>(null)
-  const pending = useRef<{ key: string; file: File }[]>([])
-  // Each file is kept while its row is listed, so a failed upload can be tried again.
-  const retained = useRef(new Map<string, File>())
-  const running = useRef(false)
-  const shownPercent = useRef(new Map<string, number>())
-  const mounted = useRef(true)
+  // A signed-in queue outlives this panel: a re-check that confirms the same person redraws the
+  // page, and the uploads it was running are still here, finished or going, when it returns.
+  // Emergency uploads are one confirmed request each and belong to this panel alone.
+  const [emergencyQueue] = useState(() =>
+    new UploadQueue(
+      authority.controller.context.identityKey ?? 'emergency',
+      slug,
+      authority.controller,
+      undefined,
+      true,
+    )
+  )
+  const queue = sessionAllowed ? uploadQueueFor(authority.controller, slug) : emergencyQueue
+  // The queue sends through this panel's access, re-checked on every request, while it is shown.
+  const accessRef = useRef(sessionAccess)
+  accessRef.current = sessionAccess
   useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
-
-  const update = (key: string, patch: Partial<UploadRow>) =>
-    setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row))
-
-  const uploadOne = async ({ key, file }: { key: string; file: File }) => {
-    update(key, { status: 'uploading', progress: 0, error: undefined })
-    setAnnouncement(`Uploading ${file.name}.`)
-    try {
-      const result = await runExplicit(
-        `Upload ${file.name}`,
-        (access) =>
-          uploadAdminFile(slug, access, file, {}, (loaded, total) => {
-            const size = total ?? file.size
-            if (!size) return
-            const percent = Math.min(100, Math.floor((loaded / size) * 100))
-            // One render per whole percent, not per progress event.
-            if (shownPercent.current.get(key) === percent) return
-            shownPercent.current.set(key, percent)
-            update(key, { progress: percent / 100 })
-          }),
-      )
-      authority.controller.assertCurrent(context)
-      if (result === undefined) {
-        update(key, {
-          status: 'failed',
-          progress: null,
-          error: 'The upload was cancelled.',
-          retryable: true,
-        })
-        return
-      }
-      if (!result || typeof result.id !== 'string' || !result.id) throw new AdminAccessError()
-      update(key, {
-        status: 'processing',
-        progress: null,
-        resourceId: result.id,
-        uploadedAt: Date.now(),
-      })
-      void onAdded().catch(() => {})
-    } catch (err) {
-      // Access changed underneath the upload: the page is checked again and redrawn.
-      if (context !== authority.controller.context || !mounted.current) return
-      update(key, {
-        status: 'failed',
-        progress: null,
-        error: errorMessage(err, 'The upload failed - please try again.'),
-        retryable: true,
-      })
-    }
-  }
-
-  const pump = async () => {
-    if (running.current) return
-    running.current = true
-    try {
-      // One file at a time keeps each row's progress true and the knowledge box's queue calm.
-      for (let next = pending.current.shift(); next; next = pending.current.shift()) {
-        if (!mounted.current) return
-        await uploadOne(next)
-      }
-    } finally {
-      running.current = false
-    }
-  }
+    if (!sessionAllowed || !queue) return
+    return queue.attach({ request: (input, init) => accessRef.current.request(input, init) })
+  }, [queue, sessionAllowed])
+  const rows = useSyncExternalStore(queue?.subscribe ?? noSubscription, queue?.snapshot ?? noRows)
+  // Emergency access sends one confirmed request per file, from this panel.
+  const runner: UploadRunner | undefined = sessionAllowed
+    ? undefined
+    : <T,>(label: string, action: (access: AdminRequestAccess) => Promise<T>) =>
+      runExplicit(label, action)
 
   const addFiles = (files: File[]) => {
-    if (files.length === 0) return
+    if (files.length === 0 || !queue) return
     setNotice(null)
     if (files.length > 1 && !sessionAllowed) {
       setNotice({
@@ -209,36 +161,10 @@ export function UploadFiles({ slug, onAdded }: {
       })
       return
     }
-    const added = files.map((file): UploadRow & { file: File } => {
-      const refusal = refuseFile(file)
-      return {
-        key: crypto.randomUUID(),
-        file,
-        name: file.name,
-        size: file.size,
-        status: refusal ? 'failed' : 'queued',
-        progress: null,
-        ...(refusal ? { error: refusal, retryable: false } : {}),
-      }
-    })
-    setRows((current) => [...current, ...added.map(({ file: _file, ...row }) => row)])
-    for (const row of added) {
-      if (row.status !== 'queued') continue
-      retained.current.set(row.key, row.file)
-      pending.current.push({ key: row.key, file: row.file })
-    }
+    const added = queue.add(files, runner)
     setAnnouncement(
       added.length === 1 ? announce(added[0]!) : `${added.length} files added to the uploads.`,
     )
-    void pump()
-  }
-
-  const retry = (key: string) => {
-    const file = retained.current.get(key)
-    if (!file) return
-    update(key, { status: 'queued', progress: null, error: undefined })
-    pending.current.push({ key, file })
-    void pump()
   }
 
   const onChoose = (event: ChangeEvent<HTMLInputElement>) => {
@@ -247,13 +173,9 @@ export function UploadFiles({ slug, onAdded }: {
     addFiles(files)
   }
 
+  const retry = (key: string) => queue?.retry(key, runner)
   const clearFinished = () => {
-    setRows((current) => {
-      const keep = current.filter((row) => row.status !== 'ready' && row.status !== 'failed')
-      const kept = new Set(keep.map((row) => row.key))
-      for (const key of retained.current.keys()) if (!kept.has(key)) retained.current.delete(key)
-      return keep
-    })
+    queue?.clearFinished()
     setNotice(null)
   }
 
@@ -268,25 +190,23 @@ export function UploadFiles({ slug, onAdded }: {
     retry: false,
   })
   useEffect(() => {
-    if (!status.data) return
-    const now = Date.now()
-    setRows((current) => applyProcessing(current, status.data, now))
-  }, [status.data, status.dataUpdatedAt])
+    if (status.data) queue?.applyProcessing(status.data, Date.now())
+  }, [queue, status.data, status.dataUpdatedAt])
 
-  // Say what changed, and refresh the collection when an upload becomes ready.
+  // Say what changed, and refresh the collection when an upload lands or becomes ready.
   const previous = useRef(new Map<string, UploadRow['status'] | 'stalled'>())
   useEffect(() => {
-    let finished = false
+    let changed = false
     for (const row of rows) {
       const state = row.stalled ? 'stalled' : row.status
       const before = previous.current.get(row.key)
       if (before !== undefined && before !== state && state !== 'uploading') {
         setAnnouncement(announce(row))
-        if (state === 'ready') finished = true
+        if (state === 'processing' || state === 'ready') changed = true
       }
       previous.current.set(row.key, state)
     }
-    if (finished) void onAdded().catch(() => {})
+    if (changed) void onAdded().catch(() => {})
   }, [rows])
 
   // While anything processes, re-read the collection counts now and then.
@@ -418,7 +338,7 @@ export function UploadFiles({ slug, onAdded }: {
                     >
                       {row.error}
                     </p>
-                    {row.retryable && retained.current.has(row.key) && (
+                    {row.retryable && queue?.canRetry(row.key) && (
                       <button
                         type='button'
                         className='rp-btn rp-btn-outline'

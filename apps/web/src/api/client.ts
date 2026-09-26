@@ -603,11 +603,13 @@ export function addAdminLink(
   passcode: AdminRequestAccess,
   input: { url: string; title?: string; hidden?: boolean },
 ): Promise<{ id: string }> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/link`, passcode, {
+  const init: ProgressRequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+    holdThroughRecheck: true,
+  }
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/link`, passcode, init)
 }
 
 export function addAdminText(
@@ -615,11 +617,13 @@ export function addAdminText(
   passcode: AdminRequestAccess,
   input: { title: string; body: string },
 ): Promise<{ id: string }> {
-  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/text`, passcode, {
+  const init: ProgressRequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
-  })
+    holdThroughRecheck: true,
+  }
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/resources/text`, passcode, init)
 }
 
 /**
@@ -641,6 +645,8 @@ export function uploadAdminFile(
       'x-filename': encodeURIComponent(file.name),
     },
     body: file,
+    // The write is on its way: an access check in progress holds its result, not cancels it.
+    holdThroughRecheck: true,
     ...(onProgress ? { onUploadProgress: onProgress } : {}),
   }
   return adminRequest(

@@ -1,11 +1,12 @@
 import { currentAuthority, type RequestContext } from './access-lifecycle.ts'
 import { errorCode } from './hosting-errors.ts'
-import { wantsUploadProgress, xhrFetch } from './upload-transport.ts'
+import { type ProgressRequestInit, wantsUploadProgress, xhrFetch } from './upload-transport.ts'
 
 interface ResponseLifecycle {
   assertCurrent(): void
   finish(): void
   signal?: AbortSignal
+  hold?(): Promise<void>
 }
 const lifecycles = new WeakMap<Response, ResponseLifecycle>()
 const resultLifecycles = new WeakMap<object, ResponseLifecycle>()
@@ -97,8 +98,10 @@ function guardResponse(response: Response, lifecycle: ResponseLifecycle): Respon
       if (['json', 'text', 'blob', 'arrayBuffer', 'formData'].includes(String(property))) {
         return async () => {
           try {
+            await lifecycle.hold?.()
             lifecycle.assertCurrent()
             const result = await Reflect.get(target, property, target).call(target)
+            await lifecycle.hold?.()
             lifecycle.assertCurrent()
             if (result !== null && typeof result === 'object') {
               resultLifecycles.set(result, lifecycle)
@@ -145,7 +148,10 @@ export async function authorityFetch(
   const signals = [init?.signal, options.signal].filter((signal): signal is AbortSignal => !!signal)
   const signal = signals.length ? AbortSignal.any(signals) : undefined
   signal?.throwIfAborted()
-  const request = authority?.beginRequest(signal)
+  // An add that asks to be held through an access check survives one; everything else ends.
+  const request = authority?.beginRequest(signal, {
+    mutation: (init as ProgressRequestInit | undefined)?.holdThroughRecheck === true,
+  })
   const lifecycle: ResponseLifecycle = request ?? {
     signal,
     assertCurrent: () => signal?.throwIfAborted(),
@@ -153,6 +159,7 @@ export async function authorityFetch(
   }
   try {
     const response = await dispatch(input, { ...init, signal: lifecycle.signal })
+    await lifecycle.hold?.()
     try {
       lifecycle.assertCurrent()
     } catch (error) {

@@ -660,6 +660,53 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
   }
 })
 
+Deno.test('an upload running when the person comes back finishes once and survives the check', async () => {
+  const browser = await launch()
+  const { management, calls } = contentManagement()
+  const server = startTestServer({ identity: { role: 'curator' }, management })
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=content`)
+  let delay: ReturnType<typeof server.delayResponse> | undefined
+  const posts = () =>
+    server.requests.filter((r) =>
+      r.method === 'POST' && r.path === '/api/admin/t/marine/resources/upload'
+    )
+  try {
+    await assertCurrentBuild(page)
+    await page.waitForSelector('input[type=file]')
+    delay = server.delayResponse('/api/admin/t/marine/resources/upload')
+    await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['Marine research evidence'], 'inflight.txt'))
+      input.files = transfer.files
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await delay.entered
+    // The person switches away and back mid-upload: the page is withdrawn and access checked.
+    await page.evaluate(() => {
+      document.querySelector('input[type=file]')!.setAttribute('data-before-return', '')
+      dispatchEvent(new Event('focus'))
+    })
+    await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
+    await page.waitForSelector('[data-upload-row][data-upload-status=uploading]')
+    // The write was never cut off, so it lands once and its row carries on in the new page.
+    delay.release()
+    await uploadShown(page, 'inflight.txt')
+    expect(posts()).toHaveLength(1)
+    expect(posts()[0]!.status).toBe(200)
+    expect(calls.filter((call) => call === 'uploadFile')).toHaveLength(1)
+    expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
+  } catch (error) {
+    console.error(server.requests.slice(-12), await page.evaluate(() => document.body.innerText))
+    throw error
+  } finally {
+    delay?.release()
+    await page.close()
+    await server.close()
+    await browser.close()
+  }
+})
+
 Deno.test('pending uploads and refreshes cannot publish after revocation', async () => {
   const browser = await launch()
   try {

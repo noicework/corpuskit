@@ -12,6 +12,17 @@ export interface AuthorityRequest {
   readonly signal: AbortSignal
   assertCurrent(): void
   finish(): void
+  /**
+   * For a mutation, wait out an access check in progress before its result is judged. Absent on
+   * reads, which never outlive a withdrawal.
+   */
+  hold?(): Promise<void>
+}
+
+/** What a held mutation was sent under: its result publishes only to the same authority. */
+interface MutationOrigin {
+  readonly slug: string | null
+  readonly session: AuthSession
 }
 
 export class StaleAuthorityError extends Error {
@@ -92,6 +103,7 @@ export class AuthorityController {
   #cleanups = new Set<() => void>()
   #scopes = new Map<string, { abort: AbortController; promise: Promise<AuthSession> }>()
   #revalidation: { context: AuthorityContext; promise: Promise<void> } | null = null
+  #mutations = new Map<AbortController, MutationOrigin>()
   constructor(private readonly browserId: () => string = anonymousBrowserId) {}
 
   get context(): AuthorityContext {
@@ -114,7 +126,18 @@ export class AuthorityController {
     }
   }
 
-  invalidate(_reason: string, status: 'loading' | 'unavailable' = 'unavailable'): void {
+  /**
+   * Withdraw the current authority: every read, cache and scope read ends. A mutation (an add
+   * sent with `holdThroughRecheck`) is not cut off while access is only being checked again
+   * (`loading`): its write is already on its way, and aborting it would lose the answer and
+   * invite a duplicate. It is held instead, and publishes only if the new session grants the
+   * same authority (`keep`). Any other withdrawal ends mutations too.
+   */
+  invalidate(
+    _reason: string,
+    status: 'loading' | 'unavailable' = 'unavailable',
+    keep?: (origin: MutationOrigin) => boolean,
+  ): void {
     this.#context = Object.freeze({ ...this.#context, generation: this.#context.generation + 1 })
     this.#status = status
     this.#session = null
@@ -125,11 +148,28 @@ export class AuthorityController {
     this.#requests.clear()
     for (const entry of this.#scopes.values()) entry.abort.abort()
     this.#scopes.clear()
+    if (status === 'loading') return
+    for (const [abort, origin] of [...this.#mutations]) {
+      if (keep?.(origin)) continue
+      this.#mutations.delete(abort)
+      abort.abort()
+    }
   }
 
   setSession(value: unknown, slug?: string): void {
-    this.invalidate('snapshot replaced')
-    const session = parseAuthSession(value, slug)
+    let session: AuthSession
+    try {
+      session = parseAuthSession(value, slug)
+    } catch (error) {
+      this.invalidate('snapshot rejected')
+      throw error
+    }
+    // A mutation held through the check keeps going only for exactly the same authority.
+    this.invalidate(
+      'snapshot replaced',
+      'unavailable',
+      (origin) => origin.slug === (slug ?? null) && sameAuthority(origin.session, session),
+    )
     this.#context = Object.freeze({
       identityKey: identityOf(session, this.browserId),
       slug: slug ?? null,
@@ -212,13 +252,48 @@ export class AuthorityController {
     if (this.#status !== 'ready' || context !== this.#context) throw new StaleAuthorityError()
   }
 
-  beginRequest(signal?: AbortSignal): AuthorityRequest {
+  /** Resolves once no access check is in progress. */
+  settled(): Promise<void> {
+    if (this.#status !== 'loading') return Promise.resolve()
+    return new Promise((resolve) => {
+      const stop = this.subscribe(() => {
+        if (this.#status === 'loading') return
+        stop()
+        resolve()
+      })
+    })
+  }
+
+  beginRequest(signal?: AbortSignal, options: { mutation?: boolean } = {}): AuthorityRequest {
     const context = this.#context
     this.assertCurrent(context)
     signal?.throwIfAborted()
     const abort = new AbortController()
     const cancel = () => abort.abort()
     signal?.addEventListener('abort', cancel, { once: true })
+    if (options.mutation && this.#session) {
+      const origin: MutationOrigin = { slug: context.slug, session: this.#session }
+      this.#mutations.set(abort, origin)
+      return {
+        context,
+        signal: abort.signal,
+        // Judged by authority, not generation: a re-check that confirms the same session lets
+        // the result through, and anything else has already aborted it.
+        assertCurrent: () => {
+          signal?.throwIfAborted()
+          abort.signal.throwIfAborted()
+          if (
+            this.#status !== 'ready' || !this.#session || this.#context.slug !== origin.slug ||
+            !sameAuthority(origin.session, this.#session)
+          ) throw new StaleAuthorityError()
+        },
+        hold: () => this.settled(),
+        finish: () => {
+          this.#mutations.delete(abort)
+          signal?.removeEventListener('abort', cancel)
+        },
+      }
+    }
     this.#requests.add(abort)
     return {
       context,

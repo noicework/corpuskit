@@ -4,6 +4,11 @@ export type UploadProgress = (loaded: number, total: number | undefined) => void
 /** A request that reports how much of its body has been sent. */
 export interface ProgressRequestInit extends RequestInit {
   onUploadProgress?: UploadProgress
+  /**
+   * An add whose write should outlive an access check in progress: its result is held through
+   * the check and published only to the same authority, instead of being cut off mid-write.
+   */
+  holdThroughRecheck?: boolean
 }
 
 /** The parts of XMLHttpRequest the transport uses, so tests can supply their own. */
