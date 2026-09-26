@@ -211,6 +211,10 @@ export class CloudflareDomainProvisioner implements PortalDomainProvisioner {
       },
     )
     const envelope = await response.json().catch(() => null) as CloudflareEnvelope<T> | null
+    // Deleting a Workers custom domain answers 200 with an empty body, not an envelope. A call
+    // that expects no result succeeds on any 2xx without a body; an envelope that reports a
+    // failure still fails.
+    if (!expectResult && response.ok && envelope === null) return undefined as T
     if (!response.ok || !envelope?.success) {
       const detail = envelope?.errors?.find((error) => error.message)?.message
       throw new CloudflareDomainApiError(

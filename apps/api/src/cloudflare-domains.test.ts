@@ -216,6 +216,26 @@ Deno.test('detach removes an owned domain by immutable id and is idempotent when
   expect(absent.requests).toHaveLength(1)
 })
 
+Deno.test('detach accepts the empty 200 and 204 bodies Cloudflare answers a domain delete with', async () => {
+  const hostname = 'new-portal.corpuskit.org'
+  for (const empty of [new Response(null, { status: 200 }), new Response(null, { status: 204 })]) {
+    const { provisioner, requests } = harness([response([domain(hostname)]), empty])
+    await expect(provisioner.detach(hostname)).resolves.toEqual({ hostname, removed: true })
+    expect(requests[1]?.method).toBe('DELETE')
+  }
+
+  const refused = harness([
+    response([domain(hostname)]),
+    Response.json({ success: false, errors: [{ code: 1000, message: 'refused' }] }, {
+      status: 200,
+    }),
+  ])
+  await expect(refused.provisioner.detach(hostname)).rejects.toThrow('refused')
+
+  const failed = harness([response([domain(hostname)]), new Response(null, { status: 500 })])
+  await expect(failed.provisioner.detach(hostname)).rejects.toBeInstanceOf(CloudflareDomainApiError)
+})
+
 Deno.test('Cloudflare failures never include the API token in their message', async () => {
   const { provisioner } = harness([response('permission denied', 403)])
 
