@@ -1,6 +1,15 @@
 import { expect } from '@std/expect'
 import { AuthorityController } from './access-lifecycle.ts'
-import { AuditError, auditQuery, exportAuditPage, listAudit, parseAuditPage } from './audit.ts'
+import {
+  AUDIT_ACTIONS,
+  AuditError,
+  auditQuery,
+  exportAuditPage,
+  listAudit,
+  parseAuditPage,
+} from './audit.ts'
+import { AUDIT_ACTION_NAMES } from '../../../api/src/audit.ts'
+import { DECLARATIONS } from '../../../api/src/permissions.ts'
 
 const scope = { kind: 'portal' as const, slug: 'marine' }
 const id = '11111111-1111-4111-8111-111111111111'
@@ -74,6 +83,44 @@ Deno.test('audit pages reject malformed envelopes, scope leaks and contradictory
   expect(() =>
     parseAuditPage(continued, scope, { cursor: cursor('22222222-2222-4222-8222-222222222222') })
   ).toThrow(AuditError)
+})
+Deno.test('the viewer lists every action the server records, so a new one cannot be left out', () => {
+  expect([...AUDIT_ACTIONS].sort()).toEqual([...AUDIT_ACTION_NAMES].sort())
+  // Every action a route or tool declares is one the server records, except the two names the
+  // content copy uses only to authorise each side; their refusals are recorded as request.denied.
+  const authorisationOnly = new Set(['migration.source', 'migration.destination'])
+  const declared = DECLARATIONS.flatMap((item) => [
+    item.action,
+    ...(item.subActions?.map((action) => action.action) ?? []),
+  ]).filter((action) => !authorisationOnly.has(action))
+  expect(declared.filter((action) => !(AUDIT_ACTIONS as readonly string[]).includes(action)))
+    .toEqual([])
+  // Every action listed can be used as a filter.
+  for (const action of AUDIT_ACTIONS) expect(auditQuery({ action }).get('action')).toBe(action)
+})
+Deno.test('an event whose action the viewer does not know still loads, by its raw name', () => {
+  // A newer server can record an action this build has never heard of: the page still loads.
+  const unknown = { ...row, action: 'portal.retention.review' }
+  expect(parseAuditPage({ ...page(), items: [unknown] }, scope).items).toEqual([unknown])
+  for (const action of ['portal.alias.set', 'portal.erase', 'portal.lifecycle.update']) {
+    const known = { ...row, action }
+    expect(parseAuditPage({ ...page(), items: [known] }, scope).items).toEqual([known])
+  }
+  // A malformed name is still refused, as any malformed field is.
+  for (
+    const action of [
+      '',
+      'request',
+      'Request.Privileged',
+      'request privileged',
+      '<script>.x',
+      `a.${'b'.repeat(80)}`,
+      'a.b.c.d.e.f.g',
+    ]
+  ) {
+    expect(() => parseAuditPage({ ...page(), items: [{ ...row, action }] }, scope), action)
+      .toThrow(AuditError)
+  }
 })
 Deno.test('operator audit records round-trip through parsing, actor filters and JSON export', async () => {
   const operatorRow = {

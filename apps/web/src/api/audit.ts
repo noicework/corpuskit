@@ -14,8 +14,18 @@ export const AUDIT_ACTORS = [
   'system',
 ] as const
 export const AUDIT_OUTCOMES = ['intent', 'success', 'denied', 'failure', 'uncertain'] as const
-// Display/query catalogue only. These names never grant authority.
+/**
+ * Display and filter catalogue only; these names never grant authority. It lists every action
+ * the server records (`AUDIT_ACTION_NAMES` in the API's audit module, which a test compares with
+ * it). An event whose action is not listed here still loads and shows its raw name.
+ */
 export const AUDIT_ACTIONS = [
+  'auth.external.denied',
+  'portal.lifecycle.update',
+  'portal.alias.set',
+  'portal.alias.remove',
+  'portal.erase',
+  'portal.delete.suspended',
   'local.mutation',
   'assignment.create',
   'assignment.update',
@@ -53,6 +63,12 @@ const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/).ref
 const time = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/).refine((v) =>
   Number.isFinite(Date.parse(v)) && new Date(v).toISOString() === v
 )
+/**
+ * An action name as the server records one: lower-case words joined by dots. Any such name is
+ * accepted, so an action from a newer server, not yet in `AUDIT_ACTIONS`, is shown by its raw
+ * name instead of failing the whole page. Anything else is still malformed.
+ */
+const actionName = z.string().max(80).regex(/^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+){1,5}$/)
 const uuid = z.string().regex(
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
 )
@@ -122,7 +138,7 @@ const eventSchema = z.object({
   actor_kind: z.enum(AUDIT_ACTORS),
   actor_id: identifier.nullable(),
   actor_label: z.string().max(160).regex(/^[\p{L}\p{N} .,'@()_-]+$/u).nullable(),
-  action: z.enum(AUDIT_ACTIONS),
+  action: actionName,
   scope_kind: z.enum(['platform', 'portal']),
   scope_slug: identifier.nullable(),
   target_kind: identifier,

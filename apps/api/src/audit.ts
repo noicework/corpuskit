@@ -423,6 +423,13 @@ const actionFields = {
   'maintenance.questions.run': ['code', 'permission'],
 } as const satisfies Record<string, readonly Field[]>
 export type AuditAction = keyof typeof actionFields
+/**
+ * Every action this server can record: `createAuditEvent` refuses any other name. The web audit
+ * viewer's catalogue is checked against this list, so a new action cannot be left out of it.
+ */
+export const AUDIT_ACTION_NAMES: readonly AuditAction[] = Object.freeze(
+  Object.keys(actionFields) as AuditAction[],
+)
 
 /** Only own, named scalar fields are inspected. Unknown fields are discarded without traversal. */
 export function redactAuditDetail(

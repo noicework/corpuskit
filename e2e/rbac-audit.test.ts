@@ -384,6 +384,69 @@ Deno.test('audit production pages render and filter operator events at platform 
   }
 })
 
+Deno.test('the platform audit log loads every recorded action, and shows an unknown one by name', async () => {
+  const server = startTestServer({ identity: { role: 'owner' } }),
+    db = seed(server.directory)
+  // Actions portal aliases, erasure, retention deletes, lifecycle changes and external sign-in
+  // record at platform scope. One of them used to stop the whole log loading.
+  const recorded = [
+    'portal.alias.set',
+    'portal.alias.remove',
+    'portal.erase',
+    'portal.delete.suspended',
+    'portal.lifecycle.update',
+    'auth.external.denied',
+    'resource.delete',
+  ] as const
+  for (const [index, action] of recorded.entries()) {
+    db.rbac.audit.append(createAuditEvent({
+      requestId: `recorded-${index}`,
+      actor: { kind: 'operator', id: 'operator:fixture-hosting' },
+      action,
+      scope: action === 'resource.delete'
+        ? { kind: 'portal', slug: 'marine' }
+        : { kind: 'platform' },
+      target: { kind: action === 'resource.delete' ? 'resource' : 'portal', id: 'marine' },
+      outcome: 'success',
+      detail: {},
+    }, () => Date.UTC(2026, 8, 13, 0, 0, index)))
+  }
+  const browser = await launch(),
+    page = await browser.newPage(`${server.url}/admin/audit`)
+  try {
+    await ready(page)
+    await assertCurrentBuild(page)
+    const shown = () =>
+      page.evaluate(() => document.querySelector('[data-audit-results]')!.textContent ?? '')
+    for (const action of recorded) expect(await shown(), action).toContain(action)
+    // A newer server may record an action this build has never heard of: the log still loads,
+    // and the event shows its raw name.
+    await page.evaluate(() => {
+      const original = globalThis.fetch.bind(globalThis)
+      globalThis.fetch = async (input, init) => {
+        const response = await original(input, init)
+        if (!String(input).startsWith('/api/admin/audit?')) return response
+        const body = await response.json()
+        body.items[0].action = 'portal.retention.review'
+        return Response.json(body)
+      }
+    })
+    await click(page, 'Apply filters')
+    await page.waitForFunction(() =>
+      document.querySelector('[data-audit-results]')?.textContent?.includes(
+        'portal.retention.review',
+      )
+    )
+    expect(await shown()).not.toContain('Could not load audit events')
+    expect(await shown()).toContain('portal.alias.set')
+  } finally {
+    db.database.close()
+    await page.close()
+    await browser.close()
+    await server.close()
+  }
+})
+
 Deno.test('audit production navigation mounts immutable portal and platform scopes', async () => {
   const server = startTestServer({ identity: { role: 'owner' } }),
     db = seed(server.directory),
