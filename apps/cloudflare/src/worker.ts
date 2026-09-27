@@ -227,6 +227,10 @@ export class PortalDurableObject extends DurableObject<Env> {
       rateLimitAskPerMin: askPerMin,
       rateLimitAskPerMinPerIp: numberBinding(bindings.RATE_LIMIT_ASK_PER_MIN_IP, askPerMin * 5),
       rateLimitAnonPortalAskPerMin: numberBinding(bindings.RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN, 30),
+      rateLimitAnonAddressAskPerMin: numberBinding(
+        bindings.RATE_LIMIT_ANON_ADDRESS_ASK_PER_MIN,
+        10,
+      ),
       rateLimitEstatePerMin: numberBinding(bindings.RATE_LIMIT_ESTATE_PER_MIN, 6),
     })
   }

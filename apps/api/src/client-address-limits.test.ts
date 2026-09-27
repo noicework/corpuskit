@@ -90,6 +90,37 @@ for (const adapter of ['durable', 'local'] as const) {
     }
   })
 
+  Deno.test(`${adapter}: one address takes no more than its share of a portal's anonymous asks`, async () => {
+    const f = createEnforcementFixture(
+      {
+        rateLimitAskPerMin: 20,
+        rateLimitAskPerMinPerIp: 100,
+        rateLimitAnonPortalAskPerMin: 30,
+        rateLimitAnonAddressAskPerMin: 10,
+      },
+      adapter,
+    )
+    try {
+      const ask = (from: string, session: TrustedSessionFacts | null = null) =>
+        status(
+          f.requestFrom(from, session, '/api/t/public-a/ask', post({ 'x-rp-client': browser() })),
+        )
+      // A new browser id each time does not stretch one address past its share.
+      for (let i = 0; i < 10; i++) expect(await ask('198.51.100.67')).toBe(200)
+      expect(await ask('198.51.100.67')).toBe(429)
+      // The rest of the portal's asks are still there for other readers.
+      expect(await ask('203.0.113.10')).toBe(200)
+      // A signed-in reader at the same address is not an anonymous caller.
+      expect(await ask('198.51.100.67', f.unassigned)).toBe(200)
+      // The share is per portal.
+      expect(
+        await status(f.requestFrom('198.51.100.67', null, '/api/t/public-b/ask', post())),
+      ).toBe(200)
+    } finally {
+      f.close()
+    }
+  })
+
   Deno.test(`${adapter}: refused asks give the portal its anonymous turn back`, async () => {
     const f = createEnforcementFixture(
       { rateLimitAskPerMin: 20, rateLimitAskPerMinPerIp: 100, rateLimitAnonPortalAskPerMin: 3 },

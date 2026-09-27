@@ -2462,6 +2462,9 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
       provider: new StubProvider(),
       tenants: freshTenants(),
       rateLimitAskPerMin: 0,
+      // The anonymous per-portal limits are separate settings, turned off here as well.
+      rateLimitAnonPortalAskPerMin: 0,
+      rateLimitAnonAddressAskPerMin: 0,
     })
     const ask = () =>
       app.request('/api/t/marine/ask', {

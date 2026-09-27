@@ -1549,6 +1549,35 @@ Deno.test('a migrated legacy key is a fixed viewer key on its portal until revok
   }
 })
 
+Deno.test('a keyless MCP answer takes its address share of the portal like a web ask', async () => {
+  const test = harness(60, { rateLimitAnonPortalAskPerMin: 30, rateLimitAnonAddressAskPerMin: 2 })
+  const answer = async (peer: string) => {
+    const response = await test.app.request('/api/t/marine/mcp', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        'mcp-protocol-version': '2025-11-25',
+        'x-test-peer': peer,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'answer_question', arguments: { question: 'What is stock health?' } },
+      }),
+    })
+    expect(response.status).toBe(200)
+    return (await response.json()).result
+  }
+  expect((await answer('198.51.100.8')).isError).not.toBe(true)
+  expect((await answer('198.51.100.8')).isError).not.toBe(true)
+  const refused = await answer('198.51.100.8')
+  expect(refused.isError).toBe(true)
+  expect(refused.structuredContent).toMatchObject({ error: 'rate_limited' })
+  expect((await answer('198.51.100.9')).isError).not.toBe(true)
+})
+
 Deno.test('MCP answers count toward the daily ask limit while searches and read-only portals do not', async () => {
   const lifecycle = new PortalLifecycleStore()
   const test = harness(60, { lifecycle })

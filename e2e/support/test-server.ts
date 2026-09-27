@@ -258,6 +258,7 @@ export function startTestServer(options: {
       breakGlass: ingress.breakGlass,
       rateLimitAskPerMin: 0,
       rateLimitAnonPortalAskPerMin: 0,
+      rateLimitAnonAddressAskPerMin: 0,
       rateLimitEstatePerMin: 0,
       ...(options.apiOnly ? {} : { webDistPath: WEB_DIST }),
     })

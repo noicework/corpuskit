@@ -1050,6 +1050,9 @@ export interface BuildAppOptions {
   /** Anonymous asks per minute on each portal, from every address together. Defaults to env
    *  RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN, or 30. 0 disables. */
   rateLimitAnonPortalAskPerMin?: number
+  /** Anonymous asks per minute one address may make on each portal, its share of the portal's
+   *  ceiling. Defaults to env RATE_LIMIT_ANON_ADDRESS_ASK_PER_MIN, or 10. 0 disables. */
+  rateLimitAnonAddressAskPerMin?: number
   /** Requests/min per address for POST /api/ask-estate, which fans one request across every
    *  tenant. Defaults to env RATE_LIMIT_ESTATE_PER_MIN, or 6. 0 disables. */
   rateLimitEstatePerMin?: number
@@ -1786,6 +1789,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
     limit: anonPortalAsksPerMin,
     windowMs: 60_000,
   })
+  // One address's share of each portal's anonymous asks, so no single address can take them all.
+  const anonAddressAsksPerMin = opts.rateLimitAnonAddressAskPerMin ??
+    Number(process.env.RATE_LIMIT_ANON_ADDRESS_ASK_PER_MIN ?? 10)
+  const anonAddressLimiter = new SlidingWindowLimiter({
+    limit: anonAddressAsksPerMin,
+    windowMs: 60_000,
+  })
+  /** The anonymous buckets an ask on `slug` from `address` counts against. */
+  const anonymousEntries = (slug: string, address: string | undefined): RateLimitEntry[] => [
+    { limiter: anonPortalLimiter, key: slug },
+    { limiter: anonAddressLimiter, key: `${slug}|${addressKey(address)}` },
+  ]
   const callerAddress = (c: Context) => requestContext(c.req.raw).clientIp
   const anonymousCaller = (c: Context) => requestContext(c.req.raw).actor?.kind === 'anonymous'
   /** The buckets a request's paid answers count against: `asks` answers, on `portals`. */
@@ -1801,7 +1816,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     },
     { limiter: expensiveIpLimiter, key: addressKey(callerAddress(c)), weight: asks },
     ...(anonymousCaller(c)
-      ? portals.map((slug) => ({ limiter: anonPortalLimiter, key: slug }))
+      ? portals.flatMap((slug) => anonymousEntries(slug, callerAddress(c)))
       : []),
   ]
   const expensiveRateLimit = infrastructureHandler(async (c, next) => {
@@ -2196,16 +2211,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
     authorityDependencies,
     authorise: authoriseDeclared,
     // The MCP transport route is already guarded; each tool call is checked again on its own,
-    // and an anonymous answer takes its portal's turn as a web ask does.
-    beforeTool: (declaration, config, authority) => {
+    // and an anonymous answer takes its portal's turn and its address's share as a web ask does.
+    beforeTool: (declaration, config, authority, caller) => {
       const portal = authority.kind === 'anonymous' && askUse(declaration) === 'count'
-        ? [{ limiter: anonPortalLimiter, key: config.slug }]
+        ? anonymousEntries(config.slug, caller.clientIp)
         : []
-      const room = portal.every((entry) => entry.limiter.peek(entry.key).allowed)
-      if (!room) {
-        const retryAfter = Math.max(
-          ...portal.map((entry) => entry.limiter.peek(entry.key).retryAfterSec),
-        )
+      const refused = portal.map((entry) => entry.limiter.peek(entry.key))
+        .filter((verdict) => !verdict.allowed)
+      if (refused.length > 0) {
+        const retryAfter = Math.max(...refused.map((verdict) => verdict.retryAfterSec))
         throw new PortalLifecycleError(429, { error: 'rate_limited', retryAfter })
       }
       toolGuard(declaration, config, authority)

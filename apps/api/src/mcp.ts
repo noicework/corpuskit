@@ -64,7 +64,13 @@ const READ_ONLY_TOOL = {
 } as const
 
 export interface McpRoutesOptions {
-  beforeTool?: (declaration: Declaration, config: TenantConfig, authority: RequestAuthority) => void
+  /** Checks each tool call; `caller` carries the address the runtime reported for it. */
+  beforeTool?: (
+    declaration: Declaration,
+    config: TenantConfig,
+    authority: RequestAuthority,
+    caller: { clientIp?: string },
+  ) => void
   localMutations?: LocalMutationScope
   provider: RetrievalProvider
   tenant: (slug: string) => TenantConfig | undefined
@@ -240,7 +246,12 @@ export function createMcpServer(opts: McpRoutesOptions): {
           accessMode: config?.accessMode,
           configuredTenantId: opts.authorityDependencies.configuredTenantId,
         })
-        if (config) opts.beforeTool?.(declaration, config, authority)
+        const clientIp = context.http?.authInfo?.extra?.clientIp
+        if (config) {
+          opts.beforeTool?.(declaration, config, authority, {
+            ...(typeof clientIp === 'string' ? { clientIp } : {}),
+          })
+        }
         return await executeMcpTool(
           declaration,
           auditContext,
@@ -521,7 +532,12 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
             token: 'credential-verified',
             clientId: selected.kind === 'key' ? selected.id : selected.actor.id ?? 'anonymous',
             scopes: [],
-            extra: { slug, authority: selected, auditContext },
+            extra: {
+              slug,
+              authority: selected,
+              auditContext,
+              ...(request?.clientIp ? { clientIp: request.clientIp } : {}),
+            },
           },
         })
         // The SDK converts callback exceptions into protocol errors; required audit errors remain HTTP failures.

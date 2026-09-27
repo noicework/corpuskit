@@ -513,6 +513,7 @@ export function createEnforcementFixture(
       | 'rateLimitAskPerMin'
       | 'rateLimitAskPerMinPerIp'
       | 'rateLimitAnonPortalAskPerMin'
+      | 'rateLimitAnonAddressAskPerMin'
       | 'rateLimitEstatePerMin'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
@@ -665,6 +666,7 @@ export function createEnforcementFixture(
     brandingPath: `${directory}/branding`,
     rateLimitAskPerMin: options.rateLimitAskPerMin ?? 0,
     rateLimitAnonPortalAskPerMin: options.rateLimitAnonPortalAskPerMin ?? 0,
+    rateLimitAnonAddressAskPerMin: options.rateLimitAnonAddressAskPerMin ?? 0,
     rateLimitEstatePerMin: options.rateLimitEstatePerMin ?? 0,
     rateLimitMcpAuthPerMin: 0,
   })
