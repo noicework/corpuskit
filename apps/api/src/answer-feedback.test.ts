@@ -18,6 +18,8 @@ import {
   type AnswerFeedback,
   FeedbackStore,
   type FeedbackStoreApi,
+  feedbackSummary,
+  FLAGGED_ANSWERS_SHOWN,
   InsightsStore,
   type InsightsStoreApi,
   RoutingLog,
@@ -175,11 +177,14 @@ for (const build of [durableStack, localStack]) {
         { learningId: LEARNING, good: false },
         { learningId: LEARNING, good: false, text: comment },
       ])
-      const kept = s.feedback.list(s.slug)
+      const kept = s.feedback.ratings(s.slug)
       expect(kept).toHaveLength(1)
       expect(kept[0]!.good).toBe(false)
-      expect(kept[0]!.text).toHaveLength(ANSWER_FEEDBACK_TEXT_MAX)
-      expect(kept[0]!.text!.startsWith('The year is wrong.')).toBe(true)
+      // Ratings are read without their comments; a comment is read only for an answer shown.
+      expect(kept[0]).not.toHaveProperty('text')
+      const said = s.feedback.comments(s.slug, [LEARNING])[LEARNING]!
+      expect(said).toHaveLength(ANSWER_FEEDBACK_TEXT_MAX)
+      expect(said.startsWith('The year is wrong.')).toBe(true)
 
       // Curators see it in Insights, joined to the question; the ask log's ids stay private.
       const insights = await s.as('curator', `/api/admin/t/${s.slug}/insights`)
@@ -191,7 +196,7 @@ for (const build of [durableStack, localStack]) {
         question: 'Abalone decline',
         askedAt: expect.any(String),
         ratedAt: kept[0]!.ts,
-        comment: kept[0]!.text,
+        comment: said,
       }])
       expect(JSON.stringify(summary.recent)).not.toContain(LEARNING)
       // Only the roles that can see Insights see readers' comments.
@@ -205,7 +210,9 @@ for (const build of [durableStack, localStack]) {
         post({ learningId: 'learning-second-answer', good: true }),
       )
       expect(unforwarded.status).toBe(502)
-      expect(s.feedback.list(s.slug).map((r) => r.learningId)).toContain('learning-second-answer')
+      expect(s.feedback.ratings(s.slug).map((r) => r.learningId)).toContain(
+        'learning-second-answer',
+      )
       fail(false)
       const store = s.feedback as { record: FeedbackStoreApi['record'] }
       store.record = () => {
@@ -229,12 +236,123 @@ for (const build of [durableStack, localStack]) {
       )
       expect(refused.status).toBe(403)
       expect(forwarded).toHaveLength(before)
-      expect(s.feedback.list(s.slug).map((r) => r.learningId)).not.toContain('learning-outsider')
+      expect(s.feedback.ratings(s.slug).map((r) => r.learningId)).not.toContain(
+        'learning-outsider',
+      )
     } finally {
       s.close()
     }
   })
 }
+
+for (const build of [durableStack, localStack]) {
+  Deno.test(`a learning id outside the platform's shape is refused, and nothing is kept (${build.name})`, async () => {
+    const { management, forwarded } = platform()
+    const s = build(management)
+    try {
+      for (
+        const learningId of [
+          'L'.repeat(129),
+          'L'.repeat(1_000_000),
+          'learning id with spaces',
+          'learning<script>',
+          'short',
+        ]
+      ) {
+        const response = await s.as(
+          'viewer',
+          `/api/t/${s.slug}/feedback`,
+          post({ learningId, good: false, text: 'Kept?' }),
+        )
+        expect([learningId.slice(0, 24), response.status]).toEqual([learningId.slice(0, 24), 400])
+        await response.body?.cancel()
+      }
+      expect(forwarded).toEqual([])
+      expect(s.feedback.ratings(s.slug)).toEqual([])
+      // The longest id the platform could issue is still accepted.
+      const longest = 'a'.repeat(128)
+      const accepted = await s.as(
+        'viewer',
+        `/api/t/${s.slug}/feedback`,
+        post({ learningId: longest, good: true }),
+      )
+      expect(accepted.status).toBe(200)
+      expect(s.feedback.ratings(s.slug).map((r) => r.learningId)).toEqual([longest])
+    } finally {
+      s.close()
+    }
+  })
+}
+
+Deno.test('a stored rating outside the bounds is never read (local server)', () => {
+  const directory = Deno.makeTempDirSync({ prefix: 'answer-feedback-stored-' })
+  try {
+    const now = Date.now()
+    Deno.mkdirSync(join(directory, 'feedback'))
+    Deno.writeTextFileSync(
+      join(directory, 'feedback', 'a.json'),
+      JSON.stringify([
+        { ts: new Date(now).toISOString(), learningId: 'L'.repeat(10_000), good: false },
+        {
+          ts: new Date(now).toISOString(),
+          learningId: 'learning-ok',
+          good: false,
+          text: 'x'.repeat(5_000),
+        },
+        { ts: new Date(now).toISOString(), learningId: 'learning-fine', good: true },
+      ]),
+    )
+    const store = new FeedbackStore(directory, () => now)
+    expect(store.ratings('a').map((r) => r.learningId)).toEqual(['learning-fine'])
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('a stored rating outside the bounds is never read (Durable Object)', () => {
+  const f = createEnforcementFixture()
+  try {
+    const now = Date.now()
+    f.database.exec(
+      'INSERT INTO answer_feedback (tenant_slug, learning_id, good, comment, rated_at) VALUES (?, ?, ?, ?, ?)',
+      'a',
+      'L'.repeat(10_000),
+      0,
+      null,
+      now,
+    )
+    const store = new DurableFeedbackStore(f.state, () => now)
+    store.record('a', { ts: new Date(now).toISOString(), learningId: 'learning-fine', good: true })
+    expect(store.ratings('a').map((r) => r.learningId)).toEqual(['learning-fine'])
+    expect(store.comments('a', ['L'.repeat(10_000)])).toEqual({})
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('Insights reads comments only for the unhelpful answers it lists', () => {
+  const ratings = Array.from({ length: 120 }, (_, index) => ({
+    learningId: `learning-${String(index).padStart(3, '0')}`,
+    good: false,
+    ts: new Date(Date.UTC(2026, 8, 12) - index * 1_000).toISOString(),
+  }))
+  const commentReads: string[][] = []
+  const summary = feedbackSummary(
+    ratings,
+    (ids) =>
+      Object.fromEntries(
+        ids.map((id) => [id, { question: `Q ${id}`, ts: '2026-09-12T00:00:00Z' }]),
+      ),
+    (ids) => {
+      commentReads.push(ids)
+      return Object.fromEntries(ids.map((id) => [id, `Comment on ${id}`]))
+    },
+  )
+  expect(summary.flagged).toHaveLength(FLAGGED_ANSWERS_SHOWN)
+  expect(commentReads).toHaveLength(1)
+  expect(commentReads[0]).toHaveLength(FLAGGED_ANSWERS_SHOWN)
+  expect(summary.flagged[0]!.comment).toBe('Comment on learning-000')
+})
 
 Deno.test('a privileged rating passes the Durable Object audit boundary as a declared mutation', async () => {
   const { management, forwarded } = platform()
@@ -266,7 +384,7 @@ Deno.test('a privileged rating passes the Durable Object audit boundary as a dec
     })
     expect(response.status).toBe(200)
     expect(forwarded).toHaveLength(1)
-    expect(f.stores.feedback.list('a').map((r) => r.text)).toEqual(['Wrong cohort'])
+    expect(f.stores.feedback.comments('a', [LEARNING])).toEqual({ [LEARNING]: 'Wrong cohort' })
     const mutation = f.rbac.audit.read({ scope: { kind: 'portal', slug: 'a' }, limit: 1000 })
       .find((event) => event.action === 'local.mutation')
     expect(JSON.parse(mutation!.detail_json).mutation).toBe('feedback.record')
@@ -303,31 +421,31 @@ for (
       store.record('a', rating('learning-1', clock, 1))
       store.record('a', rating('learning-2', clock, 0))
       store.record('a', { ...rating('learning-1', clock + 1_000, 0), good: true })
-      expect(store.list('a').map((r) => [r.learningId, r.good])).toEqual([
+      expect(store.ratings('a').map((r) => [r.learningId, r.good])).toEqual([
         ['learning-1', true],
         ['learning-2', false],
       ])
       // Other portals keep their own.
       store.record('b', rating('learning-b', clock, 0))
-      expect(store.list('b').map((r) => r.learningId)).toEqual(['learning-b'])
+      expect(store.ratings('b').map((r) => r.learningId)).toEqual(['learning-b'])
 
       // Never more than the cap per portal: the oldest go first.
       for (let index = 0; index < ANSWER_FEEDBACK_KEEP + 5; index++) {
         store.record('a', rating(`learning-cap-${index}`, clock + index * 1_000, 0))
       }
-      const capped = store.list('a')
+      const capped = store.ratings('a')
       expect(capped).toHaveLength(ANSWER_FEEDBACK_KEEP)
       expect(capped[0]!.learningId).toBe(`learning-cap-${ANSWER_FEEDBACK_KEEP + 4}`)
       expect(capped.some((r) => r.learningId === 'learning-2')).toBe(false)
 
       // Past the window a rating is no longer listed, and the next write removes it.
       clock += (ANSWER_FEEDBACK_DAYS + 1) * DAY
-      expect(store.list('a')).toEqual([])
+      expect(store.ratings('a')).toEqual([])
       store.record('a', rating('learning-fresh', clock, 0))
-      expect(store.list('a').map((r) => r.learningId)).toEqual(['learning-fresh'])
+      expect(store.ratings('a').map((r) => r.learningId)).toEqual(['learning-fresh'])
       expect(store.erase('a')).toBeGreaterThan(0)
-      expect(store.list('a')).toEqual([])
-      expect(store.list('b')).toEqual([])
+      expect(store.ratings('a')).toEqual([])
+      expect(store.ratings('b')).toEqual([])
     } finally {
       close()
     }

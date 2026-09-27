@@ -596,7 +596,8 @@ const linkBodySchema = z.object({
   hidden: z.boolean().optional(),
 })
 const feedbackBodySchema = z.object({
-  learningId: z.string().min(8),
+  // The platform's ids are 32 hex characters; anything outside this bound is not one.
+  learningId: z.string().min(8).max(128).regex(/^[A-Za-z0-9_-]+$/),
   good: z.boolean(),
   text: z.string().max(2000).optional(),
 }).strict()
@@ -5638,8 +5639,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ...insights.summary(config.slug),
       // Readers' ratings, with the unhelpful answers joined to the questions they answered.
       feedback: feedbackSummary(
-        feedback.list(config.slug),
+        feedback.ratings(config.slug),
         (learningIds) => insights.questions(config.slug, learningIds),
+        (learningIds) => feedback.comments(config.slug, learningIds),
       ),
     })
   })

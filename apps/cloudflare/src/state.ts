@@ -22,8 +22,9 @@ import {
   ANSWER_FEEDBACK_DAYS,
   ANSWER_FEEDBACK_KEEP,
   type AnswerFeedback,
+  type FeedbackRating,
   type FeedbackStoreApi,
-  parseAnswerFeedback,
+  LEARNING_ID_PATTERN,
 } from '../../api/src/stores.ts'
 import type {
   AskInsight,
@@ -373,7 +374,8 @@ export class DurableState {
       CREATE TABLE IF NOT EXISTS answer_feedback (
         tenant_slug TEXT NOT NULL,
         learning_id TEXT NOT NULL,
-        record TEXT NOT NULL,
+        good INTEGER NOT NULL,
+        comment TEXT,
         rated_at INTEGER NOT NULL,
         PRIMARY KEY (tenant_slug, learning_id)
       );
@@ -542,12 +544,14 @@ export class DurableState {
   putFeedback(slug: string, feedback: AnswerFeedback, keep: number, cutoff: number): void {
     this.guardLocalWrite()
     this.sql.exec(
-      `INSERT INTO answer_feedback (tenant_slug, learning_id, record, rated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(tenant_slug, learning_id)
-       DO UPDATE SET record = excluded.record, rated_at = excluded.rated_at`,
+      `INSERT INTO answer_feedback (tenant_slug, learning_id, good, comment, rated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(tenant_slug, learning_id) DO UPDATE SET
+         good = excluded.good, comment = excluded.comment, rated_at = excluded.rated_at`,
       slug,
       feedback.learningId,
-      JSON.stringify(feedback),
+      feedback.good ? 1 : 0,
+      feedback.text ?? null,
       Date.parse(feedback.ts),
     )
     this.sql.exec(
@@ -566,22 +570,51 @@ export class DurableState {
     )
   }
 
-  /** The portal's ratings from `cutoff` on, newest first, at most `limit`. */
-  feedbackRecords(slug: string, cutoff: number, limit: number): AnswerFeedback[] {
-    return this.sql.exec<{ record: string }>(
-      `SELECT record FROM answer_feedback WHERE tenant_slug = ? AND rated_at >= ?
+  /**
+   * The portal's ratings from `cutoff` on, newest first, at most `limit`, without their comments:
+   * a bounded read of three small columns.
+   */
+  feedbackRatings(slug: string, cutoff: number, limit: number): FeedbackRating[] {
+    return this.sql.exec<{ learning_id: string; good: number; rated_at: number }>(
+      `SELECT learning_id, good, rated_at FROM answer_feedback
+       WHERE tenant_slug = ? AND rated_at >= ?
        ORDER BY rated_at DESC, learning_id DESC LIMIT ?`,
       slug,
       cutoff,
       limit,
-    ).toArray().flatMap((row) => {
-      try {
-        const record = parseAnswerFeedback(JSON.parse(row.record))
-        return record ? [record] : []
-      } catch {
-        return []
-      }
-    })
+    ).toArray().flatMap((row) =>
+      LEARNING_ID_PATTERN.test(row.learning_id)
+        ? [{
+          learningId: row.learning_id,
+          good: row.good === 1,
+          ts: new Date(row.rated_at).toISOString(),
+        }]
+        : []
+    )
+  }
+
+  /** The comments on the named answers, from `cutoff` on. */
+  feedbackComments(
+    slug: string,
+    learningIds: readonly string[],
+    cutoff: number,
+  ): Record<string, string> {
+    const ids = [...new Set(learningIds)].filter((id) => LEARNING_ID_PATTERN.test(id))
+    const found: Record<string, string> = {}
+    if (ids.length === 0) return found
+    for (
+      const row of this.sql.exec<{ learning_id: string; comment: string | null }>(
+        `SELECT learning_id, comment FROM answer_feedback
+         WHERE tenant_slug = ? AND rated_at >= ? AND comment IS NOT NULL
+           AND learning_id IN (${ids.map(() => '?').join(', ')})`,
+        slug,
+        cutoff,
+        ...ids,
+      ).toArray()
+    ) {
+      if (row.comment) found[row.learning_id] = row.comment
+    }
+    return found
   }
 
   /** The tenant's routing decisions, newest first, at most `limit`. */
@@ -1305,8 +1338,12 @@ export class DurableFeedbackStore implements FeedbackStoreApi {
     this.state.putFeedback(slug, feedback, ANSWER_FEEDBACK_KEEP, this.cutoff())
   }
 
-  list(slug: string): AnswerFeedback[] {
-    return this.state.feedbackRecords(slug, this.cutoff(), ANSWER_FEEDBACK_KEEP)
+  ratings(slug: string): FeedbackRating[] {
+    return this.state.feedbackRatings(slug, this.cutoff(), ANSWER_FEEDBACK_KEEP)
+  }
+
+  comments(slug: string, learningIds: readonly string[]): Record<string, string> {
+    return this.state.feedbackComments(slug, learningIds, this.cutoff())
   }
 
   erase(slug: string): number {

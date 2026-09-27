@@ -434,6 +434,15 @@ export const ANSWER_FEEDBACK_DAYS = 90
 
 const DAY_MS = 24 * 3600 * 1000
 
+/**
+ * A learning id as the platform issues it (a 32-character hex id) and as the feedback route
+ * accepts it: 8 to 128 letters, digits, `_` or `-`. The bound keeps every stored rating small.
+ */
+export const LEARNING_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
+
+/** Most unhelpful answers Insights lists, and so the most comments it reads. */
+export const FLAGGED_ANSWERS_SHOWN = 50
+
 /** The record kept for a rating received at `now`. */
 export function answerFeedback(
   input: { learningId: string; good: boolean; text?: string },
@@ -460,9 +469,10 @@ export function parseAnswerFeedback(value: unknown): AnswerFeedback | null {
   const record = value as Record<string, unknown>
   if (
     typeof record.ts !== 'string' || !Number.isFinite(Date.parse(record.ts)) ||
-    typeof record.learningId !== 'string' || record.learningId.length === 0 ||
+    typeof record.learningId !== 'string' || !LEARNING_ID_PATTERN.test(record.learningId) ||
     typeof record.good !== 'boolean' ||
-    (record.text !== undefined && typeof record.text !== 'string')
+    (record.text !== undefined &&
+      (typeof record.text !== 'string' || record.text.length > ANSWER_FEEDBACK_TEXT_MAX * 2))
   ) return null
   return {
     ts: record.ts,
@@ -488,6 +498,13 @@ export function retainedFeedback(
     .slice(0, ANSWER_FEEDBACK_KEEP)
 }
 
+/** A rating without its comment: what Insights counts and joins on. */
+export interface FeedbackRating {
+  learningId: string
+  good: boolean
+  ts: string
+}
+
 /** One answer a reader marked unhelpful, with the question it answered. */
 export interface FlaggedAnswer {
   question: string
@@ -504,27 +521,30 @@ export interface FeedbackSummary {
   flagged: FlaggedAnswer[]
 }
 
-/** How readers rated the portal's answers, and the unhelpful ones joined to their questions. */
+/**
+ * How readers rated the portal's answers, and the unhelpful ones joined to their questions. It
+ * reads the ratings without their comments, then the comments of the answers it lists and no
+ * others, so one Insights read never loads every stored comment.
+ */
 export function feedbackSummary(
-  records: readonly AnswerFeedback[],
+  ratings: readonly FeedbackRating[],
   questions: (learningIds: string[]) => Record<string, { question: string; ts: string }>,
+  comments: (learningIds: string[]) => Record<string, string>,
 ): FeedbackSummary {
-  const unhelpful = records.filter((record) => !record.good)
+  const unhelpful = ratings.filter((rating) => !rating.good)
   const asked = unhelpful.length > 0 ? questions(unhelpful.map((r) => r.learningId)) : {}
+  const shown = unhelpful.filter((rating) => asked[rating.learningId])
+    .slice(0, FLAGGED_ANSWERS_SHOWN)
+  const said = shown.length > 0 ? comments(shown.map((r) => r.learningId)) : {}
   return {
-    helpful: records.length - unhelpful.length,
+    helpful: ratings.length - unhelpful.length,
     unhelpful: unhelpful.length,
-    flagged: unhelpful.flatMap((record) => {
-      const ask = asked[record.learningId]
-      return ask
-        ? [{
-          question: ask.question,
-          askedAt: ask.ts,
-          ratedAt: record.ts,
-          comment: record.text ?? null,
-        }]
-        : []
-    }).slice(0, 50),
+    flagged: shown.map((rating) => ({
+      question: asked[rating.learningId]!.question,
+      askedAt: asked[rating.learningId]!.ts,
+      ratedAt: rating.ts,
+      comment: said[rating.learningId] ?? null,
+    })),
   }
 }
 
@@ -555,9 +575,21 @@ export class FeedbackStore {
     writeJson(this.pathFor(slug), retainedFeedback([feedback, ...others], this.now()))
   }
 
-  /** The ratings kept for the portal, newest first. */
-  list(slug: string): AnswerFeedback[] {
+  /** The ratings kept for the portal, newest first, without their comments. */
+  ratings(slug: string): FeedbackRating[] {
     return retainedFeedback(this.readAll(slug), this.now())
+      .map(({ learningId, good, ts }) => ({ learningId, good, ts }))
+  }
+
+  /** The comments readers left on the named answers. */
+  comments(slug: string, learningIds: readonly string[]): Record<string, string> {
+    const wanted = new Set(learningIds)
+    const found: Record<string, string> = {}
+    if (wanted.size === 0) return found
+    for (const record of retainedFeedback(this.readAll(slug), this.now())) {
+      if (record.text && wanted.has(record.learningId)) found[record.learningId] = record.text
+    }
+    return found
   }
 
   /** Remove the portal's ratings (see `PortalErasure`). */
