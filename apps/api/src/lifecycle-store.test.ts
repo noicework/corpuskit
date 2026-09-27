@@ -10,6 +10,7 @@ import {
   FileLifecycleState,
   FileLifecycleStore,
   type LifecycleState,
+  MEASURE_TIMEOUT,
   nextPortalDay,
   PortalLifecycleStore,
 } from './lifecycle-store.ts'
@@ -684,4 +685,50 @@ Deno.test('erasing a portal removes every hosting record, readable or not', () =
   expect(store.erase('marine')).toBe(4)
   expect([...state.values.keys()]).toEqual(['portal-lifecycle:grains'])
   expect(store.erase('marine')).toBe(0)
+})
+
+Deno.test('a deletion whose release did not finish is released later without counting it twice', () => {
+  let now = instant('2026-09-26T00:00:00Z')
+  const store = new PortalLifecycleStore(new MemoryLifecycleState(), () => now)
+  store.set('a', { status: 'active', limits: { maxResources: 3, maxBytes: 1_000 } })
+  const file = store.reserveAdd('a', { observed: 0, bytes: 100 }) as { admitted: string }
+  store.settleAdd('a', file.admitted, { created: true, id: 'file-1' })
+  const link = store.reserveAdd('a', { observed: 1, bytes: null, provisional: 300 }) as {
+    admitted: string
+  }
+  expect(store.addsInFlight('a')).toBe(1)
+  store.settleAdd('a', link.admitted, { created: true, id: 'link-1' })
+  expect(store.addsInFlight('a')).toBe(0)
+  expect(store.tracksResource('a', 'file-1')).toBe(true)
+  expect(store.tracksResource('a', 'link-1')).toBe(true)
+  expect(store.tracksResource('a', 'other')).toBe(false)
+  expect(store.bytesUsed('a', 2)).toBe(400)
+  // An hour on, the link is stuck however it was last read.
+  expect(store.stuckLinks('a')).toEqual([])
+  now += MEASURE_TIMEOUT
+  expect(store.stuckLinks('a')).toEqual(['link-1'])
+  // The box deleted both, but the ledger never recorded the deletions. Releasing them frees
+  // their bytes and counts no removal: the box's own count shows the deletions, and counting
+  // them again would let an add past `maxResources`.
+  const removals = () =>
+    store.state.get<{ removed: { count: number }[] }>('portal-capacity:a', { removed: [] })
+      .removed.reduce((total, entry) => total + entry.count, 0)
+  expect(store.dropResource('a', 'link-1')).toBe(true)
+  expect(store.dropResource('a', 'file-1')).toBe(true)
+  expect(store.dropResource('a', 'file-1')).toBe(false)
+  expect(removals()).toBe(0)
+  expect(store.stuckLinks('a')).toEqual([])
+  expect(store.bytesUsed('a', 0)).toBe(0)
+  // A deletion the ledger records when it happens is counted once, as before.
+  const next = store.reserveAdd('a', { observed: 0, bytes: 5 }) as { admitted: string }
+  store.settleAdd('a', next.admitted, { created: true, id: 'next-1' })
+  store.forgetResource('a', 'next-1')
+  expect(removals()).toBe(1)
+  expect(store.tracksResource('a', 'next-1')).toBe(false)
+  // Nothing on record: nothing to release, and nothing is written.
+  const empty = new PortalLifecycleStore(new MemoryLifecycleState(), () => now)
+  expect(empty.dropResource('a', 'file-1')).toBe(false)
+  expect(empty.tracksResource('a', 'file-1')).toBe(false)
+  expect(empty.addsInFlight('a')).toBe(0)
+  expect(empty.hasCapacityLedger('a')).toBe(false)
 })

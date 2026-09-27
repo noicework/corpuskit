@@ -142,7 +142,12 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['lifecycle', ['remove'], 'portal.delete', 'platform'],
     ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],
     ['lifecycle', ['touch'], 'portal.read', 'portal'],
-    ['lifecycle', ['reserveAdd', 'settleAdd', 'forgetResource'], 'content.write', 'portal'],
+    [
+      'lifecycle',
+      ['reserveAdd', 'settleAdd', 'forgetResource', 'dropResource'],
+      'content.write',
+      'portal',
+    ],
     ['lifecycle', ['resetCapacity'], 'bindings.write', 'portal'],
     ['bindings', ['set', 'remove'], 'bindings.write', 'portal'],
     ['tenants', ['seed', 'add'], 'portal.create', 'platform'],
@@ -175,6 +180,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ],
     ['suggestions', ['replacePending', 'setStatus'], 'behaviour.write', 'portal'],
     ['enrichments', ['put', 'importRecords', 'migrateLegacy'], 'enrichments.write', 'portal'],
+    // Deleting a document removes the enrichments kept for it; the delete needs only content.write.
+    ['enrichments', ['forgetResource'], 'content.write', 'portal'],
     ['kgProposals', ['set'], 'graph.write', 'portal'],
     ['branding', ['put'], 'appearance.write', 'portal'],
     ['mcpKeys', ['add', 'revoke'], 'keys.manage', 'portal'],

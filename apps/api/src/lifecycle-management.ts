@@ -155,6 +155,24 @@ export function guardPortalWrites<T extends object>(
   })
 }
 
+/**
+ * The knowledge box deleted a resource, but the capacity ledger could not release it. The
+ * document is gone; what the ledger kept for it is released by deleting the same id again.
+ */
+export class ResourceCleanupError extends Error {
+  constructor(readonly reason: unknown) {
+    super('The resource was deleted, but the capacity ledger could not release it.')
+    this.name = 'ResourceCleanupError'
+  }
+}
+
+/**
+ * How long a delete may take. It runs while holding the portal's capacity lock, so a delete that
+ * never answers must not hold every add. One given up may still land later; its id is then
+ * released by deleting it again.
+ */
+const DELETE_TIMEOUT_MS = 30_000
+
 function unavailable(): PortalLifecycleError {
   return new PortalLifecycleError(503, { error: 'usage_unavailable' })
 }
@@ -543,6 +561,27 @@ export function guardManagement(
           }
           return result
         }
+      } else if (name === 'deleteResource') {
+        // A delete takes the same step as an admission, so no admission reads the resource count
+        // between the box forgetting the resource and the ledger releasing it: the count and the
+        // ledger's record of removals then agree. A link awaiting measurement frees its
+        // provisional bytes here, and a finding for it read meanwhile is no longer recorded.
+        wrapped = async (config: TenantConfig, id: string, ...rest: unknown[]) => {
+          assertManagementWritable(lifecycle, config.slug, options)
+          return await serialCapacity(lifecycle, config.slug, async () => {
+            assertManagementWritable(lifecycle, config.slug, options)
+            const result = await withinTimeout(
+              () => value.call(receiver, config, id, ...rest),
+              DELETE_TIMEOUT_MS,
+            )
+            try {
+              lifecycle.forgetResource(config.slug, id)
+            } catch (error) {
+              throw new ResourceCleanupError(error)
+            }
+            return result
+          })
+        }
       } else if (MUTATIONS.has(name)) {
         wrapped = async (config: TenantConfig, ...args: unknown[]) => {
           assertManagementWritable(lifecycle, config.slug, options)
@@ -568,11 +607,7 @@ export function guardManagement(
               createdId,
             )
           }
-          const result = await value.call(receiver, config, ...args)
-          if (name === 'deleteResource' && typeof args[0] === 'string') {
-            lifecycle.forgetResource(config.slug, args[0])
-          }
-          return result
+          return await value.call(receiver, config, ...args)
         }
       } else wrapped = value.bind(receiver)
       methods.set(property, wrapped)

@@ -15,6 +15,7 @@ import {
   linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
+  ResourceCleanupError,
   withinTimeout,
   withRequestAuthority,
 } from './lifecycle-management.ts'
@@ -918,4 +919,69 @@ Deno.test('a precheck refuses a full portal before remote work and reserves noth
     max: 4,
   })
   expect(state.calls).toBe(2)
+})
+
+Deno.test('a delete waits its turn behind an admission, so no count is read between the box and the ledger', async () => {
+  const { state, raw } = box()
+  const lifecycle = store('active', { maxResources: 3 })
+  const deleted: string[] = []
+  raw.deleteResource = (...args: unknown[]) => {
+    deleted.push(args[1] as string)
+    state.count--
+    return Promise.resolve()
+  }
+  const guarded = guardManagement(raw, lifecycle)
+  await guarded.createText(config, text)
+  state.count = 1
+  await guarded.createText(config, text)
+  state.count = 2
+  // The next admission is still reading the resource count when the delete arrives.
+  let release!: (count: number) => void
+  const reading = new Promise<void>((entered) => {
+    raw.resourceCount = () => {
+      entered()
+      return new Promise<number>((resolve) => release = resolve)
+    }
+  })
+  const adding = guarded.createText(config, text)
+  await reading
+  const deleting = guarded.deleteResource(config, 'res-1')
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  expect(deleted).toEqual([])
+  raw.resourceCount = () => Promise.resolve(state.count)
+  release(2)
+  await Promise.all([adding, deleting])
+  expect(deleted).toEqual(['res-1'])
+  // The box counts the third add and the deletion, and the ledger agrees: one more add fits.
+  state.count = 2
+  await guarded.createText(config, text)
+  state.count = 3
+  await denied(guarded.createText(config, text), 413, 'limit_exceeded')
+})
+
+Deno.test('a delete the ledger cannot release is told apart from one the box refused', async () => {
+  const { raw } = box()
+  const lifecycle = store('active', { maxBytes: 100 })
+  let refuse: Error | undefined
+  raw.deleteResource = () => refuse ? Promise.reject(refuse) : Promise.resolve()
+  const guarded = guardManagement(raw, lifecycle)
+  await guarded.uploadFile(config, upload(40))
+  expect(lifecycle.bytesUsed('test', 1)).toBe(40)
+  // The box refuses: the error is the box's own, and the ledger still holds the bytes.
+  refuse = new AragApiError(403, '/resource/res-1', 'Forbidden')
+  await expect(guarded.deleteResource(config, 'res-1')).rejects.toBe(refuse)
+  expect(lifecycle.tracksResource('test', 'res-1')).toBe(true)
+  // The box deletes it, but the ledger cannot record the release: the failure says the
+  // resource is gone, and releasing it later frees its bytes once.
+  refuse = undefined
+  const forget = lifecycle.forgetResource
+  lifecycle.forgetResource = () => {
+    throw new Error('storage unavailable')
+  }
+  await expect(guarded.deleteResource(config, 'res-1')).rejects.toBeInstanceOf(ResourceCleanupError)
+  lifecycle.forgetResource = forget
+  expect(lifecycle.tracksResource('test', 'res-1')).toBe(true)
+  expect(lifecycle.dropResource('test', 'res-1')).toBe(true)
+  expect(lifecycle.dropResource('test', 'res-1')).toBe(false)
+  expect(lifecycle.bytesUsed('test', 0)).toBe(0)
 })

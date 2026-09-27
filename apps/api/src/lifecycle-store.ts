@@ -708,6 +708,57 @@ export class PortalLifecycleStore {
   }
 
   /**
+   * Release what the ledger still keeps under a resource the knowledge box no longer has, after a
+   * deletion whose release did not finish: its size, or the provisional bytes of a link awaiting
+   * measurement. Nothing is counted as removed, because the box's own count shows the deletion
+   * at the next observation; counting it again could admit an add past `maxResources`. Running
+   * it twice is safe: the second run finds nothing. Returns whether anything was released.
+   */
+  dropResource(slug: string, id: string): boolean {
+    const record = this.readCapacity(slug)
+    const parsed = ResourceIdSchema.safeParse(id)
+    if (!record || !parsed.success) return false
+    if (Object.hasOwn(record.sized, parsed.data)) delete record.sized[parsed.data]
+    else if (record.measuring && Object.hasOwn(record.measuring, parsed.data)) {
+      delete record.measuring[parsed.data]
+      if (Object.keys(record.measuring).length === 0) delete record.measuring
+    } else return false
+    this.observe(record, undefined, this.clock())
+    this.persist(this.key('capacity', slug), record)
+    return true
+  }
+
+  /** Whether the ledger keeps a size, or provisional bytes, under this resource. A read. */
+  tracksResource(slug: string, id: string): boolean {
+    const record = this.readCapacity(slug)
+    const parsed = ResourceIdSchema.safeParse(id)
+    if (!record || !parsed.success) return false
+    return Object.hasOwn(record.sized, parsed.data) ||
+      (record.measuring !== undefined && Object.hasOwn(record.measuring, parsed.data))
+  }
+
+  /** Adds admitted whose write has not settled yet, within their reservation's lifetime. A read. */
+  addsInFlight(slug: string): number {
+    const record = this.readCapacity(slug)
+    if (!record) return 0
+    const now = this.clock()
+    return record.inflight.filter((entry) => entry.at > now - RESERVATION_TTL).length
+  }
+
+  /**
+   * Crawled links still unprocessed, or unreadable, `MEASURE_TIMEOUT` after they were added, the
+   * oldest first. Waiting will not free the provisional bytes they hold; deleting them does. A
+   * read.
+   */
+  stuckLinks(slug: string): string[] {
+    const now = this.clock()
+    return Object.entries(this.readCapacity(slug)?.measuring ?? {})
+      .filter(([, entry]) => entry.unsized === true || now - entry.at >= MEASURE_TIMEOUT)
+      .sort(([, a], [, b]) => a.at - b.at)
+      .map(([id]) => id)
+  }
+
+  /**
    * Resources awaiting measurement, at most `limit` of them: those never tried first, then the
    * least recently tried, so a resource that stays unprocessed never keeps others waiting.
    */

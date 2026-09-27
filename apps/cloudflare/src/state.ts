@@ -580,6 +580,34 @@ export class DurableState {
     ).one().count
   }
 
+  /** Whether any agent's row, in the table, is kept for this resource. */
+  hasEnrichmentsFor(slug: string, resourceId: string): boolean {
+    return this.sql.exec<{ found: number }>(
+      `SELECT count(*) AS found FROM enrichment_records
+       WHERE tenant_slug = ? AND resource_id = ?`,
+      slug,
+      resourceId,
+    ).one().found > 0
+  }
+
+  /** Delete every agent's row for one resource, counting them. */
+  deleteEnrichmentsFor(slug: string, resourceId: string): number {
+    this.guardLocalWrite()
+    const removed = this.sql.exec<{ n: number }>(
+      `SELECT count(*) AS n FROM enrichment_records WHERE tenant_slug = ? AND resource_id = ?`,
+      slug,
+      resourceId,
+    ).one().n
+    if (removed) {
+      this.sql.exec(
+        'DELETE FROM enrichment_records WHERE tenant_slug = ? AND resource_id = ?',
+        slug,
+        resourceId,
+      )
+    }
+    return removed
+  }
+
   putEnrichment(slug: string, resourceId: string, enrichment: Enrichment): void {
     this.guardLocalWrite()
     this.sql.exec(
@@ -1726,6 +1754,23 @@ export class DurableEnrichmentStore implements EnrichmentStoreApi {
 
   count(slug: string, schemaId = DEFAULT_RESEARCH_ENRICHMENT.id): number {
     return Object.keys(this.forAgent(slug, schemaId)).length
+  }
+
+  /** Whether any agent keeps an enrichment, in a row or a pre-table record, for this resource. */
+  holdsResource(slug: string, resourceId: string): boolean {
+    const legacy = this.state.get<EnrichmentRecords>(key('enrichments', slug), {})
+    return this.state.hasEnrichmentsFor(slug, resourceId) ||
+      Object.values(legacy).some((bucket) => Object.hasOwn(bucket ?? {}, resourceId))
+  }
+
+  /**
+   * Remove every agent's enrichment for a deleted resource, including its cached suggested
+   * questions, and count them. A pre-table record is moved into the table first, so nothing of
+   * the resource survives there. Running it again removes nothing.
+   */
+  forgetResource(slug: string, resourceId: string): number {
+    this.migrateLegacy(slug)
+    return this.state.deleteEnrichmentsFor(slug, resourceId)
   }
 
   exportRecords(slug: string): EnrichmentRecords {

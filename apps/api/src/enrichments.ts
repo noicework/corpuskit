@@ -111,6 +111,29 @@ export class EnrichmentStore {
     }
   }
 
+  /** Whether any agent keeps an enrichment, or cached suggested questions, for this resource. */
+  holdsResource(slug: string, resourceId: string): boolean {
+    return Object.values(this.load(slug)).some((bucket) => Object.hasOwn(bucket, resourceId))
+  }
+
+  /**
+   * Remove every agent's enrichment for a deleted resource, including its cached suggested
+   * questions, and count them. Running it again removes nothing.
+   */
+  forgetResource(slug: string, resourceId: string): number {
+    const data = structuredClone(this.load(slug))
+    let removed = 0
+    for (const bucket of Object.values(data)) {
+      if (!Object.hasOwn(bucket, resourceId)) continue
+      delete bucket[resourceId]
+      removed++
+    }
+    if (removed === 0) return 0
+    writeJsonAtomic(this.pathFor(slug), data)
+    this.cache.set(slug, data)
+    return removed
+  }
+
   /** How many resources carry an enrichment for this agent. */
   count(slug: string, schemaId = DEFAULT_RESEARCH_ENRICHMENT.id): number {
     return Object.keys(this.load(slug)[schemaId] ?? {}).length
