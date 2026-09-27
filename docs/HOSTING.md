@@ -17,6 +17,15 @@ install.
 | Serving a portal on hostnames outside the platform domain | [Portal host aliases](#portal-host-aliases) |
 | Deleting finished portals and erasing what they stored | [Deleting and erasing portals](#deleting-and-erasing-portals) |
 
+## Upgrading a deployment
+
+Upgrade from release to release. Before each upgrade, read the Upgrade notes of every release
+in between in [`CHANGELOG.md`](../CHANGELOG.md): the settings to add first, their defaults,
+behaviour that changes, stored data that changes, and whether rolling back is safe.
+[`docs/RELEASING.md`](RELEASING.md) describes how releases are cut and what rollback safety
+covers. `GET /api/health` reports the `release` and `buildSha` a deployment is serving (see
+[Readiness signals](#readiness-signals)).
+
 ## Knowledge box credential encryption
 
 Set `BINDING_KEY` to the standard base64 encoding of 32 cryptographically random bytes. The

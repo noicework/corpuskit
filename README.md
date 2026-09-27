@@ -12,6 +12,7 @@ writes the questions worth asking, and opens as a branded portal.
 <a href="https://corpuskit.org">Website</a> ·
 <a href="https://corpuskit.org/docs">Documentation</a> ·
 <a href="#showcase">Showcase</a> ·
+<a href="CHANGELOG.md">Changelog</a> ·
 <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -148,6 +149,7 @@ All commands are `deno task <name>`, defined in `deno.json`.
 | `test:e2e:visual` | The opt-in screenshot matrix (`e2e/rbac-visual.test.ts`, about 22 minutes). CI skips it; the "Visual matrix" workflow runs it on demand and keeps the captures. |
 | `enrich`    | Runs `apps/api/scripts/enrich-labels.ts` - a second-dimension labelling enrichment pass, idempotent. |
 | `provision` | Runs `apps/api/scripts/provision.ts` - creates/binds each tenant's knowledge box, pushes the topic labelset, uploads the seed corpus from `content/seed/`, and appends the resulting bindings to `.env`. Idempotent - safe to re-run. |
+| `release:notes` | Prints one version's section of `CHANGELOG.md` (`deno task release:notes 2026.9.27`), for the GitHub release. See `docs/RELEASING.md`. |
 
 ## Testing
 
@@ -231,6 +233,8 @@ corpuskit/
 | `docs/CLOUDFLARE.md` | The production and Entra runbook. |
 | `docs/TEST-FRAMEWORK.md` | The testing bar and how to run each suite. |
 | `docs/PERSONAS.md` | The people the portal is built for. |
+| `CHANGELOG.md` | What changed in each release, with upgrade notes for anyone running a deployment. Also at [corpuskit.org/docs/release-notes](https://corpuskit.org/docs/release-notes). |
+| `docs/RELEASING.md` | How a release is versioned, noted, tagged and published. |
 | `CONTRIBUTING.md` | How to work on this. |
 | `SECURITY.md` | How to report a vulnerability. |
 
