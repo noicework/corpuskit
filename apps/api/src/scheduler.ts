@@ -1,4 +1,4 @@
-import type { TenantConfig } from '@research-portal/core'
+import type { EnrichmentRunEvent, TenantConfig } from '@research-portal/core'
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import {
   CRAWLER_USER_AGENT,
@@ -9,7 +9,12 @@ import {
 } from './crawl.ts'
 import { type Source, type SourceStoreApi, type WatchStoreApi } from './stores.ts'
 import { FeedbackStore, type FeedbackStoreApi } from './stores.ts'
-import { type EnrichmentStoreApi, runEnrichmentOverCorpus } from './enrichments.ts'
+import {
+  type EnrichmentStoreApi,
+  isAccountBackpressure,
+  runEnrichmentOverCorpus,
+} from './enrichments.ts'
+import type { BindingStoreApi } from './bindings.ts'
 import { runSuggestedQuestionsOverCorpus } from './suggested-questions.ts'
 import type { TenantStoreApi } from './tenants.ts'
 import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
@@ -30,6 +35,162 @@ interface SystemJobContext {
   audit: AuditStore
   requestId: string
   lifecycle?: PortalLifecycleStore
+  /** Knowledge-box bindings: a portal without a connected box has nothing to maintain. */
+  bindings?: Pick<BindingStoreApi, 'status'>
+  /** The pass's clock, which also picks the portal that goes first. */
+  now?: () => number
+}
+
+type MaintenanceJob = 'sync' | 'watch' | 'enrichment'
+
+/**
+ * One unit of scheduled work that failed: which job, and the portal and the kind of thing it was
+ * for. Never the error itself, which can carry a source's address or upstream detail.
+ */
+export interface MaintenanceFailure {
+  job: MaintenanceJob
+  slug?: string
+  target: 'source' | 'watch' | 'enrichment' | 'questions' | 'portal' | 'job'
+}
+
+/**
+ * Every failed unit of a maintenance pass, thrown once the pass is over so the runtime still
+ * records a failed invocation. `halted` says the pass stopped early on account back-pressure.
+ */
+export class MaintenanceError extends Error {
+  constructor(readonly failures: readonly MaintenanceFailure[], readonly halted = false) {
+    const units = failures.map((f) => [f.job, f.slug, f.target].filter(Boolean).join(':'))
+    super(
+      `Scheduled maintenance: ${failures.length} ${
+        failures.length === 1 ? 'unit' : 'units'
+      } failed${halted ? ', and the pass stopped early on account back-pressure' : ''} (${
+        units.join(', ')
+      })`,
+    )
+    this.name = 'MaintenanceError'
+  }
+}
+
+/** A scheduled run stopped by a 429 from the account every portal shares. */
+class AccountBackpressureError extends Error {
+  constructor() {
+    super('The platform account is refusing requests (429)')
+    this.name = 'AccountBackpressureError'
+  }
+}
+
+const isBackpressure = (error: unknown): boolean =>
+  error instanceof AccountBackpressureError || isAccountBackpressure(error)
+
+/**
+ * The failures of one job's pass over the portals. A unit that fails is recorded against its
+ * portal by its own audit and the pass moves on; only back-pressure from the shared account
+ * stops it, because the next portal would only add to the pressure.
+ */
+class MaintenanceLedger {
+  readonly failures: MaintenanceFailure[] = []
+  halted = false
+  /** Back-pressure seen inside the unit under way, before its audit reclassified the error. */
+  private backpressure = false
+
+  constructor(private readonly job: MaintenanceJob) {}
+
+  /** Run one unit; true when it completed. */
+  async unit(
+    failure: Omit<MaintenanceFailure, 'job'>,
+    run: () => Promise<unknown>,
+  ): Promise<boolean> {
+    this.backpressure = false
+    try {
+      await run()
+      return true
+    } catch (error) {
+      this.fail(failure, error)
+      return false
+    }
+  }
+
+  /**
+   * A unit's own work, watched for back-pressure. The audit around the unit records every
+   * failure as `operation_failed`, so the cause has to be seen here, before it is rethrown.
+   */
+  watch<T>(work: (signal: AbortSignal) => Promise<T>): (signal: AbortSignal) => Promise<T> {
+    return async (signal) => {
+      try {
+        return await work(signal)
+      } catch (error) {
+        if (isBackpressure(error)) this.backpressure = true
+        throw error
+      }
+    }
+  }
+
+  fail(failure: Omit<MaintenanceFailure, 'job'>, error?: unknown): void {
+    this.failures.push({ job: this.job, ...failure })
+    if (this.backpressure || isBackpressure(error)) this.halted = true
+    this.backpressure = false
+  }
+
+  /** Throw the job's failures together, once every portal has had its turn. */
+  settle(): void {
+    if (this.failures.length > 0) throw new MaintenanceError(this.failures, this.halted)
+  }
+}
+
+/**
+ * Units stop starting new work this long after they begin, so what is already under way can
+ * finish inside the audited deadline (`AUDIT_TIMEOUT_MS`, 120 s). What is left waits for the
+ * next pass rather than failing this one.
+ */
+export const MAINTENANCE_UNIT_BUDGET_MS = 75_000
+
+const DAY_MS = 24 * 3600 * 1000
+
+/**
+ * The portals a pass visits, starting at a different one each day, so a portal late in the list
+ * is not the one left out every night when a pass runs short of time.
+ */
+export function maintenanceOrder<T>(portals: readonly T[], now: number): T[] {
+  if (portals.length === 0) return []
+  const start = Math.floor(now / DAY_MS) % portals.length
+  return [...portals.slice(start), ...portals.slice(0, start)]
+}
+
+/** The portal has a knowledge box to maintain (always true when bindings are not supplied). */
+function hasKnowledgeBox(context: SystemJobContext | undefined, slug: string): boolean {
+  if (!context?.bindings) return true
+  try {
+    const status = context.bindings.status(slug).status
+    return status === 'connected' || status === 'demo'
+  } catch {
+    return false
+  }
+}
+
+/** A unit's time budget, as a check its run makes before starting each piece of work. */
+function unitBudget(context: SystemJobContext | undefined): () => boolean {
+  const now = context?.now ?? Date.now
+  const stopAt = now() + MAINTENANCE_UNIT_BUDGET_MS
+  return () => now() >= stopAt
+}
+
+/** The portals a job visits, in today's order, with their configuration. */
+function* scheduledPortals(
+  tenants: TenantStoreApi,
+  context: SystemJobContext | undefined,
+  ledger: MaintenanceLedger,
+): Generator<TenantConfig> {
+  for (const summary of maintenanceOrder(tenants.list(), (context?.now ?? Date.now)())) {
+    if (ledger.halted) return
+    let config: TenantConfig | undefined
+    try {
+      config = tenants.get(summary.slug)
+    } catch (error) {
+      ledger.fail({ slug: summary.slug, target: 'portal' }, error)
+      continue
+    }
+    if (config) yield config
+  }
 }
 type SystemAction =
   | 'maintenance.source.sync'
@@ -73,11 +234,11 @@ export function auditRetentionDays(raw: string | undefined): number {
 /** Internal jobs record intent before work and never replay side effects after audit failure. */
 export async function runSystemJob(
   audit: AuditStore,
-  job: 'sync' | 'watch' | 'enrichment',
+  job: MaintenanceJob,
   work: (context: SystemJobContext) => Promise<void>,
 ): Promise<void> {
   const requestId = crypto.randomUUID()
-  const record = (outcome: 'intent' | 'success' | 'failure' | 'uncertain') =>
+  const record = (outcome: 'intent' | 'success' | 'failure' | 'uncertain', count?: number) =>
     appendAudit(
       audit,
       createAuditEvent({
@@ -88,7 +249,7 @@ export async function runSystemJob(
         target: { kind: 'maintenance', id: job },
         outcome,
         detail: outcome === 'failure' || outcome === 'uncertain'
-          ? { code: 'operation_failed' }
+          ? { code: 'operation_failed', ...(count === undefined ? {} : { count }) }
           : {},
       }),
     )
@@ -97,7 +258,8 @@ export async function runSystemJob(
     await work({ audit, requestId })
   } catch (error) {
     try {
-      record('failure')
+      // How many units failed; each is also recorded against its own portal.
+      record('failure', error instanceof MaintenanceError ? error.failures.length : undefined)
     } catch (auditError) {
       console.error('[scheduler] required failure audit could not be written')
       throw auditError
@@ -126,6 +288,7 @@ interface MaintenanceStores {
   watches: WatchStoreApi
   enrichments: EnrichmentStoreApi
   lifecycle?: PortalLifecycleStore
+  bindings?: Pick<BindingStoreApi, 'status'>
   /** Answer feedback, whose expired ratings the retention pass removes. */
   feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
 }
@@ -139,12 +302,18 @@ function purgeExpiredFeedback(feedback: MaintenanceStores['feedback']): void {
   }
 }
 
+/**
+ * One maintenance pass: each job in turn over every portal. A failing source, watch or portal is
+ * recorded and passed over, and every job still runs; the failures are thrown together at the
+ * end. Only a 429 from the platform account that every portal shares stops the pass early.
+ */
 export async function runSystemMaintenance(
   management: AragProvider,
   stores: MaintenanceStores,
   retentionDays: string | undefined,
-  jobs: readonly ('sync' | 'watch' | 'enrichment')[] = ['sync', 'watch', 'enrichment'],
+  jobs: readonly MaintenanceJob[] = ['sync', 'watch', 'enrichment'],
   retain = true,
+  options: { now?: () => number } = {},
 ): Promise<void> {
   const days = auditRetentionDays(retentionDays)
   const guarded = stores.lifecycle ? guardManagement(management, stores.lifecycle) : management
@@ -153,15 +322,31 @@ export async function runSystemMaintenance(
   const enrichments = guardPortalWrites(stores.enrichments, stores.lifecycle)
   if (retain) stores.rbac.retainAudit(days)
   if (retain) purgeExpiredFeedback(stores.feedback)
+  const failures: MaintenanceFailure[] = []
+  let halted = false
   for (const job of jobs) {
-    await runSystemJob(stores.rbac.audit, job, (context) => {
-      context.localMutations = stores.localMutations
-      context.lifecycle = stores.lifecycle
-      if (job === 'sync') return runAutoSyncs(guarded, stores.tenants, sources, context)
-      if (job === 'watch') return runWatches(guarded, stores.tenants, stores.watches, context)
-      return runAutoEnrichments(guarded, stores.tenants, enrichments, context)
-    })
+    try {
+      await runSystemJob(stores.rbac.audit, job, (context) => {
+        context.localMutations = stores.localMutations
+        context.lifecycle = stores.lifecycle
+        context.bindings = stores.bindings
+        context.now = options.now
+        if (job === 'sync') return runAutoSyncs(guarded, stores.tenants, sources, context)
+        if (job === 'watch') return runWatches(guarded, stores.tenants, stores.watches, context)
+        return runAutoEnrichments(guarded, stores.tenants, enrichments, context)
+      })
+    } catch (error) {
+      if (error instanceof MaintenanceError) {
+        failures.push(...error.failures)
+        halted = error.halted
+      } else {
+        // The job could not run at all, such as when its audit could not be written.
+        failures.push({ job, target: 'job' })
+      }
+    }
+    if (halted) break
   }
+  if (failures.length > 0) throw new MaintenanceError(failures, halted)
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +381,11 @@ export function pagesPerRun(source: Pick<Source, 'maxPages'>): number {
   return Math.min(Math.floor(requested), MAX_SYNC_CAP)
 }
 
-/** Ingest new pages from one source; reports how many were added vs left for next time. */
+/**
+ * Ingest new pages from one source; reports how many were added vs left for next time.
+ * `stopTaking` is checked before each page: once it returns true the run stops there, keeps what
+ * it added, and leaves the remaining pages for the next sync.
+ */
 export async function syncSource(
   management: AragProvider,
   sources: SourceStoreApi,
@@ -204,6 +393,7 @@ export async function syncSource(
   source: Source,
   emit: (label: string) => void | Promise<void>,
   signal?: AbortSignal,
+  stopTaking?: () => boolean,
 ): Promise<{ added: number; deferred: number }> {
   const perRun = pagesPerRun(source)
   const discovered = await discoverLinks(source.url, DISCOVER_CAP)
@@ -225,6 +415,14 @@ export async function syncSource(
   let refusal: PortalLifecycleError | undefined
   for (const [i, url] of fresh.entries()) {
     signal?.throwIfAborted()
+    if (stopTaking?.()) {
+      deferred = fresh.length - i
+      await emit(
+        `Stopping this run to stay within its time limit - ` +
+          `${deferred} ${deferred === 1 ? 'page' : 'pages'} left for the next sync.`,
+      )
+      break
+    }
     try {
       // Fetch and clean the page ourselves so the index holds body content,
       // not nav chrome - and so bot walls never enter the corpus.
@@ -391,35 +589,54 @@ export async function runWatches(
   watches: WatchStoreApi,
   context?: SystemJobContext,
 ): Promise<void> {
-  for (const summary of tenants.list()) {
-    const config = tenants.get(summary.slug)
-    if (!config) continue
+  const ledger = new MaintenanceLedger('watch')
+  for (const config of scheduledPortals(tenants, context, ledger)) {
     // A job never acts on a portal whose hosting state it cannot read, or that is paused.
     if (context?.lifecycle) {
       const hosting = readLifecycle(context.lifecycle, config.slug)
       if (!hosting || hosting.status === 'suspended') continue
     }
-    for (const watch of watches.list(config.slug)) {
-      await scopedSystemAction(context, 'maintenance.watch.run', config.slug, {
-        kind: 'watch',
-        id: watch.id,
-      }, async (signal) => {
-        const results = await management.search(config, watch.query, {
-          mode: 'hybrid',
-          pageSize: 10,
-        })
-        signal.throwIfAborted()
-        const fingerprint = results.resources.map((r) => r.id).sort().join('|')
-        watches.update(config.slug, watch.id, {
-          lastRun: new Date().toISOString(),
-          fingerprint,
-          // Only flag change once a baseline exists - the first run is setup.
-          changed: watch.changed ||
-            (watch.fingerprint !== null && watch.fingerprint !== fingerprint),
-        })
-      })
+    if (!hasKnowledgeBox(context, config.slug)) continue
+    let saved
+    try {
+      saved = watches.list(config.slug)
+    } catch (error) {
+      ledger.fail({ slug: config.slug, target: 'portal' }, error)
+      continue
+    }
+    for (const watch of saved) {
+      if (ledger.halted) break
+      await ledger.unit(
+        { slug: config.slug, target: 'watch' },
+        () =>
+          scopedSystemAction(
+            context,
+            'maintenance.watch.run',
+            config.slug,
+            {
+              kind: 'watch',
+              id: watch.id,
+            },
+            ledger.watch(async (signal) => {
+              const results = await management.search(config, watch.query, {
+                mode: 'hybrid',
+                pageSize: 10,
+              })
+              signal.throwIfAborted()
+              const fingerprint = results.resources.map((r) => r.id).sort().join('|')
+              watches.update(config.slug, watch.id, {
+                lastRun: new Date().toISOString(),
+                fingerprint,
+                // Only flag change once a baseline exists - the first run is setup.
+                changed: watch.changed ||
+                  (watch.fingerprint !== null && watch.fingerprint !== fingerprint),
+              })
+            }),
+          ),
+      )
     }
   }
+  ledger.settle()
 }
 
 /** Merchandise up to this many still-unenriched resources per portal, per run. */
@@ -456,9 +673,8 @@ export async function runAutoEnrichments(
   enrichments: EnrichmentStoreApi,
   context?: SystemJobContext,
 ): Promise<void> {
-  for (const summary of tenants.list()) {
-    const config = tenants.get(summary.slug)
-    if (!config) continue
+  const ledger = new MaintenanceLedger('enrichment')
+  for (const config of scheduledPortals(tenants, context, ledger)) {
     // Enrichment and suggested-question generators are agents: they need an active portal
     // whose agents are enabled, and a hosting state that can be read.
     const lifecycle = context?.lifecycle
@@ -468,60 +684,83 @@ export async function runAutoEnrichments(
         continue
       }
     }
+    // A portal with no knowledge box has nothing to enrich.
+    if (!hasKnowledgeBox(context, config.slug)) continue
     // Rechecked before each model call and write, so a portal paused, made read-only or with
     // agents disabled while its run is going stops there.
     const proceed = lifecycle ? () => assertAgentRunAllowed(lifecycle, config.slug) : undefined
-    try {
-      let refused = false
-      await scopedSystemAction(context, 'maintenance.enrichment.run', config.slug, {
-        kind: 'portal',
-        id: config.slug,
-      }, async (signal) => {
-        let problem: string | undefined
-        for await (
-          const event of runEnrichmentOverCorpus(management, enrichments, config, {
-            scope: 'missing',
-            limit: AUTO_ENRICH_CAP,
-            proceed,
-          })
-        ) {
-          signal.throwIfAborted()
-          // A hosting refusal stops this portal alone; the pass itself has not failed.
-          if (event.type === 'error' && event.error) refused = true
-          else if (event.type === 'error') problem = event.message
-        }
-        if (problem) {
-          // Tenants share the platform account. Once one box says it is
-          // strained, moving straight to the next box would only transfer the
-          // pressure; leave every remaining portal for the next cadence.
-          throw new Error('Scheduled enrichment did not complete')
-        }
-      })
-      if (refused) continue
-      await scopedSystemAction(context, 'maintenance.questions.run', config.slug, {
-        kind: 'portal',
-        id: config.slug,
-      }, async (signal) => {
-        // Openers for the resource pages ride the same cadence, so a page never
-        // generates them on demand once the pass has caught up.
-        for await (
-          const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
-            limit: AUTO_QUESTIONS_CAP,
-            proceed,
-          })
-        ) {
-          signal.throwIfAborted()
-          if (event.type === 'error' && event.error) return
-          if (event.type === 'error') {
-            throw new Error('Scheduled suggested questions did not complete')
-          }
-        }
-      })
-    } catch (err) {
-      console.error(`[scheduler] auto-enrichment failed for ${config.slug}`)
-      throw err
-    }
+    let refused = false
+    let nothingToDo = false
+    await ledger.unit(
+      { slug: config.slug, target: 'enrichment' },
+      () =>
+        scopedSystemAction(
+          context,
+          'maintenance.enrichment.run',
+          config.slug,
+          {
+            kind: 'portal',
+            id: config.slug,
+          },
+          ledger.watch(async (signal) => {
+            let problem: Extract<EnrichmentRunEvent, { type: 'error' }> | undefined
+            for await (
+              const event of runEnrichmentOverCorpus(management, enrichments, config, {
+                scope: 'missing',
+                limit: AUTO_ENRICH_CAP,
+                proceed,
+                stopTaking: unitBudget(context),
+              })
+            ) {
+              signal.throwIfAborted()
+              if (event.type !== 'error') continue
+              // A hosting refusal stops this portal alone; the pass itself has not failed.
+              if (event.error) refused = true
+              // An empty or unbound box has nothing to enrich yet.
+              else if (event.reason === 'empty_catalogue' || event.reason === 'not_connected') {
+                nothingToDo = true
+              } else problem = event
+            }
+            if (problem?.reason === 'backpressure') throw new AccountBackpressureError()
+            if (problem) throw new Error('Scheduled enrichment did not complete')
+          }),
+        ),
+    )
+    if (ledger.halted) break
+    if (refused || nothingToDo) continue
+    // Openers for the resource pages ride the same cadence, so a page never generates them on
+    // demand once the pass has caught up. They do not depend on the merchandising run, so they
+    // still run when it failed.
+    await ledger.unit(
+      { slug: config.slug, target: 'questions' },
+      () =>
+        scopedSystemAction(
+          context,
+          'maintenance.questions.run',
+          config.slug,
+          {
+            kind: 'portal',
+            id: config.slug,
+          },
+          ledger.watch(async (signal) => {
+            for await (
+              const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
+                limit: AUTO_QUESTIONS_CAP,
+                proceed,
+                stopTaking: unitBudget(context),
+              })
+            ) {
+              signal.throwIfAborted()
+              if (event.type !== 'error') continue
+              if (event.error || event.reason === 'not_connected') return
+              if (event.reason === 'backpressure') throw new AccountBackpressureError()
+              throw new Error('Scheduled suggested questions did not complete')
+            }
+          }),
+        ),
+    )
   }
+  ledger.settle()
 }
 
 /** Sync every auto source across all portals (daily job). */
@@ -531,44 +770,75 @@ export async function runAutoSyncs(
   sources: SourceStoreApi,
   context?: SystemJobContext,
 ): Promise<void> {
-  for (const summary of tenants.list()) {
-    const config = tenants.get(summary.slug)
-    if (!config) continue
+  const ledger = new MaintenanceLedger('sync')
+  for (const config of scheduledPortals(tenants, context, ledger)) {
     if (context?.lifecycle && readLifecycle(context.lifecycle, config.slug)?.status !== 'active') {
       continue
     }
-    for (const source of sources.list(config.slug)) {
+    // Pages have nowhere to go without a knowledge box.
+    if (!hasKnowledgeBox(context, config.slug)) continue
+    let registered
+    try {
+      registered = sources.list(config.slug)
+    } catch (error) {
+      ledger.fail({ slug: config.slug, target: 'portal' }, error)
+      continue
+    }
+    for (const source of registered) {
       if (!source.auto) continue
+      if (ledger.halted) break
       let refused = false
-      await scopedSystemAction(context, 'maintenance.source.sync', config.slug, {
-        kind: 'source',
-        id: source.id,
-      }, async (signal) => {
-        try {
-          await syncSource(management, sources, config, source, () => {}, signal)
-        } catch (err) {
-          signal.throwIfAborted()
-          if (err instanceof PortalLifecycleError) {
-            // The portal's hosting state (a limit reached, read-only or paused) refuses its
-            // other sources alike. Say so on the source and move on to the next portal; the
-            // pass itself has not failed.
-            refused = true
-            try {
-              recordSyncFailure(sources, config.slug, source, err)
-            } catch { /* A read-only or paused portal keeps its source record as it was. */ }
-            return
-          }
-          // The site is unreachable, or the box refuses writes. Record the reason
-          // against the source for Manage, then stop this run.
-          // The internal caller must observe and audit the failed maintenance pass.
-          recordSyncFailure(sources, config.slug, source, err)
-          console.error(`[scheduler] auto-sync failed for ${config.slug}`)
-          throw err
-        }
-      })
+      await ledger.unit(
+        { slug: config.slug, target: 'source' },
+        () =>
+          scopedSystemAction(
+            context,
+            'maintenance.source.sync',
+            config.slug,
+            {
+              kind: 'source',
+              id: source.id,
+            },
+            ledger.watch(async (signal) => {
+              try {
+                await syncSource(
+                  management,
+                  sources,
+                  config,
+                  source,
+                  () => {},
+                  signal,
+                  unitBudget(context),
+                )
+              } catch (err) {
+                signal.throwIfAborted()
+                if (err instanceof PortalLifecycleError) {
+                  // The portal's hosting state (a limit reached, read-only or paused) refuses its
+                  // other sources alike. Say so on the source and move on to the next portal; the
+                  // pass itself has not failed.
+                  refused = true
+                  try {
+                    recordSyncFailure(sources, config.slug, source, err)
+                  } catch { /* A read-only or paused portal keeps its source record as it was. */ }
+                  return
+                }
+                // The site is unreachable, or the box refuses writes. Record the reason against
+                // the source, where Manage shows it, and fail this source's unit alone.
+                try {
+                  recordSyncFailure(sources, config.slug, source, err)
+                } catch {
+                  console.error(`[scheduler] auto-sync failure for ${config.slug} was not recorded`)
+                }
+                console.error(`[scheduler] auto-sync failed for ${config.slug}`)
+                throw err
+              }
+            }),
+          ),
+      )
       if (refused) break
     }
   }
+  ledger.settle()
 }
 
 /**
@@ -592,6 +862,7 @@ export function startScheduler(
   rbac: RbacState,
   env: Record<string, string | undefined>,
   lifecycle?: PortalLifecycleStore,
+  bindings?: Pick<BindingStoreApi, 'status'>,
 ): () => void {
   // The feedback files `buildApp` keeps by default, under the same DATA_DIR.
   const stores = {
@@ -601,6 +872,7 @@ export function startScheduler(
     watches,
     enrichments,
     lifecycle,
+    bindings,
     feedback: new FeedbackStore(),
   }
   const runDaily = () =>
@@ -614,17 +886,23 @@ export function startScheduler(
   let stopped = false
   let queue = Promise.resolve()
   const enqueue = (task: () => Promise<void>) => {
-    queue = queue.then(() => stopped ? undefined : task()).catch(() => {
-      // Keep the timer usable for its next cadence, without replaying this failed task.
-      console.error('[scheduler] maintenance failed; no automatic retry')
+    queue = queue.then(() => stopped ? undefined : task()).catch((error: unknown) => {
+      // Keep the timer usable for its next cadence, without replaying this failed task. A
+      // maintenance error names only jobs, portals and kinds of unit, never upstream detail.
+      console.error(
+        '[scheduler] maintenance failed; no automatic retry',
+        error instanceof MaintenanceError ? error.message : '',
+      )
     })
   }
 
-  // First pass shortly after boot (machines may sleep between requests).
+  // First pass shortly after boot (machines may sleep between requests). The enrichment pass
+  // runs even when the daily pass had failures.
   const boot = setTimeout(() =>
     enqueue(async () => {
-      await runDaily()
+      const daily = await runDaily().then(() => null, (error: unknown) => error)
       await runEnrichments()
+      if (daily) throw daily
     }), 90_000)
   const daily = setInterval(() => enqueue(runDaily), 24 * 3600 * 1000)
   const cadence = autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS)

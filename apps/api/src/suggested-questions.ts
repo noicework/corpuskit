@@ -1,6 +1,6 @@
 import type { EnrichmentRunEvent, ResourceContent, TenantConfig } from '@research-portal/core'
-import type { AragProvider } from '@research-portal/retrieval'
-import type { EnrichmentStoreApi } from './enrichments.ts'
+import { type AragProvider, KnowledgeBoxNotConnectedError } from '@research-portal/retrieval'
+import { type EnrichmentStoreApi, isAccountBackpressure } from './enrichments.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 
 /**
@@ -270,7 +270,12 @@ export async function* runSuggestedQuestionsOverCorpus(
   management: AragProvider,
   store: EnrichmentStoreApi,
   config: TenantConfig,
-  opts: { limit?: number; proceed?: () => void } = {},
+  opts: {
+    limit?: number
+    proceed?: () => void
+    /** As for an enrichment run: once true, no further resource is started. */
+    stopTaking?: () => boolean
+  } = {},
 ): AsyncGenerator<EnrichmentRunEvent> {
   let catalogue
   try {
@@ -279,6 +284,11 @@ export async function* runSuggestedQuestionsOverCorpus(
     yield {
       type: 'error',
       message: err instanceof Error ? err.message : 'Could not list resources',
+      reason: err instanceof KnowledgeBoxNotConnectedError
+        ? 'not_connected'
+        : isAccountBackpressure(err)
+        ? 'backpressure'
+        : 'catalogue_unavailable',
     }
     return
   }
@@ -303,9 +313,14 @@ export async function* runSuggestedQuestionsOverCorpus(
   let errors = 0
   /** A hosting refusal (paused, read-only or agents disabled) that stopped the run. */
   let refusal: PortalLifecycleError | undefined
+  let stopped = false
   const worker = async () => {
     for (;;) {
-      if (refusal) return
+      if (refusal || stopped) return
+      if (opts.stopTaking?.()) {
+        stopped = true
+        return
+      }
       const i = index++
       if (i >= targets.length) return
       const resource = targets[i]!

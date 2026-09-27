@@ -745,6 +745,21 @@ export const EnrichmentRunEventSchema = z.discriminatedUnion('type', [
      * `portal_read_only` or `agents_disabled`, as in the matching HTTP refusal.
      */
     error: z.string().optional(),
+    /**
+     * Why a run that was not refused ended without finishing, for a caller that
+     * acts on the difference: `backpressure` (the platform account answered 429),
+     * `strained` (it stayed busy through the retries), `no_yield` (nothing could
+     * be generated), `empty_catalogue`, `not_connected` (the portal has no
+     * knowledge box) or `catalogue_unavailable`.
+     */
+    reason: z.enum([
+      'backpressure',
+      'strained',
+      'no_yield',
+      'empty_catalogue',
+      'not_connected',
+      'catalogue_unavailable',
+    ]).optional(),
   }),
 ])
 

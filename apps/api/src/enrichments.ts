@@ -17,7 +17,12 @@ import {
   type SearchResults,
   type TenantConfig,
 } from '@research-portal/core'
-import { AragApiError, type AragProvider, overlayEnrichment } from '@research-portal/retrieval'
+import {
+  AragApiError,
+  type AragProvider,
+  KnowledgeBoxNotConnectedError,
+  overlayEnrichment,
+} from '@research-portal/retrieval'
 import { writeJsonAtomic } from './persist.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 
@@ -541,6 +546,12 @@ type EnrichmentRunOptions = {
    * generated or written, and the run ends with one `error` event carrying the refusal's code.
    */
   proceed?: () => void
+  /**
+   * Checked before each resource is started. Once it returns true the run starts no further
+   * resource, lets the ones under way finish, and reports what it did; the rest stay missing
+   * for a later run. A scheduled run uses it to finish inside its time limit.
+   */
+  stopTaking?: () => boolean
 }
 
 function resolvedBackoff(
@@ -562,6 +573,21 @@ function resolvedBackoff(
  * timeout, or an aborted fetch. All are retryable here, but only inside the
  * small bounded budget above.
  */
+/**
+ * The platform account every portal shares answered 429, as a plain rate limit or as ingestion
+ * back-pressure. Unlike other strain, this is about the account rather than one knowledge box.
+ */
+export function isAccountBackpressure(err: unknown): boolean {
+  return err instanceof AragApiError && (err.status === 429 || err.backpressure !== null)
+}
+
+/** Why a catalogue read failed, as a run's `error` event reports it. */
+function listingFailure(err: unknown): 'backpressure' | 'not_connected' | 'catalogue_unavailable' {
+  if (err instanceof KnowledgeBoxNotConnectedError) return 'not_connected'
+  if (isAccountBackpressure(err)) return 'backpressure'
+  return 'catalogue_unavailable'
+}
+
 function isEnrichmentStrain(err: unknown): boolean {
   if (err instanceof PortalLifecycleError) return false
   if (err instanceof AragApiError) {
@@ -653,6 +679,7 @@ export async function* runEnrichmentOverCorpus(
     yield {
       type: 'error',
       message: err instanceof Error ? err.message : 'Could not list resources',
+      reason: listingFailure(err),
     }
     return
   }
@@ -682,6 +709,7 @@ export async function* runEnrichmentOverCorpus(
           type: 'error',
           message:
             'The knowledge box returned an empty catalogue, so enrichment could not confirm that the corpus is caught up.',
+          reason: 'empty_catalogue',
         }
         return
       }
@@ -689,6 +717,7 @@ export async function* runEnrichmentOverCorpus(
       yield {
         type: 'error',
         message: err instanceof Error ? err.message : 'Could not confirm outstanding enrichments',
+        reason: listingFailure(err),
       }
       return
     }
@@ -719,11 +748,19 @@ export async function* runEnrichmentOverCorpus(
   let enriched = 0
   let errors = 0
   let strained = false
+  /** Set when strain ended in a 429 from the shared account, not just a slow box. */
+  let backpressure = false
+  /** Set once `stopTaking` has stopped the run starting further resources. */
+  let stopped = false
   /** A hosting refusal (paused, read-only or agents disabled) that stopped the run. */
   let refusal: PortalLifecycleError | undefined
   const worker = async () => {
     for (;;) {
-      if (refusal) return
+      if (refusal || stopped) return
+      if (opts.stopTaking?.()) {
+        stopped = true
+        return
+      }
       const i = index++
       if (i >= limited.length) return
       const resource = limited[i]!
@@ -756,6 +793,7 @@ export async function* runEnrichmentOverCorpus(
         }
         errors++
         strained ||= isEnrichmentStrain(err)
+        backpressure ||= isAccountBackpressure(err)
         push({
           type: 'item',
           id: resource.id,
@@ -789,6 +827,8 @@ export async function* runEnrichmentOverCorpus(
     })
   }
   await pool
+  // Resources the run started; fewer than the targets when `stopTaking` ended it early.
+  const attempted = Math.min(index, limited.length)
   if (refusal) {
     yield {
       type: 'error',
@@ -797,7 +837,7 @@ export async function* runEnrichmentOverCorpus(
     }
     return
   }
-  if (strained || (limited.length > 0 && enriched === 0)) {
+  if (strained || (attempted > 0 && enriched === 0)) {
     // A zero-yield run had outstanding work at `start`, so it is never
     // "caught up". Pause once before returning a distinct error event; the
     // caller or next scheduler cycle can safely retry the still-missing set.
@@ -808,6 +848,7 @@ export async function* runEnrichmentOverCorpus(
       message: strained
         ? 'The knowledge box remained busy after bounded retries. Outstanding enrichments were left for a later run.'
         : 'The run yielded no enrichments despite outstanding work. It stopped without marking the corpus caught up.',
+      reason: backpressure ? 'backpressure' : strained ? 'strained' : 'no_yield',
     }
     return
   }

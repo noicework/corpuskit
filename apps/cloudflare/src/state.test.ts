@@ -665,6 +665,22 @@ Deno.test('Durable ACMD demo seeds unchanged and keeps its unlisted palette thro
   }
 })
 
+/**
+ * The fixture's stores with marine's knowledge box connected: scheduled maintenance passes over a
+ * portal with no box, and these tests are about what a pass does to a portal that has one.
+ */
+function boundStores(fixture: ReturnType<typeof mutationFixture>) {
+  return {
+    ...fixture.stores,
+    bindings: {
+      status: (slug: string) => ({
+        slug,
+        status: slug === 'marine' ? 'connected' as const : 'none' as const,
+      }),
+    },
+  }
+}
+
 function mutationFixture(management?: AragProvider) {
   const sql = new TestSqlStorage()
   const state = new DurableState(sql, sql)
@@ -981,12 +997,14 @@ Deno.test('Durable scheduled watch update rolls back after remote search and pre
     )
     const before = fixture.snapshot()
     fixture.fail()
-    await expect(runSystemMaintenance(management, fixture.stores, undefined, ['watch'], false))
+    await expect(
+      runSystemMaintenance(management, boundStores(fixture), undefined, ['watch'], false),
+    )
       .rejects.toThrow()
     expect(fixture.snapshot()).toEqual(before)
     expect(searches).toBe(1)
     fixture.recover()
-    await runSystemMaintenance(management, fixture.stores, undefined, ['watch'], false)
+    await runSystemMaintenance(management, boundStores(fixture), undefined, ['watch'], false)
     const local = fixture.stores.audit.read({ scope: { kind: 'portal', slug: 'marine' } }).find((
       e,
     ) => e.action === 'local.mutation')!
@@ -1012,8 +1030,9 @@ Deno.test('Durable scheduled question workers cannot swallow a failed local cach
     fixture.stores.enrichments.put('marine', 'doc', enrichment('Existing'))
     const before = fixture.state.enrichmentRecords('marine')
     fixture.fail()
-    await expect(runSystemMaintenance(management, fixture.stores, undefined, ['enrichment'], false))
-      .rejects.toThrow()
+    await expect(
+      runSystemMaintenance(management, boundStores(fixture), undefined, ['enrichment'], false),
+    ).rejects.toThrow()
     expect(contentCalls).toBe(1)
     expect(fixture.state.enrichmentRecords('marine')).toEqual(before)
     expect(

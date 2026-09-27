@@ -754,6 +754,37 @@ events stay on record. No other Worker seeds portals.
   it does not retry automatically. A refused agent run explains that
   agents are disabled, and it does not sign the user out.
 
+## Scheduled maintenance
+
+Once a day (the Worker's cron trigger, or a timer in the local server) the deployment runs one
+maintenance pass over every portal: auto-sync sources are synced, saved-search watches are re-run,
+and missing enrichments and suggested questions are generated. The local server runs the
+enrichment part on its own cadence (`AUTO_ENRICH_CADENCE_HOURS`, daily by default).
+
+Each source sync, each watch and each portal's enrichment and suggested-question run is its own
+unit. One failing unit never stops the others:
+
+- A unit that fails is recorded against its portal in the audit log, as a `maintenance.*` action
+  (`maintenance.source.sync`, `maintenance.watch.run`, `maintenance.enrichment.run` or
+  `maintenance.questions.run`) with outcome `failure` or `uncertain`, which the portal's
+  administrators and the platform both see. A failed source sync also records its reason on the
+  source, where Manage shows it. The pass then moves on.
+- Every job still runs. Once the pass is over, the failures are raised together as one error, so
+  the runtime records a failed invocation. It names each failed unit by job, portal and kind,
+  never by upstream detail. Each job's platform-level `maintenance.run` record carries `count`,
+  the number of its units that failed.
+- The pass stops early only when the platform account that every portal shares answers 429
+  (a rate limit or ingestion back-pressure). The next portal would only add to the pressure, so
+  the rest waits for the next pass.
+- A portal with no connected knowledge box is skipped, and an empty knowledge box has nothing to
+  enrich. Neither is a failure. The seeded showcase portals are listed on every deployment but
+  bound on few, so this is the usual case for them.
+- A unit stops starting new work 75 seconds after it begins and finishes what is under way, so it
+  ends inside its audited 120-second limit. Pages and enrichments it did not reach wait for the
+  next pass, and the unit is not a failure.
+- The pass starts at a different portal each day, so a portal late in the list is not always the
+  one a short pass leaves out.
+
 ## External sign-in handoff
 
 A deployment can accept a short-lived, signed identity assertion from a trusted external issuer,
