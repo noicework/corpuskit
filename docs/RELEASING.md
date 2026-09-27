@@ -27,8 +27,9 @@ Every pull request that changes what a reader, a curator or an operator sees add
 - End each line with its pull request as an inline link, such as
   `([#69](https://github.com/noicework/corpuskit/pull/69))`. The notes are published on their own
   as a GitHub release, so reference-style links do not work there.
-- Work that is tracked before it merges says `pending merge` after its link. Drop the marker when
-  it merges.
+- List a change only once it merges: the changelog on `main` describes `main`. Unmerged work stays
+  out, above all a security fix, whose lines would describe the weakness before the fix ships. Its
+  pull request adds them.
 - Plain, factual and positive, in Australian English, with no em dashes. Describe a portal made
   for a particular organisation generically, and keep commercial matters out: this is a public
   repository.
@@ -102,8 +103,7 @@ The steps use `2026.10.2` for the version being cut and `2026.9.27` for the prev
 
 2. **Move Unreleased into a dated section**, on a branch off `noicework/main`
    (`release/v2026.10.2`):
-   - Add `## [2026.10.2] - 2026-10-02` under `## [Unreleased]`, and move every merged entry into
-     it. Entries still marked `pending merge` stay under Unreleased.
+   - Add `## [2026.10.2] - 2026-10-02` under `## [Unreleased]`, and move every entry into it.
    - Open the section with one sentence saying what the release is about.
    - Check each Upgrade note, and state rollback safety to the previous release.
    - Leave `## [Unreleased]` in place, empty.
@@ -137,7 +137,6 @@ The steps use `2026.10.2` for the version being cut and `2026.9.27` for the prev
 
 - [ ] The latest deploy run on `main` succeeded, and health's `buildSha` is the tip of `main`.
 - [ ] Every merged pull request since the last release has its lines under Unreleased.
-- [ ] Entries still pending merge stay under Unreleased.
 - [ ] Every new or changed setting is in Upgrade notes with its default.
 - [ ] Behaviour that changes on upgrade, and every stored-data change, is in Upgrade notes.
 - [ ] Rollback safety to the previous release is stated.

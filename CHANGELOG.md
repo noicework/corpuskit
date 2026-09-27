@@ -6,36 +6,20 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ## [Unreleased]
 
-Open work, pending merge. Each entry moves into a dated release when it lands.
+### Added
+
+- Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`.
+- For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut.
 
 ### Changed
 
-- Search and Ask stay responsive on a large or slow knowledge box. Requests share one catalogue read per portal, each catalogue page gives up after 10 seconds, readers wait at most 10 seconds before going on with the last listing, and a plain search no longer reads the catalogue at all. (Pending merge)
-- Nightly maintenance treats each source sync, watch, enrichment run and suggested-question run as its own unit, so one failing portal no longer stops the pass for every other portal. The pass starts at a different portal each day and stops starting new work 75 seconds in. (Pending merge)
-- The two built-in showcase portals are served only on deployments that name them. See the Upgrade notes. (Pending merge)
-
-### Fixed
-
-- A document hidden, deleted or added while the portal's catalogue was being read no longer reappears in the Library, typeahead, and identifier and author lookups for another minute. (Pending merge)
-- A strained or rate-limited maintenance pass no longer stores empty suggested questions, and a source page that met a rate limit or a server error is kept for the next sync instead of being marked as synced. (Pending merge)
-- A deployment with no portals, or none the visitor may see, lists an empty portal list instead of showing an error. (Pending merge)
-
-### Security
-
-- Anonymous rate limits key on the address the runtime reports, `cf-connecting-ip` on Cloudflare and the connecting peer on the local server, instead of headers a caller can set. Rotating forwarding headers or browser ids no longer earns a fresh allowance. (Pending merge)
-- Each public portal gets a ceiling on anonymous asks per minute from every address together, and each address gets a share of it, so one caller cannot take every anonymous turn. A malformed ask gives the portal its turn back. (Pending merge)
-- An IPv6 /64 counts as one caller in every per-address limit, including the break-glass lockout. (Pending merge)
-- Break-glass passcode sign-in is enabled only by `ADMIN_BREAK_GLASS=true`. (Pending merge)
+- `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did.
 
 ### Upgrade notes
 
-- **`ADMIN_BREAK_GLASS=true` is now required for passcode sign-in.** Before, a passcode alone enabled break-glass whenever `ENVIRONMENT` was anything other than exactly `production`, so a deployment running as `demo` or `staging`, or with no `ENVIRONMENT`, accepted the passcode as owner. A deployment that relied on that loses passcode sign-in until it sets the flag. The Worker and the local server log a start-up warning when a passcode is set without the flag, or the flag without a passcode. A deployment that follows the documented procedure, setting both together and removing both afterwards, is unaffected. (Pending merge)
-- **`SHOWCASE_PORTALS` makes the showcase portals opt-in, and they are off by default.** Set `SHOWCASE_PORTALS=marine,grains` to keep serving them. Unset or empty, their slugs answer exactly as slugs that never held a portal, in the portal list, cross-portal asks, the admin overview and maintenance. Unknown entries are ignored with a start-up warning. What a showcase portal stored is kept, and returns when it is named again. A showcase slug is never given to a new portal. (Pending merge)
-- **`TRUST_PROXY_HOPS`** (local server only, unset by default) honours `x-forwarded-for` for that many trusted proxies, taking the right-most hop they vouch for. Without it, a local server behind a reverse proxy sees every caller as the proxy's address, and they share their limits. An invalid value is ignored with a start-up warning. The Worker always uses `cf-connecting-ip`. `fly-client-ip` is no longer read. (Pending merge)
-- **`RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN`** (default 30, 0 disables) caps anonymous asks per minute on each portal, from every address together, including anonymous MCP `answer_question` calls. Signed-in people and portal keys are exempt. (Pending merge)
-- **`RATE_LIMIT_ANON_ADDRESS_ASK_PER_MIN`** (default 10, 0 disables) caps one address's share of those asks on each portal. (Pending merge)
-- The Worker now reads `RATE_LIMIT_ASK_PER_MIN_IP`. (Pending merge)
-- Rollback safety for this work is recorded here when it merges.
+- `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead.
+- The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read.
+- **Rollback to 2026.9.27 is safe.** Nothing stored changes, and health drops the new fields.
 
 ## [2026.9.27] - 2026-09-27
 
