@@ -664,9 +664,12 @@ Deno.test('appearance and rename omit behaviour fields and revoke every control 
       dispatchEvent(new PopStateEvent('popstate'))
     })
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
+    // No privileged write or admin read of these settings follows the revocation. A public read
+    // (the header reloading the logo under a new cache-buster) is not one.
     expect(
       server.requests.slice(before).filter((r) =>
-        /\/(extraction|branding)/.test(r.path) || r.path === '/api/admin/tenants/marine'
+        (/\/(extraction|branding)/.test(r.path) || r.path === '/api/admin/tenants/marine') &&
+        (r.method !== 'GET' || r.path.startsWith('/api/admin/'))
       ),
     ).toHaveLength(0)
   } catch (error) {
