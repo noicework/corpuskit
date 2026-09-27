@@ -8,18 +8,18 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Added
 
-- Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`. ([#TBD](https://github.com/noicework/corpuskit/pulls))
-- For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+- Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`. ([#73](https://github.com/noicework/corpuskit/pull/73))
+- For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut. ([#73](https://github.com/noicework/corpuskit/pull/73))
 
 ### Changed
 
-- `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+- `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did. ([#73](https://github.com/noicework/corpuskit/pull/73))
 
 ### Upgrade notes
 
-- `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead. ([#TBD](https://github.com/noicework/corpuskit/pulls))
-- The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read. ([#TBD](https://github.com/noicework/corpuskit/pulls))
-- **Rollback to 2026.9.27.1 is safe.** Nothing stored changes, and health drops the new fields. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+- `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead. ([#73](https://github.com/noicework/corpuskit/pull/73))
+- The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read. ([#73](https://github.com/noicework/corpuskit/pull/73))
+- **Rollback to 2026.9.27.1 is safe.** Nothing stored changes, and health drops the new fields. ([#73](https://github.com/noicework/corpuskit/pull/73))
 
 ## [2026.9.27.1] - 2026-09-27
 
