@@ -46,6 +46,11 @@ platform-admin can run it; earlier releases required `owner` (`platform.settings
 requires `content.write` on both the source and destination portals and changes no platform
 settings. The administration screen continues to show the migration panel to owners only.
 
+Deleting a document (`DELETE /api/admin/t/:slug/resources/:id`) is declared with `content.write`,
+like the purge of failed crawls and reingest, which already remove resources. It is audited as
+`resource.delete`. The MCP server offers no delete tool, and keys are refused on
+`/api/admin/*`, so only a signed-in manager deletes. See `HOSTING.md`, "Deleting a document".
+
 ## Portal access modes
 
 Each portal has an access mode. Existing portals are `public`.
