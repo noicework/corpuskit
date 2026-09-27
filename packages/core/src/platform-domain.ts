@@ -6,6 +6,12 @@ export const PLATFORM_DOMAIN_MARKER = '__CORPUSKIT_PLATFORM_DOMAIN__'
  * or with nothing on every other host.
  */
 export const HOST_PORTAL_MARKER = '__CORPUSKIT_HOST_PORTAL__'
+/**
+ * Placeholder the server replaces with the hostname that served the page, so a portal's link
+ * previews name an image on the portal's own host. Any host that is not a valid hostname gets the
+ * platform domain instead.
+ */
+export const REQUEST_HOST_MARKER = '__CORPUSKIT_REQUEST_HOST__'
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 /** Validate a hostname before using it in URLs, cookies or HTML configuration. */

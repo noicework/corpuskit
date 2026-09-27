@@ -2,18 +2,22 @@ import {
   getPlatformDomain,
   HOST_PORTAL_MARKER,
   PLATFORM_DOMAIN_MARKER,
+  REQUEST_HOST_MARKER,
+  validPlatformDomain,
 } from '../../../packages/core/src/platform-domain.ts'
 
 const PORTAL_SLUG = /^[A-Za-z0-9_-]{1,64}$/
 
 /**
  * Replace the shell's non-executable configuration markers without buffering the HTML: the
- * platform domain, and the portal whose alias host served the page (empty on every other host).
+ * platform domain, the portal whose alias host served the page (empty on every other host), and
+ * the hostname that served it (the platform domain when it is absent or not a valid hostname).
  */
 export function platformShellResponse(
   response: Response,
   domain: string,
   hostPortal?: string,
+  requestHost?: string,
 ): Response {
   const platformDomain = getPlatformDomain(domain)
   if (!response.body || !response.headers.get('content-type')?.includes('text/html')) {
@@ -22,6 +26,12 @@ export function platformShellResponse(
   const values = new Map([
     [PLATFORM_DOMAIN_MARKER, platformDomain],
     [HOST_PORTAL_MARKER, hostPortal && PORTAL_SLUG.test(hostPortal) ? hostPortal : ''],
+    [
+      REQUEST_HOST_MARKER,
+      requestHost && validPlatformDomain(requestHost.toLowerCase())
+        ? requestHost.toLowerCase()
+        : platformDomain,
+    ],
   ])
   const longest = Math.max(...[...values.keys()].map((marker) => marker.length))
   let pending = ''

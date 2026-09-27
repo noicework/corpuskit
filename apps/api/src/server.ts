@@ -20,6 +20,7 @@ import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
 import { platformShellResponse } from './platform-shell.ts'
+import { robotsTxt, sitemapXml } from './search-files.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
 import { showcasePortalsWarning } from './tenants.ts'
@@ -177,6 +178,21 @@ for (const path of ['/about', '/about/']) {
     }),
   )
 }
+// The same robots.txt and apex sitemap the Worker serves (search-files.ts).
+app.get(
+  '/robots.txt',
+  infrastructureHandler(async (c) =>
+    c.text(robotsTxt(process.env.PLATFORM_DOMAIN ?? 'corpuskit.org', new URL(c.req.url).hostname))
+  ),
+)
+app.get(
+  '/sitemap.xml',
+  infrastructureHandler(async (c) => {
+    const domain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
+    if (new URL(c.req.url).hostname !== domain) return c.text('Not found', 404)
+    return c.body(sitemapXml(domain), 200, { 'Content-Type': 'application/xml; charset=utf-8' })
+  }),
+)
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
 // The same answers the Worker gives: probes are refused, and an unknown path
 // still renders the shell (the app has its own not-found page) but as a 404.
@@ -197,4 +213,5 @@ Deno.serve({ port }, async (request, info) =>
     await ingress.handle(request, (clean) => app.fetch(clean), info),
     platformDomain,
     ingress.hostPortal(request),
+    new URL(request.url).hostname,
   ))

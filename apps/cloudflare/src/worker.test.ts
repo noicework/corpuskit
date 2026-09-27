@@ -247,6 +247,60 @@ Deno.test('Worker injects domain configuration per HTML response without changin
   }
 })
 
+Deno.test("Worker names each portal's share image on the host that served it", async () => {
+  const shell =
+    '<head><meta property="og:image" content="https://__CORPUSKIT_REQUEST_HOST__/og/corpuskit.png"></head>'
+  const harness = workerHarness({
+    assets: () => new Response(shell, { headers: { 'content-type': 'text/html' } }),
+  })
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  for (const host of ['research.example.org', 'marine.research.example.org']) {
+    const response = await worker.fetch(new Request(`https://${host}/t/marine`), harness.env)
+    expect(await response.text()).toContain(`content="https://${host}/og/corpuskit.png"`)
+  }
+})
+
+Deno.test('Worker answers robots.txt on every host and the sitemap on the apex alone', async () => {
+  const harness = workerHarness()
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  const apex = await worker.fetch(
+    new Request('https://research.example.org/robots.txt'),
+    harness.env,
+  )
+  expect(apex.status).toBe(200)
+  expect(apex.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+  expect(apex.headers.get('cache-control')).toBe('public, max-age=300')
+  const rules = await apex.text()
+  expect(rules).toContain('User-agent: *\nDisallow: /api/\n')
+  expect(rules).toContain('Sitemap: https://research.example.org/sitemap.xml')
+
+  const portal = await worker.fetch(
+    new Request('https://marine.research.example.org/robots.txt'),
+    harness.env,
+  )
+  expect(portal.status).toBe(200)
+  expect(await portal.text()).not.toContain('Sitemap:')
+
+  const sitemap = await worker.fetch(
+    new Request('https://research.example.org/sitemap.xml'),
+    harness.env,
+  )
+  expect(sitemap.status).toBe(200)
+  expect(sitemap.headers.get('content-type')).toBe('application/xml; charset=utf-8')
+  const xml = await sitemap.text()
+  expect(xml).toContain('<loc>https://research.example.org/</loc>')
+  expect(xml).toContain('<loc>https://research.example.org/docs/getting-started</loc>')
+  expect(xml).not.toContain('/t/')
+
+  const elsewhere = await worker.fetch(
+    new Request('https://marine.research.example.org/sitemap.xml'),
+    harness.env,
+  )
+  expect(elsewhere.status).toBe(404)
+  // Neither is read from the asset bundle, so no stale copy can answer for them.
+  expect(harness.assetRequests).toHaveLength(0)
+})
+
 Deno.test('Worker cookies share only the configured platform domain', async () => {
   for (
     const hostname of [
@@ -526,7 +580,7 @@ Deno.test('Worker refuses secret and script probes before any asset lookup', asy
 })
 
 Deno.test('Worker serves the app shell for an unknown path, but as a 404', async () => {
-  for (const path of ['/sitemap.xml', '/nope', '/admin/users', '/t', '/firebase-adminsdk.json']) {
+  for (const path of ['/feed.xml', '/nope', '/admin/users', '/t', '/firebase-adminsdk.json']) {
     const harness = workerHarness()
     const response = await worker.fetch(new Request(`https://corpuskit.org${path}`), harness.env)
     expect([path, response.status]).toEqual([path, 404])
@@ -548,7 +602,7 @@ Deno.test('Worker keeps router paths and real assets at their own status', async
 
   const files: Record<string, [string, string]> = {
     '/app.js': ['text/javascript', 'js'],
-    '/robots.txt': ['text/plain; charset=utf-8', 'User-agent: *'],
+    '/og/corpuskit.png': ['image/png', 'png'],
   }
   for (const [path, [type, body]] of Object.entries(files)) {
     const harness = workerHarness({

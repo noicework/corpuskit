@@ -18,13 +18,24 @@ Deno.test('marketing homepage keeps its approved structure and destinations', ()
   expect(homepage).toContain('href="https://www.progress.com/agentic-rag"')
 })
 
-Deno.test('shell and marketing pages take canonical and share URLs from the runtime domain', async () => {
-  for (const file of ['../index.html', '../public/home.html', '../public/about.html']) {
+Deno.test('marketing pages take canonical and share URLs from the runtime domain', async () => {
+  for (const file of ['../public/home.html', '../public/about.html']) {
     const html = await Deno.readTextFile(new URL(file, import.meta.url))
     const tags = html.match(
       /<(?:link rel="canonical"|meta (?:property|name)="(?:og:url|og:image|twitter:image)")[^>]*>/g,
     ) ?? []
     expect(tags.length).toBeGreaterThan(0)
     for (const tag of tags) expect(tag).toContain('https://__CORPUSKIT_PLATFORM_DOMAIN__/')
+  }
+})
+
+Deno.test('the portal shell names its share image on the host that served it', async () => {
+  // A portal on its own host (a subdomain or an alias) serves /og/corpuskit.png itself, while the
+  // platform apex may be a different application altogether.
+  const shell = await Deno.readTextFile(new URL('../index.html', import.meta.url))
+  const images = shell.match(/<meta (?:property|name)="(?:og:image|twitter:image)"[^>]*>/g) ?? []
+  expect(images).toHaveLength(2)
+  for (const tag of images) {
+    expect(tag).toContain('content="https://__CORPUSKIT_REQUEST_HOST__/og/corpuskit.png"')
   }
 })

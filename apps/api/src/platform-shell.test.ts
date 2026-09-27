@@ -84,3 +84,38 @@ Deno.test('the shell names the alias host portal, and nothing on every other hos
       .toBe(expected(''))
   }
 })
+
+Deno.test('the shell names the host that served it, or the platform domain for anything else', async () => {
+  const image =
+    '<meta property="og:image" content="https://__CORPUSKIT_REQUEST_HOST__/og/corpuskit.png">'
+  const bytes = new TextEncoder().encode(`<head>${image}</head>`)
+  const chunked = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          // Every chunk size splits the marker somewhere.
+          for (let at = 0; at < bytes.length; at += 5) controller.enqueue(bytes.slice(at, at + 5))
+          controller.close()
+        },
+      }),
+      { headers: { 'content-type': 'text/html' } },
+    )
+  const expected = (host: string) =>
+    `<head>${image.replace('__CORPUSKIT_REQUEST_HOST__', host)}</head>`
+  for (
+    const host of ['marine.research.example.org', 'research.partner.example', 'Portal.Example.org']
+  ) {
+    expect(await platformShellResponse(chunked(), 'research.example.org', undefined, host).text())
+      .toBe(expected(host.toLowerCase()))
+  }
+  // Anything that is not a hostname cannot reach the page: the platform domain stands in.
+  for (
+    const host of [undefined, '', 'localhost', '127.0.0.1', '"><script>', 'a b.example', 'x..y']
+  ) {
+    expect(
+      await platformShellResponse(chunked(), 'research.example.org', undefined, host).text(),
+      host,
+    )
+      .toBe(expected('research.example.org'))
+  }
+})

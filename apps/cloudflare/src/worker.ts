@@ -17,6 +17,7 @@ import {
   isPlatformHostname,
 } from '../../../packages/core/src/platform-domain.ts'
 import { platformShellResponse } from '../../api/src/platform-shell.ts'
+import { robotsTxt, sitemapXml } from '../../api/src/search-files.ts'
 import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
@@ -743,6 +744,24 @@ async function pageRoute(
     return plain('Method not allowed', 405, { allow: 'GET, HEAD' })
   }
 
+  // robots.txt on every host, naming the sitemap on the apex; the sitemap lists the apex's pages.
+  if (url.pathname === '/robots.txt') {
+    return secureAssetResponse(
+      new Response(robotsTxt(platformDomain, url.hostname), {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      }),
+    )
+  }
+  if (url.pathname === '/sitemap.xml') {
+    return url.hostname === platformDomain
+      ? secureAssetResponse(
+        new Response(sitemapXml(platformDomain), {
+          headers: { 'content-type': 'application/xml; charset=utf-8' },
+        }),
+      )
+      : plain('Not found', 404)
+  }
+
   // The internet's routine search for secrets and server-side scripts is
   // refused before any asset lookup. The router's own paths are exempt.
   if (!documentPath(url.pathname) && probePath(url.pathname)) {
@@ -753,6 +772,7 @@ async function pageRoute(
     await env.ASSETS.fetch(marketingHomeRequest(request, platformDomain)),
     platformDomain,
     hostPortal,
+    url.hostname,
   )
   // Assets answers every unknown path with the app shell and a 200. Keep
   // the shell, so a person still sees the app's own not-found page, but say
