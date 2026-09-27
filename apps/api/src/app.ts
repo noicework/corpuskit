@@ -15,6 +15,7 @@ import {
 } from './lifecycle-policy.ts'
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
 import { registerAliasRoutes } from './alias-routes.ts'
+import type { WebBuildStamp } from './build-stamp.ts'
 import { maxPortalAliases, reservedHostnames, transportSecurityFor } from './portal-aliases.ts'
 import {
   assertAgentRunAllowed,
@@ -1021,8 +1022,8 @@ export interface BuildAppOptions {
   /** Internal documentation readiness probe; never exposed by public health. */
   docsHealth?: Pick<DocsHealth, 'snapshot' | 'ok' | 'checkTenant'>
   buildSha?: string
-  /** The web bundle's stamp (commit and build time), from `deno task build:web`. */
-  webBuild?: { sha: string; builtAt: string }
+  /** The web bundle's stamp (commit, build time and release), from `deno task build:web`. */
+  webBuild?: WebBuildStamp
   /** Where uploaded branding assets live; overridable in tests. Defaults to BRANDING_PATH or ./data/branding. */
   brandingPath?: string
   branding?: BrandingAssetStore
@@ -2297,6 +2298,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       typeof value === 'string' && value.length > 0 ? value.slice(0, 160) : undefined
     const builtAt = stamp(opts.webBuild?.builtAt)
     const buildSha = stamp(opts.webBuild?.sha)
+    const release = stamp(opts.webBuild?.release)
     // One coarse flag for monitors; the cause stays on the authorised admin overview.
     const encryption = bindings.encryptionStatus()
     const bindingsReady = encryption.writable && !encryption.error && encryption.unavailable === 0
@@ -2306,9 +2308,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
         web,
         ...(encryption.required || !bindingsReady ? { bindingsReady } : {}),
         version: stamp(opts.buildSha ?? process.env.BUILD_SHA) ?? 'dev',
-        // The bundle actually served, so a stale build is visible (D1-21).
+        // The bundle actually served, so a stale build is visible (D1-21), and the newest
+        // CHANGELOG.md release it contains.
         ...(builtAt ? { builtAt } : {}),
         ...(buildSha ? { buildSha } : {}),
+        ...(release ? { release } : {}),
       },
       web ? 200 : 503,
     )

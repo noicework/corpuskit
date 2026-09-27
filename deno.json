@@ -69,7 +69,7 @@
     "og:render": "deno run --allow-net --allow-env --allow-read --allow-write --allow-run apps/web/scripts/og/render.ts",
     "build:stamp": "deno run --allow-env --allow-read --allow-write=apps/web/dist --allow-run=git apps/web/scripts/stamp-build.ts",
     "types:cloudflare": "deno run --allow-read=.wrangler --allow-write=.wrangler,worker-configuration.d.ts --allow-run=npx apps/cloudflare/scripts/generate-types.ts",
-    "build:worker": "mkdir -p dist/cloudflare && deno bundle --external cloudflare:workers --output dist/cloudflare/worker.js apps/cloudflare/src/worker.ts",
+    "build:worker": "mkdir -p dist/cloudflare && deno bundle --external cloudflare:workers --output dist/cloudflare/worker.js apps/cloudflare/src/worker.ts && deno run --allow-read=apps/web/dist/build.json,dist/cloudflare --allow-write=dist/cloudflare apps/cloudflare/scripts/stamp-worker.ts",
     "build:cloudflare": "deno task build:web && deno task build:worker",
     "secrets:cloudflare": "deno run --allow-read=.env --allow-write=.wrangler --allow-run=npx apps/cloudflare/scripts/upload-secrets.ts",
     "check": "deno check apps/api/src/server.ts apps/api/scripts/provision.ts apps/api/scripts/persona-smoke.ts apps/api/scripts/accuracy-eval.ts apps/api/scripts/persona-eval.ts apps/web/src/main.tsx apps/cloudflare/src/worker.ts && deno lint && deno fmt --check && deno task test",

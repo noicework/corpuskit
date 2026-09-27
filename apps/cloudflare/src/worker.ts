@@ -51,6 +51,7 @@ import {
 } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { linkProvisionalBytes } from '../../api/src/lifecycle-management.ts'
+import { embeddedWebBuild } from './build-stamp.ts'
 import { AragProvider } from '@research-portal/retrieval'
 import {
   type AuthConfig,
@@ -223,7 +224,9 @@ export class PortalDurableObject extends DurableObject<Env> {
       requestContext: (request) => this.contexts.get(request),
       invalidate: (slug) => this.provider.invalidate(slug),
       webAvailable: true,
+      // Release verification matches `version` to the Cloudflare version id, so it stays that.
       buildSha: env.CF_VERSION_METADATA?.id ?? 'cloudflare',
+      webBuild: embeddedWebBuild(),
       rateLimitAskPerMin: askPerMin,
       rateLimitAskPerMinPerIp: numberBinding(bindings.RATE_LIMIT_ASK_PER_MIN_IP, askPerMin * 5),
       rateLimitAnonPortalAskPerMin: numberBinding(bindings.RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN, 30),

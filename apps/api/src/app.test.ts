@@ -2021,7 +2021,7 @@ describe('GET /api/health', () => {
           tenants,
           webAvailable,
           buildSha: 'api-commit',
-          webBuild: { sha: 'web-commit', builtAt: '2026-09-12T00:00:00Z' },
+          webBuild: { sha: 'web-commit', builtAt: '2026-09-12T00:00:00Z', release: '2026.9.27' },
           docsHealth: {
             snapshot: () => {
               calls.push('snapshot')
@@ -2046,6 +2046,7 @@ describe('GET /api/health', () => {
           version: 'api-commit',
           buildSha: 'web-commit',
           builtAt: '2026-09-12T00:00:00Z',
+          release: '2026.9.27',
         })
         for (
           const secret of [

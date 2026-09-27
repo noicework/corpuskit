@@ -97,6 +97,11 @@ restores them.
 present on Cloudflare and appears elsewhere only when false. It is false when new bindings cannot
 be stored or any stored binding is withheld.
 
+Health also says which build is serving: `buildSha` is the commit the bundle was built from,
+`builtAt` when it was built, and `release` the newest dated release in `CHANGELOG.md` at that
+commit, so a build made after a release reports that release with a later commit. `version` is the
+Cloudflare version id on the Worker, which release verification matches, and the commit elsewhere.
+
 Each row of the authorised `GET /api/admin/overview` includes
 `bindingEncryption: { configured, required, writable, error?, unavailable, plaintext }`. `error`
 names a deployment-wide cause: `binding_key_missing`, `binding_key_invalid` or

@@ -32,6 +32,7 @@ RUN chmod +x /usr/local/bin/esbuild \
   && chmod +x /usr/local/bin/tailwindcss
 
 COPY deno.json ./
+COPY CHANGELOG.md ./
 COPY packages ./packages
 COPY apps ./apps
 

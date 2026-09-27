@@ -23,6 +23,7 @@ import { platformShellResponse } from './platform-shell.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
 import { showcasePortalsWarning } from './tenants.ts'
+import { type WebBuildStamp, webBuildStamp } from './build-stamp.ts'
 
 loadRootEnv()
 const deleteWarning = operatorDeleteWarning(process.env)
@@ -71,22 +72,16 @@ const docsHealth = new DocsHealth({
 })
 
 /** The stamp `deno task build:web` leaves beside the bundle (build:stamp), when present. */
-function webBuildStamp(): { sha: string; builtAt: string } | undefined {
+function readWebBuildStamp(): WebBuildStamp | undefined {
   try {
-    const raw = JSON.parse(readFileSync('./apps/web/dist/build.json', 'utf8')) as {
-      sha?: unknown
-      builtAt?: unknown
-    }
-    if (typeof raw.sha === 'string' && typeof raw.builtAt === 'string') {
-      return { sha: raw.sha, builtAt: raw.builtAt }
-    }
+    return webBuildStamp(JSON.parse(readFileSync('./apps/web/dist/build.json', 'utf8')))
   } catch {
     // No stamp: an older build, or no build at all.
+    return undefined
   }
-  return undefined
 }
 
-const webBuild = webBuildStamp()
+const webBuild = readWebBuildStamp()
 const app = buildApp({
   ...owned,
   rbac,
