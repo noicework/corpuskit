@@ -841,11 +841,17 @@ export class PortalLifecycleStore {
     if (!parsed.success || !this.release(record, parsed.data)) {
       const unsized = record.unsized > 0
       if (unsized) record.unsized--
-      if (parsed.success && record.inflight.length > 0 &&
-        Object.keys(record.deleting ?? {}).length < MAX_IN_FLIGHT) {
+      if (
+        parsed.success && record.inflight.length > 0 &&
+        Object.keys(record.deleting ?? {}).length < MAX_IN_FLIGHT
+      ) {
         record.deleting = {
           ...record.deleting,
-          [parsed.data]: { at: now, released: true, ...(unsized ? { unsized: true as const } : {}) },
+          [parsed.data]: {
+            at: now,
+            released: true,
+            ...(unsized ? { unsized: true as const } : {}),
+          },
         }
       }
     }
