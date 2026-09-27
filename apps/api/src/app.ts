@@ -320,9 +320,9 @@ import {
   admitAll,
   clientKey,
   rateLimit,
-  rateLimitAll,
   rateLimited,
   type RateLimitEntry,
+  releaseAll,
   SlidingWindowLimiter,
 } from './rate-limit.ts'
 import {
@@ -1804,7 +1804,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? portals.map((slug) => ({ limiter: anonPortalLimiter, key: slug }))
       : []),
   ]
-  const expensiveRateLimit = infrastructureHandler(rateLimitAll((c) => {
+  const expensiveRateLimit = infrastructureHandler(async (c, next) => {
     let declaration: Declaration | undefined
     try {
       declaration = matchedDeclaration(c)
@@ -1812,8 +1812,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const slug = c.req.param('slug')
     // Only a route that counts as an ask (not one accompanying an ask) takes a portal's turn.
     const counted = declaration !== undefined && askUse(declaration) === 'count' && slug
-    return askEntries(c, 1, counted ? [slug] : [])
-  }))
+    const admitted = admitAll(askEntries(c, 1, counted ? [slug] : []))
+    if (!admitted.allowed) return rateLimited(c, admitted.retryAfterSec)
+    await next()
+    // A refused request (invalid input, or a refusal after the guard) gives the portal its
+    // anonymous turn back, as it gives back its daily ask: it cost the portal nothing, so it must
+    // not keep another reader out. The caller's own buckets keep it, to slow junk down.
+    if (c.res.status >= 400) {
+      releaseAll(admitted.receipt, (entry) => entry.limiter === anonPortalLimiter)
+    }
+  })
   const estateRateLimit = infrastructureHandler(
     rateLimit(estateLimiter, (c) => addressKey(callerAddress(c))),
   )

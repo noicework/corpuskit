@@ -779,7 +779,7 @@ The limits, each per minute, with `0` turning one off:
 |---|---|---|
 | `RATE_LIMIT_ASK_PER_MIN` | 20 | Paid-answer requests from one browser inside its address. The browser is the web app's anonymous `x-rp-client` id; without one, the address itself. The id can only divide an address's allowance, never add to it. |
 | `RATE_LIMIT_ASK_PER_MIN_IP` | 5 times the above | Paid-answer requests from one address, whatever browser ids it sends. |
-| `RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN` | 30 | Anonymous asks on one portal, from every address together, so spreading asks across many addresses cannot drain a portal's `asksPerDay` or the account behind it. Signed-in people and portal keys are not counted. The routes that only accompany an ask (routing, sub-questions, verdicts and follow-ups) are not asks here either. The MCP `answer_question` tool counts the same way. |
+| `RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN` | 30 | Anonymous asks on one portal, from every address together, so spreading asks across many addresses cannot drain a portal's `asksPerDay` or the account behind it. Signed-in people and portal keys are not counted. The routes that only accompany an ask (routing, sub-questions, verdicts and follow-ups) are not asks here either. An ask refused with a status of 400 or above, such as one with invalid input, gives its turn back, so refused requests cannot keep readers out. The MCP `answer_question` tool counts the same way. |
 | `RATE_LIMIT_ESTATE_PER_MIN` | 6 | Cross-portal asks (`POST /api/ask-estate`) from one address. |
 | `RATE_LIMIT_FEEDBACK_PER_MIN` | 30 | Answer ratings (`POST /api/t/:slug/feedback`) from one address on one portal. |
 

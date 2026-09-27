@@ -7,6 +7,7 @@ import {
   forwardedClientAddress,
   RATE_LIMIT_MESSAGE,
   rateLimit,
+  releaseAll,
   SlidingWindowLimiter,
   trustProxyHops,
   trustProxyHopsWarning,
@@ -160,6 +161,23 @@ describe('weighted admission', () => {
     // A weight above the limit costs the whole window, once it is empty.
     expect(fanOut(10, []).allowed).toBe(true)
     expect(fanOut(1, [])).toMatchObject({ allowed: false })
+  })
+
+  it('gives back exactly the hits an admitted request took', () => {
+    const clock = fakeClock()
+    const limiter = new SlidingWindowLimiter({ limit: 2, windowMs: 60_000, now: clock.now })
+    const other = new SlidingWindowLimiter({ limit: 2, windowMs: 60_000, now: clock.now })
+    const first = admitAll([{ limiter, key: 'k' }, { limiter: other, key: 'k' }])
+    clock.advance(1_000)
+    const second = admitAll([{ limiter, key: 'k' }, { limiter: other, key: 'k' }])
+    if (!first.allowed || !second.allowed) throw new Error('admitted')
+    expect(limiter.peek('k').allowed).toBe(false)
+    // Only the hits `only` picks come back, and only this request's.
+    releaseAll(second.receipt, (entry) => entry.limiter === limiter)
+    expect(limiter.peek('k')).toMatchObject({ allowed: true, remaining: 1 })
+    expect(other.peek('k').allowed).toBe(false)
+    releaseAll(second.receipt, (entry) => entry.limiter === limiter)
+    expect(limiter.peek('k').remaining).toBe(1)
   })
 
   it('says how long until enough room frees up for the weight asked', () => {

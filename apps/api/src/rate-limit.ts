@@ -89,14 +89,29 @@ export class SlidingWindowLimiter {
     }
   }
 
-  /** Record `weight` hits for `key` (clamped as in `peek`). */
-  take(key: string, weight = 1): void {
-    if (this.limit <= 0) return
+  /** Record `weight` hits for `key` (clamped as in `peek`), and say when, for `release`. */
+  take(key: string, weight = 1): number {
     const now = this.now()
+    if (this.limit <= 0) return now
     const hits = this.fresh(key, now)
     const needed = Math.min(Math.max(1, weight), this.limit)
     for (let i = 0; i < needed; i++) hits.push(now)
     this.buckets.set(key, hits)
+    return now
+  }
+
+  /** Give back up to `weight` hits `take` recorded for `key` at `at`, if they are still held. */
+  release(key: string, at: number, weight = 1): void {
+    const hits = this.buckets.get(key)
+    if (!hits) return
+    let left = Math.min(Math.max(1, weight), this.limit)
+    for (let i = hits.length - 1; i >= 0 && left > 0; i--) {
+      if (hits[i] === at) {
+        hits.splice(i, 1)
+        left--
+      }
+    }
+    if (hits.length === 0) this.buckets.delete(key)
   }
 
   /** The key's hits still inside the window, pruning the rest (and, now and then, every key). */
@@ -203,13 +218,26 @@ export interface RateLimitEntry {
   weight?: number
 }
 
+/** Hits one admitted request holds, which it can give back. */
+export type RateLimitReceipt = readonly (RateLimitEntry & { at: number; weight: number })[]
+
+/** Give back the hits of a receipt, or those `only` picks. */
+export function releaseAll(
+  receipt: RateLimitReceipt,
+  only: (entry: RateLimitReceipt[number]) => boolean = () => true,
+): void {
+  for (const entry of receipt) {
+    if (only(entry)) entry.limiter.release(entry.key, entry.at, entry.weight)
+  }
+}
+
 /**
  * Admit a request against several limiters at once: either every entry has room and all are
  * recorded, or none is. Entries for the same limiter and key are added together first.
  */
 export function admitAll(
   entries: readonly RateLimitEntry[],
-): { allowed: true } | { allowed: false; retryAfterSec: number } {
+): { allowed: true; receipt: RateLimitReceipt } | { allowed: false; retryAfterSec: number } {
   const merged = new Map<SlidingWindowLimiter, Map<string, number>>()
   for (const { limiter, key, weight = 1 } of entries) {
     const keys = merged.get(limiter) ?? new Map<string, number>()
@@ -224,10 +252,13 @@ export function admitAll(
     }
   }
   if (retryAfterSec > 0) return { allowed: false, retryAfterSec }
+  const receipt: (RateLimitEntry & { at: number; weight: number })[] = []
   for (const [limiter, keys] of merged) {
-    for (const [key, weight] of keys) limiter.take(key, weight)
+    for (const [key, weight] of keys) {
+      receipt.push({ limiter, key, weight, at: limiter.take(key, weight) })
+    }
   }
-  return { allowed: true }
+  return { allowed: true, receipt }
 }
 
 /**
@@ -255,20 +286,6 @@ export function rateLimit(
     // results-only before its automatic summary would be the call that trips
     // the limit. Absent when the limiter is disabled.
     if (Number.isFinite(remaining)) c.header('X-RateLimit-Remaining', String(remaining))
-    await next()
-  }
-}
-
-/**
- * Middleware admitting each request against every entry `entriesFor` names (see `admitAll`), so
- * the first bucket without room answers with the 429.
- */
-export function rateLimitAll(
-  entriesFor: (c: Context) => readonly RateLimitEntry[],
-): MiddlewareHandler {
-  return async (c, next) => {
-    const verdict = admitAll(entriesFor(c))
-    if (!verdict.allowed) return rateLimited(c, verdict.retryAfterSec)
     await next()
   }
 }

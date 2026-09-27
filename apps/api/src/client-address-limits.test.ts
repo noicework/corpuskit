@@ -90,6 +90,37 @@ for (const adapter of ['durable', 'local'] as const) {
     }
   })
 
+  Deno.test(`${adapter}: refused asks give the portal its anonymous turn back`, async () => {
+    const f = createEnforcementFixture(
+      { rateLimitAskPerMin: 20, rateLimitAskPerMinPerIp: 100, rateLimitAnonPortalAskPerMin: 3 },
+      adapter,
+    )
+    try {
+      // Malformed asks from one address, each with a new browser id: every one is refused as
+      // invalid, with no answer and no daily ask spent.
+      for (let i = 0; i < 10; i++) {
+        expect(
+          await status(f.requestFrom(
+            '198.51.100.66',
+            null,
+            '/api/t/public-a/ask',
+            post({ 'x-rp-client': `browser-${String(i).padStart(8, '0')}` }, '{}'),
+          )),
+        ).toBe(400)
+      }
+      expect(f.stores.lifecycle.usage('public-a', 'UTC', f.now()).asksToday).toBe(0)
+      // They took no reader's turn: the portal still has all three.
+      for (let i = 1; i <= 3; i++) {
+        expect(await status(f.requestFrom(`203.0.113.${i}`, null, '/api/t/public-a/ask', post())))
+          .toBe(200)
+      }
+      expect(await status(f.requestFrom('203.0.113.4', null, '/api/t/public-a/ask', post())))
+        .toBe(429)
+    } finally {
+      f.close()
+    }
+  })
+
   Deno.test(`${adapter}: a cross-portal ask counts once on every portal it reaches`, async () => {
     const f = createEnforcementFixture(
       { rateLimitAskPerMin: 5, rateLimitEstatePerMin: 10 },
