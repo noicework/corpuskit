@@ -1409,10 +1409,10 @@ export function GraphPage() {
             /* The vertical rhythm is set from the INK, not the boxes. The title
               is .rp-display at a 1.05 leading, so its line box sits 3.6px above
               the cap of the K and its descenders fall 1.1px below the box; the
-              padding is asymmetric to absorb that and land even optical margins
-              above the title and below the controls. Measured on a phone: 7.6px
-              over the title, 6.9px between it and the controls, 8.0px under
-              them.
+              padding is asymmetric to absorb that. The strip keeps a clear
+              band of air between the header rule and the title, as every other
+              page heading does; 4px there read as the title touching the rule
+              on a phone, so the top is now 16px and the bottom 12px.
 
               The counts sit on the title's baseline rather than on the row
               below, which is where they were and where they read wrong: an 11px
@@ -1425,7 +1425,7 @@ export function GraphPage() {
               heading with a count beside it (see the Library page), it gets more
               width than it had in the row, and the strip gets 2px shorter. */
           }
-          <div className='relative pb-2 pt-1' style={{ paddingInline: '1.5rem' }}>
+          <div className='relative pb-3 pt-4' style={{ paddingInline: '1.5rem' }}>
             <div className='flex flex-wrap items-baseline justify-between gap-x-2'>
               {
                 /* At the house heading size the title cannot share a row with
