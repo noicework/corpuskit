@@ -8,18 +8,56 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Added
 
-- Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`.
-- For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut.
+- Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+- For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut. ([#TBD](https://github.com/noicework/corpuskit/pulls))
 
 ### Changed
 
-- `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did.
+- `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did. ([#TBD](https://github.com/noicework/corpuskit/pulls))
 
 ### Upgrade notes
 
-- `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead.
-- The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read.
-- **Rollback to 2026.9.27 is safe.** Nothing stored changes, and health drops the new fields.
+- `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+- The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+- **Rollback to 2026.9.27.1 is safe.** Nothing stored changes, and health drops the new fields. ([#TBD](https://github.com/noicework/corpuskit/pulls))
+
+## [2026.9.27.1] - 2026-09-27
+
+Nightly maintenance keeps going past one portal's failure, anonymous rate limits key on the real address, break-glass needs its flag in every environment, Search and Ask no longer wait on a slow catalogue, and the built-in showcase portals are opt-in.
+
+### Changed
+
+- Nightly maintenance keeps going when one portal fails. Each source sync, watch, enrichment run and suggested-question run is its own unit, a failure is recorded against its portal, and the pass moves on. Only strain on the shared platform account halts the whole pass, and a backlog in one knowledge box holds back only that portal's syncs. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- The nightly pass skips portals with no knowledge box and empty catalogues, starts at a different portal each day, and stops starting new work 75 seconds in, so it finishes inside its deadline. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- Search, Ask, typeahead and the Library no longer wait on a slow knowledge box catalogue. Requests share one read per portal, each page gives up after 10 seconds, readers wait at most 10 seconds before going on with the cached or partial listing, and a plain search no longer reads the catalogue at all. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- The built-in showcase portals, `marine` and `grains`, are served only on deployments that name them in `SHOWCASE_PORTALS`. See the Upgrade notes. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- A deployment with no portals, or none the visitor may see, lists an empty portal list instead of showing an error. ([#72](https://github.com/noicework/corpuskit/pull/72))
+
+### Fixed
+
+- A strained or rate-limited maintenance pass no longer stores empty suggested questions, and a source page that met a rate limit or a server error stays unsynced for the next run. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- A document hidden, deleted or added while the catalogue was being read no longer reappears in the Library, typeahead, or identifier and author lookups for another minute. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- A stray record stored under a showcase slug is never served as a portal of its own. ([#72](https://github.com/noicework/corpuskit/pull/72))
+
+### Security
+
+- Anonymous rate limits key on the address the runtime reports, `cf-connecting-ip` on Cloudflare and the connecting peer on the local server, with IPv6 addresses grouped by /64. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- Each public portal has a ceiling on anonymous asks per minute from every address together, with a per-address share, and a refused ask gives its turn back. A cross-portal ask counts against every portal it reaches. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- Break-glass passcode sign-in works only with `ADMIN_BREAK_GLASS=true`, in every environment. ([#72](https://github.com/noicework/corpuskit/pull/72))
+
+### Upgrade notes
+
+- **`ADMIN_BREAK_GLASS=true` is now required for passcode sign-in, in every environment.** Before, a passcode was enough wherever `ENVIRONMENT` was not exactly `production`. A deployment that relied on that loses passcode sign-in until it sets the flag. Both servers warn at start-up when a passcode is set without the flag, and never log the value. A deployment that follows the documented procedure, setting both together and removing both afterwards, is unaffected. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- **`SHOWCASE_PORTALS` is off by default.** Set `SHOWCASE_PORTALS=marine,grains` to keep serving the showcase portals; the reference configurations for corpuskit.org and its demo set it. Unset, their slugs answer like any unknown slug everywhere. What they stored is kept, and returns when they are named again, and a showcase slug is never given to a new portal. Entries that are not showcase portals are ignored with a start-up warning. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- **`TRUST_PROXY_HOPS`** (local server only, unset by default): how many reverse proxies in front of the server append to `x-forwarded-for`. Unset or 0 keys every client on its connecting address, so behind a proxy every caller shares the proxy's limits. Set it to the number of proxies you run, never more. The Worker always uses `cf-connecting-ip`, and `fly-client-ip` is no longer read. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- **`RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN`** (default 30, 0 disables): anonymous asks per minute on each portal, from every address together, including anonymous MCP `answer_question` calls. Signed-in people and portal keys are exempt. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- **`RATE_LIMIT_ANON_ADDRESS_ASK_PER_MIN`** (default 10, 0 disables): one address's share of those asks on each portal. Keep it below the portal ceiling. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- The Worker now reads `RATE_LIMIT_ASK_PER_MIN_IP`, the per-address limit, which defaults to five times `RATE_LIMIT_ASK_PER_MIN`. ([#72](https://github.com/noicework/corpuskit/pull/72))
+- **Rollback to 2026.9.27 is safe, with effects.** Nothing stored changes, and rate-limit counts live in memory. While 2026.9.27 runs: ([#72](https://github.com/noicework/corpuskit/pull/72))
+  - a passcode works as break-glass wherever `ENVIRONMENT` is not exactly `production`, so remove the passcode or set `ENVIRONMENT=production` before rolling back;
+  - anonymous rate limits key on headers a caller can set;
+  - the showcase portals are served on every deployment, and the nightly pass reaches them;
+  - one portal's failure stops the nightly pass for the portals after it.
 
 ## [2026.9.27] - 2026-09-27
 
@@ -68,7 +106,7 @@ Adding documents is obvious and safe, managers can delete a document, and hidden
 - Portals on their own colours may see link and accent text darken slightly. Nothing stored changes. ([#71](https://github.com/noicework/corpuskit/pull/71))
 - Reader ratings are stored as one row per answer, at most 500 per portal, kept for 90 days and purged by daily maintenance. ([#71](https://github.com/noicework/corpuskit/pull/71))
 - **Rollback to 2026.9.26 is safe, with effects.** Deleted documents stay deleted. While 2026.9.26 runs: ([#68](https://github.com/noicework/corpuskit/pull/68), [#69](https://github.com/noicework/corpuskit/pull/69), [#71](https://github.com/noicework/corpuskit/pull/71))
-  - A portal with a byte limit whose capacity ledger holds a crawled link in flight, being measured or stuck refuses every add and usage read, because 2026.9.26 cannot read that ledger. Before rolling back, let such links finish measuring and delete stuck ones, or do not roll back past 2026.9.27.
+  - A portal with a byte limit whose capacity ledger holds a crawled link in flight, being measured or stuck refuses every add and usage read, because 2026.9.26 cannot read that ledger. Before rolling back, let such links finish measuring and delete stuck ones, or stay on 2026.9.27.
   - Readers can see hidden drafts again, because 2026.9.26 has no hidden-draft filter.
   - The audit viewer cannot show a log page that includes an action it does not know, such as `resource.delete`.
   - Reader ratings stay in their new `answer_feedback` table, which 2026.9.26 never reads, so they are not purged after 90 days and portal erasure does not remove them. Upgrading again resumes both.
@@ -286,7 +324,8 @@ The first public release of CorpusKit, an open source research portal you point 
 
 - `POST /api/admin/t/:slug/labelsets` also accepts labels as `{ title, text }` objects, and plain strings still work. The new `PUT /api/admin/t/:slug/labelsets/:id` replaces a set and restarts its labellers. If a replacement labeller cannot start, the route answers 502 with the removed labeller's configuration so it can be restored by hand. ([#13](https://github.com/noicework/corpuskit/pull/13), [#15](https://github.com/noicework/corpuskit/pull/15))
 
-[Unreleased]: https://github.com/noicework/corpuskit/compare/v2026.9.27...HEAD
+[Unreleased]: https://github.com/noicework/corpuskit/compare/v2026.9.27.1...HEAD
+[2026.9.27.1]: https://github.com/noicework/corpuskit/compare/v2026.9.27...v2026.9.27.1
 [2026.9.27]: https://github.com/noicework/corpuskit/compare/v2026.9.26...v2026.9.27
 [2026.9.26]: https://github.com/noicework/corpuskit/compare/v2026.9.25...v2026.9.26
 [2026.9.25]: https://github.com/noicework/corpuskit/compare/v2026.9.17...v2026.9.25

@@ -9,8 +9,9 @@ from release to release and read the notes in between.
 ## Versions
 
 Releases use calendar versions: `YYYY.M.D` for the day the release is cut, in Australian Eastern
-time, without zero padding, tagged with a leading `v`. The release cut on 27 September 2026 is `2026.9.27`, tagged
-`v2026.9.27`. A second release on the same day adds `.1`, then `.2`: `v2026.9.27.1`.
+time, without zero padding, tagged with a leading `v`. The release cut on 27 September 2026 is
+`2026.9.27`, tagged `v2026.9.27`. A second release on the same day adds `.1`, then `.2`:
+`v2026.9.27.1`.
 
 Releases are cut from `main` only. The version says when, not how much changed: read the Upgrade
 notes to judge an upgrade.
@@ -85,7 +86,7 @@ field it does not know, a lenient one ignores it, and a later write by the older
 
 ## Cutting a release
 
-The steps use `2026.10.2` for the version being cut and `2026.9.27` for the previous release.
+The steps use `2026.10.2` for the version being cut and `2026.9.27.1` for the previous release.
 
 1. **Check that `main` is green and deployed.** The latest `Gate and deploy CorpusKit` run on `main`
    must have succeeded for the commit at the tip of `main`, including the documentation demo, and
@@ -109,7 +110,7 @@ The steps use `2026.10.2` for the version being cut and `2026.9.27` for the prev
    - Check each Upgrade note, and state rollback safety to the previous release.
    - Leave `## [Unreleased]` in place, empty.
    - At the foot, point `[Unreleased]` at `compare/v2026.10.2...HEAD` and add
-     `[2026.10.2]: https://github.com/noicework/corpuskit/compare/v2026.9.27...v2026.10.2`.
+     `[2026.10.2]: https://github.com/noicework/corpuskit/compare/v2026.9.27.1...v2026.10.2`.
    - Run `deno task release:notes 2026.10.2` and read what it prints, then `deno task check`.
    - Open a pull request titled `Release v2026.10.2`. It merges like any other and deploys, which
      also publishes the new section on the Release notes page.
@@ -149,8 +150,8 @@ The steps use `2026.10.2` for the version being cut and `2026.9.27` for the prev
 
 ## History before this process
 
-Releases up to 2026.9.27 were cut from the history after the fact. Their tags go on these
-commits:
+Releases up to 2026.9.27.1 were written up after the fact, from the history. Their tags go on
+these commits:
 
 | Tag | Commit | Last pull request |
 |---|---|---|
@@ -162,6 +163,7 @@ commits:
 | `v2026.9.25` | `5c9eec9` | #61 |
 | `v2026.9.26` | `b4695e4` | #67 |
 | `v2026.9.27` | `3365b4f` | #70 |
+| `v2026.9.27.1` | `b75dc2e` | #72 |
 
 The changelog that describes them merged later, so these builds report no `release` in health.
 Tag them and create their releases oldest first, from a checkout that has the changelog, so the
@@ -179,11 +181,13 @@ v2026.9.17 39cc855
 v2026.9.25 5c9eec9
 v2026.9.26 b4695e4
 v2026.9.27 3365b4f
+v2026.9.27.1 b75dc2e
 TAGS
 git push noicework v2026.9.5 v2026.9.11 v2026.9.12 v2026.9.13 v2026.9.17 v2026.9.25 v2026.9.26 \
-  v2026.9.27
+  v2026.9.27 v2026.9.27.1
 
-for version in 2026.9.5 2026.9.11 2026.9.12 2026.9.13 2026.9.17 2026.9.25 2026.9.26 2026.9.27; do
+for version in 2026.9.5 2026.9.11 2026.9.12 2026.9.13 2026.9.17 2026.9.25 2026.9.26 2026.9.27 \
+  2026.9.27.1; do
   notes=$(deno task release:notes "$version") || break
   printf '%s\n' "$notes" | gh release create "v$version" -R noicework/corpuskit \
     --verify-tag --title "CorpusKit $version" --notes-file - || break
