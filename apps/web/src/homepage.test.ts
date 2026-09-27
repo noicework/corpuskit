@@ -68,8 +68,12 @@ Deno.test('home and About describe the project in JSON-LD that parses', () => {
     expect(project!.name).toBe('CorpusKit')
     expect(project!.license).toBe('https://www.apache.org/licenses/LICENSE-2.0')
     expect(project!.isAccessibleForFree).toBe(true)
-    // No price is claimed for the project.
+    // No price is claimed for the project, and Noice is named as its maintainer.
     expect('offers' in project!).toBe(false)
+    expect(project!.maintainer).toEqual({
+      '@id': 'https://__CORPUSKIT_PLATFORM_DOMAIN__/#maintainer',
+    })
+    expect('author' in project!).toBe(false)
     expect(of('Organization')[0]!.legalName).toBe('Noice Pty Ltd')
     expect(of('WebSite')[0]!.url).toBe('https://__CORPUSKIT_PLATFORM_DOMAIN__/')
   }
@@ -93,6 +97,12 @@ Deno.test('About answers common questions, and marks up exactly the questions it
   expect(about).toContain('<a href="#faq">Frequently asked questions</a>')
   for (const [question, answer] of shown) {
     expect(`${question} ${answer}`).not.toContain('\u2014')
+  }
+  // Scans, audio and video depend on the Progress plan, as the documentation says.
+  const content = shown.find(([question]) => question === 'What content can a portal take in?')
+  expect(content?.[1]).toContain('On a Progress Agentic RAG plan that supports them, scanned pages')
+  for (const [, answer] of shown) {
+    expect(answer).not.toMatch(/including scanned pages/)
   }
 })
 
