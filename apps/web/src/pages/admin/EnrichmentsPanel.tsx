@@ -13,6 +13,7 @@ import { getEnrichmentAgents, runEnrichment } from '../../api/client.ts'
 import { ErrorCard, Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
 /**
  * Enrichments (merchandising): the schema-driven generator agents that replace
@@ -80,6 +81,49 @@ function Coverage({ done, total }: { done: number; total: number }) {
   )
 }
 
+type RunDone = Extract<EnrichmentRunEvent, { type: 'done' }>
+type RunProgress = { done: number; total: number; errors: number }
+
+/**
+ * Follows one enrichment run: progress as items arrive, and the run's result
+ * or the reason it stopped - a paused or read-only portal, disabled agents,
+ * a platform failure - in the server's words.
+ */
+export function followEnrichmentRun(
+  job: StreamedJob<RunDone>,
+  onProgress: (update: (previous: RunProgress | null) => RunProgress | null) => void,
+): (event: EnrichmentRunEvent) => void {
+  return job.events((event: EnrichmentRunEvent) => {
+    if (event.type === 'start') onProgress(() => ({ done: 0, total: event.total, errors: 0 }))
+    else if (event.type === 'item') {
+      onProgress((prev) =>
+        prev
+          ? {
+            ...prev,
+            done: prev.done + 1,
+            errors: prev.errors + (event.outcome === 'error' ? 1 : 0),
+          }
+          : prev
+      )
+    } else if (event.type === 'error') job.fail(event)
+    else if (event.type === 'done') {
+      if (Number.isFinite(event.enriched) && Number.isFinite(event.errors)) job.complete(event)
+      else job.uncertain()
+    }
+  })
+}
+
+/** The message a finished run leaves. */
+export function enrichmentDoneMessage(done: RunDone): Message {
+  return {
+    tone: done.errors > 0 ? 'error' : 'ok',
+    text: done.enriched === 0 && done.errors === 0
+      ? 'Every resource in scope is already enriched.'
+      : `Enriched ${done.enriched} resource${done.enriched === 1 ? '' : 's'}` +
+        (done.errors > 0 ? `, ${done.errors} could not be generated.` : '.'),
+  }
+}
+
 function AgentCard(
   { slug, status }: { slug: string; status: EnrichmentAgentStatus },
 ) {
@@ -104,59 +148,29 @@ function AgentCard(
     setRunning(true)
     setMessage(null)
     setProgress({ done: 0, total: 0, errors: 0 })
+    const job = new StreamedJob<RunDone>(assertCurrent, 'Enrichment run failed - please retry.')
     try {
       const result = await runExplicit(
         scope === 'missing' ? 'Generate missing enrichments' : 'Regenerate all enrichments',
         async (access) => {
-          let completed = false
-          let failed = false
           await runEnrichment(
             slug,
             access,
             { agentId: agent.id, scope },
-            (event: EnrichmentRunEvent) => {
-              assertCurrent()
-              if (event.type === 'start') setProgress({ done: 0, total: event.total, errors: 0 })
-              if (event.type === 'item') {
-                setProgress((prev) =>
-                  prev
-                    ? {
-                      ...prev,
-                      done: prev.done + 1,
-                      errors: prev.errors + (event.outcome === 'error' ? 1 : 0),
-                    }
-                    : prev
-                )
-              }
-              if (event.type === 'error') failed = true
-              if (event.type === 'done') {
-                completed = Number.isFinite(event.enriched) && Number.isFinite(event.errors)
-                setMessage({
-                  tone: event.errors > 0 ? 'error' : 'ok',
-                  text: event.enriched === 0 && event.errors === 0
-                    ? 'Every resource in scope is already enriched.'
-                    : `Enriched ${event.enriched} resource${event.enriched === 1 ? '' : 's'}` +
-                      (event.errors > 0 ? `, ${event.errors} could not be generated.` : '.'),
-                })
-              }
-              if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
-            },
+            followEnrichmentRun(job, setProgress),
           )
-          if (!completed || failed) throw new AdminAccessError()
-          return true
+          return job.result()
         },
       )
       assertCurrent()
       if (result === undefined) return
+      setMessage(enrichmentDoneMessage(result))
       if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['enrichment-agents', slug] })
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Enrichment run failed - please retry.'),
-      })
+      setMessage(failedJobMessage(job, err, 'Enrichment run failed - please retry.'))
     } finally {
       if (context === authority.controller.context) setRunning(false)
     }

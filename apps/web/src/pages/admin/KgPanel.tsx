@@ -13,8 +13,30 @@ import { deleteAgent, getAgents, implementKg, proposeKg } from '../../api/client
 import { KgStrategyEditor } from './KgStrategyEditor.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
 const TASK_BADGE = 'rp-badge rp-badge-quiet'
+
+type ImplementDone = Extract<KgImplementEvent, { type: 'done' }>
+
+/**
+ * Follows one implementation stream: every line goes to the live log, and
+ * the job settles on the agents installed or the reason it stopped, in the
+ * server's words.
+ */
+export function followKgImplement(
+  job: StreamedJob<ImplementDone>,
+  onLog: (event: KgImplementEvent) => void,
+): (event: KgImplementEvent) => void {
+  return job.events((event: KgImplementEvent) => {
+    onLog(event)
+    if (event.type === 'error') job.fail(event)
+    else if (event.type === 'done') {
+      if (Number.isFinite(event.agents)) job.complete(event)
+      else job.uncertain()
+    }
+  })
+}
 
 function ChipGroup({
   title,
@@ -99,35 +121,28 @@ function KgPanelContent(
     setImplementing(true)
     setLog([])
     setMessage(null)
+    const job = new StreamedJob<ImplementDone>(
+      assertCurrent,
+      'Implementation failed - please retry.',
+    )
     try {
       const result = await runExplicit('Implement the graph strategy', async (access) => {
-        let completed = false
-        let failed = false
         await implementKg(
           slug,
           access,
           { applyExisting, includeSummaries, includeMemory },
-          (event) => {
-            assertCurrent()
-            setLog((prev) => [...prev, event])
-            if (event.type === 'error') failed = true
-            if (event.type === 'done') {
-              completed = Number.isFinite(event.agents)
-              setMessage({
-                tone: 'ok',
-                text: `Strategy implemented - ${event.agents} ${
-                  event.agents === 1 ? 'agent' : 'agents'
-                } installed on the box.`,
-              })
-            }
-            if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
-          },
+          followKgImplement(job, (event) => setLog((prev) => [...prev, event])),
         )
-        if (!completed || failed) throw new AdminAccessError()
-        return true
+        return job.result()
       })
       assertCurrent()
       if (result === undefined) return
+      setMessage({
+        tone: 'ok',
+        text: `Strategy implemented - ${result.agents} ${
+          result.agents === 1 ? 'agent' : 'agents'
+        } installed on the box.`,
+      })
       if (sessionAllowed) {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] }),
@@ -136,10 +151,7 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Implementation failed - please retry.'),
-      })
+      setMessage(failedJobMessage(job, err, 'Implementation failed - please retry.'))
     } finally {
       if (context === authority.controller.context) setImplementing(false)
     }

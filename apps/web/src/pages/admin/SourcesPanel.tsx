@@ -8,6 +8,7 @@ import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
 /** Pages one sync run may ingest. Small by default so a first sync is quick. */
 const PAGE_CAPS = [5, 10, 25, 50, 100] as const
@@ -26,6 +27,34 @@ function relativeTime(iso: string): string {
 }
 
 const pageWord = (n: number) => (n === 1 ? 'page' : 'pages')
+
+type SyncDone = Extract<SourceSyncEvent, { type: 'done' }>
+
+/**
+ * Follows one sync stream: every progress line, the finish and the failure go
+ * into `log`, which the row keeps whatever the outcome; `job` settles on the
+ * sync's result or the reason it failed.
+ */
+export function followSync(
+  job: StreamedJob<SyncDone>,
+  log: SourceSyncEvent[],
+): (event: SourceSyncEvent) => void {
+  return job.events((event: SourceSyncEvent) => {
+    if (event.type === 'item') log.push(event)
+    else if (event.type === 'error') {
+      log.push(event)
+      job.fail(event)
+    } else if (event.type === 'done') {
+      log.push(event)
+      if (
+        !Number.isFinite(event.added) || event.added < 0 ||
+        (event.deferred !== undefined &&
+          (!Number.isFinite(event.deferred) || event.deferred < 0))
+      ) job.uncertain()
+      else job.complete(event)
+    } else job.uncertain()
+  })
+}
 
 function SourceRow({
   source,
@@ -70,43 +99,33 @@ function SourceRow({
     setSyncing(true)
     setLog([])
     setMessage(null)
+    const current = () => context === authority.controller.context
+    const job = new StreamedJob<SyncDone>(assertCurrent, 'Sync failed - please retry.')
+    const events: SourceSyncEvent[] = []
     try {
       const result = await runExplicit('Sync website source', async (access) => {
-        let completed: Extract<SourceSyncEvent, { type: 'done' }> | undefined
-        let failed = false
-        const events: SourceSyncEvent[] = []
-        await syncSource(slug, access, source.id, (event) => {
-          assertCurrent()
-          if (event.type === 'done') {
-            if (
-              !Number.isFinite(event.added) || event.added < 0 ||
-              (event.deferred !== undefined &&
-                (!Number.isFinite(event.deferred) || event.deferred < 0))
-            ) failed = true
-            else completed = event
-          } else if (event.type === 'error') failed = true
-          else if (event.type === 'item') events.push(event)
-          else failed = true
-        })
-        if (!completed || failed) throw new AdminAccessError()
-        return { completed, events }
+        await syncSource(slug, access, source.id, followSync(job, events))
+        return job.result()
       })
       assertCurrent()
       if (result === undefined) return
-      setLog([...result.events, result.completed])
       setMessage({
         tone: 'ok',
-        text: `Synced - ${result.completed.added} ${pageWord(result.completed.added)} added.` +
-          (result.completed.deferred
-            ? ` ${result.completed.deferred} left for the next sync.`
-            : ''),
+        text: `Synced - ${result.added} ${pageWord(result.added)} added.` +
+          (result.deferred ? ` ${result.deferred} left for the next sync.` : ''),
       })
-      assertCurrent()
-      await onChanged()
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Sync failed - please retry.') })
+      // A late answer after the identity or role changed is not this session's to show.
+      if (!current()) return
+      setMessage(failedJobMessage(job, err, 'Sync failed - please retry.'))
     } finally {
-      setSyncing(false)
+      if (current()) {
+        setSyncing(false)
+        // The log is kept whatever the outcome - its last lines say what went wrong - and the
+        // row is re-read so "Last sync failed" and the stored reason show at once.
+        setLog([...events])
+        await onChanged().catch(() => {})
+      }
     }
   }
 
