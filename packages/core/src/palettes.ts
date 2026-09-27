@@ -440,7 +440,8 @@ export function validatePalette(palette: Palette): string[] {
 
 // ---------------------------------------------------------------------------
 // A portal on its own colours ('default'): the palette derived from its seeded
-// four-colour identity, held to the same contract as the library palettes.
+// four-colour identity. Its text pairs meet AA whatever the colours are; the rest of the
+// contract depends on the colours themselves (see `paletteFromColours`).
 // ---------------------------------------------------------------------------
 
 /** A portal's seeded four-colour identity (`branding.colours`). */
@@ -539,10 +540,15 @@ export function textOn(
 
 /**
  * The palette a portal on its own colours renders with. The four seeded colours stay as they are
- * (the nav band, the accent, the hero); every role drawn on top of them is chosen for contrast:
- * accent and brand text are deepened until they read at 4.5:1 on the surface and on the washes,
- * the focus ring until 3:1, and the text on the brand, accent and hero grounds is white or ink,
- * whichever reads better. Null when a colour is not a hex colour, which is then used as it is.
+ * (the nav band, the accent, the hero); what is drawn on top of them is chosen for contrast.
+ *
+ * Whatever the colours, accent and brand text are deepened until they read at 4.5:1 on the
+ * surface and on the washes, the focus ring until 3:1, and the text on the solid accent reads at
+ * 4.5:1 (white or ink, whichever reads better, black when neither does). The text on the brand
+ * ground and the hero is chosen the same way, but the 7:1 the contract asks of those, and the
+ * 3:1 nav underline (the accent against the brand ground), depend on the colours themselves: a
+ * mid-tone brand colour cannot reach 7:1 with any text. The default portal colours pass the whole
+ * contract. Null when a colour is not a hex colour, which is then used as it is.
  */
 export function paletteFromColours(colours: PortalColours): Palette | null {
   const primary = normaliseHex(colours.primary)

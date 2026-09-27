@@ -17,6 +17,7 @@
  * a late event after a sign-out or role change is dropped, and the result is
  * then the authority error, never the job's.
  */
+import { StaleAuthorityError } from '../../api/access-lifecycle.ts'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { hostingErrorMessage } from '../../api/hosting-errors.ts'
 import { errorMessage, type Message } from './shared.ts'
@@ -85,6 +86,19 @@ export class StreamedJob<Done> {
   }
 
   /**
+   * The error the starting authority check throws now, if it is no longer current: another
+   * identity or role, or a check still in progress. Undefined while it holds.
+   */
+  authorityError(): unknown {
+    try {
+      this.assertCurrent()
+      return undefined
+    } catch (error) {
+      return error
+    }
+  }
+
+  /**
    * The finished job's `done`. Throws the authority error when the authority
    * changed, the job's own failure when it reported one, and
    * `AdminAccessError` when the outcome is unknown.
@@ -98,15 +112,17 @@ export class StreamedJob<Done> {
 }
 
 /**
- * What the panel shows for a job that did not finish: the reason the job
- * reported, whatever became of the error on its way back (the emergency
- * prompt reports every failure as an unconfirmed result), otherwise the error
- * itself. The caller has already checked that its authority is current.
+ * What the panel shows for a job that did not finish. While the starting authority does not hold
+ * (a check in progress, or the result already failed on it), that is all it says: "Access
+ * changed", never the job's reason. Otherwise it is the reason the job reported, whatever became
+ * of the error on its way back (the emergency prompt reports every failure as an unconfirmed
+ * result), or the error itself.
  */
 export function failedJobMessage(
   job: StreamedJob<unknown> | undefined,
   err: unknown,
   fallback: string,
 ): Message {
-  return { tone: 'error', text: errorMessage(job?.failure ?? err, fallback) }
+  const authority = job?.authorityError() ?? (err instanceof StaleAuthorityError ? err : undefined)
+  return { tone: 'error', text: errorMessage(authority ?? job?.failure ?? err, fallback) }
 }

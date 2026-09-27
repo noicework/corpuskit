@@ -208,6 +208,16 @@ to hide it again. A palette made for one organisation (`listed: false` in
 `packages/core/src/palettes.ts`) is refused with `400 {"error":"palette_not_available"}` unless
 the portal already uses it.
 
+A portal created in the app starts on the `corpuskit` palette. A portal on its own colours (no
+`paletteId`, or `"default"`) keeps those colours for its navigation band, accent and hero, but the
+text and focus drawn on them are chosen for contrast: accent and brand text are deepened until
+they read at 4.5:1 on the page, and text on the accent, the brand colour and the hero is white or
+dark ink, whichever reads better. A portal that was on its own colours before this derivation
+can therefore look slightly different after upgrading (links and citation markers a shade darker,
+dark text on a light accent where there was white), with nothing stored changed. The 7:1 bar for
+text on the brand colour and the hero, and the 3:1 navigation underline, still depend on the
+colours chosen; the library palettes meet them.
+
 Knowledge-box connection accepts
 `{"endpoint":"https://<region>.rag.progress.cloud/api/v1/kb/<box-id>","token":"<token>"}`
 and validates the binding with the provider before saving it. The existing `url` field remains

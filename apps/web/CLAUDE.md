@@ -44,8 +44,9 @@ already fully wired.
 Defined per palette in `packages/core/src/palettes.ts` (with a WCAG contract test - a new or edited
 palette that fails `validatePalette` fails CI). Portals without a library palette derive these from
 their seeded four-colour identity (`paletteFromColours`: the four colours are kept, and the text and
-focus drawn on them are deepened or chosen until they pass the same contract), so the tokens are
-ALWAYS present. Portals created in the app start on the `corpuskit` palette:
+focus drawn on them are deepened or chosen for contrast - AA text pairs whatever the colours, while
+the 7:1 text on the brand and hero grounds and the 3:1 nav underline depend on the colours), so the
+tokens are ALWAYS present. Portals created in the app start on the `corpuskit` palette:
 
 - `--rp-primary` - the dark brand ground: nav band, footer, primary buttons, active tab fills.
 - `--rp-on-primary` - text/icons ON primary. **Never `text-white` on a brand surface** - a palette

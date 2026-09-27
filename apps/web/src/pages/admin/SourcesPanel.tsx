@@ -99,7 +99,7 @@ function SourceRow({
     setSyncing(true)
     setLog([])
     setMessage(null)
-    const current = () => context === authority.controller.context
+    const sameContext = () => context === authority.controller.context
     const job = new StreamedJob<SyncDone>(assertCurrent, 'Sync failed - please retry.')
     const events: SourceSyncEvent[] = []
     try {
@@ -115,16 +115,20 @@ function SourceRow({
           (result.deferred ? ` ${result.deferred} left for the next sync.` : ''),
       })
     } catch (err) {
-      // A late answer after the identity or role changed is not this session's to show.
-      if (!current()) return
+      // A late answer after the identity or role changed is not this session's to show. While
+      // access is being checked, the message says only that access changed.
+      if (!sameContext()) return
       setMessage(failedJobMessage(job, err, 'Sync failed - please retry.'))
     } finally {
-      if (current()) {
+      if (sameContext()) {
         setSyncing(false)
-        // The log is kept whatever the outcome - its last lines say what went wrong - and the
-        // row is re-read so "Last sync failed" and the stored reason show at once.
-        setLog([...events])
-        await onChanged().catch(() => {})
+        // Only while the authority that started the sync still holds: the log is kept whatever
+        // the outcome - its last lines say what went wrong - and the row is re-read so "Last
+        // sync failed" and the stored reason show at once.
+        if (job.authorityError() === undefined) {
+          setLog([...events])
+          await onChanged().catch(() => {})
+        }
       }
     }
   }

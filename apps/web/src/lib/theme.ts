@@ -278,9 +278,10 @@ function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
  * The colour tokens, twelve roles plus the grey suite. With no library
  * palette chosen this derives the role tokens from the portal's seeded
  * four-colour identity (`paletteFromColours`): the four colours themselves
- * are kept, and the text and focus drawn on top of them are chosen to pass
- * the same contract as the library palettes. The grey suite then stays on the
- * house defaults from the stylesheet.
+ * are kept, and the text and focus drawn on top of them are chosen for
+ * contrast (AA text on the page and on the accent whatever the colours; see
+ * `paletteFromColours` for what still depends on them). The grey suite then
+ * stays on the house defaults from the stylesheet.
  */
 export function paletteVars(
   branding: Branding,

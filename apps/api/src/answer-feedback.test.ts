@@ -18,12 +18,14 @@ import {
   ANSWER_FEEDBACK_KEEP,
   ANSWER_FEEDBACK_TEXT_MAX,
   type AnswerFeedback,
+  answerFeedback,
   FeedbackStore,
   type FeedbackStoreApi,
   feedbackSummary,
   FLAGGED_ANSWERS_SHOWN,
   InsightsStore,
   type InsightsStoreApi,
+  parseAnswerFeedback,
   RoutingLog,
   SourceStore,
 } from './stores.ts'
@@ -418,6 +420,27 @@ Deno.test('a stored rating outside the bounds is never read (Durable Object)', (
     expect(store.comments('a', ['L'.repeat(10_000)])).toEqual({})
   } finally {
     f.close()
+  }
+})
+
+Deno.test('a long comment is cut by character, never through one', () => {
+  const shell = '\u{1F41A}'
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+  for (
+    const text of [
+      shell.repeat(1_500),
+      // Where cutting by UTF-16 unit would leave half of the shell behind.
+      `${'a'.repeat(ANSWER_FEEDBACK_TEXT_MAX - 2)}${shell}${'b'.repeat(10)}`,
+    ]
+  ) {
+    const kept = answerFeedback({ learningId: 'learning-emoji', good: false, text }, Date.now())
+    const characters = Array.from(kept.text!)
+    expect(characters).toHaveLength(ANSWER_FEEDBACK_TEXT_MAX)
+    expect(characters.at(-1)).toBe('…')
+    expect(characters.at(-2)).toBe(shell)
+    expect(lone.test(kept.text!)).toBe(false)
+    // What was kept is read back as it was written.
+    expect(parseAnswerFeedback(kept)).toEqual(kept)
   }
 })
 

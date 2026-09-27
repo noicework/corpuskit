@@ -425,7 +425,10 @@ export interface AnswerFeedback {
   text?: string
 }
 
-/** The longest comment kept. A longer one is shortened here, and forwarded to the platform whole. */
+/**
+ * The longest comment kept, in characters (code points). A longer one is shortened here, and
+ * forwarded to the platform whole.
+ */
 export const ANSWER_FEEDBACK_TEXT_MAX = 1_000
 /** Ratings kept per portal; the newest win. */
 export const ANSWER_FEEDBACK_KEEP = 500
@@ -449,14 +452,16 @@ export function answerFeedback(
   now: number,
 ): AnswerFeedback {
   const text = input.text?.trim()
+  // Counted and cut by code point, so a character outside the basic plane is never split.
+  const characters = text ? Array.from(text) : []
   return {
     ts: new Date(now).toISOString(),
     learningId: input.learningId,
     good: input.good,
     ...(text
       ? {
-        text: text.length > ANSWER_FEEDBACK_TEXT_MAX
-          ? `${text.slice(0, ANSWER_FEEDBACK_TEXT_MAX - 1)}…`
+        text: characters.length > ANSWER_FEEDBACK_TEXT_MAX
+          ? `${characters.slice(0, ANSWER_FEEDBACK_TEXT_MAX - 1).join('')}…`
           : text,
       }
       : {}),
