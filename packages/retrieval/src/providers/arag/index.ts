@@ -34,6 +34,7 @@ import type { DocPage } from '@research-portal/core'
 import type {
   AskOptions,
   CatalogOptions,
+  ListResourcesOptions,
   RetrievalProvider,
   SearchOptions,
 } from '../../provider.ts'
@@ -135,6 +136,57 @@ type RelationsGraphResult = {
 /** Catalogue paging: 200 per call, up to 40 calls - 8,000 resources. */
 const CATALOG_PAGE_SIZE = 200
 const CATALOG_MAX_PAGES = 40
+/** A catalogue page that has not answered in this long is given up on, ending the walk there. */
+const CATALOG_PAGE_TIMEOUT_MS = 10_000
+/**
+ * The longest a reader's request (search, Ask, typeahead, the Library) waits on a catalogue walk.
+ * After it the request goes on with the cached listing, or what the walk has read so far, and the
+ * walk carries on for the requests after it.
+ */
+const CATALOG_READER_WAIT_MS = 10_000
+
+/** One read of a portal's catalogue: every displayable resource, as summaries and library items. */
+interface CatalogueListing {
+  at: number
+  resources: ResourceSummary[]
+  items: CatalogItem[]
+  /** False when a page failed or timed out and the listing stops short of the catalogue. */
+  complete: boolean
+}
+
+/** A walk of the catalogue under way, shared by every request for the portal. */
+interface CatalogueWalk {
+  done: Promise<CatalogueListing & { failure?: unknown }>
+  /** What the walk has read so far, for a reader that cannot wait for the rest. */
+  progress: { resources: ResourceSummary[]; items: CatalogItem[] }
+}
+
+class CatalogueTimeoutError extends Error {
+  constructor() {
+    super('The knowledge box took too long to list its catalogue')
+    this.name = 'CatalogueTimeoutError'
+  }
+}
+
+/** Run a read that is given up on, and aborted, after `ms`, whether or not it honours the abort. */
+async function within<T>(ms: number, read: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new CatalogueTimeoutError())
+    }, ms)
+  })
+  try {
+    return await Promise.race([read(controller.signal), timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const byPublishedDesc = (a: ResourceSummary, b: ResourceSummary) =>
+  (b.published ?? '').localeCompare(a.published ?? '')
 /** Health scan reads full text per resource - sample the newest slice. */
 const HEALTH_SCAN_LIMIT = 400
 const HEALTH_SCAN_CONCURRENCY = 12
@@ -1156,6 +1208,11 @@ export interface AragProviderOptions {
    * extraction tier - never to the knowledge box's user-facing answer model.
    */
   augmentationModel?: string
+  /**
+   * Catalogue timing, for tests only: how long one catalogue page may take and how long a
+   * reader waits on a walk. Deployments use the defaults (10 s each).
+   */
+  catalogueTiming?: { pageTimeoutMs?: number; readerWaitMs?: number }
 }
 
 /**
@@ -1183,10 +1240,14 @@ export class AragProvider implements RetrievalProvider {
     string,
     { at: number; groups: { group: string; entities: string[] }[] }
   >()
-  private readonly catalogCache = new Map<
-    string,
-    { at: number; resources: ResourceSummary[]; items: CatalogItem[] }
-  >()
+  /** The last listing read per portal, kept past its TTL for a reader that cannot wait. */
+  private readonly catalogCache = new Map<string, CatalogueListing>()
+  /** The one catalogue walk under way per portal. */
+  private readonly catalogWalks = new Map<string, CatalogueWalk>()
+  /** When each portal's last walk ended, so a failing box is walked at most once per TTL. */
+  private readonly catalogAttempts = new Map<string, number>()
+  /** Bumped by `invalidate`, so a walk started before it never fills the cache after it. */
+  private readonly catalogGenerations = new Map<string, number>()
   /**
    * Platform page summaries by `<slug>/<resourceId>`, `null` when a resource
    * has none. Summaries are written once at ingest, so there is no TTL;
@@ -1224,6 +1285,9 @@ export class AragProvider implements RetrievalProvider {
       if (key.startsWith(`${slug}:`)) this.clients.delete(key)
     }
     this.catalogCache.delete(slug)
+    this.catalogWalks.delete(slug)
+    this.catalogAttempts.delete(slug)
+    this.catalogGenerations.set(slug, (this.catalogGenerations.get(slug) ?? 0) + 1)
     this.entityGroupsCache.delete(slug)
     for (const cache of [this.searchCache, this.graphCache]) {
       for (const key of cache.keys()) {
@@ -1361,55 +1425,140 @@ export class AragProvider implements RetrievalProvider {
     return result
   }
 
-  async listResources(tenant: TenantConfig): Promise<ResourceSummary[]> {
-    return (await this.loadCatalogue(tenant)).resources
+  /**
+   * Every displayable resource in the portal's catalogue. Complete, or the call fails; with
+   * `bounded`, a reader's view within the wait bound instead (see `ListResourcesOptions`).
+   */
+  async listResources(
+    tenant: TenantConfig,
+    options: ListResourcesOptions = {},
+  ): Promise<ResourceSummary[]> {
+    return (await this.loadCatalogue(tenant, options.bounded === true)).resources
   }
 
   /**
    * Every displayable resource as a library item, from the same paged read
    * `listResources` makes and under the same TTL - the publication-date sort
-   * the platform cannot do runs over this.
+   * the platform cannot do runs over this. A reader's view: bounded.
    */
   private async catalogItems(tenant: TenantConfig): Promise<CatalogItem[]> {
-    return (await this.loadCatalogue(tenant)).items
+    return (await this.loadCatalogue(tenant, true)).items
   }
 
+  /**
+   * The portal's catalogue listing. Concurrent requests share one walk. A complete read waits
+   * for it and fails when it stops short; a bounded read waits at most the reader bound, then
+   * goes on with the last listing, however old, or what the walk has read so far.
+   */
   private async loadCatalogue(
     tenant: TenantConfig,
+    bounded: boolean,
   ): Promise<{ resources: ResourceSummary[]; items: CatalogItem[] }> {
     const cached = this.catalogCache.get(tenant.slug)
-    if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached
-    const client = this.client(tenant)
-    // Read the catalogue in pages and build summaries from the page payload
-    // itself. A per-resource fetch here would mean one request per document -
-    // thousands of parallel calls on a real corpus, on the hot search path.
-    const resources: ResourceSummary[] = []
-    const items: CatalogItem[] = []
-    for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
-      // Hidden resources (drafts) are left out: the platform returns them unless
-      // asked not to, and this listing reaches every reader of the portal.
-      const catalog = await client.getJson<
-        { resources?: Record<string, RawResource & { hidden?: boolean }> }
-      >(
-        `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin&hidden=false`,
-      )
-      const batch = Object.entries(catalog.resources ?? {})
-      for (const [id, raw] of batch) {
-        // Failed ingests and junk (hash/bot-challenge) titles never reach a
-        // user-facing list - see isDisplayableResource. In-app documentation
-        // is research-invisible: it never appears in the research catalogue.
-        // A hidden resource that comes back regardless is left out too.
-        if (raw.hidden === true) continue
-        if (!isDisplayableResource(raw) || isDocumentationResource(raw)) continue
-        resources.push(this.toSummary(id, raw))
-        items.push(catalogItemFromRaw(id, raw))
+    const now = Date.now()
+    const fresh = cached !== undefined && now - cached.at < CATALOG_TTL_MS
+    if (!bounded) {
+      if (fresh && cached.complete) return cached
+      const walked = await this.catalogueWalk(tenant).done
+      if (!walked.complete) {
+        throw walked.failure ?? new Error('The knowledge box catalogue could not be read in full')
       }
-      if (batch.length < CATALOG_PAGE_SIZE) break
+      return walked
     }
-    resources.sort((a, b) => (b.published ?? '').localeCompare(a.published ?? ''))
-    const entry = { at: Date.now(), resources, items }
-    this.catalogCache.set(tenant.slug, entry)
-    return entry
+    if (fresh) return cached
+    // A walk that ended short is not started again by every reader: once per TTL at most.
+    const running = this.catalogWalks.get(tenant.slug)
+    const lastAttempt = this.catalogAttempts.get(tenant.slug)
+    if (
+      !running && cached !== undefined && lastAttempt !== undefined &&
+      now - lastAttempt < CATALOG_TTL_MS
+    ) return cached
+    const walk = running ?? this.catalogueWalk(tenant)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const waited = await Promise.race([
+      walk.done,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(
+          () => resolve(null),
+          this.opts.catalogueTiming?.readerWaitMs ?? CATALOG_READER_WAIT_MS,
+        )
+      }),
+    ])
+    clearTimeout(timer)
+    if (waited) return waited
+    return cached ?? {
+      resources: [...walk.progress.resources].sort(byPublishedDesc),
+      items: [...walk.progress.items],
+    }
+  }
+
+  /**
+   * The walk of a portal's catalogue under way, or a new one. It reads the catalogue in pages
+   * and builds summaries from the page payload itself: a per-resource fetch here would mean one
+   * request per document, thousands of calls on a real corpus, on the hot search path. A page
+   * that fails or takes longer than the page timeout ends the walk with what it has read.
+   */
+  private catalogueWalk(tenant: TenantConfig): CatalogueWalk {
+    const running = this.catalogWalks.get(tenant.slug)
+    if (running) return running
+    // First, since a changed binding invalidates the portal's catalogue state.
+    const client = this.client(tenant)
+    const generation = this.catalogGenerations.get(tenant.slug) ?? 0
+    const pageTimeout = this.opts.catalogueTiming?.pageTimeoutMs ?? CATALOG_PAGE_TIMEOUT_MS
+    const progress = { resources: [] as ResourceSummary[], items: [] as CatalogItem[] }
+    const done = (async () => {
+      let complete = false
+      let failure: unknown
+      try {
+        for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
+          // Hidden resources (drafts) are left out: the platform returns them unless
+          // asked not to, and this listing reaches every reader of the portal.
+          const catalog = await within(pageTimeout, (signal) =>
+            client.getJson<
+              { resources?: Record<string, RawResource & { hidden?: boolean }> }
+            >(
+              `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin&hidden=false`,
+              { signal },
+            ))
+          const batch = Object.entries(catalog.resources ?? {})
+          for (const [id, raw] of batch) {
+            // Failed ingests and junk (hash/bot-challenge) titles never reach a
+            // user-facing list - see isDisplayableResource. In-app documentation
+            // is research-invisible: it never appears in the research catalogue.
+            // A hidden resource that comes back regardless is left out too.
+            if (raw.hidden === true) continue
+            if (!isDisplayableResource(raw) || isDocumentationResource(raw)) continue
+            progress.resources.push(this.toSummary(id, raw))
+            progress.items.push(catalogItemFromRaw(id, raw))
+          }
+          if (batch.length < CATALOG_PAGE_SIZE) break
+        }
+        // Past the page cap the listing is the first 8,000 resources, as it always was.
+        complete = true
+      } catch (error) {
+        failure = error
+      }
+      const listing: CatalogueListing = {
+        at: Date.now(),
+        resources: [...progress.resources].sort(byPublishedDesc),
+        items: [...progress.items],
+        complete,
+      }
+      if ((this.catalogGenerations.get(tenant.slug) ?? 0) === generation) {
+        this.catalogAttempts.set(tenant.slug, listing.at)
+        // A short read never replaces a complete listing, however old; it does replace a short one.
+        if (complete || !this.catalogCache.get(tenant.slug)?.complete) {
+          this.catalogCache.set(tenant.slug, listing)
+        }
+      }
+      return { ...listing, failure }
+    })()
+    const walk: CatalogueWalk = { done, progress }
+    this.catalogWalks.set(tenant.slug, walk)
+    void done.finally(() => {
+      if (this.catalogWalks.get(tenant.slug) === walk) this.catalogWalks.delete(tenant.slug)
+    })
+    return walk
   }
 
   /**
@@ -1657,12 +1806,21 @@ export class AragProvider implements RetrievalProvider {
     if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
       listing = cached
     } else {
-      listing = await this.searchUncached(tenant, trimmed, opts)
-      if (this.searchCache.size >= SEARCH_CACHE_MAX) {
-        const oldest = this.searchCache.keys().next().value
-        if (oldest !== undefined) this.searchCache.delete(oldest)
+      const uncached = await this.searchUncached(tenant, trimmed, opts)
+      listing = uncached
+      // A listing made before the portal's catalogue was first read lacks the metadata the
+      // catalogue lends; it is not kept, so the next identical search picks that up.
+      if (uncached.catalogued) {
+        if (this.searchCache.size >= SEARCH_CACHE_MAX) {
+          const oldest = this.searchCache.keys().next().value
+          if (oldest !== undefined) this.searchCache.delete(oldest)
+        }
+        this.searchCache.set(cacheKey, {
+          at: Date.now(),
+          results: uncached.results,
+          rawById: uncached.rawById,
+        })
       }
-      this.searchCache.set(cacheKey, { at: Date.now(), ...listing })
     }
     return {
       ...listing.results,
@@ -1678,7 +1836,9 @@ export class AragProvider implements RetrievalProvider {
     tenant: TenantConfig,
     trimmed: string,
     opts: SearchOptions,
-  ): Promise<{ results: SearchResults; rawById: Map<string, RawResource> }> {
+  ): Promise<
+    { results: SearchResults; rawById: Map<string, RawResource>; catalogued: boolean }
+  > {
     const client = this.client(tenant)
     const mode = opts.mode ?? 'hybrid'
     const features = mode === 'hybrid' ? ['keyword', 'semantic'] : [mode]
@@ -1736,9 +1896,16 @@ export class AragProvider implements RetrievalProvider {
     // studyDesignOf), so it is applied to the results below, not sent.
     const filters = (opts.topicIds ?? []).map((t) => `/classification.labels/topic/${t}`)
     if (filters.length > 0) body.filters = filters
+    // The catalogue lends results their full metadata. A DOI query and a kind filter need it to
+    // decide what matches, so they wait for it within the reader bound; a plain search never
+    // waits on the listing and uses it only if one is already cached.
+    const needsCatalogue = wantedDoi !== undefined || (opts.kindIds?.length ?? 0) > 0
+    const catalogued = needsCatalogue || this.catalogCache.has(tenant.slug)
     const [found, all] = await Promise.all([
       this.findWithFallback(client, body),
-      this.listResources(tenant),
+      needsCatalogue
+        ? this.listResources(tenant, { bounded: true })
+        : Promise.resolve(this.catalogCache.get(tenant.slug)?.resources ?? []),
     ])
     const byId = new Map(all.map((r) => [r.id, r]))
     // Failed ingests and junk (hash/bot-challenge) titles never surface as a
@@ -1844,7 +2011,7 @@ export class AragProvider implements RetrievalProvider {
       }),
     ).filter((r) => kinds.length === 0 || (r.kind !== undefined && kinds.includes(r.kind)))
     const relatedQuestions = deriveRelatedQuestions(trimmed, tenant.suggestedQuestions)
-    return { results: { query: trimmed, resources, relatedQuestions }, rawById }
+    return { results: { query: trimmed, resources, relatedQuestions }, rawById, catalogued }
   }
 
   /**
@@ -2447,7 +2614,9 @@ export class AragProvider implements RetrievalProvider {
     passagesByResource: Record<string, string[]>
   }> {
     const client = this.client(tenant)
-    const catalogue = await this.listResources(tenant).catch(() => [] as ResourceSummary[])
+    const catalogue = await this.listResources(tenant, { bounded: true }).catch(() =>
+      [] as ResourceSummary[]
+    )
     const byId = new Map(catalogue.map((r) => [r.id, r]))
     const res = await client.postStream('/ask', {
       query,
@@ -3304,7 +3473,7 @@ export class AragProvider implements RetrievalProvider {
     }
 
     const [resources, platform] = await Promise.all([
-      this.listResources(tenant).catch(() => [] as ResourceSummary[]),
+      this.listResources(tenant, { bounded: true }).catch(() => [] as ResourceSummary[]),
       this.client(tenant)
         .getJson<{
           entities?: { entities?: { value?: string }[] }
@@ -3782,7 +3951,9 @@ export class AragProvider implements RetrievalProvider {
     const citationMode = this.opts.citationMode ?? CITATION_MODE
     let footnotes = citationMode === 'llm_footnotes' ? new FootnoteStream() : undefined
     yield { type: 'stage', stage: 'preprocessing', status: 'started' }
-    const catalogue = await this.listResources(tenant).catch(() => [] as ResourceSummary[])
+    const catalogue = await this.listResources(tenant, { bounded: true }).catch(() =>
+      [] as ResourceSummary[]
+    )
     const byId = new Map(catalogue.map((r) => [r.id, r]))
     yield { type: 'stage', stage: 'preprocessing', status: 'completed' }
     yield { type: 'stage', stage: 'retrieval', status: 'started' }

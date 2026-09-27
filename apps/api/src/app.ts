@@ -215,6 +215,7 @@ import { passageDenominators, unusedReferences } from './synthesis-check.ts'
 import {
   authorLine,
   isCatalogueAuthor,
+  looksLikeAuthorQuery,
   lookupOf,
   metadataHit,
   researcherLabel,
@@ -2443,7 +2444,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // platform has no author index of its own.
     const identifier = parseIdentifier(parsed.data.q)
     if (identifier) {
-      const catalogue = await provider.listResources(config).catch(() => [])
+      const catalogue = await provider.listResources(config, { bounded: true }).catch(() => [])
       const hits = resolveIdentifier(catalogue, identifier)
       const label = identifier.kind === 'doi' ? 'DOI' : identifier.kind.toUpperCase()
       return c.json(merchandiseSearchResults(enrichments, config.slug, {
@@ -2459,11 +2460,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ...(route ? { route } : {}),
       }))
     }
-    const catalogue = await provider.listResources(config).catch(() => [])
     // A surname, or a person's name in any of its forms ("Wilma O'Neill",
     // "W O'Neill", "ONeill WJ"): the author's papers from the catalogue. A
     // name whose surname the catalogue knows under another initial is an
     // empty lookup - listed as retrieval finds it, never answered (D3-04).
+    // Any other query is a plain search, which never waits on the catalogue.
+    const catalogue = looksLikeAuthorQuery(parsed.data.q)
+      ? await provider.listResources(config, { bounded: true }).catch(() => [])
+      : []
     const byAuthor = resolveAuthor(catalogue, parsed.data.q) ??
       resolvePersonName(catalogue, parsed.data.q)
     const searchIntent = intentParam ?? route?.intent
@@ -6233,6 +6237,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
             })
         }
       }
+      // The grounding probe needs no catalogue, so it starts before the listing is read (see the
+      // grounding gate below), as the classifier does above.
+      const probe = async (intent: string | undefined) => {
+        const found = await provider.search(config, query, { intent, pageSize: 8 })
+        const best = found.resources.reduce((m, r) => Math.max(m, r.relevance), 0)
+        return { resources: found.resources, best }
+      }
+      const probedIntent = askOpts.intent
+      const probePending = !documentScope && firstTurn ? probe(probedIntent) : null
+      // The gate is best-effort and its real await is below, inside a try.
+      // A handler is attached here so a platform failure between the two
+      // (the pin's own find awaits in between) is never an unhandled
+      // rejection, which takes the whole server down.
+      probePending?.catch(() => {})
       // The study-name guard: a paper the question names ("the BREATHS
       // trial", "UMPIRE", a quoted title) is pinned into the grounding set
       // and leads the sources, whatever retrieval ranks first.
@@ -6248,7 +6266,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const merchandisedCatalogue = documentScope ? [] : merchandiseSummaries(
         enrichments,
         config.slug,
-        await provider.listResources(config).catch(() => []),
+        await provider.listResources(config, { bounded: true }).catch(() => []),
       )
       const pinned = !documentScope
         ? matchStudies(query, merchandisedCatalogue, lexicon)
@@ -6359,18 +6377,6 @@ export function buildApp(opts: BuildAppOptions): Hono {
       const STRONG_MATCH = 0.9
       /** Closest matches previewed before generation, and named in a decline. */
       const NEAREST_SHOWN = 8
-      const probe = async (intent: string | undefined) => {
-        const found = await provider.search(config, query, { intent, pageSize: 8 })
-        const best = found.resources.reduce((m, r) => Math.max(m, r.relevance), 0)
-        return { resources: found.resources, best }
-      }
-      const probedIntent = askOpts.intent
-      const probePending = !documentScope && firstTurn ? probe(probedIntent) : null
-      // The gate is best-effort and its real await is below, inside a try.
-      // A handler is attached here so a platform failure between the two
-      // (the pin's own find awaits in between) is never an unhandled
-      // rejection, which takes the whole server down.
-      probePending?.catch(() => {})
       const pinnedPending = pinnedIds.length > 0
         ? provider.search(config, query, { resourceIds: pinnedIds, pageSize: 8 }).then(
           (found) => found.resources,

@@ -144,6 +144,20 @@ function surnameOf(author: string): string {
 }
 
 /**
+ * A bare surname, or a citation-shaped "Surname YYYY ..." (the rest of the query is the topic and
+ * does not narrow the author match).
+ */
+const AUTHOR_QUERY = /^([A-Za-z][A-Za-z'’-]{3,})(?:\s+((?:19|20)\d\d)\b.*)?$/
+
+/**
+ * Whether a query has the shape of an author lookup (`resolveAuthor` or `resolvePersonName`), so
+ * it is worth reading the catalogue for. Any other query never waits on the catalogue.
+ */
+export function looksLikeAuthorQuery(query: string): boolean {
+  return AUTHOR_QUERY.test(query.trim()) || parsePersonQuery(query) !== null
+}
+
+/**
  * Resources whose author list carries this surname, when the query is a bare
  * surname (one word, letters only, four or more characters, not a lexicon
  * term or a gene). Returns null when the query is not an author-shaped
@@ -154,9 +168,7 @@ export function resolveAuthor(
   query: string,
 ): { surname: string; year?: string; matches: ResourceSummary[] } | null {
   const q = query.trim()
-  // A bare surname, or a citation-shaped "Surname YYYY ..." (the rest of the
-  // query is the topic and does not narrow the author match).
-  const m = /^([A-Za-z][A-Za-z'’-]{3,})(?:\s+((?:19|20)\d\d)\b.*)?$/.exec(q)
+  const m = AUTHOR_QUERY.exec(q)
   if (!m?.[1]) return null
   const surname = m[1]
   const year = m[2]

@@ -165,8 +165,18 @@ export interface CatalogOptions {
  * configuration, not a rewrite. Server-side only - credentials never reach
  * the client.
  */
+/** How a caller reads the catalogue listing. */
+export interface ListResourcesOptions {
+  /**
+   * A reader's request that must not wait on a slow box: answer within a bound with the cached
+   * listing, or as much of it as has been read, possibly none, rather than the whole catalogue.
+   * Without it the listing is complete or the call fails.
+   */
+  bounded?: boolean
+}
+
 export interface RetrievalProvider {
-  listResources(tenant: TenantConfig): Promise<ResourceSummary[]>
+  listResources(tenant: TenantConfig, options?: ListResourcesOptions): Promise<ResourceSummary[]>
   /**
    * One resource by id. A hidden resource (a draft) is null unless `hidden` is set, which only a
    * caller managing content may ask for.
