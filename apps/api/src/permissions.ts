@@ -436,6 +436,11 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/hidden', 'content.write', 'portal', {
     subActions: [HIDDEN_RESOURCES_ENABLE],
   }),
+  // Deleting a document, published or a draft: the same permission as purge-failed and reingest,
+  // which already delete resources.
+  entry('http', 'DELETE', '/api/admin/t/:slug/resources/:id', 'content.write', 'portal', {
+    subActions: [{ action: 'resource.delete', permission: 'content.write', scope: 'portal' }],
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'PATCH', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),

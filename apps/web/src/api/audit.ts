@@ -25,6 +25,7 @@ export const AUDIT_ACTIONS = [
   'migration.admin_emails',
   'request.denied',
   'request.privileged',
+  'resource.delete',
   'resource.questions.generate',
   'resource.questions.cache',
   'tenant.appearance.update',

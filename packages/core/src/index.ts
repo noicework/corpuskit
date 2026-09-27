@@ -486,6 +486,11 @@ export const RecentResourceSchema = z.object({
   created: z.string().optional(),
   /** Draft resources are hidden from searchers until published. */
   hidden: z.boolean().optional(),
+  /**
+   * A crawled link still unprocessed, or unreadable, an hour after it was added. It holds its
+   * provisional bytes against a storage limit until it is measured or deleted.
+   */
+  stuck: z.boolean().optional(),
 })
 
 /** Progress events streamed by corpus analysis (interrogate the box, derive

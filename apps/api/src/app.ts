@@ -24,6 +24,8 @@ import {
   linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
+  ResourceCleanupError,
+  withinTimeout,
   withRequestAuthority,
 } from './lifecycle-management.ts'
 import {
@@ -106,6 +108,8 @@ import type {
   Citation,
   FacetCounts,
   MigrationEvent,
+  RecentResource,
+  ResourceSummary,
   RouteDecision,
   ScoredResource,
   TenantConfig,
@@ -618,6 +622,18 @@ const sourcePatchSchema = z.object({
 const hiddenBodySchema = z.object({ hidden: z.boolean() }).strict()
 /** The most recent additions one request may list. */
 const RECENT_LIMIT_MAX = 100
+/** Stuck links Recent additions lists beyond the newest additions, and how long each read may take. */
+const STUCK_ROWS_MAX = 20
+const STUCK_READ_TIMEOUT_MS = 8_000
+/** Resource ids a delete accepts: ones the audit log can record as its target. */
+const DELETABLE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,159}$/
+/**
+ * A delete the knowledge box answered with a refusal, or that the portal refused before sending:
+ * nothing was deleted. Anything else (a timeout, a server error, no answer) may have deleted it.
+ */
+const definiteRefusal = (error: unknown) =>
+  error instanceof PortalLifecycleError ||
+  (error instanceof AragApiError && error.status >= 400 && error.status < 500)
 /** A knowledge box without hidden resources, which this server cannot turn on. */
 class HiddenResourcesOff extends Error {}
 /** The platform's refusal to hide a resource, on create or later, where hidden resources are off. */
@@ -1500,7 +1516,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     detail = {},
     scope: Scope = classification(c).scope,
     target: { kind: string; id?: string } = { kind: 'request' },
-    classify?: (result: T) => 'success' | 'failure',
+    classify?: (result: T) => 'success' | 'failure' | 'uncertain',
   ) =>
     declaredSubAction(c.req.method, path, action, (declaration) =>
       executeAudited({
@@ -2594,6 +2610,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const FACET_MEMO_MS = 30_000
   const facetMemo = new Map<string, { at: number; counts: Record<string, number> }>()
   const untaggedMemo = new Map<string, { at: number; count: number }>()
+  /** Drop a portal's memoised facet counts, so a deleted document stops counting at once. */
+  const forgetFacets = (slug: string) => {
+    for (const key of facetMemo.keys()) if (key.startsWith(`${slug}:`)) facetMemo.delete(key)
+    untaggedMemo.delete(slug)
+  }
   async function facetsFor(config: TenantConfig, labelsets: string[]): Promise<FacetCounts> {
     const now = Date.now()
     const out: FacetCounts = {}
@@ -4550,8 +4571,43 @@ export function buildApp(opts: BuildAppOptions): Hono {
     ) {
       return c.json({ error: 'invalid_request' }, 400)
     }
-    return c.json(await management!.recentResources(config, limit))
+    return c.json(await withStuckLinks(config, await management!.recentResources(config, limit)))
   })
+
+  /**
+   * Links stuck on the capacity ledger belong in Recent additions however old they are, marked
+   * as stuck, so a curator refused with `links_stuck` can always find one and delete it. A link
+   * the box cannot read is still listed, by id, so its space can be freed.
+   */
+  const withStuckLinks = async (
+    config: TenantConfig,
+    rows: RecentResource[],
+  ): Promise<RecentResource[]> => {
+    const stuck = lifecycle.stuckLinks(config.slug)
+    if (stuck.length === 0) return rows
+    const flagged = new Set(stuck)
+    const listed = new Set(rows.map((row) => row.id))
+    const older = await Promise.all(
+      stuck.filter((id) => !listed.has(id)).slice(0, STUCK_ROWS_MAX).map(async (id) => {
+        const found = await withinTimeout(
+          () => provider.resource(config, id, { hidden: true }),
+          STUCK_READ_TIMEOUT_MS,
+        ).catch(() => null)
+        const readable = found?.id === id ? found : null
+        return {
+          id,
+          title: readable?.title || 'A link that could not be processed',
+          status: 'pending' as const,
+          hidden: readable?.hidden === true,
+          stuck: true,
+        }
+      }),
+    )
+    return [
+      ...rows.map((row) => flagged.has(row.id) ? { ...row, stuck: true } : row),
+      ...older,
+    ]
+  }
 
   /**
    * Turn on the knowledge box's hidden resources (they ship off) when this server holds the
@@ -5552,6 +5608,118 @@ export function buildApp(opts: BuildAppOptions): Hono {
     } catch (err) {
       if (err instanceof HiddenResourcesOff) return c.json(HIDDEN_RESOURCES_OFF, 409)
       throw err
+    }
+    return c.json({ ok: true })
+  })
+
+  /**
+   * Delete one document for good, published or a draft. The knowledge box deletes it first, in
+   * the same step as the portal's adds, and the capacity ledger releases it: its size, or the
+   * provisional bytes of a link still awaiting measurement. Then its enrichments and cached
+   * suggested questions go. Saved research that quotes it belongs to the people who saved it and
+   * is kept. A delete the box refuses changes nothing (502). A delete whose clean-up does not
+   * finish is recorded as uncertain, and deleting the same id again finishes it: the box then
+   * no longer has the document, and only what the portal still keeps under the id is cleared.
+   */
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/resources/:id'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const unavailable = requireManagement(c)
+    if (unavailable) return unavailable
+    const id = c.req.param('id')
+    if (!resourceIdentifier(id) || !DELETABLE_ID.test(id)) return adminNotFound(c)
+    const slug = config.slug
+    // One read, drafts included, in this portal's own box. If it fails, nothing is changed.
+    let resource: ResourceSummary | null
+    try {
+      const found = await provider.resource(config, id, { hidden: true })
+      resource = found?.id === id ? found : null
+    } catch {
+      return c.json({
+        error: 'upstream_unavailable',
+        message: 'The document could not be read, so it was not deleted. Try again shortly.',
+      }, 502)
+    }
+    const onLedger = lifecycle.tracksResource(slug, id)
+    const enriched = enrichments.holdsResource(slug, id)
+    // Not in the box and nothing kept for it here: unknown, another portal's, or already gone.
+    if (!resource && !onLedger && !enriched) return adminNotFound(c)
+    // The add that created it has not settled, so the ledger could not release it yet.
+    if (resource && !onLedger && lifecycle.addsInFlight(slug) > 0) {
+      return c.json({
+        error: 'add_in_progress',
+        message:
+          'Documents are still being added to this portal, so this one cannot be deleted yet. Try again in a moment.',
+      }, 409)
+    }
+    let deleted = !resource
+    let refusal: unknown
+    let complete = true
+    const detail = {
+      ...(resource ? { resourceKind: resource.type, draft: resource.hidden === true } : {}),
+      ...(resource ? {} : { cleanupOnly: true }),
+    }
+    try {
+      await subAction(
+        c,
+        '/api/admin/t/:slug/resources/:id',
+        'resource.delete',
+        async () => {
+          if (resource) {
+            try {
+              await management!.deleteResource(config, id)
+            } catch (error) {
+              if (!(error instanceof ResourceCleanupError)) {
+                refusal = error
+                return 'refused' as const
+              }
+              complete = false
+            }
+            deleted = true
+          } else if (onLedger) {
+            try {
+              lifecycle.dropResource(slug, id)
+            } catch {
+              complete = false
+            }
+          }
+          if (enriched) {
+            try {
+              enrichments.forgetResource(slug, id)
+            } catch {
+              complete = false
+            }
+          }
+          forgetFacets(slug)
+          return complete ? 'deleted' as const : 'incomplete' as const
+        },
+        detail,
+        undefined,
+        { kind: 'resource', id },
+        (result) =>
+          result === 'deleted'
+            ? 'success'
+            : result === 'incomplete' || !definiteRefusal(refusal)
+            ? 'uncertain'
+            : 'failure',
+      )
+    } catch (error) {
+      if (error instanceof AuditWriteError) throw error
+      complete = false
+    }
+    if (refusal instanceof PortalLifecycleError) return c.json(refusal.body, refusal.status)
+    if (!deleted) {
+      return c.json({
+        error: 'delete_failed',
+        message: 'The document could not be deleted, and nothing was changed. Try again shortly.',
+      }, 502)
+    }
+    if (!complete) {
+      return c.json({
+        error: 'cleanup_incomplete',
+        message:
+          'The document was deleted, but some of what the portal kept for it could not be cleared. Try again to finish.',
+      }, 500)
     }
     return c.json({ ok: true })
   })
