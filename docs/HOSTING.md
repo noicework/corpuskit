@@ -1416,6 +1416,10 @@ Durable Object's SQLite database, not in R2 or another blob store, and locally i
 `BRANDING_PATH`. Stores that cache records in memory (bindings, enrichments, knowledge graph
 proposals and the local portal registry) drop them too.
 
+Answer feedback also leaves a live portal on its own: the daily maintenance pass (the one that
+applies `AUDIT_RETENTION_DAYS`) removes every rating older than 90 days, comment included, on
+every portal.
+
 ```json
 200 { "ok": true, "slug": "acme",
       "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0,

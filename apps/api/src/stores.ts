@@ -627,6 +627,33 @@ export class FeedbackStore {
     return found
   }
 
+  /**
+   * Remove every portal's ratings older than the window, for the daily maintenance pass: a
+   * reader's comment leaves after `ANSWER_FEEDBACK_DAYS` even on a portal no one rates again.
+   * Returns how many ratings it removed.
+   */
+  purgeExpired(): number {
+    const dir = join(this.dataDir, 'feedback')
+    let names: string[]
+    try {
+      names = readdirSync(dir).filter((name) => name.endsWith('.json'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+    let removed = 0
+    for (const name of names) {
+      const slug = name.slice(0, -'.json'.length)
+      const all = this.readAll(slug)
+      const kept = retainedFeedback(all, this.now())
+      if (kept.length === all.length) continue
+      removed += all.length - kept.length
+      if (kept.length === 0) eraseFile(this.pathFor(slug))
+      else writeJson(this.pathFor(slug), kept)
+    }
+    return removed
+  }
+
   /** Remove the portal's ratings (see `PortalErasure`). */
   erase(slug: string): number {
     const segment = portalSegment(slug)

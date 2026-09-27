@@ -8,6 +8,7 @@ import {
   looksLikeChallengePage,
 } from './crawl.ts'
 import { type Source, type SourceStoreApi, type WatchStoreApi } from './stores.ts'
+import { FeedbackStore, type FeedbackStoreApi } from './stores.ts'
 import { type EnrichmentStoreApi, runEnrichmentOverCorpus } from './enrichments.ts'
 import { runSuggestedQuestionsOverCorpus } from './suggested-questions.ts'
 import type { TenantStoreApi } from './tenants.ts'
@@ -125,6 +126,17 @@ interface MaintenanceStores {
   watches: WatchStoreApi
   enrichments: EnrichmentStoreApi
   lifecycle?: PortalLifecycleStore
+  /** Answer feedback, whose expired ratings the retention pass removes. */
+  feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
+}
+
+/** Remove expired answer feedback; a failure is logged and never stops the maintenance jobs. */
+function purgeExpiredFeedback(feedback: MaintenanceStores['feedback']): void {
+  try {
+    feedback?.purgeExpired()
+  } catch {
+    console.error('[scheduler] expired answer feedback could not be removed')
+  }
 }
 
 export async function runSystemMaintenance(
@@ -140,6 +152,7 @@ export async function runSystemMaintenance(
   const sources = guardPortalWrites(stores.sources, stores.lifecycle)
   const enrichments = guardPortalWrites(stores.enrichments, stores.lifecycle)
   if (retain) stores.rbac.retainAudit(days)
+  if (retain) purgeExpiredFeedback(stores.feedback)
   for (const job of jobs) {
     await runSystemJob(stores.rbac.audit, job, (context) => {
       context.localMutations = stores.localMutations
@@ -580,7 +593,16 @@ export function startScheduler(
   env: Record<string, string | undefined>,
   lifecycle?: PortalLifecycleStore,
 ): () => void {
-  const stores = { rbac, tenants, sources, watches, enrichments, lifecycle }
+  // The feedback files `buildApp` keeps by default, under the same DATA_DIR.
+  const stores = {
+    rbac,
+    tenants,
+    sources,
+    watches,
+    enrichments,
+    lifecycle,
+    feedback: new FeedbackStore(),
+  }
   const runDaily = () =>
     runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'])
   const runEnrichments = () =>

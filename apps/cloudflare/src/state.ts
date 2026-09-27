@@ -614,6 +614,17 @@ export class DurableState {
     )
   }
 
+  /** Remove every portal's ratings older than `cutoff`, returning how many went. */
+  purgeFeedback(cutoff: number): number {
+    this.guardLocalWrite()
+    const expired = this.sql.exec<{ n: number }>(
+      'SELECT count(*) AS n FROM answer_feedback WHERE rated_at < ?',
+      cutoff,
+    ).one().n
+    if (expired) this.sql.exec('DELETE FROM answer_feedback WHERE rated_at < ?', cutoff)
+    return expired
+  }
+
   /** The comments on the named answers, from `cutoff` on. */
   feedbackComments(
     slug: string,
@@ -1365,6 +1376,11 @@ export class DurableFeedbackStore implements FeedbackStoreApi {
 
   comments(slug: string, learningIds: readonly string[]): Record<string, string> {
     return this.state.feedbackComments(slug, learningIds, this.cutoff())
+  }
+
+  /** Every portal's ratings past the window, for the daily maintenance pass. */
+  purgeExpired(): number {
+    return this.state.purgeFeedback(this.cutoff())
   }
 
   erase(slug: string): number {

@@ -6,6 +6,8 @@ import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { DurableFeedbackStore } from '../../cloudflare/src/state.ts'
 import { buildApp as buildRawApp } from './app.ts'
 import { BindingStore } from './bindings.ts'
+import { EnrichmentStore } from './enrichments.ts'
+import { runSystemMaintenance } from './scheduler.ts'
 import { createEnforcementFixture, matrixManagement } from './enforcement-fixture.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
@@ -441,6 +443,86 @@ Deno.test('Insights reads comments only for the unhelpful answers it lists', () 
   expect(commentReads).toHaveLength(1)
   expect(commentReads[0]).toHaveLength(FLAGGED_ANSWERS_SHOWN)
   expect(summary.flagged[0]!.comment).toBe('Comment on learning-000')
+})
+
+Deno.test('the daily maintenance pass removes expired ratings (Durable Object)', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const now = Date.now()
+    for (
+      const [slug, learningId, days] of [
+        ['a', 'learning-expired', ANSWER_FEEDBACK_DAYS + 1],
+        ['a', 'learning-recent', 1],
+        ['b', 'learning-long-gone', ANSWER_FEEDBACK_DAYS + 400],
+      ] as const
+    ) {
+      f.database.exec(
+        'INSERT INTO answer_feedback (tenant_slug, learning_id, good, comment, rated_at) VALUES (?, ?, ?, ?, ?)',
+        slug,
+        learningId,
+        0,
+        'reader@example.org says the year is wrong',
+        now - days * DAY,
+      )
+    }
+    // The stores the Worker's maintenance pass is given.
+    await runSystemMaintenance(matrixManagement([]), f.stores, undefined, [])
+    expect(
+      f.database.all('SELECT tenant_slug, learning_id FROM answer_feedback ORDER BY learning_id'),
+    ).toEqual([{ tenant_slug: 'a', learning_id: 'learning-recent' }])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('the daily maintenance pass removes expired ratings (local server)', async () => {
+  const directory = Deno.makeTempDirSync({ prefix: 'answer-feedback-purge-' })
+  const env = { DATA_DIR: directory, TENANTS_PATH: join(directory, 'tenants.json') }
+  const { database, rbac } = openLocalRbac(env)
+  try {
+    const owned = localOwnedStores(directory, database, rbac.audit, env)
+    const now = Date.now()
+    const rated = (learningId: string, days: number) => ({
+      ts: new Date(now - days * DAY).toISOString(),
+      learningId,
+      good: false,
+      text: 'reader@example.org says the year is wrong',
+    })
+    Deno.mkdirSync(join(directory, 'feedback'))
+    Deno.writeTextFileSync(
+      join(directory, 'feedback', 'a.json'),
+      JSON.stringify([
+        rated('learning-recent', 1),
+        rated('learning-expired', ANSWER_FEEDBACK_DAYS + 1),
+      ]),
+    )
+    Deno.writeTextFileSync(
+      join(directory, 'feedback', 'b.json'),
+      JSON.stringify([rated('learning-long-gone', ANSWER_FEEDBACK_DAYS + 400)]),
+    )
+    await runSystemMaintenance(
+      matrixManagement([]),
+      {
+        rbac,
+        tenants: owned.tenants!,
+        sources: new SourceStore(directory),
+        watches: owned.watches,
+        enrichments: new EnrichmentStore(directory),
+        feedback: new FeedbackStore(directory),
+      },
+      undefined,
+      [],
+    )
+    expect(
+      JSON.parse(Deno.readTextFileSync(join(directory, 'feedback', 'a.json')))
+        .map((r: AnswerFeedback) => r.learningId),
+    ).toEqual(['learning-recent'])
+    // A portal with nothing left keeps no file.
+    expect(() => Deno.statSync(join(directory, 'feedback', 'b.json'))).toThrow(Deno.errors.NotFound)
+  } finally {
+    database.close()
+    Deno.removeSync(directory, { recursive: true })
+  }
 })
 
 Deno.test('a privileged rating passes the Durable Object audit boundary as a declared mutation', async () => {
