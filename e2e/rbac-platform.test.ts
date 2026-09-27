@@ -26,6 +26,19 @@ async function fill(page: Page, selector: string, value: string) {
   }, { args: [selector, value] })
 }
 
+/**
+ * Wait until both access snapshots for the chosen portals have settled and the panel has said
+ * the selection cannot be migrated. While either snapshot is still loading, the panel shows a
+ * disabled "Run migration" button instead, so a fixed pause races a slow runner.
+ */
+async function migrationSettledUnavailable(page: Page) {
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('[data-migrate-panel] [role=status]')].some((node) =>
+      node.textContent?.trim() === 'Migration is unavailable for this selection.'
+    )
+  )
+}
+
 async function selectMigration(page: Page, from: string, to: string) {
   for (const [id, value] of [['migrate-from', from], ['migrate-to', to]]) {
     await page.evaluate((id, value) => {
@@ -161,7 +174,7 @@ Deno.test('owner reduced or failed source and destination snapshots never permit
         }, { args: [blocked] })
         await clickText(page, 'Migrate resources')
         await selectMigration(page, 'marine', 'migration-destination')
-        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
+        await migrationSettledUnavailable(page)
         expect(
           await page.evaluate(() =>
             [...document.querySelectorAll('button')].some((b) =>
@@ -193,7 +206,7 @@ Deno.test('owner reduced or failed source and destination snapshots never permit
       await page.waitForSelector('[data-migrate-panel]')
       await clickText(page, 'Migrate resources')
       await selectMigration(page, 'marine', 'migration-destination')
-      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
+      await migrationSettledUnavailable(page)
       expect(
         await page.evaluate(() =>
           [...document.querySelectorAll('button')].some((b) =>
