@@ -1284,10 +1284,7 @@ export class AragProvider implements RetrievalProvider {
     for (const key of this.clients.keys()) {
       if (key.startsWith(`${slug}:`)) this.clients.delete(key)
     }
-    this.catalogCache.delete(slug)
-    this.catalogWalks.delete(slug)
-    this.catalogAttempts.delete(slug)
-    this.catalogGenerations.set(slug, (this.catalogGenerations.get(slug) ?? 0) + 1)
+    this.forgetCatalogue(slug)
     this.entityGroupsCache.delete(slug)
     for (const cache of [this.searchCache, this.graphCache]) {
       for (const key of cache.keys()) {
@@ -1774,8 +1771,20 @@ export class AragProvider implements RetrievalProvider {
     }
   }
 
-  private invalidateCatalogue(slug: string): void {
+  /**
+   * Drop the portal's listing and any walk of it under way. A walk started before a change read
+   * the catalogue as it was, so no request after the change may join it, and its result never
+   * fills the cache.
+   */
+  private forgetCatalogue(slug: string): void {
     this.catalogCache.delete(slug)
+    this.catalogWalks.delete(slug)
+    this.catalogAttempts.delete(slug)
+    this.catalogGenerations.set(slug, (this.catalogGenerations.get(slug) ?? 0) + 1)
+  }
+
+  private invalidateCatalogue(slug: string): void {
+    this.forgetCatalogue(slug)
     for (const key of this.searchCache.keys()) {
       if (key.startsWith(`${slug}|`)) this.searchCache.delete(key)
     }
