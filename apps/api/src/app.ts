@@ -24,6 +24,8 @@ import {
   linkProvisionalBytes,
   precheckAdd,
   resetCapacityOnRebind,
+  type GuardedDeleteOptions,
+  refusedByPlatform,
   ResourceCleanupError,
   withinTimeout,
   withRequestAuthority,
@@ -632,8 +634,7 @@ const DELETABLE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,159}$/
  * nothing was deleted. Anything else (a timeout, a server error, no answer) may have deleted it.
  */
 const definiteRefusal = (error: unknown) =>
-  error instanceof PortalLifecycleError ||
-  (error instanceof AragApiError && error.status >= 400 && error.status < 500)
+  error instanceof PortalLifecycleError || refusedByPlatform(error)
 /** A knowledge box without hidden resources, which this server cannot turn on. */
 class HiddenResourcesOff extends Error {}
 /** The platform's refusal to hide a resource, on create or later, where hidden resources are off. */
@@ -1512,7 +1513,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c: Context,
     path: string,
     action: AuditAction,
-    run: () => T | Promise<T>,
+    run: (signal: AbortSignal) => T | Promise<T>,
     detail = {},
     scope: Scope = classification(c).scope,
     target: { kind: string; id?: string } = { kind: 'request' },
@@ -5580,7 +5581,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return streamSSE(c, async (stream) => {
       await stream.writeSSE({ data: JSON.stringify({ type: 'started', dryRun }) })
       try {
-        const result = await management!.purgeFailedResources(config, { dryRun })
+        const result = await management!.purgeFailedResources(config, {
+          dryRun,
+          // Waves stop being started once the request has ended.
+          signal: operationSignals.get(c.req.raw) ?? c.req.raw.signal,
+        })
         await stream.writeSSE({ data: JSON.stringify({ type: 'done', dryRun, ...result }) })
       } catch (err) {
         console.error(err)
@@ -5650,15 +5655,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const enriched = enrichments.holdsResource(slug, id)
     // Not in the box and nothing kept for it here: unknown, another portal's, or already gone.
     if (!resource && !onLedger && !enriched) return adminNotFound(c)
-    // The add that created it has not settled, so the ledger could not release it yet.
-    if (resource && !onLedger && lifecycle.addsInFlight(slug) > 0) {
-      return c.json({
-        error: 'add_in_progress',
-        message:
-          'Documents are still being added to this portal, so this one cannot be deleted yet. Try again in a moment.',
-      }, 409)
-    }
-    let deleted = !resource
+    const remove = management!.deleteResource as (
+      config: TenantConfig,
+      id: string,
+      options: GuardedDeleteOptions,
+    ) => Promise<void>
+    let deleted = false
     let refusal: unknown
     let complete = true
     const detail = {
@@ -5670,31 +5672,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
         c,
         '/api/admin/t/:slug/resources/:id',
         'resource.delete',
-        async () => {
-          if (resource) {
-            try {
-              await management!.deleteResource(config, id)
-            } catch (error) {
-              if (!(error instanceof ResourceCleanupError)) {
-                refusal = error
-                return 'refused' as const
-              }
-              complete = false
+        async (signal) => {
+          // The delete is sent even when the read found nothing: one 404 is no proof the box has
+          // let the document go, and a delete of one already gone answers as a success. Only
+          // then is the portal's own record of it released, without counting it twice.
+          try {
+            await remove(config, id, { signal, ...(resource ? {} : { release: 'drop' }) })
+          } catch (error) {
+            if (!(error instanceof ResourceCleanupError)) {
+              refusal = error
+              return 'refused' as const
             }
-            deleted = true
-          } else if (onLedger) {
-            try {
-              lifecycle.dropResource(slug, id)
-            } catch {
-              complete = false
-            }
+            complete = false
           }
-          if (enriched) {
-            try {
-              enrichments.forgetResource(slug, id)
-            } catch {
-              complete = false
-            }
+          deleted = true
+          // Every time, not only when an enrichment was found first: one written while the box
+          // was deleting the document goes too.
+          try {
+            enrichments.forgetResource(slug, id)
+          } catch {
+            complete = false
           }
           forgetFacets(slug)
           return complete ? 'deleted' as const : 'incomplete' as const

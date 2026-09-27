@@ -144,7 +144,14 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['lifecycle', ['touch'], 'portal.read', 'portal'],
     [
       'lifecycle',
-      ['reserveAdd', 'settleAdd', 'forgetResource', 'dropResource'],
+      [
+        'reserveAdd',
+        'settleAdd',
+        'beginDelete',
+        'abandonDelete',
+        'forgetResource',
+        'dropResource',
+      ],
       'content.write',
       'portal',
     ],

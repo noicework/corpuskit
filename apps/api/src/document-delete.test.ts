@@ -49,6 +49,12 @@ function boxes() {
     reads: [] as string[],
     refuse: undefined as Error | undefined,
     unreadable: new Set<string>(),
+    /** Ids whose next read answers 404 although the box still holds them. */
+    transient404: new Set<string>(),
+    /** When set, a delete waits for it before it lands, and can be cut off meanwhile. */
+    gate: undefined as Promise<void> | undefined,
+    /** A delete cut off in flight still lands on the platform. */
+    landsWhenCut: false,
   }
   const portal = (tenant: TenantConfig) => docs[tenant.slug] ?? new Map<string, Doc>()
   class Reader extends DoubleProvider {
@@ -58,6 +64,7 @@ function boxes() {
       options: { hidden?: boolean } = {},
     ): Promise<ResourceSummary | null> {
       box.reads.push(`${tenant.slug}/${id}`)
+      if (box.transient404.delete(id)) return Promise.resolve(null)
       if (box.unreadable.has(id)) {
         return Promise.reject(new AragApiError(503, `/resource/${id}`, 'unavailable'))
       }
@@ -91,12 +98,28 @@ function boxes() {
       if (doc) doc.hidden = hidden
       return Promise.resolve()
     },
-    deleteResource: (tenant: TenantConfig, id: string) => {
+    deleteResource: async (
+      tenant: TenantConfig,
+      id: string,
+      options: { signal?: AbortSignal } = {},
+    ) => {
       box.deletes.push(`${tenant.slug}/${id}`)
-      if (box.refuse) return Promise.reject(box.refuse)
+      if (box.refuse) throw box.refuse
+      if (box.gate) {
+        const signal = options.signal
+        const cut = new Promise<never>((_, reject) =>
+          signal?.addEventListener('abort', () => {
+            if (box.landsWhenCut) portal(tenant).delete(id)
+            reject(signal.reason)
+          }, { once: true })
+        )
+        await Promise.race([box.gate, cut])
+      }
       portal(tenant).delete(id)
-      return Promise.resolve()
     },
+    // The ledger's reads of what a delete left behind, drafts included.
+    resource: (tenant: TenantConfig, id: string) =>
+      Promise.resolve(portal(tenant).has(id) ? { id } : null),
     resourceExtraction: () => Promise.resolve({ status: 'PENDING', text: '' }),
     recentResources: (tenant: TenantConfig, limit = 12) =>
       Promise.resolve(
@@ -134,9 +157,11 @@ async function portal(
     path: string,
     body?: unknown,
     headers: Record<string, string> = {},
+    signal?: AbortSignal,
   ) => {
     const response = await f.requestAs(session, path, {
       method,
+      ...(signal ? { signal } : {}),
       headers: {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...headers,
@@ -149,8 +174,19 @@ async function portal(
       requestId: response.headers.get('x-request-id') ?? '',
     }
   }
-  const remove = (id: string, session: ReturnType<typeof f.sessionFor> | null = curator) =>
-    send(session, 'DELETE', `/api/admin/t/a/resources/${encodeURIComponent(id)}`)
+  const remove = (
+    id: string,
+    session: ReturnType<typeof f.sessionFor> | null = curator,
+    signal?: AbortSignal,
+  ) =>
+    send(
+      session,
+      'DELETE',
+      `/api/admin/t/a/resources/${encodeURIComponent(id)}`,
+      undefined,
+      {},
+      signal,
+    )
   const text = (title: string, bytes = 10) =>
     send(curator, 'POST', '/api/admin/t/a/resources/text', { title, body: 'n'.repeat(bytes) })
   const link = (name: string, hidden = false) =>
@@ -172,6 +208,7 @@ async function portal(
     f.stores.lifecycle.state.get<{
       removed: { count: number }[]
       measuring?: Record<string, { at: number }>
+      deleting?: Record<string, { at: number; missingSince?: number }>
     }>('portal-capacity:a', { removed: [] })
   /** Deletions the ledger has recorded that the box's count may not show yet. */
   const removals = () => capacity().removed.reduce((total, entry) => total + entry.count, 0)
@@ -181,7 +218,27 @@ async function portal(
     record.measuring![id]!.at -= MEASURE_TIMEOUT
     f.stores.lifecycle.state.put('portal-capacity:a', record)
   }
-  return { ...b, f, curator, send, remove, text, link, events, deletion, removals, age }
+  /** Make a delete record's reads look as if they have answered 404 for an hour. */
+  const lapse = (id: string) => {
+    const record = capacity()
+    const entry = record.deleting![id]!
+    entry.missingSince = (entry.missingSince ?? Date.now()) - MEASURE_TIMEOUT
+    f.stores.lifecycle.state.put('portal-capacity:a', record)
+  }
+  return {
+    ...b,
+    f,
+    curator,
+    send,
+    remove,
+    text,
+    link,
+    events,
+    deletion,
+    removals,
+    age,
+    lapse,
+  }
 }
 
 /** Replace a store method with one that fails once, then gives the method back. */
@@ -491,7 +548,8 @@ Deno.test('a delete whose clean-up fails is uncertain, and deleting it again fin
           permission: 'content.write',
           cleanupOnly: true,
         })
-        expect(p.box.deletes, label).toEqual([`a/${doc}`])
+        // The retry asks the box again, which answers as for a document already gone.
+        expect(p.box.deletes, label).toEqual([`a/${doc}`, `a/${doc}`])
         expect(p.f.stores.lifecycle.tracksResource('a', doc), label).toBe(false)
         expect(p.f.stores.enrichments.holdsResource('a', doc), label).toBe(false)
         expect(p.removals(), label).toBe(counted)
@@ -529,15 +587,17 @@ Deno.test('a delete never races an add or a measurement into an inconsistent led
         await new Promise((resolve) => setTimeout(resolve, 5))
       }
       const [slow] = [...p.docs.a!].find(([, doc]) => doc.title === 'Slow')!
-      expect(await p.remove(slow), adapter).toMatchObject({
-        status: 409,
-        body: { error: 'add_in_progress' },
-      })
-      expect(p.box.deletes, adapter).toEqual([])
+      // A curator deletes it first. The add then settles for a resource that is gone: it records
+      // nothing, so no space stays held for it.
+      expect(await p.remove(slow), adapter).toMatchObject({ status: 200, body: { ok: true } })
+      expect(p.docs.a!.has(slow), adapter).toBe(false)
       settle()
       expect((await adding).status, adapter).toBe(200)
-      expect((await p.remove(slow)).status, adapter).toBe(200)
+      expect(p.f.stores.lifecycle.tracksResource('a', slow), adapter).toBe(false)
       expect(p.f.stores.lifecycle.bytesUsed('a', 0), adapter).toBe(0)
+      const filled = await p.text('Fills the portal', 1_000)
+      expect(filled.status, adapter).toBe(200)
+      expect((await p.remove(filled.body.id)).status, adapter).toBe(200)
 
       // A link is being read for its size when it is deleted. What the read finds afterwards is
       // not recorded: the link stays released.
@@ -587,6 +647,210 @@ Deno.test('a read-only or paused portal refuses a delete before anything is read
       expect((await p.remove(doc)).status, adapter).toBe(200)
     } finally {
       p.f.close()
+    }
+  }
+})
+
+Deno.test('an add that never settled does not stop documents being deleted', async () => {
+  for (const adapter of ADAPTERS) {
+    const p = await portal(adapter, { maxResources: 100 })
+    try {
+      // A document from before the portal's ledger began, and an add whose request died after
+      // it was admitted, so its reservation lingers.
+      p.docs.a!.set('legacy-1', { title: 'Older report', hidden: false, type: 'pdf' })
+      expect((await p.text('Starts the ledger')).status, adapter).toBe(200)
+      p.f.stores.lifecycle.reserveAdd('a', { observed: p.docs.a!.size, bytes: 10 })
+      expect(await p.remove('legacy-1'), adapter).toMatchObject({
+        status: 200,
+        body: { ok: true },
+      })
+      expect(p.docs.a!.has('legacy-1'), adapter).toBe(false)
+    } finally {
+      p.f.close()
+    }
+  }
+})
+
+Deno.test('a delete whose request ends while it waits its turn is never sent', async () => {
+  for (const adapter of ADAPTERS) {
+    const p = await portal(adapter, { maxBytes: 1_000 })
+    try {
+      const doc = (await p.text('Report', 600)).body.id as string
+      // An add holds the capacity step while it reads the box's count.
+      let counted!: () => void
+      const counting = new Promise<void>((resolve) => counted = resolve)
+      const count = p.management.resourceCount.bind(p.management)
+      let hold = true
+      Object.assign(p.management, {
+        resourceCount: async (tenant: TenantConfig) => {
+          if (hold) await counting
+          return count(tenant)
+        },
+      })
+      const add = p.text('Holds the capacity step', 10)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      const ended = new AbortController()
+      const pending = p.remove(doc, p.curator, ended.signal).catch(() => null)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(p.box.deletes, adapter).toEqual([])
+      ended.abort()
+      await pending
+      hold = false
+      counted()
+      await add
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      // Nothing was sent after the request ended: the document and its space are untouched,
+      // and nothing is left to settle.
+      expect(p.box.deletes, adapter).toEqual([])
+      expect(p.docs.a!.has(doc), adapter).toBe(true)
+      expect(p.f.stores.lifecycle.tracksResource('a', doc), adapter).toBe(true)
+      expect(p.f.stores.lifecycle.pendingDeletes('a'), adapter).toEqual([])
+      expect((await p.remove(doc)).status, adapter).toBe(200)
+      expect(p.f.stores.lifecycle.bytesUsed('a', 1), adapter).toBe(10)
+    } finally {
+      p.f.close()
+    }
+  }
+})
+
+Deno.test('a delete cut off in flight is cancelled at the platform, and the portal settles what landed', async () => {
+  for (const adapter of ADAPTERS) {
+    for (const lands of [false, true]) {
+      const label = `${adapter} ${lands ? 'landed' : 'cancelled'}`
+      const p = await portal(adapter, { maxBytes: 1_000 })
+      try {
+        const doc = (await p.text('Report', 600)).body.id as string
+        p.box.landsWhenCut = lands
+        p.box.gate = new Promise<void>(() => {})
+        const ended = new AbortController()
+        const pending = p.remove(doc, p.curator, ended.signal).catch(() => null)
+        while (p.box.deletes.length === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+        ended.abort()
+        await pending
+        p.box.gate = undefined
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        expect(p.docs.a!.has(doc), label).toBe(!lands)
+        // The release could not be recorded after the request ended; the ledger remembers the
+        // delete was sent, so the document's space is not lost for good.
+        expect(p.f.stores.lifecycle.pendingDeletes('a'), label).toEqual([doc])
+        expect(p.f.stores.lifecycle.bytesUsed('a', lands ? 0 : 1), label).toBe(600)
+        if (!lands) {
+          // The box still has it: a delete sent again goes through as usual.
+          expect((await p.remove(doc)).status, label).toBe(200)
+        } else {
+          // An add that does not fit reads the box for it. One 404 is no proof...
+          expect((await p.text('Needs the space', 500)).status, label).toBe(413)
+          expect(p.f.stores.lifecycle.pendingDeletes('a'), label).toEqual([doc])
+          // ...an hour of them is: the space is freed without anyone finding the id.
+          p.lapse(doc)
+          expect((await p.text('Needs the space', 500)).status, label).toBe(200)
+        }
+        expect(p.f.stores.lifecycle.pendingDeletes('a'), label).toEqual([])
+        expect(p.f.stores.lifecycle.tracksResource('a', doc), label).toBe(false)
+      } finally {
+        p.f.close()
+      }
+    }
+  }
+})
+
+Deno.test('a delete is sent even when a single read says the document is gone', async () => {
+  for (const adapter of ADAPTERS) {
+    const p = await portal(adapter, { maxBytes: 10_000 })
+    try {
+      const doc = (await p.text('Report', 100)).body.id as string
+      p.box.transient404.add(doc)
+      expect(await p.remove(doc), adapter).toMatchObject({ status: 200, body: { ok: true } })
+      expect(p.box.deletes, adapter).toEqual([`a/${doc}`])
+      expect(p.docs.a!.has(doc), adapter).toBe(false)
+      expect(p.f.stores.lifecycle.tracksResource('a', doc), adapter).toBe(false)
+      expect((await p.text('Anything', 10)).status, adapter).toBe(200)
+    } finally {
+      p.f.close()
+    }
+  }
+})
+
+Deno.test('an enrichment written while the box deletes the document goes with it', async () => {
+  for (const adapter of ADAPTERS) {
+    const p = await portal(adapter)
+    try {
+      const doc = (await p.text('Report')).body.id as string
+      let land!: () => void
+      p.box.gate = new Promise<void>((resolve) => land = resolve)
+      const pending = p.remove(doc)
+      while (p.box.deletes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+      p.f.stores.enrichments.put('a', doc, enrichment('research', 'Written by a run meanwhile'))
+      land()
+      p.box.gate = undefined
+      expect((await pending).status, adapter).toBe(200)
+      expect(p.f.stores.enrichments.holdsResource('a', doc), adapter).toBe(false)
+      expect((await p.remove(doc)).status, adapter).toBe(404)
+    } finally {
+      p.f.close()
+    }
+  }
+})
+
+Deno.test('a purge through the route deletes five at a time again', async () => {
+  const junk = Array.from({ length: 7 }, (_, n) => `junk-${n + 1}`)
+  const live = new Set(junk)
+  let inFlight = 0
+  let peak = 0
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    const path = url.pathname.replace(/^.*\/kb\/test-kb/, '')
+    if (path === '/catalog') {
+      return Response.json({
+        resources: Object.fromEntries(
+          [...live].map((id) => [id, { id, title: '', metadata: { status: 'ERROR' } }]),
+        ),
+      })
+    }
+    if (path === '/counters') return Response.json({ resources: live.size })
+    const single = /^\/resource\/([^/]+)$/.exec(path)
+    if (single && init?.method === 'DELETE') {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      inFlight--
+      live.delete(single[1]!)
+      return Response.json({})
+    }
+    return Response.json({})
+  }) as typeof fetch
+  const provider = new AragProvider({
+    resolveBinding: () => ({
+      baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test-kb',
+      token: 'fixture',
+    }),
+    fetchImpl,
+  })
+  for (const adapter of ADAPTERS) {
+    junk.forEach((id) => live.add(id))
+    peak = 0
+    const f = createEnforcementFixture({ provider, management: provider }, adapter)
+    try {
+      await f.stores.bindings.set('a', {
+        baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test-kb',
+        token: 'fixture',
+        kbId: 'test-kb',
+      })
+      const response = await f.requestAs(f.sessionFor('curator'), '/api/admin/t/a/purge-failed', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dryRun: false }),
+      })
+      const body = await response.text()
+      expect(response.status, adapter).toBe(200)
+      expect(body, adapter).toContain('"deleted":7')
+      expect(body, adapter).toContain('"notAttempted":0')
+      expect(live.size, adapter).toBe(0)
+      expect(peak, adapter).toBe(5)
+    } finally {
+      f.close()
     }
   }
 })
@@ -745,4 +1009,33 @@ Deno.test('the Durable Object enrichment store forgets a deleted document in its
   } finally {
     f.close()
   }
+})
+
+Deno.test('a delete drops the cached entity groups, so a deleted document’s entities do not linger', async () => {
+  const calls: string[] = []
+  const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname.replace(/^.*\/kb\/test-kb/, '')
+    calls.push(`${init?.method ?? 'GET'} ${path}`)
+    if (path === '/entitiesgroups') {
+      return Promise.resolve(Response.json({
+        groups: { Species: { entities: { Abalone: {} } } },
+      }))
+    }
+    return Promise.resolve(Response.json({}))
+  }) as typeof fetch
+  const provider = new AragProvider({
+    resolveBinding: () => ({
+      baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test-kb',
+      token: 'fixture',
+    }),
+    fetchImpl,
+  })
+  const tenant = { slug: 'a' } as TenantConfig
+  const reads = () => calls.filter((call) => call === 'GET /entitiesgroups').length
+  await provider.entityGroups(tenant)
+  await provider.entityGroups(tenant)
+  expect(reads()).toBe(1)
+  await provider.deleteResource(tenant, 'doc-1')
+  await provider.entityGroups(tenant)
+  expect(reads()).toBe(2)
 })

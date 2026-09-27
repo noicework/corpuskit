@@ -126,6 +126,27 @@ const MeasuringSchema = z.object({
   unsized: z.literal(true).optional(),
 }).strict()
 type Measuring = z.infer<typeof MeasuringSchema>
+/**
+ * A resource this portal sent the knowledge box a delete for, whose release the ledger has not
+ * recorded yet (the request ended before it could), or one it released while an add in flight
+ * could still settle for the same id.
+ */
+const DeletingSchema = z.object({
+  /** When the delete was sent, or, once released, when the release was recorded. */
+  at: Count,
+  /**
+   * Released already. Kept only while an add in flight could still settle for this id (a delete
+   * that overtook the add that created the resource), so that settling releases, not records.
+   */
+  released: z.literal(true).optional(),
+  /** A resource the ledger counts among those it cannot size, not under its id. */
+  unsized: z.literal(true).optional(),
+  /** When the box was last read for it; the least recently read are read first. */
+  checked: Count.optional(),
+  /** When reads of it began answering 404 without a break. */
+  missingSince: Count.optional(),
+}).strict()
+type Deleting = z.infer<typeof DeletingSchema>
 const StoredCapacitySchema = z.object({
   v: z.literal(1),
   /** Resource count the knowledge box last reported. */
@@ -152,6 +173,11 @@ const StoredCapacitySchema = z.object({
    * Each holds its provisional bytes until then. Absent when empty.
    */
   measuring: z.record(ResourceIdSchema, MeasuringSchema).optional(),
+  /**
+   * Deletes whose release is not recorded yet, and releases an unsettled add may still meet.
+   * Absent when empty.
+   */
+  deleting: z.record(ResourceIdSchema, DeletingSchema).optional(),
 }).strict()
 type StoredCapacity = z.infer<typeof StoredCapacitySchema>
 type Recent = StoredCapacity['added']
@@ -193,6 +219,11 @@ export type Measurement =
   | { id: string; bytes: number }
   | { id: string; missing: true; readAt: number }
   | { id: string; pending: true }
+  /**
+   * Whether the knowledge box still holds a resource a delete was sent for (read with drafts
+   * included), with when that was read, on this store's clock.
+   */
+  | { id: string; exists: boolean; readAt: number }
 
 function dateFormatter(timeZone: string): Intl.DateTimeFormat {
   // Invalid configured timezones fail instead of resetting quotas in another timezone.
@@ -461,6 +492,13 @@ export class PortalLifecycleStore {
     record.inflight = record.inflight.filter(live)
     record.added = record.added.filter(live)
     record.removed = record.removed.filter(live)
+    // A release kept for an add that could still settle lapses with that add's reservation.
+    if (record.deleting) {
+      for (const [id, entry] of Object.entries(record.deleting)) {
+        if (entry.released && !live(entry)) delete record.deleting[id]
+      }
+      if (Object.keys(record.deleting).length === 0) delete record.deleting
+    }
     if (observed === undefined) return
     if (observed > record.observed) record.added = consume(record.added, observed - record.observed)
     if (observed < record.observed) {
@@ -498,6 +536,10 @@ export class PortalLifecycleStore {
   ): void {
     for (const measurement of measurements) {
       const id = ResourceIdSchema.safeParse(measurement.id)
+      if ('exists' in measurement) {
+        if (id.success) this.applyDeleteReading(record, id.data, measurement, now)
+        continue
+      }
       const measuring = record.measuring
       // Only a resource still awaiting measurement; one removed meanwhile has nothing to record.
       if (!id.success || !measuring || !Object.hasOwn(measuring, id.data)) continue
@@ -525,6 +567,60 @@ export class PortalLifecycleStore {
       record.sized[id.data] = Count.parse(measurement.bytes)
     }
     if (record.measuring && Object.keys(record.measuring).length === 0) delete record.measuring
+  }
+
+  /**
+   * Settle a delete whose release was never recorded, from what a read of the box found. Reads
+   * that have answered nothing but 404 for `MEASURE_TIMEOUT`, timed by when they were read, mean
+   * the delete landed: the resource is released, and no removal is counted, since the box's own
+   * count already shows it. A resource still there `MEASURE_TIMEOUT` after the delete was sent
+   * was not deleted, and stays counted. Any other reading starts that wait again.
+   */
+  private applyDeleteReading(
+    record: StoredCapacity,
+    id: string,
+    reading: { exists: boolean; readAt: number },
+    now: number,
+  ): void {
+    const entry = record.deleting?.[id]
+    if (!entry || entry.released) return
+    if (reading.exists) {
+      const { missingSince: _missing, ...rest } = entry
+      if (reading.readAt - entry.at >= MEASURE_TIMEOUT) this.endDelete(record, id)
+      else record.deleting![id] = { ...rest, checked: now }
+      return
+    }
+    const since = entry.missingSince ?? reading.readAt
+    if (reading.readAt - since >= MEASURE_TIMEOUT) {
+      this.release(record, id, entry)
+      this.endDelete(record, id)
+      return
+    }
+    record.deleting![id] = { ...entry, checked: now, missingSince: since }
+  }
+
+  /** Take a resource off the ledger: its size, its provisional bytes, or its unsized count. */
+  private release(record: StoredCapacity, id: string, entry?: Pick<Deleting, 'unsized'>): boolean {
+    if (Object.hasOwn(record.sized, id)) {
+      delete record.sized[id]
+      return true
+    }
+    if (record.measuring && Object.hasOwn(record.measuring, id)) {
+      delete record.measuring[id]
+      if (Object.keys(record.measuring).length === 0) delete record.measuring
+      return true
+    }
+    if (entry?.unsized && record.unsized > 0) {
+      record.unsized--
+      return true
+    }
+    return false
+  }
+
+  private endDelete(record: StoredCapacity, id: string): void {
+    if (!record.deleting || !Object.hasOwn(record.deleting, id)) return
+    delete record.deleting[id]
+    if (Object.keys(record.deleting).length === 0) delete record.deleting
   }
 
   /**
@@ -680,7 +776,14 @@ export class PortalLifecycleStore {
       // exists with an unknown size.
       const tracked = Object.keys(record.sized).length +
         Object.keys(record.measuring ?? {}).length
-      if (!entry || !id.success || tracked >= MAX_SIZED) {
+      const overtaken = id.success ? record.deleting?.[id.data] : undefined
+      if (overtaken?.released) {
+        // Deleted before this add settled: the release already happened, so nothing is
+        // recorded. It took one from the unsized count on the chance the resource was one the
+        // ledger cannot size; it was this add's, so that count is given back.
+        if (overtaken.unsized) record.unsized++
+        this.endDelete(record, id.data!)
+      } else if (!entry || !id.success || tracked >= MAX_SIZED) {
         record.unsized++
       } else if (entry.measure) {
         record.measuring = { ...record.measuring, [id.data]: { at: now, reserved: entry.bytes } }
@@ -690,51 +793,112 @@ export class PortalLifecycleStore {
     this.persist(this.key('capacity', slug), record)
   }
 
-  /** Release the size of a resource this portal deleted. */
+  /**
+   * Before a delete is sent, record that it is being sent, so that a delete whose release is
+   * never recorded (its request ended first) is found and settled later from reads of the box.
+   * A resource the ledger holds nothing for needs no record.
+   */
+  beginDelete(slug: string, id: string): void {
+    const now = this.clock()
+    const record = this.readCapacity(slug)
+    const parsed = ResourceIdSchema.safeParse(id)
+    if (!record || !parsed.success) return
+    this.observe(record, undefined, now)
+    const tracked = Object.hasOwn(record.sized, parsed.data) ||
+      (record.measuring !== undefined && Object.hasOwn(record.measuring, parsed.data))
+    if (!tracked && record.unsized === 0) return
+    if (Object.keys(record.deleting ?? {}).length >= MAX_IN_FLIGHT) return
+    record.deleting = {
+      ...record.deleting,
+      [parsed.data]: { at: now, ...(tracked ? {} : { unsized: true as const }) },
+    }
+    this.persist(this.key('capacity', slug), record)
+  }
+
+  /** The box refused a delete: nothing was deleted, so its record is dropped. */
+  abandonDelete(slug: string, id: string): void {
+    const record = this.readCapacity(slug)
+    const parsed = ResourceIdSchema.safeParse(id)
+    const pending = parsed.success ? record?.deleting?.[parsed.data] : undefined
+    if (!record || !pending || pending.released) return
+    this.endDelete(record, parsed.data!)
+    this.persist(this.key('capacity', slug), record)
+  }
+
+  /**
+   * Release a resource this portal deleted, and count the removal until the box's own count shows
+   * it. A resource the ledger has no size for is taken from the unsized count. If an add is still
+   * in flight, the resource might be that add's, created but not settled: the release is kept for
+   * it, so that settling releases rather than records.
+   */
   forgetResource(slug: string, id: string): void {
     const now = this.clock()
     const record = this.readCapacity(slug)
     if (!record) return
     this.observe(record, undefined, now)
     const parsed = ResourceIdSchema.safeParse(id)
-    if (parsed.success && Object.hasOwn(record.sized, parsed.data)) {
-      delete record.sized[parsed.data]
-    } else if (parsed.success && record.measuring && Object.hasOwn(record.measuring, parsed.data)) {
-      delete record.measuring[parsed.data]
-      if (Object.keys(record.measuring).length === 0) delete record.measuring
-    } else if (record.unsized > 0) record.unsized--
+    if (parsed.success) this.endDelete(record, parsed.data)
+    if (!parsed.success || !this.release(record, parsed.data)) {
+      const unsized = record.unsized > 0
+      if (unsized) record.unsized--
+      if (parsed.success && record.inflight.length > 0 &&
+        Object.keys(record.deleting ?? {}).length < MAX_IN_FLIGHT) {
+        record.deleting = {
+          ...record.deleting,
+          [parsed.data]: { at: now, released: true, ...(unsized ? { unsized: true as const } : {}) },
+        }
+      }
+    }
     record.removed = bump(record.removed, now)
     this.persist(this.key('capacity', slug), record)
   }
 
   /**
    * Release what the ledger still keeps under a resource the knowledge box no longer has, after a
-   * deletion whose release did not finish: its size, or the provisional bytes of a link awaiting
-   * measurement. Nothing is counted as removed, because the box's own count shows the deletion
-   * at the next observation; counting it again could admit an add past `maxResources`. Running
-   * it twice is safe: the second run finds nothing. Returns whether anything was released.
+   * deletion whose release did not finish: its size, the provisional bytes of a link awaiting
+   * measurement, or the unsized count a delete record noted. Nothing is counted as removed,
+   * because the box's own count shows the deletion at the next observation; counting it again
+   * could admit an add past `maxResources`. Running it twice is safe: the second run finds
+   * nothing. Returns whether anything was released.
    */
   dropResource(slug: string, id: string): boolean {
     const record = this.readCapacity(slug)
     const parsed = ResourceIdSchema.safeParse(id)
     if (!record || !parsed.success) return false
-    if (Object.hasOwn(record.sized, parsed.data)) delete record.sized[parsed.data]
-    else if (record.measuring && Object.hasOwn(record.measuring, parsed.data)) {
-      delete record.measuring[parsed.data]
-      if (Object.keys(record.measuring).length === 0) delete record.measuring
-    } else return false
+    const found = record.deleting?.[parsed.data]
+    const pending = found?.released ? undefined : found
+    const released = this.release(record, parsed.data, pending)
+    if (!released && !pending) return false
+    if (pending) this.endDelete(record, parsed.data)
     this.observe(record, undefined, this.clock())
     this.persist(this.key('capacity', slug), record)
-    return true
+    return released
   }
 
-  /** Whether the ledger keeps a size, or provisional bytes, under this resource. A read. */
+  /**
+   * Whether the ledger keeps anything under this resource: a size, provisional bytes, or a delete
+   * whose release it has not recorded. A read.
+   */
   tracksResource(slug: string, id: string): boolean {
     const record = this.readCapacity(slug)
     const parsed = ResourceIdSchema.safeParse(id)
     if (!record || !parsed.success) return false
+    const pending = record.deleting?.[parsed.data]
     return Object.hasOwn(record.sized, parsed.data) ||
-      (record.measuring !== undefined && Object.hasOwn(record.measuring, parsed.data))
+      (record.measuring !== undefined && Object.hasOwn(record.measuring, parsed.data)) ||
+      (pending !== undefined && !pending.released)
+  }
+
+  /**
+   * Deletes whose release is not recorded, at most `limit` of them: those never read first, then
+   * the least recently read. A read.
+   */
+  pendingDeletes(slug: string, limit = Number.MAX_SAFE_INTEGER): string[] {
+    return Object.entries(this.readCapacity(slug)?.deleting ?? {})
+      .filter(([, entry]) => !entry.released)
+      .sort(([, a], [, b]) => (a.checked ?? -1) - (b.checked ?? -1) || a.at - b.at)
+      .slice(0, limit)
+      .map(([id]) => id)
   }
 
   /** Adds admitted whose write has not settled yet, within their reservation's lifetime. A read. */
@@ -793,6 +957,20 @@ function awaitingMeasurementReadable(raw: unknown, provisional: number): unknown
         ? { ...entry, bytes: provisional }
         : entry
     )
+  }
+  // A delete record in a shape this build does not recognise is left out: its resource stays
+  // counted, which errs on the side of refusing an add.
+  if ('deleting' in record) {
+    const deleting = record.deleting
+    const readable: Record<string, Deleting> = {}
+    if (deleting && typeof deleting === 'object' && !Array.isArray(deleting)) {
+      for (const [id, value] of Object.entries(deleting)) {
+        const entry = DeletingSchema.safeParse(value)
+        if (ResourceIdSchema.safeParse(id).success && entry.success) readable[id] = entry.data
+      }
+    }
+    if (Object.keys(readable).length) record.deleting = readable
+    else delete record.deleting
   }
   if (!('measuring' in record)) return record
   const measuring = record.measuring

@@ -174,9 +174,14 @@ export class KbClient {
     return await res.json().catch(() => ({}))
   }
 
-  async deleteJson(path: string): Promise<void> {
+  /** A delete; a 404 means it is already gone. `signal` cancels it where the platform allows. */
+  async deleteJson(path: string, options: { signal?: AbortSignal } = {}): Promise<void> {
     const url = this.url(path)
-    const res = await this.fetchImpl(url, { method: 'DELETE', headers: this.headers() })
+    const res = await this.fetchImpl(url, {
+      method: 'DELETE',
+      headers: this.headers(),
+      ...(options.signal ? { signal: options.signal } : {}),
+    })
     if (!res.ok && res.status !== 404) throw new AragApiError(res.status, url, await res.text())
   }
 

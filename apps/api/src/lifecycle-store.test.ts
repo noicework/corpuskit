@@ -732,3 +732,120 @@ Deno.test('a deletion whose release did not finish is released later without cou
   expect(empty.addsInFlight('a')).toBe(0)
   expect(empty.hasCapacityLedger('a')).toBe(false)
 })
+
+Deno.test('a delete sent but never released is settled from reads of the box, timed by read time', () => {
+  let now = instant('2026-09-26T00:00:00Z')
+  const store = new PortalLifecycleStore(new MemoryLifecycleState(), () => now)
+  store.set('a', { status: 'active', limits: { maxBytes: 1_000 } })
+  for (const [id, bytes] of [['gone-1', 100], ['kept-1', 200]] as const) {
+    const add = store.reserveAdd('a', { observed: 0, bytes }) as { admitted: string }
+    store.settleAdd('a', add.admitted, { created: true, id })
+  }
+  expect(store.bytesUsed('a', 2)).toBe(300)
+  // Both deletes were sent; neither release was recorded (the request ended first).
+  store.beginDelete('a', 'gone-1')
+  store.beginDelete('a', 'kept-1')
+  expect(store.pendingDeletes('a')).toEqual(['gone-1', 'kept-1'])
+  expect(store.tracksResource('a', 'gone-1')).toBe(true)
+  const read = (id: string, exists: boolean, readAt = now) =>
+    store.reserveAdd('a', { observed: 1, bytes: 1, measurements: [{ id, exists, readAt }] })
+  // A 404 is not proof at first: the bytes stay counted.
+  read('gone-1', false)
+  read('kept-1', true)
+  expect(store.bytesUsed('a', 1)).toBe(300)
+  // An hour of reads that answered only 404 means the delete landed: released, and no removal
+  // counted twice. The resource still there an hour after its delete was sent was not deleted.
+  now += MEASURE_TIMEOUT
+  read('gone-1', false)
+  read('kept-1', true)
+  expect(store.tracksResource('a', 'gone-1')).toBe(false)
+  expect(store.tracksResource('a', 'kept-1')).toBe(true)
+  expect(store.pendingDeletes('a')).toEqual([])
+  expect(store.bytesUsed('a', 1)).toBe(200)
+  const removed = store.state.get<{ removed: unknown[] }>('portal-capacity:a', { removed: [] })
+  expect(removed.removed).toEqual([])
+})
+
+Deno.test('a 404 read long after the last one does not settle a delete on its own', () => {
+  let now = instant('2026-09-26T00:00:00Z')
+  const store = new PortalLifecycleStore(new MemoryLifecycleState(), () => now)
+  const add = store.reserveAdd('a', { observed: 0, bytes: 100 }) as { admitted: string }
+  store.settleAdd('a', add.admitted, { created: true, id: 'doc-1' })
+  store.beginDelete('a', 'doc-1')
+  const read = (exists: boolean) =>
+    store.reserveAdd('a', {
+      observed: 1,
+      bytes: 1,
+      measurements: [{ id: 'doc-1', exists, readAt: now }],
+    })
+  read(false)
+  now += MEASURE_TIMEOUT / 2
+  // The box shows it again: the wait starts over.
+  read(true)
+  now += MEASURE_TIMEOUT / 2
+  read(false)
+  now += MEASURE_TIMEOUT / 2
+  read(false)
+  expect(store.tracksResource('a', 'doc-1')).toBe(true)
+  now += MEASURE_TIMEOUT / 2
+  read(false)
+  expect(store.tracksResource('a', 'doc-1')).toBe(false)
+})
+
+Deno.test('a delete the box refused, or one released as usual, leaves no record behind', () => {
+  const store = new PortalLifecycleStore(new MemoryLifecycleState())
+  const add = store.reserveAdd('a', { observed: 0, bytes: 100 }) as { admitted: string }
+  store.settleAdd('a', add.admitted, { created: true, id: 'doc-1' })
+  store.beginDelete('a', 'doc-1')
+  store.abandonDelete('a', 'doc-1')
+  expect(store.pendingDeletes('a')).toEqual([])
+  expect(store.tracksResource('a', 'doc-1')).toBe(true)
+  store.beginDelete('a', 'doc-1')
+  store.forgetResource('a', 'doc-1')
+  expect(store.pendingDeletes('a')).toEqual([])
+  expect(store.tracksResource('a', 'doc-1')).toBe(false)
+  const record = store.state.get<Record<string, unknown>>('portal-capacity:a', {})
+  expect('deleting' in record).toBe(false)
+  // Nothing held for a resource: nothing to record.
+  store.beginDelete('a', 'unknown-1')
+  expect(store.pendingDeletes('a')).toEqual([])
+})
+
+Deno.test('an add that settles after its resource was deleted records nothing and keeps the count right', () => {
+  const now = instant('2026-09-26T00:00:00Z')
+  const store = new PortalLifecycleStore(new MemoryLifecycleState(), () => now)
+  // Two resources were there before the ledger began: it cannot size them.
+  const first = store.reserveAdd('a', { observed: 2, bytes: 50 }) as { admitted: string }
+  store.settleAdd('a', first.admitted, { created: true, id: 'doc-1' })
+  const unsized = () =>
+    store.state.get<{ unsized: number }>('portal-capacity:a', { unsized: -1 }).unsized
+  expect(unsized()).toBe(2)
+  // An add is in flight; the box has created its resource, and a curator deletes it before the
+  // add settles.
+  const slow = store.reserveAdd('a', { observed: 3, bytes: 300 }) as { admitted: string }
+  store.beginDelete('a', 'doc-2')
+  store.forgetResource('a', 'doc-2')
+  // The delete could not tell it from one of the unsized two, so it took one from that count.
+  expect(unsized()).toBe(1)
+  store.settleAdd('a', slow.admitted, { created: true, id: 'doc-2' })
+  // Settling finds the delete: nothing is recorded for doc-2, and the unsized count is whole.
+  expect(store.tracksResource('a', 'doc-2')).toBe(false)
+  expect(unsized()).toBe(2)
+  expect(store.addsInFlight('a')).toBe(0)
+  expect(store.state.get<Record<string, unknown>>('portal-capacity:a', {}).deleting)
+    .toBeUndefined()
+})
+
+Deno.test('a delete record in a shape this build does not know is left out, never refused', () => {
+  const state = new MemoryLifecycleState()
+  const store = new PortalLifecycleStore(state)
+  const add = store.reserveAdd('a', { observed: 0, bytes: 100 }) as { admitted: string }
+  store.settleAdd('a', add.admitted, { created: true, id: 'doc-1' })
+  const record = state.get<Record<string, unknown>>('portal-capacity:a', {})
+  state.put('portal-capacity:a', {
+    ...record,
+    deleting: { 'doc-1': { at: 1, future: true }, 'bad id!': { at: 1 }, 'doc-2': { at: 2 } },
+  })
+  expect(store.bytesUsed('a', 1)).toBe(100)
+  expect(store.pendingDeletes('a')).toEqual(['doc-2'])
+})

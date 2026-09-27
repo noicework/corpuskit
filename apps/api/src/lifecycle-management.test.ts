@@ -985,3 +985,188 @@ Deno.test('a delete the ledger cannot release is told apart from one the box ref
   expect(lifecycle.dropResource('test', 'res-1')).toBe(false)
   expect(lifecycle.bytesUsed('test', 0)).toBe(0)
 })
+
+Deno.test('a delete whose request ends while it waits its turn is never sent', async () => {
+  const { state, raw } = box()
+  const lifecycle = store('active', { maxBytes: 1_000 })
+  const sent: string[] = []
+  raw.deleteResource = (...args: unknown[]) => {
+    sent.push(args[1] as string)
+    return Promise.resolve()
+  }
+  const guarded = guardManagement(raw, lifecycle)
+  await guarded.uploadFile(config, upload(600))
+  state.count = 1
+  // An admission holds the capacity step while it reads the resource count.
+  let release!: (count: number) => void
+  const reading = new Promise<void>((entered) => {
+    raw.resourceCount = () => {
+      entered()
+      return new Promise<number>((resolve) => release = resolve)
+    }
+  })
+  const adding = guarded.createText(config, text)
+  await reading
+  const ended = new AbortController()
+  const deleting = (guarded.deleteResource as (
+    config: TenantConfig,
+    id: string,
+    options: { signal: AbortSignal },
+  ) => Promise<void>)(config, 'res-1', { signal: ended.signal })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  ended.abort()
+  raw.resourceCount = () => Promise.resolve(state.count)
+  release(1)
+  await adding
+  await expect(deleting).rejects.toThrow()
+  // Nothing was sent, and nothing needs settling later.
+  expect(sent).toEqual([])
+  expect(lifecycle.tracksResource('test', 'res-1')).toBe(true)
+  expect(lifecycle.pendingDeletes('test')).toEqual([])
+})
+
+Deno.test('a delete cut off in flight is cancelled at the platform, and later reads settle it', async () => {
+  let now = Date.UTC(2026, 8, 26)
+  const lifecycle = new PortalLifecycleStore(undefined, () => now)
+  lifecycle.set(config.slug, { status: 'active', limits: { maxBytes: 1_000 } })
+  const { state, raw } = box()
+  let landed = false
+  let seen: AbortSignal | undefined
+  const boxHas = new Set(['res-1'])
+  Object.assign(raw, {
+    // The platform takes the delete; the request that sent it ends before it answers.
+    deleteResource: (_config: TenantConfig, id: string, options: { signal?: AbortSignal }) => {
+      seen = options.signal
+      return new Promise<void>((resolve, reject) => {
+        options.signal?.addEventListener('abort', () => {
+          if (landed) boxHas.delete(id)
+          reject(options.signal!.reason)
+        })
+        void resolve
+      })
+    },
+    resource: (_config: TenantConfig, id: string) =>
+      Promise.resolve(boxHas.has(id) ? { id } : null),
+  })
+  const guarded = guardManagement(raw, lifecycle)
+  await guarded.uploadFile(config, upload(600))
+  state.count = 1
+  for (const lands of [false, true]) {
+    landed = lands
+    boxHas.add('res-1')
+    const ended = new AbortController()
+    const deleting = (guarded.deleteResource as (
+      config: TenantConfig,
+      id: string,
+      options: { signal: AbortSignal },
+    ) => Promise<void>)(config, 'res-1', { signal: ended.signal })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    ended.abort()
+    await expect(deleting).rejects.toThrow()
+    // The platform call carried the request's signal.
+    expect(seen?.aborted).toBe(true)
+    expect(lifecycle.pendingDeletes('test')).toEqual(['res-1'])
+    expect(lifecycle.bytesUsed('test', 1)).toBe(600)
+  }
+  // The second delete landed. An add that does not fit reads the box: a first 404 is no proof.
+  state.count = 0
+  await denied(guarded.uploadFile(config, upload(600)), 413, 'limit_exceeded')
+  expect(lifecycle.pendingDeletes('test')).toEqual(['res-1'])
+  // An hour of 404s later, the delete is settled and the space is free.
+  now += MEASURE_TIMEOUT
+  await guarded.uploadFile(config, upload(600))
+  expect(lifecycle.pendingDeletes('test')).toEqual([])
+  expect(lifecycle.tracksResource('test', 'res-1')).toBe(false)
+})
+
+Deno.test('a delete the platform refuses leaves no record to settle', async () => {
+  const { raw } = box()
+  const lifecycle = store('active', { maxBytes: 1_000 })
+  raw.deleteResource = () => Promise.reject(new AragApiError(403, '/resource/res-1', 'Forbidden'))
+  const guarded = guardManagement(raw, lifecycle)
+  await guarded.uploadFile(config, upload(100))
+  await expect(guarded.deleteResource(config, 'res-1')).rejects.toBeInstanceOf(AragApiError)
+  expect(lifecycle.pendingDeletes('test')).toEqual([])
+  expect(lifecycle.tracksResource('test', 'res-1')).toBe(true)
+})
+
+/** A box full of failed crawls, deleted through the real provider's purge. */
+function junkBox(count: number, onDelete: () => Promise<void> = () => Promise.resolve()) {
+  const live = new Set(Array.from({ length: count }, (_, n) => `junk-${n + 1}`))
+  let inFlight = 0
+  const seen = { peak: 0, sent: [] as string[] }
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input))
+    const path = url.pathname.replace(/^.*\/kb\/test-kb/, '')
+    if (path === '/catalog') {
+      return Response.json({
+        resources: Object.fromEntries(
+          [...live].map((id) => [id, { id, title: '', metadata: { status: 'ERROR' } }]),
+        ),
+      })
+    }
+    if (path === '/counters') return Response.json({ resources: live.size })
+    const single = /^\/resource\/([^/]+)$/.exec(path)
+    if (single && init?.method === 'DELETE') {
+      inFlight++
+      seen.peak = Math.max(seen.peak, inFlight)
+      seen.sent.push(single[1]!)
+      await onDelete()
+      inFlight--
+      live.delete(single[1]!)
+      return Response.json({})
+    }
+    return Response.json({})
+  }) as typeof fetch
+  const provider = new AragProvider({
+    resolveBinding: () => ({
+      baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test-kb',
+      token: 'fixture',
+    }),
+    fetchImpl,
+  })
+  return { live, seen, provider }
+}
+
+Deno.test('a purge deletes in waves of five, each wave one step with the adds', async () => {
+  const { live, seen, provider } = junkBox(
+    12,
+    () => new Promise((resolve) => setTimeout(resolve, 5)),
+  )
+  const lifecycle = store()
+  const guarded = guardManagement(provider, lifecycle)
+  const result = await guarded.purgeFailedResources(config, { dryRun: false })
+  expect(result).toMatchObject({ eligible: 12, deleted: 12, failed: 0, notAttempted: 0 })
+  expect(seen.peak).toBe(5)
+  expect(live.size).toBe(0)
+})
+
+Deno.test('a purge starts no wave once its request has ended or its time is up', async () => {
+  let now = Date.UTC(2026, 8, 26)
+  const lifecycle = new PortalLifecycleStore(undefined, () => now)
+  const ended = new AbortController()
+  let calls = 0
+  // The request ends as the last delete of the first wave is sent.
+  const first = junkBox(12, () => {
+    if (++calls === 5) ended.abort()
+    return Promise.resolve()
+  })
+  const stopped = await guardManagement(first.provider, lifecycle).purgeFailedResources(config, {
+    dryRun: false,
+    signal: ended.signal,
+  } as { dryRun: boolean })
+  // The first wave was sent before the request ended; no other wave was started.
+  expect(first.seen.sent).toHaveLength(5)
+  expect(stopped).toMatchObject({ eligible: 12, notAttempted: 7 })
+  // A purge that has run for 75 seconds starts no further wave.
+  // Each wave of five takes 40 seconds.
+  const second = junkBox(12, () => {
+    now += 8_000
+    return Promise.resolve()
+  })
+  const capped = await guardManagement(second.provider, lifecycle).purgeFailedResources(config, {
+    dryRun: false,
+  })
+  expect(second.seen.sent).toHaveLength(10)
+  expect(capped).toMatchObject({ eligible: 12, deleted: 10, notAttempted: 2 })
+})

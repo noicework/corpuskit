@@ -3068,9 +3068,22 @@ export class AragProvider implements RetrievalProvider {
     })
   }
 
-  async deleteResource(tenant: TenantConfig, id: string): Promise<void> {
-    await this.client(tenant).deleteJson(`/resource/${id}`)
+  /**
+   * Delete one resource; one already gone is not an error. `signal` cancels the request where
+   * the platform allows, though a delete it has received may still land. The deleted resource's
+   * entities leave the cached graph too.
+   */
+  async deleteResource(
+    tenant: TenantConfig,
+    id: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    await this.client(tenant).deleteJson(`/resource/${id}`, options)
     this.invalidateCatalogue(tenant.slug)
+    this.entityGroupsCache.delete(tenant.slug)
+    for (const key of this.graphCache.keys()) {
+      if (key.startsWith(`${tenant.slug}|`)) this.graphCache.delete(key)
+    }
   }
 
   /** Show or hide a resource from searchers (draft/publish workflow). */
@@ -3086,18 +3099,34 @@ export class AragProvider implements RetrievalProvider {
    * health-scan's newest-slice sample), same page/max-page pattern as
    * `listResources`, so a box with thousands of resources is fully scanned.
    *
-   * `dryRun` (the caller's default) never calls `deleteResource` - it only
+   * `dryRun` (the caller's default) never deletes anything - it only
    * reports what WOULD be deleted, so a caller can confirm scope before
    * committing. A real run deletes in bounded waves of
    * `PURGE_DELETE_CONCURRENCY` so the box is never hit with an unbounded
    * burst of parallel deletes; one resource's delete failing is logged and
-   * counted but never aborts the rest of the run.
+   * counted but never aborts the rest of the run. A caller that keeps a ledger
+   * of what the box holds passes `deleteWave` to run each wave its own way;
+   * `shouldStop` is asked before each wave, and the resources a stopped run
+   * never reached are reported as `notAttempted`.
    */
   async purgeFailedResources(
     tenant: TenantConfig,
-    opts: { dryRun: boolean },
+    opts: {
+      dryRun: boolean
+      /** Once aborted, no further wave is started. */
+      signal?: AbortSignal
+      deleteWave?: (ids: string[]) => Promise<PromiseSettledResult<unknown>[]>
+      shouldStop?: () => boolean
+    },
   ): Promise<
-    { scanned: number; eligible: number; deleted: number; failed: number; sampleTitles: string[] }
+    {
+      scanned: number
+      eligible: number
+      deleted: number
+      failed: number
+      notAttempted: number
+      sampleTitles: string[]
+    }
   > {
     const client = this.client(tenant)
     const candidates: { id: string; title: string }[] = []
@@ -3118,34 +3147,52 @@ export class AragProvider implements RetrievalProvider {
     const sampleTitles = candidates.slice(0, PURGE_SAMPLE_SIZE).map((r) => `${r.title} (${r.id})`)
 
     if (opts.dryRun) {
-      return { scanned, eligible: candidates.length, deleted: 0, failed: 0, sampleTitles }
+      return {
+        scanned,
+        eligible: candidates.length,
+        deleted: 0,
+        failed: 0,
+        notAttempted: 0,
+        sampleTitles,
+      }
     }
 
+    const deleteWave = opts.deleteWave ??
+      ((ids: string[]) => Promise.allSettled(ids.map((id) => this.deleteResource(tenant, id))))
     let deleted = 0
     let failed = 0
-    for (let start = 0; start < candidates.length; start += PURGE_DELETE_CONCURRENCY) {
+    let start = 0
+    for (; start < candidates.length; start += PURGE_DELETE_CONCURRENCY) {
+      if (opts.signal?.aborted || opts.shouldStop?.()) break
       const wave = candidates.slice(start, start + PURGE_DELETE_CONCURRENCY)
-      const results = await Promise.allSettled(
-        wave.map((r) =>
-          this.deleteResource(tenant, r.id).catch((err) => {
-            throw new Error(
-              `failed to delete "${r.title}" (${r.id}): ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            )
-          })
-        ),
-      )
-      for (const result of results) {
+      let results: PromiseSettledResult<unknown>[]
+      try {
+        results = await deleteWave(wave.map((r) => r.id))
+      } catch (err) {
+        // The whole wave was refused before any delete was sent.
+        results = wave.map(() => ({ status: 'rejected' as const, reason: err }))
+      }
+      for (const [index, result] of results.entries()) {
         if (result.status === 'fulfilled') {
           deleted++
         } else {
           failed++
-          console.error(`purgeFailedResources(${tenant.slug}):`, result.reason)
+          const r = wave[index]!
+          console.error(
+            `purgeFailedResources(${tenant.slug}): failed to delete "${r.title}" (${r.id}):`,
+            result.reason instanceof Error ? result.reason.message : String(result.reason),
+          )
         }
       }
     }
-    return { scanned, eligible: candidates.length, deleted, failed, sampleTitles }
+    return {
+      scanned,
+      eligible: candidates.length,
+      deleted,
+      failed,
+      notAttempted: Math.max(0, candidates.length - start),
+      sampleTitles,
+    }
   }
 
   /**

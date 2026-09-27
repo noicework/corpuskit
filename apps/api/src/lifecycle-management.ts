@@ -168,10 +168,34 @@ export class ResourceCleanupError extends Error {
 
 /**
  * How long a delete may take. It runs while holding the portal's capacity lock, so a delete that
- * never answers must not hold every add. One given up may still land later; its id is then
- * released by deleting it again.
+ * never answers must not hold every add. One given up may still land later: the ledger settles
+ * it from later reads of the box (see `beginDelete`).
  */
 const DELETE_TIMEOUT_MS = 30_000
+/**
+ * How long a purge keeps starting waves of deletes. It stops well inside the request's audit
+ * deadline, so no wave is sent after the request has ended; the rest are left for the next purge.
+ */
+const PURGE_TIME_CAP_MS = 75_000
+
+/**
+ * A delete the knowledge box answered with a refusal: nothing was deleted. Anything else (a
+ * timeout, a server error, a cancelled request, no answer) may have deleted it.
+ */
+export function refusedByPlatform(error: unknown): boolean {
+  return error instanceof AragApiError && error.status >= 400 && error.status < 500
+}
+
+/** How a delete through the guard is sent and released. */
+export interface GuardedDeleteOptions {
+  /** The request's operation signal: once it ends, nothing more is sent. */
+  signal?: AbortSignal
+  /**
+   * `drop` finishes a delete whose release was never recorded: nothing is counted as removed
+   * again. The default counts the removal until the box's own count shows it.
+   */
+  release?: 'forget' | 'drop'
+}
 
 function unavailable(): PortalLifecycleError {
   return new PortalLifecycleError(503, { error: 'usage_unavailable' })
@@ -227,6 +251,9 @@ interface Readings {
   /** The latest finding for each link, with when it was read on the store's clock. */
   found: Map<string, { measurement: Measurement; at: number }>
   reading: Set<string>
+  /** The same for resources a delete was sent for whose release was never recorded. */
+  deletes: Map<string, { measurement: Measurement; at: number }>
+  deleting: Set<string>
 }
 const readingsByState = new WeakMap<object, Map<string, Readings>>()
 
@@ -234,13 +261,19 @@ function readingsFor(lifecycle: PortalLifecycleStore, slug: string): Readings {
   let portals = readingsByState.get(lifecycle.state)
   if (!portals) readingsByState.set(lifecycle.state, portals = new Map())
   let readings = portals.get(slug)
-  if (!readings) portals.set(slug, readings = { found: new Map(), reading: new Set() })
+  if (!readings) {
+    portals.set(
+      slug,
+      readings = { found: new Map(), reading: new Set(), deletes: new Map(), deleting: new Set() },
+    )
+  }
   return readings
 }
 
 /** The findings not recorded yet. */
 function foundReadings(lifecycle: PortalLifecycleStore, slug: string): Measurement[] {
-  return [...readingsFor(lifecycle, slug).found.values()].map(({ measurement }) => measurement)
+  const { found, deletes } = readingsFor(lifecycle, slug)
+  return [...found.values(), ...deletes.values()].map(({ measurement }) => measurement)
 }
 
 /**
@@ -249,12 +282,13 @@ function foundReadings(lifecycle: PortalLifecycleStore, slug: string): Measureme
  * the link is read again when it is next due.
  */
 function takeReadings(lifecycle: PortalLifecycleStore, slug: string): Measurement[] {
-  const { found } = readingsFor(lifecycle, slug)
+  const { found, deletes } = readingsFor(lifecycle, slug)
   const now = lifecycle.now()
-  const measurements = [...found.values()]
+  const measurements = [...found.values(), ...deletes.values()]
     .filter(({ measurement, at }) => 'bytes' in measurement || now - at < STALE_READING_MS)
     .map(({ measurement }) => measurement)
   found.clear()
+  deletes.clear()
   return measurements
 }
 
@@ -275,6 +309,19 @@ function dueReadings(
   }
   return lifecycle.pendingMeasurements(slug)
     .filter((id) => !reading.has(id) && !measured(id) && !skip.has(id))
+    .slice(0, limit)
+}
+
+/** Deletes whose release was never recorded that are worth reading now, least recently first. */
+function dueDeleteReadings(
+  lifecycle: PortalLifecycleStore,
+  slug: string,
+  limit: number,
+  skip: ReadonlySet<string> = new Set(),
+): string[] {
+  const { deleting } = readingsFor(lifecycle, slug)
+  return lifecycle.pendingDeletes(slug)
+    .filter((id) => !deleting.has(id) && !skip.has(id))
     .slice(0, limit)
 }
 
@@ -311,9 +358,32 @@ async function measure(
   lifecycle: PortalLifecycleStore,
   config: TenantConfig,
   ids: readonly string[],
+  deleteIds: readonly string[] = [],
 ): Promise<void> {
   const readings = readingsFor(lifecycle, config.slug)
-  const queue = ids.filter((id) => !readings.reading.has(id))
+  // Whether a resource a delete was sent for is still in the box, drafts included. A read that
+  // fails finds nothing, and the resource is read again later.
+  const readDelete = async (id: string) => {
+    readings.deleting.add(id)
+    try {
+      const found = await withinTimeout(
+        () => management.resource(config, id, { hidden: true }),
+        READ_TIMEOUT_MS,
+      )
+      readings.deletes.set(id, {
+        measurement: { id, exists: found?.id === id, readAt: lifecycle.now() },
+        at: lifecycle.now(),
+      })
+    } catch {
+      // Unknown: the record stays, and the resource is read again when it is next due.
+    } finally {
+      readings.deleting.delete(id)
+    }
+  }
+  const queue: (() => Promise<void>)[] = [
+    ...ids.filter((id) => !readings.reading.has(id)).map((id) => () => read(id)),
+    ...deleteIds.filter((id) => !readings.deleting.has(id)).map((id) => () => readDelete(id)),
+  ]
   const read = async (id: string) => {
     readings.reading.add(id)
     let measurement: Measurement
@@ -344,7 +414,7 @@ async function measure(
     }, MEASURE_DEADLINE_MS)
   })
   const worker = async () => {
-    while (open && queue.length) await Promise.race([read(queue.shift()!), deadline])
+    while (open && queue.length) await Promise.race([queue.shift()!(), deadline])
   }
   try {
     await Promise.all(Array.from({ length: Math.min(MEASURE_CONCURRENCY, queue.length) }, worker))
@@ -366,8 +436,9 @@ export async function capacityUsage(
   config: TenantConfig,
 ): Promise<{ resources: number; bytes: number | null }> {
   const due = dueReadings(lifecycle, config.slug, MEASURE_PER_REPORT)
+  const deletes = dueDeleteReadings(lifecycle, config.slug, MEASURE_PER_REPORT)
   const [, observed] = await Promise.all([
-    measure(management, lifecycle, config, due),
+    measure(management, lifecycle, config, due, deletes),
     resources(management, config),
   ])
   return {
@@ -433,9 +504,15 @@ async function admitAdd(
     // waits on the reads, and judge this add once more with what was found.
     if (!measured && measurable(admission)) {
       const due = dueReadings(lifecycle, config.slug, MEASURE_PER_CHECK, new Set(recorded))
-      if (due.length) {
+      const deletes = dueDeleteReadings(
+        lifecycle,
+        config.slug,
+        MEASURE_PER_CHECK,
+        new Set(recorded),
+      )
+      if (due.length || deletes.length) {
         measured = true
-        await measure(management, lifecycle, config, due)
+        await measure(management, lifecycle, config, due, deletes)
         continue
       }
     }
@@ -469,8 +546,11 @@ export async function precheckAdd(
     })
   let admission = check()
   const due = measurable(admission) ? dueReadings(lifecycle, config.slug, MEASURE_PER_CHECK) : []
-  if (due.length) {
-    await measure(management, lifecycle, config, due)
+  const deletes = measurable(admission)
+    ? dueDeleteReadings(lifecycle, config.slug, MEASURE_PER_CHECK)
+    : []
+  if (due.length || deletes.length) {
+    await measure(management, lifecycle, config, due, deletes)
     admission = check()
   }
   if (!('admitted' in admission)) throw refusal(admission)
@@ -566,20 +646,55 @@ export function guardManagement(
         // between the box forgetting the resource and the ledger releasing it: the count and the
         // ledger's record of removals then agree. A link awaiting measurement frees its
         // provisional bytes here, and a finding for it read meanwhile is no longer recorded.
-        wrapped = async (config: TenantConfig, id: string, ...rest: unknown[]) => {
+        wrapped = async (config: TenantConfig, id: string, how: GuardedDeleteOptions = {}) => {
           assertManagementWritable(lifecycle, config.slug, options)
-          return await serialCapacity(lifecycle, config.slug, async () => {
+          how.signal?.throwIfAborted()
+          return await serialCapacity(lifecycle, config.slug, () => {
+            // The portal can have been paused or made read-only while this waited its turn.
             assertManagementWritable(lifecycle, config.slug, options)
-            const result = await withinTimeout(
-              () => value.call(receiver, config, id, ...rest),
-              DELETE_TIMEOUT_MS,
+            return deleteInStep(
+              (signal) => value.call(receiver, config, id, { signal }),
+              lifecycle,
+              config.slug,
+              id,
+              how,
             )
-            try {
-              lifecycle.forgetResource(config.slug, id)
-            } catch (error) {
-              throw new ResourceCleanupError(error)
-            }
-            return result
+          })
+        }
+      } else if (name === 'purgeFailedResources') {
+        // A purge deletes in waves. Each wave takes the capacity step once and deletes its
+        // resources together inside it, each marked and released as a single delete is. The
+        // purge stops starting waves when its request ends or has run for PURGE_TIME_CAP_MS.
+        wrapped = async (
+          config: TenantConfig,
+          opts: { dryRun: boolean; signal?: AbortSignal },
+        ) => {
+          assertManagementWritable(lifecycle, config.slug, options)
+          const signal = opts.signal
+          const started = lifecycle.now()
+          const raw = Reflect.get(target, 'deleteResource', target) as (
+            config: TenantConfig,
+            id: string,
+            options: { signal?: AbortSignal },
+          ) => Promise<void>
+          return await value.call(receiver, config, {
+            ...opts,
+            shouldStop: () =>
+              signal?.aborted === true || lifecycle.now() - started >= PURGE_TIME_CAP_MS,
+            deleteWave: (ids: string[]) =>
+              serialCapacity(lifecycle, config.slug, () => {
+                assertManagementWritable(lifecycle, config.slug, options)
+                signal?.throwIfAborted()
+                return Promise.allSettled(ids.map((id) =>
+                  deleteInStep(
+                    (each) => raw.call(target, config, id, { signal: each }),
+                    lifecycle,
+                    config.slug,
+                    id,
+                    { ...(signal ? { signal } : {}) },
+                  )
+                ))
+              }),
           })
         }
       } else if (MUTATIONS.has(name)) {
@@ -614,6 +729,43 @@ export function guardManagement(
       return wrapped
     },
   })
+}
+
+/**
+ * One delete, inside the portal's capacity step. Nothing is sent once the request has ended, since
+ * its release could no longer be recorded. Before the delete is sent the ledger records that it is
+ * being sent; if the request then ends before the release is recorded, later reads of the box
+ * settle it. A delete the box refuses drops that record; one whose outcome is unknown keeps it.
+ */
+async function deleteInStep(
+  send: (signal: AbortSignal) => Promise<unknown>,
+  lifecycle: PortalLifecycleStore,
+  slug: string,
+  id: string,
+  options: GuardedDeleteOptions,
+): Promise<void> {
+  const signal = options.signal
+  signal?.throwIfAborted()
+  lifecycle.beginDelete(slug, id)
+  try {
+    await withinTimeout(
+      (timeout) => send(signal ? AbortSignal.any([signal, timeout]) : timeout),
+      DELETE_TIMEOUT_MS,
+    )
+  } catch (error) {
+    if (refusedByPlatform(error) && !signal?.aborted) {
+      try {
+        lifecycle.abandonDelete(slug, id)
+      } catch { /* Later reads find the resource still there and drop the record. */ }
+    }
+    throw error
+  }
+  try {
+    if (options.release === 'drop') lifecycle.dropResource(slug, id)
+    else lifecycle.forgetResource(slug, id)
+  } catch (error) {
+    throw new ResourceCleanupError(error)
+  }
 }
 
 interface BindingWrites {
