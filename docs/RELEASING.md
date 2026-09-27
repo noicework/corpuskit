@@ -66,14 +66,20 @@ fails, and an operator can roll back by hand. Stored data is never rolled back w
 the question to answer is: can the previous release run correctly on the data this release has
 written? State one of these, naming the release rolled back to:
 
-- **Safe.** Say why in a clause: "the capacity ledger keeps the shape 2026.9.26 reads".
-- **Safe, with effects.** Name what the older code ignores or drops, and what to do: "that release
-  ignores aliases, and its next registry write drops them; stop routing alias hostnames first".
+- **Safe.** Say why in a clause: "nothing stored changes, and health drops the new fields".
+- **Safe, with effects.** Name what the older code ignores, drops, refuses or exposes, and what to
+  do: "that release ignores aliases, and its next registry write drops them; stop routing alias
+  hostnames first".
 - **Not safe after a step.** Name the step and the release not to go below: "once any token is
   sealed, do not roll back to a release before 2026.9.25".
 
-Say what no rollback restores, such as erased records. When unsure, check the previous release's
-code for how it reads the new data before writing "safe".
+Say what no rollback restores, such as erased records, and what a rollback exposes again, such as
+a leak this release fixed.
+
+Check the claim against the previous release's code, not this release's tests. A compatibility
+test pins whichever build it was written against, which may be inside the same release. For every
+record this release writes, find how the previous release parses it: a strict schema refuses a
+field it does not know, a lenient one ignores it, and a later write by the older code may drop it.
 
 ## Cutting a release
 

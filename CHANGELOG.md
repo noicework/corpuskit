@@ -83,8 +83,11 @@ Adding documents is obvious and safe, managers can delete a document, and hidden
 - The recent-additions route takes a bounded `?limit`. ([#68](https://github.com/noicework/corpuskit/pull/68))
 - Portals on their own colours may see link and accent text darken slightly. Nothing stored changes. ([#71](https://github.com/noicework/corpuskit/pull/71))
 - Reader ratings are stored as one row per answer, at most 500 per portal, kept for 90 days and purged by daily maintenance. ([#71](https://github.com/noicework/corpuskit/pull/71))
-- **Rollback to 2026.9.26 is safe.** The capacity ledger keeps the shape 2026.9.26 reads, and a compatibility test pins it. Deleted documents stay deleted. ([#69](https://github.com/noicework/corpuskit/pull/69))
-- While rolled back to 2026.9.26, reader ratings stay in their new `answer_feedback` table, which that release never reads: they are not purged after 90 days, and portal erasure does not remove them. Upgrading again resumes both. ([#71](https://github.com/noicework/corpuskit/pull/71))
+- **Rollback to 2026.9.26 is safe, with effects.** Deleted documents stay deleted. While 2026.9.26 runs: ([#68](https://github.com/noicework/corpuskit/pull/68), [#69](https://github.com/noicework/corpuskit/pull/69), [#71](https://github.com/noicework/corpuskit/pull/71))
+  - A portal with a byte limit whose capacity ledger holds a crawled link in flight, being measured or stuck refuses every add and usage read, because 2026.9.26 cannot read that ledger. Before rolling back, let such links finish measuring and delete stuck ones, or do not roll back past 2026.9.27.
+  - Readers can see hidden drafts again, because 2026.9.26 has no hidden-draft filter.
+  - The audit viewer cannot show a log page that includes an action it does not know, such as `resource.delete`.
+  - Reader ratings stay in their new `answer_feedback` table, which 2026.9.26 never reads, so they are not purged after 90 days and portal erasure does not remove them. Upgrading again resumes both.
 
 ## [2026.9.26] - 2026-09-26
 
@@ -129,7 +132,7 @@ Portals can be served on their own hostnames, and a hosting operator can retire 
 - A reserved hostname that still carries an alias record refuses sign-in with `409 host_conflict`. Remove the alias first. ([#64](https://github.com/noicework/corpuskit/pull/64))
 - A portal other than the showcase portals that relied on the regional discovery band must now set `regionalDiscovery: true` through `PATCH /api/admin/tenants/:slug`, which needs `behaviour.write`. Assigning the unlisted palette to another portal answers `400 palette_not_available`. ([#63](https://github.com/noicework/corpuskit/pull/63))
 - Aliases are stored with the portal registry. When a suspension began is kept in a companion record, so the lifecycle record stays readable by 2026.9.25; suspensions from before this release count from the lifecycle's last change. ([#64](https://github.com/noicework/corpuskit/pull/64), [#67](https://github.com/noicework/corpuskit/pull/67))
-- **Rollback to 2026.9.25:** that release ignores aliases, so it serves alias hosts as ordinary hosts, and its next portal registry write drops the stored aliases. Stop routing alias hostnames before rolling back, and register them again after upgrading. Erasure is permanent, and no rollback restores what it removed. ([#64](https://github.com/noicework/corpuskit/pull/64), [#67](https://github.com/noicework/corpuskit/pull/67))
+- **Rollback to 2026.9.25 is safe, with effects.** That release ignores aliases, so it serves alias hosts as ordinary hosts, and its next portal registry write drops the stored aliases. It also reads a session sealed to a host on every host, so a cookie taken from an alias host would work on the platform hosts. Stop routing alias hostnames before rolling back, rotate `SESSION_SECRET` if anyone else controlled one (this signs everyone out), and register the aliases again after upgrading. Erasure is permanent, and no rollback restores what it removed. ([#64](https://github.com/noicework/corpuskit/pull/64), [#67](https://github.com/noicework/corpuskit/pull/67))
 
 ## [2026.9.25] - 2026-09-25
 
@@ -157,7 +160,7 @@ Optional hosting hooks for deployments that serve portals for several organisati
 - `/api/health` gains a coarse `bindingsReady` flag, always present on Cloudflare and elsewhere only when false. ([#61](https://github.com/noicework/corpuskit/pull/61))
 - New optional settings, all off unless set: `PLATFORM_DOMAIN` (default `corpuskit.org`), `OPERATOR_API_KEY` and `OPERATOR_ID` (default `operator`), and `EXTERNAL_LOGIN_ISSUER`, `EXTERNAL_LOGIN_JWK`, `EXTERNAL_LOGIN_NAME` and `EXTERNAL_LOGIN_START_URL`. Changing `PLATFORM_DOMAIN` does not move DNS routes or carry sessions across. ([#61](https://github.com/noicework/corpuskit/pull/61))
 - Email assignments are now bound to their identity source. An atomic migration marks existing assignments as Entra. ([#61](https://github.com/noicework/corpuskit/pull/61))
-- **Rollback:** once any token is sealed, do not roll back to a release before 2026.9.25, which would send the sealed token as the credential. Once external sign-in has created assignments, do not roll back to a release that ignores their identity source, even with external sign-in turned off; prefer a forward fix. ([#61](https://github.com/noicework/corpuskit/pull/61))
+- **Rollback to 2026.9.17 is not safe once any token is sealed:** that release would send the sealed token as the credential. Once external sign-in has created assignments, do not roll back to a release that ignores their identity source, even with external sign-in turned off; prefer a forward fix. Before either, rolling back has effects: 2026.9.17 ignores portal status and limits, so suspended and read-only portals serve and accept changes again, and its next portal registry write forgets retired slugs, so a new portal could take a deleted portal's slug and the records still stored under it. ([#61](https://github.com/noicework/corpuskit/pull/61))
 
 ## [2026.9.17] - 2026-09-17
 
