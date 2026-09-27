@@ -10,6 +10,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 - Search engines can find the public site. `/robots.txt` names a sitemap on the platform domain, and `/sitemap.xml` lists the home page, About and every documentation page, including new ones as they are added. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - About answers common questions: what CorpusKit is, where answers come from and how they are checked, what a portal takes in, access for AI assistants over MCP, what a deployment needs, the demo, and how to contribute. ([#74](https://github.com/noicework/corpuskit/pull/74))
+- `PORTAL_INDEXING=deny` keeps a deployment's portals out of search: portal hosts answer `robots.txt` with `Disallow: /` and portal pages carry `X-Robots-Tag: noindex`, while the platform domain's home page, About and documentation stay indexable. The default, `allow`, changes nothing. See [Search engines](https://github.com/noicework/corpuskit/blob/main/docs/HOSTING.md#search-engines). ([#74](https://github.com/noicework/corpuskit/pull/74))
 - The home page, About and every documentation page describe themselves to search engines in structured data, and each documentation page carries its breadcrumb trail. About and the documentation have share cards of their own. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`. ([#73](https://github.com/noicework/corpuskit/pull/73))
 - For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut. ([#73](https://github.com/noicework/corpuskit/pull/73))
@@ -25,6 +26,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Upgrade notes
 
+- `PORTAL_INDEXING` is new and defaults to `allow`, so portals stay as indexable as before. Set it to `deny` to keep them out of search; any value other than `allow` counts as `deny`. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/robots.txt` is now answered by the Worker and the local server, and `apps/web/public/robots.txt` is gone. A deployment that changed that file should carry its rules into `apps/api/src/search-files.ts`. `/sitemap.xml` answers on the platform domain only. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead. ([#73](https://github.com/noicework/corpuskit/pull/73))
 - The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read. ([#73](https://github.com/noicework/corpuskit/pull/73))

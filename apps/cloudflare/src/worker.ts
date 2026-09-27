@@ -17,7 +17,7 @@ import {
   isPlatformHostname,
 } from '../../../packages/core/src/platform-domain.ts'
 import { platformShellResponse } from '../../api/src/platform-shell.ts'
-import { robotsTxt, sitemapXml } from '../../api/src/search-files.ts'
+import { robotsTag, robotsTxt, sitemapXml } from '../../api/src/search-files.ts'
 import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
@@ -747,7 +747,7 @@ async function pageRoute(
   // robots.txt on every host, naming the sitemap on the apex; the sitemap lists the apex's pages.
   if (url.pathname === '/robots.txt') {
     return secureAssetResponse(
-      new Response(robotsTxt(platformDomain, url.hostname), {
+      new Response(robotsTxt(platformDomain, url.hostname, stringEnv(env).PORTAL_INDEXING), {
         headers: { 'content-type': 'text/plain; charset=utf-8' },
       }),
     )
@@ -779,7 +779,11 @@ async function pageRoute(
   // 404: a scanner learns nothing and a crawler does not index the typo.
   const unknownShell = asset.status === 200 && !documentPath(url.pathname) &&
     (asset.headers.get('content-type') ?? '').includes('text/html')
-  return secureAssetResponse(asset, unknownShell ? 404 : asset.status)
+  const response = secureAssetResponse(asset, unknownShell ? 404 : asset.status)
+  // PORTAL_INDEXING=deny keeps a portal's pages out of search; the apex's own pages stay in.
+  const tag = robotsTag(platformDomain, url.hostname, url.pathname, stringEnv(env).PORTAL_INDEXING)
+  if (tag) response.headers.set('x-robots-tag', tag)
+  return response
 }
 
 /**

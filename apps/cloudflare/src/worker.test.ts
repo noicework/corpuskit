@@ -301,6 +301,53 @@ Deno.test('Worker answers robots.txt on every host and the sitemap on the apex a
   expect(harness.assetRequests).toHaveLength(0)
 })
 
+Deno.test('PORTAL_INDEXING=deny keeps portals out of search and the apex pages in', async () => {
+  const shell = new Response('<!doctype html><title>shell</title>', {
+    headers: { 'content-type': 'text/html' },
+  })
+  const harness = workerHarness({ assets: () => shell.clone() })
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org', PORTAL_INDEXING: 'deny' })
+  const get = (url: string) => worker.fetch(new Request(url), harness.env)
+
+  const portalRobots = await get('https://marine.research.example.org/robots.txt')
+  expect(await portalRobots.text()).toContain('User-agent: *\nDisallow: /\n')
+  const apexRobots = await (await get('https://research.example.org/robots.txt')).text()
+  expect(apexRobots).toContain('Disallow: /api/')
+  expect(apexRobots).toContain('Sitemap: https://research.example.org/sitemap.xml')
+
+  for (
+    const url of [
+      'https://marine.research.example.org/t/marine',
+      'https://marine.research.example.org/t/marine/library',
+      'https://research.example.org/t/marine',
+    ]
+  ) {
+    const response = await get(url)
+    expect([url, response.headers.get('x-robots-tag')]).toEqual([url, 'noindex'])
+  }
+  for (const path of ['/', '/about', '/docs', '/docs/search']) {
+    const response = await get(`https://research.example.org${path}`)
+    expect([path, response.status, response.headers.get('x-robots-tag')]).toEqual([path, 200, null])
+  }
+})
+
+Deno.test('without PORTAL_INDEXING, portal pages carry no robots tag and portal robots are unchanged', async () => {
+  const harness = workerHarness({
+    assets: () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }),
+  })
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  const page = await worker.fetch(
+    new Request('https://marine.research.example.org/t/marine'),
+    harness.env,
+  )
+  expect(page.headers.get('x-robots-tag')).toBeNull()
+  const robots = await worker.fetch(
+    new Request('https://marine.research.example.org/robots.txt'),
+    harness.env,
+  )
+  expect(await robots.text()).not.toContain('Disallow: /\n')
+})
+
 Deno.test('Worker cookies share only the configured platform domain', async () => {
   for (
     const hostname of [

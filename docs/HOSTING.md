@@ -1152,6 +1152,27 @@ name. Before changing it on a deployment that already attached hostnames, list t
 Worker custom domains: a portal whose hostname is attached to the previous script cannot be
 removed (`domain_removal_failed`) until that hostname is detached or moved.
 
+## Search engines
+
+The Worker and the local server answer two files for crawlers themselves, built from
+`PLATFORM_DOMAIN` (`apps/api/src/search-files.ts`):
+
+- `/robots.txt` on every host. It keeps crawlers out of `/api/`, `/auth/` and `/admin`, and on the
+  platform domain it names the sitemap.
+- `/sitemap.xml` on the platform domain only (other hosts answer 404). It lists the home page,
+  About and every public documentation page, so a new documentation page is listed without anyone
+  editing a file. Portal pages are never listed.
+
+A portal's pages are open to search engines unless the deployment says otherwise:
+
+| Variable | Meaning |
+|---|---|
+| `PORTAL_INDEXING` | `allow` (the default) or `deny`. With `deny`, every host other than the platform domain (each portal's subdomain and its own hostnames) answers `/robots.txt` with `Disallow: /`, and every portal page, on those hosts and at `/t/...` on the platform domain, carries `X-Robots-Tag: noindex`. The platform domain's home page, About and documentation stay indexable. Only an absent, empty or `allow` value (any case) allows indexing, so a mistyped value keeps portals out. |
+
+Set `PORTAL_INDEXING=deny` on a deployment that hosts portals for other organisations, whose names
+and content should not reach search results just because someone linked to a portal. A deployment
+whose public portals should be found keeps the default.
+
 ## Portal host aliases
 
 A hosting operator can serve a portal on hostnames outside the platform domain, such as

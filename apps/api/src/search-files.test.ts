@@ -1,6 +1,13 @@
 import { expect } from '@std/expect'
 import { DOC_PAGES, RELEASE_NOTES_PAGE_ID } from '../../../packages/core/src/docs.ts'
-import { publicPagePaths, robotsTxt, sitemapXml } from './search-files.ts'
+import {
+  isPortalPage,
+  portalIndexingMode,
+  publicPagePaths,
+  robotsTag,
+  robotsTxt,
+  sitemapXml,
+} from './search-files.ts'
 
 Deno.test('the sitemap lists the home page, About and every public documentation page, once', () => {
   const xml = sitemapXml('research.example.org')
@@ -33,5 +40,53 @@ Deno.test('robots.txt keeps crawlers to pages, and only the apex names the sitem
   const closed = [...apex.matchAll(/^Disallow: (\S+)$/gm)].map(([, path]) => path!)
   for (const path of publicPagePaths()) {
     for (const prefix of closed) expect(path.startsWith(prefix)).toBe(false)
+  }
+})
+
+Deno.test('PORTAL_INDEXING allows portal indexing by default, and a mistyped value denies it', () => {
+  for (const value of [undefined, '', ' ', 'allow', 'ALLOW', ' Allow ']) {
+    expect([value, portalIndexingMode(value)]).toEqual([value, 'allow'])
+  }
+  for (const value of ['deny', 'DENY', ' deny ', 'no', 'false', 'denied']) {
+    expect([value, portalIndexingMode(value)]).toEqual([value, 'deny'])
+  }
+})
+
+Deno.test('a portal page is anything off the platform apex, or a /t/ page on it', () => {
+  const domain = 'research.example.org'
+  expect(isPortalPage(domain, 'marine.research.example.org', '/')).toBe(true)
+  expect(isPortalPage(domain, 'research.partner.example', '/t/marine')).toBe(true)
+  expect(isPortalPage(domain, 'research.example.org', '/t/marine/library')).toBe(true)
+  expect(isPortalPage(domain, 'Research.Example.org', '/t/marine')).toBe(true)
+  for (const path of ['/', '/about', '/docs', '/docs/search', '/robots.txt', '/og/corpuskit.png']) {
+    expect([path, isPortalPage(domain, 'research.example.org', path)]).toEqual([path, false])
+  }
+})
+
+Deno.test('with PORTAL_INDEXING=deny, portal hosts disallow everything and portal pages are noindex', () => {
+  const domain = 'research.example.org'
+  for (const host of ['marine.research.example.org', 'research.partner.example']) {
+    expect(robotsTxt(domain, host, 'deny')).toBe(
+      '# CorpusKit portal. This deployment keeps its portals out of search.\n' +
+        'User-agent: *\nDisallow: /\n',
+    )
+    expect(robotTagOf(host, '/t/marine', 'deny')).toBe('noindex')
+    // The default keeps today's rules and no tag.
+    expect(robotsTxt(domain, host)).toContain('Disallow: /api/\n')
+    expect(robotsTxt(domain, host)).not.toContain('Disallow: /\n')
+    expect(robotTagOf(host, '/t/marine', undefined)).toBeNull()
+  }
+  // The apex keeps its rules and sitemap, and its own pages stay indexable; its portal pages do not.
+  expect(robotsTxt(domain, domain, 'deny')).toBe(robotsTxt(domain, domain))
+  expect(robotsTxt(domain, domain, 'deny')).toContain(
+    'Sitemap: https://research.example.org/sitemap.xml',
+  )
+  for (const path of ['/', '/about', '/docs', '/docs/search']) {
+    expect([path, robotTagOf(domain, path, 'deny')]).toEqual([path, null])
+  }
+  expect(robotTagOf(domain, '/t/marine', 'deny')).toBe('noindex')
+
+  function robotTagOf(host: string, path: string, indexing: string | undefined) {
+    return robotsTag(domain, host, path, indexing)
   }
 })

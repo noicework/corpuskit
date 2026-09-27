@@ -20,7 +20,7 @@ import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
 import { platformShellResponse } from './platform-shell.ts'
-import { robotsTxt, sitemapXml } from './search-files.ts'
+import { robotsTag, robotsTxt, sitemapXml } from './search-files.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
 import { showcasePortalsWarning } from './tenants.ts'
@@ -182,7 +182,13 @@ for (const path of ['/about', '/about/']) {
 app.get(
   '/robots.txt',
   infrastructureHandler(async (c) =>
-    c.text(robotsTxt(process.env.PLATFORM_DOMAIN ?? 'corpuskit.org', new URL(c.req.url).hostname))
+    c.text(
+      robotsTxt(
+        process.env.PLATFORM_DOMAIN ?? 'corpuskit.org',
+        new URL(c.req.url).hostname,
+        process.env.PORTAL_INDEXING,
+      ),
+    )
   ),
 )
 app.get(
@@ -208,10 +214,22 @@ app.get(
 )
 
 const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
-Deno.serve({ port }, async (request, info) =>
-  platformShellResponse(
+Deno.serve({ port }, async (request, info) => {
+  const url = new URL(request.url)
+  const response = platformShellResponse(
     await ingress.handle(request, (clean) => app.fetch(clean), info),
     platformDomain,
     ingress.hostPortal(request),
-    new URL(request.url).hostname,
-  ))
+    url.hostname,
+  )
+  // As in the Worker: PORTAL_INDEXING=deny keeps a portal's pages out of search.
+  const tag = robotsTag(platformDomain, url.hostname, url.pathname, process.env.PORTAL_INDEXING)
+  if (!tag || response.headers.has('x-robots-tag')) return response
+  const headers = new Headers(response.headers)
+  headers.set('x-robots-tag', tag)
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+})
