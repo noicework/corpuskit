@@ -482,20 +482,46 @@ export function parseAnswerFeedback(value: unknown): AnswerFeedback | null {
   }
 }
 
+/** Which of the named answers the portal's ask log holds. */
+export type MatchedAnswers = (learningIds: string[]) => ReadonlySet<string>
+
+/**
+ * The ratings to keep under a cap, newest first. Past the cap, a rating of an answer the ask log
+ * does not hold goes before any rating of one it does, so ratings of made-up answers cannot push
+ * genuine ones out. Unmatched ratings are still kept while there is room: the ask log can stop
+ * recording, and the ratings of answers given after that are genuine too.
+ */
+export function keptRatings<T extends { learningId: string; ts: string }>(
+  records: readonly T[],
+  keep: number,
+  matched?: MatchedAnswers,
+): T[] {
+  // Newest first, ties by answer id, as the Durable Object's table orders them.
+  const newest = [...records].sort((a, b) =>
+    Date.parse(b.ts) - Date.parse(a.ts) ||
+    (a.learningId < b.learningId ? 1 : a.learningId > b.learningId ? -1 : 0)
+  )
+  if (newest.length <= keep) return newest
+  const known = matched?.(newest.map((record) => record.learningId)) ?? new Set<string>()
+  const kept = new Set([
+    ...newest.filter((record) => known.has(record.learningId)),
+    ...newest.filter((record) => !known.has(record.learningId)),
+  ].slice(0, keep))
+  return newest.filter((record) => kept.has(record))
+}
+
 /** The ratings a portal keeps at `now`: within the window, newest first, at most the cap. */
 export function retainedFeedback(
   records: readonly AnswerFeedback[],
   now: number,
+  matched?: MatchedAnswers,
 ): AnswerFeedback[] {
   const cutoff = now - ANSWER_FEEDBACK_DAYS * DAY_MS
-  return records
-    .filter((record) => Date.parse(record.ts) >= cutoff)
-    // Newest first, ties by answer id, as the Durable Object's table orders them.
-    .sort((a, b) =>
-      Date.parse(b.ts) - Date.parse(a.ts) ||
-      (a.learningId < b.learningId ? 1 : a.learningId > b.learningId ? -1 : 0)
-    )
-    .slice(0, ANSWER_FEEDBACK_KEEP)
+  return keptRatings(
+    records.filter((record) => Date.parse(record.ts) >= cutoff),
+    ANSWER_FEEDBACK_KEEP,
+    matched,
+  )
 }
 
 /** A rating without its comment: what Insights counts and joins on. */
@@ -515,6 +541,7 @@ export interface FlaggedAnswer {
 }
 
 export interface FeedbackSummary {
+  /** Ratings of answers the ask log holds; a rating of an unknown answer is not counted. */
   helpful: number
   unhelpful: number
   /** Unhelpful answers whose question the ask log still holds, newest first. */
@@ -531,13 +558,15 @@ export function feedbackSummary(
   questions: (learningIds: string[]) => Record<string, { question: string; ts: string }>,
   comments: (learningIds: string[]) => Record<string, string>,
 ): FeedbackSummary {
-  const unhelpful = ratings.filter((rating) => !rating.good)
-  const asked = unhelpful.length > 0 ? questions(unhelpful.map((r) => r.learningId)) : {}
-  const shown = unhelpful.filter((rating) => asked[rating.learningId])
-    .slice(0, FLAGGED_ANSWERS_SHOWN)
+  // Only ratings of answers this portal gave count: an id the ask log does not hold may be made
+  // up, and would let anyone inflate the counts.
+  const asked = ratings.length > 0 ? questions(ratings.map((r) => r.learningId)) : {}
+  const matched = ratings.filter((rating) => asked[rating.learningId])
+  const unhelpful = matched.filter((rating) => !rating.good)
+  const shown = unhelpful.slice(0, FLAGGED_ANSWERS_SHOWN)
   const said = shown.length > 0 ? comments(shown.map((r) => r.learningId)) : {}
   return {
-    helpful: ratings.length - unhelpful.length,
+    helpful: matched.length - unhelpful.length,
     unhelpful: unhelpful.length,
     flagged: shown.map((rating) => ({
       question: asked[rating.learningId]!.question,
@@ -569,10 +598,16 @@ export class FeedbackStore {
       : []
   }
 
-  /** Keep a rating, replacing the same answer's earlier one, and drop what ages out. */
-  record(slug: string, feedback: AnswerFeedback): void {
+  /**
+   * Keep a rating, replacing the same answer's earlier one, and drop what ages out. Past the cap,
+   * ratings of answers `matched` does not know go first.
+   */
+  record(slug: string, feedback: AnswerFeedback, matched?: MatchedAnswers): void {
     const others = this.readAll(slug).filter((r) => r.learningId !== feedback.learningId)
-    writeJson(this.pathFor(slug), retainedFeedback([feedback, ...others], this.now()))
+    writeJson(
+      this.pathFor(slug),
+      retainedFeedback([feedback, ...others], this.now(), matched),
+    )
   }
 
   /** The ratings kept for the portal, newest first, without their comments. */

@@ -1401,7 +1401,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |
 | `sources` | The source registry | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
 | `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
-| `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
+| `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
 | `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
 | `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |

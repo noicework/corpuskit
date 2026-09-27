@@ -1039,6 +1039,8 @@ export interface BuildAppOptions {
   rateLimitAskPerMin?: number
   /** Wider per-address cap behind the per-client limit (default 5x ask limit). */
   rateLimitAskPerMinPerIp?: number
+  /** Answer ratings a minute per address and portal; 0 turns the limit off. */
+  rateLimitFeedbackPerMin?: number
   /** Requests/min/IP for POST /api/ask-estate, which fans one request across every tenant.
    *  Defaults to env RATE_LIMIT_ESTATE_PER_MIN, or 6. 0 disables. */
   rateLimitEstatePerMin?: number
@@ -1770,6 +1772,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     { limiter: expensiveIpLimiter, keyFn: clientIp },
   ]))
   const estateRateLimit = infrastructureHandler(rateLimit(estateLimiter, clientIp))
+  // A rating costs nothing to send and each portal keeps a bounded number, so an unthrottled
+  // caller could fill a portal's store with made-up ratings. A reader rates a few answers a
+  // minute: per address and portal, the address as the MCP limiter reads it.
+  const feedbackPerMin = opts.rateLimitFeedbackPerMin ??
+    Number(process.env.RATE_LIMIT_FEEDBACK_PER_MIN ?? 30)
+  const feedbackLimiter = new SlidingWindowLimiter({ limit: feedbackPerMin, windowMs: 60_000 })
+  const feedbackRateLimit = infrastructureHandler(rateLimit(
+    feedbackLimiter,
+    (c) => `${c.req.header('cf-connecting-ip') ?? clientIp(c)}|${c.req.param('slug') ?? ''}`,
+  ))
 
   // Baseline security headers on every response. Deliberately narrow for now:
   // frame-ancestors only, not a full CSP - the app legitimately loads
@@ -3440,7 +3452,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
-  app.post(declaredRoute('POST', '/api/t/:slug/feedback'), async (c) => {
+  app.post(declaredRoute('POST', '/api/t/:slug/feedback'), feedbackRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     if (!opts.management) return c.json({ error: 'management_unavailable' }, 503)
@@ -3449,7 +3461,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Kept for the portal's curators before it is forwarded, so a failed forward never loses
     // it; a failed local save never stops the rating reaching the platform.
     try {
-      feedback.record(config.slug, answerFeedback(parsed.data, Date.now()))
+      // Past the portal's cap, ratings of answers its ask log does not hold go first.
+      feedback.record(
+        config.slug,
+        answerFeedback(parsed.data, Date.now()),
+        (learningIds) => new Set(Object.keys(insights.questions(config.slug, learningIds))),
+      )
     } catch (err) {
       console.warn(JSON.stringify({
         message: 'answer feedback was not kept',

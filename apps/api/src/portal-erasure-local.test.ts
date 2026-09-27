@@ -73,6 +73,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   operatorDeleteAfterDays: { noPortalRecords: 'deployment configuration' },
   rateLimitAskPerMin: { noPortalRecords: 'in-memory, per client address' },
   rateLimitAskPerMinPerIp: { noPortalRecords: 'in-memory, per client address' },
+  rateLimitFeedbackPerMin: { noPortalRecords: 'in-memory, per client address' },
   rateLimitEstatePerMin: { noPortalRecords: 'in-memory, per client address' },
   rateLimitMcpAuthPerMin: { noPortalRecords: 'in-memory, per client address' },
 }

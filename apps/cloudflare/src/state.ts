@@ -24,7 +24,9 @@ import {
   type AnswerFeedback,
   type FeedbackRating,
   type FeedbackStoreApi,
+  keptRatings,
   LEARNING_ID_PATTERN,
+  type MatchedAnswers,
 } from '../../api/src/stores.ts'
 import type {
   AskInsight,
@@ -539,9 +541,16 @@ export class DurableState {
 
   /**
    * Keep a reader's rating, one row per answer (a later rating of the same answer replaces it),
-   * then drop the portal's ratings older than `cutoff` and beyond the newest `keep`.
+   * then drop the portal's ratings older than `cutoff`, and past `keep` the ones `keptRatings`
+   * lets go: ratings of answers the ask log does not hold before any it does.
    */
-  putFeedback(slug: string, feedback: AnswerFeedback, keep: number, cutoff: number): void {
+  putFeedback(
+    slug: string,
+    feedback: AnswerFeedback,
+    keep: number,
+    cutoff: number,
+    matched?: MatchedAnswers,
+  ): void {
     this.guardLocalWrite()
     this.sql.exec(
       `INSERT INTO answer_feedback (tenant_slug, learning_id, good, comment, rated_at)
@@ -559,15 +568,27 @@ export class DurableState {
       slug,
       cutoff,
     )
-    this.sql.exec(
-      `DELETE FROM answer_feedback WHERE tenant_slug = ? AND learning_id NOT IN (
-         SELECT learning_id FROM answer_feedback WHERE tenant_slug = ?
-         ORDER BY rated_at DESC, learning_id DESC LIMIT ?
-       )`,
+    const count = this.sql.exec<{ n: number }>(
+      'SELECT count(*) AS n FROM answer_feedback WHERE tenant_slug = ?',
       slug,
+    ).one().n
+    if (count <= keep) return
+    const ratings = this.sql.exec<{ learning_id: string; rated_at: number }>(
+      'SELECT learning_id, rated_at FROM answer_feedback WHERE tenant_slug = ?',
       slug,
-      keep,
-    )
+    ).toArray().map((row) => ({
+      learningId: row.learning_id,
+      ts: new Date(row.rated_at).toISOString(),
+    }))
+    const kept = new Set(keptRatings(ratings, keep, matched).map((rating) => rating.learningId))
+    for (const rating of ratings) {
+      if (kept.has(rating.learningId)) continue
+      this.sql.exec(
+        'DELETE FROM answer_feedback WHERE tenant_slug = ? AND learning_id = ?',
+        slug,
+        rating.learningId,
+      )
+    }
   }
 
   /**
@@ -1334,8 +1355,8 @@ export class DurableFeedbackStore implements FeedbackStoreApi {
     return this.now() - ANSWER_FEEDBACK_DAYS * 24 * 3600 * 1000
   }
 
-  record(slug: string, feedback: AnswerFeedback): void {
-    this.state.putFeedback(slug, feedback, ANSWER_FEEDBACK_KEEP, this.cutoff())
+  record(slug: string, feedback: AnswerFeedback, matched?: MatchedAnswers): void {
+    this.state.putFeedback(slug, feedback, ANSWER_FEEDBACK_KEEP, this.cutoff(), matched)
   }
 
   ratings(slug: string): FeedbackRating[] {

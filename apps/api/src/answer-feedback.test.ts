@@ -149,8 +149,13 @@ const post = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 })
 
-for (const build of [durableStack, localStack]) {
-  Deno.test(`answer feedback is kept for curators and forwarded unchanged (${build.name})`, async () => {
+for (
+  const [adapter, build] of [['Durable Object', durableStack], [
+    'local server',
+    localStack,
+  ]] as const
+) {
+  Deno.test(`answer feedback is kept for curators and forwarded unchanged (${adapter})`, async () => {
     const { management, forwarded, fail } = platform()
     const s = build(management)
     try {
@@ -245,8 +250,13 @@ for (const build of [durableStack, localStack]) {
   })
 }
 
-for (const build of [durableStack, localStack]) {
-  Deno.test(`a learning id outside the platform's shape is refused, and nothing is kept (${build.name})`, async () => {
+for (
+  const [adapter, build] of [['Durable Object', durableStack], [
+    'local server',
+    localStack,
+  ]] as const
+) {
+  Deno.test(`a learning id outside the platform's shape is refused, and nothing is kept (${adapter})`, async () => {
     const { management, forwarded } = platform()
     const s = build(management)
     try {
@@ -278,6 +288,85 @@ for (const build of [durableStack, localStack]) {
       )
       expect(accepted.status).toBe(200)
       expect(s.feedback.ratings(s.slug).map((r) => r.learningId)).toEqual([longest])
+    } finally {
+      s.close()
+    }
+  })
+}
+
+for (
+  const [adapter, build] of [['Durable Object', durableStack], [
+    'local server',
+    localStack,
+  ]] as const
+) {
+  Deno.test(`ratings are limited per address and portal (${adapter})`, async () => {
+    const { management } = platform()
+    const s = build(management)
+    try {
+      const rate = (address: string, index: number) =>
+        s.as('viewer', `/api/t/${s.slug}/feedback`, {
+          ...post({
+            learningId: `learning-${address.replaceAll('.', '-')}-${
+              String(index).padStart(4, '0')
+            }`,
+            good: true,
+          }),
+          headers: { 'content-type': 'application/json', 'x-forwarded-for': address },
+        })
+      for (let index = 0; index < 30; index++) {
+        const response = await rate('192.0.2.10', index)
+        expect(response.status).toBe(200)
+        await response.body?.cancel()
+      }
+      const limited = await rate('192.0.2.10', 30)
+      expect(limited.status).toBe(429)
+      expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+      await limited.body?.cancel()
+      // Another address is not held back by the first one's limit.
+      const other = await rate('192.0.2.11', 0)
+      expect(other.status).toBe(200)
+      await other.body?.cancel()
+    } finally {
+      s.close()
+    }
+  })
+
+  Deno.test(`made-up ratings neither push out a genuine one nor count (${adapter})`, async () => {
+    const { management } = platform()
+    const s = build(management)
+    try {
+      // Read to the end: the ask log records the answer once the stream completes.
+      const asked = await s.as('viewer', `/api/t/${s.slug}/ask`, post({ query: 'Abalone decline' }))
+      expect(await asked.text()).toContain(LEARNING)
+      const genuine = await s.as(
+        'viewer',
+        `/api/t/${s.slug}/feedback`,
+        post({ learningId: LEARNING, good: false, text: 'The cohort size is wrong' }),
+      )
+      expect(genuine.status).toBe(200)
+      // More made-up ratings than the portal keeps, from enough addresses to pass the limit.
+      for (let index = 0; index < ANSWER_FEEDBACK_KEEP + 10; index++) {
+        const response = await s.as('viewer', `/api/t/${s.slug}/feedback`, {
+          ...post({ learningId: `forged-${String(index).padStart(6, '0')}`, good: true }),
+          headers: {
+            'content-type': 'application/json',
+            'x-forwarded-for': `198.51.100.${index % 250}`,
+          },
+        })
+        expect(response.status).toBe(200)
+        await response.body?.cancel()
+      }
+      const kept = s.feedback.ratings(s.slug)
+      expect(kept).toHaveLength(ANSWER_FEEDBACK_KEEP)
+      expect(kept.some((rating) => rating.learningId === LEARNING)).toBe(true)
+      const summary = await (await s.as('curator', `/api/admin/t/${s.slug}/insights`)).json()
+      // Only the answer this portal gave is counted and listed.
+      expect(summary.feedback.helpful).toBe(0)
+      expect(summary.feedback.unhelpful).toBe(1)
+      expect(summary.feedback.flagged.map((item: { comment: string }) => item.comment)).toEqual([
+        'The cohort size is wrong',
+      ])
     } finally {
       s.close()
     }
@@ -437,6 +526,17 @@ for (
       expect(capped).toHaveLength(ANSWER_FEEDBACK_KEEP)
       expect(capped[0]!.learningId).toBe(`learning-cap-${ANSWER_FEEDBACK_KEEP + 4}`)
       expect(capped.some((r) => r.learningId === 'learning-2')).toBe(false)
+
+      // Past the cap, a rating of an answer the ask log holds outlasts newer made-up ones.
+      const genuine = 'learning-cap-5'
+      const matched = (ids: string[]) => new Set(ids.filter((id) => id === genuine))
+      for (let index = 0; index < 10; index++) {
+        store.record('a', rating(`learning-forged-${index}`, clock + 600_000 + index, 0), matched)
+      }
+      const afterFlood = store.ratings('a').map((r) => r.learningId)
+      expect(afterFlood).toHaveLength(ANSWER_FEEDBACK_KEEP)
+      expect(afterFlood).toContain(genuine)
+      expect(afterFlood).toContain('learning-forged-9')
 
       // Past the window a rating is no longer listed, and the next write removes it.
       clock += (ANSWER_FEEDBACK_DAYS + 1) * DAY
