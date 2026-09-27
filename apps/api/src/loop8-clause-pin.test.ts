@@ -155,7 +155,7 @@ async function ask(provider: TwoPaperProvider, query: string) {
       ...fixture.stores,
       configuredTenantId: fixture.tenantId,
       audience: fixture.audience,
-      breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+      breakGlass: fixture.rbac.breakGlassService({}),
       provider,
       tenants: freshTenants(),
       management: management(),

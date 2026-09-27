@@ -659,7 +659,7 @@ export function createEnforcementFixture(
     provider,
     requestContext: (request) => contexts.get(request),
     breakGlass: state.rbac.breakGlassService(
-      options.breakGlassPolicy ?? { environment: 'production' },
+      options.breakGlassPolicy ?? {},
     ),
     brandingPath: `${directory}/branding`,
     rateLimitAskPerMin: options.rateLimitAskPerMin ?? 0,
@@ -691,7 +691,7 @@ export function createEnforcementFixture(
     creator: persona('portal-admin', 'a'),
     contextFor,
     authorityDependencies: (
-      policy: BreakGlassPolicy = { environment: 'production' },
+      policy: BreakGlassPolicy = {},
     ): AuthorityDependencies => ({
       configuredTenantId: tenantId,
       tenants: stores.tenants,

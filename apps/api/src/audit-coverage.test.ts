@@ -66,8 +66,8 @@ Deno.test('break-glass ask withholds output until completion and fails closed on
       configuredTenantId: f.tenantId,
       audience: f.audience,
       breakGlass: f.rbac.breakGlassService({
-        environment: 'development',
         passcode: 'fixture-passcode',
+        explicitFlag: 'true',
       }),
       requestContext: () => ({
         requestId: crypto.randomUUID(),
@@ -141,7 +141,7 @@ function buildApp(options: BuildAppOptions) {
     rbac,
     configuredTenantId: 'tenant-1',
     audience: 'corpuskit',
-    breakGlass: rbac.breakGlassService({ environment: 'production' }),
+    breakGlass: rbac.breakGlassService({}),
   })
 }
 

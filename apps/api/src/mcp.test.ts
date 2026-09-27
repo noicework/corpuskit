@@ -196,7 +196,7 @@ function harness(
       audit,
       configuredTenantId: 'tenant-1',
       audience: 'corpuskit',
-      breakGlass: rbac.breakGlassService({ environment: 'development', passcode: 'fixture' }),
+      breakGlass: rbac.breakGlassService({ passcode: 'fixture', explicitFlag: 'true' }),
       provider: new McpStubProvider(),
       tenants,
       mcpKeys: keys,
@@ -1220,7 +1220,7 @@ Deno.test('break-glass key creation still needs the verified creator and current
         configuredTenantId: f.tenantId,
         audience: f.audience,
         requestContext: () => context,
-        breakGlass: f.rbac.breakGlassService({ environment: 'development', passcode: 'fixture' }),
+        breakGlass: f.rbac.breakGlassService({ passcode: 'fixture', explicitFlag: 'true' }),
       })
       const response = await app.request('/api/t/a/mcp/keys', {
         method: 'POST',

@@ -104,10 +104,10 @@ Deno.test('short or absent secrets refuse configured production identity and sig
   ).toBe(true)
 })
 
-Deno.test('production break-glass needs the exact explicit flag and a configured passcode', () => {
+Deno.test('break-glass needs the exact explicit flag and a configured passcode', () => {
   for (const flag of [undefined, '', 'false', 'TRUE', '1']) {
-    expect(breakGlassEnabled(true, 'production', flag)).toBe(false)
+    expect(breakGlassEnabled(true, flag)).toBe(false)
   }
-  expect(breakGlassEnabled(true, 'production', 'true')).toBe(true)
-  expect(breakGlassEnabled(false, 'production', 'true')).toBe(false)
+  expect(breakGlassEnabled(true, 'true')).toBe(true)
+  expect(breakGlassEnabled(false, 'true')).toBe(false)
 })

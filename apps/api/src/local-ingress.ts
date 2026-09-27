@@ -20,7 +20,7 @@ import {
   type RoleResolution,
 } from './assignments.ts'
 import { appendAudit, type AuditActor, createAuditEvent } from './audit.ts'
-import { type BreakGlassService } from './break-glass.ts'
+import { breakGlassConfigurationWarning, type BreakGlassService } from './break-glass.ts'
 import {
   PRINCIPAL_HEADER,
   type SessionEnvelope,
@@ -145,9 +145,10 @@ export class LocalIngress {
     }
     this.breakGlass = rbac.breakGlassService({
       passcode: env.ADMIN_PASSCODE,
-      environment: env.ENVIRONMENT,
       explicitFlag: env.ADMIN_BREAK_GLASS,
     })
+    const breakGlassWarning = breakGlassConfigurationWarning(env)
+    if (breakGlassWarning) console.warn(breakGlassWarning)
     this.breakGlassEnabled = this.breakGlass.enabled
     if (env.ENTRA_TENANT_ID) {
       rbac.assignmentService(this.tenantId, this.audience)

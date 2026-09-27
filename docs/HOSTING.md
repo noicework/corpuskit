@@ -1008,7 +1008,7 @@ external identity source.
 
 `ENTRA_ADMIN_EMAILS` creates the first owners only when Entra is configured. An external-only
 deployment creates its first owner with one [break-glass](RBAC.md#break-glass) request. Set
-`ADMIN_PASSCODE`, and in production also `ADMIN_BREAK_GLASS=true`, then send:
+`ADMIN_PASSCODE` and `ADMIN_BREAK_GLASS=true`, then send:
 
 ```http
 POST /api/admin/people
@@ -1024,8 +1024,8 @@ content-type: application/json
 ```
 
 The assignment activates when that person completes an external sign-in with the same verified
-email. After that, the owner manages access from the People screen. In production, remove
-`ADMIN_BREAK_GLASS` again unless you want to keep the emergency path available.
+email. After that, the owner manages access from the People screen. Remove `ADMIN_BREAK_GLASS`
+and `ADMIN_PASSCODE` again unless you want to keep the emergency path available.
 
 ### Rollback
 

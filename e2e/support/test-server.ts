@@ -90,7 +90,9 @@ export function startTestServer(options: {
     WORKER_NAME: 'corpuskit',
     ENVIRONMENT: 'test',
     ...options.loginEnv,
-    ...(options.breakGlass ? { ADMIN_PASSCODE: 'fixture-emergency-only' } : {}),
+    ...(options.breakGlass
+      ? { ADMIN_PASSCODE: 'fixture-emergency-only', ADMIN_BREAK_GLASS: 'true' }
+      : {}),
   }
   const { database, rbac } = openLocalRbac(env)
   try {

@@ -211,7 +211,7 @@ async function askPayload(mode: 'yield' | 'throw'): Promise<string> {
       ...fixture.stores,
       configuredTenantId: fixture.tenantId,
       audience: fixture.audience,
-      breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+      breakGlass: fixture.rbac.breakGlassService({}),
       provider: new FailingProvider(mode),
       tenants: freshTenants(),
     })

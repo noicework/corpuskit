@@ -180,7 +180,10 @@ function buildApp(options: BuildAppOptions & { adminPasscode?: string }) {
     configuredTenantId: 'tenant-1',
     audience: 'corpuskit',
     audit: rbac.audit,
-    breakGlass: rbac.breakGlassService({ passcode: options.adminPasscode }),
+    breakGlass: rbac.breakGlassService({
+      passcode: options.adminPasscode,
+      explicitFlag: options.adminPasscode ? 'true' : undefined,
+    }),
     requestContext: options.requestContext ?? (() => ({
       requestId: crypto.randomUUID(),
       session: null,
@@ -862,7 +865,7 @@ describe('exact admin gate', () => {
       provider: new StubProvider(),
       tenants: freshTenants(),
       audit: rbac.audit,
-      breakGlass: rbac.breakGlassService({ passcode: 'gate-fixture' }),
+      breakGlass: rbac.breakGlassService({ passcode: 'gate-fixture', explicitFlag: 'true' }),
       requestContext: () => ({ ...context, denialAudited: false }),
     })
     return { db, rbac, context, app }

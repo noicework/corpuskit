@@ -8,8 +8,10 @@ The `deploy-demo` job in `.github/workflows/deploy.yml` deploys
 `wrangler.demo.jsonc` after the shared build and test gate passes. Runtime secrets
 remain attached to that Worker; they are never committed or passed through CI.
 
-Required secrets: `ADMIN_PASSCODE`, `ARAG_ZONE`, `ARAG_KB_DEMO`, and
-`ARAG_KB_DEMO_TOKEN`. The portal slug is `demo`; its knowledge box is the CorpusKit
+Required secrets: `ARAG_ZONE`, `ARAG_KB_DEMO`, and `ARAG_KB_DEMO_TOKEN`. The demo's
+`ENVIRONMENT=demo` does not turn on the break-glass passcode: `ADMIN_PASSCODE` works only while
+`ADMIN_BREAK_GLASS=true` is set beside it (see [break-glass](RBAC.md#break-glass)), so give its
+administrators a sign-in and an owner assignment instead. The portal slug is `demo`; its knowledge box is the CorpusKit
 box in the Noice NFR account's Australia region.
 
 The CorpusKit palette and Archivo / Source Sans 3 pairing reproduce the public

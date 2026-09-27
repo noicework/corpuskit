@@ -807,7 +807,8 @@ async function principalRequest(
   })
 }
 async function realHarness(
-  extraEnv: Record<string, string> = {},
+  /** Settings to add; an undefined value removes the harness's own. */
+  extraEnv: Record<string, string | undefined> = {},
   legacyBindings?: unknown,
   databasePath = ':memory:',
 ) {
@@ -1041,6 +1042,40 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
     } finally {
       h.database.close()
     }
+  }
+})
+
+Deno.test('Worker break-glass is on only for ADMIN_BREAK_GLASS=true, whatever ENVIRONMENT says', async () => {
+  const warn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: string) => void warnings.push(String(message))
+  try {
+    for (const environment of [undefined, 'development', 'demo', 'production']) {
+      for (const flag of [undefined, 'false', 'true']) {
+        // The harness configures ADMIN_PASSCODE=fixture, as the demo deployment has a passcode.
+        const h = await realHarness({ ENVIRONMENT: environment, ADMIN_BREAK_GLASS: flag })
+        try {
+          const on = flag === 'true'
+          const label = `ENVIRONMENT=${environment} ADMIN_BREAK_GLASS=${flag}`
+          const me = await worker.fetch(new Request('https://corpuskit.test/auth/me'), h.env)
+          expect((await me.json()).breakGlassEnabled, label).toBe(on)
+          const admin = await worker.fetch(
+            new Request('https://corpuskit.test/api/admin/overview', {
+              headers: { 'x-admin-passcode': 'fixture', 'cf-connecting-ip': '192.0.2.80' },
+            }),
+            h.env,
+          )
+          expect(admin.status, label).toBe(on ? 200 : 403)
+          await admin.body?.cancel()
+        } finally {
+          h.database.close()
+        }
+      }
+    }
+    expect(warnings.some((w) => w.includes('ADMIN_BREAK_GLASS is not true'))).toBe(true)
+    expect(warnings.join('\n')).not.toContain('fixture')
+  } finally {
+    console.warn = warn
   }
 })
 

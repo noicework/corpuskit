@@ -66,7 +66,7 @@ for (const adapter of ['local', 'durable'] as const) {
           configuredTenantId: f.tenantId,
           audience: f.audience,
           now: f.now,
-          breakGlass: f.rbac.breakGlassService({ environment: 'production' }),
+          breakGlass: f.rbac.breakGlassService({}),
           requestContext: () => context,
         })
         if (failure !== 'none') {

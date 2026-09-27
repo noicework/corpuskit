@@ -45,7 +45,10 @@ import {
 } from '../../api/src/operator.ts'
 import { appendAudit, createAuditEvent } from '../../api/src/audit.ts'
 import { operatorDeleteAfterDays, operatorDeleteWarning } from '../../api/src/portal-erasure.ts'
-import type { BreakGlassService } from '../../api/src/break-glass.ts'
+import {
+  breakGlassConfigurationWarning,
+  type BreakGlassService,
+} from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { linkProvisionalBytes } from '../../api/src/lifecycle-management.ts'
 import { AragProvider } from '@research-portal/retrieval'
@@ -147,9 +150,10 @@ export class PortalDurableObject extends DurableObject<Env> {
     this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
       passcode: bindings.ADMIN_PASSCODE,
-      environment: bindings.ENVIRONMENT,
       explicitFlag: bindings.ADMIN_BREAK_GLASS,
     })
+    const breakGlassWarning = breakGlassConfigurationWarning(bindings)
+    if (breakGlassWarning) console.warn(breakGlassWarning)
     if (bindings.ENTRA_TENANT_ID) {
       this.stores.rbac.assignmentService(bindings.ENTRA_TENANT_ID, bindings.WORKER_NAME)
         .bootstrapAdminEmails(bindings.ENTRA_ADMIN_EMAILS ?? '')

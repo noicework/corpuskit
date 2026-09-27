@@ -375,7 +375,7 @@ describe('admin source routes', () => {
       configuredTenantId: 'tenant-1',
       audience: 'corpuskit',
       audit: rbac.audit,
-      breakGlass: rbac.breakGlassService({ passcode: PASSCODE }),
+      breakGlass: rbac.breakGlassService({ passcode: PASSCODE, explicitFlag: 'true' }),
       requestContext: () => ({
         requestId: crypto.randomUUID(),
         session: sessionFor('curator', 'marine', Date.now()),

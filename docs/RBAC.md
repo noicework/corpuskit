@@ -158,10 +158,12 @@ recorded.
 ## Break-glass
 
 `ADMIN_PASSCODE` no longer opens the whole administration surface. It grants `owner` for a single
-request only when `ADMIN_BREAK_GLASS=true`, or outside production, and only when presented in
-the `x-admin-passcode` header of that request. The browser never stores it and never retries with
-it. Every use is audited with the session identity beside it when there is one. Five failures
-from one address in ten minutes lock the path for ten minutes.
+request only when the deployment also sets `ADMIN_BREAK_GLASS=true` (exactly that value), and only
+when presented in the `x-admin-passcode` header of that request. `ENVIRONMENT` plays no part: a
+passcode without the flag does nothing in any environment, and the server logs a start-up warning
+saying so, without the value. The browser never stores the passcode and never retries with it.
+Every use is audited with the session identity beside it when there is one. Five failures from one
+address in ten minutes lock the path for ten minutes.
 
 ## Configuration
 
@@ -184,7 +186,7 @@ mappings need `groupMembershipClaims` set on the registration.
   as before for anonymous visitors and keyless MCP clients.
 - Administrators: anyone in `ENTRA_ADMIN_EMAILS` or holding `CorpusKit.Admin` keeps full access,
   now as an owner or platform-admin assignment. The passcode stops being an everyday credential;
-  set `ADMIN_BREAK_GLASS=true` in production if you need it as an emergency path.
+  set `ADMIN_BREAK_GLASS=true` beside it only while you need it as an emergency path.
 - Research trails, investigations and watches saved before this release stay readable by the same
   browser.
 - Existing MCP keys keep working as viewer keys; mint new keys for anything above viewer.

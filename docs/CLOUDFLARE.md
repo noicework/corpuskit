@@ -69,7 +69,8 @@ Only Worker-relevant values are read at runtime:
 
 - `ARAG_ZONE`
 - `ARAG_KB_<SLUG>` and `ARAG_KB_<SLUG>_TOKEN`
-- `ADMIN_PASSCODE` as an emergency/local fallback
+- `ADMIN_PASSCODE`, the emergency passcode, which does nothing unless `ADMIN_BREAK_GLASS=true`
+  is also set (see [break-glass](RBAC.md#break-glass))
 - `ENTRA_CLIENT_SECRET`
 - `ENTRA_ADMIN_EMAILS` as an optional break-glass allowlist
 - `SESSION_SECRET`, a random value of at least 32 bytes

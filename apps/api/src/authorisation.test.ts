@@ -13,7 +13,7 @@ import { DECLARATIONS } from './permissions.ts'
 import { AuditWriteError } from './audit.ts'
 
 function dependencies(f: ReturnType<typeof createEnforcementFixture>) {
-  return f.authorityDependencies({ passcode: 'test-only', environment: 'development' })
+  return f.authorityDependencies({ passcode: 'test-only', explicitFlag: 'true' })
 }
 const policy = (slug = 'a', accessMode = 'restricted') => ({
   slug,

@@ -435,7 +435,7 @@ Deno.test('access response completion failure hides output while retaining a com
 })
 Deno.test('platform group activity and explicit break-glass cannot bypass final owner protection', async () => {
   const f = createEnforcementFixture({
-    breakGlassPolicy: { environment: 'test', passcode: 'fixture' },
+    breakGlassPolicy: { passcode: 'fixture', explicitFlag: 'true' },
   })
   try {
     f.database.exec('DELETE FROM rbac_owner_evidence')

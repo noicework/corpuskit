@@ -109,8 +109,8 @@ the equivalent is `deno task <name>` (see the table below).
 
 ```sh
 cp .env.example .env
-# fill in ARAG_ZONE, ARAG_ACCOUNT, ARAG_NUA_KEY (and set ADMIN_PASSCODE if you want the
-# admin surface enabled locally)
+# fill in ARAG_ZONE, ARAG_ACCOUNT, ARAG_NUA_KEY (and set ADMIN_PASSCODE with
+# ADMIN_BREAK_GLASS=true if you want the break-glass admin path locally)
 
 deno task provision   # create + seed the showcase knowledge boxes (idempotent);
                       # writes ARAG_KB_* bindings back into .env
@@ -118,9 +118,11 @@ deno task provision   # create + seed the showcase knowledge boxes (idempotent);
 deno task dev         # builds the web bundle, then serves the API + SPA on :8787
 ```
 
-Without `ADMIN_PASSCODE` set, the server still runs, but every `/api/admin/*` route returns
-`503 { error: "admin_disabled" }` - there is no default passcode and no way to reach the admin
-surface (provisioning, corpus upload, labels, graph config, agents, branding) until you set one.
+Administration (provisioning, corpus upload, labels, graph config, agents, branding) needs a
+signed-in owner or administrator. Without sign-in configured, the break-glass passcode is the way
+in: set `ADMIN_PASSCODE` and `ADMIN_BREAK_GLASS=true`, and send the passcode in the
+`x-admin-passcode` header. There is no default passcode, and a passcode without the flag does
+nothing in any environment (see `docs/RBAC.md`, "Break-glass").
 
 Open `http://localhost:8787`.
 

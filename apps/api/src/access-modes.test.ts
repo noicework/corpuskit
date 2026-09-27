@@ -131,7 +131,7 @@ Deno.test('aggregate scoped keys reject before registry enumeration even with an
         audience: f.audience,
         now: f.now,
         requestContext: () => ({ ...context, requestId: crypto.randomUUID() }),
-        breakGlass: f.rbac.breakGlassService({ environment: 'production' }),
+        breakGlass: f.rbac.breakGlassService({}),
       })
       const original = f.stores.tenants.list.bind(f.stores.tenants)
       let enumerations = 0
@@ -599,7 +599,7 @@ Deno.test('local branding bytes retain no-store and lose access immediately when
       configuredTenantId: f.tenantId,
       audience: f.audience,
       now: f.now,
-      breakGlass: f.rbac.breakGlassService({ environment: 'production' }),
+      breakGlass: f.rbac.breakGlassService({}),
     })
     const cache = new SharedCache()
     for (const kind of ['logo', 'hero', 'font-heading', 'font-body']) {

@@ -118,7 +118,7 @@ function makeApp(askLines: unknown[], enrichments?: EnrichmentStore) {
     audience: fixture.audience,
     now: fixture.now,
     audit: fixture.rbac.audit,
-    breakGlass: fixture.rbac.breakGlassService({ environment: 'production' }),
+    breakGlass: fixture.rbac.breakGlassService({}),
     requestContext: () => ({
       requestId: crypto.randomUUID(),
       session,

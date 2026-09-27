@@ -121,7 +121,7 @@ Deno.test('local selected snapshots use current policy and assignments with safe
 })
 
 Deno.test('local coarse gate audits disabled and missing-peer passcodes without role fallback', async () => {
-  for (const production of [true, false]) {
+  for (const enabled of [false, true]) {
     const db = new LocalRbacDatabase(':memory:')
     const directory = Deno.makeTempDirSync({ prefix: 'local-gate-' })
     try {
@@ -134,7 +134,8 @@ Deno.test('local coarse gate audits disabled and missing-peer passcodes without 
         tenants,
         env: {
           ...env,
-          ENVIRONMENT: production ? 'production' : 'development',
+          ENVIRONMENT: 'development',
+          ...(enabled ? { ADMIN_BREAK_GLASS: 'true' } : {}),
           SESSION_SECRET: 'x'.repeat(32),
         },
       })
@@ -162,14 +163,14 @@ Deno.test('local coarse gate audits disabled and missing-peer passcodes without 
           owner,
         )
       expect((await invoke(false)).status).toBe(200)
-      expect((await invoke(true)).status).toBe(production ? 403 : 200)
+      expect((await invoke(true)).status).toBe(enabled ? 200 : 403)
       expect((await invoke(true, false)).status).toBe(403)
       const events = rbac.audit.read({ scope: { kind: 'platform' } })
       expect(events.filter((e) => e.action === 'break_glass.failed')).toHaveLength(
-        production ? 2 : 1,
+        enabled ? 1 : 2,
       )
-      expect(events.filter((e) => e.action === 'request.denied')).toHaveLength(production ? 2 : 1)
-      if (!production) {
+      expect(events.filter((e) => e.action === 'request.denied')).toHaveLength(enabled ? 1 : 2)
+      if (enabled) {
         expect(JSON.parse(events.find((e) => e.action === 'break_glass.used')!.detail_json))
           .toEqual({ sessionOid: owner.oid, sessionTenantId: owner.tenantId })
       }
@@ -185,7 +186,11 @@ Deno.test('local ingress strips caller authority and uses only actual peer metad
   try {
     const rbac = new RbacState(db)
     rbac.migrate()
-    const ingress = new LocalIngress({ rbac, tenants: { list: () => [] }, env })
+    const ingress = new LocalIngress({
+      rbac,
+      tenants: { list: () => [] },
+      env: { ...env, ADMIN_BREAK_GLASS: 'true' },
+    })
     for (const info of [undefined, peer]) {
       const response = await ingress.handle(
         new Request('http://localhost/api/admin/overview', {
@@ -412,5 +417,70 @@ Deno.test('concurrent valid sessions survive a newer login on public routes and 
       db.close()
       Deno.removeSync(directory, { recursive: true })
     }
+  }
+})
+
+Deno.test('the local server turns break-glass on only for ADMIN_BREAK_GLASS=true, in every environment', async () => {
+  const warn = console.warn
+  const warnings: string[] = []
+  console.warn = (message: string) => void warnings.push(String(message))
+  try {
+    for (const environment of [undefined, 'development', 'test', 'demo', 'production']) {
+      for (const flag of [undefined, 'false', 'TRUE', 'true']) {
+        const db = new LocalRbacDatabase(':memory:')
+        const directory = Deno.makeTempDirSync({ prefix: 'local-break-glass-' })
+        try {
+          const rbac = new RbacState(db)
+          rbac.migrate()
+          const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+          const ingress = new LocalIngress({
+            rbac,
+            tenants,
+            env: {
+              ...env,
+              ...(environment === undefined ? {} : { ENVIRONMENT: environment }),
+              ...(flag === undefined ? {} : { ADMIN_BREAK_GLASS: flag }),
+              SESSION_SECRET: 'x'.repeat(32),
+            },
+          })
+          const app = buildApp({
+            provider: new DoubleProvider(),
+            tenants,
+            rbac,
+            configuredTenantId: env.ENTRA_TENANT_ID,
+            audience: 'corpuskit',
+            audit: rbac.audit,
+            breakGlass: ingress.breakGlass,
+            requestContext: ingress.requestContext,
+          })
+          const on = flag === 'true'
+          const label = `ENVIRONMENT=${environment} ADMIN_BREAK_GLASS=${flag}`
+          expect(ingress.breakGlassEnabled, label).toBe(on)
+          const me = await ingress.handle(
+            new Request('http://localhost/auth/me'),
+            (request) => app.fetch(request),
+            peer,
+          )
+          expect((await me.json()).breakGlassEnabled, label).toBe(on)
+          const admin = await ingress.handle(
+            new Request('http://localhost/api/admin/overview', {
+              headers: { 'x-admin-passcode': 'fixture' },
+            }),
+            (request) => app.fetch(request),
+            peer,
+          )
+          expect(admin.status, label).toBe(on ? 200 : 403)
+          await admin.body?.cancel()
+        } finally {
+          db.close()
+          Deno.removeSync(directory, { recursive: true })
+        }
+      }
+    }
+    // A passcode that break-glass will not use is said at start-up, without its value.
+    expect(warnings.some((w) => w.includes('ADMIN_BREAK_GLASS is not true'))).toBe(true)
+    expect(warnings.join('\n')).not.toContain('fixture')
+  } finally {
+    console.warn = warn
   }
 })

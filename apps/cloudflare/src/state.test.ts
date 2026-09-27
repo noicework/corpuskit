@@ -701,7 +701,7 @@ function mutationFixture(management?: AragProvider) {
     ...stores,
     configuredTenantId: 'directory',
     audience: 'corpuskit',
-    breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
+    breakGlass: state.rbac.breakGlassService({}),
     provider: {
       resource: async (config: { slug: string }, id: string) =>
         config.slug === 'marine' && ['doc', 'doc2'].includes(id)
@@ -1708,7 +1708,7 @@ Deno.test('public investigation reads return all 140 passages without audit stag
       ...stores,
       configuredTenantId: 'directory',
       audience: 'corpuskit',
-      breakGlass: state.rbac.breakGlassService({ environment: 'production' }),
+      breakGlass: state.rbac.breakGlassService({}),
       provider: {} as RetrievalProvider,
     })
     const response = await app.request(`/api/t/marine/investigations/${investigation.id}`, {

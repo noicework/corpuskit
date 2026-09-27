@@ -577,8 +577,8 @@ Deno.test('a privileged rating passes the Durable Object audit boundary as a dec
       configuredTenantId: f.tenantId,
       audience: f.audience,
       breakGlass: f.rbac.breakGlassService({
-        environment: 'development',
         passcode: 'fixture-passcode',
+        explicitFlag: 'true',
       }),
       requestContext: () => ({
         requestId: crypto.randomUUID(),
