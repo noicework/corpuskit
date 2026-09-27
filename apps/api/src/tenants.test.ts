@@ -10,7 +10,8 @@ import {
 import { tenantConfig, TenantStore } from './tenants.ts'
 import { checkAliasRegistry } from './alias-store-fixture.ts'
 
-const storeAt = (path: string) => new TenantStore({ TENANTS_PATH: path })
+const storeAt = (path: string) =>
+  new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' })
 const tempPath = () => `${Deno.makeTempDirSync()}/tenants.json`
 
 describe('regional discovery on the file store', () => {

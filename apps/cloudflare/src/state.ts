@@ -54,6 +54,7 @@ import type {
 import {
   type NewTenantInput,
   retiredSlugs,
+  showcasePortals,
   tenantConfig,
   type TenantPatch,
   tenantRecord,
@@ -1002,7 +1003,22 @@ export class DurableTenantStore implements TenantStoreApi {
     private readonly platformDomain: string,
     /** Hostnames the deployment keeps for itself, which are never a canonical hostname. */
     private readonly reserved: ReadonlySet<string> = new Set(),
+    /** The seeded showcase portals this deployment serves (`SHOWCASE_PORTALS`); none by default. */
+    private readonly showcase: ReadonlySet<string> = new Set(),
   ) {}
+
+  /** A seeded showcase portal's configuration, when this deployment serves it. */
+  private seedConfig(slug: string): TenantConfig | undefined {
+    return this.showcase.has(slug) ? tenantConfig(slug) : undefined
+  }
+
+  /** Every slug that can hold a portal here: the showcase portals served, then those created. */
+  private slugs(data: TenantState): Set<string> {
+    return new Set([
+      ...tenantSlugs().filter((slug) => this.showcase.has(slug)),
+      ...Object.keys(data.custom),
+    ])
+  }
 
   private load(): TenantState {
     const raw = tenantRecord(this.state.get<unknown>('tenants', {}))
@@ -1049,7 +1065,7 @@ export class DurableTenantStore implements TenantStoreApi {
       ? TenantConfigSchema.parse(data.custom[slug])
       : undefined
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
-    const base = tenantConfig(slug) ?? custom
+    const base = this.seedConfig(slug) ?? custom
     if (!base) return undefined
     if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(data.overrides[slug])
@@ -1119,7 +1135,7 @@ export class DurableTenantStore implements TenantStoreApi {
   }
 
   private claimedByAnother(data: TenantState, slug: string, hostname: string): boolean {
-    for (const other of new Set([...tenantSlugs(), ...Object.keys(data.custom)])) {
+    for (const other of this.slugs(data)) {
       if (other === slug) continue
       try {
         if (this.own(data, other)?.hostname === hostname) return true
@@ -1202,11 +1218,7 @@ export class DurableTenantStore implements TenantStoreApi {
   list(includeDisabled = false, visible?: (config: TenantConfig) => boolean): TenantSummary[] {
     const data = this.load()
     const rows: TenantSummary[] = []
-    const slugs = new Set([
-      ...tenantSlugs(),
-      ...Object.keys(data.custom),
-    ])
-    for (const slug of slugs) {
+    for (const slug of this.slugs(data)) {
       if (!includeDisabled && data.disabled.includes(slug)) continue
       let config: TenantConfig | undefined
       try {
@@ -1225,9 +1237,11 @@ export class DurableTenantStore implements TenantStoreApi {
     const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!base) throw new Error('The portal name must contain letters or numbers')
     let slug = base
+    // A seeded showcase slug is never given to a new portal, served here or not, so turning the
+    // showcase on later can never put a seed in front of a portal someone created.
     for (
       let index = 2;
-      this.get(slug) || data.retired.includes(slug) || unavailable?.(slug);
+      this.get(slug) || tenantConfig(slug) || data.retired.includes(slug) || unavailable?.(slug);
       index += 1
     ) slug = `${base}-${index}`
     const config = TenantConfigSchema.parse({
@@ -1268,7 +1282,7 @@ export class DurableTenantStore implements TenantStoreApi {
   /** See `TenantStore.erase`. The retired slug stays, so the slug is never reused. */
   erase(slug: string): { configuration: number; aliases: number } {
     const data = this.load()
-    if (tenantConfig(slug) || Object.hasOwn(data.custom, slug)) {
+    if (this.seedConfig(slug) || Object.hasOwn(data.custom, slug)) {
       throw new Error('A live portal cannot be erased')
     }
     const configuration = [Object.hasOwn(data.overrides, slug), data.disabled.includes(slug)]
@@ -2144,7 +2158,12 @@ export function durableStores(
     bindings: new DurableBindingStore(state, env),
     tenants: state.auditedStore(
       'tenants',
-      new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN), reservedHostnames(env)),
+      new DurableTenantStore(
+        state,
+        getPlatformDomain(env.PLATFORM_DOMAIN),
+        reservedHostnames(env),
+        showcasePortals(env),
+      ),
     ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     feedback: state.auditedStore('feedback', new DurableFeedbackStore(state)),

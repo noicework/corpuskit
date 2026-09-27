@@ -36,7 +36,10 @@ function fixture(): Fixture {
   const database = new LocalRbacDatabase(':memory:')
   const rbac = new RbacState(database)
   rbac.migrate()
-  const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+  const tenants = new TenantStore({
+    TENANTS_PATH: `${directory}/tenants.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  })
   tenants.add({ name: 'Third' })
   return {
     rbac,

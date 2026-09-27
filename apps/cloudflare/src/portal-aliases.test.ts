@@ -91,6 +91,7 @@ async function fixture(
     ENTRA_CLIENT_SECRET: 'client-secret',
     ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENVIRONMENT: 'production',
+    SHOWCASE_PORTALS: 'marine,grains',
     ADMIN_BREAK_GLASS: 'true',
     ADMIN_PASSCODE: 'fixture-passcode',
     RATE_LIMIT_ASK_PER_MIN: '0',
@@ -115,7 +116,7 @@ async function fixture(
   if (seed) {
     const before = new DurableState(storage.sql, storage)
     before.migrate()
-    seed(new DurableTenantStore(before, 'corpuskit.org'))
+    seed(new DurableTenantStore(before, 'corpuskit.org', new Set(), new Set(['marine', 'grains'])))
   }
   let initialization: Promise<unknown> = Promise.resolve()
   const object = new workerModule.PortalDurableObject({

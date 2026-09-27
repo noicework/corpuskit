@@ -54,7 +54,10 @@ const { EnrichmentStore } = await import('./enrichments.ts')
 const { TenantStore } = await import('./tenants.ts')
 
 const freshTenants = () =>
-  new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` })
+  new TenantStore({
+    TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  })
 
 Deno.test('maintenance skips read-only content jobs, agent runs when agents are disabled, and all suspended portal jobs', async () => {
   const db = new LocalRbacDatabase(':memory:')

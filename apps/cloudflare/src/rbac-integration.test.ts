@@ -78,6 +78,7 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
     ENTRA_CLIENT_ID: 'fixture-client',
     ENTRA_CLIENT_SECRET: 'fixture-client-secret',
     ENVIRONMENT: 'production',
+    SHOWCASE_PORTALS: 'marine,grains',
     ADMIN_BREAK_GLASS: 'true',
     ADMIN_PASSCODE: 'fixture',
     RATE_LIMIT_ASK_PER_MIN: '0',

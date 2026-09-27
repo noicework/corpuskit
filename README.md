@@ -71,6 +71,9 @@ your own knowledge box.
 - **Southern Waters Research Institute** (`marine`) - a fisheries and aquaculture research portal.
 - **Dryland Cropping Research Alliance** (`grains`) - a grains research portal.
 
+A deployment serves them only when `SHOWCASE_PORTALS=marine,grains` is set, so your own
+deployment shows only the portals you create (see `docs/HOSTING.md`, "Showcase portals").
+
 ## Prerequisites
 
 - **Deno 2.x** (developed against 2.9.5).
@@ -113,7 +116,8 @@ cp .env.example .env
 # ADMIN_BREAK_GLASS=true if you want the break-glass admin path locally)
 
 deno task provision   # create + seed the showcase knowledge boxes (idempotent);
-                      # writes ARAG_KB_* bindings back into .env
+                      # writes ARAG_KB_* bindings back into .env; set
+                      # SHOWCASE_PORTALS=marine,grains in .env to serve those portals
 
 deno task dev         # builds the web bundle, then serves the API + SPA on :8787
 ```

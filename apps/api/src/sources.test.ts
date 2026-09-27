@@ -39,7 +39,10 @@ const { SourceStore } = await import('./stores.ts')
 const { TenantStore } = await import('./tenants.ts')
 
 const freshTenants = () =>
-  new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` })
+  new TenantStore({
+    TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  })
 
 const PASSCODE = 'test-passcode'
 const config = { slug: 'marine' } as TenantConfig

@@ -813,8 +813,8 @@ unit. One failing unit never stops the others:
   (a rate limit or ingestion back-pressure). The next portal would only add to the pressure, so
   the rest waits for the next pass.
 - A portal with no connected knowledge box is skipped, and an empty knowledge box has nothing to
-  enrich. Neither is a failure. The seeded showcase portals are listed on every deployment but
-  bound on few, so this is the usual case for them.
+  enrich. Neither is a failure. A [showcase portal](#showcase-portals) served without its
+  knowledge box bound is the usual case.
 - A unit stops starting new work 75 seconds after it begins and finishes what is under way, so it
   ends inside its audited 120-second limit. Pages and enrichments it did not reach wait for the
   next pass, and the unit is not a failure.
@@ -1035,6 +1035,32 @@ Prefer a forward fix for this change. Do not roll back to code that ignores `sou
 assignment rows remain, even if external sign-in has been disabled. A code rollback does not undo
 the SQLite migration or remove those rows.
 
+## Showcase portals
+
+The two showcase portals, `marine` (Southern Waters Research Institute) and `grains` (Dryland
+Cropping Research Alliance), are fictional organisations built into every release, so the product
+can be seen working over the sample corpus in `content/seed`. A deployment serves them only when
+it names them:
+
+| Variable | Meaning |
+|---|---|
+| `SHOWCASE_PORTALS` | Comma-separated showcase portal slugs to serve, such as `marine,grains`. Unset or empty serves none. Case and spaces are ignored, and an entry that is not a showcase slug is ignored with a start-up warning that names it. |
+
+A showcase portal the deployment does not name is not a portal there at all. It is left out of
+`GET /api/tenants`, cross-portal asks, the administration overview, scheduled maintenance and
+routing, and every route under its slug, `/t/marine` and `/api/t/marine/...` included, answers as
+it does for a slug that never held a portal.
+
+- Its slug is still never given to a new portal: a portal named Marine is created as `marine-2`.
+  So naming a showcase portal later can never put it in front of a portal someone created.
+- Whatever a served showcase portal stored (overrides, a disabled flag, host aliases, research
+  records) is kept when it stops being served, and applies again if it is named once more.
+- A served showcase portal cannot be deleted (`400 not_removable`); stop serving it instead.
+
+Set `SHOWCASE_PORTALS=marine,grains` for a deployment that shows the sample portals, such as a
+local development server after `deno task provision` has created their knowledge boxes. Both
+Worker configurations in this repository set it.
+
 ## Configurable platform domain
 
 Set the runtime `PLATFORM_DOMAIN` variable to the deployment's platform hostname, such as
@@ -1068,8 +1094,10 @@ as exactly that type, without parameters (`application/pdf`, not `application/pd
 holding a comma, or one that is not a media type, is sandboxed and downloads, because a browser
 splits the header on commas and could render a later type, such as `text/html`, in place.
 
-The two seeded showcase portals, and one showcase portal created before hostnames were stored,
-receive their `corpuskit.org` hostnames when read on the `corpuskit.org` platform domain only.
+The two seeded showcase portals (when the deployment serves them, see
+[Showcase portals](#showcase-portals)), and one showcase portal created before hostnames were
+stored, receive their `corpuskit.org` hostnames when read on the `corpuskit.org` platform domain
+only.
 On any other platform domain they have no hostname until one is attached, and every new portal,
 whatever its slug, gets its hostname through hostname automation.
 
@@ -1517,7 +1545,7 @@ tenant's `assignments` are usually already zero, because deletion removed them.
 |---|---|---|
 | A body that is not empty or `{}` | 400 | `{ "error": "invalid_request" }` |
 | The slug is not a retired portal's, including one that never held a portal | 404 | `{ "error": "unknown_tenant" }` |
-| A portal serves the slug: a live, seeded or unreadable portal | 409 | `{ "error": "portal_active" }` |
+| A portal serves the slug: a live portal, including a showcase portal the deployment serves, or an unreadable one | 409 | `{ "error": "portal_active" }` |
 | The stored binding set cannot be read (see [Unavailable bindings](#unavailable-bindings)) | 503 | `{ "error": "binding_storage_invalid" }` |
 
 Each refusal of the first three kinds is audited as `portal.erase` with outcome `denied` and its

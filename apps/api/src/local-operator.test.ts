@@ -34,6 +34,7 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
   rbac.migrate()
   const env = {
     TENANTS_PATH: `${directory}/tenants.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
     ENTRA_TENANT_ID: 'tenant-1',
     OPERATOR_API_KEY: operatorKey,
     OPERATOR_ID: 'hosting-test',

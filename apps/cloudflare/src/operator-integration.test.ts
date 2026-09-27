@@ -80,6 +80,7 @@ async function fixture(overrides: Record<string, string | undefined> = {}) {
     BINDING_KEY: btoa('operator-fixture-binding-key-32b'),
     ENTRA_TENANT_ID: 'tenant-1',
     ENVIRONMENT: 'production',
+    SHOWCASE_PORTALS: 'marine,grains',
     ADMIN_BREAK_GLASS: 'true',
     ADMIN_PASSCODE: 'fixture-passcode',
     RATE_LIMIT_ASK_PER_MIN: '0',

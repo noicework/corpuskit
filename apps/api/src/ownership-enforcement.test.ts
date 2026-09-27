@@ -38,7 +38,10 @@ Deno.test('real local ingress restores exact owned files after observed append a
   }
   const { database, rbac } = openLocalRbac(env)
   try {
-    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    const tenants = new TenantStore({
+      TENANTS_PATH: `${directory}/tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
+    })
     const ingress = new LocalIngress({ env, tenants, rbac })
     const writer = sessionFor('owner', 'marine', Date.now())
     const owner = { kind: 'user' as const, tenantId: writer.tenantId, oid: writer.oid }

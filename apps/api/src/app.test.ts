@@ -1999,7 +1999,10 @@ describe('GET /api/health', () => {
     try {
       const config = { ...freshTenants().get('marine')!, slug, accessMode: 'restricted' }
       Deno.writeTextFileSync(`${dir}/tenants.json`, JSON.stringify({ custom: { [slug]: config } }))
-      const tenants = new TenantStore({ TENANTS_PATH: `${dir}/tenants.json` })
+      const tenants = new TenantStore({
+        TENANTS_PATH: `${dir}/tenants.json`,
+        SHOWCASE_PORTALS: 'marine,grains',
+      })
       expect(tenants.get(slug)?.accessMode).toBe('restricted')
       const provider = new Proxy(new StubProvider(), {
         get(target, property, receiver) {
@@ -2152,9 +2155,9 @@ describe('appearance (typography, shape, branding fonts)', () => {
 
   it('persists the choice across a store reload', () => {
     const path = `${Deno.makeTempDirSync()}/tenants.json`
-    const store = new TenantStore({ TENANTS_PATH: path })
+    const store = new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' })
     store.patchBranding('marine', { typography: 'lexend-zilla', shape: 'rounded' })
-    const reloaded = new TenantStore({ TENANTS_PATH: path })
+    const reloaded = new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' })
     expect(reloaded.get('marine')?.branding.typography).toBe('lexend-zilla')
     expect(reloaded.get('marine')?.branding.shape).toBe('rounded')
   })

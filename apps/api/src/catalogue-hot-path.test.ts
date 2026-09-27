@@ -66,7 +66,10 @@ function portalApp(provider: AragProvider | DoubleProvider) {
   const app = buildApp({
     provider,
     ...(provider instanceof AragProvider ? { management: provider } : {}),
-    tenants: new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` }),
+    tenants: new TenantStore({
+      TENANTS_PATH: `${directory}/tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
+    }),
     enrichments: new EnrichmentStore(directory),
     rbac,
     configuredTenantId: 'tenant-1',

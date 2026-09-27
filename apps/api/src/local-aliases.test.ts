@@ -24,6 +24,7 @@ function fixture(
   const rbac = new RbacState(database)
   rbac.migrate()
   const env = {
+    SHOWCASE_PORTALS: 'marine,grains',
     TENANTS_PATH: `${directory}/tenants.json`,
     ENTRA_TENANT_ID: 'tenant-1',
     OPERATOR_API_KEY: operatorKey,

@@ -62,6 +62,7 @@ import {
 } from './auth.ts'
 import { DurableState, type DurableStores, durableStores, stringEnv } from './state.ts'
 import { tenantAliasLocation } from '../../api/src/tenant-aliases.ts'
+import { showcasePortalsWarning } from '../../api/src/tenants.ts'
 import {
   aliasCacheSeconds,
   aliasHostRoute,
@@ -146,6 +147,8 @@ export class PortalDurableObject extends DurableObject<Env> {
     if (hostWarning) console.warn(hostWarning)
     const deleteWarning = operatorDeleteWarning(bindings)
     if (deleteWarning) console.warn(deleteWarning)
+    const showcaseWarning = showcasePortalsWarning(bindings)
+    if (showcaseWarning) console.warn(showcaseWarning)
     this.stores = durableStores(state, bindings)
     this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({

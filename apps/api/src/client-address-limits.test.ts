@@ -141,7 +141,10 @@ function localServer(env: Record<string, string>) {
   const directory = Deno.makeTempDirSync({ prefix: 'client-address-' })
   const rbac = new RbacState(db)
   rbac.migrate()
-  const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+  const tenants = new TenantStore({
+    TENANTS_PATH: `${directory}/tenants.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  })
   const ingress = new LocalIngress({ rbac, tenants, env: { ENTRA_TENANT_ID: 'tenant-1', ...env } })
   const app = buildApp({
     provider: new DoubleProvider(),

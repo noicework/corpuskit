@@ -112,6 +112,7 @@ Deno.test('every application store is classified, and each one holding portal re
 async function localServer() {
   const directory = Deno.makeTempDirSync({ prefix: 'portal-erasure-' })
   const env = {
+    SHOWCASE_PORTALS: 'marine,grains',
     DATA_DIR: directory,
     TENANTS_PATH: join(directory, 'tenants.json'),
     BINDINGS_PATH: join(directory, 'bindings.json'),

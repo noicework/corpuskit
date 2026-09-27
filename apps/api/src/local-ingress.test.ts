@@ -29,7 +29,10 @@ Deno.test('local selected snapshots use current policy and assignments with safe
   try {
     const rbac = new RbacState(db)
     rbac.migrate()
-    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    const tenants = new TenantStore({
+      TENANTS_PATH: `${directory}/tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
+    })
     const ingress = new LocalIngress({ rbac, tenants, env })
     const person = session()
     const read = async (
@@ -127,7 +130,10 @@ Deno.test('local coarse gate audits disabled and missing-peer passcodes without 
     try {
       const rbac = new RbacState(db)
       rbac.migrate()
-      const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+      const tenants = new TenantStore({
+        TENANTS_PATH: `${directory}/tenants.json`,
+        SHOWCASE_PORTALS: 'marine,grains',
+      })
       const mcpKeys = new McpKeyStore(directory, { database: db, audit: rbac.audit })
       const ingress = new LocalIngress({
         rbac,
@@ -376,7 +382,10 @@ Deno.test('concurrent valid sessions survive a newer login on public routes and 
     try {
       const rbac = new RbacState(db)
       rbac.migrate()
-      const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+      const tenants = new TenantStore({
+        TENANTS_PATH: `${directory}/tenants.json`,
+        SHOWCASE_PORTALS: 'marine,grains',
+      })
       const mcpKeys = new McpKeyStore(directory, { database: db, audit: rbac.audit })
       const ingress = new LocalIngress({ rbac, tenants, env })
       const app = buildApp({
@@ -432,7 +441,10 @@ Deno.test('the local server turns break-glass on only for ADMIN_BREAK_GLASS=true
         try {
           const rbac = new RbacState(db)
           rbac.migrate()
-          const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+          const tenants = new TenantStore({
+            TENANTS_PATH: `${directory}/tenants.json`,
+            SHOWCASE_PORTALS: 'marine,grains',
+          })
           const ingress = new LocalIngress({
             rbac,
             tenants,

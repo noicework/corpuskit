@@ -22,10 +22,13 @@ import { documentPath, probePath } from './public-paths.ts'
 import { platformShellResponse } from './platform-shell.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
+import { showcasePortalsWarning } from './tenants.ts'
 
 loadRootEnv()
 const deleteWarning = operatorDeleteWarning(process.env)
 if (deleteWarning) console.warn(deleteWarning)
+const showcaseWarning = showcasePortalsWarning(process.env)
+if (showcaseWarning) console.warn(showcaseWarning)
 
 const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'

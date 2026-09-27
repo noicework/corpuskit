@@ -114,7 +114,8 @@ See [configurable platform domain](HOSTING.md#configurable-platform-domain).
 
 ## Portal custom domains
 
-The two seeded showcase portals and OPAX have explicit custom domains in `wrangler.jsonc`. Other portals are always
+The two seeded showcase portals and OPAX have explicit custom domains in `wrangler.jsonc`, which
+serves the showcase portals with `SHOWCASE_PORTALS=marine,grains`. Other portals are always
 created with a working relative `/t/<slug>` route first. If the optional Cloudflare domain
 credentials are configured, the admin create route then:
 

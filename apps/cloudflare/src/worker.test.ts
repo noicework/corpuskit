@@ -855,6 +855,8 @@ async function realHarness(
     ENTRA_TENANT_ID: 'entra-tenant-id',
     ENTRA_CLIENT_SECRET: 'fixture',
     ADMIN_PASSCODE: 'fixture',
+    // The harness is a showcase deployment, as corpuskit.org is.
+    SHOWCASE_PORTALS: 'marine,grains',
     ...extraEnv,
   })
   if (legacyBindings) {
@@ -1042,6 +1044,41 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
     } finally {
       h.database.close()
     }
+  }
+})
+
+Deno.test('a Worker serves the showcase portals only when SHOWCASE_PORTALS names them', async () => {
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    const read = async (h: Awaited<ReturnType<typeof realHarness>>, path: string) => {
+      const response = await worker.fetch(new Request(`https://corpuskit.test${path}`), h.env)
+      return { status: response.status, text: await response.text() }
+    }
+    const slugs = (text: string) => (JSON.parse(text) as { slug: string }[]).map((t) => t.slug)
+    const off = await realHarness({ SHOWCASE_PORTALS: undefined })
+    try {
+      const stores = (off.object as unknown as { stores: DurableStores }).stores
+      stores.tenants.add({ name: 'Acme Research' })
+      expect(slugs((await read(off, '/api/tenants')).text)).toEqual(['acme-research'])
+      for (const path of ['/api/t/%s/config', '/api/t/%s/resources']) {
+        expect(await read(off, path.replace('%s', 'marine')))
+          .toEqual(await read(off, path.replace('%s', 'no-such-portal')))
+      }
+      // A showcase slug is never handed to a new portal.
+      expect(stores.tenants.add({ name: 'Grains' }).slug).toBe('grains-2')
+    } finally {
+      off.database.close()
+    }
+    const on = await realHarness()
+    try {
+      expect(slugs((await read(on, '/api/tenants')).text).sort()).toEqual(['grains', 'marine'])
+      expect((await read(on, '/api/t/marine/config')).status).toBe(200)
+    } finally {
+      on.database.close()
+    }
+  } finally {
+    console.warn = warn
   }
 })
 

@@ -94,6 +94,7 @@ function localStack(management: AragProvider): Stack {
   const env = {
     DATA_DIR: directory,
     TENANTS_PATH: join(directory, 'tenants.json'),
+    SHOWCASE_PORTALS: 'marine,grains',
     ENTRA_TENANT_ID: 'tenant-1',
     WORKER_NAME: 'corpuskit',
   }

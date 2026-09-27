@@ -560,6 +560,7 @@ export function createEnforcementFixture(
   const durable = durableStores(state, {
     BINDING_KEY: options.bindingKey ?? btoa('x'.repeat(32)),
     PLATFORM_DOMAIN: options.platformDomain,
+    SHOWCASE_PORTALS: 'marine,grains',
   })
   const stores = {
     ...durable,

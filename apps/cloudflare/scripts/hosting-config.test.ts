@@ -1,4 +1,5 @@
 import { expect } from '@std/expect'
+import { showcasePortals } from '../../api/src/tenants.ts'
 
 for (const filename of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
   Deno.test(`${filename} excludes credential-bearing request URLs from invocation logs`, async () => {
@@ -7,5 +8,14 @@ for (const filename of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
     )
     expect(config.observability.logs.invocation_logs).toBe(false)
     expect(config.observability.logs.enabled).toBe(true)
+  })
+}
+
+for (const filename of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
+  Deno.test(`${filename} serves the seeded showcase portals, which are off by default`, async () => {
+    const config = JSON.parse(
+      await Deno.readTextFile(new URL(`../../../${filename}`, import.meta.url)),
+    )
+    expect([...showcasePortals(config.vars)].sort()).toEqual(['grains', 'marine'])
   })
 }

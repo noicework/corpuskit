@@ -199,6 +199,31 @@ export function tenantSlugs(): string[] {
   return Object.keys(tenantsBySlug)
 }
 
+/**
+ * The seeded showcase portals a deployment serves: `SHOWCASE_PORTALS`, a comma-separated list of
+ * seed slugs such as `marine,grains`. None by default, so a deployment shows only the portals it
+ * creates. A seed it does not list is not a portal there at all: it is left out of every listing
+ * and answers as an unknown slug. Entries that are not seed slugs are ignored.
+ */
+export function showcasePortals(env: Record<string, string | undefined>): ReadonlySet<string> {
+  const wanted = new Set(
+    (env.SHOWCASE_PORTALS ?? '').split(',').map((slug) => slug.trim().toLowerCase()),
+  )
+  return new Set(tenantSlugs().filter((slug) => wanted.has(slug)))
+}
+
+/** A start-up warning naming `SHOWCASE_PORTALS` entries that are not seeded showcase portals. */
+export function showcasePortalsWarning(env: Record<string, string | undefined>): string | null {
+  const unknown = (env.SHOWCASE_PORTALS ?? '').split(',').map((slug) => slug.trim())
+    .filter((slug) => slug && !tenantSlugs().includes(slug.toLowerCase()))
+  return unknown.length
+    ? `SHOWCASE_PORTALS names ${unknown.length === 1 ? 'an entry' : 'entries'} that ` +
+      `${unknown.length === 1 ? 'is not a' : 'are not'} seeded showcase portal` +
+      `${unknown.length === 1 ? '' : 's'}, which ${unknown.length === 1 ? 'is' : 'are'} ignored: ` +
+      `${unknown.join(', ')}. The seeded showcase portals are ${tenantSlugs().join(', ')}.`
+    : null
+}
+
 // ---------------------------------------------------------------------------
 // Dynamic tenant store: the seed above plus knowledge box portals added in the
 // app, persisted as JSON (TENANTS_PATH, default ./data/tenants.json).
@@ -266,6 +291,8 @@ export class TenantStore {
   private readonly platformDomain: string
   /** Hostnames the deployment keeps for itself, which are never a canonical hostname. */
   private readonly reserved: ReadonlySet<string>
+  /** The seeded showcase portals this deployment serves (`SHOWCASE_PORTALS`). */
+  private readonly showcase: ReadonlySet<string>
 
   private committed!: {
     custom: Record<string, unknown>
@@ -282,6 +309,7 @@ export class TenantStore {
     this.path = env.TENANTS_PATH ?? './data/tenants.json'
     this.platformDomain = getPlatformDomain(env.PLATFORM_DOMAIN)
     this.reserved = reservedHostnames(env)
+    this.showcase = showcasePortals(env)
     let raw: Record<string, unknown>
     try {
       raw = tenantRecord(JSON.parse(readFileSync(this.path, 'utf8')))
@@ -314,7 +342,7 @@ export class TenantStore {
       ? TenantConfigSchema.parse(this.custom[slug])
       : undefined
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
-    const base = tenantsBySlug[slug] ?? custom
+    const base = this.seed(slug) ?? custom
     if (!base) return undefined
     if (!Object.hasOwn(this.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(this.overrides[slug])
@@ -384,9 +412,22 @@ export class TenantStore {
     return this.portalAliases(slug)
   }
 
+  /** A seeded showcase portal's configuration, when this deployment serves it. */
+  private seed(slug: string): TenantConfig | undefined {
+    return this.showcase.has(slug) ? tenantConfig(slug) : undefined
+  }
+
+  /** Every slug that can hold a portal here: the showcase portals served, then those created. */
+  private slugs(): Set<string> {
+    return new Set([
+      ...tenantSlugs().filter((slug) => this.showcase.has(slug)),
+      ...Object.keys(this.custom),
+    ])
+  }
+
   /** Whether another portal uses the hostname as its own. */
   private claimedByAnother(slug: string, hostname: string): boolean {
-    for (const other of new Set([...Object.keys(tenantsBySlug), ...Object.keys(this.custom)])) {
+    for (const other of this.slugs()) {
       if (other === slug) continue
       try {
         if (this.own(other)?.hostname === hostname) return true
@@ -477,7 +518,7 @@ export class TenantStore {
 
   list(includeDisabled = false, visible?: (config: TenantConfig) => boolean): TenantSummary[] {
     const all: TenantSummary[] = []
-    for (const slug of new Set([...Object.keys(tenantsBySlug), ...Object.keys(this.custom)])) {
+    for (const slug of this.slugs()) {
       if (!includeDisabled && this.disabled.has(slug)) continue
       let config: TenantConfig | undefined
       try {
@@ -499,9 +540,13 @@ export class TenantStore {
     const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     if (!base) throw new Error('The portal name must contain letters or numbers')
     let slug = base
-    for (let i = 2; this.get(slug) || this.retired.has(slug) || unavailable?.(slug); i++) {
-      slug = `${base}-${i}`
-    }
+    // A seeded showcase slug is never given to a new portal, served here or not, so turning the
+    // showcase on later can never put a seed in front of a portal someone created.
+    for (
+      let i = 2;
+      this.get(slug) || tenantConfig(slug) || this.retired.has(slug) || unavailable?.(slug);
+      i++
+    ) slug = `${base}-${i}`
     const config = TenantConfigSchema.parse({
       slug,
       branding: {
@@ -554,9 +599,9 @@ export class TenantStore {
     return { configuration, aliases }
   }
 
-  /** Whether a portal serves under the slug: a seeded one, or one created in the app. */
+  /** Whether a portal serves under the slug: a showcase one served here, or one created in the app. */
   private isLive(slug: string): boolean {
-    return Object.hasOwn(tenantsBySlug, slug) || this.isCustom(slug)
+    return this.seed(slug) !== undefined || this.isCustom(slug)
   }
 
   private persist(): void {

@@ -30,6 +30,7 @@ Deno.test('local signed ingress integrates current assignments, audit failures a
     rbac.migrate()
     const owned = localOwnedStores(directory, database, rbac.audit, {
       TENANTS_PATH: `${directory}/tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
     })
     stores = { ...owned, tenants: owned.tenants! }
     const tenants = owned.tenants!

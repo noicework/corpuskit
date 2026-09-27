@@ -168,7 +168,10 @@ Deno.test('alias edits keep one primary, stay idempotent and refuse taken names 
   expect(withoutAlias(aliases, 'b', 'one.example.org')).toEqual(aliases)
   expect(aliasesFor(withoutAlias(aliases, 'a', 'one.example.org'), 'a').map((a) => a.hostname))
     .toEqual(['two.example.org'])
-  const config = new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/t.json` }).get(
+  const config = new TenantStore({
+    TENANTS_PATH: `${Deno.makeTempDirSync()}/t.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  }).get(
     'marine',
   )!
   expect(withPrimaryAlias({ ...config, slug: 'a' }, aliases).hostname).toBe('one.example.org')
@@ -436,7 +439,10 @@ Deno.test('start-up warnings name reserved aliases and served unknown hosts', ()
 })
 
 Deno.test('a reserved hostname is never a canonical hostname', () => {
-  const config = new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/t.json` }).get(
+  const config = new TenantStore({
+    TENANTS_PATH: `${Deno.makeTempDirSync()}/t.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  }).get(
     'marine',
   )!
   const aliases = [

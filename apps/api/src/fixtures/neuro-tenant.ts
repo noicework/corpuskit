@@ -340,5 +340,5 @@ export function tenantsWithNeuro(): TenantStore {
   const dir = Deno.makeTempDirSync()
   const path = `${dir}/tenants.json`
   Deno.writeTextFileSync(path, JSON.stringify({ custom: { neuro: NEURO_TENANT } }))
-  return new TenantStore({ TENANTS_PATH: path })
+  return new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' })
 }

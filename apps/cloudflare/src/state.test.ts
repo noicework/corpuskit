@@ -42,7 +42,7 @@ Deno.test('Durable owned mutations roll back authoritative append and real SQL c
     try {
       const state = new DurableState(sql, sql)
       state.migrate()
-      const stores = durableStores(state, {})
+      const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
       const { watch, investigation, evidence } = seedOwned(stores)
       const snapshot = () => sql.database.prepare('SELECT key,value FROM state ORDER BY key').all()
       const before = snapshot()
@@ -71,11 +71,12 @@ Deno.test('Durable owned mutations roll back authoritative append and real SQL c
         expect(state.rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
       }
       expect(
-        durableStores(new DurableState(sql, sql), {}).sessions.get('marine', {
-          kind: 'user',
-          tenantId: 'one',
-          oid: 'same',
-        }, 's')?.title,
+        durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' }).sessions
+          .get('marine', {
+            kind: 'user',
+            tenantId: 'one',
+            oid: 'same',
+          }, 's')?.title,
       ).toBe('original')
     } finally {
       sql.database.close()
@@ -125,7 +126,7 @@ Deno.test('Durable pre-phase records belong to the anonymous client the old mapp
     for (let repeat = 0; repeat < 2; repeat++) {
       const state = new DurableState(sql, sql)
       state.migrate()
-      const stores = durableStores(state, {})
+      const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
       // D13: the sanitised segment is the identity for 'ab', never for 'a/b' or 'unknown'.
       expect(stores.sessions.get('marine', 'ab', 's')).toEqual(session)
       expect(stores.sessions.list('marine', 'ab')).toEqual([
@@ -149,14 +150,19 @@ Deno.test('Durable pre-phase records belong to the anonymous client the old mapp
       expect(rows()).toEqual(before)
     }
     // Updates write the new namespace and shadow the legacy record without rewriting it.
-    durableStores(seed, {}).sessions.put('marine', 'ab', { ...session, title: 'renamed' })
-    const fresh = durableStores(new DurableState(sql, sql), {})
+    durableStores(seed, { SHOWCASE_PORTALS: 'marine,grains' }).sessions.put('marine', 'ab', {
+      ...session,
+      title: 'renamed',
+    })
+    const fresh = durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' })
     expect(fresh.sessions.get('marine', 'ab', 's')?.title).toBe('renamed')
     expect(fresh.sessions.list('marine', 'ab').map((row) => row.title)).toEqual(['renamed'])
     expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get('session:marine:ab:s'))
       .toEqual({ value: JSON.stringify(session) })
     fresh.watches.update('marine', 'proven', { changed: true }, 'a/b')
-    const migrated = durableStores(new DurableState(sql, sql), {})
+    const migrated = durableStores(new DurableState(sql, sql), {
+      SHOWCASE_PORTALS: 'marine,grains',
+    })
     expect(migrated.watches.list('marine', 'a/b').find((w) => w.id === 'proven')?.changed).toBe(
       true,
     )
@@ -165,14 +171,26 @@ Deno.test('Durable pre-phase records belong to the anonymous client the old mapp
     )
     migrated.watches.remove('marine', 'a/b', 'proven')
     expect(
-      durableStores(new DurableState(sql, sql), {}).watches.list('marine', 'a/b').map((w) => w.id),
+      durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' }).watches.list(
+        'marine',
+        'a/b',
+      ).map((w) => w.id),
     ).toEqual(['w'])
     // Deleting removes the record in both namespaces so it cannot reappear.
     migrated.sessions.remove('marine', 'ab', 's')
-    expect(durableStores(new DurableState(sql, sql), {}).sessions.get('marine', 'ab', 's'))
+    expect(
+      durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' }).sessions.get(
+        'marine',
+        'ab',
+        's',
+      ),
+    )
       .toBeNull()
     migrated.investigations.remove('marine', 'ab', 'i')
-    expect(durableStores(new DurableState(sql, sql), {}).investigations.get('marine', 'ab', 'i'))
+    expect(
+      durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' })
+        .investigations.get('marine', 'ab', 'i'),
+    )
       .toBeNull()
     for (const key of ['session:marine:ab:s', 'investigation:marine:ab:i']) {
       expect(sql.database.prepare('SELECT value FROM state WHERE key = ?').get(key)).toBeUndefined()
@@ -192,7 +210,7 @@ Deno.test('Durable corrupt owned metadata and malformed JSON remain untouched an
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    const stores = durableStores(state, {})
+    const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
     seedOwned(stores)
     const owner = { kind: 'user' as const, tenantId: 'one', oid: 'same' }
     const rows = sql.database.prepare("SELECT key,value FROM state WHERE key LIKE 'research-v2:%'")
@@ -240,7 +258,7 @@ Deno.test('Durable owned stores isolate exact typed owners across all operations
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    checkOwnedStores(durableStores(state, {}))
+    checkOwnedStores(durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' }))
   } finally {
     sql.database.close()
   }
@@ -277,7 +295,7 @@ Deno.test('Durable key startup migrates mixed metadata once with system audit an
     for (let repeat = 0; repeat < 2; repeat++) {
       const state = new DurableState(sql, sql)
       state.migrate()
-      const keys = durableStores(state, {}).mcpKeys
+      const keys = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' }).mcpKeys
       expect(keys.findByHash('marine', legacyScopedKey.hash)).toEqual(
         migrateLegacyKeyRecord(legacyScopedKey),
       )
@@ -381,7 +399,7 @@ Deno.test('Durable key ordinary writes retain caller audit and roll back failed 
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    const keys = durableStores(state, {}).mcpKeys
+    const keys = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' }).mcpKeys
     const input = {
       requestId: 'key-test',
       actor: { kind: 'user' as const, id: 'creator' },
@@ -461,7 +479,12 @@ Deno.test('Durable portal policy survives reload and repeated migration for seed
   try {
     let state = new DurableState(sql, sql)
     state.migrate()
-    let store = new DurableTenantStore(state, 'corpuskit.org')
+    let store = new DurableTenantStore(
+      state,
+      'corpuskit.org',
+      new Set(),
+      new Set(['marine', 'grains']),
+    )
     state.put('tenants', {
       custom: { legacy: { ...tenantConfig('marine'), slug: 'legacy', accessMode: undefined } },
       overrides: { marine: { searchPlaceholder: 'Legacy seed' } },
@@ -479,7 +502,12 @@ Deno.test('Durable portal policy survives reload and repeated migration for seed
         for (let repeat = 0; repeat < 2; repeat++) {
           state = new DurableState(sql, sql)
           state.migrate()
-          store = new DurableTenantStore(state, 'corpuskit.org')
+          store = new DurableTenantStore(
+            state,
+            'corpuskit.org',
+            new Set(),
+            new Set(['marine', 'grains']),
+          )
           expect(store.get(slug)?.accessMode).toBe(accessMode)
           expect(store.get(slug)?.branding).toEqual(branding)
           expect(store.isDisabled(slug)).toBe(true)
@@ -529,7 +557,12 @@ Deno.test('Durable portal store never gives a new portal a retired slug', () => 
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    const store = new DurableTenantStore(state, 'corpuskit.org')
+    const store = new DurableTenantStore(
+      state,
+      'corpuskit.org',
+      new Set(),
+      new Set(['marine', 'grains']),
+    )
     expect(store.add({ name: 'Acme' }).slug).toBe('acme')
     expect(store.remove('acme')).toBe(true)
     // The removed portal had no keys or members and no caller marks the slug unavailable, so
@@ -539,7 +572,10 @@ Deno.test('Durable portal store never gives a new portal a retired slug', () => 
     expect(store.add({ name: 'Acme' }).slug).toBe('acme-2')
     const restarted = new DurableState(sql, sql)
     restarted.migrate()
-    expect(new DurableTenantStore(restarted, 'corpuskit.org').add({ name: 'Acme' }).slug).toBe(
+    expect(
+      new DurableTenantStore(restarted, 'corpuskit.org', new Set(), new Set(['marine', 'grains']))
+        .add({ name: 'Acme' }).slug,
+    ).toBe(
       'acme-3',
     )
   } finally {
@@ -566,7 +602,12 @@ Deno.test('Durable corrupt policy never exposes seed fallback and survives unrel
         for (let repeat = 0; repeat < 2; repeat++) {
           const restart = new DurableState(sql, sql)
           restart.migrate()
-          const store = new DurableTenantStore(restart, 'corpuskit.org')
+          const store = new DurableTenantStore(
+            restart,
+            'corpuskit.org',
+            new Set(),
+            new Set(['marine', 'grains']),
+          )
           expect(() => store.get('marine')).toThrow()
           expect(store.list(true).some((item) => item.slug === 'marine')).toBe(false)
           expect(store.get('grains')?.accessMode).toBe('public')
@@ -576,14 +617,23 @@ Deno.test('Durable corrupt policy never exposes seed fallback and survives unrel
     }
     for (const raw of [null, [], { custom: null }, { custom: {}, overrides: [] }]) {
       state.put('tenants', raw)
-      expect(() => new DurableTenantStore(state, 'corpuskit.org').get('marine')).toThrow()
-      expect(() => new DurableTenantStore(state, 'corpuskit.org').list()).toThrow()
+      expect(() =>
+        new DurableTenantStore(state, 'corpuskit.org', new Set(), new Set(['marine', 'grains']))
+          .get('marine')
+      ).toThrow()
+      expect(() =>
+        new DurableTenantStore(state, 'corpuskit.org', new Set(), new Set(['marine', 'grains']))
+          .list()
+      ).toThrow()
     }
     sql.database.prepare('UPDATE state SET value = ? WHERE key = ?').run('{broken', 'tenants')
     for (let repeat = 0; repeat < 2; repeat++) {
       const restarted = new DurableState(sql, sql)
       restarted.migrate()
-      expect(() => new DurableTenantStore(restarted, 'corpuskit.org').get('marine')).toThrow()
+      expect(() =>
+        new DurableTenantStore(restarted, 'corpuskit.org', new Set(), new Set(['marine', 'grains']))
+          .get('marine')
+      ).toThrow()
     }
   } finally {
     sql.database.close()
@@ -613,19 +663,34 @@ Deno.test('Durable showcase portals keep the regional band on state stored befor
     for (let restart = 0; restart < 2; restart++) {
       state = new DurableState(sql, sql)
       state.migrate()
-      const store = new DurableTenantStore(state, 'corpuskit.org')
+      const store = new DurableTenantStore(
+        state,
+        'corpuskit.org',
+        new Set(),
+        new Set(['marine', 'grains']),
+      )
       expect(store.get('grains')?.regionalDiscovery).toBe(true)
       expect(store.get('grains')?.searchPlaceholder).toBe('Search the stored grains portal')
       expect(store.get('marine')?.regionalDiscovery).toBe(true)
       expect(store.get('marine')?.branding.shape).toBe('soft')
       expect(showsRegionalDiscovery(store.get('runtime')!)).toBe(false)
     }
-    const store = new DurableTenantStore(state, 'corpuskit.org')
+    const store = new DurableTenantStore(
+      state,
+      'corpuskit.org',
+      new Set(),
+      new Set(['marine', 'grains']),
+    )
     store.patch('grains', { regionalDiscovery: false })
     store.patch('runtime', { regionalDiscovery: true })
     const restarted = new DurableState(sql, sql)
     restarted.migrate()
-    const reloaded = new DurableTenantStore(restarted, 'corpuskit.org')
+    const reloaded = new DurableTenantStore(
+      restarted,
+      'corpuskit.org',
+      new Set(),
+      new Set(['marine', 'grains']),
+    )
     expect(reloaded.get('grains')?.regionalDiscovery).toBe(false)
     expect(reloaded.get('marine')?.regionalDiscovery).toBe(true)
     expect(reloaded.get('runtime')?.regionalDiscovery).toBe(true)
@@ -685,7 +750,7 @@ function mutationFixture(management?: AragProvider) {
   const sql = new TestSqlStorage()
   const state = new DurableState(sql, sql)
   state.migrate()
-  const stores = durableStores(state, {})
+  const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
   const session = fixtureSession({ oid: 'writer', tenantId: 'directory' })
   const assignments = state.rbac.assignmentService('directory', 'corpuskit')
   expect(assignments.observeSession(session)).toBe(true)
@@ -1441,7 +1506,7 @@ Deno.test('Durable RBAC migrates additively and rolls back rows with failed audi
     state.migrate()
     state.put('tenant:existing', { slug: 'existing' })
     state.migrate()
-    const stores = durableStores(state, {})
+    const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
     expect(stores.assignments.list('tenant-1')).toEqual([])
     expect(stores.locks.lockedUntil('ip')).toBeNull()
     expect(state.get('tenant:existing', null)).toEqual({ slug: 'existing' })
@@ -1620,7 +1685,12 @@ Deno.test('DurableTenantStore exposes hostnames for OPAX and successfully provis
   const sql = new TestSqlStorage()
   const state = new DurableState(sql)
   state.migrate()
-  const store = new DurableTenantStore(state, 'corpuskit.org')
+  const store = new DurableTenantStore(
+    state,
+    'corpuskit.org',
+    new Set(),
+    new Set(['marine', 'grains']),
+  )
 
   // The showcase upgrade is applied on read and never saved, so creation still attaches.
   expect(store.add({ name: 'OPAX' }).hostname).toBeUndefined()
@@ -1641,7 +1711,12 @@ Deno.test('DurableTenantStore exposes hostnames for OPAX and successfully provis
 Deno.test('DurableTenantStore never gives showcase hostnames to another platform domain', () => {
   const state = new DurableState(new TestSqlStorage())
   state.migrate()
-  const store = new DurableTenantStore(state, 'research.example')
+  const store = new DurableTenantStore(
+    state,
+    'research.example',
+    new Set(),
+    new Set(['marine', 'grains']),
+  )
 
   expect(store.add({ name: 'OPAX' }).hostname).toBeUndefined()
   for (const slug of ['marine', 'grains', 'opax']) {
@@ -1687,7 +1762,7 @@ Deno.test('public investigation reads return all 140 passages without audit stag
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    const stores = durableStores(state, {})
+    const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
     const reader = { kind: 'anonymous' as const, clientId: 'reader' }
     const investigation = stores.investigations.create('marine', reader, { name: 'Research' })
     for (let index = 0; index < 140; index++) {
@@ -1766,7 +1841,14 @@ Deno.test('Durable portal host aliases persist with the registry and leave with 
   const sql = new TestSqlStorage()
   try {
     new DurableState(sql, sql).migrate()
-    checkAliasRegistry(() => new DurableTenantStore(new DurableState(sql, sql), 'corpuskit.org'))
+    checkAliasRegistry(() =>
+      new DurableTenantStore(
+        new DurableState(sql, sql),
+        'corpuskit.org',
+        new Set(),
+        new Set(['marine', 'grains']),
+      )
+    )
   } finally {
     sql.database.close()
   }
@@ -1777,7 +1859,12 @@ Deno.test('Durable registry row gains an alias list only while a portal has alia
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    const store = new DurableTenantStore(state, 'corpuskit.org')
+    const store = new DurableTenantStore(
+      state,
+      'corpuskit.org',
+      new Set(),
+      new Set(['marine', 'grains']),
+    )
     const slug = store.add({ name: 'Acme' }).slug
     const keys = () => Object.keys(state.get<Record<string, unknown>>('tenants', {})).sort()
     expect(keys()).toEqual(['custom', 'disabled', 'overrides', 'retired'])
@@ -1799,7 +1886,7 @@ Deno.test('Durable alias writes are audited in their transaction and a refusal r
   try {
     const state = new DurableState(sql, sql)
     state.migrate()
-    const stores = durableStores(state, {})
+    const stores = durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' })
     const input = (action: 'portal.alias.set' | 'portal.alias.remove'): Omit<
       AuditInput,
       'outcome'

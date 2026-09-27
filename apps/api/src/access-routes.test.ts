@@ -23,6 +23,7 @@ const json = (method: string, body: unknown) => ({
 Deno.test('real local access changes restore file and memory after append and actual COMMIT failures', async () => {
   const directory = Deno.makeTempDirSync({ prefix: 'access-ingress-' })
   const env = {
+    SHOWCASE_PORTALS: 'marine,grains',
     DATA_DIR: directory,
     TENANTS_PATH: `${directory}/tenants.json`,
     ENTRA_TENANT_ID: 'tenant-1',

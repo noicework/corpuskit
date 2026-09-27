@@ -35,7 +35,7 @@ function fixture() {
   const sql = new LifecycleSqlStorage()
   const state = new DurableState(sql, sql)
   state.migrate()
-  return { sql, state, stores: durableStores(state, {}) }
+  return { sql, state, stores: durableStores(state, { SHOWCASE_PORTALS: 'marine,grains' }) }
 }
 
 const auditInput: Omit<AuditInput, 'outcome'> = {
@@ -62,7 +62,8 @@ Deno.test('durable lifecycle, ask usage and capacity reservations survive object
       created: true,
       id: 'resource-1',
     })
-    const restarted = durableStores(new DurableState(sql, sql), {}).lifecycle
+    const restarted =
+      durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' }).lifecycle
     expect(restarted.get('marine').status).toBe('read_only')
     expect(restarted.consumeAsk('marine', 'Australia/Melbourne', now)?.limit).toBe(1)
     expect(restarted.reserveAdd('marine', { observed: 1, bytes: 1 })).toEqual({
@@ -147,7 +148,10 @@ Deno.test('durable lifecycle changes roll back audit append, named completion an
         async () => stores.lifecycle.set('marine', { status: 'suspended', limits: null }),
       )).rejects.toThrow()
       expect(stores.lifecycle.get('marine')).toEqual(before)
-      expect(durableStores(new DurableState(sql, sql), {}).lifecycle.get('marine')).toEqual(before)
+      expect(
+        durableStores(new DurableState(sql, sql), { SHOWCASE_PORTALS: 'marine,grains' }).lifecycle
+          .get('marine'),
+      ).toEqual(before)
       expect(stores.audit.read({ scope: { kind: 'platform' } })).toEqual([])
     } finally {
       sql.database.close()

@@ -172,7 +172,10 @@ function harness(
   const audit = overrides.audit ?? rbac.audit
   const owned = localOwnedStores(dataDir, database, audit)
   const keys = owned.mcpKeys
-  const tenants = new TenantStore({ TENANTS_PATH: `${dataDir}/tenants.json` })
+  const tenants = new TenantStore({
+    TENANTS_PATH: `${dataDir}/tenants.json`,
+    SHOWCASE_PORTALS: 'marine,grains',
+  })
   const writer = { ...sessionFor('portal-admin', 'marine', Date.now()), oid: 'admin-user-id' }
   const service = rbac.assignmentService('tenant-1', 'corpuskit')
   service.observeSession(writer)
@@ -1142,7 +1145,10 @@ Deno.test('real local MCP ingress strips forged and foreign-audience principal h
   }
   const { database, rbac } = openLocalRbac(env)
   try {
-    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    const tenants = new TenantStore({
+      TENANTS_PATH: `${directory}/tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
+    })
     tenants.patch('marine', { accessMode: 'restricted' })
     const ingress = new LocalIngress({ env, rbac, tenants })
     let calls = 0
@@ -1251,7 +1257,10 @@ Deno.test('real local key HTTP commits restore exact bytes on append and SQL COM
   }
   const { database, rbac } = openLocalRbac(env)
   try {
-    const tenants = new TenantStore({ TENANTS_PATH: `${directory}/tenants.json` })
+    const tenants = new TenantStore({
+      TENANTS_PATH: `${directory}/tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
+    })
     const ingress = new LocalIngress({ env, tenants, rbac })
     const writer = sessionFor('owner', 'marine', Date.now())
     let failure: 'append' | 'commit' | 'completion' | undefined

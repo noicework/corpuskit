@@ -146,11 +146,11 @@ Deno.test('the local portal store retires removed slugs across restarts', () => 
   const directory = Deno.makeTempDirSync({ prefix: 'portal-removal-' })
   try {
     const path = `${directory}/tenants.json`
-    const store = new TenantStore({ TENANTS_PATH: path })
+    const store = new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' })
     expect(store.add({ name: 'Acme' }).slug).toBe('acme')
     expect(store.remove('acme')).toBe(true)
     expect(store.isRetired('acme')).toBe(true)
-    const restarted = new TenantStore({ TENANTS_PATH: path })
+    const restarted = new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' })
     expect(restarted.isRetired('acme')).toBe(true)
     expect(restarted.add({ name: 'Acme' }).slug).toBe('acme-2')
     expect(restarted.add({ name: 'Beta' }, (slug) => slug === 'beta').slug).toBe('beta-2')

@@ -38,7 +38,9 @@ Nothing tenant-specific ever appears in a component.
 The seeded showcase portals are defined in `apps/api/src/tenants.ts` and are never copied into
 storage: both the file store and the Durable Object read each seed on every request and merge
 only that portal's stored overrides over it. A change to a seed therefore reaches existing
-deployments on the next deploy, and a field an override sets explicitly still wins.
+deployments on the next deploy, and a field an override sets explicitly still wins. A deployment
+serves a seed only when `SHOWCASE_PORTALS` names it; by default it serves none (see
+`HOSTING.md`, "Showcase portals").
 
 Optional surfaces are opt-in per portal. The regional discovery band on Explore (a map of
 Australia and a question per state) appears only when `regionalDiscovery` is `true`; absent or

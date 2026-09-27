@@ -68,6 +68,7 @@
     "ENTRA_TENANT_ID": "15c1eb19-1f38-4a09-bb25-7ff9892387b8",
     "ENTRA_REDIRECT_URI": "https://corpuskit.org/auth/callback",
     "RESERVED_HOSTNAMES": "corpuskit.noice.net.au",
-    "MAX_PORTAL_ALIASES": "0"
+    "MAX_PORTAL_ALIASES": "0",
+    "SHOWCASE_PORTALS": "marine,grains"
   }
 }

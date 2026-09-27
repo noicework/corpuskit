@@ -137,7 +137,10 @@ function buildApp(options: BuildAppOptions) {
   return buildRawApp({
     ...options,
     tenants: options.tenants ??
-      new TenantStore({ TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json` }),
+      new TenantStore({
+        TENANTS_PATH: `${Deno.makeTempDirSync()}/tenants.json`,
+        SHOWCASE_PORTALS: 'marine,grains',
+      }),
     rbac,
     configuredTenantId: 'tenant-1',
     audience: 'corpuskit',

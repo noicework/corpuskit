@@ -190,7 +190,10 @@ Deno.test('an allowed provider failure never dispatches to or identifies a hidde
 Deno.test('local and Durable registry predicates run before metadata projection and propagate failures', () => {
   const f = createEnforcementFixture()
   try {
-    const local = new TenantStore({ TENANTS_PATH: `${f.directory}/local-tenants.json` })
+    const local = new TenantStore({
+      TENANTS_PATH: `${f.directory}/local-tenants.json`,
+      SHOWCASE_PORTALS: 'marine,grains',
+    })
     for (const store of [local, f.stores.tenants]) {
       const original = store.get.bind(store)
       store.get = (slug) => {
@@ -681,7 +684,7 @@ function fixture(raw?: unknown) {
   if (raw !== undefined) Deno.writeTextFileSync(path, JSON.stringify(raw))
   return {
     path,
-    open: () => new TenantStore({ TENANTS_PATH: path }),
+    open: () => new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine,grains' }),
     close: () => Deno.removeSync(directory, { recursive: true }),
   }
 }
