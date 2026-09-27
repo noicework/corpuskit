@@ -1,5 +1,6 @@
 import { appendAudit, type AuditActor, type AuditStore, createAuditEvent } from './audit.ts'
 import type { RbacDatabase } from './rbac-state.ts'
+import { clientBucket } from './rate-limit.ts'
 
 export interface BreakGlassPolicy {
   passcode?: string
@@ -104,7 +105,8 @@ export class BreakGlassService {
         record('break_glass.failed', { code: 'unavailable' })
         return { ok: false, code: 'unavailable' }
       }
-      const ip = context.clientIp!
+      // Failures lock the caller: one address, or one IPv6 /64.
+      const ip = clientBucket(context.clientIp)!
       const lockedUntil = this.database.all<{ locked_until: number }>(
         'SELECT locked_until FROM break_glass_locks WHERE trusted_ip = ?',
         ip,

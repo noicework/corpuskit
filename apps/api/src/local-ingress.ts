@@ -48,11 +48,11 @@ import {
   unknownHostsMode,
 } from './portal-aliases.ts'
 import {
+  addressKey,
   forwardedClientAddress,
   SlidingWindowLimiter,
   trustProxyHops,
   trustProxyHopsWarning,
-  UNKNOWN_CLIENT_ADDRESS,
 } from './rate-limit.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import {
@@ -211,8 +211,9 @@ export class LocalIngress {
     const requestId = crypto.randomUUID()
     const { rbac } = this.options
     const clientIp = this.clientAddress(request, info)
-    // The per-address failure limits share one bucket for requests with no reported address.
-    const limitKey = clientIp ?? UNKNOWN_CLIENT_ADDRESS
+    // The per-address failure limits key on the caller's address (an IPv6 /64), and share one
+    // bucket for requests with no reported address.
+    const limitKey = addressKey(clientIp)
     let operator: { id: string } | undefined
     const actor = (): AuditActor =>
       operator ? { kind: 'operator', id: `operator:${operator.id}` } : { kind: 'anonymous' }

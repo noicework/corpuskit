@@ -771,7 +771,9 @@ address the runtime reports, never on a header the caller can write:
   (a load balancer, nginx, or a container platform's edge), every client has the proxy's address
   and shares its limits. The Worker ignores it.
 
-The same address keys the break-glass lockout and the other per-address failure limits.
+The same address keys the break-glass lockout and the other per-address failure limits. Every
+per-address limit treats an IPv6 address as its /64 network, since one host is usually given a
+whole /64, and drops a port a proxy appended to the address.
 
 The limits, each per minute, with `0` turning one off:
 

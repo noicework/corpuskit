@@ -84,6 +84,30 @@ Deno.test('break-glass fifth failure locks atomically and exact expiry restores 
   }
 })
 
+Deno.test('break-glass failures from one IPv6 /64 lock the whole /64', async () => {
+  const f = rbacFixture()
+  try {
+    const service = f.state.breakGlassService(policy)
+    for (let i = 1; i <= 5; i++) {
+      await service.authorise(request(), { ...context(), clientIp: `2001:db8:1:2::${i}` })
+    }
+    expect(
+      await service.authorise(request(policy.passcode), {
+        ...context(),
+        clientIp: '2001:db8:1:2::abcd',
+      }),
+    ).toMatchObject({ ok: false, code: 'locked' })
+    expect(
+      await service.authorise(request(policy.passcode), {
+        ...context(),
+        clientIp: '2001:db8:1:3::1',
+      }),
+    ).toMatchObject({ ok: true })
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('break-glass failures roll out of the ten minute window and do not use forwarding headers', async () => {
   const f = rbacFixture()
   try {

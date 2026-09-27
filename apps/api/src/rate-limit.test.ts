@@ -3,6 +3,7 @@ import { expect } from '@std/expect'
 import {
   addressKey,
   admitAll,
+  clientBucket,
   clientKey,
   forwardedClientAddress,
   RATE_LIMIT_MESSAGE,
@@ -108,6 +109,27 @@ describe('client addresses', () => {
     // No reported address is one shared bucket, not a free pass.
     expect(addressKey(undefined)).toBe('ip:unknown')
     expect(addressKey('  ')).toBe('ip:unknown')
+  })
+
+  it('treats an IPv6 /64 as one caller, and drops ports and IPv4-in-IPv6 wrapping', () => {
+    for (
+      const address of [
+        '2001:db8:1:2::1',
+        '2001:db8:1:2::ffff',
+        '2001:0DB8:0001:0002:0000:0000:0000:0001',
+        '2001:db8:1:2:aaaa:bbbb:cccc:dddd',
+        '[2001:db8:1:2::1]:443',
+        '2001:db8:1:2::9%eth0',
+      ]
+    ) expect(addressKey(address)).toBe('ip:2001:db8:1:2::/64')
+    expect(addressKey('2001:db8:1:3::1')).toBe('ip:2001:db8:1:3::/64')
+    expect(addressKey('::1')).toBe('ip:0:0:0:0::/64')
+    expect(addressKey('::ffff:192.0.2.1')).toBe('ip:192.0.2.1')
+    expect(addressKey('192.0.2.1:8080')).toBe('ip:192.0.2.1')
+    expect(addressKey('192.0.2.1')).toBe('ip:192.0.2.1')
+    // Not an address: kept as given, never a shared bucket with a real one.
+    expect(addressKey('1:2:3:4:5:6:7:8:9')).toBe('ip:1:2:3:4:5:6:7:8:9')
+    expect(clientBucket(undefined)).toBeUndefined()
   })
 
   it('reads x-forwarded-for only behind declared proxies, taking the hop they vouch for', () => {

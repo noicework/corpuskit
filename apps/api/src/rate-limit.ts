@@ -190,10 +190,55 @@ export function forwardedClientAddress(
   return entry.slice(0, MAX_ADDRESS_LENGTH)
 }
 
+/** The eight 16-bit groups of an IPv6 address, or null when `value` is not one. */
+function ipv6Groups(value: string): number[] | null {
+  let text = value
+  // An IPv4 tail (`::ffff:192.0.2.1`) is the last two groups written another way.
+  const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text)
+  if (v4) {
+    const octets = v4.slice(1).map(Number)
+    if (octets.some((octet) => octet > 255)) return null
+    const high = ((octets[0]! << 8) | octets[1]!).toString(16)
+    const low = ((octets[2]! << 8) | octets[3]!).toString(16)
+    text = `${text.slice(0, v4.index)}${high}:${low}`
+  }
+  const halves = text.split('::')
+  if (halves.length > 2) return null
+  const split = (part: string) => part === '' ? [] : part.split(':')
+  const head = split(halves[0]!)
+  const tail = halves.length === 2 ? split(halves[1]!) : []
+  if (![...head, ...tail].every((group) => /^[0-9a-f]{1,4}$/.test(group))) return null
+  const missing = 8 - head.length - tail.length
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null
+  return [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...tail]
+    .map((group) => parseInt(group, 16))
+}
+
+/**
+ * The caller a client address stands for, for per-address limits. An IPv6 address is its /64
+ * network, since one host is usually given a whole /64 and could otherwise take a fresh bucket for
+ * every address in it. An IPv4 address carried in IPv6 is that IPv4 address, and a port a proxy
+ * appended (`192.0.2.1:443`, `[2001:db8::1]:443`) is dropped. Anything else is kept as given.
+ */
+export function clientBucket(address: string | undefined): string | undefined {
+  let value = address?.trim().toLowerCase()
+  if (!value) return undefined
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(value)
+  if (bracketed) value = bracketed[1]!
+  const withPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(value)
+  if (withPort) return withPort[1]
+  value = value.replace(/%.*$/, '')
+  const groups = value.includes(':') ? ipv6Groups(value) : null
+  if (!groups) return value.slice(0, MAX_ADDRESS_LENGTH)
+  if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
+    return [groups[6]! >> 8, groups[6]! & 255, groups[7]! >> 8, groups[7]! & 255].join('.')
+  }
+  return `${groups.slice(0, 4).map((group) => group.toString(16)).join(':')}::/64`
+}
+
 /** The rate-limit bucket for a client address, one shared bucket when it is unknown. */
 export function addressKey(address: string | undefined): string {
-  const trimmed = address?.trim().slice(0, MAX_ADDRESS_LENGTH)
-  return `ip:${trimmed || UNKNOWN_CLIENT_ADDRESS}`
+  return `ip:${clientBucket(address) ?? UNKNOWN_CLIENT_ADDRESS}`
 }
 
 /** Shape of the anonymous per-browser id the web app sends as `x-rp-client`. */

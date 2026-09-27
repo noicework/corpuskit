@@ -121,6 +121,24 @@ for (const adapter of ['durable', 'local'] as const) {
     }
   })
 
+  Deno.test(`${adapter}: every address in one IPv6 /64 is one caller`, async () => {
+    const f = createEnforcementFixture(
+      { rateLimitAskPerMin: 2, rateLimitAskPerMinPerIp: 2 },
+      adapter,
+    )
+    try {
+      const ask = (from: string) =>
+        status(f.requestFrom(from, null, '/api/t/public-a/ask', post({ 'x-rp-client': browser() })))
+      expect(await ask('2001:db8:1:2::1')).toBe(200)
+      expect(await ask('2001:db8:1:2::2')).toBe(200)
+      for (let i = 3; i <= 6; i++) expect(await ask(`2001:db8:1:2::${i}`)).toBe(429)
+      // The next /64 is another caller.
+      expect(await ask('2001:db8:1:3::1')).toBe(200)
+    } finally {
+      f.close()
+    }
+  })
+
   Deno.test(`${adapter}: refused asks give the portal its anonymous turn back`, async () => {
     const f = createEnforcementFixture(
       { rateLimitAskPerMin: 20, rateLimitAskPerMinPerIp: 100, rateLimitAnonPortalAskPerMin: 3 },

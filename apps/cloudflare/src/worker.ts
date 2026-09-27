@@ -80,7 +80,7 @@ import {
   transportSecurityFor,
   unknownHostsMode,
 } from '../../api/src/portal-aliases.ts'
-import { SlidingWindowLimiter } from '../../api/src/rate-limit.ts'
+import { addressKey, SlidingWindowLimiter } from '../../api/src/rate-limit.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import {
   createCloudflareDomainProvisioner,
@@ -496,7 +496,7 @@ export class PortalDurableObject extends DurableObject<Env> {
     request: Request,
     clientIp?: string,
   ): Promise<{ limited: false } | { limited: true; retryAfterSec: number }> {
-    const { allowed, retryAfterSec } = this.operatorFailures.check(clientIp ?? 'unknown')
+    const { allowed, retryAfterSec } = this.operatorFailures.check(addressKey(clientIp))
     if (!allowed) return { limited: true, retryAfterSec }
     await this.auditDenial(request, 401)
     return { limited: false }
@@ -508,7 +508,7 @@ export class PortalDurableObject extends DurableObject<Env> {
    * client address, so a looping replay cannot grow the audit log without bound.
    */
   async auditSessionHostMismatch(request: Request, oid: string, clientIp?: string): Promise<void> {
-    if (!this.hostMismatches.check(clientIp ?? 'unknown').allowed) return
+    if (!this.hostMismatches.check(addressKey(clientIp)).allowed) return
     appendAudit(
       this.stores.audit,
       createAuditEvent({
@@ -528,7 +528,7 @@ export class PortalDurableObject extends DurableObject<Env> {
    * as `host_conflict` at most a few times a minute per client address.
    */
   async auditHostConflict(request: Request, clientIp?: string): Promise<void> {
-    if (!this.hostConflicts.check(clientIp ?? 'unknown').allowed) return
+    if (!this.hostConflicts.check(addressKey(clientIp)).allowed) return
     appendAudit(
       this.stores.audit,
       createAuditEvent({
@@ -552,7 +552,7 @@ export class PortalDurableObject extends DurableObject<Env> {
    * the rest are counted onto the next record (see `ExternalFailureAudit`).
    */
   async auditExternalFailure(reason: ExternalLoginFailure, clientIp?: string): Promise<void> {
-    this.externalFailures.record(reason, clientIp ?? 'unknown')
+    this.externalFailures.record(reason, addressKey(clientIp))
   }
 
   async maintenance(): Promise<void> {
