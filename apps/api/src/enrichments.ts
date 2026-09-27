@@ -574,11 +574,21 @@ function resolvedBackoff(
  * small bounded budget above.
  */
 /**
- * The platform account every portal shares answered 429, as a plain rate limit or as ingestion
- * back-pressure. Unlike other strain, this is about the account rather than one knowledge box.
+ * Back-pressure one knowledge box reports about itself: too many of its own messages waiting to
+ * be processed. It holds back that portal alone.
+ */
+export function isKnowledgeBoxBackpressure(err: unknown): boolean {
+  return err instanceof AragApiError && err.backpressure?.kind === 'processing'
+}
+
+/**
+ * The platform account every portal shares answered 429: a plain rate limit, or indexing or
+ * ingest back-pressure, which the platform measures across all its knowledge boxes. Unlike other
+ * strain, and unlike one box's own processing backlog, this is about the account.
  */
 export function isAccountBackpressure(err: unknown): boolean {
-  return err instanceof AragApiError && (err.status === 429 || err.backpressure !== null)
+  return err instanceof AragApiError &&
+    (err.status === 429 || err.backpressure !== null) && !isKnowledgeBoxBackpressure(err)
 }
 
 /** Why a catalogue read failed, as a run's `error` event reports it. */

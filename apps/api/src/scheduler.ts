@@ -12,6 +12,7 @@ import { FeedbackStore, type FeedbackStoreApi } from './stores.ts'
 import {
   type EnrichmentStoreApi,
   isAccountBackpressure,
+  isKnowledgeBoxBackpressure,
   runEnrichmentOverCorpus,
 } from './enrichments.ts'
 import type { BindingStoreApi } from './bindings.ts'
@@ -48,9 +49,10 @@ type MaintenanceJob = 'sync' | 'watch' | 'enrichment'
  * for. Never the error itself, which can carry a source's address or upstream detail.
  */
 export interface MaintenanceFailure {
-  job: MaintenanceJob
+  /** The job, or `retention` for the pass's own clean-up before the jobs. */
+  job: MaintenanceJob | 'retention'
   slug?: string
-  target: 'source' | 'watch' | 'enrichment' | 'questions' | 'portal' | 'job'
+  target: 'source' | 'watch' | 'enrichment' | 'questions' | 'portal' | 'job' | 'feedback'
 }
 
 /**
@@ -292,12 +294,17 @@ interface MaintenanceStores {
   feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
 }
 
-/** Remove expired answer feedback; a failure is logged and never stops the maintenance jobs. */
-function purgeExpiredFeedback(feedback: MaintenanceStores['feedback']): void {
+/**
+ * Remove expired answer feedback; true when that worked. A failure is logged and counted in the
+ * pass's combined error, and never stops the maintenance jobs.
+ */
+function purgeExpiredFeedback(feedback: MaintenanceStores['feedback']): boolean {
   try {
     feedback?.purgeExpired()
+    return true
   } catch {
     console.error('[scheduler] expired answer feedback could not be removed')
+    return false
   }
 }
 
@@ -320,8 +327,11 @@ export async function runSystemMaintenance(
   const sources = guardPortalWrites(stores.sources, stores.lifecycle)
   const enrichments = guardPortalWrites(stores.enrichments, stores.lifecycle)
   if (retain) stores.rbac.retainAudit(days)
-  if (retain) purgeExpiredFeedback(stores.feedback)
   const failures: MaintenanceFailure[] = []
+  // A failed purge never stops the jobs, but the pass still reports it at the end.
+  if (retain && !purgeExpiredFeedback(stores.feedback)) {
+    failures.push({ job: 'retention', target: 'feedback' })
+  }
   let halted = false
   for (const job of jobs) {
     try {
@@ -393,7 +403,7 @@ export async function syncSource(
   emit: (label: string) => void | Promise<void>,
   signal?: AbortSignal,
   stopTaking?: () => boolean,
-): Promise<{ added: number; deferred: number; backpressure: boolean }> {
+): Promise<{ added: number; deferred: number; backpressure: boolean; boxBusy: boolean }> {
   const perRun = pagesPerRun(source)
   const discovered = await discoverLinks(source.url, DISCOVER_CAP)
   const known = new Set(source.synced ?? [])
@@ -414,6 +424,8 @@ export async function syncSource(
   let refusal: PortalLifecycleError | undefined
   /** The shared platform account answered 429, which stopped this run. */
   let backpressure = false
+  /** This portal's own knowledge box has too much waiting to process, which stopped this run. */
+  let boxBusy = false
   /** Pages the knowledge box could not take this time (408 or 5xx), left for the next sync. */
   let retry = 0
   for (const [i, url] of fresh.entries()) {
@@ -518,9 +530,11 @@ export async function syncSource(
         // The box's ingestion queue is full, or the account is rate limited. Stop this run
         // cleanly rather than hammering it for every remaining page - they stay un-synced
         // (not added to `known`) so the next scheduled or manual sync picks them up once the
-        // queue has drained.
+        // queue has drained. A backlog of this box's own processing holds back this portal
+        // alone; anything else is the account every portal shares.
         deferred = fresh.length - i
-        backpressure = true
+        if (isKnowledgeBoxBackpressure(err)) boxBusy = true
+        else backpressure = true
         await emit(
           `Knowledge box is busy processing recent changes - stopping this run early. ` +
             `${deferred} ${deferred === 1 ? 'page' : 'pages'} left for the next sync.`,
@@ -577,7 +591,7 @@ export async function syncSource(
     lastError: null,
   })
   await emit(added > 0 ? `Sync complete - ${added} pages added` : 'Sync complete - nothing new')
-  return { added, deferred, backpressure }
+  return { added, deferred, backpressure, boxBusy }
 }
 
 /**
@@ -859,6 +873,9 @@ export async function runAutoSyncs(
               // The shared account turned the sync away. What it added is kept and the rest waits
               // for the next pass, which must not start on another portal now.
               if (synced.backpressure) throw new AccountBackpressureError()
+              // This portal's own box is still working through a backlog: its other sources
+              // wait for the next pass too, and the other portals carry on.
+              if (synced.boxBusy) refused = true
             }),
           ),
       )

@@ -810,12 +810,18 @@ unit. One failing unit never stops the others:
   source, where Manage shows it. The pass then moves on.
 - Every job still runs. Once the pass is over, the failures are raised together as one error, so
   the runtime records a failed invocation. It names each failed unit by job, portal and kind,
-  never by upstream detail. Each job's platform-level `maintenance.run` record carries `count`,
-  the number of its units that failed.
+  never by upstream detail, and it also counts a failure to remove expired answer feedback, which
+  the pass does before its jobs. Each job's platform-level `maintenance.run` record carries
+  `count`, the number of its units that failed.
 - The pass stops early only when the platform account that every portal shares answers 429
-  (a rate limit or ingestion back-pressure), in a source sync, a watch, an enrichment run or a
-  suggested-question run. The next portal would only add to the pressure, so the rest waits for
-  the next pass.
+  (a rate limit, or indexing or ingest back-pressure, which the platform measures across all its
+  knowledge boxes), in a source sync, a watch, an enrichment run or a suggested-question run. The
+  next portal would only add to the pressure, so the rest waits for the next pass. This assumes
+  every portal's knowledge box is on the same platform account; one account's 429 stops the pass
+  for portals on others as well.
+- A knowledge box that is still processing a backlog of its own (processing back-pressure, such
+  as after a bulk upload) holds back only its own portal: that portal's syncs stop with their
+  pages kept for the next pass, and the other portals carry on.
 - A page the platform does not take during a sync (a 429, a timeout or a server error) is not
   marked as synced, so the next sync tries it again.
 - A portal whose enrichment run found its knowledge box strained (still busy after the run's

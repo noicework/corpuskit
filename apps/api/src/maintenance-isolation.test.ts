@@ -384,7 +384,7 @@ Deno.test('a source sync stops taking pages when told to, and leaves the rest fo
       undefined,
       () => created >= 2,
     )
-    expect(result).toEqual({ added: 2, deferred: 4, backpressure: false })
+    expect(result).toEqual({ added: 2, deferred: 4, backpressure: false, boxBusy: false })
     const after = sources.find('marine', source.id)!
     expect(after.synced).toHaveLength(2)
     expect(after.lastStatus).toBe('ok')
@@ -541,23 +541,25 @@ function stubArticles(): () => void {
   }
 }
 
+/** Structured back-pressure of one of the platform's kinds, as a 429 carries it. */
+const backPressure = (kind: string) =>
+  new AragApiError(
+    429,
+    'https://box.example/resources',
+    JSON.stringify({
+      detail: {
+        try_after: Math.floor(Date.now() / 1000) + 600,
+        back_pressure_type: kind,
+        message: 'Too many messages pending.',
+      },
+    }),
+  )
+
 for (
   const [label, refusal] of [
-    [
-      'ingestion back-pressure',
-      () =>
-        new AragApiError(
-          429,
-          'https://box.example/resources',
-          JSON.stringify({
-            detail: {
-              try_after: Math.floor(Date.now() / 1000),
-              back_pressure_type: 'ingestion',
-              message: 'Too many messages pending to ingest.',
-            },
-          }),
-        ),
-    ],
+    // Indexing and ingest back-pressure are measured across every knowledge box.
+    ['indexing back-pressure', () => backPressure('indexing')],
+    ['ingest back-pressure', () => backPressure('ingest')],
     ['a plain 429', () => new AragApiError(429, 'https://box.example/resources', 'Too Many')],
   ] as const
 ) {
@@ -631,6 +633,87 @@ Deno.test('a page the box fails with a 5xx stays for the next sync, and the pass
     expect(f.sources.list(second)[0]?.synced).toHaveLength(6)
   } finally {
     restore()
+    f.close()
+  }
+})
+
+Deno.test("one knowledge box's own processing backlog holds back that portal alone", async () => {
+  const f = fixture()
+  const restore = stubArticles()
+  try {
+    const [busy, ...others] = f.order as [string, ...string[]]
+    f.sources.add(busy, 'https://busy.example/news', true, 10)
+    f.sources.add(busy, 'https://busy-two.example/news', true, 10)
+    for (const slug of others) {
+      f.sources.add(slug, `https://${slug}.example/news`, true, 10)
+      f.watches.add(slug, 'fixture-client', 'reef recovery')
+    }
+    const calls: string[] = []
+    const management = {
+      ...generating(answered, calls),
+      createText: (config: TenantConfig) => {
+        calls.push(`create:${config.slug}`)
+        // The busy portal's box reports a processing backlog of its own; the others take pages.
+        return config.slug === busy
+          ? Promise.reject(backPressure('processing'))
+          : Promise.resolve('created')
+      },
+      search: (config: TenantConfig) => {
+        calls.push(`search:${config.slug}`)
+        return Promise.resolve({ query: 'q', resources: [{ id: 'doc-1' }], relatedQuestions: [] })
+      },
+    } as unknown as AragProvider
+    await runSystemMaintenance(
+      management,
+      { ...f, bindings: bindingsFor(f.order) },
+      undefined,
+      ['sync', 'watch', 'enrichment'],
+      false,
+      { now: () => 0 },
+    )
+    // That portal's first source stopped on its first page, and its second was not started.
+    expect(calls.filter((call) => call === `create:${busy}`)).toHaveLength(1)
+    for (const source of f.sources.list(busy)) expect(source.synced ?? []).toEqual([])
+    // Every other portal was synced, watched and enriched.
+    for (const slug of others) {
+      expect(f.sources.list(slug)[0]?.synced).toHaveLength(6)
+      expect(calls).toContain(`search:${slug}`)
+      expect(f.enrichments.count(slug)).toBe(2)
+    }
+  } finally {
+    restore()
+    f.close()
+  }
+})
+
+Deno.test('a failed feedback purge is counted in the pass, and never stops its jobs', async () => {
+  const f = fixture()
+  try {
+    const [first] = f.order as [string]
+    const calls: string[] = []
+    let caught: unknown
+    await runSystemMaintenance(
+      generating(answered, calls),
+      {
+        ...f,
+        bindings: bindingsFor([first]),
+        feedback: {
+          purgeExpired: () => {
+            throw new Error('feedback storage unavailable')
+          },
+        },
+      },
+      undefined,
+      ['enrichment'],
+      true,
+      { now: () => 0 },
+    ).catch((error) => {
+      caught = error
+    })
+    expect(failures(caught)).toEqual(['retention:-:feedback'])
+    expect((caught as { halted?: boolean }).halted).toBe(false)
+    expect(f.enrichments.count(first)).toBe(2)
+  } finally {
     f.close()
   }
 })
