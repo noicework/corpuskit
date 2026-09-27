@@ -7,7 +7,12 @@
  * section 8). Surface-specific state (stages, the route chip, the composer)
  * stays with each page.
  */
-import type { AskEvent, Citation, ScoredResource } from '@research-portal/core'
+import {
+  type AskEvent,
+  AskEventSchema,
+  type Citation,
+  type ScoredResource,
+} from '@research-portal/core'
 import type { QualityScores } from '../components/QualityGauge.tsx'
 import type { AnswerAudit } from './answer-marks.ts'
 
@@ -71,8 +76,15 @@ export function applyAnswerEvent<T extends StreamedAnswer>(answer: T, event: Ask
           contextRelevance: event.contextRelevance,
         },
       }
-    case 'audit':
-      return { ...answer, audit: auditFromEvent(event) }
+    case 'audit': {
+      // Events arrive as parsed JSON, not validated. A malformed audit counts as no audit: the
+      // confidence then rests on the platform score (never High) and nothing is marked, instead
+      // of the page failing on a missing list or reading a verdict the check never reached.
+      const parsed = AskEventSchema.safeParse(event)
+      return parsed.success && parsed.data.type === 'audit'
+        ? { ...answer, audit: auditFromEvent(parsed.data) }
+        : { ...answer, audit: undefined }
+    }
     case 'fallback':
       // A fresh answer follows on another configuration: whatever the first
       // attempt streamed is discarded so the two never read as one answer.

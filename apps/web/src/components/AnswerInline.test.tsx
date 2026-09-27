@@ -180,6 +180,45 @@ describe('the answer Ask and Search fold from one stream', () => {
     expect(markup).toContain('Years the cited resources do not carry: 1987.')
   })
 
+  it('treats a malformed audit as no audit: never a crash, never High', () => {
+    const malformed = [
+      // The lists missing altogether.
+      { type: 'audit', figuresChecked: 2 },
+      // A count that is not a number.
+      {
+        type: 'audit',
+        figuresChecked: '2',
+        figuresUnsupported: [],
+        yearsUnsupported: [],
+        contraindicationsUnsupported: [],
+      },
+      // A list that holds something other than figures.
+      {
+        type: 'audit',
+        figuresChecked: 1,
+        figuresUnsupported: [{ figure: '12%' }],
+        yearsUnsupported: [],
+        contraindicationsUnsupported: [],
+      },
+    ] as unknown as AskEvent[]
+    for (const event of malformed) {
+      const answer = fold([
+        { type: 'delta', text: 'Abalone fell 12% after 2019.' },
+        event,
+        { type: 'done', refused: false, text: 'Abalone fell 12% after 2019.' },
+        { type: 'quality', answerRelevance: 4.8, groundedness: 4.8, contextRelevance: 4.8 },
+      ])
+      expect(answer.audit).toBeUndefined()
+      // With no audit the platform score decides, and it never reaches High on its own.
+      expect(confidenceOnEachSurface(answer)).toEqual({ search: 'moderate', ask: 'moderate' })
+      expect(marks(renderAnswer(answer))).toEqual([])
+      expect(renderToStaticMarkup(<AuditBadge audit={answer.audit} />)).toBe('')
+    }
+    // A malformed audit after a good one withdraws it rather than keeping a stale verdict.
+    const withdrawn = fold([...stream({ yearsUnsupported: ['1987'] }), malformed[0]!])
+    expect(withdrawn.audit).toBeUndefined()
+  })
+
   it('starts a fresh answer when the server falls back to another configuration', () => {
     const answer = fold([
       { type: 'sources', resources: [RESOURCE] },
