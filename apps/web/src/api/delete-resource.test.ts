@@ -48,7 +48,7 @@ Deno.test('a document already gone, a refused delete and an unfinished clean-up 
       [
         502,
         'delete_failed',
-        'The document could not be deleted, and nothing was changed. Try again shortly.',
+        'The document could not be deleted. Try again shortly.',
       ],
       [
         500,

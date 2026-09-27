@@ -4583,7 +4583,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     config: TenantConfig,
     rows: RecentResource[],
   ): Promise<RecentResource[]> => {
-    const stuck = lifecycle.stuckLinks(config.slug)
+    let stuck: string[]
+    try {
+      stuck = lifecycle.stuckLinks(config.slug)
+    } catch {
+      // A ledger that cannot be read refuses adds on its own; the listing still serves.
+      return rows
+    }
     if (stuck.length === 0) return rows
     const flagged = new Set(stuck)
     const listed = new Set(rows.map((row) => row.id))
@@ -5711,7 +5717,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!deleted) {
       return c.json({
         error: 'delete_failed',
-        message: 'The document could not be deleted, and nothing was changed. Try again shortly.',
+        message: 'The document could not be deleted. Try again shortly.',
       }, 502)
     }
     if (!complete) {

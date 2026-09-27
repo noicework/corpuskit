@@ -312,6 +312,13 @@ Deno.test('deleting a waiting or stuck link frees its bytes at once and lets the
 
       expect((await p.remove(stuck.body.id)).status, adapter).toBe(200)
       expect(p.f.stores.lifecycle.stuckLinks('a'), adapter).toEqual([])
+      // A ledger that cannot be read does not take the listing down with it.
+      const ledger = p.f.stores.lifecycle.state.get<unknown>('portal-capacity:a', null)
+      p.f.stores.lifecycle.state.put('portal-capacity:a', { v: 1, broken: true })
+      const listed = await p.send(p.curator, 'GET', '/api/admin/t/a/recent')
+      expect(listed.status, adapter).toBe(200)
+      expect((listed.body as RecentResource[]).length, adapter).toBe(12)
+      p.f.stores.lifecycle.state.put('portal-capacity:a', ledger)
       expect((await p.text('Notes', 700)).status, adapter).toBe(200)
       const after = await p.send(p.curator, 'GET', '/api/admin/t/a/recent')
       expect((after.body as RecentResource[]).some((row) => row.stuck), adapter).toBe(false)
