@@ -957,14 +957,19 @@ body {
   box-shadow: var(--rp-shadow-xl);
 }
 
-/* Consistent focus treatment on anything interactive that opts in. */
+/* Consistent focus treatment on anything interactive that opts in. The ring is
+ * a box-shadow, which forced-colours mode removes; the transparent outline
+ * under it is what that mode paints instead (see the forced-colours rules at
+ * the end of this file). */
 .rp-focus:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--rp-ring);
 }
 
 .rp-focus-inverse:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--rp-ring-inverse);
 }
 
@@ -1353,6 +1358,10 @@ body {
   --rp-ink-3: #6f6c64;
   --rp-line: var(--rp-surface-3);
   --rp-line-2: var(--rp-surface-2);
+  /* The edge of a text field: 3:1 on the grounds it sits on (WCAG 1.4.11),
+   * where --rp-line is a hairline for dividers. fieldBorder() in
+   * packages/core/src/palettes.ts derives it; theme.ts writes it per palette. */
+  --rp-field: #8f8d87;
   --rp-glass-bg: rgba(255, 255, 255, 0.94);
   --rp-ok-bg: #ecfdf5;
   --rp-ok-ink: #047857;
@@ -1582,7 +1591,8 @@ label.rp-btn:has(input:focus-visible) {
   cursor: not-allowed;
 }
 .rp-btn:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--rp-ring);
 }
 .rp-btn-primary {
@@ -1681,7 +1691,8 @@ label.rp-btn:has(input:focus-visible) {
   color: var(--rp-ink);
 }
 .rp-chip:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--rp-ring);
 }
 .rp-chip-active {
@@ -1729,7 +1740,21 @@ label.rp-btn:has(input:focus-visible) {
   color: var(--rp-ink-3);
 }
 .rp-input:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--rp-ring);
+}
+
+/* A composite field: a bordered box holding a bare text control and its
+ * buttons (the Ask composer, the search box, "Ask this document"). The control
+ * inside draws no focus of its own, so the box shows it, and the box's edge is
+ * the field's edge, at 3:1. */
+.rp-field {
+  border-color: var(--rp-field);
+}
+.rp-field:focus-within {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--rp-ring);
 }
 
@@ -3292,5 +3317,31 @@ button:disabled,
   .acmd-footer-tagline {
     background: none;
     -webkit-text-fill-color: currentColor;
+  }
+}
+
+/* Windows high contrast and other forced-colours modes drop every box-shadow,
+ * and with it the house focus ring. The focus indicator is then an outline in
+ * the system's highlight colour, on everything that can take focus. */
+@media (forced-colors: active) {
+  :focus-visible,
+  .rp-focus:focus-visible,
+  .rp-focus-inverse:focus-visible,
+  .rp-btn:focus-visible,
+  .rp-chip:focus-visible,
+  .rp-input:focus-visible,
+  .rp-field:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  /* The composite field's box carries the ring; its bare control does not repeat it. */
+  .rp-field :is(input, textarea):focus-visible {
+    outline: none;
+  }
+  /* A full-bleed map draws its indicator inward, where the viewport cannot clip it. */
+  .rp-map3d canvas:focus-visible,
+  svg.rp-map:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -4px;
   }
 }

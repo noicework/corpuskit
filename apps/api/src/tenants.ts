@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import {
   type AccessMode,
   AccessModeSchema,
+  DEFAULT_PORTAL_COLOURS,
+  NEW_PORTAL_PALETTE,
   type TenantConfig,
   TenantConfigSchema,
   type TenantSummary,
@@ -201,14 +203,6 @@ export function tenantSlugs(): string[] {
 // Dynamic tenant store: the seed above plus knowledge box portals added in the
 // app, persisted as JSON (TENANTS_PATH, default ./data/tenants.json).
 // ---------------------------------------------------------------------------
-
-/** Neutral dark palette for portals added in-app (until a theming pass). */
-const DEFAULT_COLOURS = {
-  primary: '#27364b',
-  accent: '#5a8bd6',
-  heroFrom: '#141d2b',
-  heroTo: '#27364b',
-}
 
 export interface NewTenantInput {
   name: string
@@ -514,7 +508,10 @@ export class TenantStore {
         productName: input.name,
         organisation: input.organisation?.trim() || input.name,
         tagline: input.tagline?.trim() || 'Research, discovery and development',
-        colours: DEFAULT_COLOURS,
+        // A new portal starts on a palette that passes the contrast contract. Its own colours
+        // stay stored for when the owner chooses them ('default').
+        colours: { ...DEFAULT_PORTAL_COLOURS },
+        paletteId: NEW_PORTAL_PALETTE,
       },
       searchPlaceholder: 'Search this portal…',
       topics: [],

@@ -437,3 +437,158 @@ export function validatePalette(palette: Palette): string[] {
   }
   return failures
 }
+
+// ---------------------------------------------------------------------------
+// A portal on its own colours ('default'): the palette derived from its seeded
+// four-colour identity, held to the same contract as the library palettes.
+// ---------------------------------------------------------------------------
+
+/** A portal's seeded four-colour identity (`branding.colours`). */
+export interface PortalColours {
+  primary: string
+  accent: string
+  heroFrom: string
+  heroTo: string
+}
+
+/** The colours a portal created in the app carries, for when its owner chooses 'default'. */
+export const DEFAULT_PORTAL_COLOURS: PortalColours = Object.freeze({
+  primary: '#27364b',
+  accent: '#5a8bd6',
+  heroFrom: '#141d2b',
+  heroTo: '#27364b',
+})
+
+/**
+ * The library palette a portal created in the app starts on. It passes the contract, and only the
+ * portal's owner changes it; portals created earlier keep the choice they have.
+ */
+export const NEW_PORTAL_PALETTE: PaletteId = 'corpuskit'
+
+/**
+ * The house light grey suite a portal on its own colours renders on: the `:root` values in
+ * apps/web/src/styles.css (a test keeps the two in step).
+ */
+export const HOUSE_LIGHT_SUITE = Object.freeze({
+  paper: '#ffffff',
+  surface: '#ffffff',
+  surface2: '#f8fafc',
+  line: '#e6ebf0',
+  ink: '#1a1815',
+  ink2: '#5b5851',
+  ink3: '#6f6c64',
+})
+
+/** Share of the accent in the derived washes, as `color-mix` used to mix them over the surface. */
+const WASH_SHARE = 0.12
+const WASH_STRONG_SHARE = 0.22
+
+/** A `#rgb` or `#rrggbb` colour as lower-case `#rrggbb`, or null for any other CSS colour. */
+export function normaliseHex(value: string): string | null {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim())
+  if (!m) return null
+  const digits = m[1]!.length === 3 ? [...m[1]!].map((d) => d + d).join('') : m[1]!
+  return `#${digits.toLowerCase()}`
+}
+
+/** `share` of `first` mixed into `second`, channel by channel in sRGB, as `color-mix(in srgb)` does. */
+export function mixHex(first: string, second: string, share: number): string {
+  const channels = (hex: string) =>
+    [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16))
+  const a = channels(first)
+  const b = channels(second)
+  return `#${
+    a.map((value, i) =>
+      Math.round(value * share + b[i]! * (1 - share)).toString(16).padStart(2, '0')
+    ).join('')
+  }`
+}
+
+/**
+ * The colour stepped toward `toward` (the house ink by default) until it reaches `minimum` against
+ * every ground; unchanged when it already does. Used for text and focus drawn in a brand colour
+ * on a light surface, where a mid-tone brand colour reads too faintly.
+ */
+export function deepenForContrast(
+  hex: string,
+  grounds: readonly string[],
+  minimum: number,
+  toward: string = HOUSE_LIGHT_SUITE.ink,
+): string {
+  for (let step = 0; step <= 20; step++) {
+    const candidate = mixHex(toward, hex, step / 20)
+    if (grounds.every((ground) => contrastRatio(candidate, ground) >= minimum)) return candidate
+  }
+  return toward
+}
+
+/**
+ * Text for a solid ground: white or the house ink, whichever reads better against every ground,
+ * and black when neither reaches `minimum` and black reads better still.
+ */
+export function textOn(
+  grounds: readonly string[],
+  minimum: number,
+  ink: string = HOUSE_LIGHT_SUITE.ink,
+): string {
+  const worst = (text: string) => Math.min(...grounds.map((ground) => contrastRatio(text, ground)))
+  const best = worst('#ffffff') >= worst(ink) ? '#ffffff' : ink
+  if (worst(best) >= minimum) return best
+  return worst('#000000') > worst(best) ? '#000000' : best
+}
+
+/**
+ * The palette a portal on its own colours renders with. The four seeded colours stay as they are
+ * (the nav band, the accent, the hero); every role drawn on top of them is chosen for contrast:
+ * accent and brand text are deepened until they read at 4.5:1 on the surface and on the washes,
+ * the focus ring until 3:1, and the text on the brand, accent and hero grounds is white or ink,
+ * whichever reads better. Null when a colour is not a hex colour, which is then used as it is.
+ */
+export function paletteFromColours(colours: PortalColours): Palette | null {
+  const primary = normaliseHex(colours.primary)
+  const accent = normaliseHex(colours.accent)
+  const heroFrom = normaliseHex(colours.heroFrom)
+  const heroTo = normaliseHex(colours.heroTo)
+  if (!primary || !accent || !heroFrom || !heroTo) return null
+  const suite = HOUSE_LIGHT_SUITE
+  const accentWash = mixHex(accent, suite.surface, WASH_SHARE)
+  const accentWashStrong = mixHex(accent, suite.surface, WASH_STRONG_SHARE)
+  return {
+    mode: 'light',
+    brandSurface: primary,
+    onBrandSurface: textOn([primary], 7),
+    brandForeground: deepenForContrast(primary, [suite.surface, accentWashStrong], 4.5),
+    accent,
+    onAccent: textOn([accent], 4.5),
+    accentForeground: deepenForContrast(accent, [suite.surface, accentWash], 4.5),
+    focusRing: deepenForContrast(accent, [suite.surface], 3),
+    accentWash,
+    accentWashStrong,
+    heroFrom,
+    heroTo,
+    onHero: textOn([heroFrom, heroTo], 7),
+    paper: suite.paper,
+    surface: suite.surface,
+    surface2: suite.surface2,
+    line: suite.line,
+    ink: suite.ink,
+    ink2: suite.ink2,
+    ink3: suite.ink3,
+  }
+}
+
+/**
+ * The border of a text field or search box, which WCAG 1.4.11 asks to reach 3:1 against the
+ * grounds it sits on (with a little headroom): the palette's caption ink mixed toward its surface,
+ * as light as it can be while it still does. The hairline (`line`) stays for dividers, where no such bar applies.
+ */
+export function fieldBorder(
+  palette: Pick<Palette, 'ink3' | 'surface' | 'surface2' | 'paper'>,
+): string {
+  const grounds = [palette.surface, palette.surface2, palette.paper]
+  for (let step = 0; step <= 20; step++) {
+    const candidate = mixHex(palette.ink3, palette.surface, 0.5 + step / 40)
+    if (grounds.every((ground) => contrastRatio(candidate, ground) >= 3.1)) return candidate
+  }
+  return palette.ink3
+}

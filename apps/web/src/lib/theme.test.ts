@@ -1,6 +1,14 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import type { TenantConfig } from '@research-portal/core'
+import {
+  contrastRatio,
+  DEFAULT_PALETTES,
+  DEFAULT_PORTAL_COLOURS,
+  fieldBorder,
+  HOUSE_LIGHT_SUITE,
+  paletteFromColours,
+  type TenantConfig,
+} from '@research-portal/core'
 import {
   customFontCss,
   DENSITY_DIALS,
@@ -112,7 +120,7 @@ describe('typographyVars', () => {
 })
 
 describe('paletteVars', () => {
-  it('derives the legacy identity exactly when no library palette is chosen', () => {
+  it("keeps a portal's own colours and draws readable text and focus on them", () => {
     const marineColours = {
       primary: '#143669',
       accent: '#00b8a5',
@@ -130,17 +138,84 @@ describe('paletteVars', () => {
       expect(vars['--rp-accent']).toBe('#00b8a5')
       expect(vars['--rp-hero-from']).toBe('#0b2247')
       expect(vars['--rp-hero-to']).toBe('#0e5f6b')
-      // The roles the code used to hardcode, reproduced so nothing shifts.
+      // Roles that already read are unchanged.
       expect(vars['--rp-on-primary']).toBe('#ffffff')
       expect(vars['--rp-brand-fg']).toBe('#143669')
-      expect(vars['--rp-on-accent']).toBe('#ffffff')
-      expect(vars['--rp-accent-fg']).toBe('#00b8a5')
-      expect(vars['--rp-focus']).toBe('#00b8a5')
       expect(vars['--rp-on-hero']).toBe('#ffffff')
+      // The teal accent is 2.5:1 on white: links and citations are deepened to AA, the focus
+      // ring to 3:1, and the text on the solid accent is the ink that reads on it.
+      expect(vars['--rp-accent-fg']).not.toBe('#00b8a5')
+      expect(contrastRatio(vars['--rp-accent-fg']!, HOUSE_LIGHT_SUITE.surface))
+        .toBeGreaterThanOrEqual(4.5)
+      expect(contrastRatio(vars['--rp-accent-fg']!, vars['--rp-wash']!)).toBeGreaterThanOrEqual(4.5)
+      expect(contrastRatio(vars['--rp-focus']!, HOUSE_LIGHT_SUITE.surface))
+        .toBeGreaterThanOrEqual(3)
+      expect(vars['--rp-on-accent']).toBe(HOUSE_LIGHT_SUITE.ink)
+      // The washes are the same 12% and 22% accent mixes over the surface as before.
+      expect(vars['--rp-wash']).toBe('#e0f6f4')
+      expect(vars['--rp-wash-strong']).toBe('#c7efeb')
       // The grey suite must NOT be touched - house defaults stay in charge.
       expect(vars['--rp-ink']).toBeUndefined()
       expect(vars['--rp-surface']).toBeUndefined()
       expect(vars['--rp-paper']).toBeUndefined()
+    }
+  })
+
+  it('renders the default portal colours with the palette that passes the contract', () => {
+    const vars = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    const derived = paletteFromColours(DEFAULT_PORTAL_COLOURS)!
+    expect(vars).toEqual({
+      '--rp-primary': derived.brandSurface,
+      '--rp-accent': derived.accent,
+      '--rp-hero-from': derived.heroFrom,
+      '--rp-hero-to': derived.heroTo,
+      '--rp-on-primary': derived.onBrandSurface,
+      '--rp-brand-fg': derived.brandForeground,
+      '--rp-on-accent': derived.onAccent,
+      '--rp-accent-fg': derived.accentForeground,
+      '--rp-focus': derived.focusRing,
+      '--rp-on-hero': derived.onHero,
+      '--rp-wash': derived.accentWash,
+      '--rp-wash-strong': derived.accentWashStrong,
+    })
+  })
+
+  it('uses a seeded colour it cannot measure as it is', () => {
+    const vars = paletteVars(
+      branding({
+        colours: { primary: 'navy', accent: '#222222', heroFrom: '#333333', heroTo: '#444444' },
+      }),
+    )
+    expect(vars['--rp-primary']).toBe('navy')
+    expect(vars['--rp-brand-fg']).toBe('navy')
+    expect(vars['--rp-on-primary']).toBe('#ffffff')
+  })
+
+  it("lifts a portal's own brand colours for the dark scheme exactly as before", async () => {
+    const { DARK_GREY_SUITE, ensureContrast } = await import('./theme.ts')
+    const colours = { ...DEFAULT_PORTAL_COLOURS }
+    const vars = paletteVars(branding({ colours }), 'dark')
+    const surface = DARK_GREY_SUITE['--rp-surface']!
+    expect(vars['--rp-accent-fg']).toBe(ensureContrast(colours.accent, surface, 4.5))
+    expect(vars['--rp-brand-fg']).toBe(ensureContrast(colours.primary, surface, 4.5))
+    expect(vars['--rp-focus']).toBe(ensureContrast(colours.accent, surface, 3))
+  })
+
+  it('gives every palette and scheme a field edge at 3:1', async () => {
+    const { DARK_GREY_SUITE } = await import('./theme.ts')
+    for (const id of Object.keys(DEFAULT_PALETTES) as (keyof typeof DEFAULT_PALETTES)[]) {
+      const vars = paletteVars(branding({ paletteId: id }))
+      expect(vars['--rp-field']).toBe(fieldBorder(DEFAULT_PALETTES[id].palette))
+      expect(contrastRatio(vars['--rp-field']!, vars['--rp-surface']!), id)
+        .toBeGreaterThanOrEqual(3)
+      if (DEFAULT_PALETTES[id].palette.mode === 'light') {
+        const dark = paletteVars(branding({ paletteId: id }), 'dark')
+        expect(dark['--rp-field']).toBe(DARK_GREY_SUITE['--rp-field'])
+      }
+    }
+    for (const ground of ['--rp-surface', '--rp-surface-2', '--rp-paper']) {
+      expect(contrastRatio(DARK_GREY_SUITE['--rp-field']!, DARK_GREY_SUITE[ground]!))
+        .toBeGreaterThanOrEqual(3)
     }
   })
 
@@ -305,5 +380,76 @@ describe('viewer dark scheme', () => {
     const observatory = branding({ paletteId: 'observatory' })
     expect(paletteVars(observatory, 'dark')).toEqual(paletteVars(observatory))
     expect(paletteMode(observatory, 'light')).toBe('dark')
+  })
+})
+
+/** A rule's declarations, by its exact selector, from the stylesheet. */
+function rule(selector: string, source = styles): string {
+  const start = source.indexOf(`${selector} {`)
+  expect(start, selector).toBeGreaterThanOrEqual(0)
+  return source.slice(start, source.indexOf('}', start))
+}
+
+describe('the house light suite', () => {
+  it('matches the stylesheet defaults a portal on its own colours renders on', () => {
+    const root = styles.slice(styles.indexOf('--rp-radius: 0px;'))
+    const value = (token: string) => new RegExp(`${token}: ([^;]+);`).exec(root)?.[1]
+    const ramp = (token: string) => new RegExp(`${token}: (#[0-9a-f]{6});`).exec(styles)?.[1]
+    expect(ramp('--rp-paper')).toBe(HOUSE_LIGHT_SUITE.paper)
+    expect(ramp('--rp-n-0')).toBe(HOUSE_LIGHT_SUITE.surface)
+    expect(ramp('--rp-n-100')).toBe(HOUSE_LIGHT_SUITE.surface2)
+    expect(ramp('--rp-n-200')).toBe(HOUSE_LIGHT_SUITE.line)
+    expect(ramp('--rp-n-900')).toBe(HOUSE_LIGHT_SUITE.ink)
+    expect(ramp('--rp-n-600')).toBe(HOUSE_LIGHT_SUITE.ink2)
+    expect(value('--rp-ink-3')).toBe(HOUSE_LIGHT_SUITE.ink3)
+    expect(value('--rp-surface')).toBe('var(--rp-n-0)')
+    expect(value('--rp-surface-2')).toBe('var(--rp-n-100)')
+    expect(value('--rp-ink')).toBe('var(--rp-n-900)')
+    expect(value('--rp-ink-2')).toBe('var(--rp-n-600)')
+    expect(value('--rp-field')).toBe(fieldBorder(HOUSE_LIGHT_SUITE))
+  })
+})
+
+describe('focus visibility', () => {
+  it('keeps a transparent outline under every house ring, for forced-colours modes', () => {
+    for (
+      const selector of [
+        '.rp-focus:focus-visible',
+        '.rp-focus-inverse:focus-visible',
+        '.rp-btn:focus-visible',
+        '.rp-chip:focus-visible',
+        '.rp-input:focus-visible',
+        '.rp-field:focus-within',
+      ]
+    ) {
+      const declarations = rule(selector)
+      expect(declarations, selector).toContain('outline: 2px solid transparent;')
+      expect(declarations, selector).toContain('box-shadow: var(--rp-ring')
+      expect(declarations, selector).not.toContain('outline: none')
+    }
+  })
+
+  it('paints focus in the system highlight when forced colours drop the ring', () => {
+    const forced = styles.slice(styles.lastIndexOf('@media (forced-colors: active)'))
+    expect(forced).toMatch(/^\s*:focus-visible,$/m)
+    expect(forced).toContain('.rp-field:focus-within {')
+    expect(forced).toContain('outline: 2px solid Highlight;')
+  })
+
+  it('draws the composite fields at 3:1 with a ring around the whole box', async () => {
+    expect(rule('.rp-field')).toContain('border-color: var(--rp-field);')
+    for (
+      const file of [
+        '../pages/AskPage.tsx',
+        '../components/SearchField.tsx',
+        '../pages/ResourceDetailPage.tsx',
+      ]
+    ) {
+      const source = await Deno.readTextFile(new URL(file, import.meta.url))
+      const boxes = [...source.matchAll(/['`](rp-field [^'`]*)/g)].map((m) => m[1]!)
+      expect(boxes, file).toHaveLength(1)
+      expect(boxes[0], file).toMatch(/\bborder\b/)
+      expect(boxes[0], file).not.toContain('border-line')
+    }
   })
 })

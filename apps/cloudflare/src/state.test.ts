@@ -1,8 +1,10 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
 import {
+  DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
   type Enrichment,
+  NEW_PORTAL_PALETTE,
   showsRegionalDiscovery,
 } from '@research-portal/core'
 import {
@@ -490,6 +492,33 @@ Deno.test('Durable portal policy survives reload and repeated migration for seed
       expect(() => store.patch('marine', patch as unknown as TenantPatch)).toThrow()
       expect(store.get('marine')?.accessMode).toBe('restricted')
     }
+  } finally {
+    sql.database.close()
+  }
+})
+
+Deno.test('Durable portal store starts a new portal on a validated palette; stored ones keep theirs', () => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    const legacy = {
+      ...tenantConfig('marine')!,
+      slug: 'legacy',
+      branding: { ...tenantConfig('marine')!.branding, colours: { ...DEFAULT_PORTAL_COLOURS } },
+    }
+    delete legacy.branding.paletteId
+    state.put('tenants', { custom: { legacy }, overrides: {}, disabled: [], retired: [] })
+    const store = new DurableTenantStore(state, 'corpuskit.org')
+    const created = store.add({ name: 'Estuary notes' })
+    expect(created.branding.paletteId).toBe(NEW_PORTAL_PALETTE)
+    expect(created.branding.colours).toEqual(DEFAULT_PORTAL_COLOURS)
+    const restarted = new DurableState(sql, sql)
+    restarted.migrate()
+    const reloaded = new DurableTenantStore(restarted, 'corpuskit.org')
+    expect(reloaded.get(created.slug)?.branding.paletteId).toBe(NEW_PORTAL_PALETTE)
+    // Only the owner changes a portal's palette: one stored without a choice keeps none.
+    expect(reloaded.get('legacy')?.branding.paletteId).toBeUndefined()
   } finally {
     sql.database.close()
   }

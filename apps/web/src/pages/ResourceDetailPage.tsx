@@ -1327,7 +1327,7 @@ function DocumentChat(
         <label htmlFor='ask-document' className='sr-only'>
           Ask a question about {resource.title}
         </label>
-        <div className='flex items-center gap-2 rounded-[var(--rp-radius)] border border-line bg-surface p-1.5 pl-3'>
+        <div className='rp-field flex items-center gap-2 rounded-[var(--rp-radius)] border bg-surface p-1.5 pl-3'>
           <input
             id='ask-document'
             onFocus={onFocus}

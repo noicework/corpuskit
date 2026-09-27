@@ -43,7 +43,9 @@ already fully wired.
 
 Defined per palette in `packages/core/src/palettes.ts` (with a WCAG contract test - a new or edited
 palette that fails `validatePalette` fails CI). Portals without a library palette derive these from
-their seeded four-colour identity, so the tokens are ALWAYS present:
+their seeded four-colour identity (`paletteFromColours`: the four colours are kept, and the text and
+focus drawn on them are deepened or chosen until they pass the same contract), so the tokens are
+ALWAYS present. Portals created in the app start on the `corpuskit` palette:
 
 - `--rp-primary` - the dark brand ground: nav band, footer, primary buttons, active tab fills.
 - `--rp-on-primary` - text/icons ON primary. **Never `text-white` on a brand surface** - a palette
@@ -55,11 +57,17 @@ their seeded four-colour identity, so the tokens are ALWAYS present:
   text contrast by design.
 - `--rp-on-accent` - text/ticks on solid accent (citation pills, checkmarks). Not white.
 - `--rp-accent-fg` - accent as TEXT: links, citation superscripts, chip labels, "show more".
-- `--rp-focus` - focus indicator; use `.rp-focus` / `--rp-ring` rather than outlining in accent.
+- `--rp-focus` - focus indicator; use `.rp-focus` / `--rp-ring` rather than outlining in accent. A
+  ring is a box-shadow, which forced-colours modes drop, so a focus rule keeps
+  `outline: 2px solid transparent` under it (never `outline: none`); those modes paint it.
 - `--rp-wash` / `--rp-wash-strong` - tinted selection grounds (selected chips, bubbles, tiles,
   sidebar actives). Use these instead of `color-mix` with the accent - washes are authored per
   palette and are not always accent-tinted.
 - `--rp-hero-from` / `--rp-hero-to` / `--rp-on-hero` - the hero duotone and its text.
+- `--rp-field` - the edge of a text field or search box, at 3:1 on its grounds (WCAG 1.4.11).
+  `--rp-line` is a hairline for dividers and is too faint for a control's edge. A bordered box
+  holding a bare input and its buttons takes `.rp-field`, which also draws the focus ring around the
+  whole box (`:focus-within`), since the bare input inside draws none.
 - Greys: `--rp-paper`, `--rp-app`, `--rp-surface`, `--rp-surface-2`, `--rp-surface-3`, `--rp-line`,
   `--rp-line-2`, `--rp-ink`, `--rp-ink-2`, `--rp-ink-3`. Library palettes replace the whole suite
   (temperature-tinted, and INVERTED for dark palettes) - never hardcode a grey, white or black for

@@ -38,7 +38,7 @@ export function SearchField(
   },
 ) {
   const shell =
-    `flex h-[calc(2.25rem*var(--rp-density-ctl,1))] items-center gap-2 rounded-[var(--rp-radius-input)] border border-line bg-surface px-3 max-lg:min-h-11 ${className}`
+    `rp-field flex h-[calc(2.25rem*var(--rp-density-ctl,1))] items-center gap-2 rounded-[var(--rp-radius-input)] border bg-surface px-3 max-lg:min-h-11 ${className}`
 
   const body = (
     <>

@@ -1,8 +1,10 @@
 import {
+  DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
   type Enrichment,
   type KgProposal,
   KgProposalSchema,
+  NEW_PORTAL_PALETTE,
   type TenantConfig,
   TenantConfigSchema,
   type TenantSummary,
@@ -859,13 +861,6 @@ interface TenantState {
   aliases: StoredPortalAlias[]
 }
 
-const DEFAULT_COLOURS = {
-  primary: '#27364b',
-  accent: '#5a8bd6',
-  heroFrom: '#141d2b',
-  heroTo: '#27364b',
-}
-
 export class DurableTenantStore implements TenantStoreApi {
   constructor(
     private readonly state: DurableState,
@@ -1106,7 +1101,9 @@ export class DurableTenantStore implements TenantStoreApi {
         productName: input.name,
         organisation: input.organisation?.trim() || input.name,
         tagline: input.tagline?.trim() || 'Research, discovery and development',
-        colours: DEFAULT_COLOURS,
+        // As on the local server: a validated palette, with the portal's own colours kept.
+        colours: { ...DEFAULT_PORTAL_COLOURS },
+        paletteId: NEW_PORTAL_PALETTE,
       },
       searchPlaceholder: 'Search this portal…',
       topics: [],

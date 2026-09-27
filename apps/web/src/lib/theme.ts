@@ -4,10 +4,12 @@ import {
   contrastRatio,
   DEFAULT_PALETTES,
   type DensityId,
+  fieldBorder,
   FONT_PAIRINGS,
   type FontPairingId,
   FontPairingIdSchema,
   type Palette,
+  paletteFromColours,
   type ShapeId,
   type TenantConfig,
   type TextScaleId,
@@ -212,6 +214,13 @@ export const DARK_GREY_SUITE: Record<string, string> = {
   '--rp-ink': '#f2f3f5',
   '--rp-ink-2': '#cfd2d8',
   '--rp-ink-3': '#a3a8b1',
+  // A field's edge at 3:1 on the dark grounds (WCAG 1.4.11); `--rp-line` stays for dividers.
+  '--rp-field': fieldBorder({
+    ink3: '#a3a8b1',
+    surface: '#1a1c20',
+    surface2: '#23262b',
+    paper: '#121316',
+  }),
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -268,9 +277,9 @@ function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
 /**
  * The colour tokens, twelve roles plus the grey suite. With no library
  * palette chosen this derives the role tokens from the portal's seeded
- * four-colour identity exactly as the code used to hardcode them (white on
- * primary and accent, accent doubling as link and focus, washes as mixes),
- * so existing portals render unchanged; the grey suite then stays on the
+ * four-colour identity (`paletteFromColours`): the four colours themselves
+ * are kept, and the text and focus drawn on top of them are chosen to pass
+ * the same contract as the library palettes. The grey suite then stays on the
  * house defaults from the stylesheet.
  */
 export function paletteVars(
@@ -281,9 +290,17 @@ export function paletteVars(
   // A dark library palette is already dark; the viewer's toggle only has
   // work to do on a light suite.
   if (scheme === 'dark' && paletteMode(branding) === 'light') {
+    // On a portal's own colours the dark inks are lifted from the brand colours
+    // themselves, not from the light inks deepened for a white surface.
+    const own = resolvePalette(branding) === null
+    const { primary, accent } = branding.colours
     return {
       ...roles,
-      ...viewerDarkVars(roles),
+      ...viewerDarkVars(
+        own
+          ? { ...roles, '--rp-brand-fg': primary, '--rp-accent-fg': accent, '--rp-focus': accent }
+          : roles,
+      ),
       ...(branding.paletteId === 'corpuskit'
         ? {
           '--rp-primary': DARK_GREY_SUITE['--rp-surface']!,
@@ -298,6 +315,25 @@ export function paletteVars(
 function paletteRoleVars(branding: Branding): Record<string, string> {
   const palette = resolvePalette(branding)
   if (!palette) {
+    const derived = paletteFromColours(branding.colours)
+    if (derived) {
+      return {
+        '--rp-primary': derived.brandSurface,
+        '--rp-accent': derived.accent,
+        '--rp-hero-from': derived.heroFrom,
+        '--rp-hero-to': derived.heroTo,
+        '--rp-on-primary': derived.onBrandSurface,
+        '--rp-brand-fg': derived.brandForeground,
+        '--rp-on-accent': derived.onAccent,
+        '--rp-accent-fg': derived.accentForeground,
+        '--rp-focus': derived.focusRing,
+        '--rp-on-hero': derived.onHero,
+        '--rp-wash': derived.accentWash,
+        '--rp-wash-strong': derived.accentWashStrong,
+      }
+    }
+    // A colour that is not a hex colour (a seed may use any CSS colour) cannot
+    // be measured, so the identity is used as it is.
     const { primary, accent, heroFrom, heroTo } = branding.colours
     return {
       '--rp-primary': primary,
@@ -337,6 +373,7 @@ function paletteRoleVars(branding: Branding): Record<string, string> {
     '--rp-ink': palette.ink,
     '--rp-ink-2': palette.ink2,
     '--rp-ink-3': palette.ink3,
+    '--rp-field': fieldBorder(palette),
     ...(palette.mode === 'dark'
       ? {
         ...DARK_STATUS_VARS,

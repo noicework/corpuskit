@@ -1,6 +1,12 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import { showsRegionalDiscovery } from '@research-portal/core'
+import {
+  DEFAULT_PALETTES,
+  DEFAULT_PORTAL_COLOURS,
+  NEW_PORTAL_PALETTE,
+  showsRegionalDiscovery,
+  validatePalette,
+} from '@research-portal/core'
 import { tenantConfig, TenantStore } from './tenants.ts'
 import { checkAliasRegistry } from './alias-store-fixture.ts'
 
@@ -91,4 +97,27 @@ Deno.test('a malformed stored alias list fails closed instead of dropping aliase
     JSON.stringify({ custom: {}, aliases: [{ hostname: 'Bad Host', slug: 'marine' }] }),
   )
   expect(() => storeAt(path)).toThrow('Invalid persisted portal configuration')
+})
+
+Deno.test('a portal created in the app starts on a validated palette; stored portals keep theirs', () => {
+  const path = tempPath()
+  const legacy = {
+    ...tenantConfig('marine')!,
+    slug: 'legacy',
+    branding: { ...tenantConfig('marine')!.branding, colours: { ...DEFAULT_PORTAL_COLOURS } },
+  }
+  delete legacy.branding.paletteId
+  Deno.writeTextFileSync(path, JSON.stringify({ custom: { legacy } }))
+  const store = storeAt(path)
+  const created = store.add({ name: 'Estuary notes' })
+  expect(created.branding.paletteId).toBe(NEW_PORTAL_PALETTE)
+  expect(validatePalette(DEFAULT_PALETTES[NEW_PORTAL_PALETTE].palette)).toEqual([])
+  // Its own colours stay stored for when the owner chooses them.
+  expect(created.branding.colours).toEqual(DEFAULT_PORTAL_COLOURS)
+  const reloaded = storeAt(path)
+  expect(reloaded.get(created.slug)?.branding.paletteId).toBe(NEW_PORTAL_PALETTE)
+  // Only the owner changes a portal's palette: one stored without a choice keeps none.
+  expect(reloaded.get('legacy')?.branding.paletteId).toBeUndefined()
+  expect(JSON.parse(Deno.readTextFileSync(path)).custom.legacy.branding.paletteId)
+    .toBeUndefined()
 })

@@ -3046,7 +3046,7 @@ export function AskPage() {
                 )
                 : null}
             </div>
-            <div className='flex items-end gap-2 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-2 shadow-sm'>
+            <div className='rp-field flex items-end gap-2 rounded-[calc(var(--rp-radius)+4px)] border bg-surface p-2 shadow-sm'>
               <label htmlFor='ask-composer' className='sr-only'>
                 Ask a question
               </label>
