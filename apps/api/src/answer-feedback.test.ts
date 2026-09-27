@@ -355,6 +355,34 @@ for (
     }
   })
 
+  Deno.test(`ratings from one IPv6 /64 share one limit (${adapter})`, async () => {
+    const { management } = platform()
+    const s = build(management)
+    try {
+      const rate = (address: string, index: number) =>
+        s.as(
+          'viewer',
+          `/api/t/${s.slug}/feedback`,
+          post({ learningId: `learning-v6-${String(index).padStart(4, '0')}`, good: true }),
+          address,
+        )
+      // A new address in the same /64 for every rating.
+      for (let index = 0; index < 30; index++) {
+        const response = await rate(`2001:db8:1:2::${(index + 1).toString(16)}`, index)
+        expect(response.status).toBe(200)
+        await response.body?.cancel()
+      }
+      const limited = await rate('2001:db8:1:2::ff', 30)
+      expect(limited.status).toBe(429)
+      await limited.body?.cancel()
+      const other = await rate('2001:db8:1:3::1', 31)
+      expect(other.status).toBe(200)
+      await other.body?.cancel()
+    } finally {
+      s.close()
+    }
+  })
+
   Deno.test(`made-up ratings neither push out a genuine one nor count (${adapter})`, async () => {
     const { management } = platform()
     const s = build(management)
