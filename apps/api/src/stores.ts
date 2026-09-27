@@ -12,7 +12,7 @@ import process from 'node:process'
 import type { Enrichment } from '@research-portal/core'
 import { EnrichmentStore } from './enrichments.ts'
 import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from './persist.ts'
-import { appendAudit, type AuditStore, createAuditEvent } from './audit.ts'
+import { appendAudit, type AuditStore, AuditWriteError, createAuditEvent } from './audit.ts'
 import type { RbacDatabase } from './rbac-state.ts'
 import {
   decodeLegacyWatches,
@@ -116,6 +116,7 @@ export function ownedMutation(
       return undefined
     }
   })
+  let recorded = false
   const work = () => {
     for (const { path, value } of changes) {
       if (value === undefined) removeIfPresent(path)
@@ -125,6 +126,7 @@ export function ownedMutation(
     if (completion && typeof (completion as PromiseLike<unknown>).then === 'function') {
       throw new Error('Owned completion must be synchronous')
     }
+    recorded = true
   }
   try {
     if (boundary) boundary.database.transactionSync(work)
@@ -135,7 +137,9 @@ export function ownedMutation(
       if (before !== undefined) writeFileSync(path, before)
       else removeIfPresent(path)
     }
-    throw error
+    // The writes and their audit record were made, and committing them failed: the record was
+    // never kept, which is an audit failure like any other.
+    throw recorded && boundary ? new AuditWriteError() : error
   }
 }
 

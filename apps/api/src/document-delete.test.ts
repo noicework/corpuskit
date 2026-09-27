@@ -462,7 +462,15 @@ Deno.test('a delete whose clean-up fails is uncertain, and deleting it again fin
         p.f.stores.enrichments.put('a', doc, enrichment('research', 'Report'))
         failOnce(p.f.stores[store], 'forgetResource')
         const first = await p.remove(doc)
-        expect(first.status, label).toBe(500)
+        // Both adapters say the same: the document was deleted, and a retry finishes the rest.
+        expect(first, label).toMatchObject({
+          status: 500,
+          body: {
+            error: 'cleanup_incomplete',
+            message:
+              'The document was deleted, but some of what the portal kept for it could not be cleared. Try again to finish.',
+          },
+        })
         // The document is gone from the box, and the audit says the delete is uncertain.
         expect(p.docs.a!.has(doc), label).toBe(false)
         expect(p.deletion(first.requestId).map((event) => event.outcome), label).toEqual([

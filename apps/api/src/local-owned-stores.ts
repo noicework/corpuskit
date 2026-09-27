@@ -122,9 +122,13 @@ export function localOwnedStores(
           try {
             return operations.run({ name: operation, args }, () => value.apply(target, args))
           } catch (error) {
-            for (let context = requests.getStore(); context; context = context.parent) {
-              context
-                .failure = error
+            // As on the Durable Object, only a record the audit could not take ends the
+            // request's writes. Any other failure left the files as they were (ownedMutation
+            // restores them), so the route that asked decides what to answer.
+            if (error instanceof AuditWriteError) {
+              for (let context = requests.getStore(); context; context = context.parent) {
+                context.failure = error
+              }
             }
             throw error
           }
