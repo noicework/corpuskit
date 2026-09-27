@@ -97,6 +97,11 @@ Deno.test('the viewer lists every action the server records, so a new one cannot
     .toEqual([])
   // Every action listed can be used as a filter.
   for (const action of AUDIT_ACTIONS) expect(auditQuery({ action }).get('action')).toBe(action)
+  // Every action the server records is a name the viewer loads, so none can stop a page loading.
+  for (const action of AUDIT_ACTION_NAMES) {
+    expect(parseAuditPage({ ...page(), items: [{ ...row, action }] }, scope).items[0]?.action)
+      .toBe(action)
+  }
 })
 Deno.test('an event whose action the viewer does not know still loads, by its raw name', () => {
   // A newer server can record an action this build has never heard of: the page still loads.
