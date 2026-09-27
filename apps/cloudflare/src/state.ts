@@ -406,7 +406,7 @@ export class DurableState {
       return JSON.parse(row.value) as T
     } catch (error) {
       if (key === 'bindings') throw new BindingCryptoError('binding_storage_invalid')
-      if (/^portal-(?:lifecycle|asks|capacity|suspension):/.test(key)) {
+      if (/^portal-(?:lifecycle|asks|capacity|suspension|deletes):/.test(key)) {
         throw new Error('Invalid persisted portal lifecycle')
       }
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')

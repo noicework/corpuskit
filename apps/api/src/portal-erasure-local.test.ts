@@ -261,6 +261,13 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       tags: [],
     })
     s.owned.watches.add(SLUG, researcher, 'abalone decline')
+    // A delete whose release was never recorded, kept in its own file beside the ledger.
+    const added = s.owned.lifecycle.reserveAdd(SLUG, { observed: 0, bytes: 10 }) as {
+      admitted: string
+    }
+    s.owned.lifecycle.settleAdd(SLUG, added.admitted, { created: true, id: 'erased-doc' })
+    s.owned.lifecycle.beginDelete(SLUG, 'erased-doc')
+    expect(files(s.directory).some((path) => path.includes(`portal-deletes-${SLUG}`))).toBe(true)
     for (
       const [path, value] of [
         [`sessions/${SLUG}/visitor-1/legacy-1.json`, { id: 'legacy-1', slug: SLUG }],

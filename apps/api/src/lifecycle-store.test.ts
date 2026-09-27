@@ -804,8 +804,7 @@ Deno.test('a delete the box refused, or one released as usual, leaves no record 
   store.forgetResource('a', 'doc-1')
   expect(store.pendingDeletes('a')).toEqual([])
   expect(store.tracksResource('a', 'doc-1')).toBe(false)
-  const record = store.state.get<Record<string, unknown>>('portal-capacity:a', {})
-  expect('deleting' in record).toBe(false)
+  expect(store.state.has('portal-deletes:a')).toBe(false)
   // Nothing held for a resource: nothing to record.
   store.beginDelete('a', 'unknown-1')
   expect(store.pendingDeletes('a')).toEqual([])
@@ -832,8 +831,7 @@ Deno.test('an add that settles after its resource was deleted records nothing an
   expect(store.tracksResource('a', 'doc-2')).toBe(false)
   expect(unsized()).toBe(2)
   expect(store.addsInFlight('a')).toBe(0)
-  expect(store.state.get<Record<string, unknown>>('portal-capacity:a', {}).deleting)
-    .toBeUndefined()
+  expect(store.state.has('portal-deletes:a')).toBe(false)
 })
 
 Deno.test('a delete record in a shape this build does not know is left out, never refused', () => {
@@ -841,11 +839,14 @@ Deno.test('a delete record in a shape this build does not know is left out, neve
   const store = new PortalLifecycleStore(state)
   const add = store.reserveAdd('a', { observed: 0, bytes: 100 }) as { admitted: string }
   store.settleAdd('a', add.admitted, { created: true, id: 'doc-1' })
-  const record = state.get<Record<string, unknown>>('portal-capacity:a', {})
-  state.put('portal-capacity:a', {
-    ...record,
-    deleting: { 'doc-1': { at: 1, future: true }, 'bad id!': { at: 1 }, 'doc-2': { at: 2 } },
+  state.put('portal-deletes:a', {
+    v: 1,
+    deletes: { 'doc-1': { at: 1, future: true }, 'bad id!': { at: 1 }, 'doc-2': { at: 2 } },
   })
   expect(store.bytesUsed('a', 1)).toBe(100)
   expect(store.pendingDeletes('a')).toEqual(['doc-2'])
+  // A record that cannot be read at all is left out too.
+  state.put('portal-deletes:a', 'not a record')
+  expect(store.pendingDeletes('a')).toEqual([])
+  expect(store.bytesUsed('a', 1)).toBe(100)
 })

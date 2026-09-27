@@ -11,6 +11,7 @@ import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { MEASURE_TIMEOUT } from './lifecycle-store.ts'
+import { parseCapacityAt756fed6 } from './fixtures/capacity-ledger-756fed6.ts'
 import { DECLARATIONS } from './permissions.ts'
 import { issueScopedKey } from './scoped-keys.ts'
 import { SUGGESTED_QUESTIONS_SCHEMA_ID } from './suggested-questions.ts'
@@ -208,7 +209,6 @@ async function portal(
     f.stores.lifecycle.state.get<{
       removed: { count: number }[]
       measuring?: Record<string, { at: number }>
-      deleting?: Record<string, { at: number; missingSince?: number }>
     }>('portal-capacity:a', { removed: [] })
   /** Deletions the ledger has recorded that the box's count may not show yet. */
   const removals = () => capacity().removed.reduce((total, entry) => total + entry.count, 0)
@@ -220,10 +220,12 @@ async function portal(
   }
   /** Make a delete record's reads look as if they have answered 404 for an hour. */
   const lapse = (id: string) => {
-    const record = capacity()
-    const entry = record.deleting![id]!
+    const record = f.stores.lifecycle.state.get<{
+      deletes: Record<string, { missingSince?: number }>
+    }>('portal-deletes:a', { deletes: {} })
+    const entry = record.deletes[id]!
     entry.missingSince = (entry.missingSince ?? Date.now()) - MEASURE_TIMEOUT
-    f.stores.lifecycle.state.put('portal-capacity:a', record)
+    f.stores.lifecycle.state.put('portal-deletes:a', record)
   }
   return {
     ...b,
@@ -746,6 +748,12 @@ Deno.test('a delete cut off in flight is cancelled at the platform, and the port
         // delete was sent, so the document's space is not lost for good.
         expect(p.f.stores.lifecycle.pendingDeletes('a'), label).toEqual([doc])
         expect(p.f.stores.lifecycle.bytesUsed('a', lands ? 0 : 1), label).toBe(600)
+        // The record is kept beside the ledger, which the build before delete still parses.
+        expect(p.f.stores.lifecycle.state.has('portal-deletes:a'), label).toBe(true)
+        expect(
+          () => parseCapacityAt756fed6(p.f.stores.lifecycle.state.get('portal-capacity:a', null)),
+          label,
+        ).not.toThrow()
         if (!lands) {
           // The box still has it: a delete sent again goes through as usual.
           expect((await p.remove(doc)).status, label).toBe(200)

@@ -472,11 +472,12 @@ hour of 404s later it holds nothing (see above), or can raise `maxBytes`, clear 
 which starts a fresh ledger. A
 ledger written by an earlier build in a form this build does not recognise is read, never
 refused: a link recorded in an unknown form is taken as not yet measured and holds the
-deployment's `LINK_PROVISIONAL_BYTES` until it is, and a delete record in an unknown form is left
-out, so its document stays counted. The ledger records a delete only while it is being sent, or
-while one is waiting to be settled (see [Deleting a document](#deleting-a-document)); a build
-from before document delete refuses a ledger that holds such a record, so roll back only when
-no delete is in flight or unsettled.
+deployment's `LINK_PROVISIONAL_BYTES` until it is. Delete records (see
+[Deleting a document](#deleting-a-document)) are kept beside the ledger, not in it, and one in an
+unknown form is left out, so its document stays counted. The ledger itself keeps the shape the
+build before document delete reads, so that build can be rolled back to at any time: it ignores
+the delete records. A delete waiting to be settled stays counted while that build runs, and is
+settled as before once this build is back.
 
 Resource and byte limits apply to every add: uploads, links, pasted text, source syncs, content
 copies, reingest and the built-in help pages. They are checked when the write happens,
@@ -673,10 +674,12 @@ The two are independent:
 ### Storage
 
 On Cloudflare, lifecycle state lives in the `PortalDurableObject` SQLite `state` table under
-four keys per portal: `portal-lifecycle:<slug>` (status, limits, last activity),
+five keys per portal: `portal-lifecycle:<slug>` (status, limits, last activity),
 `portal-asks:<slug>` (ask counts in quarter-hour buckets, kept for 32 days),
-`portal-capacity:<slug>` (reservations and the byte ledger) and `portal-suspension:<slug>` (when
-the current suspension began). The suspension start is kept beside the lifecycle record rather
+`portal-capacity:<slug>` (reservations and the byte ledger), `portal-deletes:<slug>` (deletes
+whose release is not recorded yet, present only while there are some) and
+`portal-suspension:<slug>` (when the current suspension began). The delete records are cleared
+with the ledger whenever it starts afresh, and a portal's removal and erasure take them too. The suspension start is kept beside the lifecycle record rather
 than in it, so a release from before it was tracked still reads the lifecycle. Such a release
 ignores the suspension record and does not update it, so once the lifecycle has been replaced
 without it the record no longer applies. A suspended portal with no applicable record, including
@@ -1391,7 +1394,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `configuration` | An override or disabled flag left in the portal registry | `tenants` row | `TENANTS_PATH` |
 | `aliases` | Host alias records | `tenants` row | `TENANTS_PATH` |
 | `bindings` | The knowledge box endpoint and sealed service account token | `bindings` row | `BINDINGS_PATH` |
-| `lifecycle` | Status, limits, ask counts, capacity ledger and suspension start | `portal-*:<slug>` rows | `DATA_DIR/lifecycle/` |
+| `lifecycle` | Status, limits, ask counts, capacity ledger, pending delete records and suspension start | `portal-*:<slug>` rows | `DATA_DIR/lifecycle/` |
 | `sessions` | Every member's and visitor's saved research sessions, including pre-owner-scope records | `research-v2:…:sessions:` and `session:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/sessions/<slug>/` |
 | `investigations` | Investigations with their evidence, notes and artefacts | `research-v2:…:investigations:` and `investigation:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/investigations/<slug>/` |
 | `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |

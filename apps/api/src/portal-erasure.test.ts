@@ -76,6 +76,13 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
     f.stores.lifecycle.set(slug, { status: 'suspended', limits: { asksPerDay: 5 } }, f.now())
     f.stores.lifecycle.consumeAsk(slug, 'UTC', f.now())
     f.stores.lifecycle.reserveAdd(slug, { observed: 0, bytes: 10 })
+    // A delete whose release was never recorded, kept beside the ledger.
+    const added = f.stores.lifecycle.reserveAdd(slug, { observed: 0, bytes: 10 }) as {
+      admitted: string
+    }
+    f.stores.lifecycle.settleAdd(slug, added.admitted, { created: true, id: 'erased-doc' })
+    f.stores.lifecycle.beginDelete(slug, 'erased-doc')
+    if (!f.state.has(`portal-deletes:${slug}`)) throw new Error('Fixture delete not recorded')
     f.stores.lifecycle.touch(slug, f.now())
   },
   // Request scaffolding and access control: populated through the routes below.

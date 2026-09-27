@@ -173,14 +173,22 @@ const StoredCapacitySchema = z.object({
    * Each holds its provisional bytes until then. Absent when empty.
    */
   measuring: z.record(ResourceIdSchema, MeasuringSchema).optional(),
-  /**
-   * Deletes whose release is not recorded yet, and releases an unsettled add may still meet.
-   * Absent when empty.
-   */
-  deleting: z.record(ResourceIdSchema, DeletingSchema).optional(),
 }).strict()
-type StoredCapacity = z.infer<typeof StoredCapacitySchema>
+/**
+ * The ledger as this build works on it: the stored record, whose shape every earlier build can
+ * still parse (a release that rolls back reads it), and the deletes whose release is not recorded
+ * yet, or releases an unsettled add may still meet. Those are stored under their own key,
+ * `portal-deletes:<slug>`, which an earlier build never reads.
+ */
+type StoredCapacity = z.infer<typeof StoredCapacitySchema> & {
+  deleting?: Record<string, Deleting>
+}
 type Recent = StoredCapacity['added']
+/** The deletes kept beside a portal's ledger. */
+const StoredDeletesSchema = z.object({
+  v: z.literal(1),
+  deletes: z.record(z.string(), z.unknown()),
+}).strict()
 
 export type AddAdmission =
   | { admitted: string | null }
@@ -269,7 +277,13 @@ const sum = (values: Iterable<number>) => {
 }
 
 /** The records kept per portal, each under `portal-<kind>:<slug>`. */
-export const LIFECYCLE_RECORD_KINDS = ['lifecycle', 'asks', 'capacity', 'suspension'] as const
+export const LIFECYCLE_RECORD_KINDS = [
+  'lifecycle',
+  'asks',
+  'capacity',
+  'suspension',
+  'deletes',
+] as const
 type LifecycleRecordKind = typeof LIFECYCLE_RECORD_KINDS[number]
 
 /**
@@ -335,7 +349,42 @@ export class PortalLifecycleStore {
       awaitingMeasurementReadable(raw, this.linkProvisionalBytes),
     )
     if (!parsed.success) throw new Error('Invalid persisted portal capacity')
-    return parsed.data
+    const deleting = this.readDeletes(slug)
+    return Object.keys(deleting).length ? { ...parsed.data, deleting } : parsed.data
+  }
+
+  /**
+   * The deletes kept beside the ledger. An entry in a shape this build does not recognise, or a
+   * record that cannot be read at all, is left out: its document stays counted, which errs on the
+   * side of refusing an add.
+   */
+  private readDeletes(slug: string): Record<string, Deleting> {
+    let raw: unknown
+    try {
+      raw = this.state.get<unknown>(this.key('deletes', slug), undefined)
+    } catch {
+      return {}
+    }
+    const parsed = StoredDeletesSchema.safeParse(raw)
+    if (!parsed.success) return {}
+    const readable: Record<string, Deleting> = {}
+    for (const [id, value] of Object.entries(parsed.data.deletes)) {
+      const entry = DeletingSchema.safeParse(value)
+      if (ResourceIdSchema.safeParse(id).success && entry.success) readable[id] = entry.data
+    }
+    return readable
+  }
+
+  /** Write the ledger and the deletes beside it in one step; an empty record is removed. */
+  private persistCapacity(slug: string, record: StoredCapacity): void {
+    const { deleting, ...ledger } = record
+    this.persistAll([
+      [this.key('capacity', slug), ledger],
+      [
+        this.key('deletes', slug),
+        deleting && Object.keys(deleting).length ? { v: 1, deletes: deleting } : undefined,
+      ],
+    ])
   }
 
   /** The single write path, one step per call; the local adapter joins the request's audit. */
@@ -706,10 +755,9 @@ export class PortalLifecycleStore {
     } else this.observe(record, observed, now)
     // Recorded with the admission; a check only judges with them and records nothing.
     if (input.measurements?.length) this.applyMeasurements(record, input.measurements, now)
-    const key = this.key('capacity', slug)
     // A refusal still records the observation it made, so later decisions start from it.
     const refuse = (admission: AddAdmission) => {
-      if (reserve) this.persist(key, record)
+      if (reserve) this.persistCapacity(slug, record)
       return admission
     }
     if (limited && observed === undefined) return refuse({ unavailable: true })
@@ -757,7 +805,7 @@ export class PortalLifecycleStore {
         ? { token, at: now, bytes: bytes ?? 0 }
         : { token, at: now, bytes: provisional, measure: true },
     )
-    this.persist(key, record)
+    this.persistCapacity(slug, record)
     return { admitted: token }
   }
 
@@ -790,7 +838,7 @@ export class PortalLifecycleStore {
       } else record.sized[id.data] = entry.bytes
       record.added = bump(record.added, now)
     }
-    this.persist(this.key('capacity', slug), record)
+    this.persistCapacity(slug, record)
   }
 
   /**
@@ -812,7 +860,7 @@ export class PortalLifecycleStore {
       ...record.deleting,
       [parsed.data]: { at: now, ...(tracked ? {} : { unsized: true as const }) },
     }
-    this.persist(this.key('capacity', slug), record)
+    this.persistCapacity(slug, record)
   }
 
   /** The box refused a delete: nothing was deleted, so its record is dropped. */
@@ -822,7 +870,7 @@ export class PortalLifecycleStore {
     const pending = parsed.success ? record?.deleting?.[parsed.data] : undefined
     if (!record || !pending || pending.released) return
     this.endDelete(record, parsed.data!)
-    this.persist(this.key('capacity', slug), record)
+    this.persistCapacity(slug, record)
   }
 
   /**
@@ -856,7 +904,7 @@ export class PortalLifecycleStore {
       }
     }
     record.removed = bump(record.removed, now)
-    this.persist(this.key('capacity', slug), record)
+    this.persistCapacity(slug, record)
   }
 
   /**
@@ -877,7 +925,7 @@ export class PortalLifecycleStore {
     if (!released && !pending) return false
     if (pending) this.endDelete(record, parsed.data)
     this.observe(record, undefined, this.clock())
-    this.persist(this.key('capacity', slug), record)
+    this.persistCapacity(slug, record)
     return released
   }
 
@@ -940,9 +988,12 @@ export class PortalLifecycleStore {
       .map(([id]) => id)
   }
 
-  /** A different knowledge box starts a fresh ledger. */
+  /** A different knowledge box starts a fresh ledger, and the deletes beside it go too. */
   resetCapacity(slug: string): void {
-    this.persist(this.key('capacity', slug), undefined)
+    this.persistAll([[this.key('capacity', slug), undefined], [
+      this.key('deletes', slug),
+      undefined,
+    ]])
   }
 }
 
@@ -964,20 +1015,9 @@ function awaitingMeasurementReadable(raw: unknown, provisional: number): unknown
         : entry
     )
   }
-  // A delete record in a shape this build does not recognise is left out: its resource stays
-  // counted, which errs on the side of refusing an add.
-  if ('deleting' in record) {
-    const deleting = record.deleting
-    const readable: Record<string, Deleting> = {}
-    if (deleting && typeof deleting === 'object' && !Array.isArray(deleting)) {
-      for (const [id, value] of Object.entries(deleting)) {
-        const entry = DeletingSchema.safeParse(value)
-        if (ResourceIdSchema.safeParse(id).success && entry.success) readable[id] = entry.data
-      }
-    }
-    if (Object.keys(readable).length) record.deleting = readable
-    else delete record.deleting
-  }
+  // An unreleased build of document delete kept its delete records inside the ledger; they are
+  // kept beside it now, and one left inside is ignored.
+  delete record.deleting
   if (!('measuring' in record)) return record
   const measuring = record.measuring
   const readable: Record<string, Measuring> = {}
@@ -1024,7 +1064,7 @@ export class FileLifecycleState implements LifecycleState {
   constructor(private readonly dataDir: string) {}
 
   path(key: string): string {
-    if (!/^portal-(?:lifecycle|asks|capacity|suspension):[A-Za-z0-9_-]{1,64}$/.test(key)) {
+    if (!/^portal-(?:lifecycle|asks|capacity|suspension|deletes):[A-Za-z0-9_-]{1,64}$/.test(key)) {
       throw new Error('Invalid portal lifecycle storage key')
     }
     return join(this.dataDir, 'lifecycle', `${key.replace(':', '-')}.json`)
