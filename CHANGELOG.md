@@ -8,18 +8,28 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Added
 
+- Search engines can find the public site. `/robots.txt` names a sitemap on the platform domain, and `/sitemap.xml` lists the home page, About and every documentation page, including new ones as they are added. ([#74](https://github.com/noicework/corpuskit/pull/74))
+- About answers common questions: what CorpusKit is, where answers come from and how they are checked, what a portal takes in, access for AI assistants over MCP, what a deployment needs, the demo, and how to contribute. ([#74](https://github.com/noicework/corpuskit/pull/74))
+- The home page, About and every documentation page describe themselves to search engines in structured data, and each documentation page carries its breadcrumb trail. About and the documentation have share cards of their own. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - Release notes for every release, with upgrade notes for anyone running a deployment, on the documentation site at `/docs/release-notes` and in `CHANGELOG.md`. ([#73](https://github.com/noicework/corpuskit/pull/73))
 - For maintainers: `deno task release:notes <version>` prints one release's notes for its GitHub release, and `docs/RELEASING.md` describes how a release is cut. ([#73](https://github.com/noicework/corpuskit/pull/73))
 
 ### Changed
 
+- The documentation overview is titled "CorpusKit documentation", and the home page's description names the licence and the checked answers. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did. ([#73](https://github.com/noicework/corpuskit/pull/73))
+
+### Fixed
+
+- Link previews of a portal on its own subdomain or hostname show the CorpusKit share image, which the page now names on the host that served it rather than on the platform domain. ([#74](https://github.com/noicework/corpuskit/pull/74))
 
 ### Upgrade notes
 
+- `/robots.txt` is now answered by the Worker and the local server, and `apps/web/public/robots.txt` is gone. A deployment that changed that file should carry its rules into `apps/api/src/search-files.ts`. `/sitemap.xml` answers on the platform domain only. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead. ([#73](https://github.com/noicework/corpuskit/pull/73))
 - The container build copies `CHANGELOG.md`, which the documentation build and the build stamp now read. ([#73](https://github.com/noicework/corpuskit/pull/73))
 - **Rollback to 2026.9.27.1 is safe.** Nothing stored changes, and health drops the new fields. ([#73](https://github.com/noicework/corpuskit/pull/73))
+- **Rollback is safe** after the search changes too: nothing stored changes, and the static `robots.txt` returns with the older build. ([#74](https://github.com/noicework/corpuskit/pull/74))
 
 ## [2026.9.27.1] - 2026-09-27
 

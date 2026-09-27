@@ -6,7 +6,14 @@ import {
   isPublicDocPageId,
   RELEASE_NOTES_PAGE_ID,
 } from '../../../packages/core/src/docs.ts'
-import { buildDocs, docGroups, releaseNotesPage, renderDocsPage } from './build-docs.ts'
+import {
+  buildDocs,
+  docGroups,
+  DOCS_SHARE_IMAGE,
+  releaseNotesPage,
+  renderDocsPage,
+} from './build-docs.ts'
+import { publicPagePaths } from '../../api/src/search-files.ts'
 import { parseChangelog, UNRELEASED } from './changelog.ts'
 import { escapeHtml } from './docs-markdown.ts'
 
@@ -126,4 +133,73 @@ Deno.test('release notes render every dated release, newest first, and link from
   expect(isPublicDocPageId(RELEASE_NOTES_PAGE_ID)).toBe(true)
   expect(isPublicDocPageId('unknown')).toBe(false)
   expect(docPagesByCategory().flatMap((g) => g.pages)).not.toContainEqual(page)
+})
+
+const decode = (value: string) =>
+  value.replaceAll('&#39;', "'").replaceAll('&quot;', '"').replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>').replaceAll('&amp;', '&')
+
+Deno.test('every documentation page has its own title, description and canonical URL', () => {
+  const seen = { title: new Set<string>(), description: new Set<string>(), canonical: new Set() }
+  for (const page of [undefined, ...publicPages]) {
+    const html = renderDocsPage(template, page)
+    const title = decode(html.match(/<title>([^<]*)<\/title>/)![1]!)
+    const description = decode(html.match(/<meta name="description" content="([^"]*)">/)![1]!)
+    const canonical = html.match(/<link rel="canonical" href="([^"]+)">/)![1]!
+    expect(title).toBe(page ? `${page.title} - CorpusKit documentation` : 'CorpusKit documentation')
+    expect(html).toContain(`<meta property="og:title" content="${escapeHtml(title)}">`)
+    for (
+      const [key, value] of [['title', title], ['description', description], [
+        'canonical',
+        canonical,
+      ]] as const
+    ) {
+      expect([key, seen[key].has(value)]).toEqual([key, false])
+      seen[key].add(value)
+    }
+    // Every page shares the documentation card, not About's.
+    expect(html).toContain(`<meta property="og:image" content="${DOCS_SHARE_IMAGE}">`)
+    expect(html).toContain(`<meta name="twitter:image" content="${DOCS_SHARE_IMAGE}">`)
+    expect(html).not.toContain('corpuskit-about.png')
+  }
+})
+
+Deno.test('documentation JSON-LD parses, describes the page and traces it from the site', () => {
+  for (const page of [undefined, ...publicPages]) {
+    const html = renderDocsPage(template, page)
+    const blocks = [
+      ...html.matchAll(
+        /<script type="application\/ld\+json" id="structured-data">([\s\S]*?)<\/script>/g,
+      ),
+    ]
+    expect(blocks).toHaveLength(1)
+    const data = JSON.parse(blocks[0]![1]!)
+    expect(data['@context']).toBe('https://schema.org')
+    const graph = data['@graph'] as Record<string, unknown>[]
+    const byType = (type: string) => graph.filter((node) => node['@type'] === type)
+    const url = `https://__CORPUSKIT_PLATFORM_DOMAIN__/docs${page ? `/${page.id}` : ''}`
+    const [main] = byType(page ? 'TechArticle' : 'CollectionPage')
+    expect(main!.url).toBe(url)
+    if (page) expect([main!.headline, main!.description]).toEqual([page.title, page.summary])
+    const [trail] = byType('BreadcrumbList')
+    const items = trail!.itemListElement as { position: number; name: string; item: string }[]
+    expect(items.map((item) => [item.position, item.name, item.item])).toEqual([
+      [1, 'CorpusKit', 'https://__CORPUSKIT_PLATFORM_DOMAIN__/'],
+      [2, 'Documentation', 'https://__CORPUSKIT_PLATFORM_DOMAIN__/docs'],
+      ...(page ? [[3, page.title, url]] : []),
+    ])
+    // Every reference inside the graph points at a node in it, and About's FAQ is not repeated.
+    const ids = new Set(graph.map((node) => node['@id']))
+    for (const [, ref] of JSON.stringify(graph).matchAll(/\{"@id":"([^"]+)"\}/g)) {
+      expect(ids.has(ref)).toBe(true)
+    }
+    expect(byType('FAQPage')).toHaveLength(0)
+  }
+})
+
+Deno.test('the sitemap lists every page the documentation build writes, once', () => {
+  const listed = publicPagePaths().filter((path) => path.startsWith('/docs'))
+  const written = ['/docs', ...publicPages.map((page) => `/docs/${page.id}`)]
+  expect(listed.length).toBe(new Set(listed).size)
+  expect(new Set(listed)).toEqual(new Set(written))
 })

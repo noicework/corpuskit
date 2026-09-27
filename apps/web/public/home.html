@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="CorpusKit is an open source research portal for searching collections, asking cited questions and exploring connections between sources.">
+  <meta name="description" content="CorpusKit is an open source research portal under Apache 2.0. Search a collection, get cited answers checked against their sources, and follow the connections.">
   <meta name="theme-color" content="#f2efe7">
   <title>CorpusKit – open source research portal</title>
   <link rel="canonical" href="https://__CORPUSKIT_PLATFORM_DOMAIN__/">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="CorpusKit">
   <meta property="og:title" content="CorpusKit - open source research portal">
-  <meta property="og:description" content="CorpusKit is an open source research portal for searching collections, asking cited questions and exploring connections between sources.">
+  <meta property="og:description" content="CorpusKit is an open source research portal under Apache 2.0. Search a collection, get cited answers checked against their sources, and follow the connections.">
   <meta property="og:url" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/">
   <meta property="og:image" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/og/corpuskit.png">
   <meta property="og:image:type" content="image/png">
@@ -22,9 +22,81 @@
   <meta property="og:locale" content="en_AU">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="CorpusKit - open source research portal">
-  <meta name="twitter:description" content="CorpusKit is an open source research portal for searching collections, asking cited questions and exploring connections between sources.">
+  <meta name="twitter:description" content="CorpusKit is an open source research portal under Apache 2.0. Search a collection, get cited answers checked against their sources, and follow the connections.">
   <meta name="twitter:image" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/og/corpuskit.png">
   <meta name="twitter:image:alt" content="CorpusKit - put your organisation's research to work. An open source research portal under the Apache 2.0 licence.">
+  <script type="application/ld+json" id="structured-data">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#maintainer",
+        "name": "Noice",
+        "legalName": "Noice Pty Ltd",
+        "url": "https://noice.net.au"
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#website",
+        "name": "CorpusKit",
+        "url": "https://__CORPUSKIT_PLATFORM_DOMAIN__/",
+        "inLanguage": "en-AU",
+        "publisher": {
+          "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#maintainer"
+        }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#software",
+        "name": "CorpusKit",
+        "description": "An open source research portal: search a collection, ask questions with cited answers and follow connections between sources.",
+        "url": "https://__CORPUSKIT_PLATFORM_DOMAIN__/",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web browser",
+        "inLanguage": "en-AU",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "isAccessibleForFree": true,
+        "author": {
+          "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#maintainer"
+        },
+        "softwareHelp": {
+          "@type": "CreativeWork",
+          "url": "https://__CORPUSKIT_PLATFORM_DOMAIN__/docs"
+        },
+        "releaseNotes": "https://__CORPUSKIT_PLATFORM_DOMAIN__/docs/release-notes"
+      },
+      {
+        "@type": "SoftwareSourceCode",
+        "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#source",
+        "name": "CorpusKit",
+        "codeRepository": "https://github.com/noicework/corpuskit",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "programmingLanguage": "TypeScript",
+        "runtimePlatform": "Deno",
+        "targetProduct": {
+          "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#software"
+        },
+        "author": {
+          "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#maintainer"
+        }
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#page",
+        "url": "https://__CORPUSKIT_PLATFORM_DOMAIN__/",
+        "name": "CorpusKit – open source research portal",
+        "inLanguage": "en-AU",
+        "isPartOf": {
+          "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#website"
+        },
+        "about": {
+          "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#software"
+        }
+      }
+    ]
+  }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,300..700&amp;family=Source+Sans+3:ital,wght@0,200..900;1,200..900&amp;family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&amp;display=swap" rel="stylesheet">
@@ -1902,7 +1974,7 @@
 
       <footer class="site-footer">
         <p>CorpusKit is open source under the Apache 2.0 licence. Maintained by <a href="https://noice.net.au">Noice</a>. Powered by <a href="https://www.progress.com/agentic-rag">Progress Agentic RAG</a>.</p>
-        <nav class="footer-links" aria-label="Footer navigation"><a href="/about">About</a><a href="/docs">Docs</a><a href="https://github.com/noicework/corpuskit">Repository</a></nav>
+        <nav class="footer-links" aria-label="Footer navigation"><a href="/about">About</a><a href="/docs">Docs</a><a href="/docs/release-notes">Release notes</a><a href="https://github.com/noicework/corpuskit">Repository</a></nav>
       </footer>
     </div>
   </div>

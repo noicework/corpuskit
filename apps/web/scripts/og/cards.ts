@@ -329,9 +329,40 @@ function icon(size: number, file: string): Card {
   }
 }
 
+/** A page's share card: its own headline, highlight and citation, and a line under it. */
+function pageCard(file: string, headline: string, lede: string): Card {
+  return {
+    file,
+    width: 1200,
+    height: 630,
+    fonts: TEXT_FONTS,
+    html: htmlDocument(
+      1200,
+      630,
+      `<div class="card">
+        ${TOP}
+        <div class="body">
+          <h1>${headline}</h1>
+          <p class="lede">${lede}</p>
+        </div>
+      </div>`,
+    ),
+  }
+}
+
 export const OG_CARDS: Card[] = [
   launch(1200, 630, 'og/corpuskit.png'),
   launch(1200, 1200, 'og/corpuskit-square.png', true),
+  pageCard(
+    'og/corpuskit-about.png',
+    'About<br><span class="hl">CorpusKit</span><span class="cite">1</span>',
+    'Discovery, cited answers, evidence checks, investigations and portal administration, in one open source research portal.',
+  ),
+  pageCard(
+    'og/corpuskit-docs.png',
+    'CorpusKit<br><span class="hl">documentation</span><span class="cite">1</span>',
+    'How to find answers, explore a collection and manage your research portal.',
+  ),
   icon(180, 'apple-touch-icon.png'),
   icon(96, 'favicon.png'),
 ]

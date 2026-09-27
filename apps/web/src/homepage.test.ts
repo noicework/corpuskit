@@ -39,3 +39,74 @@ Deno.test('the portal shell names its share image on the host that served it', a
     expect(tag).toContain('content="https://__CORPUSKIT_REQUEST_HOST__/og/corpuskit.png"')
   }
 })
+
+const about = await Deno.readTextFile(new URL('../public/about.html', import.meta.url))
+
+/** A page's one JSON-LD block, parsed, and its nodes of one type. */
+function structuredData(html: string) {
+  const blocks = [
+    ...html.matchAll(
+      /<script type="application\/ld\+json" id="structured-data">([\s\S]*?)<\/script>/g,
+    ),
+  ]
+  expect(blocks).toHaveLength(1)
+  const data = JSON.parse(blocks[0]![1]!)
+  expect(data['@context']).toBe('https://schema.org')
+  const graph = data['@graph'] as Record<string, unknown>[]
+  // Every reference inside the graph points at a node in it.
+  const ids = new Set(graph.map((node) => node['@id']))
+  for (const [, ref] of JSON.stringify(graph).matchAll(/\{"@id":"([^"]+)"\}/g)) {
+    expect(ids.has(ref)).toBe(true)
+  }
+  return (type: string) => graph.filter((node) => node['@type'] === type)
+}
+
+Deno.test('home and About describe the project in JSON-LD that parses', () => {
+  for (const html of [homepage, about]) {
+    const of = structuredData(html)
+    const [project] = of('SoftwareApplication')
+    expect(project!.name).toBe('CorpusKit')
+    expect(project!.license).toBe('https://www.apache.org/licenses/LICENSE-2.0')
+    expect(project!.isAccessibleForFree).toBe(true)
+    // No price is claimed for the project.
+    expect('offers' in project!).toBe(false)
+    expect(of('Organization')[0]!.legalName).toBe('Noice Pty Ltd')
+    expect(of('WebSite')[0]!.url).toBe('https://__CORPUSKIT_PLATFORM_DOMAIN__/')
+  }
+  expect(structuredData(homepage)('SoftwareSourceCode')[0]!.codeRepository).toBe(
+    'https://github.com/noicework/corpuskit',
+  )
+})
+
+Deno.test('About answers common questions, and marks up exactly the questions it shows', () => {
+  const section = about.slice(about.indexOf('<section class="glance" id="faq"'))
+  const shown = [
+    ...section.slice(0, section.indexOf('</section>')).matchAll(
+      /<div class="glance-row">\s*<h3>([^<]+)<\/h3>\s*<div><p>([^<]+)<\/p>/g,
+    ),
+  ].map(([, question, answer]) => [question, answer])
+  expect(shown.length).toBeGreaterThanOrEqual(6)
+  const [faq] = structuredData(about)('FAQPage')
+  const marked = (faq!.mainEntity as { name: string; acceptedAnswer: { text: string } }[])
+    .map((q) => [q.name, q.acceptedAnswer.text])
+  expect(marked).toEqual(shown)
+  expect(about).toContain('<a href="#faq">Frequently asked questions</a>')
+  for (const [question, answer] of shown) {
+    expect(`${question} ${answer}`).not.toContain('\u2014')
+  }
+})
+
+Deno.test('each share card is a 1200x630 PNG, and About and the docs use their own', async () => {
+  for (const card of ['corpuskit.png', 'corpuskit-about.png', 'corpuskit-docs.png']) {
+    const bytes = await Deno.readFile(new URL(`../public/og/${card}`, import.meta.url))
+    expect([...bytes.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    const view = new DataView(bytes.buffer, bytes.byteOffset)
+    expect([card, view.getUint32(16), view.getUint32(20)]).toEqual([card, 1200, 630])
+  }
+  expect(about).toContain(
+    '<meta property="og:image" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/og/corpuskit-about.png">',
+  )
+  expect(homepage).toContain(
+    '<meta property="og:image" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/og/corpuskit.png">',
+  )
+})

@@ -119,9 +119,80 @@ function content(page?: DocPage): string {
   </nav>`
 }
 
+/** The share card every documentation page uses (apps/web/scripts/og/cards.ts). */
+export const DOCS_SHARE_IMAGE = `https://${PLATFORM_DOMAIN_MARKER}/og/corpuskit-docs.png`
+const DOCS_SHARE_ALT =
+  'CorpusKit documentation. How to find answers, explore a collection and manage your research portal.'
+
+/**
+ * The page's schema.org data: the project and its maintainer as the About page describes them,
+ * the page itself (the overview as a collection, each page as an article) and its breadcrumb trail.
+ * Written so no value can close the script element.
+ */
+export function docsStructuredData(page: DocPage | undefined, canonical: string): string {
+  const site = `https://${PLATFORM_DOMAIN_MARKER}`
+  const docs = `${site}/docs`
+  const crumbs = [
+    { name: 'CorpusKit', item: `${site}/` },
+    { name: 'Documentation', item: docs },
+    ...(page ? [{ name: page.title, item: canonical }] : []),
+  ]
+  const graph = [
+    {
+      '@type': 'Organization',
+      '@id': `${site}/#maintainer`,
+      name: 'Noice',
+      legalName: 'Noice Pty Ltd',
+      url: 'https://noice.net.au',
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${site}/#website`,
+      name: 'CorpusKit',
+      url: `${site}/`,
+      inLanguage: 'en-AU',
+      publisher: { '@id': `${site}/#maintainer` },
+    },
+    page
+      ? {
+        '@type': 'TechArticle',
+        '@id': `${canonical}#article`,
+        headline: page.title,
+        description: page.summary,
+        url: canonical,
+        inLanguage: 'en-AU',
+        isPartOf: { '@id': `${site}/#website` },
+        author: { '@id': `${site}/#maintainer` },
+        breadcrumb: { '@id': `${canonical}#breadcrumb` },
+      }
+      : {
+        '@type': 'CollectionPage',
+        '@id': `${canonical}#page`,
+        name: 'CorpusKit documentation',
+        description: overview,
+        url: canonical,
+        inLanguage: 'en-AU',
+        isPartOf: { '@id': `${site}/#website` },
+        breadcrumb: { '@id': `${canonical}#breadcrumb` },
+      },
+    {
+      '@type': 'BreadcrumbList',
+      '@id': `${canonical}#breadcrumb`,
+      itemListElement: crumbs.map((crumb, i) => ({
+        '@type': 'ListItem',
+        position: i + 1,
+        ...crumb,
+      })),
+    },
+  ]
+  return JSON.stringify({ '@context': 'https://schema.org', '@graph': graph }, null, 2)
+    .replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026')
+}
+
 /** Reuse About's marketing shell, including its styles, metadata, nav and footer. */
 export function renderDocsPage(template: string, page?: DocPage): string {
   const title = page?.title ?? 'Documentation'
+  const documentTitle = page ? `${page.title} - CorpusKit documentation` : 'CorpusKit documentation'
   const description = page?.summary ?? overview
   // The server fills in the deployment's platform domain when it serves the page.
   const canonical = `https://${PLATFORM_DOMAIN_MARKER}${page ? pageLink(page) : '/docs'}`
@@ -135,16 +206,35 @@ export function renderDocsPage(template: string, page?: DocPage): string {
   if ((template.match(/<main\b/g) ?? []).length !== 1 || !template.includes('</main>')) {
     throw new Error('About template must contain exactly one main element')
   }
+  const structured = /<script type="application\/ld\+json" id="structured-data">[\s\S]*?<\/script>/
+  if (!structured.test(template)) {
+    throw new Error('About template must contain its structured-data script')
+  }
   return template
     .replace(/<main\b[^>]*>[\s\S]*?<\/main>/, () => main)
-    .replace(/<title>[^<]*<\/title>/, () => `<title>${e(title)} - CorpusKit documentation</title>`)
+    .replace(/<title>[^<]*<\/title>/, () => `<title>${e(documentTitle)}</title>`)
+    .replace(
+      structured,
+      () =>
+        `<script type="application/ld+json" id="structured-data">\n${
+          docsStructuredData(page, canonical)
+        }\n  </script>`,
+    )
+    .replaceAll(
+      /(<meta (?:property|name)="(?:og:image|twitter:image)" content=")[^"]*/g,
+      (_, prefix) => `${prefix}${DOCS_SHARE_IMAGE}`,
+    )
+    .replaceAll(
+      /(<meta (?:property|name)="(?:og:image:alt|twitter:image:alt)" content=")[^"]*/g,
+      (_, prefix) => `${prefix}${e(DOCS_SHARE_ALT)}`,
+    )
     .replaceAll(
       /(<meta (?:name|property)="(?:description|og:description|twitter:description)" content=")[^"]*/g,
       (_, prefix) => `${prefix}${e(description)}`,
     )
     .replaceAll(
       /(<meta (?:name|property)="(?:og:title|twitter:title)" content=")[^"]*/g,
-      (_, prefix) => `${prefix}${e(title)} - CorpusKit documentation`,
+      (_, prefix) => `${prefix}${e(documentTitle)}`,
     )
     .replace(/(<link rel="canonical" href=")[^"]*/, (_, prefix) => `${prefix}${canonical}`)
     .replace(/(<meta property="og:url" content=")[^"]*/, (_, prefix) => `${prefix}${canonical}`)
