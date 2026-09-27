@@ -1,8 +1,8 @@
 /**
  * Stamps the web build: writes `apps/web/dist/build.json` with the commit the
  * bundle was built from, the time it was built and the newest dated release in
- * CHANGELOG.md, so /api/health and the Help page can say which bundle is being
- * served. Run by `deno task build:web`; a stale bundle is then visible instead
+ * CHANGELOG.md, so /api/health can say which bundle is being served.
+ * Run by `deno task build:web`; a stale bundle is then visible instead
  * of silently masking a change that never reached the browser (D1-21).
  */
 import process from 'node:process'

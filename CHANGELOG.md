@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to CorpusKit are recorded here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Releases use calendar versions, `YYYY.M.D` without zero padding and tagged `v2026.9.27`, with a `.N` suffix for a second release on the same day. How a release is cut is in [docs/RELEASING.md](https://github.com/noicework/corpuskit/blob/main/docs/RELEASING.md).
+All notable changes to CorpusKit are recorded here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Releases use calendar versions, `YYYY.M.D` without zero padding and tagged `v2026.9.27`, with a `.N` suffix for a second release on the same day. Release dates are in Australian Eastern time. How a release is cut is in [docs/RELEASING.md](https://github.com/noicework/corpuskit/blob/main/docs/RELEASING.md).
 
 Each release groups its changes under Added, Changed, Fixed and Security, then closes with Upgrade notes for people who run a deployment: new or changed settings and their defaults, behaviour that changes on upgrade, changes to stored data, and whether rolling back is safe.
 
@@ -40,9 +40,9 @@ Adding documents is obvious and safe, managers can delete a document, and hidden
 
 ### Changed
 
-- Search shows the same trust signals as Ask: confidence, citation markers, marks on unverified figures, the audit badge and the truncation notice. The same answer now reaches the same confidence on both pages; before, Search could never reach High. ([#71](https://github.com/noicework/corpuskit/pull/71))
+- Search shows the same trust signals as Ask: confidence, citation markers, marks on unverified figures, the audit badge and the truncation notice. The same answer now reaches the same confidence on both pages. ([#71](https://github.com/noicework/corpuskit/pull/71))
 - Curators see the real reason a source sync, enrichment or knowledge graph job failed, with the server's own message and code, instead of a generic error. ([#71](https://github.com/noicework/corpuskit/pull/71))
-- Text and focus drawn on a portal's own colours meet WCAG AA: accent text is deepened to 4.5:1, text on the accent is chosen by contrast, and focus indicators reach 3:1. The Ask, Search and "Ask this document" fields gain a visible focus ring, and focus stays visible in forced-colours mode. New portals start on the `corpuskit` palette. ([#71](https://github.com/noicework/corpuskit/pull/71))
+- On a portal's own colours, accent text is deepened to at least 4.5:1 contrast, text on the accent is chosen by contrast, and focus indicators reach at least 3:1. The Ask, Search and "Ask this document" fields gain a visible focus ring, and focus stays visible in forced-colours mode. New portals start on the `corpuskit` palette. ([#71](https://github.com/noicework/corpuskit/pull/71))
 - On portals with a byte limit, a crawled link whose size cannot be read up front is admitted against a provisional reservation and measured once it is processed. An add that does not fit is refused with a distinct reason: `413 limit_exceeded` for a real overflow, `503 links_pending` when it would fit once waiting links are measured, and `413 links_stuck` when a link could not be processed. ([#68](https://github.com/noicework/corpuskit/pull/68))
 - An upload, link or text add stays in flight through an access check, and its result is shown only if the same person still has the same access to the same portal. If someone else signs in, unfinished uploads end as "Upload interrupted, choose the file again." ([#68](https://github.com/noicework/corpuskit/pull/68))
 - Unpublishing a cited document no longer blocks judging, removing or referencing its evidence in an investigation, and synthesis skips evidence it cannot read. ([#68](https://github.com/noicework/corpuskit/pull/68))
@@ -93,7 +93,7 @@ Portals can be served on their own hostnames, and a hosting operator can retire 
 
 ### Fixed
 
-- Document, logo, hero and font uploads work in real browsers again. The focus a native file picker hands back had withdrawn access between choosing a file and uploading it. ([#66](https://github.com/noicework/corpuskit/pull/66))
+- Document, logo, hero and font uploads work again when a file is chosen from the file picker. The focus the picker hands back had withdrawn access between choosing the file and uploading it. ([#66](https://github.com/noicework/corpuskit/pull/66))
 - Automatic portal hostnames work on Cloudflare Workers. ([#62](https://github.com/noicework/corpuskit/pull/62))
 - Deleting a portal no longer reports `domain_removal_failed` when Cloudflare confirms the hostname removal with an empty body. ([#65](https://github.com/noicework/corpuskit/pull/65))
 

@@ -1,14 +1,15 @@
 # Releasing CorpusKit
 
-Every push to `main` passes the gate and deploys, so production is always the tip of `main`. A
-release names one of those deployed commits: a `vYYYY.M.D` tag on it, a dated section in
+Every push to `main` passes the gate and then deploys, so production is normally the tip of `main`
+once that deploy succeeds; a failed or running deploy leaves it on an earlier commit, so check the
+deploy. A release names one of those deployed commits: a `vYYYY.M.D` tag on it, a dated section in
 [`CHANGELOG.md`](../CHANGELOG.md), and a GitHub release carrying that section. Operators upgrade
 from release to release and read the notes in between.
 
 ## Versions
 
-Releases use calendar versions: `YYYY.M.D` for the day the release is cut, without zero padding,
-tagged with a leading `v`. The release cut on 27 September 2026 is `2026.9.27`, tagged
+Releases use calendar versions: `YYYY.M.D` for the day the release is cut, in Australian Eastern
+time, without zero padding, tagged with a leading `v`. The release cut on 27 September 2026 is `2026.9.27`, tagged
 `v2026.9.27`. A second release on the same day adds `.1`, then `.2`: `v2026.9.27.1`.
 
 Releases are cut from `main` only. The version says when, not how much changed: read the Upgrade
@@ -179,7 +180,8 @@ v2026.9.25 5c9eec9
 v2026.9.26 b4695e4
 v2026.9.27 3365b4f
 TAGS
-git push noicework --tags
+git push noicework v2026.9.5 v2026.9.11 v2026.9.12 v2026.9.13 v2026.9.17 v2026.9.25 v2026.9.26 \
+  v2026.9.27
 
 for version in 2026.9.5 2026.9.11 2026.9.12 2026.9.13 2026.9.17 2026.9.25 2026.9.26 2026.9.27; do
   notes=$(deno task release:notes "$version") || break

@@ -1,7 +1,9 @@
 /**
- * Prints one version's section of CHANGELOG.md, for the GitHub release body:
+ * Prints one version's section of CHANGELOG.md, for the GitHub release body. Capture it first, so
+ * a failure stops before gh runs instead of publishing an empty release:
  *
- *   deno task release:notes 2026.9.27 | gh release create v2026.9.27 --notes-file - ...
+ *   notes=$(deno task release:notes 2026.9.27) &&
+ *     printf '%s\n' "$notes" | gh release create v2026.9.27 --notes-file - ...
  *
  * Accepts `2026.9.27`, `v2026.9.27` or `unreleased`. Exits 1 when the version has no section or
  * the section is empty, and 2 without a version. See docs/RELEASING.md.
