@@ -1,8 +1,60 @@
-import { type DocPage, docPagesByCategory } from '../../../packages/core/src/docs.ts'
+import {
+  type DocPage,
+  docPagesByCategory,
+  RELEASE_NOTES_PAGE_ID,
+} from '../../../packages/core/src/docs.ts'
 import { PLATFORM_DOMAIN_MARKER } from '../../../packages/core/src/platform-domain.ts'
+import { parseChangelog, UNRELEASED } from './changelog.ts'
 import { escapeHtml as e, headingIds, renderMarkdown } from './docs-markdown.ts'
 
-const groups = docPagesByCategory()
+const REPOSITORY = 'https://github.com/noicework/corpuskit'
+
+function releaseDate(date: string): string {
+  return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-AU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
+/**
+ * CHANGELOG.md's dated releases as a public documentation page, newest first. Unreleased work
+ * stays in the repository. Only the public docs carry this page; in-app Help does not.
+ */
+export function releaseNotesPage(changelog: string): DocPage {
+  const releases = parseChangelog(changelog).releases.filter((r) => r.version !== UNRELEASED)
+  return {
+    id: RELEASE_NOTES_PAGE_ID,
+    category: 'Project',
+    title: 'Release notes',
+    summary: 'What changed in each CorpusKit release, and what to check before upgrading.',
+    sections: [
+      {
+        heading: 'About these notes',
+        body: 'Each release groups its changes under Added, Changed, Fixed and Security, and ' +
+          'closes with Upgrade notes for people who run a deployment: new or changed settings ' +
+          'and their defaults, behaviour that changes on upgrade, changes to stored data, and ' +
+          'whether rolling back is safe. Releases use calendar versions, such as `2026.9.27`.' +
+          `\n\nWork not yet released is listed in [CHANGELOG.md](${REPOSITORY}/blob/main/CHANGELOG.md), ` +
+          `and every release is on [GitHub](${REPOSITORY}/releases).`,
+      },
+      ...releases.map((release) => ({
+        heading: release.version,
+        body: `Released ${releaseDate(release.date!)}.\n\n${release.body}`,
+      })),
+    ],
+  }
+}
+
+const changelog = await Deno.readTextFile(new URL('../../../CHANGELOG.md', import.meta.url))
+
+/** The public collection: the shared Help pages by category, then the project's own pages. */
+export const docGroups: { category: string; pages: DocPage[] }[] = [
+  ...docPagesByCategory(),
+  { category: 'Project', pages: [releaseNotesPage(changelog)] },
+]
+const groups = docGroups
 const pages = groups.flatMap((group) => group.pages)
 const overview = 'Learn how to find answers, explore a collection and manage your research portal.'
 const pageLink = (page: DocPage) => `/docs/${page.id}`

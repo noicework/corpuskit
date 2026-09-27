@@ -3,8 +3,25 @@
 `deno task build:docs` renders the shared `DOC_PAGES` content, grouped by
 `docPagesByCategory()`, into `apps/web/dist/docs/index.html` and one HTML file
 per page. It runs inside `deno task build:web` before the build stamp. The
-current collection is 17 guides plus the overview, or 18 HTML pages. Generated
-output is not tracked.
+current collection is 17 guides, the Release notes page and the overview, or
+19 HTML pages. Generated output is not tracked.
+
+## Release notes
+
+`/docs/release-notes` renders the dated releases in `CHANGELOG.md`, newest
+first, under a Project group at the end of the navigation. It is built for the
+public docs only and is not in-app Help content, so it has its own id,
+`RELEASE_NOTES_PAGE_ID`, which the Worker's docs routing accepts beside the Help
+pages. Unreleased work stays in the repository. Because the page goes through
+the same strict renderer, `CHANGELOG.md` must stay within its Markdown subset:
+one line per bullet, nested bullets two spaces in, identifiers, paths and
+anything with `_`, `*`, `<`, `>` or `|` in backticks, and absolute link URLs. A
+test renders the whole changelog, so anything else fails the gate.
+
+Checked on 27 September 2026 in headless Chromium at 1920px and a true 390px
+viewport, 16px and 22px root fonts, light and dark preferences: no horizontal
+overflow on any combination, the Project group on the overview, and the
+current-page link in the navigation.
 
 The build reuses the About document's marketing shell: metadata pattern, fonts,
 palette, header, footer and base styles. Only the main content, page metadata

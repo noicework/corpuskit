@@ -1,10 +1,19 @@
 import { expect } from '@std/expect'
-import { DOC_CATEGORIES, DOC_PAGES, docPagesByCategory } from '../../../packages/core/src/docs.ts'
-import { buildDocs, renderDocsPage } from './build-docs.ts'
+import {
+  DOC_CATEGORIES,
+  DOC_PAGES,
+  docPagesByCategory,
+  isPublicDocPageId,
+  RELEASE_NOTES_PAGE_ID,
+} from '../../../packages/core/src/docs.ts'
+import { buildDocs, docGroups, releaseNotesPage, renderDocsPage } from './build-docs.ts'
+import { parseChangelog, UNRELEASED } from './changelog.ts'
 import { escapeHtml } from './docs-markdown.ts'
 
 const template = await Deno.readTextFile(new URL('../public/about.html', import.meta.url))
 const home = await Deno.readTextFile(new URL('../public/home.html', import.meta.url))
+const changelog = await Deno.readTextFile(new URL('../../../CHANGELOG.md', import.meta.url))
+const publicPages = docGroups.flatMap((group) => group.pages)
 
 Deno.test('About and documentation match every homepage container width and gutter', () => {
   const widths = (html: string) => [...html.matchAll(/--page:\s*([^;]+);/g)].map((m) => m[1])
@@ -31,7 +40,7 @@ Deno.test('documentation overview follows the shared category and page order', (
 })
 
 Deno.test('every public page has complete content, metadata, anchors, navigation and safe copy', () => {
-  const ordered = docPagesByCategory().flatMap((group) => group.pages)
+  const ordered = publicPages
   for (const page of [undefined, ...ordered]) {
     const html = renderDocsPage(template, page)
     expect(html).toContain('<html lang="en-AU">')
@@ -73,11 +82,14 @@ Deno.test('build writes exactly the source pages plus landing page and removes s
   const output = new URL(`file://${directory}/`)
   try {
     await Deno.writeTextFile(new URL('stale.html', output), 'old')
-    expect(await buildDocs(output)).toBe(DOC_PAGES.length + 1)
+    expect(await buildDocs(output)).toBe(DOC_PAGES.length + 2)
     const files = []
     for await (const entry of Deno.readDir(output)) files.push(entry.name)
-    expect(files.sort()).toEqual(['index.html', ...DOC_PAGES.map((p) => `${p.id}.html`)].sort())
-    for (const page of DOC_PAGES) {
+    expect(files.sort()).toEqual(
+      ['index.html', `${RELEASE_NOTES_PAGE_ID}.html`, ...DOC_PAGES.map((p) => `${p.id}.html`)]
+        .sort(),
+    )
+    for (const page of publicPages) {
       expect(await Deno.readTextFile(new URL(`${page.id}.html`, output))).toBe(
         renderDocsPage(template, page),
       )
@@ -85,4 +97,33 @@ Deno.test('build writes exactly the source pages plus landing page and removes s
   } finally {
     await Deno.remove(output, { recursive: true })
   }
+})
+
+Deno.test('release notes render every dated release, newest first, and link from the docs nav', () => {
+  const page = releaseNotesPage(changelog)
+  const dated = parseChangelog(changelog).releases.filter((r) => r.version !== UNRELEASED)
+  expect(page.id).toBe(RELEASE_NOTES_PAGE_ID)
+  expect(publicPages.at(-1)).toEqual(page)
+  expect(page.sections.slice(1).map((section) => section.heading)).toEqual(
+    dated.map((release) => release.version),
+  )
+  const html = renderDocsPage(template, page)
+  let position = 0
+  for (const release of dated) {
+    const next = html.indexOf(`id="${release.version.replaceAll('.', '-')}"`)
+    expect(next).toBeGreaterThan(position)
+    position = next
+  }
+  expect(html).toContain('Released 27 September 2026.')
+  expect(html).toContain('href="https://github.com/noicework/corpuskit/releases"')
+  expect(html).toContain('<h3 id="upgrade-notes">Upgrade notes</h3>')
+  // Unreleased work stays in the repository.
+  expect(html).not.toMatch(/>Unreleased<|pending merge/)
+  // Every public page links to it from the navigation, and the Worker routes it.
+  for (const other of [undefined, ...DOC_PAGES]) {
+    expect(renderDocsPage(template, other)).toContain(`href="/docs/${RELEASE_NOTES_PAGE_ID}"`)
+  }
+  expect(isPublicDocPageId(RELEASE_NOTES_PAGE_ID)).toBe(true)
+  expect(isPublicDocPageId('unknown')).toBe(false)
+  expect(docPagesByCategory().flatMap((g) => g.pages)).not.toContainEqual(page)
 })

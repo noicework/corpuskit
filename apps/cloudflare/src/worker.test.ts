@@ -2,7 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 
 import { expect } from '@std/expect'
-import { DOC_PAGES } from '../../../packages/core/src/docs.ts'
+import { DOC_PAGES, RELEASE_NOTES_PAGE_ID } from '../../../packages/core/src/docs.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DurableState } from './state.ts'
 import { BindingCipher } from '../../api/src/binding-crypto.ts'
@@ -364,6 +364,9 @@ Deno.test('About asset selection preserves SPA paths and does not rewrite mutati
   }
 })
 
+/** Help pages plus the public-only release notes, which the docs build renders from CHANGELOG.md. */
+const PUBLIC_DOC_IDS = [...DOC_PAGES.map((page) => page.id), RELEASE_NOTES_PAGE_ID]
+
 Deno.test('Worker serves all public docs aliases without asset redirects and with homepage headers', async () => {
   const home = await worker.fetch(new Request('https://corpuskit.org/'), workerHarness().env)
   const routes = [
@@ -371,17 +374,17 @@ Deno.test('Worker serves all public docs aliases without asset redirects and wit
       path,
       asset: '/docs/',
     })),
-    ...DOC_PAGES.flatMap((page) =>
+    ...PUBLIC_DOC_IDS.flatMap((id) =>
       ['', '/', '.html', '.html/'].map((suffix) => ({
-        path: `/docs/${page.id}${suffix}`,
-        asset: `/docs/${page.id}`,
+        path: `/docs/${id}${suffix}`,
+        asset: `/docs/${id}`,
       }))
     ),
     ...['/docs/unknown', '/docs/unknown.html/', '/docs/nested/path', '/docs/unknown/'].map((
       path,
     ) => ({ path, asset: '/docs/' })),
   ]
-  const canonicalAssets = new Set(['/docs/', ...DOC_PAGES.map((page) => `/docs/${page.id}`)])
+  const canonicalAssets = new Set(['/docs/', ...PUBLIC_DOC_IDS.map((id) => `/docs/${id}`)])
   for (const { path, asset } of routes) {
     for (const method of ['GET', 'HEAD']) {
       const harness = workerHarness()
@@ -424,8 +427,8 @@ Deno.test('public docs stay on the apex, preserve www canonicalisation and do no
     '/docs',
     '/docs/',
     '/docs/index.html',
-    ...DOC_PAGES.flatMap((page) =>
-      ['', '/', '.html', '.html/'].map((suffix) => `/docs/${page.id}${suffix}`)
+    ...PUBLIC_DOC_IDS.flatMap((id) =>
+      ['', '/', '.html', '.html/'].map((suffix) => `/docs/${id}${suffix}`)
     ),
   ]
   for (const host of ['demo.corpuskit.org', 'research.example.org', 'corpuskit.noice.net.au']) {

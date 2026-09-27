@@ -11,7 +11,7 @@ import {
   externalLoginPresentation,
   ExternalLoginReplayStore,
 } from '../../api/src/external-login.ts'
-import { docPageById } from '../../../packages/core/src/docs.ts'
+import { isPublicDocPageId } from '../../../packages/core/src/docs.ts'
 import {
   getPlatformDomain,
   isPlatformHostname,
@@ -870,7 +870,7 @@ export function marketingHomeRequest(request: Request, domain: string): Request 
     const id = /^\/docs\/([a-z0-9-]+)(?:\.html)?\/?$/.exec(url.pathname)?.[1]
     // Unknown paths deliberately serve the overview. Ask Assets for its
     // canonical directory/extensionless URL to avoid pretty-URL redirects.
-    url.pathname = id && docPageById(id) ? `/docs/${id}` : '/docs/'
+    url.pathname = id && isPublicDocPageId(id) ? `/docs/${id}` : '/docs/'
   } else if (url.pathname === '/') {
     // Ask Assets for its extensionless route. Requesting `home.html` directly
     // invokes pretty-URL handling and would leak a `/home` redirect to visitors.

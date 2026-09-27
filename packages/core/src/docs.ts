@@ -1106,6 +1106,17 @@ export function docPageById(id: string): DocPage | undefined {
   return DOC_PAGES.find((page) => page.id === id)
 }
 
+/**
+ * The public Release notes page. The docs build renders it from CHANGELOG.md for the public
+ * documentation only (apps/web/scripts/build-docs.ts); it is not in-app Help content.
+ */
+export const RELEASE_NOTES_PAGE_ID = 'release-notes'
+
+/** Whether the public documentation serves a page with this id. */
+export function isPublicDocPageId(id: string): boolean {
+  return id === RELEASE_NOTES_PAGE_ID || docPageById(id) !== undefined
+}
+
 /** Documentation pages grouped by category, in category and authored order. */
 export function docPagesByCategory(): { category: DocCategory; pages: DocPage[] }[] {
   return DOC_CATEGORIES.map((category) => ({
