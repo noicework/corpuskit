@@ -11,7 +11,7 @@ import {
 } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { createPortal, flushSync } from 'react-dom'
-import { Link, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import type {
   Citation,
   ResourceContent,
@@ -30,6 +30,8 @@ import { AnswerStream } from '../components/AnswerStream.tsx'
 import { PdfReader } from '../components/PdfReader.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { SaveEvidenceButton } from '../components/SaveEvidence.tsx'
+import { deletedNotice, DeleteDocumentButton } from '../components/DeleteDocument.tsx'
+import { AdminPageAccess } from './AdminPage.tsx'
 import {
   EmptyState,
   ErrorCard,
@@ -983,6 +985,30 @@ function BackToLibrary({ slug }: { slug: string }) {
  * suits a wide screen: the title gets the entire content width rather than
  * being squeezed beside a column of actions.
  */
+/**
+ * A manager's delete, on the document itself. Only a session holding content.write on this portal
+ * sees it; a reader, signed in or not, never does. Once the document is deleted there is nothing
+ * left to show here, so the manager goes back to the Library, which says what was deleted.
+ */
+function ManagerDelete({ slug, resource }: { slug: string; resource: ResourceSummary }) {
+  const access = useAccess()
+  const navigate = useNavigate()
+  if (!access.can('content.write', { kind: 'portal', slug })) return null
+  return (
+    <AdminPageAccess>
+      <DeleteDocumentButton
+        slug={slug}
+        document={resource}
+        className='rp-btn rp-btn-outline min-h-[44px] hover:text-[var(--rp-bad-ink)]'
+        onDeleted={(outcome) =>
+          navigate(`/t/${slug}/library`, {
+            state: { notice: deletedNotice(resource.title, outcome) },
+          })}
+      />
+    </AdminPageAccess>
+  )
+}
+
 function ResourceHeader(
   { slug, resource, originUrl, topicLabel, organisation }: {
     slug: string
@@ -1029,7 +1055,8 @@ function ResourceHeader(
     <header>
       <div className='flex items-center justify-between gap-3'>
         <BackToLibrary slug={slug} />
-        <div className='shrink-0'>
+        <div className='flex shrink-0 items-center gap-2'>
+          <ManagerDelete slug={slug} resource={resource} />
           {
             /* Just "Save" with a bookmark glyph. The picker it opens is
             * titled "Save to investigation", so the destination is stated the

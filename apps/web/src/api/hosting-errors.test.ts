@@ -69,7 +69,7 @@ Deno.test('an add held back by links still being processed says to wait, not tha
   }
 })
 
-Deno.test('an add held back by a link that could not be processed says whom to ask', async () => {
+Deno.test('an add held back by a link that could not be processed says how to free its space', async () => {
   const original = globalThis.fetch
   globalThis.fetch = () => Promise.resolve(Response.json({ error: 'links_stuck' }, { status: 413 }))
   try {
@@ -77,7 +77,7 @@ Deno.test('an add held back by a link that could not be processed says whom to a
       .toMatchObject({
         status: 413,
         message:
-          'A link added earlier could not be processed, so its space is still counted and this cannot be added. Ask your hosting operator to check it, or to raise the storage limit.',
+          'A link added earlier could not be processed, so its space is still counted and this cannot be added. Delete the stuck link from Recent additions to free its space, or ask your hosting operator to check it or raise the storage limit.',
       })
   } finally {
     globalThis.fetch = original

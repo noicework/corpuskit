@@ -12,7 +12,7 @@ export function hostingErrorMessage(body: unknown): string | undefined {
     case 'links_pending':
       return 'Links added earlier are still being processed, so this cannot be added yet. Try again in a minute or two.'
     case 'links_stuck':
-      return 'A link added earlier could not be processed, so its space is still counted and this cannot be added. Ask your hosting operator to check it, or to raise the storage limit.'
+      return 'A link added earlier could not be processed, so its space is still counted and this cannot be added. Delete the stuck link from Recent additions to free its space, or ask your hosting operator to check it or raise the storage limit.'
     case 'agents_disabled':
       return 'Agents are disabled for this portal. Contact your portal administrator to enable them.'
     case 'limit_exceeded':

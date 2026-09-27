@@ -15,6 +15,7 @@ import {
   type EvidenceItem,
   type EvidenceVerdict,
   getInvestigation,
+  getResource,
   type Investigation,
   type InvestigationArtefact,
   synthesiseInvestigation,
@@ -452,11 +453,28 @@ function verdictChipStyle(id: EvidenceVerdict, active: boolean): CSSProperties {
   }
 }
 
+/**
+ * Whether the document a passage was saved from is still in the Library. A document that was
+ * deleted answers 404, as one unpublished does to a reader; either way the saved passage is kept
+ * and is shown as no longer in the Library, not as an error. Any other failure says nothing.
+ */
+function useSourceGone(slug: string, resourceId: string): boolean {
+  const source = useQuery({
+    queryKey: ['resource', slug, resourceId],
+    queryFn: () => getResource(slug, resourceId),
+    retry: (failureCount, err) =>
+      !(err instanceof ApiError && err.status === 404) && failureCount < 1,
+    staleTime: 60_000,
+  })
+  return source.error instanceof ApiError && source.error.status === 404
+}
+
 function EvidenceCard(
   { slug, investigationId, item }: { slug: string; investigationId: string; item: EvidenceItem },
 ) {
   const queryClient = useQueryClient()
   const { access, canWrite, run } = useInvestigationAuthority(slug)
+  const sourceGone = useSourceGone(slug, item.resourceId)
   const [expanded, setExpanded] = useState(false)
   const [note, setNote] = useState(item.note)
   const [noteDirty, setNoteDirty] = useState(false)
@@ -536,13 +554,24 @@ function EvidenceCard(
   return (
     <div className='rp-card p-4'>
       <div className='flex items-start justify-between gap-3'>
-        <Link
-          to={sourceHref}
-          className='rp-focus min-w-0 truncate text-sm font-semibold text-ink underline-offset-2 hover:underline'
-          title={item.resourceTitle}
-        >
-          {item.resourceTitle}
-        </Link>
+        {sourceGone
+          ? (
+            <span
+              className='min-w-0 truncate text-sm font-semibold text-ink-2'
+              title={item.resourceTitle}
+            >
+              {item.resourceTitle}
+            </span>
+          )
+          : (
+            <Link
+              to={sourceHref}
+              className='rp-focus min-w-0 truncate text-sm font-semibold text-ink underline-offset-2 hover:underline'
+              title={item.resourceTitle}
+            >
+              {item.resourceTitle}
+            </Link>
+          )}
         {item.score != null
           ? (
             <span className='rp-badge rp-badge-quiet shrink-0 tabular-nums'>
@@ -551,6 +580,14 @@ function EvidenceCard(
           )
           : null}
       </div>
+
+      {sourceGone && (
+        <p className='mt-2 text-xs text-ink-3' data-evidence-source-gone>
+          <span className='rp-badge rp-badge-quiet mr-2'>No longer in the Library</span>
+          The document this passage came from was deleted or unpublished. The passage, its verdict
+          and notes are kept.
+        </p>
+      )}
 
       <blockquote
         className={`break-words mt-2 border-l-2 border-line pl-3 text-sm leading-relaxed text-ink-2 ${

@@ -359,6 +359,12 @@ test('visual matrix covers management, reading, access and platform surfaces in 
     { name: 'manage-chrome', path: '/t/marine/manage', selector: 'h1' },
     { name: 'manage-recent', path: '/t/marine/manage', selector: 'main li button' },
     {
+      name: 'manage-recent-delete',
+      path: '/t/marine/manage?tab=content',
+      selector: 'dialog h2',
+      open: ['Delete'],
+    },
+    {
       name: 'manage-add-content',
       path: '/t/marine/manage?tab=content',
       selector: '#link-url-marine',
@@ -538,6 +544,12 @@ test('visual matrix covers management, reading, access and platform surfaces in 
     },
     { name: 'search-chrome', path: '/t/marine/search?q=abalone', selector: 'main' },
     { name: 'document-chrome', path: '/t/marine/library/res-1', selector: 'main' },
+    {
+      name: 'document-delete',
+      path: '/t/marine/library/res-1',
+      selector: 'dialog h2',
+      open: ['Delete'],
+    },
     { name: 'document-chat-heading', path: '/t/marine/library/res-1', selector: '#chat-heading' },
     { name: 'docs-ask-heading', path: '/t/marine/help', selector: 'text:How do I' },
     {

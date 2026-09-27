@@ -1,5 +1,5 @@
 import { useAccess } from '../../components/AccessProvider.tsx'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { CorpusHealthRow } from '../../api/client.ts'
 import { getCorpusHealth, setResourceHidden } from '../../api/client.ts'
@@ -7,20 +7,27 @@ import { errorMessage, type Message } from './shared.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
+import {
+  deletedNotice,
+  DeleteDocumentButton,
+  type DeleteOutcome,
+} from '../../components/DeleteDocument.tsx'
 
 /**
  * One resource that failed extraction or came back suspiciously thin - a
- * hide/publish toggle so it can be pulled out of the citable corpus without
- * deleting it (the librarian may want to investigate or re-crawl it later).
+ * hide/publish toggle so it can be pulled out of the citable corpus while the
+ * librarian investigates or re-crawls it, and a delete for one that is junk.
  */
 function HealthRow({
   row,
   slug,
   onChanged,
+  onDeleted,
 }: {
   row: CorpusHealthRow
   slug: string
   onChanged: (id: string, hidden: boolean) => Promise<unknown>
+  onDeleted: (row: CorpusHealthRow, outcome: DeleteOutcome) => void
 }) {
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -68,14 +75,22 @@ function HealthRow({
             {row.hidden ? <span className='rp-badge rp-badge-quiet'>Hidden</span> : null}
           </div>
         </div>
-        <button
-          type='button'
-          disabled={busy}
-          onClick={() => void toggle()}
-          className='rp-btn rp-btn-outline shrink-0'
-        >
-          {busy ? 'Updating…' : row.hidden ? 'Publish' : 'Hide'}
-        </button>
+        <span className='flex shrink-0 flex-wrap items-center gap-2'>
+          <button
+            type='button'
+            disabled={busy}
+            onClick={() => void toggle()}
+            className='rp-btn rp-btn-outline shrink-0'
+          >
+            {busy ? 'Updating…' : row.hidden ? 'Publish' : 'Hide'}
+          </button>
+          <DeleteDocumentButton
+            slug={slug}
+            document={row}
+            onDeleted={(outcome) => onDeleted(row, outcome)}
+            className='rp-btn rp-btn-outline shrink-0 hover:text-[var(--rp-bad-ink)]'
+          />
+        </span>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
     </li>
@@ -102,6 +117,8 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [healthyOpen, setHealthyOpen] = useState(false)
+  const [notice, setNotice] = useState('')
+  const heading = useRef<HTMLParagraphElement>(null)
 
   const scan = async () => {
     setScanning(true)
@@ -126,6 +143,12 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
     setRows((previous) => previous?.map((row) => row.id === id ? { ...row, hidden } : row) ?? null)
     await queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
   }
+  const onDeleted = (deleted: CorpusHealthRow, outcome: DeleteOutcome) => {
+    setRows((previous) => previous?.filter((row) => row.id !== deleted.id) ?? null)
+    setNotice(deletedNotice(deleted.title, outcome))
+    // The row, and the control that had focus, go: focus the panel instead of the page body.
+    heading.current?.focus()
+  }
 
   const needsAttention = (rows ?? [])
     .filter((r) => r.status !== 'ok')
@@ -139,10 +162,12 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
     >
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div>
-          <p className='text-sm font-semibold text-ink'>Corpus health</p>
+          <p ref={heading} tabIndex={-1} className='text-sm font-semibold text-ink'>
+            Corpus health
+          </p>
           <p className='mt-0.5 max-w-md text-xs text-ink-3'>
-            Pages that failed extraction (bot walls, empty pages) should be hidden so they can never
-            be cited.
+            Pages that failed extraction (bot walls, empty pages) should be hidden or deleted so
+            they can never be cited.
           </p>
         </div>
         <button
@@ -171,6 +196,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
         : null}
 
       {error ? <MessagePanel message={{ tone: 'error', text: error }} className='mt-3' /> : null}
+      <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-3'>{notice}</p>
 
       {rows && rows.length === 0
         ? <p className='mt-4 text-sm text-ink-3'>This corpus has no resources yet.</p>
@@ -190,6 +216,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
                         row={row}
                         slug={slug}
                         onChanged={onChanged}
+                        onDeleted={onDeleted}
                       />
                     ))}
                   </ul>
@@ -222,6 +249,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
                             row={row}
                             slug={slug}
                             onChanged={onChanged}
+                            onDeleted={onDeleted}
                           />
                         ))}
                       </ul>

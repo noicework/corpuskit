@@ -1416,6 +1416,23 @@ export function setResourceHidden(
   )
 }
 
+/**
+ * Delete one document for good, published or a draft. The API answers 404 when it is already
+ * gone, and `cleanup_incomplete` when the document was deleted but what the portal kept for it
+ * was not all cleared; deleting it again finishes that.
+ */
+export function deleteAdminResource(
+  slug: string,
+  passcode: AdminRequestAccess,
+  resourceId: string,
+): Promise<{ ok: true }> {
+  return adminRequest(
+    `/api/admin/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(resourceId)}`,
+    passcode,
+    { method: 'DELETE' },
+  ).then(validatedAdminResult(adminSuccessSchema))
+}
+
 // --- Admin: source registry and syncs ----------------------------------------
 
 export interface PortalSource {

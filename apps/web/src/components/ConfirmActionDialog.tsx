@@ -3,12 +3,24 @@ import { createPortal } from 'react-dom'
 
 /** Native modality makes the background inert; explicit containment includes browser Tab edges. */
 export function ConfirmActionDialog(
-  { title, description, confirmLabel, cancelLabel, busy = false, error, onConfirm, onCancel }: {
+  {
+    title,
+    description,
+    confirmLabel,
+    cancelLabel,
+    busy = false,
+    busyLabel = 'Saving change...',
+    error,
+    onConfirm,
+    onCancel,
+  }: {
     title: string
     description: ReactNode
     confirmLabel: string
     cancelLabel: string
     busy?: boolean
+    /** What the status line says while the action runs. */
+    busyLabel?: string
     error?: string | null
     onConfirm(): void
     onCancel(): void
@@ -72,7 +84,7 @@ export function ConfirmActionDialog(
         {description}
       </div>
       {error && <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
-      {busy && <p role='status' className='mt-4 text-sm'>Saving change...</p>}
+      {busy && <p role='status' className='mt-4 text-sm'>{busyLabel}</p>}
       <div className='mt-6 flex flex-wrap gap-3'>
         <button
           ref={safe}

@@ -73,6 +73,8 @@ export function startTestServer(options: {
   componentHtml?: string
   /** Serve portals whose collection has no documents yet. */
   emptyCollection?: boolean
+  /** The collection readers see, when a journey changes it; the DoubleProvider otherwise. */
+  provider?: DoubleProvider
 } = {}): TestServer {
   const directory = Deno.makeTempDirSync({ prefix: 'rbac-e2e-' })
   // Legacy JSON stores capture DATA_DIR at module load. Override only their
@@ -218,7 +220,7 @@ export function startTestServer(options: {
     const statuses = new Map<string, number>()
     const providerCalls: string[] = []
     const provider = new Proxy(
-      options.emptyCollection ? DoubleProvider.empty() : new DoubleProvider(),
+      options.provider ?? (options.emptyCollection ? DoubleProvider.empty() : new DoubleProvider()),
       {
         get(target, property, receiver) {
           const value = Reflect.get(target, property, receiver)

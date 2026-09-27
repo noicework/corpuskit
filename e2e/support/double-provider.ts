@@ -47,7 +47,8 @@ const MATCHED_PASSAGE =
   'populations since 2019, with marine heatwaves identified as the leading stressor.'
 
 export class DoubleProvider implements RetrievalProvider {
-  private resources: ResourceSummary[] = [RESOURCE_ONE, RESOURCE_TWO]
+  /** Protected so a journey that deletes a document can take it out of the collection. */
+  protected resources: ResourceSummary[] = [RESOURCE_ONE, RESOURCE_TWO]
 
   /**
    * A provider for portals whose collection is still empty. A factory, not a constructor

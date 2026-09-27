@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import type { CatalogItem } from '@research-portal/core'
 import { getCatalog, getFacets } from '../api/client.ts'
 import { Byline, bylineFor } from '../components/Byline.tsx'
@@ -289,6 +289,7 @@ export function LibraryBrowser(
     onDensityChange,
     view: viewProp,
     onViewChange,
+    notice = '',
   }: {
     bare?: boolean
     /** Controlled sort and density, when the host renders the controls itself. */
@@ -303,6 +304,8 @@ export function LibraryBrowser(
      */
     view?: ViewMode
     onViewChange?: (value: ViewMode) => void
+    /** A status to announce under the heading, such as which document was just deleted. */
+    notice?: string
   } = {},
 ) {
   const { config } = useOutletContext<TenantOutletContext>()
@@ -474,6 +477,7 @@ export function LibraryBrowser(
           </div>
         </div>
       )}
+      {!bare && <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-2'>{notice}</p>}
 
       {
         /* Bare mode drops the library's own heading, search and facet rail, but
@@ -853,5 +857,16 @@ export function LibraryBrowser(
 
 /** The standalone /library route, kept for direct links and the mobile sheet. */
 export function LibraryPage() {
-  return <LibraryBrowser />
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [notice, setNotice] = useState('')
+  // A page that sent the reader here (a deleted document's page) can leave a status to announce.
+  // It is said once: going back and forward again does not repeat it.
+  useEffect(() => {
+    const sent = (location.state as { notice?: unknown } | null)?.notice
+    if (typeof sent !== 'string' || !sent) return
+    setNotice(sent)
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
+  }, [location.state])
+  return <LibraryBrowser notice={notice} />
 }
