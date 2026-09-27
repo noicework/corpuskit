@@ -754,6 +754,42 @@ events stay on record. No other Worker seeds portals.
   it does not retry automatically. A refused agent run explains that
   agents are disabled, and it does not sign the user out.
 
+## Client addresses and rate limits
+
+Paid answers to anonymous callers are rate limited, and every limit is keyed on the client
+address the runtime reports, never on a header the caller can write:
+
+- On Cloudflare, the address is `cf-connecting-ip`, which Cloudflare sets on every request.
+- On the local server, it is the TCP peer. `fly-client-ip`, `x-forwarded-for`, `x-real-ip` and
+  the like are ignored, unless `TRUST_PROXY_HOPS` says reverse proxies run in front of it.
+- With `TRUST_PROXY_HOPS=n`, the local server trusts the last `n` entries of `x-forwarded-for`,
+  which its `n` proxies append, and takes the client address from the right-most entry they
+  vouch for. Entries to the left of it were written by the client and are never read. Set it to
+  the number of proxies that each append to the header, and make sure clients cannot reach the
+  server without passing through them. It is a whole number from 0 to 10; any other value is
+  ignored with a start-up warning, and 0 or unset reads the TCP peer. Behind a proxy without it
+  (a load balancer, nginx, or a container platform's edge), every client has the proxy's address
+  and shares its limits. The Worker ignores it.
+
+The same address keys the break-glass lockout and the other per-address failure limits.
+
+The limits, each per minute, with `0` turning one off:
+
+| Setting | Default | Limits |
+|---|---|---|
+| `RATE_LIMIT_ASK_PER_MIN` | 20 | Paid-answer requests from one browser inside its address. The browser is the web app's anonymous `x-rp-client` id; without one, the address itself. The id can only divide an address's allowance, never add to it. |
+| `RATE_LIMIT_ASK_PER_MIN_IP` | 5 times the above | Paid-answer requests from one address, whatever browser ids it sends. |
+| `RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN` | 30 | Anonymous asks on one portal, from every address together, so spreading asks across many addresses cannot drain a portal's `asksPerDay` or the account behind it. Signed-in people and portal keys are not counted. The routes that only accompany an ask (routing, sub-questions, verdicts and follow-ups) are not asks here either. The MCP `answer_question` tool counts the same way. |
+| `RATE_LIMIT_ESTATE_PER_MIN` | 6 | Cross-portal asks (`POST /api/ask-estate`) from one address. |
+| `RATE_LIMIT_FEEDBACK_PER_MIN` | 30 | Answer ratings (`POST /api/t/:slug/feedback`) from one address on one portal. |
+
+A paid-answer route covers asks, help-assistant asks, briefings, summaries, syntheses, routing,
+sub-questions, verdicts and follow-ups. A cross-portal ask is one answer on every portal it
+reaches, so it counts once per portal against the first two limits and against each portal's
+anonymous limit, and it is admitted on all of them or on none. A request over any limit is
+answered `429 {"error":"rate_limited"}` with a `Retry-After` header, and an ask it had counted
+toward `asksPerDay` is given back.
+
 ## Scheduled maintenance
 
 Once a day (the Worker's cron trigger, or a timer in the local server) the deployment runs one

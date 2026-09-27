@@ -176,6 +176,9 @@ export class PortalDurableObject extends DurableObject<Env> {
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
     })
+    // Rate limits key on the `cf-connecting-ip` the Worker passes in the trusted context, never
+    // on a forwarding header, so `TRUST_PROXY_HOPS` has no meaning here.
+    const askPerMin = numberBinding(bindings.RATE_LIMIT_ASK_PER_MIN, 20)
     this.app = buildApp({
       rbac: this.stores.rbac,
       configuredTenantId: bindings.ENTRA_TENANT_ID ||
@@ -214,7 +217,9 @@ export class PortalDurableObject extends DurableObject<Env> {
       invalidate: (slug) => this.provider.invalidate(slug),
       webAvailable: true,
       buildSha: env.CF_VERSION_METADATA?.id ?? 'cloudflare',
-      rateLimitAskPerMin: numberBinding(bindings.RATE_LIMIT_ASK_PER_MIN, 20),
+      rateLimitAskPerMin: askPerMin,
+      rateLimitAskPerMinPerIp: numberBinding(bindings.RATE_LIMIT_ASK_PER_MIN_IP, askPerMin * 5),
+      rateLimitAnonPortalAskPerMin: numberBinding(bindings.RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN, 30),
       rateLimitEstatePerMin: numberBinding(bindings.RATE_LIMIT_ESTATE_PER_MIN, 6),
     })
   }

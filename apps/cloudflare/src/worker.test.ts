@@ -1044,6 +1044,37 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
   }
 })
 
+Deno.test('Worker rate limits key on cf-connecting-ip, never on headers the caller writes', async () => {
+  const h = await realHarness({ RATE_LIMIT_ASK_PER_MIN: '2', RATE_LIMIT_ASK_PER_MIN_IP: '3' })
+  try {
+    const ask = (peer: string, headers: Record<string, string> = {}) =>
+      worker.fetch(
+        new Request('https://corpuskit.test/api/t/marine/ask', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'cf-connecting-ip': peer, ...headers },
+          // Refused as invalid after the limiter has counted it, so no answer is generated.
+          body: '{}',
+        }),
+        h.env,
+      )
+    const spoofed = () => ({
+      'fly-client-ip': `203.0.113.${Math.floor(Math.random() * 250)}`,
+      'x-forwarded-for': `198.51.100.${Math.floor(Math.random() * 250)}`,
+      'x-rp-client': `browser-${crypto.randomUUID().slice(0, 12)}`,
+    })
+    expect((await ask('192.0.2.70', spoofed())).status).toBe(400)
+    expect((await ask('192.0.2.70', spoofed())).status).toBe(400)
+    expect((await ask('192.0.2.70', spoofed())).status).toBe(400)
+    const limited = await ask('192.0.2.70', spoofed())
+    expect(limited.status).toBe(429)
+    expect(await limited.json()).toEqual({ error: 'rate_limited' })
+    // Another address Cloudflare reports is another caller.
+    expect((await ask('192.0.2.71', spoofed())).status).toBe(400)
+  } finally {
+    h.database.close()
+  }
+})
+
 Deno.test('scheduled RPC runs retention while every HTTP maintenance spelling stays non-system', async () => {
   const h = await realHarness()
   try {

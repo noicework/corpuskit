@@ -511,6 +511,9 @@ export function createEnforcementFixture(
       | 'platformDomain'
       | 'lifecycle'
       | 'rateLimitAskPerMin'
+      | 'rateLimitAskPerMinPerIp'
+      | 'rateLimitAnonPortalAskPerMin'
+      | 'rateLimitEstatePerMin'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
     >
@@ -617,7 +620,10 @@ export function createEnforcementFixture(
     },
   })
   const contexts = new WeakMap<Request, PortalRequestContext>()
-  const contextFor = async (session: TrustedSessionFacts | null): Promise<PortalRequestContext> => {
+  const contextFor = async (
+    session: TrustedSessionFacts | null,
+    clientIp = '192.0.2.1',
+  ): Promise<PortalRequestContext> => {
     if (session && !validSessionFacts(session, clock)) throw new Error('Invalid fixture session')
     const resolution = await resolveEffectiveRoles(
       session,
@@ -634,7 +640,7 @@ export function createEnforcementFixture(
       session,
       ...resolution,
       coarseAdminEligible: coarseAdminEligibility(resolution.effectiveRoles),
-      clientIp: '192.0.2.1',
+      clientIp,
       actor: session ? { kind: 'user', id: session.oid } : { kind: 'anonymous' },
     }
   }
@@ -657,7 +663,8 @@ export function createEnforcementFixture(
     ),
     brandingPath: `${directory}/branding`,
     rateLimitAskPerMin: options.rateLimitAskPerMin ?? 0,
-    rateLimitEstatePerMin: 0,
+    rateLimitAnonPortalAskPerMin: options.rateLimitAnonPortalAskPerMin ?? 0,
+    rateLimitEstatePerMin: options.rateLimitEstatePerMin ?? 0,
     rateLimitMcpAuthPerMin: 0,
   })
   const routeCases: EnforcementRouteCase[] = []
@@ -698,6 +705,22 @@ export function createEnforcementFixture(
       await stores.bindings.initialize()
       const request = new Request(`http://localhost${path}`, init)
       contexts.set(request, await contextFor(session))
+      try {
+        return await app.fetch(request)
+      } finally {
+        contexts.delete(request)
+      }
+    },
+    /** As `requestAs`, from the client address the runtime reported for the request. */
+    async requestFrom(
+      clientIp: string,
+      session: TrustedSessionFacts | null,
+      path: string,
+      init?: RequestInit,
+    ) {
+      await stores.bindings.initialize()
+      const request = new Request(`http://localhost${path}`, init)
+      contexts.set(request, await contextFor(session, clientIp))
       try {
         return await app.fetch(request)
       } finally {

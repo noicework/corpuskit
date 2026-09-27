@@ -74,6 +74,9 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   rateLimitAskPerMin: { noPortalRecords: 'in-memory, per client address' },
   rateLimitAskPerMinPerIp: { noPortalRecords: 'in-memory, per client address' },
   rateLimitFeedbackPerMin: { noPortalRecords: 'in-memory, per client address' },
+  rateLimitAnonPortalAskPerMin: {
+    noPortalRecords: 'in-memory counts for one minute, never stored',
+  },
   rateLimitEstatePerMin: { noPortalRecords: 'in-memory, per client address' },
   rateLimitMcpAuthPerMin: { noPortalRecords: 'in-memory, per client address' },
 }

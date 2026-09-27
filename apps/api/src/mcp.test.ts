@@ -207,6 +207,8 @@ function harness(
         return {
           requestId: crypto.randomUUID(),
           session,
+          // The runtime's own view of the peer, which only this test harness sets.
+          clientIp: request.headers.get('x-test-peer') ?? undefined,
           coarseAdminEligible: false,
           effectiveRoles: {
             portalRoles: id === writer.oid ? [{ slug: 'marine', role: 'portal-admin' }] : [],
@@ -614,18 +616,23 @@ describe('Streamable HTTP MCP endpoint', () => {
     expect(await limited.json()).toEqual({ error: 'rate_limited' })
     // A limited attempt never reaches verification, so it writes no audit row.
     expect(denials()).toBe(before)
+    const attempt = (headers: Record<string, string>) =>
+      test.app.request('/api/t/marine/mcp', {
+        method: 'POST',
+        headers: {
+          accept: 'application/json, text/event-stream',
+          'content-type': 'application/json',
+          authorization: `Bearer ${bad}`,
+          ...headers,
+        },
+        body: JSON.stringify(body),
+      })
+    // Address headers the caller writes itself choose no new bucket.
+    for (const header of ['cf-connecting-ip', 'fly-client-ip', 'x-forwarded-for']) {
+      expect((await attempt({ [header]: '198.51.100.7' })).status).toBe(429)
+    }
     // The limit is keyed by caller address, so the limiter itself keeps counting new callers.
-    const other = await test.app.request('/api/t/marine/mcp', {
-      method: 'POST',
-      headers: {
-        accept: 'application/json, text/event-stream',
-        'content-type': 'application/json',
-        authorization: `Bearer ${bad}`,
-        'fly-client-ip': '198.51.100.7',
-      },
-      body: JSON.stringify(body),
-    })
-    expect(other.status).toBe(401)
+    expect((await attempt({ 'x-test-peer': '198.51.100.7' })).status).toBe(401)
   })
 })
 

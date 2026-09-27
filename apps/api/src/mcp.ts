@@ -44,7 +44,7 @@ import { z } from 'zod/v4'
 import { PORTAL_ROLES, type TenantConfig } from '@research-portal/core'
 import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
 import { type McpKeyStoreApi } from './stores.ts'
-import { clientIp, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
+import { addressKey, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
 
 const MCP_ROUTE = '/api/t/:slug/mcp'
 const keyLabelSchema = z.object({
@@ -77,6 +77,8 @@ export interface McpRoutesOptions {
 export interface McpAuthRateLimitOptions {
   /** Authentication attempts per minute per address. Defaults to 60; 0 disables. */
   rateLimitPerMin?: number
+  /** The client address the runtime reported for a request, never a header the caller sets. */
+  clientAddress: (context: Context) => string | undefined
 }
 
 interface McpAuditContext {
@@ -426,7 +428,7 @@ export function registerMcpAuthRateLimit(app: Hono, opts: McpAuthRateLimitOption
   registerInfrastructure(
     app,
     MCP_ROUTE,
-    rateLimit(limiter, (context) => context.req.header('cf-connecting-ip') ?? clientIp(context)),
+    rateLimit(limiter, (context) => addressKey(opts.clientAddress(context))),
   )
 }
 

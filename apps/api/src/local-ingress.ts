@@ -47,7 +47,13 @@ import {
   SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
   unknownHostsMode,
 } from './portal-aliases.ts'
-import { SlidingWindowLimiter } from './rate-limit.ts'
+import {
+  forwardedClientAddress,
+  SlidingWindowLimiter,
+  trustProxyHops,
+  trustProxyHopsWarning,
+  UNKNOWN_CLIENT_ADDRESS,
+} from './rate-limit.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import {
   authenticateOperator,
@@ -67,9 +73,9 @@ interface LocalIngressOptions {
   env: Record<string, string | undefined>
 }
 type PeerInfo = Pick<Deno.ServeHandlerInfo<Deno.NetAddr>, 'remoteAddr'>
-/** The TCP peer, which keys the per-address failure limits. */
-const peerAddress = (info?: PeerInfo) =>
-  info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : 'unknown'
+/** The TCP peer: the client, or the nearest reverse proxy when there is one. */
+const tcpPeer = (info?: PeerInfo) =>
+  info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : undefined
 class InvalidLocalPrincipal extends Error {}
 class InvalidOperatorCredential extends Error {}
 
@@ -93,10 +99,15 @@ export class LocalIngress {
     windowMs: 60_000,
   })
   private readonly externalFailures: ExternalFailureAudit
+  /** Trusted reverse proxies in front of this server (`TRUST_PROXY_HOPS`). */
+  private readonly proxyHops: number
 
   constructor(private readonly options: LocalIngressOptions) {
     const { env, rbac } = options
     this.externalFailures = new ExternalFailureAudit(rbac.audit)
+    this.proxyHops = trustProxyHops(env.TRUST_PROXY_HOPS)
+    const proxyWarning = trustProxyHopsWarning(env)
+    if (proxyWarning) console.warn(proxyWarning)
     const operatorWarning = operatorConfigurationWarning(env)
     if (operatorWarning) console.warn(operatorWarning)
     const hostWarning = externalHostWarning(env)
@@ -148,6 +159,19 @@ export class LocalIngress {
     this.contexts.get(request)
 
   /**
+   * The client's address: the TCP peer, or with `TRUST_PROXY_HOPS` set the address the trusted
+   * proxies recorded in `x-forwarded-for`. It keys every per-address limit, the break-glass
+   * lockout and audit, so no header the client writes itself can choose it.
+   */
+  clientAddress(request: Request, info?: PeerInfo): string | undefined {
+    return forwardedClientAddress(
+      tcpPeer(info),
+      request.headers.get('x-forwarded-for'),
+      this.proxyHops,
+    )
+  }
+
+  /**
    * The portal whose registered alias the request host is, or undefined. Read from the portal
    * registry on every request, so a change applies at once; platform and local hosts never are.
    */
@@ -185,6 +209,9 @@ export class LocalIngress {
   ): Promise<Response> {
     const requestId = crypto.randomUUID()
     const { rbac } = this.options
+    const clientIp = this.clientAddress(request, info)
+    // The per-address failure limits share one bucket for requests with no reported address.
+    const limitKey = clientIp ?? UNKNOWN_CLIENT_ADDRESS
     let operator: { id: string } | undefined
     const actor = (): AuditActor =>
       operator ? { kind: 'operator', id: `operator:${operator.id}` } : { kind: 'anonymous' }
@@ -258,7 +285,7 @@ export class LocalIngress {
         // As in the Worker: a reserved host that still carries an alias record issues no session
         // until the alias is removed.
         if (path === '/auth/external' && host.kind === 'reserved' && hostPortal !== undefined) {
-          if (this.hostConflicts.check(peerAddress(info)).allowed) {
+          if (this.hostConflicts.check(limitKey).allowed) {
             appendAudit(
               rbac.audit,
               createAuditEvent({
@@ -284,14 +311,14 @@ export class LocalIngress {
               if (!this.options.externalReplays) throw new Error('Replay store unavailable')
               return this.options.externalReplays.consume(key, expiresAt)
             },
-            auditFailure: (reason) => this.externalFailures.record(reason, peerAddress(info)),
+            auditFailure: (reason) => this.externalFailures.record(reason, limitKey),
           })) ?? Response.json({ error: 'not_found' }, { status: 404 })
         }
         // The local server reads only the sessions it can issue: external handoff cookies.
         if (!session && this.externalEnabled && sessionAuthConfigured(auth)) {
           // A session carried off the host it was sealed to is refused, and recorded.
           const user = await authUser(request, auth, (oid) => {
-            if (!this.hostMismatches.check(peerAddress(info)).allowed) return
+            if (!this.hostMismatches.check(limitKey).allowed) return
             appendAudit(
               rbac.audit,
               createAuditEvent({
@@ -352,7 +379,6 @@ export class LocalIngress {
           })
         if (!result.ok && result.code === 'invalid_principal') throw new InvalidLocalPrincipal()
       }
-      const clientIp = info?.remoteAddr.transport === 'tcp' ? info.remoteAddr.hostname : undefined
       let principal: PortalRequestContext
       let resolution: RoleResolution | undefined
       if (operator) {
@@ -491,7 +517,7 @@ export class LocalIngress {
     } catch (error) {
       if (error instanceof InvalidLocalPrincipal || error instanceof InvalidOperatorCredential) {
         if (error instanceof InvalidOperatorCredential) {
-          const { allowed, retryAfterSec } = this.operatorFailures.check(peerAddress(info))
+          const { allowed, retryAfterSec } = this.operatorFailures.check(limitKey)
           if (!allowed) {
             return Response.json({ error: 'rate_limited' }, {
               status: 429,

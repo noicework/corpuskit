@@ -15,6 +15,8 @@ export function lifecycleMessage(body: { error: string; [key: string]: unknown }
       return 'Agents are disabled for this portal.'
     case 'ask_quota_exceeded':
       return 'This portal has reached its daily question limit.'
+    case 'rate_limited':
+      return 'This portal is answering as many questions as it can. Try again in a minute.'
     default:
       return 'This portal refused the request.'
   }

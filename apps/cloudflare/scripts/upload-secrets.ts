@@ -52,7 +52,8 @@ function isWorkerSecret(name: string): boolean {
     name === 'SESSION_SECRET' || name === 'BINDING_KEY' || name === 'OPERATOR_API_KEY' ||
     name === 'EXTERNAL_LOGIN_ISSUER' || name === 'EXTERNAL_LOGIN_JWK' ||
     name === 'EXTERNAL_LOGIN_NAME' || name === 'EXTERNAL_LOGIN_START_URL' ||
-    name === 'RATE_LIMIT_ASK_PER_MIN' ||
+    name === 'RATE_LIMIT_ASK_PER_MIN' || name === 'RATE_LIMIT_ASK_PER_MIN_IP' ||
+    name === 'RATE_LIMIT_ANON_PORTAL_ASK_PER_MIN' ||
     name === 'RATE_LIMIT_ESTATE_PER_MIN' || name === 'CLOUDFLARE_ACCOUNT_ID' ||
     name === 'CLOUDFLARE_DOMAINS_TOKEN' || /^ARAG_KB_[A-Z0-9_]+$/.test(name)
 }

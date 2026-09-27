@@ -2388,7 +2388,7 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
     const ask = () =>
       app.request('/api/t/marine/ask', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'fly-client-ip': '203.0.113.5' },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
       })
 
@@ -2401,21 +2401,34 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
     expect(Number(third.headers.get('retry-after'))).toBeGreaterThan(0)
   })
 
-  it('isolates the limit per client IP - a different caller is unaffected', async () => {
+  it('isolates the limit per client address - a different caller is unaffected', async () => {
+    // The address the runtime reported for each request, as ingress supplies it.
+    const peers = new WeakMap<Request, string>()
     const app = buildApp({
       provider: new StubProvider(),
       tenants: freshTenants(),
       rateLimitAskPerMin: 1,
+      requestContext: (request) => ({
+        requestId: crypto.randomUUID(),
+        session: null,
+        clientIp: peers.get(request),
+        coarseAdminEligible: false,
+      }),
     })
-    const askAs = (ip: string) =>
-      app.request('/api/t/marine/ask', {
+    const askAs = (ip: string, headers: Record<string, string> = {}) => {
+      const request = new Request('http://localhost/api/t/marine/ask', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'fly-client-ip': ip },
+        headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
       })
+      peers.set(request, ip)
+      return app.fetch(request)
+    }
 
     expect((await askAs('203.0.113.1')).status).toBe(200)
     expect((await askAs('203.0.113.1')).status).toBe(429)
+    // An address header the caller writes itself is not its address.
+    expect((await askAs('203.0.113.1', { 'fly-client-ip': '203.0.113.7' })).status).toBe(429)
     expect((await askAs('203.0.113.2')).status).toBe(200)
   })
 
@@ -2429,7 +2442,7 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
     const askEstate = () =>
       app.request('/api/ask-estate', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'fly-client-ip': '203.0.113.9' },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
       })
 
@@ -2447,7 +2460,7 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
     const ask = () =>
       app.request('/api/t/marine/ask', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'fly-client-ip': '203.0.113.5' },
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
       })
 
@@ -2464,7 +2477,7 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
       adminPasscode: passcode,
       rateLimitAskPerMin: 1,
     })
-    const headers = { 'x-admin-passcode': passcode, 'fly-client-ip': '203.0.113.5' }
+    const headers = { 'x-admin-passcode': passcode }
 
     for (let i = 0; i < 5; i++) {
       const response = await app.request('/api/admin/overview', { headers })
@@ -2988,11 +3001,7 @@ describe('rate limiting per browser id', () => {
     const askAs = (client: string) =>
       app.request('/api/t/marine/ask', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'fly-client-ip': '203.0.113.9',
-          'x-rp-client': client,
-        },
+        headers: { 'content-type': 'application/json', 'x-rp-client': client },
         body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
       })
 

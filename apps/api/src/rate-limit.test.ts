@@ -1,13 +1,17 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import {
-  clientIp,
+  addressKey,
+  admitAll,
   clientKey,
+  forwardedClientAddress,
   RATE_LIMIT_MESSAGE,
   rateLimit,
   SlidingWindowLimiter,
+  trustProxyHops,
+  trustProxyHopsWarning,
 } from './rate-limit.ts'
-import { type Context, Hono } from 'hono'
+import { Hono } from 'hono'
 
 /** A controllable clock so tests never depend on real elapsed time. */
 function fakeClock(start = 0) {
@@ -97,33 +101,76 @@ describe('SlidingWindowLimiter', () => {
   })
 })
 
-describe('clientIp', () => {
-  const testApp = () => {
-    const app = new Hono()
-    app.get('/', (c) => c.text(clientIp(c)))
-    return app
-  }
-
-  it('prefers fly-client-ip', async () => {
-    const app = testApp()
-    const res = await app.request('/', {
-      headers: { 'fly-client-ip': '203.0.113.9', 'x-forwarded-for': '10.0.0.1' },
-    })
-    expect(await res.text()).toBe('203.0.113.9')
+describe('client addresses', () => {
+  it('keys a request on the address the runtime reported, never a header', () => {
+    expect(addressKey('203.0.113.9')).toBe('ip:203.0.113.9')
+    // No reported address is one shared bucket, not a free pass.
+    expect(addressKey(undefined)).toBe('ip:unknown')
+    expect(addressKey('  ')).toBe('ip:unknown')
   })
 
-  it('falls back to the first hop of x-forwarded-for', async () => {
-    const app = testApp()
-    const res = await app.request('/', {
-      headers: { 'x-forwarded-for': '198.51.100.7, 10.0.0.1' },
-    })
-    expect(await res.text()).toBe('198.51.100.7')
+  it('reads x-forwarded-for only behind declared proxies, taking the hop they vouch for', () => {
+    // No proxies declared: the TCP peer, whatever the header says.
+    expect(forwardedClientAddress('10.0.0.1', '198.51.100.7', 0)).toBe('10.0.0.1')
+    // One proxy appends the address it saw, so a client-written prefix is never read.
+    expect(forwardedClientAddress('10.0.0.1', 'spoofed, 198.51.100.7', 1)).toBe('198.51.100.7')
+    // Two proxies: the second from the right is the client.
+    expect(forwardedClientAddress('10.0.0.2', 'spoofed, 198.51.100.7, 10.0.0.1', 2))
+      .toBe('198.51.100.7')
+    // A request that skipped a proxy: the nearest address a proxy recorded.
+    expect(forwardedClientAddress('10.0.0.2', '198.51.100.7', 2)).toBe('198.51.100.7')
+    // No header behind a proxy: the peer.
+    expect(forwardedClientAddress('10.0.0.1', null, 1)).toBe('10.0.0.1')
+    expect(forwardedClientAddress('10.0.0.1', ' , ', 1)).toBe('10.0.0.1')
   })
 
-  it('falls back to "unknown" with neither header', async () => {
-    const app = testApp()
-    const res = await app.request('/')
-    expect(await res.text()).toBe('unknown')
+  it('accepts TRUST_PROXY_HOPS only as a whole number from 0 to 10', () => {
+    expect(trustProxyHops(undefined)).toBe(0)
+    expect(trustProxyHops('')).toBe(0)
+    expect(trustProxyHops('1')).toBe(1)
+    expect(trustProxyHops(' 2 ')).toBe(2)
+    expect(trustProxyHops('10')).toBe(10)
+    for (const invalid of ['11', '-1', '1.5', 'one', 'true', '1e1']) {
+      expect(trustProxyHops(invalid)).toBe(0)
+      expect(trustProxyHopsWarning({ TRUST_PROXY_HOPS: invalid })).toContain('TRUST_PROXY_HOPS')
+      expect(trustProxyHopsWarning({ TRUST_PROXY_HOPS: invalid })).not.toContain(invalid)
+    }
+    expect(trustProxyHopsWarning({})).toBeNull()
+    expect(trustProxyHopsWarning({ TRUST_PROXY_HOPS: '1' })).toBeNull()
+  })
+})
+
+describe('weighted admission', () => {
+  it('admits a request against every bucket at once, or against none', () => {
+    const clock = fakeClock()
+    const perClient = new SlidingWindowLimiter({ limit: 3, windowMs: 60_000, now: clock.now })
+    const perPortal = new SlidingWindowLimiter({ limit: 2, windowMs: 60_000, now: clock.now })
+    const fanOut = (weight: number, portals: string[]) =>
+      admitAll([
+        { limiter: perClient, key: 'ip:a', weight },
+        ...portals.map((slug) => ({ limiter: perPortal, key: slug })),
+      ])
+    expect(fanOut(2, ['one', 'two']).allowed).toBe(true)
+    // Room for the client, none for portal one: nothing is recorded anywhere.
+    expect(fanOut(1, ['one', 'one'])).toMatchObject({ allowed: false })
+    expect(perClient.peek('ip:a').remaining).toBe(1)
+    expect(fanOut(1, ['three']).allowed).toBe(true)
+    expect(fanOut(1, ['four'])).toMatchObject({ allowed: false })
+    clock.advance(60_001)
+    // A weight above the limit costs the whole window, once it is empty.
+    expect(fanOut(10, []).allowed).toBe(true)
+    expect(fanOut(1, [])).toMatchObject({ allowed: false })
+  })
+
+  it('says how long until enough room frees up for the weight asked', () => {
+    const clock = fakeClock()
+    const limiter = new SlidingWindowLimiter({ limit: 3, windowMs: 60_000, now: clock.now })
+    limiter.take('k')
+    clock.advance(10_000)
+    limiter.take('k', 2)
+    // Two more need the first two hits gone: the second left at 70 s, 60 s from now.
+    expect(limiter.peek('k', 2)).toMatchObject({ allowed: false, retryAfterSec: 60 })
+    expect(limiter.peek('k', 1)).toMatchObject({ allowed: false, retryAfterSec: 50 })
   })
 })
 
@@ -172,21 +219,18 @@ describe('X-RateLimit-Remaining', () => {
 })
 
 describe('clientKey', () => {
-  const ctx = (headers: Record<string, string>) =>
-    ({ req: { header: (name: string) => headers[name.toLowerCase()] } }) as unknown as Context
-
-  it('keys on a well-formed x-rp-client id ahead of the address', () => {
-    expect(clientKey(ctx({ 'x-rp-client': 'abcdef0123456789', 'fly-client-ip': '10.0.0.1' })))
-      .toBe('client:abcdef0123456789')
+  it('splits an address bucket by a well-formed x-rp-client id, never replacing the address', () => {
+    expect(clientKey('10.0.0.1', 'abcdef0123456789')).toBe('ip:10.0.0.1|client:abcdef0123456789')
+    // The same id from another address is another bucket.
+    expect(clientKey('10.0.0.2', 'abcdef0123456789')).not.toBe(
+      clientKey('10.0.0.1', 'abcdef0123456789'),
+    )
   })
 
   it('falls back to the address when the id is missing or malformed', () => {
-    expect(clientKey(ctx({ 'fly-client-ip': '10.0.0.1' }))).toBe('ip:10.0.0.1')
-    expect(clientKey(ctx({ 'x-rp-client': 'x y', 'fly-client-ip': '10.0.0.1' }))).toBe(
-      'ip:10.0.0.1',
-    )
-    expect(clientKey(ctx({ 'x-rp-client': 'short', 'fly-client-ip': '10.0.0.1' }))).toBe(
-      'ip:10.0.0.1',
-    )
+    expect(clientKey('10.0.0.1', undefined)).toBe('ip:10.0.0.1')
+    expect(clientKey('10.0.0.1', 'x y')).toBe('ip:10.0.0.1')
+    expect(clientKey('10.0.0.1', 'short')).toBe('ip:10.0.0.1')
+    expect(clientKey(undefined, 'abcdef0123456789')).toBe('ip:unknown|client:abcdef0123456789')
   })
 })
