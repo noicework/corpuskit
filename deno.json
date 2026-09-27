@@ -45,6 +45,7 @@
       "content/",
       "docs/",
       "README.md",
+      "CHANGELOG.md",
       "CLAUDE.md",
       "apps/web/dist/",
       "apps/web/public/",
@@ -76,6 +77,7 @@
     "test:e2e": "deno task build:web && deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/",
     "test:e2e:visual": "deno task build:web && E2E_VISUAL_MATRIX=1 deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/rbac-visual.test.ts",
     "enrich": "deno run --allow-net --allow-env --allow-read apps/api/scripts/enrich-labels.ts",
-    "provision": "deno run --allow-net --allow-env --allow-read --allow-write=.env apps/api/scripts/provision.ts"
+    "provision": "deno run --allow-net --allow-env --allow-read --allow-write=.env apps/api/scripts/provision.ts",
+    "release:notes": "deno run --allow-read=CHANGELOG.md apps/web/scripts/release-notes.ts"
   }
 }
