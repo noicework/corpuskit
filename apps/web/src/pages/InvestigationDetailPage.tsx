@@ -464,7 +464,9 @@ function useSourceGone(slug: string, resourceId: string): boolean {
     queryFn: () => getResource(slug, resourceId),
     retry: (failureCount, err) =>
       !(err instanceof ApiError && err.status === 404) && failureCount < 1,
-    staleTime: 60_000,
+    // One read per cited document when the investigation opens, not on every return to the tab.
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   })
   return source.error instanceof ApiError && source.error.status === 404
 }

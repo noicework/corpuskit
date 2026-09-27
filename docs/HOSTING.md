@@ -472,7 +472,11 @@ hour of 404s later it holds nothing (see above), or can raise `maxBytes`, clear 
 which starts a fresh ledger. A
 ledger written by an earlier build in a form this build does not recognise is read, never
 refused: a link recorded in an unknown form is taken as not yet measured and holds the
-deployment's `LINK_PROVISIONAL_BYTES` until it is.
+deployment's `LINK_PROVISIONAL_BYTES` until it is, and a delete record in an unknown form is left
+out, so its document stays counted. The ledger records a delete only while it is being sent, or
+while one is waiting to be settled (see [Deleting a document](#deleting-a-document)); a build
+from before document delete refuses a ledger that holds such a record, so roll back only when
+no delete is in flight or unsettled.
 
 Resource and byte limits apply to every add: uploads, links, pasted text, source syncs, content
 copies, reingest and the built-in help pages. They are checked when the write happens,
@@ -559,28 +563,50 @@ document. Viewers, analysts and anonymous visitors never see it. It is permanent
 
 The route reads the document once, drafts included, in the portal's own knowledge box. An id the
 box does not hold, including one from another portal's box or one already deleted, answers 404
-`not_found`; no other box is read. A read that fails answers 502 `upstream_unavailable`. Then,
-in the same step as the portal's adds, so that no add reads the resource count in between:
+`not_found`; no other box is read, unless the portal still keeps something for that id (see
+below). A read that fails answers 502 `upstream_unavailable`. Then, in the same step as the
+portal's adds, so that no add reads the resource count in between:
 
-1. The knowledge box deletes the document. If it refuses, or does not answer within 30 seconds,
-   the route answers 502 `delete_failed` and the portal changes nothing.
-2. The capacity ledger releases the document's size, or the provisional bytes of a link still
+1. If the request has already ended (the client went away, or the request ran out of time while
+   the delete waited its turn), nothing is sent and nothing changes.
+2. The ledger records that the delete is being sent, and the knowledge box is asked to delete the
+   document. The request's end cancels that call where the platform allows. If the box refuses,
+   the route answers 502 `delete_failed` and nothing changes. If it does not answer within 30
+   seconds, or the request ends while it is in flight, the delete may still land; the ledger's
+   record of it stays, and later reads settle it (see below).
+3. The capacity ledger releases the document's size, or the provisional bytes of a link still
    waiting to be measured, and counts the removal towards `maxResources` until the box's own
    count shows it. A measurement of the link read meanwhile is not recorded.
-3. Every enrichment kept for the document is removed, including its cached suggested questions.
-4. The cached catalogue, search results and page summaries, and the portal's memoised facet
-   counts, are dropped, so the Library, search and answers stop showing it at once.
+4. Every enrichment kept for the document is removed, including its cached suggested questions,
+   and one written while the box was deleting it.
+5. The cached catalogue, search results, page summaries, entity groups and graph, and the
+   portal's memoised facet counts, are dropped, so the Library, search and answers stop showing it
+   at once.
 
-A document whose add has not settled yet (the box has created it but the request that added it
-has not finished) is refused with 409 `add_in_progress`; delete it again once the add is done.
+A delete that overtakes the add that created the document (the box has created it but the
+request that added it has not finished) goes ahead. When that add settles, it finds the delete
+and records nothing, so no space stays held for a document that is gone.
+
+A delete whose release was never recorded is settled from reads of the box. An add that the
+storage limit would refuse, and a usage report, read the box for each such document, drafts
+included. Once those reads have answered nothing but 404 for an hour, timed by when they were
+read, the document's space is released, with no removal counted twice. One the box still holds an
+hour after its delete was sent was not deleted, and stays counted. Deleting the same id again
+settles it at once.
 
 Each delete is audited as `resource.delete` at portal scope, with the resource id as its target
 and `resourceKind` and `draft` in its detail; never its title. If the box deleted the document
-but step 2 or 3 failed, the route answers 500 `cleanup_incomplete` and the record's outcome is
-`uncertain`. Deleting the same id again finishes the clean-up: the box no longer has the
-document, so only what the portal still keeps under the id is cleared, without counting the
-removal twice, and the record says `cleanupOnly`. A delete of a read-only or suspended portal is
-refused like any other write.
+but step 3 or 4 failed, the route answers 500 `cleanup_incomplete` on either storage adapter, and
+the record's outcome is `uncertain`. Deleting the same id again finishes the clean-up: the delete
+is sent again, since one read answering 404 is no proof the box has let the document go, and a
+document already gone answers as one; then only what the portal still keeps under the id is
+cleared, without counting the removal twice, and the record says `cleanupOnly`. A delete of a
+read-only or suspended portal is refused like any other write.
+
+The purge of failed crawls (`POST /api/admin/t/:slug/purge-failed`) deletes in waves of five.
+Each wave takes the same step with the adds once, and its deletes are recorded and released as
+above. A purge starts no further wave once its request has ended or it has run for 75 seconds;
+its result counts what it left as `notAttempted`, for the next purge.
 
 Kept: what people saved for themselves. Investigation evidence and artefacts, research sessions
 and watches keep their rows. Evidence from a deleted document is shown as no longer in the

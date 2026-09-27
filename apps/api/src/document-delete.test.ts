@@ -334,15 +334,20 @@ Deno.test('deleting a waiting or stuck link frees its bytes at once and lets the
       expect(notes.status, adapter).toBe(200)
       expect((await p.remove(notes.body.id)).status, adapter).toBe(200)
 
-      // A link still unprocessed an hour after it was added is stuck: waiting will not help.
+      // Links still unprocessed an hour after they were added are stuck: waiting will not help.
+      // The box cannot even read the second one.
       const stuck = await p.link('stuck')
-      expect(stuck.status, adapter).toBe(200)
+      const lost = await p.link('lost')
+      expect([stuck.status, lost.status], adapter).toEqual([200, 200])
+      p.box.unreadable.add(lost.body.id)
       p.age(stuck.body.id)
+      p.age(lost.body.id)
       expect(await p.text('Notes', 700), adapter).toMatchObject({
         status: 413,
         body: { error: 'links_stuck' },
       })
-      // Recent additions lists it, marked stuck, however many documents were added after it.
+      // Recent additions lists them, marked stuck, however many documents were added after them.
+      // One the box cannot read is listed by its id, so each row can be told apart.
       for (let n = 0; n < 12; n++) expect((await p.text(`Later ${n}`)).status).toBe(200)
       const recent = await p.send(p.curator, 'GET', '/api/admin/t/a/recent')
       expect(recent.status, adapter).toBe(200)
@@ -353,21 +358,26 @@ Deno.test('deleting a waiting or stuck link frees its bytes at once and lets the
         status: 'pending',
         hidden: false,
         stuck: true,
-      }])
-      expect(rows.filter((row) => !row.stuck), adapter).toHaveLength(12)
-      // A stuck link the box cannot read is still listed, so its space can be freed.
-      p.box.unreadable.add(stuck.body.id)
-      const unreadable = await p.send(p.curator, 'GET', '/api/admin/t/a/recent')
-      expect((unreadable.body as RecentResource[]).find((row) => row.stuck), adapter).toEqual({
-        id: stuck.body.id,
-        title: 'A link that could not be processed',
+      }, {
+        id: lost.body.id,
+        title: `A link that could not be processed (${lost.body.id})`,
         status: 'pending',
         hidden: false,
         stuck: true,
-      })
-      p.box.unreadable.clear()
+      }])
+      expect(rows.filter((row) => !row.stuck), adapter).toHaveLength(12)
+      // The list is polled while additions process; stuck links are not read on every poll.
+      const reads = p.box.reads.length
+      const polled = await p.send(p.curator, 'GET', '/api/admin/t/a/recent')
+      expect(polled.body, adapter).toEqual(recent.body)
+      expect(p.box.reads.length, adapter).toBe(reads)
 
-      expect((await p.remove(stuck.body.id)).status, adapter).toBe(200)
+      // While the box cannot read it, a delete changes nothing; once it can, the delete goes.
+      expect((await p.remove(lost.body.id)).status, adapter).toBe(502)
+      p.box.unreadable.clear()
+      for (const id of [stuck.body.id, lost.body.id]) {
+        expect((await p.remove(id)).status, `${adapter} ${id}`).toBe(200)
+      }
       expect(p.f.stores.lifecycle.stuckLinks('a'), adapter).toEqual([])
       // A ledger that cannot be read does not take the listing down with it.
       const ledger = p.f.stores.lifecycle.state.get<unknown>('portal-capacity:a', null)

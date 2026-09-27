@@ -26,9 +26,16 @@ export function refreshAfterDelete(
   queryClient: QueryClient,
   slug: string,
   id: string,
+  /**
+   * The document's own page is showing it: its queries are only marked stale, so they are not
+   * read again, and answered 404, while the page is still on screen.
+   */
+  onDocumentPage = false,
 ): Promise<unknown> {
-  queryClient.removeQueries({ queryKey: ['resource', slug, id] })
-  queryClient.removeQueries({ queryKey: ['resource-content', slug, id] })
+  for (const queryKey of [['resource', slug, id], ['resource-content', slug, id]]) {
+    if (onDocumentPage) void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
+    else queryClient.removeQueries({ queryKey })
+  }
   return Promise.all(
     [
       ['admin-recent', slug],
@@ -78,6 +85,7 @@ export function DeleteDocumentButton({
   onDeleted,
   className,
   label = 'Delete',
+  onDocumentPage = false,
 }: {
   slug: string
   document: DeletableDocument
@@ -85,6 +93,8 @@ export function DeleteDocumentButton({
   onDeleted(outcome: DeleteOutcome): void
   className?: string
   label?: string
+  /** Shown on the document's own page, which leaves once the delete is done. */
+  onDocumentPage?: boolean
 }) {
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -94,18 +104,22 @@ export function DeleteDocumentButton({
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
-  const [ended, setEnded] = useState<DeleteOutcome | null>(null)
+  const [ended, setEnded] = useState<{ outcome: DeleteOutcome; sentUnder: typeof context } | null>(
+    null,
+  )
   // Reported once the dialog has closed and handed focus back, so the host can move focus on:
-  // the row that held this control is about to go. Still only under the same authority.
+  // the row that held this control is about to go. Only under the authority the delete was sent
+  // under, never one that has replaced it since.
   useEffect(() => {
     if (!ended) return
     setEnded(null)
     try {
-      authority.controller.assertCurrent(context)
+      authority.controller.assertCurrent(ended.sentUnder)
     } catch {
       return
     }
-    onDeleted(ended)
+    onDeleted(ended.outcome)
+    void refreshAfterDelete(queryClient, slug, document.id, onDocumentPage)
   }, [ended])
 
   const confirm = async () => {
@@ -129,8 +143,7 @@ export function DeleteDocumentButton({
         outcome = 'already-deleted'
       }
       setOpen(false)
-      void refreshAfterDelete(queryClient, slug, document.id)
-      setEnded(outcome)
+      setEnded({ outcome, sentUnder: context })
     } catch (err) {
       setError(
         err instanceof Error && err.message

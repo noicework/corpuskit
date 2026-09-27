@@ -55,11 +55,6 @@ Deno.test('a document already gone, a refused delete and an unfinished clean-up 
         'cleanup_incomplete',
         'The document was deleted, but some of what the portal kept for it could not be cleared. Try again to finish.',
       ],
-      [
-        409,
-        'add_in_progress',
-        'Documents are still being added to this portal, so this one cannot be deleted yet. Try again in a moment.',
-      ],
     ] as const
   ) {
     const answer = await answering(
@@ -100,16 +95,24 @@ Deno.test('a delete answer is published only while the authority that sent it is
   expect(component).toContain('await runExplicit(')
   const answered = component.indexOf('await runExplicit(')
   const checked = component.indexOf('authority.controller.assertCurrent(context)', answered)
-  const published = component.indexOf('setEnded(outcome)', answered)
+  const recorded = component.indexOf('setEnded({ outcome, sentUnder: context })', answered)
   expect(checked).toBeGreaterThan(answered)
-  expect(published).toBeGreaterThan(checked)
-  // It is reported once the dialog has closed, after the same check again.
-  const reported = component.indexOf('onDeleted(ended)')
-  expect(component.lastIndexOf('authority.controller.assertCurrent(context)', reported))
-    .toBeGreaterThan(component.indexOf('if (!ended) return'))
+  expect(recorded).toBeGreaterThan(checked)
+  // It is reported once the dialog has closed, checked against the authority it was sent under,
+  // and only then are the lists and counts refreshed.
+  const effect = component.indexOf('if (!ended) return')
+  const again = component.indexOf('authority.controller.assertCurrent(ended.sentUnder)', effect)
+  const reported = component.indexOf('onDeleted(ended.outcome)', effect)
+  const refreshed = component.indexOf('refreshAfterDelete(queryClient', effect)
+  expect(again).toBeGreaterThan(effect)
+  expect(reported).toBeGreaterThan(again)
+  expect(refreshed).toBeGreaterThan(reported)
   // A document already gone is reported, after the same check.
   expect(component).toContain('err.status === 404')
   expect(component).toContain("outcome = 'already-deleted'")
+  // On the document's own page its queries are only marked stale, so it is not read again.
+  expect(component).toContain("refetchType: 'none'")
+  expect(document).toContain('onDocumentPage')
 })
 
 Deno.test('delete is offered in Recent additions for every row, and on the document page only with content.write', () => {

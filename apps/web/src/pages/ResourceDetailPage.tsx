@@ -999,6 +999,7 @@ function ManagerDelete({ slug, resource }: { slug: string; resource: ResourceSum
       <DeleteDocumentButton
         slug={slug}
         document={resource}
+        onDocumentPage
         className='rp-btn rp-btn-outline min-h-[44px] hover:text-[var(--rp-bad-ink)]'
         onDeleted={(outcome) =>
           navigate(`/t/${slug}/library`, {

@@ -627,6 +627,9 @@ const RECENT_LIMIT_MAX = 100
 /** Stuck links Recent additions lists beyond the newest additions, and how long each read may take. */
 const STUCK_ROWS_MAX = 20
 const STUCK_READ_TIMEOUT_MS = 8_000
+/** How long a stuck link's row is reused before the box is read again, and how many are kept. */
+const STUCK_ROW_MEMO_MS = 60_000
+const STUCK_ROW_MEMO_MAX = 1_000
 /** Resource ids a delete accepts: ones the audit log can record as its target. */
 const DELETABLE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,159}$/
 /**
@@ -4580,6 +4583,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
    * as stuck, so a curator refused with `links_stuck` can always find one and delete it. A link
    * the box cannot read is still listed, by id, so its space can be freed.
    */
+  const stuckRows = new Map<string, { at: number; row: RecentResource }>()
   const withStuckLinks = async (
     config: TenantConfig,
     rows: RecentResource[],
@@ -4594,20 +4598,29 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (stuck.length === 0) return rows
     const flagged = new Set(stuck)
     const listed = new Set(rows.map((row) => row.id))
+    const now = Date.now()
     const older = await Promise.all(
       stuck.filter((id) => !listed.has(id)).slice(0, STUCK_ROWS_MAX).map(async (id) => {
+        // The list is polled while additions process: a stuck link is read once a minute at most.
+        const key = `${config.slug}/${id}`
+        const memo = stuckRows.get(key)
+        if (memo && now - memo.at < STUCK_ROW_MEMO_MS) return memo.row
         const found = await withinTimeout(
           () => provider.resource(config, id, { hidden: true }),
           STUCK_READ_TIMEOUT_MS,
         ).catch(() => null)
         const readable = found?.id === id ? found : null
-        return {
+        const row = {
           id,
-          title: readable?.title || 'A link that could not be processed',
+          // Named by its id when the box cannot say what it is, so each row can be told apart.
+          title: readable?.title || `A link that could not be processed (${id})`,
           status: 'pending' as const,
           hidden: readable?.hidden === true,
           stuck: true,
         }
+        if (stuckRows.size >= STUCK_ROW_MEMO_MAX) stuckRows.clear()
+        stuckRows.set(key, { at: now, row })
+        return row
       }),
     )
     return [
