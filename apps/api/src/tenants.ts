@@ -342,7 +342,9 @@ export class TenantStore {
       ? TenantConfigSchema.parse(this.custom[slug])
       : undefined
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
-    const base = this.seed(slug) ?? custom
+    // A seed slug only ever serves its seed, and only where it is served: a stray record stored
+    // under one (a restore, a hand edit) never becomes a portal of its own.
+    const base = tenantConfig(slug) ? this.seed(slug) : custom
     if (!base) return undefined
     if (!Object.hasOwn(this.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(this.overrides[slug])
@@ -421,7 +423,7 @@ export class TenantStore {
   private slugs(): Set<string> {
     return new Set([
       ...tenantSlugs().filter((slug) => this.showcase.has(slug)),
-      ...Object.keys(this.custom),
+      ...Object.keys(this.custom).filter((slug) => !tenantConfig(slug)),
     ])
   }
 

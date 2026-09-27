@@ -1059,7 +1059,13 @@ Deno.test('a Worker serves the showcase portals only when SHOWCASE_PORTALS names
     const off = await realHarness({ SHOWCASE_PORTALS: undefined })
     try {
       const stores = (off.object as unknown as { stores: DurableStores }).stores
-      stores.tenants.add({ name: 'Acme Research' })
+      // No portal at all: an empty list, not a refusal.
+      expect(await read(off, '/api/tenants')).toEqual({ status: 200, text: '[]' })
+      const acme = stores.tenants.add({ name: 'Acme Research' })
+      // A stray record under a showcase slug is not served either.
+      const raw = off.state.get<{ custom: Record<string, unknown> }>('tenants', { custom: {} })
+      raw.custom.marine = { ...acme, slug: 'marine' }
+      off.state.put('tenants', raw)
       expect(slugs((await read(off, '/api/tenants')).text)).toEqual(['acme-research'])
       for (const path of ['/api/t/%s/config', '/api/t/%s/resources']) {
         expect(await read(off, path.replace('%s', 'marine')))

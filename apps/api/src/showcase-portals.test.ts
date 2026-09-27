@@ -178,3 +178,41 @@ Deno.test('turning the showcase off keeps what it stored, and turning it back on
     Deno.removeSync(directory, { recursive: true })
   }
 })
+
+Deno.test('a deployment with no portal lists none, and still refuses one the caller may not see', async () => {
+  const server = localServer({})
+  try {
+    const empty = await server.request('/api/tenants')
+    expect(empty).toEqual({ status: 200, text: '[]' })
+    const restricted = server.tenants.add({ name: 'Private Archive' })
+    server.tenants.patch(restricted.slug, { accessMode: 'restricted' })
+    expect((await server.request('/api/tenants')).status).toBe(401)
+  } finally {
+    server.close()
+  }
+})
+
+Deno.test('a record stored under a showcase slug is never served as a portal of its own', () => {
+  const directory = Deno.makeTempDirSync({ prefix: 'showcase-shadow-' })
+  try {
+    const path = `${directory}/tenants.json`
+    const own = new TenantStore({ TENANTS_PATH: path }).add({ name: 'Stray' })
+    // As a restore or a hand edit could leave it: a portal record under the marine slug.
+    Deno.writeTextFileSync(
+      path,
+      JSON.stringify({
+        custom: { marine: { ...own, slug: 'marine' } },
+        overrides: {},
+        disabled: [],
+        retired: [],
+      }),
+    )
+    const off = new TenantStore({ TENANTS_PATH: path })
+    expect(off.get('marine')).toBeUndefined()
+    expect(off.list()).toEqual([])
+    const on = new TenantStore({ TENANTS_PATH: path, SHOWCASE_PORTALS: 'marine' })
+    expect(on.get('marine')?.branding.organisation).toBe('Southern Waters Research Institute')
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})

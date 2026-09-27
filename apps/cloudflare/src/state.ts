@@ -1016,7 +1016,7 @@ export class DurableTenantStore implements TenantStoreApi {
   private slugs(data: TenantState): Set<string> {
     return new Set([
       ...tenantSlugs().filter((slug) => this.showcase.has(slug)),
-      ...Object.keys(data.custom),
+      ...Object.keys(data.custom).filter((slug) => !tenantConfig(slug)),
     ])
   }
 
@@ -1065,7 +1065,9 @@ export class DurableTenantStore implements TenantStoreApi {
       ? TenantConfigSchema.parse(data.custom[slug])
       : undefined
     if (custom && custom.slug !== slug) throw new Error('Invalid persisted portal slug')
-    const base = this.seedConfig(slug) ?? custom
+    // A seed slug only ever serves its seed, and only where it is served: a stray record stored
+    // under one (a restore, a hand edit) never becomes a portal of its own.
+    const base = tenantConfig(slug) ? this.seedConfig(slug) : custom
     if (!base) return undefined
     if (!Object.hasOwn(data.overrides, slug)) return withPlatformHostname(base, this.platformDomain)
     const override = validateTenantPatch(data.overrides[slug])

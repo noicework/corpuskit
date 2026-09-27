@@ -1066,6 +1066,12 @@ it does for a slug that never held a portal.
 - Whatever a served showcase portal stored (overrides, a disabled flag, host aliases, research
   records) is kept when it stops being served, and applies again if it is named once more.
 - A served showcase portal cannot be deleted (`400 not_removable`); stop serving it instead.
+- While it is not served, its host aliases are not registered hostnames, so they answer as
+  `UNKNOWN_HOSTS` says, and its knowledge-box binding and MCP keys cannot be managed. Remove its
+  aliases before you stop serving it if the hostnames still route here.
+- A record stored under a showcase slug by other means, such as a restore or a hand edit, is
+  never served as a portal of its own.
+- A deployment with no portal at all lists none: `GET /api/tenants` answers `200 []`.
 
 Set `SHOWCASE_PORTALS=marine,grains` for a deployment that shows the sample portals, such as a
 local development server after `deno task provision` has created their knowledge boxes. Both

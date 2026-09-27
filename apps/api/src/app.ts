@@ -1451,7 +1451,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
           if (allowed) targets.push(config)
           return allowed
         })
-        if (targets.length === 0) return deny({ kind: 'platform' })
+        if (targets.length === 0) {
+          // A deployment that holds no portal at all has nothing to refuse: its portal list is
+          // empty for everyone. A portal the caller may not see still answers as a refusal.
+          if (declaration.path === '/api/tenants' && !requested && tenants.list().length === 0) {
+            return targets
+          }
+          return deny({ kind: 'platform' })
+        }
         // Terminal guards run only after the complete candidate set is filtered.
         if (selected) {
           try {
