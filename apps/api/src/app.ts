@@ -1452,11 +1452,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
           return allowed
         })
         if (targets.length === 0) {
-          // A deployment that holds no portal at all has nothing to refuse: its portal list is
-          // empty for everyone. A portal the caller may not see still answers as a refusal.
-          if (declaration.path === '/api/tenants' && !requested && tenants.list().length === 0) {
-            return targets
-          }
+          // The portal list shows what the caller may see, and seeing none is not a refusal: an
+          // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
+          // is still refused.
+          if (declaration.path === '/api/tenants') return targets
           return deny({ kind: 'platform' })
         }
         // Terminal guards run only after the complete candidate set is filtered.

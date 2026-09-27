@@ -65,7 +65,7 @@ Deno.test('aggregate persona matrix returns only exact visible sets before strea
   }
 })
 
-Deno.test('aggregate empty or foreign selections deny once; malformed selections never dispatch', async () => {
+Deno.test('aggregate empty or foreign asks deny once, an empty portal list does not, and malformed selections never dispatch', async () => {
   const f = createEnforcementFixture()
   try {
     for (const selection of [[], ['b'], ['missing'], ['disabled'], ['corrupt']]) {
@@ -91,23 +91,30 @@ Deno.test('aggregate empty or foreign selections deny once; malformed selections
     for (const { slug } of f.stores.tenants.list()) {
       f.stores.tenants.patch(slug, { accessMode: 'restricted' })
     }
-    for (
-      const [path, init] of [['/api/tenants', undefined], [
-        '/api/ask-estate',
-        estateInit(),
-      ]] as const
-    ) {
-      const response = await f.requestAs(null, path, init)
-      expect(response.status).toBe(401)
-      expect(await response.json()).toEqual({ error: 'unauthorised' })
-      f.failAudit()
-      const failed = await f.requestAs(null, path, init)
-      expect(failed.status).toBe(500)
-      expect(failed.headers.get('cache-control')).toBe('private, no-store')
-      expect(await failed.json()).toEqual({ error: 'audit_write_failed' })
-      f.recoverAudit()
-      f.assertNoProtectedDispatch()
+    // Seeing no portal is not a refusal: the portal list is empty, and nothing is audited, so it
+    // answers the same while the audit is failing.
+    for (const failing of [false, true]) {
+      if (failing) f.failAudit()
+      const before =
+        f.database.all("SELECT id FROM audit_events WHERE action='request.denied'").length
+      const listed = await f.requestAs(null, '/api/tenants')
+      expect(listed.status).toBe(200)
+      expect(await listed.json()).toEqual([])
+      expect(f.database.all("SELECT id FROM audit_events WHERE action='request.denied'"))
+        .toHaveLength(before)
+      if (failing) f.recoverAudit()
     }
+    // A cross-portal ask with nowhere to ask is refused, and its refusal is audited.
+    const response = await f.requestAs(null, '/api/ask-estate', estateInit())
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ error: 'unauthorised' })
+    f.failAudit()
+    const failed = await f.requestAs(null, '/api/ask-estate', estateInit())
+    expect(failed.status).toBe(500)
+    expect(failed.headers.get('cache-control')).toBe('private, no-store')
+    expect(await failed.json()).toEqual({ error: 'audit_write_failed' })
+    f.recoverAudit()
+    f.assertNoProtectedDispatch()
   } finally {
     f.close()
   }

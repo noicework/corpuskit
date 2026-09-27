@@ -1071,7 +1071,8 @@ it does for a slug that never held a portal.
   aliases before you stop serving it if the hostnames still route here.
 - A record stored under a showcase slug by other means, such as a restore or a hand edit, is
   never served as a portal of its own.
-- A deployment with no portal at all lists none: `GET /api/tenants` answers `200 []`.
+- A deployment with no portal a caller may see, the usual state of a new one, lists none:
+  `GET /api/tenants` answers `200 []` rather than refusing.
 
 Set `SHOWCASE_PORTALS=marine,grains` for a deployment that shows the sample portals, such as a
 local development server after `deno task provision` has created their knowledge boxes. Both

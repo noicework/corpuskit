@@ -179,14 +179,26 @@ Deno.test('turning the showcase off keeps what it stored, and turning it back on
   }
 })
 
-Deno.test('a deployment with no portal lists none, and still refuses one the caller may not see', async () => {
+Deno.test('a caller who can see no portal gets an empty list, not a refusal', async () => {
   const server = localServer({})
   try {
-    const empty = await server.request('/api/tenants')
-    expect(empty).toEqual({ status: 200, text: '[]' })
+    // A deployment with no portal at all.
+    expect(await server.request('/api/tenants')).toEqual({ status: 200, text: '[]' })
+    // A deployment whose only portal an anonymous caller may not see.
     const restricted = server.tenants.add({ name: 'Private Archive' })
     server.tenants.patch(restricted.slug, { accessMode: 'restricted' })
-    expect((await server.request('/api/tenants')).status).toBe(401)
+    expect(await server.request('/api/tenants')).toEqual({ status: 200, text: '[]' })
+    // Nothing is recorded as a refusal.
+    const denials = server.rbac.audit.read({ scope: { kind: 'platform' }, limit: 100 })
+      .filter((event) => event.action === 'request.denied')
+    expect(denials).toEqual([])
+    // A cross-portal ask with nowhere to ask is still refused.
+    const estate = await server.request('/api/ask-estate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
+    })
+    expect(estate.status).toBe(401)
   } finally {
     server.close()
   }
