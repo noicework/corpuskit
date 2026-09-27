@@ -90,45 +90,44 @@ const isBackpressure = (error: unknown): boolean =>
 class MaintenanceLedger {
   readonly failures: MaintenanceFailure[] = []
   halted = false
-  /** Back-pressure seen inside the unit under way, before its audit reclassified the error. */
-  private backpressure = false
 
   constructor(private readonly job: MaintenanceJob) {}
 
-  /** Run one unit; true when it completed. */
+  /**
+   * Run one unit; true when it completed. `run` wraps the unit's own work in `observe`, which sees
+   * back-pressure before the audit around the unit records every failure as `operation_failed`.
+   * The flag belongs to this unit alone, so work a previous unit abandoned cannot set it.
+   */
   async unit(
     failure: Omit<MaintenanceFailure, 'job'>,
-    run: () => Promise<unknown>,
+    run: (
+      observe: <T>(
+        work: (signal: AbortSignal) => Promise<T>,
+      ) => (signal: AbortSignal) => Promise<T>,
+    ) => Promise<unknown>,
   ): Promise<boolean> {
-    this.backpressure = false
+    let backpressure = false
+    const observe =
+      <T>(work: (signal: AbortSignal) => Promise<T>) => async (signal: AbortSignal) => {
+        try {
+          return await work(signal)
+        } catch (error) {
+          if (isBackpressure(error)) backpressure = true
+          throw error
+        }
+      }
     try {
-      await run()
+      await run(observe)
       return true
     } catch (error) {
-      this.fail(failure, error)
+      this.fail(failure, error, backpressure)
       return false
     }
   }
 
-  /**
-   * A unit's own work, watched for back-pressure. The audit around the unit records every
-   * failure as `operation_failed`, so the cause has to be seen here, before it is rethrown.
-   */
-  watch<T>(work: (signal: AbortSignal) => Promise<T>): (signal: AbortSignal) => Promise<T> {
-    return async (signal) => {
-      try {
-        return await work(signal)
-      } catch (error) {
-        if (isBackpressure(error)) this.backpressure = true
-        throw error
-      }
-    }
-  }
-
-  fail(failure: Omit<MaintenanceFailure, 'job'>, error?: unknown): void {
+  fail(failure: Omit<MaintenanceFailure, 'job'>, error?: unknown, backpressure = false): void {
     this.failures.push({ job: this.job, ...failure })
-    if (this.backpressure || isBackpressure(error)) this.halted = true
-    this.backpressure = false
+    if (backpressure || isBackpressure(error)) this.halted = true
   }
 
   /** Throw the job's failures together, once every portal has had its turn. */
@@ -394,7 +393,7 @@ export async function syncSource(
   emit: (label: string) => void | Promise<void>,
   signal?: AbortSignal,
   stopTaking?: () => boolean,
-): Promise<{ added: number; deferred: number }> {
+): Promise<{ added: number; deferred: number; backpressure: boolean }> {
   const perRun = pagesPerRun(source)
   const discovered = await discoverLinks(source.url, DISCOVER_CAP)
   const known = new Set(source.synced ?? [])
@@ -413,6 +412,10 @@ export async function syncSource(
   let rejectedReason: string | undefined
   /** A hosting refusal (a limit, read-only or paused) that stopped this run. */
   let refusal: PortalLifecycleError | undefined
+  /** The shared platform account answered 429, which stopped this run. */
+  let backpressure = false
+  /** Pages the knowledge box could not take this time (408 or 5xx), left for the next sync. */
+  let retry = 0
   for (const [i, url] of fresh.entries()) {
     signal?.throwIfAborted()
     if (stopTaking?.()) {
@@ -476,7 +479,12 @@ export async function syncSource(
         // refuses writes outright - both belong to the caller.
         if (err instanceof PortalLifecycleError) throw err
         if (err instanceof AragApiError) {
-          if (err.backpressure || err.status === 401 || err.status === 403) throw err
+          // Back-pressure, a rate limit and a platform fault are the box's answer, not the
+          // page's: they must never mark the page synced.
+          if (
+            err.backpressure || err.status === 401 || err.status === 403 ||
+            err.status === 408 || err.status === 429 || err.status >= 500
+          ) throw err
         }
         // Our own fetch or parse failed - fall through to the skip below.
       }
@@ -506,17 +514,23 @@ export async function syncSource(
         await emit(err.message)
         break
       }
-      if (err instanceof AragApiError && err.backpressure) {
-        // The box's ingestion queue is full. Stop this run cleanly rather
-        // than hammering it for every remaining page - they stay un-synced
-        // (not added to `known`) so the next scheduled or manual sync picks
-        // them up once the queue has drained.
+      if (err instanceof AragApiError && (err.backpressure || err.status === 429)) {
+        // The box's ingestion queue is full, or the account is rate limited. Stop this run
+        // cleanly rather than hammering it for every remaining page - they stay un-synced
+        // (not added to `known`) so the next scheduled or manual sync picks them up once the
+        // queue has drained.
         deferred = fresh.length - i
+        backpressure = true
         await emit(
           `Knowledge box is busy processing recent changes - stopping this run early. ` +
             `${deferred} ${deferred === 1 ? 'page' : 'pages'} left for the next sync.`,
         )
         break
+      }
+      if (err instanceof AragApiError && (err.status === 408 || err.status >= 500)) {
+        // A fault on the platform's side: this page is left for the next sync, not skipped.
+        retry += 1
+        continue
       }
       // A 401/403 from the platform is a credential problem, not a bad page:
       // it will reject every remaining page identically. Stop and say so once,
@@ -539,6 +553,12 @@ export async function syncSource(
         'they were not added rather than added empty.',
     )
   }
+  if (retry > 0) {
+    await emit(
+      `The knowledge box could not take ${retry} ${retry === 1 ? 'page' : 'pages'} this time - ` +
+        `${retry === 1 ? 'it was' : 'they were'} left for the next sync.`,
+    )
+  }
   signal?.throwIfAborted()
   if (refusal) {
     // Keep what this run got through, so the next sync neither re-adds nor re-reads it.
@@ -557,7 +577,7 @@ export async function syncSource(
     lastError: null,
   })
   await emit(added > 0 ? `Sync complete - ${added} pages added` : 'Sync complete - nothing new')
-  return { added, deferred }
+  return { added, deferred, backpressure }
 }
 
 /**
@@ -608,7 +628,7 @@ export async function runWatches(
       if (ledger.halted) break
       await ledger.unit(
         { slug: config.slug, target: 'watch' },
-        () =>
+        (observe) =>
           scopedSystemAction(
             context,
             'maintenance.watch.run',
@@ -617,7 +637,7 @@ export async function runWatches(
               kind: 'watch',
               id: watch.id,
             },
-            ledger.watch(async (signal) => {
+            observe(async (signal) => {
               const results = await management.search(config, watch.query, {
                 mode: 'hybrid',
                 pageSize: 10,
@@ -691,9 +711,11 @@ export async function runAutoEnrichments(
     const proceed = lifecycle ? () => assertAgentRunAllowed(lifecycle, config.slug) : undefined
     let refused = false
     let nothingToDo = false
+    /** The box stayed busy through the enrichment run's retries: leave it alone this pass. */
+    let strained = false
     await ledger.unit(
       { slug: config.slug, target: 'enrichment' },
-      () =>
+      (observe) =>
         scopedSystemAction(
           context,
           'maintenance.enrichment.run',
@@ -702,7 +724,7 @@ export async function runAutoEnrichments(
             kind: 'portal',
             id: config.slug,
           },
-          ledger.watch(async (signal) => {
+          observe(async (signal) => {
             let problem: Extract<EnrichmentRunEvent, { type: 'error' }> | undefined
             for await (
               const event of runEnrichmentOverCorpus(management, enrichments, config, {
@@ -721,19 +743,20 @@ export async function runAutoEnrichments(
                 nothingToDo = true
               } else problem = event
             }
+            strained = problem?.reason === 'strained' || problem?.reason === 'backpressure'
             if (problem?.reason === 'backpressure') throw new AccountBackpressureError()
             if (problem) throw new Error('Scheduled enrichment did not complete')
           }),
         ),
     )
     if (ledger.halted) break
-    if (refused || nothingToDo) continue
+    if (refused || nothingToDo || strained) continue
     // Openers for the resource pages ride the same cadence, so a page never generates them on
     // demand once the pass has caught up. They do not depend on the merchandising run, so they
-    // still run when it failed.
+    // still run when it failed, unless it failed because the box is strained.
     await ledger.unit(
       { slug: config.slug, target: 'questions' },
-      () =>
+      (observe) =>
         scopedSystemAction(
           context,
           'maintenance.questions.run',
@@ -742,7 +765,7 @@ export async function runAutoEnrichments(
             kind: 'portal',
             id: config.slug,
           },
-          ledger.watch(async (signal) => {
+          observe(async (signal) => {
             for await (
               const event of runSuggestedQuestionsOverCorpus(management, enrichments, config, {
                 limit: AUTO_QUESTIONS_CAP,
@@ -790,7 +813,7 @@ export async function runAutoSyncs(
       let refused = false
       await ledger.unit(
         { slug: config.slug, target: 'source' },
-        () =>
+        (observe) =>
           scopedSystemAction(
             context,
             'maintenance.source.sync',
@@ -799,9 +822,10 @@ export async function runAutoSyncs(
               kind: 'source',
               id: source.id,
             },
-            ledger.watch(async (signal) => {
+            observe(async (signal) => {
+              let synced
               try {
-                await syncSource(
+                synced = await syncSource(
                   management,
                   sources,
                   config,
@@ -832,6 +856,9 @@ export async function runAutoSyncs(
                 console.error(`[scheduler] auto-sync failed for ${config.slug}`)
                 throw err
               }
+              // The shared account turned the sync away. What it added is kept and the rest waits
+              // for the next pass, which must not start on another portal now.
+              if (synced.backpressure) throw new AccountBackpressureError()
             }),
           ),
       )
@@ -901,7 +928,8 @@ export function startScheduler(
   const boot = setTimeout(() =>
     enqueue(async () => {
       const daily = await runDaily().then(() => null, (error: unknown) => error)
-      await runEnrichments()
+      // A daily pass the shared account turned away is not followed by more of its work.
+      if (!(daily instanceof MaintenanceError && daily.halted)) await runEnrichments()
       if (daily) throw daily
     }), 90_000)
   const daily = setInterval(() => enqueue(runDaily), 24 * 3600 * 1000)

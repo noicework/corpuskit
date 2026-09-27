@@ -198,8 +198,9 @@ export function questionContextFor(content: ResourceContent | null): string {
 }
 
 /**
- * Generate openers for one resource. Audited callers use strict failures and
- * cancellation checks; existing batch callers retain their empty-result fallback.
+ * Generate openers for one resource. A caller that stores the result passes
+ * `strict`, so a failed read or generation throws rather than returning an
+ * empty set that would be stored as the resource's openers for good.
  * `proceed` is checked immediately before the paid model call, and a throw from it
  * always propagates.
  */
@@ -314,9 +315,11 @@ export async function* runSuggestedQuestionsOverCorpus(
   /** A hosting refusal (paused, read-only or agents disabled) that stopped the run. */
   let refusal: PortalLifecycleError | undefined
   let stopped = false
+  /** Set when the shared platform account answered 429: nothing further is started. */
+  let backpressure = false
   const worker = async () => {
     for (;;) {
-      if (refusal || stopped) return
+      if (refusal || stopped || backpressure) return
       if (opts.stopTaking?.()) {
         stopped = true
         return
@@ -326,13 +329,15 @@ export async function* runSuggestedQuestionsOverCorpus(
       const resource = targets[i]!
       try {
         opts.proceed?.()
+        // Strict: a failed read or generation is an error for this resource, never an empty
+        // set, which would be stored as its openers for good. It stays missing for a later run.
         const questions = await generateSuggestedQuestions(
           management,
           config,
           resource.id,
           resource.title,
           resource.summary,
-          { proceed: opts.proceed },
+          { proceed: opts.proceed, strict: true },
         )
         // Generation can take a while: judge the write by the portal's state now.
         opts.proceed?.()
@@ -351,6 +356,7 @@ export async function* runSuggestedQuestionsOverCorpus(
           return
         }
         errors++
+        backpressure ||= isAccountBackpressure(err)
         push({
           type: 'item',
           id: resource.id,
@@ -387,6 +393,15 @@ export async function* runSuggestedQuestionsOverCorpus(
       type: 'error',
       message: `Stopped after ${written} of ${targets.length} resources. ${refusal.message}`,
       error: refusal.body.error,
+    }
+    return
+  }
+  if (backpressure) {
+    yield {
+      type: 'error',
+      message: `Stopped after ${written} of ${targets.length} resources. The platform account ` +
+        'is refusing requests, so the rest were left for a later run.',
+      reason: 'backpressure',
     }
     return
   }

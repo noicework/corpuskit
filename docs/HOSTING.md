@@ -813,8 +813,15 @@ unit. One failing unit never stops the others:
   never by upstream detail. Each job's platform-level `maintenance.run` record carries `count`,
   the number of its units that failed.
 - The pass stops early only when the platform account that every portal shares answers 429
-  (a rate limit or ingestion back-pressure). The next portal would only add to the pressure, so
-  the rest waits for the next pass.
+  (a rate limit or ingestion back-pressure), in a source sync, a watch, an enrichment run or a
+  suggested-question run. The next portal would only add to the pressure, so the rest waits for
+  the next pass.
+- A page the platform does not take during a sync (a 429, a timeout or a server error) is not
+  marked as synced, so the next sync tries it again.
+- A portal whose enrichment run found its knowledge box strained (still busy after the run's
+  retries) gets no suggested-question run that pass. A suggested question that fails to generate
+  is never stored as an empty set: the resource stays without openers until a pass generates
+  them.
 - A portal with no connected knowledge box is skipped, and an empty knowledge box has nothing to
   enrich. Neither is a failure. A [showcase portal](#showcase-portals) served without its
   knowledge box bound is the usual case.

@@ -384,12 +384,253 @@ Deno.test('a source sync stops taking pages when told to, and leaves the rest fo
       undefined,
       () => created >= 2,
     )
-    expect(result).toEqual({ added: 2, deferred: 4 })
+    expect(result).toEqual({ added: 2, deferred: 4, backpressure: false })
     const after = sources.find('marine', source.id)!
     expect(after.synced).toHaveLength(2)
     expect(after.lastStatus).toBe('ok')
   } finally {
     globalThis.fetch = original
     Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+// --- Strain and back-pressure ---------------------------------------------------------------
+
+const QUESTIONS_PROMPT = 'questions that this ONE research document answers'
+
+/** A provider whose model calls answer as `generate` says, per portal and per kind of call. */
+function generating(
+  generate: (slug: string, kind: 'enrichment' | 'questions') => Promise<unknown>,
+  calls: string[] = [],
+): AragProvider {
+  return {
+    invalidate: () => {},
+    listResources: (config: TenantConfig) => {
+      calls.push(`list:${config.slug}`)
+      return Promise.resolve([
+        { id: `${config.slug}-1`, title: 'Report one', summary: '' },
+        { id: `${config.slug}-2`, title: 'Report two', summary: '' },
+      ])
+    },
+    resourceContent: (_config: TenantConfig, id: string) =>
+      Promise.resolve({
+        id,
+        title: 'Report',
+        kind: 'text',
+        texts: [{ fieldId: 'b', text: REPORT }],
+      }),
+    askStructured: (config: TenantConfig, _schema: unknown, prompt: string) => {
+      const kind = String(prompt).includes(QUESTIONS_PROMPT) ? 'questions' : 'enrichment'
+      calls.push(`${kind}:${config.slug}`)
+      return generate(config.slug, kind)
+    },
+    search: () => Promise.resolve({ query: 'q', resources: [], relatedQuestions: [] }),
+  } as unknown as AragProvider
+}
+
+const answered = () =>
+  Promise.resolve({
+    object: {
+      title: 'Northern reef recovery',
+      summary: 'The reef recovered within two seasons.',
+      questions: [
+        'How quickly did the northern reef recover?',
+        'What did the survey find about the reef?',
+        'Which reef recovered within two seasons?',
+      ],
+    },
+  })
+
+/** The openers stored for a portal's two resources, whatever they hold. */
+const openers = (f: Fixture, slug: string) =>
+  [`${slug}-1`, `${slug}-2`].map((id) => f.enrichments.get(slug, id, 'suggested-questions'))
+    .filter(Boolean) as unknown as { data: { questions: string[] } }[]
+
+Deno.test('a box whose enrichment ended strained gets no question run, and nothing is stored', async () => {
+  const f = fixture()
+  try {
+    const [first] = f.order as [string]
+    const calls: string[] = []
+    // Every model call answers 503: the box stays busy through the enrichment run's retries.
+    const busy = () => Promise.reject(new AragApiError(503, 'https://box.example/ask', 'busy'))
+    await runSystemMaintenance(
+      generating(busy, calls),
+      { ...f, bindings: bindingsFor([first]) },
+      undefined,
+      ['enrichment'],
+      false,
+      { now: () => 0 },
+    ).catch(() => {})
+    expect(calls.some((call) => call.startsWith('questions:'))).toBe(false)
+    expect(openers(f, first)).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a failed question generation is never stored as an empty set', async () => {
+  const f = fixture()
+  try {
+    const [first] = f.order as [string]
+    // Enrichment works; question generation fails on a fault that is not strain or back-pressure.
+    await runSystemMaintenance(
+      generating((_slug, kind) =>
+        kind === 'questions' ? Promise.reject(new Error('generation failed')) : answered()
+      ),
+      { ...f, bindings: bindingsFor([first]) },
+      undefined,
+      ['enrichment'],
+      false,
+      { now: () => 0 },
+    ).catch(() => {})
+    expect(f.enrichments.count(first)).toBe(2)
+    // Nothing is stored, so the next pass tries these resources again.
+    expect(openers(f, first)).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a 429 during the question run stops the pass and stores no empty openers', async () => {
+  const f = fixture()
+  try {
+    const [first, second, third] = f.order as [string, string, string]
+    const calls: string[] = []
+    let caught: unknown
+    await runSystemMaintenance(
+      generating(
+        (slug, kind) =>
+          kind === 'questions' && slug === first
+            ? Promise.reject(new AragApiError(429, 'https://box.example/ask', 'Too Many Requests'))
+            : answered(),
+        calls,
+      ),
+      { ...f, bindings: bindingsFor(f.order) },
+      undefined,
+      ['enrichment'],
+      false,
+      { now: () => 0 },
+    ).catch((error) => {
+      caught = error
+    })
+    expect((caught as { halted?: boolean }).halted).toBe(true)
+    expect(failures(caught)).toEqual([`enrichment:${first}:questions`])
+    expect(calls.some((c) => c.endsWith(`:${second}`) || c.endsWith(`:${third}`))).toBe(false)
+    expect(openers(f, first)).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+/** Crawler: `/news` links six articles, each a readable page. */
+function stubArticles(): () => void {
+  const original = globalThis.fetch
+  globalThis.fetch = ((input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const body = url.endsWith('/news')
+      ? `<html><body>${
+        Array.from({ length: 6 }, (_, i) => `<a href="/article-${i}">Article ${i}</a>`).join('')
+      }</body></html>`
+      : `<html><head><title>Article</title></head><body><main><h1>Article</h1><p>${
+        'fisheries stock assessment evidence '.repeat(40)
+      }</p></main></body></html>`
+    return Promise.resolve(new Response(body, { headers: { 'content-type': 'text/html' } }))
+  }) as typeof fetch
+  return () => {
+    globalThis.fetch = original
+  }
+}
+
+for (
+  const [label, refusal] of [
+    [
+      'ingestion back-pressure',
+      () =>
+        new AragApiError(
+          429,
+          'https://box.example/resources',
+          JSON.stringify({
+            detail: {
+              try_after: Math.floor(Date.now() / 1000),
+              back_pressure_type: 'ingestion',
+              message: 'Too many messages pending to ingest.',
+            },
+          }),
+        ),
+    ],
+    ['a plain 429', () => new AragApiError(429, 'https://box.example/resources', 'Too Many')],
+  ] as const
+) {
+  Deno.test(`${label} on a sync stops the pass and keeps the pages for the next sync`, async () => {
+    const f = fixture()
+    const restore = stubArticles()
+    try {
+      const [first, second] = f.order as [string, string]
+      f.sources.add(first, 'https://one.example/news', true, 10)
+      f.sources.add(second, 'https://two.example/news', true, 10)
+      const creates: string[] = []
+      const management = {
+        createText: (config: TenantConfig) => {
+          creates.push(config.slug)
+          return Promise.reject(refusal())
+        },
+      } as unknown as AragProvider
+      let caught: unknown
+      await runSystemMaintenance(
+        management,
+        { ...f, bindings: bindingsFor([first, second]) },
+        undefined,
+        ['sync'],
+        false,
+        { now: () => 0 },
+      ).catch((error) => {
+        caught = error
+      })
+      expect((caught as { halted?: boolean }).halted).toBe(true)
+      expect(creates.includes(second)).toBe(false)
+      expect(f.sources.list(first)[0]?.synced ?? []).toEqual([])
+    } finally {
+      restore()
+      f.close()
+    }
+  })
+}
+
+Deno.test('a page the box fails with a 5xx stays for the next sync, and the pass goes on', async () => {
+  const f = fixture()
+  const restore = stubArticles()
+  try {
+    const [first, second] = f.order as [string, string]
+    f.sources.add(first, 'https://one.example/news', true, 10)
+    f.sources.add(second, 'https://two.example/news', true, 10)
+    let failed = 0
+    const management = {
+      createText: (config: TenantConfig, input: { originUrl: string }) => {
+        // The first portal's first two pages meet a fault on the platform's side.
+        if (config.slug === first && input.originUrl.match(/article-[01]$/)) {
+          failed++
+          return Promise.reject(
+            new AragApiError(502, 'https://box.example/resources', 'bad gateway'),
+          )
+        }
+        return Promise.resolve('created')
+      },
+    } as unknown as AragProvider
+    await runSystemMaintenance(
+      management,
+      { ...f, bindings: bindingsFor([first, second]) },
+      undefined,
+      ['sync'],
+      false,
+      { now: () => 0 },
+    )
+    expect(failed).toBe(2)
+    const synced = f.sources.list(first)[0]?.synced ?? []
+    expect(synced).toHaveLength(4)
+    expect(synced.some((url) => /article-[01]$/.test(url))).toBe(false)
+    expect(f.sources.list(second)[0]?.synced).toHaveLength(6)
+  } finally {
+    restore()
+    f.close()
   }
 })
