@@ -38,14 +38,8 @@ import {
   streamAsk,
 } from '../api/client.ts'
 import { secondsUntilRetry } from '../lib/ask-budget.ts'
-import { AnswerMarkdown } from '../components/AnswerMarkdown.tsx'
 import { answerHtml, escapeHtml, referenceListHtml } from '../lib/answer-export.ts'
-import {
-  citationHref,
-  ContextJourney,
-  EvidenceDisclosure,
-  InferenceMark,
-} from '../components/AnswerStream.tsx'
+import { citationHref, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
 import { CompareConfigurations } from '../components/CompareConfigurations.tsx'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
 import { RouteChip } from '../components/RouteChip.tsx'
@@ -60,12 +54,9 @@ import { AnswerQualityDisclosure, type QualityScores } from '../components/Quali
 import { ExportNotice, LiveStatus, savedFileNotice, useExportNotice } from '../components/ui.tsx'
 import { useCompactViewport } from '../components/useViewMode.ts'
 import { isThinlyGrounded } from '../lib/confidence.ts'
-import {
-  type AnswerAudit,
-  auditBadge,
-  isUnsupportedFigure,
-  unsupportedFigurePattern,
-} from '../lib/answer-marks.ts'
+import type { AnswerAudit } from '../lib/answer-marks.ts'
+import { applyAnswerEvent } from '../lib/answer-trust.ts'
+import { AnswerText, AuditBadge, TruncatedNotice } from '../components/AnswerInline.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import type { Intent } from '@research-portal/core'
 import {
@@ -230,6 +221,10 @@ function migrateAudit(raw: unknown): AnswerAudit | undefined {
     attributionsCorrected: strings(value.attributionsCorrected),
     sentencesRemoved: count(value.sentencesRemoved),
     figuresRemoved: strings(value.figuresRemoved),
+    figuresRescued: strings(value.figuresRescued),
+    sentencesReplaced: count(value.sentencesReplaced),
+    figuresSecondhandRemoved: strings(value.figuresSecondhandRemoved),
+    denominatorsCorrected: strings(value.denominatorsCorrected),
   }
 }
 
@@ -312,137 +307,23 @@ function sessionTitle(session: ChatSession): string {
 }
 
 // ---------------------------------------------------------------------------
-// Answer rendering: block structure comes from the shared AnswerMarkdown
-// component; the inline pass here adds **bold** spans and linked citation
-// markers on top of it.
+// Answer rendering: the shared AnswerText (components/AnswerInline.tsx) reads
+// the answer the same way Search does - markers, marks and the hedge.
 // ---------------------------------------------------------------------------
 
-/**
- * Replaces `[n]` markers in a plain-text run with superscript, accent-
- * coloured links to the matching citation's deep link, marks the figures
- * the audit could not find beside their claim, and renders the model's
- * "(inference)" hedge quietly. Run AFTER other inline parsing (bold,
- * italic) has already split the text into nodes, so this only ever sees
- * plain text segments - never markup.
- */
-function renderCitationMarkers(
-  text: string,
-  citations: Citation[],
-  sources: ScoredResource[],
-  slug: string,
-  keyPrefix: string,
-  unsupported: RegExp | null,
-): ReactNode[] {
-  // Bracketed runs are either the answer's own citation markers (bound to a
-  // source below) or a paper's citation numbers copied verbatim ("[16,17]"),
-  // which mean nothing here and are dropped; "(inference)" is the model's
-  // own hedge and renders as one.
-  const splitter = new RegExp(
-    `(\\[\\d+(?:\\s*,\\s*\\d+)*\\]|\\[inference\\]|\\(inference\\)${
-      unsupported ? `|${unsupported.source}` : ''
-    })`,
-    'gi',
-  )
-  const segments = text.split(splitter).filter((segment) => segment !== undefined)
-  return segments.map((segment, index) => {
-    if (/^[[(]inference[\])]$/i.test(segment)) {
-      return <InferenceMark key={`${keyPrefix}-${index}`} />
-    }
-    if (isUnsupportedFigure(segment, unsupported)) {
-      return (
-        <mark
-          key={`${keyPrefix}-${index}`}
-          className='rounded-[var(--rp-radius-chip)] px-0.5 underline decoration-dotted decoration-[var(--rp-warn-ink)] underline-offset-2'
-          style={{ backgroundColor: 'var(--rp-warn-bg)', color: 'var(--rp-warn-ink)' }}
-          title='Not found beside this claim in the cited passages - verify against the source'
-        >
-          {segment}
-        </mark>
-      )
-    }
-    const match = /^\[(\d+)\]$/.exec(segment)
-    const citationIndex = match?.[1] ? Number(match[1]) : null
-    const citation = citationIndex === null
-      ? undefined
-      : citations.find((item) => item.index === citationIndex)
+/** Where else the reader finds a cited source on this page. */
+const CITATION_HINT = 'click to open, or find it in the Evidence table below'
 
-    if (!citation && /^\[[\d,\s]+\]$/.test(segment) && citations.length > 0) {
-      return <span key={`${keyPrefix}-${index}`} />
-    }
-    if (citation) {
-      const source = sources.find((s) => s.id === citation.resourceId)
-      const matchedPassage = source?.matchedField === 'summary' ? undefined : source?.matchedPassage
-      return (
-        <sup key={`${keyPrefix}-${index}`}>
-          <Link
-            to={citationHref(slug, citation.resourceId, matchedPassage, source?.matchedPage)}
-            className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
-            style={{ color: 'var(--rp-accent-fg)' }}
-            aria-label={`Source ${citationIndex}, ${citation.title}`}
-            title={`Source ${citationIndex} - ${citation.title}; click to open, or find it in the Evidence table below`}
-          >
-            [{citationIndex}]
-          </Link>
-        </sup>
-      )
-    }
-    return <span key={`${keyPrefix}-${index}`}>{segment}</span>
-  })
-}
-
-function renderInline(
-  text: string,
-  citations: Citation[],
-  sources: ScoredResource[],
-  slug: string,
-  keyPrefix: string,
-  unsupported: RegExp | null,
-): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*|(?<![\w*])\*[^*\n]+\*(?![\w*]))/g)
-  return parts.flatMap((part, index): ReactNode[] =>
-    part.startsWith('**') && part.endsWith('**') && part.length > 4
-      ? [
-        <strong key={`${keyPrefix}-${index}`}>
-          {renderCitationMarkers(
-            part.slice(2, -2),
-            citations,
-            sources,
-            slug,
-            `${keyPrefix}-${index}`,
-            unsupported,
-          )}
-        </strong>,
-      ]
-      : part.startsWith('*') && part.endsWith('*') && part.length > 2
-      ? [
-        <em key={`${keyPrefix}-${index}`} className='text-ink-2'>
-          {renderCitationMarkers(
-            part.slice(1, -1),
-            citations,
-            sources,
-            slug,
-            `${keyPrefix}-${index}`,
-            unsupported,
-          )}
-        </em>,
-      ]
-      : renderCitationMarkers(part, citations, sources, slug, `${keyPrefix}-${index}`, unsupported)
-  )
-}
-
-function renderMarkdown(
-  text: string,
-  citations: Citation[],
-  sources: ScoredResource[],
-  slug: string,
-  audit?: AnswerAudit,
-): ReactNode {
-  const unsupported = unsupportedFigurePattern(audit)
+function renderMarkdown(message: ChatMessage, slug: string): ReactNode {
   return (
-    <AnswerMarkdown
-      text={text}
-      renderInline={(run, keyPrefix) =>
-        renderInline(run, citations, sources, slug, keyPrefix, unsupported)}
+    <AnswerText
+      text={message.text}
+      citations={message.citations}
+      sources={message.sources}
+      slug={slug}
+      audit={message.audit}
+      streaming={message.pending === true}
+      citationHint={CITATION_HINT}
     />
   )
 }
@@ -833,19 +714,6 @@ function CheckingBadge({ figures }: { figures?: number }) {
   )
 }
 
-function AuditBadge({ audit }: { audit?: AnswerAudit }) {
-  const badge = auditBadge(audit)
-  if (!badge) return null
-  return (
-    <span
-      className={`rp-badge ${badge.tone === 'ok' ? 'rp-badge-ok' : 'rp-badge-warn'} mr-1`}
-      title={badge.title}
-    >
-      {badge.label}
-    </span>
-  )
-}
-
 function CopyAnswer({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
 
@@ -1193,9 +1061,7 @@ function AnswerCard({
           <span className='rp-badge rp-badge-quiet'>No direct evidence found</span>
         </div>
 
-        {message.text.length > 0
-          ? renderMarkdown(message.text, message.citations, message.sources, slug, message.audit)
-          : null}
+        {message.text.length > 0 ? renderMarkdown(message, slug) : null}
 
         {evidenceSources.length > 0
           ? (
@@ -1299,7 +1165,7 @@ function AnswerCard({
             className={message.pending ? 'rp-answer-in rp-answer-checking' : 'rp-answer-in'}
             aria-busy={message.pending ? true : undefined}
           >
-            {renderMarkdown(message.text, message.citations, message.sources, slug, message.audit)}
+            {renderMarkdown(message, slug)}
           </div>
         )
         : null}
@@ -1332,27 +1198,11 @@ function AnswerCard({
 
       {message.truncated && !message.pending
         ? (
-          <div
-            className='rp-answer-tail mt-3 flex flex-wrap items-center justify-between gap-2 rounded-[var(--rp-radius)] border p-3'
-            role='status'
-            style={{
-              ...tailStyle(TAIL_NOTICE),
-              borderColor: 'var(--rp-warn-line)',
-              background: 'var(--rp-warn-bg)',
-            }}
-          >
-            <p className='text-xs leading-relaxed text-[var(--rp-warn-ink)]'>
-              The answer stopped mid-sentence. The incomplete sentence was removed; what remains is
-              complete and cited. Ask again for the rest.
-            </p>
-            <button
-              type='button'
-              onClick={() => onAskSubquery?.(question)}
-              className='rp-btn rp-btn-outline h-8 shrink-0 px-2 text-xs'
-            >
-              Ask again
-            </button>
-          </div>
+          <TruncatedNotice
+            onAskAgain={() => onAskSubquery?.(question)}
+            className='rp-answer-tail mt-3'
+            style={tailStyle(TAIL_NOTICE)}
+          />
         )
         : null}
 
@@ -1421,7 +1271,7 @@ function AnswerCard({
                   </button>
                 )
                 : null}
-              <AuditBadge audit={message.audit} />
+              <AuditBadge audit={message.audit} className='mr-1' />
               <AnswerQualityDisclosure
                 quality={message.quality}
                 audit={message.audit}
@@ -2394,18 +2244,15 @@ export function AskPage() {
                 update((message) => ({ ...message, checking: figures }))
               }
               break
+            // The answer itself - text, citations, sources, quality, audit - is
+            // folded exactly as Search folds it (lib/answer-trust.ts), so one
+            // stream gives both pages the same confidence and the same marks.
             case 'sources':
-              update((message) => ({ ...message, sources: event.resources }))
-              break
             case 'delta':
-              update((message) => ({ ...message, text: message.text + event.text }))
-              break
             case 'citation':
-              update((message) =>
-                message.citations.some((citation) => citation.index === event.citation.index)
-                  ? message
-                  : { ...message, citations: [...message.citations, event.citation] }
-              )
+            case 'quality':
+            case 'audit':
+              update((message) => applyAnswerEvent(message, event))
               break
             case 'learning':
               update((message) => ({ ...message, learningId: event.id }))
@@ -2418,10 +2265,7 @@ export function AskPage() {
               // the first attempt streamed (its decline copy, its sources)
               // is discarded so the two never read as one answer.
               update((message) => ({
-                ...message,
-                text: '',
-                sources: [],
-                citations: [],
+                ...applyAnswerEvent(message, event),
                 fallback: { from: event.from, to: event.to, reason: event.reason },
               }))
               break
@@ -2450,38 +2294,8 @@ export function AskPage() {
                 },
               }))
               break
-            case 'quality':
-              update((message) => ({
-                ...message,
-                quality: {
-                  answerRelevance: event.answerRelevance,
-                  groundedness: event.groundedness,
-                  contextRelevance: event.contextRelevance,
-                },
-              }))
-              break
-            case 'audit':
-              update((message) => ({
-                ...message,
-                audit: {
-                  figuresChecked: event.figuresChecked,
-                  figuresUnsupported: event.figuresUnsupported,
-                  yearsUnsupported: event.yearsUnsupported,
-                  contraindicationsUnsupported: event.contraindicationsUnsupported,
-                  sentencesChecked: event.sentencesChecked,
-                  sentencesCited: event.sentencesCited,
-                  denominatorsMissing: event.denominatorsMissing ?? [],
-                  attributionsCorrected: event.attributionsCorrected ?? [],
-                  sentencesRemoved: event.sentencesRemoved ?? 0,
-                  figuresRemoved: event.figuresRemoved ?? [],
-                  figuresRescued: event.figuresRescued ?? [],
-                  sentencesReplaced: event.sentencesReplaced ?? 0,
-                },
-              }))
-              break
             case 'done':
               update((message) => ({
-                ...message,
                 // event.text is the deterministically citation-bound answer
                 // (the model's own [n] markers stripped and replaced with
                 // markers spliced at the platform's own char-offsets) - it
@@ -2489,12 +2303,10 @@ export function AskPage() {
                 // evidence table badges and the click-through targets all
                 // agree on what each [n] means. Falls back to the streamed
                 // text when absent (e.g. a refusal, which carries no citations).
-                text: event.text ?? message.text,
+                ...applyAnswerEvent(message, event),
                 pending: false,
                 checking: undefined,
                 verified: undefined,
-                refused: event.refused,
-                truncated: event.truncated === true,
               }))
               // The answer is complete here; the quality scores follow on
               // the same stream a few seconds later. The composer is

@@ -895,6 +895,7 @@ PR #17). The ones that cover the trust layer:
 | `apps/api/src/app.test.ts` (87) | The `/ask` route with a stub provider and management: routing, the grounding gate, fallback, pinned retry, withheld decline, the contraindication strip, document chat, author lookup, prequery expectations, the audit event |
 | `packages/retrieval/src/providers/arag/intents.test.ts` (12), `ask-structured.test.ts`, `display.test.ts` | Configuration names and filters, prequery construction, structured asks, refusal detection |
 | `apps/web/src/lib/confidence.test.ts`, `answer-marks.test.ts`, `answer-text.test.ts` | Audit-led confidence, the badge and inline marks, marker rendering |
+| `apps/web/src/components/AnswerInline.test.tsx`, `e2e/answer-trust-parity.test.ts` | One event stream folded the same way for Ask and Search: the same confidence (High only through the audit), the same marks on unverified figures, the badge and the truncation notice, on both pages |
 | `packages/core/src/docs.test.ts`, `apps/web/src/pages/HowItWorksPage.test.ts` | The in-app description of the check stays in step with the page |
 
 Live verification is part of every PR: the persona's own questions re-run against the live box
@@ -933,6 +934,9 @@ packages/retrieval/src/providers/arag/index.ts   ask(): the platform request, gr
 packages/core/src/index.ts              AskEventSchema (route, sources, searched, fallback, delta, verified,
                                         stage, citation, audit, quality, done), Citation, ScoredResource
 apps/web/src/pages/AskPage.tsx          event handling, the checking state, the verified line, done replacing the text
+apps/web/src/components/SearchAnswer.tsx  the Search page's answer panel, with the same audit, marks and confidence as Ask
+apps/web/src/lib/answer-trust.ts        the one reducer both surfaces fold the stream with (text, citations, audit, quality)
+apps/web/src/components/AnswerInline.tsx  markers, marks, the audit badge and the truncation notice, shared by both surfaces
 apps/web/src/lib/confidence.ts          audit-led confidence
 apps/web/src/lib/answer-marks.ts        the badge and inline marks
 apps/web/src/components/AnswerStream.tsx, QualityGauge.tsx, StageTimeline.tsx, EvidenceTable.tsx

@@ -1,13 +1,13 @@
 import { useAccess } from './AccessProvider.tsx'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AskEvent, AskStage, Citation, ScoredResource } from '@research-portal/core'
 import { ApiError, RATE_LIMIT_MESSAGE, streamAsk } from '../api/client.ts'
 import { secondsUntilRetry, shouldDeferAutomaticAsk } from '../lib/ask-budget.ts'
-import { AnswerMarkdown } from './AnswerMarkdown.tsx'
-import { citationHref } from './AnswerStream.tsx'
+import { applyAnswerEvent, EMPTY_ANSWER, type StreamedAnswer } from '../lib/answer-trust.ts'
+import { AnswerText, AuditBadge, TruncatedNotice } from './AnswerInline.tsx'
 import { CurrencyNote } from './CurrencyNote.tsx'
-import { ConfidenceIndicator, type QualityScores } from './QualityGauge.tsx'
+import { ConfidenceIndicator } from './QualityGauge.tsx'
 import { ErrorCard, LiveStatus } from './ui.tsx'
 import { StageTimeline, statusesFor, useAnswerPhase } from './StageTimeline.tsx'
 
@@ -41,87 +41,6 @@ export interface SearchAnswerProps {
    * Resources/Citations toggle without re-implementing the stream.
    */
   onResult?: (result: SearchAnswerResult) => void
-}
-
-/**
- * Replaces `[n]` markers in a plain-text run with superscript, accent-
- * coloured links to the matching citation's deep link - the same treatment
- * AskPage gives its own streamed answers. Duplicated here (a small
- * pure function, not exported there) so this panel's prose matches it.
- */
-function renderCitationMarkers(
-  text: string,
-  citations: Citation[],
-  sources: ScoredResource[],
-  slug: string,
-  keyPrefix: string,
-  streaming: boolean,
-): ReactNode[] {
-  const segments = text.split(/(\[\d+\])/g)
-  return segments.map((segment, index) => {
-    const match = /^\[(\d+)\]$/.exec(segment)
-    const citationIndex = match?.[1] ? Number(match[1]) : null
-    const citation = citationIndex === null
-      ? undefined
-      : citations.find((item) => item.index === citationIndex)
-
-    if (citation) {
-      const matchedPassage = sources.find((source) => source.id === citation.resourceId)
-        ?.matchedPassage
-      return (
-        <sup key={`${keyPrefix}-${index}`}>
-          <Link
-            to={citationHref(slug, citation.resourceId, matchedPassage)}
-            className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
-            style={{ color: 'var(--rp-accent-fg)' }}
-            aria-label={`Source ${citationIndex}, ${citation.title}`}
-            title={`Source ${citationIndex} - ${citation.title}`}
-          >
-            [{citationIndex}]
-          </Link>
-        </sup>
-      )
-    }
-    // While the answer streams, a marker with no citation to bind to is the
-    // model's own provisional numbering: never shown as if it were a
-    // source (D2-14). The server's bound text replaces it on `done`.
-    if (citationIndex !== null && streaming) return null
-    return <span key={`${keyPrefix}-${index}`}>{segment}</span>
-  })
-}
-
-function renderInline(
-  text: string,
-  citations: Citation[],
-  sources: ScoredResource[],
-  slug: string,
-  keyPrefix: string,
-  streaming: boolean,
-): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
-  return parts.flatMap((part, index): ReactNode[] =>
-    part.startsWith('**') && part.endsWith('**') && part.length > 4
-      ? [<strong key={`${keyPrefix}-${index}`}>{part.slice(2, -2)}</strong>]
-      : renderCitationMarkers(part, citations, sources, slug, `${keyPrefix}-${index}`, streaming)
-  )
-}
-
-/** Answer text: shared block structure, with bold and [n] markers inline. */
-function renderAnswer(
-  text: string,
-  citations: Citation[],
-  sources: ScoredResource[],
-  slug: string,
-  streaming: boolean,
-): ReactNode {
-  return (
-    <AnswerMarkdown
-      text={text}
-      renderInline={(run, keyPrefix) =>
-        renderInline(run, citations, sources, slug, keyPrefix, streaming)}
-      bodyClassName='text-sm leading-relaxed text-ink'
-    />
-  )
 }
 
 /**
@@ -192,11 +111,11 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     access.controller.context === context &&
     access.controller.can('portal.ask', { kind: 'portal', slug })
   const [status, setStatus] = useState<Status>('idle')
-  const [text, setText] = useState('')
-  const [sources, setSources] = useState<ScoredResource[]>([])
-  const [citations, setCitations] = useState<Citation[]>([])
-  const [refused, setRefused] = useState(false)
-  const [quality, setQuality] = useState<QualityScores | undefined>(undefined)
+  // Folded by the same reducer as Ask (lib/answer-trust.ts), so the audit,
+  // quality and truncation this panel shows are the ones Ask would show.
+  const [answer, setAnswer] = useState<StreamedAnswer>(EMPTY_ANSWER)
+  const { text, sources, citations, quality, audit } = answer
+  const refused = answer.refused === true
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [stageLabel, setStageLabel] = useState<string | null>(null)
   const [activeStage, setActiveStage] = useState<AskStage | null>(null)
@@ -217,20 +136,13 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
 
     if (trimmed.length === 0) {
       setStatus('idle')
-      setText('')
-      setSources([])
-      setCitations([])
-      setRefused(false)
+      setAnswer(EMPTY_ANSWER)
       setErrorMessage(null)
       setStageLabel(null)
       return
     }
 
-    setText('')
-    setSources([])
-    setCitations([])
-    setRefused(false)
-    setQuality(undefined)
+    setAnswer(EMPTY_ANSWER)
     setErrorMessage(null)
     setStageLabel(null)
     setActiveStage(null)
@@ -251,6 +163,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
 
     streamAsk(slug, { query: trimmed }, (event: AskEvent) => {
       if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
+      setAnswer((prev) => applyAnswerEvent(prev, event))
       switch (event.type) {
         case 'stage':
           setStageLabel(event.status === 'started' ? STAGE_LABELS[event.stage] ?? null : null)
@@ -260,30 +173,8 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
             setSeenStages((prev) => new Set(prev).add(event.stage))
           }
           break
-        case 'sources':
-          setSources(event.resources)
-          break
-        case 'delta':
-          setText((prev) => prev + event.text)
-          break
-        case 'citation':
-          setCitations((prev) => [...prev, event.citation])
-          break
-        case 'quality':
-          setQuality({
-            answerRelevance: event.answerRelevance,
-            groundedness: event.groundedness,
-            contextRelevance: event.contextRelevance,
-          })
-          break
         case 'done':
           setStageLabel(null)
-          // The deterministically citation-bound text (server-spliced [n]
-          // markers) replaces the streamed accumulation, same as
-          // AskPage - falls back to the streamed text when absent
-          // (a refusal carries no citations to bind).
-          if (event.text !== undefined) setText(event.text)
-          setRefused(event.refused ?? false)
           setStatus('done')
           break
         case 'error':
@@ -420,20 +311,35 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                   {text.length > 0
                     ? (
                       <div className='rp-answer-in rp-prose text-sm text-ink'>
-                        {renderAnswer(text, citations, sources, slug, status === 'streaming')}
+                        <AnswerText
+                          text={text}
+                          citations={citations}
+                          sources={sources}
+                          slug={slug}
+                          audit={audit}
+                          streaming={status === 'streaming'}
+                          bodyClassName='text-sm leading-relaxed text-ink'
+                        />
                       </div>
                     )
                     : null}
 
+                  {status === 'done' && answer.truncated
+                    ? <TruncatedNotice onAskAgain={retry} className='rp-answer-in mt-3' />
+                    : null}
+
                   {
-                    /* Confidence, citation count and source range read as one
-                    * fact about the answer, so they sit on one line and arrive
-                    * together rather than stacking up as three separate rows. */
+                    /* Confidence, what the audit checked, citation count and
+                    * source range read as one fact about the answer, so they
+                    * sit on one line and arrive together rather than stacking
+                    * up as separate rows. Confidence reads the audit exactly as
+                    * Ask's does, so the same answer is rated the same here. */
                   }
                   {status === 'done' && !refused
                     ? (
                       <div className='rp-answer-in mt-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
-                        <ConfidenceIndicator quality={quality} />
+                        <ConfidenceIndicator quality={quality} audit={audit} />
+                        <AuditBadge audit={audit} />
                         <p className='text-xs text-ink-3'>{citations.length} cited</p>
                         <CurrencyNote
                           sources={sources.filter((source) =>

@@ -6,7 +6,7 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { assessConfidence, type ConfidenceState } from '../lib/confidence.ts'
+import { assessConfidence, type Confidence, type ConfidenceState } from '../lib/confidence.ts'
 import { type AnswerAudit, figureLabel } from '../lib/answer-marks.ts'
 import { useCompactViewport } from './useViewMode.ts'
 
@@ -212,6 +212,25 @@ const CONFIDENCE_DETAIL: Record<ConfidenceState, string> = {
 
 export interface ConfidenceIndicatorProps {
   quality: QualityScores | null | undefined
+  /**
+   * The portal's own audit of the answer against the cited texts. It leads
+   * the verdict whenever it checked anything, exactly as it does in
+   * `AnswerQualityDisclosure`, so the same answer reads the same confidence
+   * on every surface - and only an audit can earn "High confidence".
+   */
+  audit?: AnswerAudit
+}
+
+/**
+ * The sentence behind a confidence level: what the audit found when it led
+ * the verdict, otherwise the platform-score explanation. Shared by the pill
+ * and the disclosure so the two never explain the same level differently.
+ */
+function confidenceDetail(confidence: Confidence, audit: AnswerAudit | undefined): string {
+  const audited = auditSummary(audit)
+  return confidence.basis === 'audit' && audited
+    ? `Checked against the cited texts: ${audited.charAt(0).toLowerCase()}${audited.slice(1)}`
+    : CONFIDENCE_DETAIL[confidence.state]
 }
 
 /**
@@ -227,12 +246,15 @@ export interface ConfidenceIndicatorProps {
  *    `role="alert"` so assistive tech announces it immediately, an icon (not
  *    colour alone), and copy that explicitly points at the evidence below.
  */
-export function ConfidenceIndicator({ quality }: ConfidenceIndicatorProps) {
-  const confidence = assessConfidence(quality)
+export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps) {
+  const confidence = assessConfidence(quality, audit)
 
   if (confidence.state === 'unscored') {
     return (
-      <span className='rp-badge rp-badge-quiet inline-flex items-center gap-1'>
+      <span
+        className='rp-badge rp-badge-quiet inline-flex items-center gap-1'
+        data-confidence={confidence.state}
+      >
         <InfoCircleIcon />
         Confidence not scored for this answer
       </span>
@@ -241,28 +263,23 @@ export function ConfidenceIndicator({ quality }: ConfidenceIndicatorProps) {
 
   if (confidence.state === 'high') {
     return (
-      <span className='rp-badge rp-badge-ok inline-flex items-center gap-1'>
+      <span
+        className='rp-badge rp-badge-ok inline-flex items-center gap-1'
+        title={confidenceDetail(confidence, audit)}
+        data-confidence={confidence.state}
+      >
         <CheckCircleIcon />
         High confidence
       </span>
     )
   }
 
-  if (confidence.state === 'moderate') {
-    return (
-      <ConfidencePill
-        tone='warn'
-        label='Moderate confidence'
-        detail={CONFIDENCE_DETAIL.moderate}
-      />
-    )
-  }
-
   return (
     <ConfidencePill
-      tone='bad'
-      label='Low confidence'
-      detail={CONFIDENCE_DETAIL.low}
+      tone={confidence.state === 'moderate' ? 'warn' : 'bad'}
+      label={confidence.label}
+      detail={confidenceDetail(confidence, audit)}
+      state={confidence.state}
     />
   )
 }
@@ -276,7 +293,12 @@ export function ConfidenceIndicator({ quality }: ConfidenceIndicatorProps) {
  * icon so the warning is not carried by colour alone.
  */
 function ConfidencePill(
-  { tone, label, detail }: { tone: 'warn' | 'bad'; label: string; detail: string },
+  { tone, label, detail, state }: {
+    tone: 'warn' | 'bad'
+    label: string
+    detail: string
+    state: ConfidenceState
+  },
 ) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLSpanElement | null>(null)
@@ -298,7 +320,7 @@ function ConfidencePill(
   }, [open])
 
   return (
-    <span ref={wrapRef} className='relative inline-flex'>
+    <span ref={wrapRef} className='relative inline-flex' data-confidence={state}>
       <button
         type='button'
         onClick={() => setOpen((prev) => !prev)}
@@ -553,10 +575,7 @@ export function AnswerQualityDisclosure(
   }
 
   const confidence = assessConfidence(quality, audit)
-  const audited = auditSummary(audit)
-  const detail = confidence.basis === 'audit' && audited
-    ? `Checked against the cited texts: ${audited.charAt(0).toLowerCase()}${audited.slice(1)}`
-    : CONFIDENCE_DETAIL[confidence.state]
+  const detail = confidenceDetail(confidence, audit)
   const { tone, labelled } = TRIGGER_TONE[confidence.state]
   const loud = tone !== 'quiet'
 
@@ -691,7 +710,7 @@ export function AnswerQualityDisclosure(
     )
 
   return (
-    <div ref={rootRef} className='relative inline-flex'>
+    <div ref={rootRef} className='relative inline-flex' data-confidence={confidence.state}>
       <button
         ref={triggerRef}
         type='button'
