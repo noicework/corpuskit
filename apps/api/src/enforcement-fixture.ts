@@ -303,7 +303,14 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         : {}),
     }
     const snapshot = () =>
-      ['state', 'branding_assets', 'enrichment_records', 'routing_records', 'audit_query_snapshots']
+      [
+        'state',
+        'branding_assets',
+        'enrichment_records',
+        'routing_records',
+        'answer_feedback',
+        'audit_query_snapshots',
+      ]
         .map((table) => f.database.all(`SELECT * FROM ${table}`))
     const baseline = snapshot()
     // Public shell/health have deliberately no denied role. D9 and aggregates have explicit redacted alternatives.
@@ -1155,7 +1162,10 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'prompts') {
             expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
           } else if (suffix === 'insights') {
-            expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
+            expect(JSON.parse(result)).toEqual({
+              ...fixture.stores.insights.summary('a'),
+              feedback: { helpful: 0, unhelpful: 0, flagged: [] },
+            })
           } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
           else if (suffix === 'lifecycle') {
             expect(JSON.parse(result)).toEqual({

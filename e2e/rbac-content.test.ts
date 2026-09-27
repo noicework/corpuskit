@@ -63,6 +63,7 @@ function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
         gaps: [],
         recent: [],
       }),
+      questions: () => ({}),
       erase: () => 0,
     },
   })

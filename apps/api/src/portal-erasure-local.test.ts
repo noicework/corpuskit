@@ -12,7 +12,7 @@ import { localOwnedStores } from './local-owned-stores.ts'
 import type { PortalErasureStores } from './portal-erasure.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import type { ResearchOwner } from './research-owner.ts'
-import { InsightsStore, RoutingLog, SourceStore } from './stores.ts'
+import { FeedbackStore, InsightsStore, RoutingLog, SourceStore } from './stores.ts'
 import { TenantStore } from './tenants.ts'
 import type { AuditEvent } from './audit.ts'
 
@@ -37,6 +37,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   tenants: { erasedBy: 'tenants' },
   bindings: { erasedBy: 'bindings' },
   insights: { erasedBy: 'insights' },
+  feedback: { erasedBy: 'feedback' },
   sessions: { erasedBy: 'sessions' },
   sources: { erasedBy: 'sources' },
   watches: { erasedBy: 'watches' },
@@ -85,6 +86,7 @@ const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
   watches: true,
   sources: true,
   insights: true,
+  feedback: true,
   suggestions: true,
   enrichments: true,
   kgProposals: true,
@@ -122,6 +124,7 @@ async function localServer() {
   const stores = {
     sources: new SourceStore(directory),
     insights: new InsightsStore(directory),
+    feedback: new FeedbackStore(directory),
     routing: new RoutingLog(directory),
     suggestions: new SuggestionStore(directory),
     kgProposals: new KgProposalStore(env),
@@ -290,6 +293,13 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       groundedness: 4,
       contextRelevance: 4,
     })
+    // Ratings age out on real time, whatever the fixture's clock says.
+    s.stores.feedback.record(SLUG, {
+      ts: new Date().toISOString(),
+      learningId: 'learning-probe',
+      good: false,
+      text: 'reader@first-customer.example says the year is wrong',
+    })
     s.stores.routing.record(SLUG, {
       ts: new Date(s.now()).toISOString(),
       questionHash: 'abcd1234',
@@ -343,6 +353,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
         'watches',
         'sources',
         'insights',
+        'feedback',
         'suggestions',
         'enrichments',
         'kgProposals',

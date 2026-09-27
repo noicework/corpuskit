@@ -18,7 +18,7 @@ import { LocalIngress } from '../../apps/api/src/local-ingress.ts'
 import { localOwnedStores } from '../../apps/api/src/local-owned-stores.ts'
 import { infrastructureHandler } from '../../apps/api/src/permissions.ts'
 import { fixtureSession } from '../../apps/api/src/rbac-integration-fixture.ts'
-import { InsightsStore, RoutingLog, SourceStore } from '../../apps/api/src/stores.ts'
+import { FeedbackStore, InsightsStore, RoutingLog, SourceStore } from '../../apps/api/src/stores.ts'
 import { SuggestionStore } from '../../apps/api/src/interrogate.ts'
 import { KgProposalStore } from '../../apps/api/src/kg.ts'
 import { EnrichmentStore } from '../../apps/api/src/enrichments.ts'
@@ -240,6 +240,7 @@ export function startTestServer(options: {
       domainProvisioner: options.domainProvisioner ?? null,
       sources: options.sources ?? isolatedStore(new SourceStore(), 'sources', 'json'),
       insights: options.insights ?? isolatedStore(new InsightsStore(), 'insights', 'jsonl'),
+      feedback: new FeedbackStore(directory),
       routing: isolatedStore(new RoutingLog(), 'routing', 'jsonl'),
       suggestions: isolatedStore(new SuggestionStore(), 'suggestions', 'json'),
       kgProposals: new KgProposalStore({ KG_PROPOSALS_PATH: `${directory}/kg-proposals.json` }),

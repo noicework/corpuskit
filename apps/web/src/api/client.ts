@@ -1382,7 +1382,25 @@ export interface AskInsightRow {
   contextRelevance: number | null
 }
 
+/** An answer a reader marked unhelpful, with the question it answered. */
+export interface FlaggedAnswer {
+  question: string
+  askedAt: string
+  ratedAt: string
+  /** What the reader said was wrong, or null when they left no comment. */
+  comment: string | null
+}
+
+/** Readers' ratings of the portal's answers over the Insights window. */
+export interface AnswerFeedbackSummary {
+  helpful: number
+  unhelpful: number
+  flagged: FlaggedAnswer[]
+}
+
 export interface InsightsSummary {
+  /** Absent from a server that does not keep answer feedback. */
+  feedback?: AnswerFeedbackSummary
   totalAsks: number
   answered: number
   unanswered: number

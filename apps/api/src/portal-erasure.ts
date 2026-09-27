@@ -12,6 +12,7 @@ import type { KgProposalStoreApi } from './kg.ts'
 import type { PortalLifecycleStore } from './lifecycle-store.ts'
 import type { RbacState } from './rbac-state.ts'
 import type {
+  FeedbackStoreApi,
   InsightsStoreApi,
   InvestigationStoreApi,
   McpKeyStoreApi,
@@ -38,6 +39,7 @@ export interface PortalErasureStores {
   watches: Pick<WatchStoreApi, 'erase'>
   sources: Pick<SourceStoreApi, 'erase'>
   insights: Pick<InsightsStoreApi, 'erase'>
+  feedback: Pick<FeedbackStoreApi, 'erase'>
   suggestions: Pick<SuggestionStoreApi, 'erase'>
   enrichments: Pick<EnrichmentStoreApi, 'erase'>
   kgProposals: Pick<KgProposalStoreApi, 'erase'>
@@ -80,6 +82,7 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   watches: 'erasedWatches',
   sources: 'erasedSources',
   insights: 'erasedInsights',
+  feedback: 'erasedFeedback',
   suggestions: 'erasedSuggestions',
   enrichments: 'erasedEnrichments',
   kgProposals: 'erasedKgProposals',
@@ -130,6 +133,7 @@ export function erasePortal(
     erased.watches = stores.watches.erase(slug)
     erased.sources = stores.sources.erase(slug)
     erased.insights = stores.insights.erase(slug)
+    erased.feedback = stores.feedback.erase(slug)
     erased.suggestions = stores.suggestions.erase(slug)
     erased.enrichments = stores.enrichments.erase(slug)
     erased.kgProposals = stores.kgProposals.erase(slug)

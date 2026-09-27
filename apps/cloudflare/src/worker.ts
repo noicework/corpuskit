@@ -189,6 +189,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       tenants: this.stores.tenants,
       lifecycle: this.stores.lifecycle,
       insights: this.stores.insights,
+      feedback: this.stores.feedback,
       sessions: this.stores.sessions,
       watches: this.stores.watches,
       sources: this.stores.sources,

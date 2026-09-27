@@ -149,6 +149,14 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
       groundedness: 4,
       contextRelevance: 4,
     }),
+  feedback: (f, slug) =>
+    // Ratings age out on real time, whatever the fixture's clock says.
+    f.stores.feedback.record(slug, {
+      ts: new Date().toISOString(),
+      learningId: 'learning-probe',
+      good: false,
+      text: 'reader@first-customer.example says the year is wrong',
+    }),
   sessions: (f, slug) => {
     for (const owner of [researcher, anonymous]) {
       f.stores.sessions.put(slug, owner, {
@@ -791,6 +799,7 @@ const DURABLE_TABLES: Record<string, string> = {
   branding_assets: 'erased: DurableBrandingStore.erase',
   enrichment_records: 'erased: DurableEnrichmentStore.erase',
   routing_records: 'erased: DurableRoutingLog.erase',
+  answer_feedback: 'erased: DurableFeedbackStore.erase',
   audit_events: 'erased: RbacState.erasePortalRecords, keeping the erasure records',
   audit_event_order: 'erased: with the audit events it orders',
   audit_query_snapshots: 'erased: open paged queries of the portal',

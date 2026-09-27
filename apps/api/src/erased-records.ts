@@ -16,6 +16,8 @@ export const ERASED_RECORD_KINDS = [
   'watches',
   'sources',
   'insights',
+  /** Readers' ratings of answers and their comments. */
+  'feedback',
   'suggestions',
   /** Generated enrichments and cached suggested questions. */
   'enrichments',

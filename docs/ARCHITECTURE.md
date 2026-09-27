@@ -196,9 +196,9 @@ the stored search configurations behind it are in `docs/INTENT-ROUTING.md`.
 
 ## Persistence rule
 All production app-side state (tenants, bindings, sessions, investigations, watches, sources,
-insights, suggestions, enrichments and branding) lives in the `PortalDurableObject` SQLite
-database. The object serialises writes and SQLite output gates make each mutation durable before
-the response completes. The file-backed stores remain the local Deno adapter and rollback path;
+insights, answer feedback, suggestions, enrichments and branding) lives in the
+`PortalDurableObject` SQLite database. The object serialises writes and SQLite output gates make
+each mutation durable before the response completes. The file-backed stores remain the local Deno adapter and rollback path;
 business routes depend on store interfaces rather than either persistence mechanism.
 
 ## Deployment pipeline

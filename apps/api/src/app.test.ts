@@ -777,7 +777,10 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'prompts') {
                 expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
               } else if (suffix === 'insights') {
-                expect(JSON.parse(result)).toEqual(fixture.stores.insights.summary('a'))
+                expect(JSON.parse(result)).toEqual({
+                  ...fixture.stores.insights.summary('a'),
+                  feedback: { helpful: 0, unhelpful: 0, flagged: [] },
+                })
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
               else if (suffix === 'lifecycle') {
                 expect(JSON.parse(result)).toEqual({

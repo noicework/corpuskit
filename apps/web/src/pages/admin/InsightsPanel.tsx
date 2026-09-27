@@ -1,7 +1,8 @@
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { AskInsightRow } from '../../api/client.ts'
+import type { AnswerFeedbackSummary, AskInsightRow } from '../../api/client.ts'
 import { getInsights } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -34,6 +35,78 @@ function StatTile({ label, value }: { label: string; value: string }) {
       <dd className='mt-1 text-lg font-semibold text-ink'>{value}</dd>
     </div>
   )
+}
+
+/**
+ * The answers readers marked unhelpful, with what they said was wrong and a way to ask the
+ * question again: the clearest signal of what the collection needs next.
+ */
+export function UnhelpfulAnswers(
+  { slug, feedback }: { slug: string; feedback: AnswerFeedbackSummary },
+) {
+  const rated = feedback.helpful + feedback.unhelpful
+  return (
+    <div className='rp-card p-5' data-unhelpful-answers>
+      <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
+        <h4 className='text-sm font-semibold text-ink'>Answers marked unhelpful</h4>
+        <p className='text-xs text-ink-3'>
+          {rated === 0
+            ? 'No answers rated yet'
+            : `${feedback.unhelpful} of ${rated} rated ${
+              rated === 1 ? 'answer' : 'answers'
+            } marked unhelpful`}
+        </p>
+      </div>
+      <p className='mt-1 text-xs text-ink-3'>
+        Readers' thumbs-down ratings and what they said was wrong. Ask a question again to see the
+        answer readers get now.
+      </p>
+      {feedback.flagged.length === 0
+        ? (
+          <p className='mt-3 text-sm text-ink-3'>
+            No answer has been marked unhelpful in the last 90 days.
+          </p>
+        )
+        : (
+          <ul className='mt-3 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
+            {feedback.flagged.map((item, index) => (
+              <li key={index} className='bg-surface px-4 py-3'>
+                <div className='flex flex-wrap items-start justify-between gap-2'>
+                  <p className='min-w-0 break-words text-sm font-medium text-ink'>
+                    {item.question}
+                  </p>
+                  <Link
+                    to={`/t/${slug}/ask?ask=${encodeURIComponent(item.question)}`}
+                    className='rp-chip inline-flex h-9 shrink-0 items-center text-xs font-semibold sm:h-7'
+                    aria-label={`Ask again: ${item.question}`}
+                  >
+                    Ask again
+                  </Link>
+                </div>
+                {item.comment
+                  ? (
+                    <blockquote className='mt-1.5 break-words border-l-2 border-line pl-3 text-sm leading-relaxed text-ink-2'>
+                      {item.comment}
+                    </blockquote>
+                  )
+                  : <p className='mt-1.5 text-xs text-ink-3'>No comment left.</p>}
+                <p className='mt-1 text-xs text-ink-3'>
+                  Marked unhelpful {relativeTime(item.ratedAt)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+    </div>
+  )
+}
+
+/** A server's feedback summary, when it sent a well-formed one. */
+function validFeedback(value: unknown): boolean {
+  if (value === undefined) return true
+  const feedback = value as Partial<AnswerFeedbackSummary> | null
+  return !!feedback && Number.isFinite(feedback.helpful) &&
+    Number.isFinite(feedback.unhelpful) && Array.isArray(feedback.flagged)
 }
 
 /**
@@ -71,7 +144,8 @@ function InsightsPanelContent({ slug }: { slug: string }) {
         if (
           !insights ||
           ![insights.totalAsks, insights.answered, insights.unanswered].every(Number.isFinite) ||
-          ![insights.topQuestions, insights.gaps, insights.recent].every(Array.isArray)
+          ![insights.topQuestions, insights.gaps, insights.recent].every(Array.isArray) ||
+          !validFeedback(insights.feedback)
         ) throw new AdminAccessError()
         return insights
       })
@@ -190,6 +264,10 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                 </ul>
               )}
           </div>
+
+          {data.feedback && validFeedback(data.feedback)
+            ? <UnhelpfulAnswers slug={slug} feedback={data.feedback} />
+            : null}
 
           <div className='rp-card p-5'>
             <h4 className='text-sm font-semibold text-ink'>Recent questions</h4>

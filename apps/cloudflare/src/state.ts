@@ -18,6 +18,13 @@ import type { EnrichmentStoreApi } from '../../api/src/enrichments.ts'
 import type { KgProposalStoreApi } from '../../api/src/kg.ts'
 import type { Suggestion, SuggestionStoreApi } from '../../api/src/interrogate.ts'
 import { type RbacDatabase, RbacState, type RbacStores } from '../../api/src/rbac-state.ts'
+import {
+  ANSWER_FEEDBACK_DAYS,
+  ANSWER_FEEDBACK_KEEP,
+  type AnswerFeedback,
+  type FeedbackStoreApi,
+  parseAnswerFeedback,
+} from '../../api/src/stores.ts'
 import type {
   AskInsight,
   EnrichmentCollisionPolicy,
@@ -363,6 +370,15 @@ export class DurableState {
       );
       CREATE INDEX IF NOT EXISTS routing_records_by_tenant
         ON routing_records (tenant_slug, id);
+      CREATE TABLE IF NOT EXISTS answer_feedback (
+        tenant_slug TEXT NOT NULL,
+        learning_id TEXT NOT NULL,
+        record TEXT NOT NULL,
+        rated_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant_slug, learning_id)
+      );
+      CREATE INDEX IF NOT EXISTS answer_feedback_by_tenant
+        ON answer_feedback (tenant_slug, rated_at);
     `)
     // Legacy construction remains usable until the Worker injects storage in plan 02-04.
     if (this.transactions) this.rbac.migrate()
@@ -487,7 +503,10 @@ export class DurableState {
   }
 
   /** Delete every row a table keeps for the portal in its `tenant_slug` column, counting them. */
-  eraseTenantRows(table: 'enrichment_records' | 'routing_records', slug: string): number {
+  eraseTenantRows(
+    table: 'enrichment_records' | 'routing_records' | 'answer_feedback',
+    slug: string,
+  ): number {
     this.guardLocalWrite()
     const erased = this.sql.exec<{ n: number }>(
       `SELECT count(*) AS n FROM ${table} WHERE tenant_slug = ?`,
@@ -514,6 +533,55 @@ export class DurableState {
       slug,
       keep,
     )
+  }
+
+  /**
+   * Keep a reader's rating, one row per answer (a later rating of the same answer replaces it),
+   * then drop the portal's ratings older than `cutoff` and beyond the newest `keep`.
+   */
+  putFeedback(slug: string, feedback: AnswerFeedback, keep: number, cutoff: number): void {
+    this.guardLocalWrite()
+    this.sql.exec(
+      `INSERT INTO answer_feedback (tenant_slug, learning_id, record, rated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(tenant_slug, learning_id)
+       DO UPDATE SET record = excluded.record, rated_at = excluded.rated_at`,
+      slug,
+      feedback.learningId,
+      JSON.stringify(feedback),
+      Date.parse(feedback.ts),
+    )
+    this.sql.exec(
+      'DELETE FROM answer_feedback WHERE tenant_slug = ? AND rated_at < ?',
+      slug,
+      cutoff,
+    )
+    this.sql.exec(
+      `DELETE FROM answer_feedback WHERE tenant_slug = ? AND learning_id NOT IN (
+         SELECT learning_id FROM answer_feedback WHERE tenant_slug = ?
+         ORDER BY rated_at DESC, learning_id DESC LIMIT ?
+       )`,
+      slug,
+      slug,
+      keep,
+    )
+  }
+
+  /** The portal's ratings from `cutoff` on, newest first, at most `limit`. */
+  feedbackRecords(slug: string, cutoff: number, limit: number): AnswerFeedback[] {
+    return this.sql.exec<{ record: string }>(
+      `SELECT record FROM answer_feedback WHERE tenant_slug = ? AND rated_at >= ?
+       ORDER BY rated_at DESC, learning_id DESC LIMIT ?`,
+      slug,
+      cutoff,
+      limit,
+    ).toArray().flatMap((row) => {
+      try {
+        const record = parseAnswerFeedback(JSON.parse(row.record))
+        return record ? [record] : []
+      } catch {
+        return []
+      }
+    })
   }
 
   /** The tenant's routing decisions, newest first, at most `limit`. */
@@ -751,8 +819,9 @@ export class DurableState {
 
   /**
    * Delete the records a removed portal leaves stored under its slug: sources, enrichments and
-   * cached questions, insights, suggestions, knowledge graph proposals, research sessions,
-   * investigations, watches (current and pre-phase), branding assets and routing decisions.
+   * cached questions, insights, answer feedback, suggestions, knowledge graph proposals, research
+   * sessions, investigations, watches (current and pre-phase), branding assets and routing
+   * decisions.
    * Removal itself already took the portal's binding and lifecycle records and revoked its access;
    * the revoked data keys and the audit events stay on record.
    */
@@ -767,6 +836,7 @@ export class DurableState {
     underPrefix('state', `research-v2:${encodeStorageIdentifier(slug)}:`)
     this.sql.exec('DELETE FROM enrichment_records WHERE tenant_slug = ?', slug)
     this.sql.exec('DELETE FROM routing_records WHERE tenant_slug = ?', slug)
+    this.sql.exec('DELETE FROM answer_feedback WHERE tenant_slug = ?', slug)
     const proposals = this.get<Record<string, unknown>>('kg-proposals', {})
     if (Object.hasOwn(proposals, slug)) {
       delete proposals[slug]
@@ -1199,8 +1269,48 @@ export class DurableInsightsStore implements InsightsStoreApi {
           ? 'No answer found in the corpus'
           : `Weak grounding (${item.groundedness}/5)`,
       })),
-      recent: all.slice(-25).reverse(),
+      recent: all.slice(-25).reverse().map(({ learningId: _learningId, ...item }) => item),
     }
+  }
+
+  /** The questions the named answers answered (see `AskInsight.learningId`). */
+  questions(
+    slug: string,
+    learningIds: readonly string[],
+  ): Record<string, { question: string; ts: string }> {
+    const wanted = new Set(learningIds)
+    const found: Record<string, { question: string; ts: string }> = {}
+    if (wanted.size === 0) return found
+    for (const item of this.all(slug)) {
+      if (item.learningId && wanted.has(item.learningId)) {
+        found[item.learningId] = { question: item.question, ts: item.ts }
+      }
+    }
+    return found
+  }
+}
+
+/** Answer feedback on the Durable Object: one `answer_feedback` row per rated answer. */
+export class DurableFeedbackStore implements FeedbackStoreApi {
+  constructor(
+    private readonly state: DurableState,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private cutoff(): number {
+    return this.now() - ANSWER_FEEDBACK_DAYS * 24 * 3600 * 1000
+  }
+
+  record(slug: string, feedback: AnswerFeedback): void {
+    this.state.putFeedback(slug, feedback, ANSWER_FEEDBACK_KEEP, this.cutoff())
+  }
+
+  list(slug: string): AnswerFeedback[] {
+    return this.state.feedbackRecords(slug, this.cutoff(), ANSWER_FEEDBACK_KEEP)
+  }
+
+  erase(slug: string): number {
+    return this.state.eraseTenantRows('answer_feedback', slug)
   }
 }
 
@@ -1932,6 +2042,7 @@ export interface DurableStores extends RbacStores {
   bindings: DurableBindingStore
   tenants: DurableTenantStore
   insights: DurableInsightsStore
+  feedback: DurableFeedbackStore
   sessions: DurableSessionsStore
   watches: DurableWatchStore
   sources: DurableSourceStore
@@ -1962,6 +2073,7 @@ export function durableStores(
       new DurableTenantStore(state, getPlatformDomain(env.PLATFORM_DOMAIN), reservedHostnames(env)),
     ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
+    feedback: state.auditedStore('feedback', new DurableFeedbackStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
     watches: state.auditedStore('watches', new DurableWatchStore(state)),
     sources: state.auditedStore('sources', new DurableSourceStore(state)),

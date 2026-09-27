@@ -168,6 +168,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['tenants', ['patchBranding'], 'appearance.write', 'portal'],
     ['sessions', ['put', 'remove'], 'portal.ask', 'portal'],
     ['insights', ['record'], 'portal.ask', 'portal'],
+    ['feedback', ['record'], 'portal.ask', 'portal'],
     ['routing', ['record'], 'portal.ask', 'portal'],
     ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],
     ['sources', ['add', 'update', 'remove'], 'content.write', 'portal'],

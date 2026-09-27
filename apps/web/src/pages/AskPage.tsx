@@ -538,7 +538,8 @@ function UserBubble({
 }
 
 /**
- * Small ghost thumbs-up/thumbs-down pair for the platform's learning loop.
+ * Small ghost thumbs-up/thumbs-down pair for the platform's learning loop, also kept for the
+ * portal's curators (Manage > Insights, "Answers marked unhelpful").
  * Hidden entirely when the message has no `learningId` (nothing to attach
  * feedback to). Once either button is used the row collapses to a quiet
  * "thanks" line; a negative rating additionally offers a one-line detail
@@ -579,27 +580,35 @@ function FeedbackControl({
   if (message.feedbackSubmitted) {
     return (
       <div className='flex flex-col items-start gap-1.5'>
-        <p className='text-xs text-ink-3'>Thanks - feedback sent to the platform.</p>
+        <p className='text-xs text-ink-3'>Thanks - your feedback was sent.</p>
         {message.feedbackGood === false && !detailSent
           ? (
-            <div className='flex items-center gap-1.5'>
-              <input
-                type='text'
-                value={detail}
-                onChange={(event) => setDetail(event.target.value)}
-                placeholder='What was wrong? (optional)'
-                disabled={busy}
-                className='rp-input h-7 w-48 text-xs'
-              />
-              <button
-                type='button'
-                onClick={handleDetailSend}
-                disabled={busy || detail.trim().length === 0}
-                className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
-              >
-                Send
-              </button>
-            </div>
+            <>
+              <div className='flex items-center gap-1.5'>
+                <input
+                  type='text'
+                  value={detail}
+                  onChange={(event) => setDetail(event.target.value)}
+                  placeholder='What was wrong? (optional)'
+                  aria-label='What was wrong with this answer? (optional)'
+                  disabled={busy}
+                  className='rp-input h-7 w-48 text-xs'
+                />
+                <button
+                  type='button'
+                  onClick={handleDetailSend}
+                  disabled={busy || detail.trim().length === 0}
+                  className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
+                >
+                  Send
+                </button>
+              </div>
+              {
+                /* A comment is kept for the portal's curators as well as sent to the
+                 * platform, so the reader is told who can read it before writing one. */
+              }
+              <p className='text-xs text-ink-3'>This portal's curators can read what you write.</p>
+            </>
           )
           : null}
         {error ? <p className='text-xs text-[var(--rp-bad-ink)]'>{error}</p> : null}

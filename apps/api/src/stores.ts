@@ -277,6 +277,32 @@ export interface AskInsight {
   answerRelevance: number | null
   groundedness: number | null
   contextRelevance: number | null
+  /**
+   * The platform's id for the answer, which readers' feedback names, so a rating can be joined
+   * back to the question it answered. Absent on asks recorded before it was kept.
+   */
+  learningId?: string
+}
+
+/** The asks Insights lists: never with the answer ids feedback joins on. */
+function withoutLearningId({ learningId: _learningId, ...insight }: AskInsight): AskInsight {
+  return insight
+}
+
+/** The question each answer answered, keyed by the answer's learning id, from an ask log. */
+function questionsByLearningId(
+  asks: readonly AskInsight[],
+  learningIds: readonly string[],
+): Record<string, { question: string; ts: string }> {
+  const wanted = new Set(learningIds)
+  const found: Record<string, { question: string; ts: string }> = {}
+  if (wanted.size === 0) return found
+  for (const ask of asks) {
+    if (ask.learningId && wanted.has(ask.learningId)) {
+      found[ask.learningId] = { question: ask.question, ts: ask.ts }
+    }
+  }
+  return found
 }
 
 export interface InsightsSummary {
@@ -369,8 +395,175 @@ export class InsightsStore {
       avgAnswerRelevance: avg(answered.map((i) => i.answerRelevance)),
       topQuestions: byCount.slice(0, 10).map(([question, count]) => ({ question, count })),
       gaps,
-      recent: all.slice(-25).reverse(),
+      recent: all.slice(-25).reverse().map(withoutLearningId),
     }
+  }
+
+  /** The questions the named answers answered (see `AskInsight.learningId`). */
+  questions(
+    slug: string,
+    learningIds: readonly string[],
+  ): Record<string, { question: string; ts: string }> {
+    return learningIds.length === 0 ? {} : questionsByLearningId(this.readAll(slug), learningIds)
+  }
+}
+
+// --- Answer feedback ----------------------------------------------------------
+
+/**
+ * A reader's rating of one answer, kept for the portal's curators (Insights, "Answers marked
+ * unhelpful") as well as forwarded to the platform. One record per answer: a later rating of the
+ * same answer replaces the earlier one. The comment is personal data: it is bounded, ages out
+ * after `ANSWER_FEEDBACK_DAYS` and is erased with the portal.
+ */
+export interface AnswerFeedback {
+  ts: string
+  /** The platform's id for the answer; the ask log records it beside the question. */
+  learningId: string
+  good: boolean
+  /** What the reader said was wrong, at most `ANSWER_FEEDBACK_TEXT_MAX` characters. */
+  text?: string
+}
+
+/** The longest comment kept. A longer one is shortened here, and forwarded to the platform whole. */
+export const ANSWER_FEEDBACK_TEXT_MAX = 1_000
+/** Ratings kept per portal; the newest win. */
+export const ANSWER_FEEDBACK_KEEP = 500
+/** Days a rating is kept: the window Insights reports on. */
+export const ANSWER_FEEDBACK_DAYS = 90
+
+const DAY_MS = 24 * 3600 * 1000
+
+/** The record kept for a rating received at `now`. */
+export function answerFeedback(
+  input: { learningId: string; good: boolean; text?: string },
+  now: number,
+): AnswerFeedback {
+  const text = input.text?.trim()
+  return {
+    ts: new Date(now).toISOString(),
+    learningId: input.learningId,
+    good: input.good,
+    ...(text
+      ? {
+        text: text.length > ANSWER_FEEDBACK_TEXT_MAX
+          ? `${text.slice(0, ANSWER_FEEDBACK_TEXT_MAX - 1)}…`
+          : text,
+      }
+      : {}),
+  }
+}
+
+/** A stored rating, or null for anything that is not one. */
+export function parseAnswerFeedback(value: unknown): AnswerFeedback | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.ts !== 'string' || !Number.isFinite(Date.parse(record.ts)) ||
+    typeof record.learningId !== 'string' || record.learningId.length === 0 ||
+    typeof record.good !== 'boolean' ||
+    (record.text !== undefined && typeof record.text !== 'string')
+  ) return null
+  return {
+    ts: record.ts,
+    learningId: record.learningId,
+    good: record.good,
+    ...(typeof record.text === 'string' ? { text: record.text } : {}),
+  }
+}
+
+/** The ratings a portal keeps at `now`: within the window, newest first, at most the cap. */
+export function retainedFeedback(
+  records: readonly AnswerFeedback[],
+  now: number,
+): AnswerFeedback[] {
+  const cutoff = now - ANSWER_FEEDBACK_DAYS * DAY_MS
+  return records
+    .filter((record) => Date.parse(record.ts) >= cutoff)
+    // Newest first, ties by answer id, as the Durable Object's table orders them.
+    .sort((a, b) =>
+      Date.parse(b.ts) - Date.parse(a.ts) ||
+      (a.learningId < b.learningId ? 1 : a.learningId > b.learningId ? -1 : 0)
+    )
+    .slice(0, ANSWER_FEEDBACK_KEEP)
+}
+
+/** One answer a reader marked unhelpful, with the question it answered. */
+export interface FlaggedAnswer {
+  question: string
+  askedAt: string
+  ratedAt: string
+  /** The reader's comment, or null when they left none. */
+  comment: string | null
+}
+
+export interface FeedbackSummary {
+  helpful: number
+  unhelpful: number
+  /** Unhelpful answers whose question the ask log still holds, newest first. */
+  flagged: FlaggedAnswer[]
+}
+
+/** How readers rated the portal's answers, and the unhelpful ones joined to their questions. */
+export function feedbackSummary(
+  records: readonly AnswerFeedback[],
+  questions: (learningIds: string[]) => Record<string, { question: string; ts: string }>,
+): FeedbackSummary {
+  const unhelpful = records.filter((record) => !record.good)
+  const asked = unhelpful.length > 0 ? questions(unhelpful.map((r) => r.learningId)) : {}
+  return {
+    helpful: records.length - unhelpful.length,
+    unhelpful: unhelpful.length,
+    flagged: unhelpful.flatMap((record) => {
+      const ask = asked[record.learningId]
+      return ask
+        ? [{
+          question: ask.question,
+          askedAt: ask.ts,
+          ratedAt: record.ts,
+          comment: record.text ?? null,
+        }]
+        : []
+    }).slice(0, 50),
+  }
+}
+
+/**
+ * Answer feedback on the local server: one JSON file per portal, holding one record per answer,
+ * bounded by `retainedFeedback` on every write.
+ */
+export class FeedbackStore {
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private pathFor(slug: string): string {
+    return join(this.dataDir, 'feedback', `${safeSegment(slug)}.json`)
+  }
+
+  private readAll(slug: string): AnswerFeedback[] {
+    const raw = readJson<unknown>(this.pathFor(slug), [])
+    return Array.isArray(raw)
+      ? raw.map(parseAnswerFeedback).filter((r): r is AnswerFeedback => r !== null)
+      : []
+  }
+
+  /** Keep a rating, replacing the same answer's earlier one, and drop what ages out. */
+  record(slug: string, feedback: AnswerFeedback): void {
+    const others = this.readAll(slug).filter((r) => r.learningId !== feedback.learningId)
+    writeJson(this.pathFor(slug), retainedFeedback([feedback, ...others], this.now()))
+  }
+
+  /** The ratings kept for the portal, newest first. */
+  list(slug: string): AnswerFeedback[] {
+    return retainedFeedback(this.readAll(slug), this.now())
+  }
+
+  /** Remove the portal's ratings (see `PortalErasure`). */
+  erase(slug: string): number {
+    const segment = portalSegment(slug)
+    return eraseFile(segment && this.pathFor(segment))
   }
 }
 
@@ -1069,6 +1262,7 @@ export class McpKeyStore implements ScopedKeyStore {
 
 /** Public store contracts used by runtimes without a local filesystem. */
 export type InsightsStoreApi = Pick<InsightsStore, keyof InsightsStore>
+export type FeedbackStoreApi = Pick<FeedbackStore, keyof FeedbackStore>
 export type SessionsStoreApi = Pick<SessionsStore, keyof SessionsStore>
 export type WatchStoreApi = Pick<WatchStore, keyof WatchStore>
 export type SourceStoreApi = Pick<SourceStore, keyof SourceStore>
