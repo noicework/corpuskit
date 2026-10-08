@@ -3,8 +3,29 @@
 `deno task build:docs` renders the shared `DOC_PAGES` content, grouped by
 `docPagesByCategory()`, into `apps/web/dist/docs/index.html` and one HTML file
 per page. It runs inside `deno task build:web` before the build stamp. The
-current collection is 17 guides, the Release notes page and the overview, or
-19 HTML pages. Generated output is not tracked.
+current collection is 17 guides, 3 developer guides, the Release notes page and
+the overview, or 22 HTML pages. Generated output is not tracked.
+
+## Developer guides
+
+`DEVELOPER_DOCS` in `packages/core/src/docs.ts` names the repository's own
+Markdown files under `docs/` that the public documentation publishes: Hosting
+(`HOSTING.md`), Architecture (`ARCHITECTURE.md`) and Developing on Progress
+Agentic RAG (`ARAG-DEV.md`), under a Developers group between the Help
+categories and Project. They are public only, not in-app Help. The build drops
+the file's H1 for the page's own title, turns the text before the first `## `
+heading into an Overview section, and starts a section at each `## ` heading.
+A section listed in `unpublished` stays in the repository only; a test fails
+if that heading disappears from the file. A link to another repository file
+points at its published page when it has one, and at the file on GitHub
+otherwise.
+
+The renderer supports what these files use: pipe tables (a scrolling region on
+narrow screens; `\|` keeps a pipe inside a cell), numbered lists that resume
+after a code block (`<ol start>`), item text and code spans that wrap onto
+indented lines, a code fence indented under a list item, and one level of
+nesting three spaces under a numbered item. Inline syntax is checked on each
+block's joined text as it renders. Anything else still fails the build.
 
 ## Release notes
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Explore CorpusKit’s tools for research discovery, cited answers, investigations and portal administration. Open source, built on Progress Agentic RAG.">
+  <meta name="description" content="What CorpusKit, the open source research portal for Progress Agentic RAG, does: discovery, cited answers, investigations and portal administration.">
   <meta name="theme-color" content="#f2efe7">
   <title>About CorpusKit</title>
   <link rel="canonical" href="https://__CORPUSKIT_PLATFORM_DOMAIN__/about">
@@ -12,7 +12,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="CorpusKit">
   <meta property="og:title" content="About CorpusKit">
-  <meta property="og:description" content="Explore CorpusKit’s tools for research discovery, cited answers, investigations and portal administration. Open source, built on Progress Agentic RAG.">
+  <meta property="og:description" content="What CorpusKit, the open source research portal for Progress Agentic RAG, does: discovery, cited answers, investigations and portal administration.">
   <meta property="og:url" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/about">
   <meta property="og:image" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/og/corpuskit-about.png">
   <meta property="og:image:type" content="image/png">
@@ -22,7 +22,7 @@
   <meta property="og:locale" content="en_AU">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="About CorpusKit">
-  <meta name="twitter:description" content="Explore CorpusKit’s tools for research discovery, cited answers, investigations and portal administration. Open source, built on Progress Agentic RAG.">
+  <meta name="twitter:description" content="What CorpusKit, the open source research portal for Progress Agentic RAG, does: discovery, cited answers, investigations and portal administration.">
   <meta name="twitter:image" content="https://__CORPUSKIT_PLATFORM_DOMAIN__/og/corpuskit-about.png">
   <meta name="twitter:image:alt" content="About CorpusKit. Discovery, cited answers, evidence checks, investigations and portal administration, in one open source research portal.">
   <script type="application/ld+json" id="structured-data">
@@ -34,7 +34,10 @@
         "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#maintainer",
         "name": "Noice",
         "legalName": "Noice Pty Ltd",
-        "url": "https://noice.net.au"
+        "url": "https://noice.net.au",
+        "sameAs": [
+          "https://www.linkedin.com/company/noiceapac/"
+        ]
       },
       {
         "@type": "WebSite",
@@ -50,8 +53,12 @@
         "@type": "SoftwareApplication",
         "@id": "https://__CORPUSKIT_PLATFORM_DOMAIN__/#software",
         "name": "CorpusKit",
-        "description": "An open source research portal: search a collection, ask questions with cited answers and follow connections between sources.",
+        "description": "The open source research portal for Progress Agentic RAG: search a collection, ask questions with cited answers and follow connections between sources.",
         "url": "https://__CORPUSKIT_PLATFORM_DOMAIN__/",
+        "sameAs": [
+          "https://github.com/noicework/corpuskit",
+          "https://corpuskit.cloud/"
+        ],
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "Web browser",
         "inLanguage": "en-AU",
@@ -109,7 +116,7 @@
             "name": "What is CorpusKit?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "CorpusKit is an open source research portal. It turns a collection of reports, papers and other documents into a portal where people search, ask questions with cited answers and follow connections between sources. It runs on Progress Agentic RAG and is licensed under Apache 2.0."
+              "text": "CorpusKit is the open source research portal for Progress Agentic RAG. It turns a collection of reports, papers and other documents into a portal where people search, ask questions with cited answers and follow connections between sources. It is licensed under Apache 2.0."
             }
           },
           {
@@ -162,6 +169,14 @@
           },
           {
             "@type": "Question",
+            "name": "Can someone run it for us?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. Noice, which maintains CorpusKit, runs it as a hosted service called CorpusKit Cloud, at corpuskit.cloud. You can also run it yourself from the repository."
+            }
+          },
+          {
+            "@type": "Question",
             "name": "How can I contribute?",
             "acceptedAnswer": {
               "@type": "Answer",
@@ -173,10 +188,106 @@
     ]
   }
   </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Newsreader:opsz,wght@6..72,300..700&amp;family=Source+Sans+3:ital,wght@0,200..900;1,200..900&amp;family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&amp;display=swap" rel="stylesheet">
+  <link rel="preload" href="/fonts/archivo-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/source-sans-3-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
   <style>
+    /* Self-hosted fonts (public/fonts, SIL Open Font License: fonts/OFL.txt). Latin and latin-ext only. */
+    @font-face {
+      font-family: "Archivo";
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url("/fonts/archivo-normal-latin-ext.woff2") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: "Archivo";
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url("/fonts/archivo-normal-latin.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("/fonts/ibm-plex-mono-normal-400-latin-ext.woff2") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("/fonts/ibm-plex-mono-normal-400-latin.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+      src: url("/fonts/ibm-plex-mono-normal-500-latin-ext.woff2") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: "IBM Plex Mono";
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+      src: url("/fonts/ibm-plex-mono-normal-500-latin.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      font-style: normal;
+      font-weight: 200 800;
+      font-display: swap;
+      src: url("/fonts/newsreader-normal-latin-ext.woff2") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: "Newsreader";
+      font-style: normal;
+      font-weight: 200 800;
+      font-display: swap;
+      src: url("/fonts/newsreader-normal-latin.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "Source Sans 3";
+      font-style: italic;
+      font-weight: 200 900;
+      font-display: swap;
+      src: url("/fonts/source-sans-3-italic-latin-ext.woff2") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: "Source Sans 3";
+      font-style: italic;
+      font-weight: 200 900;
+      font-display: swap;
+      src: url("/fonts/source-sans-3-italic-latin.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
+    @font-face {
+      font-family: "Source Sans 3";
+      font-style: normal;
+      font-weight: 200 900;
+      font-display: swap;
+      src: url("/fonts/source-sans-3-normal-latin-ext.woff2") format("woff2");
+      unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+    }
+    @font-face {
+      font-family: "Source Sans 3";
+      font-style: normal;
+      font-weight: 200 900;
+      font-display: swap;
+      src: url("/fonts/source-sans-3-normal-latin.woff2") format("woff2");
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+    }
     :root {
       --paper: #f2efe7;
       --paper-soft: #f8f6f0;
@@ -402,7 +513,7 @@
     <section class="intro" aria-labelledby="about-title">
       <h1 id="about-title">About CorpusKit</h1>
       <div class="intro-copy">
-        <p>CorpusKit is an open source research portal over a body of research, built on Progress Agentic RAG. It is licensed under Apache-2.0 and maintained by <a href="https://noice.net.au">Noice</a>.</p>
+        <p>CorpusKit is the open source research portal for Progress Agentic RAG. It is licensed under Apache 2.0 and maintained by <a href="https://noice.net.au">Noice</a>, which also runs it as a hosted service, <a href="https://corpuskit.cloud">CorpusKit Cloud</a>.</p>
         <p>Search the collection, ask questions with sources you can inspect, and follow connections between documents. The tools below support that work, from reading a single report to administering a portal.</p>
       </div>
     </section>
@@ -747,7 +858,7 @@
       <p class="glance-intro">What CorpusKit is, how its answers are made and checked, and what running it takes.</p>
       <div class="glance-row">
         <h3>What is CorpusKit?</h3>
-        <div><p>CorpusKit is an open source research portal. It turns a collection of reports, papers and other documents into a portal where people search, ask questions with cited answers and follow connections between sources. It runs on Progress Agentic RAG and is licensed under Apache 2.0.</p></div>
+        <div><p>CorpusKit is the open source research portal for Progress Agentic RAG. It turns a collection of reports, papers and other documents into a portal where people search, ask questions with cited answers and follow connections between sources. It is licensed under Apache 2.0.</p></div>
       </div>
       <div class="glance-row">
         <h3>Where do answers come from?</h3>
@@ -774,6 +885,10 @@
         <div><p>Yes. The demo at demo.corpuskit.org is a CorpusKit portal over the project’s own documentation. Ask it how answers are checked.</p><p><a href="https://demo.corpuskit.org">Try the demo</a></p></div>
       </div>
       <div class="glance-row">
+        <h3>Can someone run it for us?</h3>
+        <div><p>Yes. Noice, which maintains CorpusKit, runs it as a hosted service called CorpusKit Cloud, at corpuskit.cloud. You can also run it yourself from the repository.</p><p><a href="https://corpuskit.cloud">CorpusKit Cloud</a></p></div>
+      </div>
+      <div class="glance-row">
         <h3>How can I contribute?</h3>
         <div><p>Through pull requests on GitHub. The contribution guide explains how, and every change passes typechecking, linting, formatting, tests and a full build before it merges.</p><p><a href="https://github.com/noicework/corpuskit/blob/main/CONTRIBUTING.md">Read the contribution guide</a></p></div>
       </div>
@@ -789,7 +904,7 @@
   </main>
   <footer class="site-footer">
     <p>CorpusKit is open source under the Apache 2.0 licence. Maintained by <a href="https://noice.net.au">Noice</a>. Powered by <a href="https://www.progress.com/agentic-rag">Progress Agentic RAG</a>.</p>
-    <nav class="footer-links" aria-label="Footer navigation"><a href="/">Home</a><a href="/about" aria-current="page">About</a><a href="/docs">Docs</a><a href="/docs/release-notes">Release notes</a><a href="https://github.com/noicework/corpuskit">Repository</a></nav>
+    <nav class="footer-links" aria-label="Footer navigation"><a href="/">Home</a><a href="/about" aria-current="page">About</a><a href="/docs">Docs</a><a href="/docs/release-notes">Release notes</a><a href="https://github.com/noicework/corpuskit">Repository</a><a href="https://corpuskit.cloud">CorpusKit Cloud</a></nav>
   </footer>
 </body>
 </html>

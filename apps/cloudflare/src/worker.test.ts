@@ -260,6 +260,22 @@ Deno.test("Worker names each portal's share image on the host that served it", a
   }
 })
 
+Deno.test('Worker answers llms.txt on the apex alone', async () => {
+  const harness = workerHarness()
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  const llms = await worker.fetch(new Request('https://research.example.org/llms.txt'), harness.env)
+  expect(llms.status).toBe(200)
+  expect(llms.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+  const text = await llms.text()
+  expect(text.startsWith('# CorpusKit\n')).toBe(true)
+  expect(text).toContain('(https://research.example.org/docs/hosting)')
+  const portal = await worker.fetch(
+    new Request('https://marine.research.example.org/llms.txt'),
+    harness.env,
+  )
+  expect(portal.status).toBe(404)
+})
+
 Deno.test('Worker answers robots.txt on every host and the sitemap on the apex alone', async () => {
   const harness = workerHarness()
   Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })

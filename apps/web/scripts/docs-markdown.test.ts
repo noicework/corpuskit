@@ -31,6 +31,28 @@ Deno.test('documentation renders headings, paragraphs, emphasis, code, lists and
   )
 })
 
+Deno.test('developer guides render tables, resumed numbering, wrapped spans and indented fences', () => {
+  expect(renderMarkdown('| Setting | Meaning |\n|---|---|\n| `A` | `{ "x": true \\| false }` |'))
+    .toBe(
+      '<div class="docs-table" role="region" aria-label="Table: Setting, Meaning" tabindex="0">' +
+        '<table><thead><tr><th scope="col">Setting</th><th scope="col">Meaning</th></tr></thead>' +
+        '<tbody><tr><td><code>A</code></td><td><code>{ &quot;x&quot;: true | false }</code></td>' +
+        '</tr></tbody></table></div>',
+    )
+  // A list resumed after a code block keeps its numbering.
+  expect(renderMarkdown('1. One\n\n   ```http\n   GET /\n   ```\n\n2. Two')).toBe(
+    '<ol><li>One</li></ol>\n<pre><code>GET /</code></pre>\n<ol start="2"><li>Two</li></ol>',
+  )
+  // An item wraps onto indented lines, and a code span or bold run may wrap with it.
+  expect(renderMarkdown('1. Run\n   `deno task\n   check`, **then\n   commit**.\n2. Push')).toBe(
+    '<ol><li>Run <code>deno task check</code>, <strong>then commit</strong>.</li><li>Push</li></ol>',
+  )
+  // Three spaces nest under a numbered item; an arrow may end a line.
+  expect(renderMarkdown('1. Call it:\n   - 200: done\n2. Read ->\n   the answer')).toBe(
+    '<ol><li>Call it:<ul><li>200: done</li></ul></li><li>Read -&gt; the answer</li></ol>',
+  )
+})
+
 Deno.test('new or malformed Markdown fails loudly rather than shipping raw or lost syntax', () => {
   for (
     const source of [
@@ -42,7 +64,7 @@ Deno.test('new or malformed Markdown fails loudly rather than shipping raw or lo
       '![image](/image.png)',
       '<script>alert(1)</script>',
       '> quote',
-      '| A | B |\n| - | - |',
+      '| A | B |',
       '---',
       '~~~\ncode\n~~~',
       '```\nunclosed',
@@ -50,7 +72,8 @@ Deno.test('new or malformed Markdown fails loudly rather than shipping raw or lo
       '    indented code',
       '- parent\n  - child\n    - grandchild',
       '- first\n1. mixed',
-      '4. Starts at four',
+      '- parent\n    - four spaces is deeper than one level',
+      '| A | B |\n| - | - |\n| `unclosed | cell |',
     ]
   ) expect(() => renderMarkdown(source)).toThrow()
   for (

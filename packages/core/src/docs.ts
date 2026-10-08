@@ -1112,9 +1112,54 @@ export function docPageById(id: string): DocPage | undefined {
  */
 export const RELEASE_NOTES_PAGE_ID = 'release-notes'
 
+/**
+ * A developer guide: one of the repository's own Markdown files under `docs/`, which the docs
+ * build renders for the public documentation only (apps/web/scripts/build-docs.ts). These are for
+ * people who run or extend CorpusKit, so they are not in-app Help content.
+ */
+export interface DeveloperDoc {
+  /** Stable slug used in the URL. Never change it. */
+  readonly id: string
+  /** The Markdown file under `docs/` the page is built from. */
+  readonly file: string
+  /** Page title. */
+  readonly title: string
+  /** One-line summary shown under the title, in the docs index and as the page description. */
+  readonly summary: string
+  /** `## ` sections of the file that stay in the repository and are left off the public page. */
+  readonly unpublished?: readonly string[]
+}
+
+/** The developer guides, in navigation order. */
+export const DEVELOPER_DOCS: readonly DeveloperDoc[] = [
+  {
+    id: 'architecture',
+    file: 'ARCHITECTURE.md',
+    title: 'CorpusKit architecture',
+    summary: 'How CorpusKit is built: tenants as data, retrieval behind one interface, ' +
+      'provisioning as a product feature, and the API, front end and deployment pipeline.',
+  },
+  {
+    id: 'hosting',
+    file: 'HOSTING.md',
+    title: 'Hosting CorpusKit',
+    summary: 'Run a CorpusKit deployment: upgrades, credential encryption, the operator ' +
+      'credential, portal lifecycle and limits, sign-in handoff, host aliases and search engines.',
+  },
+  {
+    id: 'progress-agentic-rag',
+    file: 'ARAG-DEV.md',
+    title: 'Developing on Progress Agentic RAG',
+    summary: 'The credential model, working call shapes and architecture for building a ' +
+      'research portal on Progress Agentic RAG, from the CorpusKit project.',
+    unpublished: ['Known platform issues', 'When you hit something not covered here'],
+  },
+]
+
 /** Whether the public documentation serves a page with this id. */
 export function isPublicDocPageId(id: string): boolean {
-  return id === RELEASE_NOTES_PAGE_ID || docPageById(id) !== undefined
+  return id === RELEASE_NOTES_PAGE_ID || docPageById(id) !== undefined ||
+    DEVELOPER_DOCS.some((doc) => doc.id === id)
 }
 
 /** Documentation pages grouped by category, in category and authored order. */

@@ -8,6 +8,8 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Added
 
+- Developer guides on the documentation site, under Developers: Hosting CorpusKit, CorpusKit architecture and Developing on Progress Agentic RAG, built from the repository's `docs/` files and listed in the sitemap. The documentation renders their tables, numbered lists that resume after a code block, and code fences indented under a list item. ([#75](https://github.com/noicework/corpuskit/pull/75))
+- `/llms.txt` on the platform domain: a plain-text guide for AI assistants that says what CorpusKit is and links every public page with a one-line summary. Other hosts answer 404. ([#75](https://github.com/noicework/corpuskit/pull/75))
 - Search engines can find the public site. `/robots.txt` names a sitemap on the platform domain, and `/sitemap.xml` lists the home page, About and every documentation page, including new ones as they are added. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - About answers common questions: what CorpusKit is, where answers come from and how they are checked, what a portal takes in, access for AI assistants over MCP, what a deployment needs, the demo, and how to contribute. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `PORTAL_INDEXING=deny` keeps a deployment's portals out of search: portal hosts answer `robots.txt` with `Disallow: /` and portal pages carry `X-Robots-Tag: noindex`, while the platform domain's home page, About and documentation stay indexable. The default, `allow`, changes nothing. See [Search engines](https://github.com/noicework/corpuskit/blob/main/docs/HOSTING.md#search-engines). ([#74](https://github.com/noicework/corpuskit/pull/74))
@@ -17,6 +19,9 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Changed
 
+- The home page, About, the README and the structured data describe the project in one line: CorpusKit, the open source research portal for Progress Agentic RAG. The structured data names the repository and corpuskit.cloud as the same project and Noice's LinkedIn page as the same organisation, and the home page and About link CorpusKit Cloud, the hosted service. ([#75](https://github.com/noicework/corpuskit/pull/75))
+- The website serves its own fonts instead of loading them from Google Fonts, so the first paint no longer waits on a third-party stylesheet. The fonts are under the SIL Open Font License (`apps/web/public/fonts/OFL.txt`). ([#75](https://github.com/noicework/corpuskit/pull/75))
+- The reference deployments set `PORTAL_INDEXING=deny` in `wrangler.jsonc` and `wrangler.demo.jsonc`, so their portals stay out of search while the home page, About and documentation stay indexable. ([#75](https://github.com/noicework/corpuskit/pull/75))
 - The documentation overview is titled "CorpusKit documentation", and the home page's description names the licence and the checked answers. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/api/health` reports `release`, the newest release the build contains. On Cloudflare it now also reports `buildSha` and `builtAt`, the commit and time the build was made, as the local server already did. ([#73](https://github.com/noicework/corpuskit/pull/73))
 
@@ -26,6 +31,8 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Upgrade notes
 
+- `wrangler.jsonc` and `wrangler.demo.jsonc` now set `PORTAL_INDEXING=deny`. A deployment built from these files keeps its portals out of search; set `allow` to index them. ([#75](https://github.com/noicework/corpuskit/pull/75))
+- **Rollback is safe** after the documentation, llms.txt and font changes: nothing stored changes. ([#75](https://github.com/noicework/corpuskit/pull/75))
 - `PORTAL_INDEXING` is new and defaults to `allow`, so portals stay as indexable as before. Set it to `deny` to keep them out of search; any value other than `allow` counts as `deny`. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/robots.txt` is now answered by the Worker and the local server, and `apps/web/public/robots.txt` is gone. A deployment that changed that file should carry its rules into `apps/api/src/search-files.ts`. `/sitemap.xml` answers on the platform domain only. ([#74](https://github.com/noicework/corpuskit/pull/74))
 - `/api/health` gains `release`, and on the Worker also `buildSha` and `builtAt`. `version` is unchanged: on the Worker it is still the Cloudflare version id that release verification matches. Automation that reads health can show the commit or release instead. ([#73](https://github.com/noicework/corpuskit/pull/73))

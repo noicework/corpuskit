@@ -60,6 +60,7 @@
     "ENVIRONMENT": "demo",
     "ARAG_DA_AGENT_MODEL": "openai-compatible",
     "MAX_PORTAL_ALIASES": "0",
-    "SHOWCASE_PORTALS": "marine,grains"
+    "SHOWCASE_PORTALS": "marine,grains",
+    "PORTAL_INDEXING": "deny"
   }
 }

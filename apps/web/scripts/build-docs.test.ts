@@ -1,5 +1,6 @@
 import { expect } from '@std/expect'
 import {
+  DEVELOPER_DOCS,
   DOC_CATEGORIES,
   DOC_PAGES,
   docPagesByCategory,
@@ -8,10 +9,12 @@ import {
 } from '../../../packages/core/src/docs.ts'
 import {
   buildDocs,
+  developerDocPage,
   docGroups,
   DOCS_SHARE_IMAGE,
   releaseNotesPage,
   renderDocsPage,
+  repositoryLink,
 } from './build-docs.ts'
 import { publicPagePaths } from '../../api/src/search-files.ts'
 import { parseChangelog, UNRELEASED } from './changelog.ts'
@@ -89,12 +92,16 @@ Deno.test('build writes exactly the source pages plus landing page and removes s
   const output = new URL(`file://${directory}/`)
   try {
     await Deno.writeTextFile(new URL('stale.html', output), 'old')
-    expect(await buildDocs(output)).toBe(DOC_PAGES.length + 2)
+    expect(await buildDocs(output)).toBe(DOC_PAGES.length + DEVELOPER_DOCS.length + 2)
     const files = []
     for await (const entry of Deno.readDir(output)) files.push(entry.name)
     expect(files.sort()).toEqual(
-      ['index.html', `${RELEASE_NOTES_PAGE_ID}.html`, ...DOC_PAGES.map((p) => `${p.id}.html`)]
-        .sort(),
+      [
+        'index.html',
+        `${RELEASE_NOTES_PAGE_ID}.html`,
+        ...DOC_PAGES.map((p) => `${p.id}.html`),
+        ...DEVELOPER_DOCS.map((doc) => `${doc.id}.html`),
+      ].sort(),
     )
     for (const page of publicPages) {
       expect(await Deno.readTextFile(new URL(`${page.id}.html`, output))).toBe(
@@ -202,4 +209,59 @@ Deno.test('the sitemap lists every page the documentation build writes, once', (
   const written = ['/docs', ...publicPages.map((page) => `/docs/${page.id}`)]
   expect(listed.length).toBe(new Set(listed).size)
   expect(new Set(listed)).toEqual(new Set(written))
+})
+
+Deno.test('developer guides publish the repository docs, between the Help pages and Project', async () => {
+  expect(docGroups.map((group) => group.category)).toEqual([
+    ...docPagesByCategory().map((group) => group.category),
+    'Developers',
+    'Project',
+  ])
+  const developers = docGroups.find((group) => group.category === 'Developers')!.pages
+  expect(developers.map((page) => page.id)).toEqual(DEVELOPER_DOCS.map((doc) => doc.id))
+  for (const doc of DEVELOPER_DOCS) {
+    // Public only: not in-app Help, but routed and listed by the Worker.
+    expect(DOC_PAGES.some((page) => page.id === doc.id)).toBe(false)
+    expect(isPublicDocPageId(doc.id)).toBe(true)
+    const source = await Deno.readTextFile(new URL(`../../../docs/${doc.file}`, import.meta.url))
+    const headings = [...source.matchAll(/^## (.+)$/gm)].map(([, heading]) => heading!.trim())
+    const page = developers.find((page) => page.id === doc.id)!
+    expect(page).toEqual(developerDocPage(doc, source))
+    // Every section of the file is on the page, apart from the ones kept in the repository,
+    // each of which still exists (so a renamed heading cannot slip onto the public page).
+    for (const heading of doc.unpublished ?? []) expect(headings).toContain(heading)
+    expect(page.sections.map((section) => section.heading)).toEqual([
+      ...(/^# .+\n+(?!## )\S/.test(source) ? ['Overview'] : []),
+      ...headings.filter((heading) => !doc.unpublished?.includes(heading)),
+    ])
+    const html = renderDocsPage(template, page)
+    expect(html).toContain(`<h1 id="docs-title">${escapeHtml(doc.title)}</h1>`)
+    // Links leave for absolute URLs, site pages or anchors: never a relative repository path.
+    for (const [, href] of html.matchAll(/href="([^"]+)"/g)) {
+      expect([href, /^(?:https:\/\/|mailto:|\/|#)/.test(href!)]).toEqual([href, true])
+    }
+  }
+})
+
+Deno.test('a developer guide links another repository file to its page, or else to GitHub', () => {
+  expect(repositoryLink('HOSTING.md#search-engines', 'ARCHITECTURE.md')).toBe(
+    '/docs/hosting#search-engines',
+  )
+  expect(repositoryLink('RBAC.md#break-glass', 'HOSTING.md')).toBe(
+    'https://github.com/noicework/corpuskit/blob/main/docs/RBAC.md#break-glass',
+  )
+  expect(repositoryLink('../CHANGELOG.md', 'HOSTING.md')).toBe(
+    'https://github.com/noicework/corpuskit/blob/main/CHANGELOG.md',
+  )
+  for (const kept of ['#operator-credential', '/docs/search', 'https://llmstxt.org']) {
+    expect(repositoryLink(kept, 'HOSTING.md')).toBe(kept)
+  }
+  const page = developerDocPage(
+    { id: 'example', file: 'EXAMPLE.md', title: 'Example', summary: 'An example.' },
+    '# Example\n\nIntro with [hosting](HOSTING.md).\n\n## Kept\n\n```\n## not a heading\n```\n',
+  )
+  expect(page.sections).toEqual([
+    { heading: 'Overview', body: 'Intro with [hosting](/docs/hosting).' },
+    { heading: 'Kept', body: '```\n## not a heading\n```' },
+  ])
 })

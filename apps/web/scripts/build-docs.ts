@@ -1,6 +1,9 @@
 import {
+  DEVELOPER_DOCS,
+  type DeveloperDoc,
   type DocPage,
   docPagesByCategory,
+  type DocSection,
   RELEASE_NOTES_PAGE_ID,
 } from '../../../packages/core/src/docs.ts'
 import { PLATFORM_DOMAIN_MARKER } from '../../../packages/core/src/platform-domain.ts'
@@ -47,16 +50,83 @@ export function releaseNotesPage(changelog: string): DocPage {
   }
 }
 
-const changelog = await Deno.readTextFile(new URL('../../../CHANGELOG.md', import.meta.url))
+/**
+ * Where a developer guide's link to another repository file goes: that file's public page when it
+ * has one, otherwise the file on GitHub. Absolute URLs, site paths and in-page anchors are kept.
+ */
+export function repositoryLink(target: string, from: string): string {
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(target)) return target
+  const url = new URL(target, `https://repository.invalid/docs/${from}`)
+  const path = url.pathname.slice(1)
+  const guide = DEVELOPER_DOCS.find((doc) => `docs/${doc.file}` === path)
+  return guide ? `/docs/${guide.id}${url.hash}` : `${REPOSITORY}/blob/main/${path}${url.hash}`
+}
 
-/** The public collection: the shared Help pages by category, then the project's own pages. */
+/**
+ * A developer guide (docs/*.md) as a public documentation page. The file's H1 gives way to the
+ * page's own title, the text before the first `## ` heading becomes an Overview section, each
+ * `## ` heading starts a section, and sections listed as unpublished stay in the repository.
+ */
+export function developerDocPage(doc: DeveloperDoc, markdown: string): DocPage {
+  const sections: DocSection[] = []
+  let heading = 'Overview'
+  let lines: string[] = []
+  let fenced = false
+  const flush = () => {
+    const body = lines.join('\n').trim()
+    if (body && !doc.unpublished?.includes(heading)) sections.push({ heading, body })
+    lines = []
+  }
+  for (const line of markdown.replace(/\r\n?/g, '\n').split('\n')) {
+    if (/^\s*```/.test(line)) fenced = !fenced
+    const title = fenced ? null : /^# \S/.test(line)
+    const section = fenced ? null : /^## (.+)$/.exec(line)
+    if (title) continue
+    if (section) {
+      flush()
+      heading = section[1]!.trim()
+      continue
+    }
+    lines.push(
+      fenced ? line : line.replace(
+        /\]\(([^\s()]+)\)/g,
+        (_, target: string) => `](${repositoryLink(target, doc.file)})`,
+      ),
+    )
+  }
+  flush()
+  return {
+    id: doc.id,
+    category: 'Developers',
+    title: doc.title,
+    summary: doc.summary,
+    sections,
+  }
+}
+
+const changelog = await Deno.readTextFile(new URL('../../../CHANGELOG.md', import.meta.url))
+const developerPages = await Promise.all(
+  DEVELOPER_DOCS.map(async (doc) =>
+    developerDocPage(
+      doc,
+      await Deno.readTextFile(new URL(`../../../docs/${doc.file}`, import.meta.url)),
+    )
+  ),
+)
+
+/**
+ * The public collection: the shared Help pages by category, then the developer guides, then the
+ * project's own pages.
+ */
 export const docGroups: { category: string; pages: DocPage[] }[] = [
   ...docPagesByCategory(),
+  { category: 'Developers', pages: developerPages },
   { category: 'Project', pages: [releaseNotesPage(changelog)] },
 ]
 const groups = docGroups
 const pages = groups.flatMap((group) => group.pages)
-const overview = 'Learn how to find answers, explore a collection and manage your research portal.'
+const overview =
+  'Learn how to find answers, explore a collection and manage your research portal, and how to run and extend CorpusKit.'
 const pageLink = (page: DocPage) => `/docs/${page.id}`
 
 function sidebar(current?: DocPage): string {
@@ -144,6 +214,7 @@ export function docsStructuredData(page: DocPage | undefined, canonical: string)
       name: 'Noice',
       legalName: 'Noice Pty Ltd',
       url: 'https://noice.net.au',
+      sameAs: ['https://www.linkedin.com/company/noiceapac/'],
     },
     {
       '@type': 'WebSite',

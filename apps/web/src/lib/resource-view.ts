@@ -100,7 +100,14 @@ export type DocBlock =
   | { kind: 'heading'; level: number; text: string; index: number }
   | { kind: 'paragraph'; text: string; index: number }
   | { kind: 'quote'; text: string; index: number }
-  | { kind: 'list'; ordered: boolean; items: DocListItem[]; index: number }
+  | {
+    kind: 'list'
+    ordered: boolean
+    /** An ordered list's first number, when it is not 1 (a list resumed after a code block). */
+    start?: number
+    items: DocListItem[]
+    index: number
+  }
   | { kind: 'code'; text: string; index: number }
   | { kind: 'table'; headers: string[]; rows: string[][]; index: number }
 
@@ -108,17 +115,17 @@ export type DocBlock =
 type DocBlockInput = DocBlock extends infer T ? (T extends DocBlock ? Omit<T, 'index'> : never)
   : never
 
-/** Strip a markdown table-row into trimmed cells. */
-function tableCells(line: string): string[] {
+/** Strip a markdown table-row into trimmed cells. An escaped pipe (`\|`) stays in its cell. */
+export function tableCells(line: string): string[] {
   return line
     .replace(/^\s*\|/, '')
-    .replace(/\|\s*$/, '')
-    .split('|')
-    .map((c) => c.trim())
+    .replace(/(?<!\\)\|\s*$/, '')
+    .split(/(?<!\\)\|/)
+    .map((c) => c.trim().replaceAll('\\|', '|'))
 }
 
 /** Whether a line is a markdown table separator row (e.g. `|---|:--:|`). */
-function isTableSeparator(line: string): boolean {
+export function isTableSeparator(line: string): boolean {
   return /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(line) && line.includes('-')
 }
 
@@ -176,10 +183,12 @@ export function parseDocBlocks(body: string): DocBlock[] {
     // Fenced code block.
     if (/^```/.test(trimmed)) {
       flushParagraph()
+      // A fence indented under a list item indents its lines too; drop that much from each.
+      const fenceIndent = new RegExp(`^ {0,${indentWidth(line)}}`)
       const buf: string[] = []
       i += 1
       while (i < lines.length && !/^```/.test((lines[i] ?? '').trim())) {
-        buf.push(lines[i] ?? '')
+        buf.push((lines[i] ?? '').replace(fenceIndent, ''))
         i += 1
       }
       i += 1 // closing fence
@@ -232,6 +241,7 @@ export function parseDocBlocks(body: string): DocBlock[] {
     if (bullet) {
       flushParagraph()
       const ordered = /^\d/.test(bullet[1]!)
+      const start = ordered ? Number.parseInt(bullet[1]!, 10) : 1
       const baseIndent = indentWidth(line)
       const items: DocListItem[] = []
       let lastWasChild = false
@@ -276,7 +286,7 @@ export function parseDocBlocks(body: string): DocBlock[] {
         }
         break
       }
-      push({ kind: 'list', ordered, items })
+      push({ kind: 'list', ordered, ...(start !== 1 ? { start } : {}), items })
       continue
     }
 

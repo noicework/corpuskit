@@ -17,7 +17,7 @@ import {
   isPlatformHostname,
 } from '../../../packages/core/src/platform-domain.ts'
 import { platformShellResponse } from '../../api/src/platform-shell.ts'
-import { robotsTag, robotsTxt, sitemapXml } from '../../api/src/search-files.ts'
+import { llmsTxt, robotsTag, robotsTxt, sitemapXml } from '../../api/src/search-files.ts'
 import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
@@ -759,6 +759,11 @@ async function pageRoute(
           headers: { 'content-type': 'application/xml; charset=utf-8' },
         }),
       )
+      : plain('Not found', 404)
+  }
+  if (url.pathname === '/llms.txt') {
+    return url.hostname === platformDomain
+      ? plain(llmsTxt(platformDomain), 200)
       : plain('Not found', 404)
   }
 

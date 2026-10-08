@@ -219,6 +219,37 @@ describe('parseDocBlocks', () => {
     expect(table.rows).toEqual([['0-10cm', '5.2'], ['20-30cm', '4.4']])
   })
 
+  it('keeps an escaped pipe inside its table cell', () => {
+    const [table] = parseDocBlocks(
+      '| Route | Body |\n|---|---|\n| `PUT` | `{ "a": true \\| false }` |',
+    )
+    expect(table).toEqual({
+      kind: 'table',
+      headers: ['Route', 'Body'],
+      rows: [['`PUT`', '`{ "a": true | false }`']],
+      index: 0,
+    })
+  })
+
+  it('keeps the number an ordered list resumes at, and dedents a fence indented under it', () => {
+    const blocks = parseDocBlocks('1. One\n\n   ```\n   GET /\n     indented\n   ```\n\n2. Two')
+    expect(blocks.map((block) => block.kind)).toEqual(['list', 'code', 'list'])
+    expect(blocks[0]).toEqual({
+      kind: 'list',
+      ordered: true,
+      items: [{ text: 'One', children: [] }],
+      index: 0,
+    })
+    expect(blocks[1]).toEqual({ kind: 'code', text: 'GET /\n  indented', index: 1 })
+    expect(blocks[2]).toEqual({
+      kind: 'list',
+      ordered: true,
+      start: 2,
+      items: [{ text: 'Two', children: [] }],
+      index: 2,
+    })
+  })
+
   it('treats each line of flattened extracted text (no blank lines) as its own block', () => {
     const body = 'Title line \n Executive summary \n This project quantified losses'
     const blocks = parseDocBlocks(body)

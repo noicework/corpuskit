@@ -1,12 +1,17 @@
-import { DOC_PAGES, RELEASE_NOTES_PAGE_ID } from '../../../packages/core/src/docs.ts'
+import {
+  DEVELOPER_DOCS,
+  DOC_PAGES,
+  RELEASE_NOTES_PAGE_ID,
+} from '../../../packages/core/src/docs.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 
 /**
- * The files search engines read first: robots.txt on every host, and on the platform apex a
- * sitemap of the pages there (the home page, About and the public documentation). They are built
- * from the platform domain and the documentation's own page list, so a deployment on any domain
- * lists its own pages, and a new documentation page is listed without anyone editing a file.
- * Portal pages are left out: each portal decides its own audience.
+ * The files search engines and AI assistants read first: robots.txt on every host, and on the
+ * platform apex a sitemap of the pages there (the home page, About and the public documentation)
+ * and llms.txt, a plain-text guide to the same pages. They are built from the platform domain and
+ * the documentation's own page lists, so a deployment on any domain lists its own pages, and a new
+ * documentation page is listed without anyone editing a file. Portal pages are left out: each
+ * portal decides its own audience.
  */
 
 /** The platform apex's indexed pages, in sitemap order. */
@@ -16,6 +21,7 @@ export function publicPagePaths(): string[] {
     '/about',
     '/docs',
     ...DOC_PAGES.map((page) => `/docs/${page.id}`),
+    ...DEVELOPER_DOCS.map((doc) => `/docs/${doc.id}`),
     `/docs/${RELEASE_NOTES_PAGE_ID}`,
   ]
 }
@@ -85,4 +91,55 @@ export function sitemapXml(domain: string): string {
   )
   return `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`
+}
+
+/** The project's one-line description, as the home page and About give it. */
+export const PROJECT_DESCRIPTOR =
+  'CorpusKit, the open source research portal for Progress Agentic RAG'
+
+const REPOSITORY = 'https://github.com/noicework/corpuskit'
+
+/**
+ * llms.txt for the platform apex (https://llmstxt.org): what CorpusKit is, then a link and a
+ * one-line summary for each public page, so an AI assistant can find the right page to read.
+ */
+export function llmsTxt(domain: string): string {
+  const site = `https://${getPlatformDomain(domain)}`
+  const link = (title: string, url: string, summary: string) => `- [${title}](${url}): ${summary}`
+  return [
+    '# CorpusKit',
+    '',
+    `> ${PROJECT_DESCRIPTOR}. It turns a collection of reports, papers and other documents into ` +
+    'a portal where people search, ask questions with cited answers checked against their ' +
+    'sources, and follow connections between sources. Open source under Apache 2.0, maintained ' +
+    'by Noice.',
+    '',
+    '## Project',
+    '',
+    link('Home', `${site}/`, 'What CorpusKit is, what a portal looks like and how to run one.'),
+    link(
+      'About',
+      `${site}/about`,
+      'Every feature, what a deployment needs, and frequently asked questions.',
+    ),
+    link('Source code', REPOSITORY, 'The repository, under the Apache 2.0 licence.'),
+    link(
+      'Release notes',
+      `${site}/docs/${RELEASE_NOTES_PAGE_ID}`,
+      'What changed in each release, and what to check before upgrading.',
+    ),
+    '',
+    '## Developer guides',
+    '',
+    ...DEVELOPER_DOCS.map((doc) => link(doc.title, `${site}/docs/${doc.id}`, doc.summary)),
+    '',
+    '## User guides',
+    '',
+    ...DOC_PAGES.map((page) => link(page.title, `${site}/docs/${page.id}`, page.summary)),
+    '',
+    '## Optional',
+    '',
+    link('CorpusKit Cloud', 'https://corpuskit.cloud/', 'CorpusKit hosted and supported by Noice.'),
+    '',
+  ].join('\n')
 }

@@ -82,6 +82,66 @@ Deno.test('home and About describe the project in JSON-LD that parses', () => {
   )
 })
 
+const DESCRIPTOR = 'CorpusKit, the open source research portal for Progress Agentic RAG'
+
+Deno.test('home and About use one descriptor and tie the project to its other homes', () => {
+  for (const html of [homepage, about]) {
+    const of = structuredData(html)
+    // The repository and the hosted service name the same project; LinkedIn names the maintainer.
+    expect(of('SoftwareApplication')[0]!.sameAs).toEqual([
+      'https://github.com/noicework/corpuskit',
+      'https://corpuskit.cloud/',
+    ])
+    expect(of('Organization')[0]!.sameAs).toEqual(['https://www.linkedin.com/company/noiceapac/'])
+    expect(of('SoftwareApplication')[0]!.description).toMatch(
+      /^The open source research portal for Progress Agentic RAG: /,
+    )
+    // Both pages link the hosted service, in the page and in the footer.
+    expect(html.match(/href="https:\/\/corpuskit\.cloud"/g)!.length).toBeGreaterThanOrEqual(2)
+    expect(html).not.toMatch(/[\u2013\u2014]/)
+  }
+  expect(homepage).toContain(`<title>${DESCRIPTOR}</title>`)
+  for (const name of ['description', 'og:description', 'twitter:description']) {
+    const content = homepage.match(new RegExp(`(?:name|property)="${name}" content="([^"]+)"`))![1]!
+    expect(content.startsWith(`${DESCRIPTOR}. `)).toBe(true)
+    expect(content.length).toBeLessThanOrEqual(160)
+  }
+  expect(homepageText).toContain(
+    'CorpusKit is the open source research portal for Progress Agentic RAG.',
+  )
+  expect(about).toContain('CorpusKit is the open source research portal for Progress Agentic RAG.')
+})
+
+Deno.test('the marketing pages serve their own fonts, with no third-party stylesheet', async () => {
+  for (const html of [homepage, about]) {
+    expect(html).not.toMatch(/fonts\.(?:googleapis|gstatic)\.com/)
+    const sources = [...html.matchAll(/src: url\("(\/fonts\/[^"]+\.woff2)"\) format\("woff2"\)/g)]
+      .map(([, path]) => path!)
+    expect(sources.length).toBe(12)
+    for (const family of ['Archivo', 'IBM Plex Mono', 'Newsreader', 'Source Sans 3']) {
+      expect(html).toContain(`font-family: "${family}";`)
+    }
+    for (const path of sources) {
+      const bytes = await Deno.readFile(new URL(`../public${path}`, import.meta.url))
+      // wOF2 signature.
+      expect([path, [...bytes.slice(0, 4)]]).toEqual([path, [0x77, 0x4f, 0x46, 0x32]])
+    }
+    // The two faces the first screen paints with load early.
+    for (const preload of ['archivo-normal-latin', 'source-sans-3-normal-latin']) {
+      expect(html).toContain(
+        `<link rel="preload" href="/fonts/${preload}.woff2" as="font" type="font/woff2" crossorigin>`,
+      )
+    }
+  }
+  const licence = await Deno.readTextFile(new URL('../public/fonts/OFL.txt', import.meta.url))
+  expect(licence).toContain('SIL OPEN FONT LICENSE Version 1.1')
+  for (
+    const holder of ['Archivo Project Authors', 'IBM Corp.', 'Newsreader Project Authors', 'Adobe']
+  ) {
+    expect(licence).toContain(holder)
+  }
+})
+
 Deno.test('About answers common questions, and marks up exactly the questions it shows', () => {
   const section = about.slice(about.indexOf('<section class="glance" id="faq"'))
   const shown = [

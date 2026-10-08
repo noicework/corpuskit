@@ -740,8 +740,8 @@ slug for the same name (`acme`, then `acme-2`). It also passes over a slug that 
 rows, group mappings or data keys on record, which covers portals deleted before slugs were
 retired. So a new portal, whoever creates it, never inherits access or data from a removed one.
 
-The one exception is a demo Worker (`ENVIRONMENT=demo`), which seeds its own `demo` and `acmd`
-portals whenever they have no portal record. Deleting either one there is undone on the next
+The one exception is a demo Worker (`ENVIRONMENT=demo`), which seeds its own demonstration
+portals whenever they have no portal record. Deleting one there is undone on the next
 start: the portal comes back under the same slug with its seeded configuration, and the slug
 stays retired, so `POST /api/admin/tenants` still passes over it. The seed first clears every
 record the removed portal left stored under the slug (sources, enrichments and cached questions,
@@ -1154,7 +1154,7 @@ removed (`domain_removal_failed`) until that hostname is detached or moved.
 
 ## Search engines
 
-The Worker and the local server answer two files for crawlers themselves, built from
+The Worker and the local server answer three files for crawlers themselves, built from
 `PLATFORM_DOMAIN` (`apps/api/src/search-files.ts`):
 
 - `/robots.txt` on every host. It keeps crawlers out of `/api/`, `/auth/` and `/admin`, and on the
@@ -1162,6 +1162,9 @@ The Worker and the local server answer two files for crawlers themselves, built 
 - `/sitemap.xml` on the platform domain only (other hosts answer 404). It lists the home page,
   About and every public documentation page, so a new documentation page is listed without anyone
   editing a file. Portal pages are never listed.
+- `/llms.txt` on the platform domain only (other hosts answer 404). It is a plain-text guide for AI
+  assistants, in the [llms.txt](https://llmstxt.org) format: what CorpusKit is, then a link and a
+  one-line summary for every page the sitemap lists.
 
 A portal's pages are open to search engines unless the deployment says otherwise:
 
