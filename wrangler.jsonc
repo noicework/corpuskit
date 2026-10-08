@@ -69,6 +69,7 @@
     "ENTRA_REDIRECT_URI": "https://corpuskit.org/auth/callback",
     "RESERVED_HOSTNAMES": "corpuskit.noice.net.au",
     "MAX_PORTAL_ALIASES": "0",
-    "SHOWCASE_PORTALS": "marine,grains"
+    "SHOWCASE_PORTALS": "marine,grains",
+    "PORTAL_INDEXING": "deny"
   }
 }

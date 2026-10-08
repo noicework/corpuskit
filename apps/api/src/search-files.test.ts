@@ -1,7 +1,12 @@
 import { expect } from '@std/expect'
-import { DOC_PAGES, RELEASE_NOTES_PAGE_ID } from '../../../packages/core/src/docs.ts'
+import {
+  DEVELOPER_DOCS,
+  DOC_PAGES,
+  RELEASE_NOTES_PAGE_ID,
+} from '../../../packages/core/src/docs.ts'
 import {
   isPortalPage,
+  llmsTxt,
   portalIndexingMode,
   publicPagePaths,
   robotsTag,
@@ -20,9 +25,38 @@ Deno.test('the sitemap lists the home page, About and every public documentation
     'https://research.example.org/about',
     'https://research.example.org/docs',
     ...DOC_PAGES.map((page) => `https://research.example.org/docs/${page.id}`),
+    ...DEVELOPER_DOCS.map((doc) => `https://research.example.org/docs/${doc.id}`),
     `https://research.example.org/docs/${RELEASE_NOTES_PAGE_ID}`,
   ])
   expect(publicPagePaths()).toEqual(listed.map((url) => new URL(url).pathname))
+})
+
+Deno.test('llms.txt describes the project and links every page the sitemap lists', () => {
+  const text = llmsTxt('research.example.org')
+  const lines = text.split('\n')
+  expect(lines[0]).toBe('# CorpusKit')
+  expect(lines[2]).toMatch(
+    /^> CorpusKit, the open source research portal for Progress Agentic RAG\. /,
+  )
+  expect(text.endsWith('\n')).toBe(true)
+  // Every link line is `- [title](absolute URL): summary`.
+  const links = lines.filter((line) => line.startsWith('- '))
+  for (const line of links) expect(line).toMatch(/^- \[[^\]]+\]\(https:\/\/[^)\s]+\): \S/)
+  const urls = links.map((line) => line.match(/\]\(([^)]+)\)/)![1]!)
+  expect(new Set(urls).size).toBe(urls.length)
+  // The sitemap's pages, except the documentation index, which the guides stand in for.
+  for (const path of publicPagePaths().filter((path) => path !== '/docs')) {
+    expect(urls).toContain(`https://research.example.org${path}`)
+  }
+  expect(urls).toContain('https://github.com/noicework/corpuskit')
+  for (const doc of DEVELOPER_DOCS) {
+    expect(text).toContain(
+      `- [${doc.title}](https://research.example.org/docs/${doc.id}): ${doc.summary}`,
+    )
+  }
+  expect(text).toContain('\n## Developer guides\n')
+  expect(text).toContain('\n## User guides\n')
+  expect(text).not.toMatch(/[\u2013\u2014]/)
 })
 
 Deno.test('robots.txt keeps crawlers to pages, and only the apex names the sitemap', () => {

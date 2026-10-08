@@ -1,11 +1,10 @@
 <h1 align="center">CorpusKit</h1>
 
-<p align="center"><strong>An open source research portal.</strong></p>
+<p align="center"><strong>The open source research portal for Progress Agentic RAG.</strong></p>
 
 <p align="center">
-Point it at an empty Progress Agentic RAG knowledge box.<br>
-It reads your corpus, designs the taxonomy and the knowledge graph around it,<br>
-writes the questions worth asking, and opens as a branded portal.
+Point it at an empty knowledge box. It reads your corpus, designs the taxonomy and the knowledge graph<br>
+around it, writes the questions worth asking, and opens as a branded portal with cited, checked answers.
 </p>
 
 <p align="center">

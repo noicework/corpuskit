@@ -20,7 +20,7 @@ import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
 import { platformShellResponse } from './platform-shell.ts'
-import { robotsTag, robotsTxt, sitemapXml } from './search-files.ts'
+import { llmsTxt, robotsTag, robotsTxt, sitemapXml } from './search-files.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
 import { showcasePortalsWarning } from './tenants.ts'
@@ -197,6 +197,14 @@ app.get(
     const domain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
     if (new URL(c.req.url).hostname !== domain) return c.text('Not found', 404)
     return c.body(sitemapXml(domain), 200, { 'Content-Type': 'application/xml; charset=utf-8' })
+  }),
+)
+app.get(
+  '/llms.txt',
+  infrastructureHandler(async (c) => {
+    const domain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
+    if (new URL(c.req.url).hostname !== domain) return c.text('Not found', 404)
+    return c.text(llmsTxt(domain))
   }),
 )
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))

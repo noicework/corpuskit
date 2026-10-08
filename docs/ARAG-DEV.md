@@ -1,9 +1,8 @@
-# Developing on Progress Agentic RAG (ARAG / Nuclia) - hard-won reference
+# Developing on Progress Agentic RAG (ARAG / Nuclia)
 
-This is the distilled, battle-tested knowledge for building against Progress Agentic RAG
-(the Nuclia-based platform). It exists so this session does NOT rediscover the platform's
-sharp edges the hard way. Read it before writing any retrieval/provisioning code. Source:
-the ARAG GTM factory's own field builds (Aug 2026).
+What building CorpusKit taught us about Progress Agentic RAG (the Nuclia-based platform): the
+credential model, the call shapes that work, and the platform behaviours to plan for. Read it
+before writing any retrieval or provisioning code.
 
 ## Mental model
 ARAG = a managed RAG platform. Per **Knowledge Box (KB)** you: ingest content -> enrich it
@@ -13,21 +12,22 @@ optionally expose tools to an agent over **MCP**. Extraction, labels, a knowledg
 search configurations are all configurable objects ON the KB, viewable in the admin console.
 
 ## Credentials (get this right first - most 403s are a wrong-token problem)
-- **Account:** all resources live under one account. Account id `86d1adc8-64ef-499b-86d6-72e9fd684ab0`
-  (the shared development account). Never provision under any other account.
+- **Account:** all resources live under one account, set as `ARAG_ACCOUNT` in `.env`. Provision
+  only under that account.
 - **NUA key** = account-level ops only (create/list KBs). Put it in `.env` as `ARAG_NUA_KEY`
-  (never commit; copy it from the team's shared `.env`). It **403s on KB-scoped writes** - do NOT
-  use it to write resources/tasks/configs on a KB.
+  (never commit it). It **403s on KB-scoped writes** - do NOT use it to write
+  resources/tasks/configs on a KB.
 - **KB service-account token** (SOWNER) = KB-scoped reads AND writes (ingest, tasks, `/ask`, REMi).
   Header: `X-NUCLIA-SERVICEACCOUNT: Bearer <token>`. Mint one per KB after creating it.
 - Verify a NUA key is scoped to the right account with `GET /api/v1/account/{ACCOUNT_ID}/kbs`
   (200 + KB list = good; 403 = wrong account). Note `GET /api/v1/user` does NOT work for NUA keys
   (always 403 "not valid in the global API") - a 403 there proves nothing.
 - Hosts: retrieval/`/ask` use the **rag-host** (`{region}.rag.progress.cloud`); DA tasks use the
-  **dp-host** (same, with `.rag.` swapped for `.dp.`). Only AU zone (`aws-ap-southeast-2-1`) is
-  provisionable with the current key.
+  **dp-host** (same, with `.rag.` swapped for `.dp.`). A key provisions only in the zones its
+  account allows; the account CorpusKit is developed on provisions in the Australian zone
+  (`aws-ap-southeast-2-1`).
 
-## Working call shapes (these are the ones that actually work)
+## Working call shapes
 - **Ingest a file:** single-call `POST /kb/{id}/upload`, then PATCH metadata onto the created
   resource. The two-step create-resource + PUT-file pattern **500s on PDFs** on this deployment.
 - **A resource's title is NOT searchable body text.** Any name that must ground an answer
@@ -35,8 +35,8 @@ search configurations are all configurable objects ON the KB, viewable in the ad
 - **Grounded answer:** `POST {rag-host}/api/v1/kb/{id}/ask` -> grounded, cited answer.
 - **Structured JSON answer (query-time):** `POST .../ask` with `answer_json_schema`
   (OpenAI-function style: `name` + `parameters` as JSON Schema) -> schema-conformant `answer_json`
-  grounded in real content. **HARD CONSTRAINT: never send `citations:true` AND `answer_json_schema`
-  in the same `/ask` call - it crashes the backend (500/503).** For provenance in schema mode read
+  grounded in real content. **Never send `citations:true` AND `answer_json_schema` in the same
+  `/ask` call - the backend answers 500 or 503.** For provenance in schema mode read
   `retrieval_results.resources` (populated even with `citations:false`) or fire a second
   citations-only `/ask`.
 - **REMi (answer-quality score):** `POST {kb}/predict/remi` with the **KB service-account token**
@@ -126,13 +126,25 @@ search configurations are all configurable objects ON the KB, viewable in the ad
   [{memory:{ident, prompt?, rules?}}], llm:{model}}, apply, enabled}` - verified 200.
 - **Activity endpoints (`/kb/{id}/activity/*`) are 403 to SA tokens** (dashboard-user auth only).
   Ask analytics must be logged app-side at the proxy - which sees every ask anyway.
+- **`search_configuration` overrides the request's `features`** - passing a
+  named config plus `features: ['keyword']` still runs the config's own
+  features, making mode switches silently inert. Only attach the config for
+  the default mode; drop it when the caller chooses a specific mode.
+- **`/find` paragraph scores mix scales** - semantic about 0 to 1, BM25 unbounded
+  (5-30 typical). Calibrate (logistic squash above 1) instead of normalising
+  to the top hit, or every top result reads "100%".
+- **Graph queries: filter to agent-extracted relations with
+  `{prop:'generated', by:'data-augmentation'}`** (combinable via `{and:[...]}`
+  with a path/node query). Without it, once real PDFs land the built-in NER
+  pipeline floods `/graph` with PERSON/DATE/LOC paths and the curated llm-graph
+  relations fall outside `top_k`.
 
-## Known platform bugs - DO NOT burn cycles rediscovering these
-- **DA-Generator JSON output (`json:true` / `kv_schema_id`) is BROKEN** - 422s even on Progress's
+## Known platform issues
+- **DA-Generator JSON output (`json:true` / `kv_schema_id`) answers 422**, even on Progress's
   own example, even schema-free. It is the ingest-time DA task path only. Workarounds: a plain-text
   `ask` DA task that emits JSON-as-text parsed server-side, OR the query-time `/ask`
   `answer_json_schema` path (which WORKS - see above). Disclose the gap; never fake it.
-- **RAO Retrieval-Agent live sessions (`/session/ephemeral`) are BROKEN** - fail with
+- **RAO Retrieval-Agent live sessions (`/session/ephemeral`) fail** with
   `"unhandled errors in a TaskGroup"` even with zero tools. So "an ARAG agent orchestrating tool
   calls over MCP" is not live today. If you need that pattern, app-orchestrate the same genuine
   calls and disclose it, OR wait for the upstream fix.
@@ -152,7 +164,7 @@ search configurations are all configurable objects ON the KB, viewable in the ad
   in `/tasks` `done` even when its output is verifiably on every resource. Verify by fetching the
   resource's fields, not just the status flag.
 
-## Clean architecture for THIS portal (so ARAG is swappable)
+## Clean architecture for this portal (so ARAG is swappable)
 - Put retrieval behind a **`RetrievalProvider` interface** on the server (methods like
   `ask()`, `search()`, `graph()`, `provisionTenant()`). ARAG is one implementation; a stub/mock is
   another for local dev without the platform. No ARAG/Nuclia types leak into the UI or components.
@@ -170,16 +182,3 @@ The team's internal ARAG factory project has deeper skills (`arag-kb`,
 `rao-workflow`, `arag-demo-app`) and a live memory of every gotcha. Ask the team to relay a
 specific question to the factory session rather than probing the live platform blindly - the factory has
 almost certainly already paid for that lesson.
-
-- **`search_configuration` overrides the request's `features`** - passing a
-  named config plus `features: ['keyword']` still runs the config's own
-  features, making mode switches silently inert. Only attach the config for
-  the default mode; drop it when the caller chooses a specific mode.
-- **`/find` paragraph scores mix scales** - semantic ~0-1, BM25 unbounded
-  (5-30 typical). Calibrate (logistic squash for >1) instead of normalising
-  to the top hit, or every top result reads "100%".
-- **Graph queries: filter to agent-extracted relations with
-  `{prop:'generated', by:'data-augmentation'}`** (combinable via `{and:[...]}`
-  with a path/node query). Without it, once real PDFs land the built-in NER
-  pipeline floods `/graph` with PERSON/DATE/LOC paths and the curated llm-graph
-  relations fall outside `top_k`.
