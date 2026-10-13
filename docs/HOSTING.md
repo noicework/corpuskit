@@ -378,6 +378,7 @@ A layout for a user group's portal might be:
 | `footer.poweredBy` | `true` adds "Powered by CorpusKit", linking to corpuskit.org | |
 | `home.hero` | Optional `heading` (120 characters), `body` (400), `image` and `questions` shown as chips under the ask box (6, of 200 characters each). Without `questions`, the chips are the portal's suggested questions | |
 | `home.sections` | The sections under the hero, in order | 10 |
+| `home.cardArrows` | `false` drops the arrow that ends each card in the `cards`, `resources` and `recent` sections, with the space it kept. The whole card stays the link, and a card leaving the portal is still announced to screen readers. Question cards keep their arrow. Absent means `true` | |
 
 A footer, when set, keeps the organisation, product name and tagline beside its columns. The home
 page keeps the ask box in its hero, and a question asked there, or picked from a chip or a question

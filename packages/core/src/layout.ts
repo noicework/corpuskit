@@ -233,6 +233,13 @@ export const PortalLayoutSchema = z.object({
         .optional(),
     }).strict().optional(),
     sections: list(HomeSectionSchema, LAYOUT_LIMITS.sections, 'sections'),
+    /**
+     * Whether home cards end in an arrow: a → on a card that opens a page in the portal, the
+     * external marker on one that leaves it. Absent means true. False drops the arrow and the
+     * space it kept; the whole card stays the link, and a screen reader still hears that a card
+     * leaves the portal.
+     */
+    cardArrows: z.boolean().optional(),
   }).strict().optional(),
 }).strict()
 export type PortalLayout = z.infer<typeof PortalLayoutSchema>

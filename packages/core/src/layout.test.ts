@@ -48,6 +48,7 @@ const full: PortalLayout = {
       },
       { kind: 'topics' },
     ],
+    cardArrows: false,
   },
 }
 
