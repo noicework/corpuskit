@@ -192,7 +192,6 @@ Deno.test('broken or excluded references fail explicitly without success or stan
     const options of [
       { broken: true },
       { id: 'unknown/f/pdf/0-16' },
-      { id: 'report/t/da-summary/0-16' },
       { id: 'USER_CONTEXT_0' },
       { doc: true },
     ]
@@ -278,7 +277,6 @@ Deno.test('footnote validation logs fixed reason codes without leaking source ID
     for (
       const [id, reason] of [
         ['USER_CONTEXT_0', 'anonymous_context'],
-        ['report/t/da-private-summary/0-16', 'generated_context'],
         ['report/a/private-metadata/0-16', 'metadata_context'],
         ['private-excluded-source/f/pdf/0-16', 'out_of_scope'],
         ['private-unsupported-value', 'unsupported_context'],
@@ -297,11 +295,129 @@ Deno.test('footnote validation logs fixed reason codes without leaking source ID
       })])
       expect(f.bodies.length).toBe(1)
     }
-    expect(logs.length).toBe(5)
+    expect(logs.length).toBe(4)
     expect(JSON.stringify(logs)).not.toMatch(/private|USER_CONTEXT|block-AA|Stocks|report/)
   } finally {
     console.error = originalError
   }
+})
+
+/** Run with console.info and console.error captured; returns what each received. */
+async function withLogs<T>(run: () => Promise<T>) {
+  const originalInfo = console.info
+  const originalError = console.error
+  const info: unknown[][] = []
+  const errors: unknown[][] = []
+  console.info = (...args: unknown[]) => info.push(args)
+  console.error = (...args: unknown[]) => errors.push(args)
+  try {
+    return { result: await run(), info, errors }
+  } finally {
+    console.info = originalInfo
+    console.error = originalError
+  }
+}
+
+Deno.test('a generated-summary reference no longer fails the answer: it binds to its resource', async () => {
+  for (const mode of ['llm_footnotes', 'standard'] as const) {
+    const f = fixture({ id: 'report/t/da-private-summary/0-16', mode })
+    const { result: events, info, errors } = await withLogs(() => collect(f.provider))
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(errors).toEqual([])
+    const done = events.find((e) => e.type === 'done')
+    expect(done?.type === 'done' && done.text).toContain('Stocks recovered.[1]')
+    // Resource level: the citation carries no passage, so the generated
+    // summary is never presented as a quote from the document.
+    expect(events.filter((e) => e.type === 'citation')).toEqual([{
+      type: 'citation',
+      citation: { index: 1, resourceId: 'report', title: 'Original report' },
+    }])
+    expect(info).toEqual([[JSON.stringify({
+      event: 'arag_generated_context_citation',
+      remapped: 1,
+      dropped: 0,
+    })]])
+    expect(JSON.stringify(info)).not.toMatch(/private|block-AA|Stocks|report|da-/)
+    expect(f.bodies.length).toBe(1)
+  }
+})
+
+Deno.test('a generated-summary reference to a resource outside scope is dropped, not failed', async () => {
+  for (const mode of ['llm_footnotes', 'standard'] as const) {
+    for (const options of [{}, { resourceId: 'report' }]) {
+      // `elsewhere` was never retrieved and is not in the catalogue; under a
+      // document pin it is outside the pinned document as well.
+      const f = fixture({ id: 'elsewhere/t/da-summary/0-16', mode })
+      const { result: events, info } = await withLogs(() => collect(f.provider, options))
+      expect(events.some((e) => e.type === 'error')).toBe(false)
+      expect(events.some((e) => e.type === 'citation')).toBe(false)
+      const done = events.find((e) => e.type === 'done')
+      expect(done?.type === 'done' && done.refused).toBe(false)
+      expect(done?.type === 'done' && done.text).not.toMatch(/\[\d+\]/)
+      expect(info).toEqual([[JSON.stringify({
+        event: 'arag_generated_context_citation',
+        remapped: 0,
+        dropped: 1,
+      })]])
+    }
+  }
+})
+
+Deno.test('a mixed answer binds real and generated references with consistent numbering', async () => {
+  const resource = (title: string, text: string) => ({
+    title,
+    metadata: { status: 'PROCESSED' },
+    fields: { 'f/pdf': { paragraphs: { p: { score: 0.9, text } } } },
+  })
+  const provider = new AragProvider({
+    resolveBinding: () => ({
+      baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
+      token: 'test',
+    }),
+    fetchImpl: (input) => {
+      const url = String(input)
+      const resources = {
+        survey: resource('Dive survey', 'Stocks fell by a third.'),
+        closure: resource('Closure review', 'The fishery closed in 2019.'),
+      }
+      if (url.includes('/catalog')) return Promise.resolve(Response.json({ resources }))
+      if (url.includes('/predict/remi')) return Promise.resolve(Response.json({}))
+      const raw = 'Stocks fell [1][2]. The fishery closed [3]. Recovery was slow [4][5].\n\n' +
+        '[1]: block-A1\n[2]: block-A2\n[3]: block-A3\n[4]: block-A4\n[5]: block-A5\n'
+      const items = [
+        { type: 'retrieval', results: { resources } },
+        { type: 'answer', text: raw },
+        {
+          type: 'footnote_citations',
+          footnote_to_context: {
+            'block-A1': 'elsewhere/t/da-summary/0-10',
+            'block-A2': 'survey/t/da-summary/0-10',
+            'block-A3': 'closure/f/pdf/0-27',
+            'block-A4': 'survey/f/pdf/0-23',
+            'block-A5': 'closure/t/da-takeaways/0-10',
+          },
+        },
+      ]
+      return Promise.resolve(
+        new Response(items.map((item) => JSON.stringify({ item })).join('\n') + '\n'),
+      )
+    },
+  })
+  const { result: events, info } = await withLogs(() => collect(provider))
+  expect(events.some((e) => e.type === 'error')).toBe(false)
+  const done = events.find((e) => e.type === 'done')
+  expect(done?.type === 'done' && done.text).toBe(
+    'Stocks fell.[1] The fishery closed.[2] Recovery was slow.[1][2]\n\n',
+  )
+  expect(events.flatMap((e) => e.type === 'citation' ? [e.citation] : [])).toEqual([
+    { index: 1, resourceId: 'survey', title: 'Dive survey' },
+    { index: 2, resourceId: 'closure', title: 'Closure review' },
+  ])
+  expect(info).toEqual([[JSON.stringify({
+    event: 'arag_generated_context_citation',
+    remapped: 2,
+    dropped: 1,
+  })]])
 })
 
 Deno.test('verified extra context binds at resource level in both citation modes', async () => {

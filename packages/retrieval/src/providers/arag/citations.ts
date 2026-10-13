@@ -33,6 +33,50 @@ export function stripInlineMarkers(text: string): string {
   return text.replace(INLINE_MARKER, '')
 }
 
+/**
+ * How many references to data-augmentation fields (generated summaries, not
+ * the document) one answer's binding re-keyed to their resource, and how many
+ * it dropped because that resource was not citable. Counts only: never ids or text.
+ */
+export interface GeneratedCitations {
+  remapped: number
+  dropped: number
+}
+
+/**
+ * The platform's citations map, kept to the resources this answer may cite,
+ * BEFORE binding, so numbering, in-text markers and citation events all derive
+ * from one set (filtering only at emit time once left dead `[n]` markers).
+ * Supplied-context aliases resolve to their resource first. A key naming a
+ * data-augmentation field is re-keyed to its resource alone, so the resource
+ * is cited without the generated paragraph, or dropped when the resource is
+ * not citable - the same treatment footnote binding gives a generated anchor.
+ */
+export function scopeCitationsMap(
+  citationsMap: Record<string, unknown>,
+  citable: (resourceId: string) => boolean,
+  aliases: ReadonlyMap<string, string> = new Map(),
+): { citations: Record<string, unknown>; generated: GeneratedCitations } {
+  const citations: Record<string, unknown> = {}
+  const generated: GeneratedCitations = { remapped: 0, dropped: 0 }
+  for (const [key, value] of Object.entries(citationsMap)) {
+    const mappedKey = aliases.get(key) ?? key
+    const resourceId = mappedKey.split('/')[0]
+    const isGenerated = mappedKey.includes('/da-')
+    if (!resourceId || !citable(resourceId)) {
+      if (isGenerated) generated.dropped += 1
+      continue
+    }
+    if (isGenerated) generated.remapped += 1
+    const target = isGenerated ? resourceId : mappedKey
+    const existing = citations[target]
+    citations[target] = Array.isArray(existing) && Array.isArray(value)
+      ? [...existing, ...value]
+      : value
+  }
+  return { citations, generated }
+}
+
 /** One citation range: a resource cited at a given end-offset into the raw answer text. */
 export interface CitationRange {
   resourceId: string

@@ -45,7 +45,7 @@ import {
 } from '../../merchandise.ts'
 import { variantPreamble } from '../../prompts.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
-import { spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
+import { scopeCitationsMap, spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
 import {
   CITATION_MODE,
   type CitationMode,
@@ -4472,9 +4472,9 @@ export class AragProvider implements RetrievalProvider {
         // Both return one canonical text + citation table for every consumer.
         let boundText: string | undefined
         if (!refused && fullAnswer.trim()) {
-          // Scope cross-check, applied to the citations map BEFORE binding so
-          // that numbering, in-text markers and citation events all derive
-          // from one set. Filtering only at emit time (as this once did) let
+          // Scope cross-check, applied BEFORE binding in both modes so that
+          // numbering, in-text markers and citation events all derive from
+          // one set. Filtering only at emit time (as this once did) let
           // spliceCitationMarkers number and splice a marker for a resource
           // whose event was then suppressed - a dead `[n]` the reader can
           // click and get nothing from, measured at 7.3% of all markers.
@@ -4500,17 +4500,6 @@ export class AragProvider implements RetrievalProvider {
             if (excludedSourceIds.has(resourceId)) return false
             return opts.docScope ? false : byId.has(resourceId)
           }
-          const scopedCitations: Record<string, unknown> = {}
-          for (const [key, value] of Object.entries(citationsMapAccum)) {
-            const mappedKey = extraContext.resources.get(key) ?? key
-            const resourceId = mappedKey.split('/')[0]
-            if (resourceId && citable(resourceId)) {
-              const existing = scopedCitations[mappedKey]
-              scopedCitations[mappedKey] = Array.isArray(existing) && Array.isArray(value)
-                ? [...existing, ...value]
-                : value
-            }
-          }
           const resolveTitle = (resourceId: string) =>
             byId.get(resourceId)?.title ?? sources.find((s) => s.id === resourceId)?.title ??
               'Untitled resource'
@@ -4523,18 +4512,35 @@ export class AragProvider implements RetrievalProvider {
             // footnote request. Do not quietly accept an uncited answer.
             throw new FootnoteError('unexpected_standard_citations')
           }
-          const bound = parsedFootnotes
-            ? bindFootnotes(parsedFootnotes, citable, resolveTitle, extraContext.resources)
-            : spliceCitationMarkers(
-              fullAnswer,
-              scopedCitations,
-              // Both branches already resolve through toSummary/displayTitle,
-              // so this never surfaces a raw hash - but a resource id absent
-              // from both (never retrieved as a scored source) still needs a
-              // clean fallback rather than citations.ts's own last-resort
-              // `?? resourceId`.
-              resolveTitle,
-            )
+          let bound: ReturnType<typeof bindFootnotes>
+          if (parsedFootnotes) {
+            bound = bindFootnotes(parsedFootnotes, citable, resolveTitle, extraContext.resources)
+          } else {
+            const scoped = scopeCitationsMap(citationsMapAccum, citable, extraContext.resources)
+            bound = {
+              ...spliceCitationMarkers(
+                fullAnswer,
+                scoped.citations,
+                // Both branches already resolve through toSummary/displayTitle,
+                // so this never surfaces a raw hash - but a resource id absent
+                // from both (never retrieved as a scored source) still needs a
+                // clean fallback rather than citations.ts's own last-resort
+                // `?? resourceId`.
+                resolveTitle,
+              ),
+              generated: scoped.generated,
+            }
+          }
+          // A reference to a generated summary binds to its resource or is
+          // dropped (bindFootnotes, scopeCitationsMap). Counts only: never
+          // answer text, source ids or payloads.
+          if (bound.generated.remapped + bound.generated.dropped > 0) {
+            console.info(JSON.stringify({
+              event: 'arag_generated_context_citation',
+              remapped: bound.generated.remapped,
+              dropped: bound.generated.dropped,
+            }))
+          }
           // No emit-time filtering: binding already validated the source set.
           for (const citation of bound.citations) yield { type: 'citation', citation }
           boundText = bound.text

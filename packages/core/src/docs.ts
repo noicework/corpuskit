@@ -515,7 +515,11 @@ export const DOC_PAGES: DocPage[] = [
           "the cited papers' text: a sentence keeps a marker only when the cited paper carries " +
           'its words, its figures and the names it hangs on, so the number you click resolves to ' +
           'a passage that grounds that claim. Markers never sit on headings, and an item in a ' +
-          'list takes the citation of the paragraph it belongs to.',
+          'list takes the citation of the paragraph it belongs to.\n\n' +
+          "A document's generated summary and key takeaways are never a source in their own " +
+          'right. When an answer leans on one, its citation points at the document itself, ' +
+          "never at the summary's words, and the claim is checked against the document's own " +
+          'text: a figure only the summary carries is removed like any other unverified figure.',
       },
       {
         heading: 'Every figure is checked before you see it',
@@ -1050,7 +1054,14 @@ export const DOC_PAGES: DocPage[] = [
           'whether a resource may carry one value or several, and add its labels with their ' +
           'definitions. Nothing carries a brand-new set, so creating one neither creates nor ' +
           'restarts any agent; a labeller for it comes from running analysis or the knowledge ' +
-          'graph tools. Editing a set later restarts only the labellers that carry it.',
+          'graph tools. Editing a set later restarts only the labellers that carry it.\n\n' +
+          'Analyse and configure, under Manage > Taxonomy, reads the corpus and designs the ' +
+          'topic and kind label sets, labels the resources it sampled and writes suggested ' +
+          'questions. Writing a label set replaces it whole, so analysis never replaces a ' +
+          'topic or kind set this portal did not create: on a knowledge box that already has ' +
+          'its own, it stops before changing anything and says which set is in the way. ' +
+          'Rename or remove that set in the knowledge box, then run analysis again. Running ' +
+          'analysis again over the sets an earlier run wrote replaces them as before.',
       },
       {
         heading: 'Enrichments',

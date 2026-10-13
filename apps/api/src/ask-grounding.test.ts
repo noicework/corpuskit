@@ -400,3 +400,61 @@ describe('bindAndAudit over the loop 4 cases', () => {
     expect(result.audit.denominatorsMissing).toEqual([])
   })
 })
+
+describe('bindAndAudit never takes a generated summary as evidence', () => {
+  // The answer stated a figure only the paper's generated summary and key
+  // takeaways carry: the provider bound the summary reference to the paper
+  // itself (resource level), so the sentence is checked against the paper's
+  // own extracted text, which never includes generated fields.
+  const OWN_TEXT = 'Stock assessment of blacklip abalone in the southern zone.\n\nAbstract\n\n' +
+    'Dive surveys were run at 40 sites.\n\nResults\n\nLegal-sized density fell at most ' +
+    'sites over the survey period.\n\nDiscussion\n\nRecovery depends on recruitment.'
+  const SUMMARY = 'Legal-sized density fell by 38% at surveyed sites between 2018 and 2022.'
+  const sentence = 'Legal-sized density fell by 38% at surveyed sites between 2018 and 2022.'
+  const audit = (id: string, own: string, others: Record<string, string> = {}) => {
+    const summarised = {
+      ...resource(id, 'Blacklip abalone stock assessment', SUMMARY),
+      keyTakeaways: [SUMMARY],
+    } as ScoredResource
+    return bindAndAudit({
+      management: management({ [id]: own, ...others }),
+      config,
+      query: 'How much did legal-sized abalone density fall?',
+      text: `Dive surveys were run at 40 sites.[1] ${sentence}[1]`,
+      citations: [{ index: 1, resourceId: id, title: 'Blacklip abalone stock assessment' }],
+      sources: [
+        summarised,
+        ...Object.keys(others).map((other) =>
+          resource(other, 'Southern zone survey report', 'Abalone survey.')
+        ),
+      ],
+      lexicon: [],
+      variant: undefined,
+      floor: 0.3,
+    })
+  }
+
+  it('removes a sentence whose only support is the generated summary', async () => {
+    const result = await audit('abalone-generated-only', OWN_TEXT)
+    expect(result.text).toContain('Dive surveys were run at 40 sites.[1]')
+    expect(result.text).not.toContain(sentence)
+    expect(result.audit.sentencesRemoved).toBe(1)
+    expect(result.audit.figuresRescued).toEqual([])
+    expect(result.audit.figuresRemoved).toContain('38%')
+  })
+
+  it('keeps the same sentence when the paper itself carries the figure', async () => {
+    const result = await audit('abalone-own-text', `${OWN_TEXT}\n\n${sentence}`)
+    expect(result.text).toContain(`${sentence}[1]`)
+    expect(result.audit.sentencesRemoved).toBe(0)
+  })
+
+  it("still rescues the figure from another retrieved paper's own text", async () => {
+    const result = await audit('abalone-rescued', OWN_TEXT, {
+      'abalone-survey-report': `Southern zone abalone survey report.\n\nResults\n\n${sentence}`,
+    })
+    expect(result.text).toContain(sentence)
+    expect(result.citations.map((c) => c.resourceId)).toContain('abalone-survey-report')
+    expect(result.audit.figuresRescued).toContain('38%')
+  })
+})

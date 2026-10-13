@@ -505,7 +505,16 @@ export const AnalyseEventSchema = z.discriminatedUnion('type', [
     labelled: z.number().int().nonnegative(),
     questions: z.number().int().nonnegative(),
   }),
-  z.object({ type: z.literal('error'), message: z.string() }),
+  z.object({
+    type: z.literal('error'),
+    message: z.string(),
+    /**
+     * Set when analysis refused before writing anything: `labelset_exists`,
+     * the box already has a `topic` or `kind` label set this portal did not
+     * create, which analysis would replace.
+     */
+    error: z.enum(['labelset_exists']).optional(),
+  }),
 ])
 
 /** Progress events streamed by the knowledge-box migration tool. */
@@ -1195,7 +1204,7 @@ export const AskEventSchema = z.discriminatedUnion('type', [
      */
     sentencesRemoved: z.number().int().nonnegative().optional(),
     figuresRemoved: z.string().array().optional(),
-    /** Figures found in a retrieved, prior-turn or generated text after the cited passages failed them. */
+    /** Figures found in a retrieved or prior-turn paper's own text after the cited passages failed them. */
     figuresRescued: z.string().array().optional(),
     /** Sentences replaced by the named paper's own figure sentence, quoted and cited. */
     sentencesReplaced: z.number().int().nonnegative().optional(),

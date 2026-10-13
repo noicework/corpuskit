@@ -29,7 +29,6 @@ import {
   carriesQualifier,
   cohortTerms,
   figuresFoundIn,
-  generatedText,
   isDeclineSentence,
   isPlanningQuestion,
   namesOtherStudy,
@@ -105,7 +104,7 @@ export interface AuditEvent {
   /** Sentences the figure gate removed, and the figures they stated. */
   sentencesRemoved: number
   figuresRemoved: string[]
-  /** Figures found in a retrieved, prior-turn or DA text after the cited passages failed them. */
+  /** Figures found in a retrieved or prior-turn paper's text after the cited passages failed them. */
   figuresRescued?: string[]
   /** Sentences replaced by the named paper's own figure sentence. */
   sentencesReplaced?: number
@@ -713,8 +712,9 @@ const MAX_POOL_TEXTS = 8
  * the pin but never import one from a neighbouring cohort. Without a pin,
  * best first: the pinned papers, the papers earlier turns cited, then the
  * retrieved resources by relevance. Each is the paper's extracted text
- * (fetched now, cached per process) plus its DA summary and key takeaways
- * as a text of its own. Cited texts already fetched are not repeated.
+ * (fetched now, cached per process). Cited texts already fetched are not
+ * repeated. A generated summary or key takeaway is never one of them: the
+ * answer may have been written from it, so it would vouch for itself.
  */
 async function poolTexts(
   input: BindAndAuditInput,
@@ -756,15 +756,7 @@ async function poolTexts(
     }
   }))
   for (const { id, text } of texts) {
-    if (text) out.push({ resourceId: id, title: titleOf.get(id) ?? '', text, generated: false })
-  }
-  // The DA fields of every known resource, cited or not, after the texts.
-  for (const id of order) {
-    const source = input.sources.find((s) => s.id === id)
-    const generated = source ? generatedText(source) : undefined
-    if (generated) {
-      out.push({ resourceId: id, title: titleOf.get(id) ?? '', text: generated, generated: true })
-    }
+    if (text) out.push({ resourceId: id, title: titleOf.get(id) ?? '', text })
   }
   return out
 }
@@ -912,9 +904,9 @@ export async function bindAndAudit(raw: BindAndAuditInput): Promise<BindAndAudit
   const namedCohort = cohort.size > 0
   const planning = isPlanningQuestion(query)
   // The rescue (D3-02): a sentence the gate would remove is looked up in
-  // the full text of every retrieved resource, the papers the session's
-  // earlier turns cited and the DA summary and key takeaways, before it
-  // is withheld. The texts are fetched only when something needs them.
+  // the full text of every retrieved resource and the papers the session's
+  // earlier turns cited, before it is withheld - never in a generated
+  // summary (poolTexts). The texts are fetched only when something needs them.
   const failing = new Set(checks.filter((c) => !c.supported).map((c) => c.sentence))
   // An unbound sentence passes only when one text carries every figure
   // (the gate's inheritance rule); otherwise it needs the rescue too.
@@ -1013,7 +1005,7 @@ export async function bindAndAudit(raw: BindAndAuditInput): Promise<BindAndAudit
         resourceId: entry.resourceId,
         title: entry.title,
       })
-      if (!entry.generated && !texts.has(index)) texts.set(index, entry.text)
+      if (!texts.has(index)) texts.set(index, entry.text)
     }
     // A resource the study guard would reject cannot lend a marker either
     // - unless an earlier turn cited it, or the sentence names that other

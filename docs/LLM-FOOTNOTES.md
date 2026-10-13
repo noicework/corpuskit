@@ -40,8 +40,24 @@ Progress does not support citations with `answer_json_schema`.
 - Preserve the existing post-generation evidence audit. It can still remove or
   rebind claims that fail its checks; LLM footnotes are attribution, not proof that
   every claim is correct.
-- Reject malformed, missing, conflicting, generated-field and out-of-scope
-  references. Server-created `sourceContext` entries keep original text and its
+- Reject malformed, missing, conflicting and out-of-scope references.
+- A reference to a data-augmentation field (`<rid>/t/da-...`: a generated
+  summary or key takeaways, not the document) does not fail the answer. When
+  its resource is citable it binds to that resource at resource level, sharing
+  the number the resource already has, and carries no passage, so generated
+  text is never presented as the document's words. When the resource is not
+  citable the reference is dropped with its marker. Numbering stays contiguous,
+  with no dead markers. An answer that remaps or drops one logs
+  `arag_generated_context_citation` with the two counts and nothing else.
+  Standard attribution gives a generated-field key in the citations map the
+  same treatment (`scopeCitationsMap`).
+- The sentence audit checks a remapped claim against the document's own
+  extracted text, which never includes generated fields, and its rescue reads
+  only papers' extracted texts. A generated summary never vouches for a
+  sentence: a figure only the summary carries is removed like any other
+  unverified figure, and a sentence the document's text does not support
+  loses its marker.
+- Server-created `sourceContext` entries keep original text and its
   resource ID together; their exact ordered `USER_CONTEXT_n` aliases bind at
   resource level, without inventing paragraph IDs or pages. Browser-supplied
   previous excerpts must match a fresh, permitted original before becoming
@@ -77,12 +93,12 @@ The September 2026 restoration retains the demo-only functional release gates.
 The code flag remains server-wide; it is not a per-tenant switch. No tenant
 configuration is changed or tested as part of this restoration.
 
-The subsequent OPAX release failure was diagnosed as `generated_context`: Progress
-returned a citation to a data-augmentation field and the binder rejected it.
-That tenant's source-only generation/configuration issue remains unresolved.
-The safeguard stays enabled, so a corpus that supplies generated fields can still
-fail citation validation. Demo validation must not be described as proving OPAX
-or every connected corpus works.
+A later release failure was diagnosed as a citation to a data-augmentation
+field: Progress returned one and the binder rejected the whole answer. Such a
+reference now binds to its resource or is dropped (see Binding and streaming),
+so a corpus that supplies generated fields no longer fails citation validation
+on that account. Demo validation must still not be described as proving every
+connected corpus works.
 
 ## Verification and release
 

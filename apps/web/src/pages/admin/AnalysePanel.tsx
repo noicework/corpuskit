@@ -1,12 +1,35 @@
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { AdminAccessError } from '../../api/break-glass.ts'
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { AnalyseEvent } from '@research-portal/core'
 import { analysePortal } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
-import { errorMessage, type Message } from './shared.ts'
+import type { Message } from './shared.ts'
+import { failedJobMessage, StreamedJob } from './streamed-job.ts'
+
+type AnalyseDone = Extract<AnalyseEvent, { type: 'done' }>
+
+/**
+ * Follows one analysis stream: every line goes to the live log, and the job
+ * settles on the counts or on the reason the server gave for stopping - a
+ * refusal to replace a label set this portal did not create among them - in
+ * the server's words.
+ */
+export function followAnalysis(
+  job: StreamedJob<AnalyseDone>,
+  onLog: (event: AnalyseEvent) => void,
+): (event: AnalyseEvent) => void {
+  return job.events((event: AnalyseEvent) => {
+    onLog(event)
+    if (event.type === 'error') job.fail(event)
+    else if (event.type === 'done') {
+      const counts = [event.topics, event.kinds, event.labelled, event.questions]
+      if (counts.every(Number.isFinite)) job.complete(event)
+      else job.uncertain()
+    }
+  })
+}
 
 /**
  * Interrogate the knowledge box: the system reads the corpus, designs the
@@ -30,36 +53,28 @@ function AnalysePanelContent({ slug }: { slug: string }) {
     setRunning(true)
     setLog([])
     setMessage(null)
+    const job = new StreamedJob<AnalyseDone>(assertCurrent, 'Analysis failed - please retry.')
     try {
       const result = await runExplicit('Analyse and configure this portal', async (access) => {
-        let completed = false
-        let failed = false
-        await analysePortal(slug, access, (event) => {
-          assertCurrent()
-          setLog((prev) => [...prev, event])
-          if (event.type === 'error') failed = true
-          if (event.type === 'done') {
-            completed = [event.topics, event.kinds, event.labelled, event.questions].every(
-              Number.isFinite,
-            )
-            setMessage({
-              tone: 'ok',
-              text: `Analysis complete - ${event.topics} topics, ${event.kinds} kinds, ` +
-                `${event.labelled} resources labelled, ${event.questions} suggested questions. ` +
-                'The portal now reflects what is in the box.',
-            })
-          }
-          if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
-        })
-        if (!completed || failed) throw new AdminAccessError()
-        return true
+        await analysePortal(
+          slug,
+          access,
+          followAnalysis(job, (event) => setLog((prev) => [...prev, event])),
+        )
+        return job.result()
       })
       assertCurrent()
       if (result === undefined) return
+      setMessage({
+        tone: 'ok',
+        text: `Analysis complete - ${result.topics} topics, ${result.kinds} kinds, ` +
+          `${result.labelled} resources labelled, ${result.questions} suggested questions. ` +
+          'The portal now reflects what is in the box.',
+      })
       if (sessionAllowed) await queryClient.invalidateQueries()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Analysis failed - please retry.') })
+      setMessage(failedJobMessage(job, err, 'Analysis failed - please retry.'))
     } finally {
       if (context === authority.controller.context) setRunning(false)
     }
