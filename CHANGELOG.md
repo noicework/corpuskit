@@ -19,6 +19,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Changed
 
+- The figure check no longer accepts a document's generated summary or key takeaways as evidence. A figure only the summary carries is removed like any other unverified figure, and an emptied answer is never rescued with a sentence from a summary. ([#76](https://github.com/noicework/corpuskit/pull/76))
 - The home page, About, the README and the structured data describe the project in one line: CorpusKit, the open source research portal for Progress Agentic RAG. The structured data names the repository and corpuskit.cloud as the same project and Noice's LinkedIn page as the same organisation, and the home page and About link CorpusKit Cloud, the hosted service. ([#75](https://github.com/noicework/corpuskit/pull/75))
 - The website serves its own fonts instead of loading them from Google Fonts, so the first paint no longer waits on a third-party stylesheet. The fonts are under the SIL Open Font License (`apps/web/public/fonts/OFL.txt`). ([#75](https://github.com/noicework/corpuskit/pull/75))
 - The reference deployments set `PORTAL_INDEXING=deny` in `wrangler.jsonc` and `wrangler.demo.jsonc`, so their portals stay out of search while the home page, About and documentation stay indexable. ([#75](https://github.com/noicework/corpuskit/pull/75))
@@ -27,10 +28,15 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Analyse and configure no longer replaces a knowledge box's own `topic` or `kind` label set. When the box already has one the portal did not create, analysis stops before changing anything and the Analyse panel says which set is in the way. A re-run over the sets an earlier run wrote works as before. ([#76](https://github.com/noicework/corpuskit/pull/76))
+- Answers no longer fail with "The answer service had a problem" when the model cites a document's generated summary. The citation points at the document itself, never at the summary's words, and is checked against the document's own text; a citation to a summary of a document outside the answer's scope is dropped instead. ([#76](https://github.com/noicework/corpuskit/pull/76))
 - Link previews of a portal on its own subdomain or hostname show the CorpusKit share image, which the page now names on the host that served it rather than on the platform domain. ([#74](https://github.com/noicework/corpuskit/pull/74))
 
 ### Upgrade notes
 
+- Analysis now refuses a knowledge box whose `topic` or `kind` label set holds labels this portal did not write, including labels an admin added to the portal's own `topic` set on the Taxonomy tab in Manage. Rename or remove that set in the knowledge box, or remove the added labels, before running analysis again. ([#76](https://github.com/noicework/corpuskit/pull/76))
+- The analyse stream's `error` event can carry `error: "labelset_exists"`. The `arag_footnote_validation_failed` log no longer reports `generated_context`; a citation to a generated summary now logs `arag_generated_context_citation` with `remapped` and `dropped` counts only. Update any log alert that watched for the old reason. ([#76](https://github.com/noicework/corpuskit/pull/76))
+- **Rollback is safe** after the citation and analysis changes: nothing stored changes. Rolling back brings back failed answers on generated-summary citations and lets analysis replace a curated label set again. ([#76](https://github.com/noicework/corpuskit/pull/76))
 - `wrangler.jsonc` and `wrangler.demo.jsonc` now set `PORTAL_INDEXING=deny`. A deployment built from these files keeps its portals out of search; set `allow` to index them. ([#75](https://github.com/noicework/corpuskit/pull/75))
 - **Rollback is safe** after the documentation, llms.txt and font changes: nothing stored changes. ([#75](https://github.com/noicework/corpuskit/pull/75))
 - `PORTAL_INDEXING` is new and defaults to `allow`, so portals stay as indexable as before. Set it to `deny` to keep them out of search; any value other than `allow` counts as `deny`. ([#74](https://github.com/noicework/corpuskit/pull/74))
