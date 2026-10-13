@@ -279,6 +279,7 @@ export interface BrandingPatch {
   shape?: TenantConfig['branding']['shape']
   textScale?: TenantConfig['branding']['textScale']
   density?: TenantConfig['branding']['density']
+  colourScheme?: TenantConfig['branding']['colourScheme']
   paletteId?: TenantConfig['branding']['paletteId']
   /** The portal's header links, footer and home page; null removes them. */
   layout?: PortalLayout | null
@@ -312,6 +313,7 @@ export function patchedBranding(
     ...(patch.shape ? { shape: patch.shape } : {}),
     ...(patch.textScale ? { textScale: patch.textScale } : {}),
     ...(patch.density ? { density: patch.density } : {}),
+    ...(patch.colourScheme ? { colourScheme: patch.colourScheme } : {}),
     ...(patch.paletteId ? { paletteId: patch.paletteId } : {}),
   }, patch.layout)
 }

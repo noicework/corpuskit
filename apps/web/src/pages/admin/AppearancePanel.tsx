@@ -1,6 +1,7 @@
 import { type ChangeEvent, type ComponentProps, type ReactNode, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  type ColourSchemeId,
   DEFAULT_PALETTES,
   type DensityId,
   FONT_PAIRINGS,
@@ -910,9 +911,99 @@ function DensitySection({
   )
 }
 
+const COLOUR_SCHEME_OPTIONS: { id: ColourSchemeId; label: string; description: string }[] = [
+  {
+    id: 'viewer',
+    label: 'Light and dark',
+    description: 'Follows each viewer’s system setting, with a toggle in the header.',
+  },
+  {
+    id: 'light',
+    label: 'Light only',
+    description: 'Always light, whatever the viewer’s system prefers. No toggle.',
+  },
+]
+
+function ColourSchemeSection({
+  slug,
+  branding,
+}: {
+  slug: string
+  branding: Branding
+}) {
+  const queryClient = useQueryClient()
+  const saveAppearance = useAppearanceSave(slug)
+  const authority = useAccess()
+  const context = authority.controller.context
+  const assertCurrent = () => authority.controller.assertCurrent(context)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<Message | null>(null)
+
+  const current = branding.colourScheme ?? 'viewer'
+  const [selected, setSelected] = useState<ColourSchemeId>(current)
+
+  const choose = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      if (!await saveAppearance({ colourScheme: selected }, 'Save portal dark mode')) return
+      assertCurrent()
+      await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      assertCurrent()
+      setMessage({
+        tone: 'ok',
+        text: selected === 'light'
+          ? 'Saved - the portal is now light for every viewer.'
+          : 'Saved - viewers can now read the portal in light or dark.',
+      })
+    } catch (err) {
+      if (context !== authority.controller.context) return
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that choice.') })
+    } finally {
+      if (context === authority.controller.context) setBusy(false)
+    }
+  }
+
+  return (
+    <div className='rp-card p-5'>
+      <h3 className='text-sm font-semibold text-ink'>Dark mode</h3>
+      <p className='mt-1 text-xs text-ink-3'>
+        Whether viewers may read the portal in dark. Choose an option, then save to apply it.
+      </p>
+
+      <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
+        {COLOUR_SCHEME_OPTIONS.map((option) => (
+          <ChoiceTile
+            key={option.id}
+            selected={selected === option.id}
+            disabled={busy}
+            onSelect={() => setSelected(option.id)}
+            label={option.label}
+          >
+            <span className='block text-sm font-semibold text-ink'>{option.label}</span>
+            <span className='mt-0.5 block text-xs text-ink-3'>{option.description}</span>
+          </ChoiceTile>
+        ))}
+      </div>
+
+      <button
+        type='button'
+        data-appearance-save='colour-scheme'
+        disabled={busy || current === selected}
+        onClick={() => void choose()}
+        className='rp-btn rp-btn-primary mt-4'
+      >
+        {busy ? 'Saving…' : 'Save dark mode'}
+      </button>
+
+      {message && <MessagePanel message={message} className='mt-4' />}
+    </div>
+  )
+}
+
 /**
  * Appearance: the portal's images (logo, hero), typeface pairing, shape
- * language and density. Choices stay local until saved. Each upload is a separate explicit request.
+ * language, density and dark mode. Choices stay local until saved. Each upload is a separate explicit request.
  */
 function AppearancePanelContent({
   slug,
@@ -958,6 +1049,7 @@ function AppearancePanelContent({
       <TypographySection slug={slug} branding={branding} />
       <ShapeSection slug={slug} branding={branding} />
       <DensitySection slug={slug} branding={branding} />
+      <ColourSchemeSection slug={slug} branding={branding} />
     </div>
   )
 }

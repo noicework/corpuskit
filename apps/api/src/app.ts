@@ -91,6 +91,7 @@ import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts
 import type { RbacState } from './rbac-state.ts'
 import {
   canAssignPalette,
+  ColourSchemeIdSchema,
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
   describeLayoutIssues,
@@ -833,6 +834,7 @@ const renameTenantSchema = z.object({
   shape: ShapeIdSchema.optional(),
   textScale: TextScaleIdSchema.optional(),
   density: DensityIdSchema.optional(),
+  colourScheme: ColourSchemeIdSchema.optional(),
   paletteId: PaletteChoiceSchema.optional(),
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
@@ -5213,6 +5215,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             shape: parsed.data.shape,
             textScale: parsed.data.textScale,
             density: parsed.data.density,
+            colourScheme: parsed.data.colourScheme,
             paletteId: parsed.data.paletteId,
             layout,
           }),

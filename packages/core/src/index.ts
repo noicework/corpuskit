@@ -54,6 +54,14 @@ export type TextScaleId = z.infer<typeof TextScaleIdSchema>
 export const DensityIdSchema = z.enum(['compact', 'default', 'comfortable', 'spacious'])
 export type DensityId = z.infer<typeof DensityIdSchema>
 
+/**
+ * Whether the portal may be read in dark. 'viewer' follows each viewer's system preference and
+ * offers the light/dark toggle; 'light' keeps the portal light for every viewer, whatever their
+ * system prefers, and removes the toggle. Absent means 'viewer'.
+ */
+export const ColourSchemeIdSchema = z.enum(['viewer', 'light'])
+export type ColourSchemeId = z.infer<typeof ColourSchemeIdSchema>
+
 export const BrandingSchema = z.object({
   /** Own-system product name, e.g. "GrainsIQ Research Portal" - never vendor branding. */
   productName: z.string().min(1),
@@ -76,6 +84,7 @@ export const BrandingSchema = z.object({
   shape: ShapeIdSchema.optional(),
   textScale: TextScaleIdSchema.optional(),
   density: DensityIdSchema.optional(),
+  colourScheme: ColourSchemeIdSchema.optional(),
   /** Served when an administrator uploaded a logo for this portal. */
   logoUrl: z.string().optional(),
   /** Served when an administrator uploaded a hero image for this portal. */

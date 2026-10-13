@@ -227,6 +227,7 @@ Deno.test('sealed Worker sessions integrate the real DO, durable SQLite and mand
     const metadata = await safe.json()
     expect(Object.keys(metadata).sort()).toEqual(['accessMode', 'branding', 'slug'])
     expect(Object.keys(metadata.branding).sort()).toEqual([
+      'colourScheme',
       'colours',
       'logoUrl',
       'organisation',

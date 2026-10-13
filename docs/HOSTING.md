@@ -216,9 +216,12 @@ gain access through it, and a deployment without Entra refuses such an assignmen
 `400 {"error":"invalid_input"}`.
 
 Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, `colours`,
-`typography`, `shape`, `textScale`, `density`, `paletteId` and `layout`, see
+`typography`, `shape`, `textScale`, `density`, `colourScheme`, `paletteId` and `layout`, see
 [Portal layout](#portal-layout)) and the behaviour fields `searchPlaceholder` and
-`regionalDiscovery`. The regional discovery band on Explore is off unless
+`regionalDiscovery`. A portal follows each viewer's system light or dark setting and offers a
+toggle in the header; send `{"colourScheme": "light"}` to keep it light for every viewer, sign-in
+screen included, with no toggle, and `{"colourScheme": "viewer"}` to offer both again. Manage >
+Appearance sets the same choice. The regional discovery band on Explore is off unless
 a portal opts in: send `{"regionalDiscovery": true}` to show it and `{"regionalDiscovery": false}`
 to hide it again. A palette made for one organisation (`listed: false` in
 `packages/core/src/palettes.ts`) is refused with `400 {"error":"palette_not_available"}` unless
