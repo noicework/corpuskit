@@ -356,7 +356,7 @@ async function readFixture() {
       baseUrl: 'https://example.test/kb/research',
       token: 'fixture',
     })
-    for (const kind of ['logo', 'hero', 'font-heading', 'font-body'] as const) {
+    for (const kind of ['logo', 'hero', 'font-heading', 'font-body', 'image-banner'] as const) {
       f.stores.branding.put(slug, kind, {
         bytes: new TextEncoder().encode(kind),
         contentType: 'image/png',
@@ -379,6 +379,7 @@ const reads = [
   ['branding/hero', '', 'hero', null],
   ['branding/font-heading', '', 'font-heading', null],
   ['branding/font-body', '', 'font-body', null],
+  ['branding/image/banner', '', 'image-banner', null],
   ['resources/res-1/thumbnail', '', 'thumbnail', 'thumbnail'],
   ['search', '?q=abalone', 'res-1', 'search'],
   ['docs/search', '?q=abalone', 'res-1', 'search'],
@@ -475,6 +476,7 @@ Deno.test('shared caches cannot replay bytes across revocation or mutable portal
         'branding/hero',
         'branding/font-heading',
         'branding/font-body',
+        'branding/image/banner',
         'resources/res-1/thumbnail',
         'resources/res-1/content',
         'resources/res-1/file/file',

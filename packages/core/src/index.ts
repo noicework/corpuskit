@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
 
@@ -96,6 +97,11 @@ export const BrandingSchema = z.object({
     /** Headings (.rp-display). */
     display: z.string(),
   }).optional(),
+  /**
+   * The portal's own header links, footer and home page (see `layout.ts`). Absent, the portal
+   * renders its built-in navigation, footer and Explore page.
+   */
+  layout: PortalLayoutSchema.optional(),
 })
 
 /** One face of a font pairing, with the display metrics the theme layer applies. */
@@ -1286,3 +1292,4 @@ export * from './palettes.ts'
 export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'
+export * from './layout.ts'

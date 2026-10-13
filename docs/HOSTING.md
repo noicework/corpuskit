@@ -187,7 +187,7 @@ The current allowlist is:
 | Purpose | Method and route |
 |---|---|
 | Create a portal | `POST /api/admin/tenants` |
-| Update portal appearance, search prompt and regional discovery band | `PATCH /api/admin/tenants/:slug` |
+| Update portal appearance, layout, search prompt and regional discovery band | `PATCH /api/admin/tenants/:slug` |
 | Connect or disconnect a knowledge box | `POST`, `DELETE /api/admin/t/:slug/knowledge-box` |
 | Change portal access mode | `PATCH /api/admin/t/:slug/access` |
 | List and create portal members | `GET`, `POST /api/admin/t/:slug/members` |
@@ -197,6 +197,7 @@ The current allowlist is:
 | Read corpus counters | `GET /api/admin/t/:slug/counters` |
 | List, register or remove portal host aliases | `GET /api/admin/t/:slug/aliases`, `PUT`, `DELETE /api/admin/t/:slug/aliases/:hostname` |
 | Upload branding | `POST /api/admin/t/:slug/branding/:kind` |
+| Upload, replace or delete a layout image | `POST`, `DELETE /api/admin/t/:slug/branding/image/:name` |
 | Migrate content between portals | `POST /api/admin/migrate` |
 | Delete a portal suspended for `OPERATOR_DELETE_AFTER_DAYS` | `POST /api/admin/tenants/:slug/delete-suspended` |
 | Erase a deleted portal's records | `POST /api/admin/tenants/:slug/erase` |
@@ -215,8 +216,9 @@ gain access through it, and a deployment without Entra refuses such an assignmen
 `400 {"error":"invalid_input"}`.
 
 Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, `colours`,
-`typography`, `shape`, `textScale`, `density`, `paletteId`) and the behaviour fields
-`searchPlaceholder` and `regionalDiscovery`. The regional discovery band on Explore is off unless
+`typography`, `shape`, `textScale`, `density`, `paletteId` and `layout`, see
+[Portal layout](#portal-layout)) and the behaviour fields `searchPlaceholder` and
+`regionalDiscovery`. The regional discovery band on Explore is off unless
 a portal opts in: send `{"regionalDiscovery": true}` to show it and `{"regionalDiscovery": false}`
 to hide it again. A palette made for one organisation (`listed: false` in
 `packages/core/src/palettes.ts`) is refused with `400 {"error":"palette_not_available"}` unless
@@ -277,6 +279,167 @@ the caller to use the new value. Only one key is accepted; the previous key stop
 soon as the replacement takes effect. Restart the local server after changing its environment.
 Keep `OPERATOR_ID` stable when rotating a key to retain the same audit actor, or change it to
 identify a different operator. Remove `OPERATOR_API_KEY` to disable this authentication scheme.
+
+## Portal layout
+
+A portal can have its own header links, footer and home page: a `layout` stored with the rest of
+its branding. It is optional. Without one, a portal shows the built-in navigation, the slim footer
+and Explore, exactly as before. Manage has no editor for it yet, so a layout is set through the API
+by a portal administrator or the [operator credential](#operator-credential).
+
+### Setting and clearing a layout
+
+`PATCH /api/admin/tenants/:slug` with `{"layout": {...}}` replaces the portal's whole layout, and
+`{"layout": null}` removes it. It is an appearance field: it needs `appearance.write` on the
+portal, is recorded as `tenant.appearance.update`, and the operator credential may set it. A
+layout is checked strictly, after authorisation. An unknown field, a link that is not allowed, or a
+list or a piece of text over its limit is refused with
+`400 {"error":"invalid_layout","message":"..."}`, where the message names each problem by where it
+is, for example
+`layout.nav.links[0].href: must be an https:// address or a portal path starting with "/", such as "/library".`
+
+A layout for a user group's portal might be:
+
+```json
+{
+  "layout": {
+    "nav": {
+      "links": [{ "label": "Events", "href": "https://example.org/events" }],
+      "hide": ["tools", "investigations"]
+    },
+    "footer": {
+      "columns": [
+        {
+          "heading": "Community",
+          "links": [
+            { "label": "Join the group", "href": "https://example.org/join" },
+            { "label": "Code of conduct", "href": "https://example.org/conduct" }
+          ]
+        },
+        {
+          "heading": "Explore",
+          "links": [
+            { "label": "Library", "href": "/library" },
+            { "label": "Ask a question", "href": "/ask" }
+          ]
+        }
+      ],
+      "note": "Example User Group is run by volunteers.",
+      "poweredBy": true
+    },
+    "home": {
+      "hero": {
+        "heading": "Every talk from the community",
+        "body": "Search the recordings and slides, or ask a question.",
+        "image": { "asset": "hero", "alt": "" },
+        "questions": ["Where do I start?"]
+      },
+      "sections": [
+        {
+          "kind": "cards",
+          "heading": "Browse by subject",
+          "cards": [
+            {
+              "title": "Getting started",
+              "body": "Talks for people new to the platform.",
+              "href": "/search?q=getting%20started",
+              "image": { "asset": "start", "alt": "" }
+            }
+          ]
+        },
+        { "kind": "resources", "heading": "Featured", "resourceIds": ["<resource id>"], "moreHref": "/library" },
+        { "kind": "questions", "heading": "Questions to start with", "questions": ["What changed in the last release?"] },
+        { "kind": "recent", "heading": "Recently added", "limit": 6 },
+        {
+          "kind": "about",
+          "heading": "About the group",
+          "body": "We meet every month.\n\nAnyone can join.",
+          "image": { "asset": "about", "alt": "Members at a meetup" },
+          "links": [{ "label": "Join the group", "href": "https://example.org/join" }]
+        },
+        { "kind": "topics" }
+      ]
+    }
+  }
+}
+```
+
+### Fields
+
+| Field | What it does | Limit |
+|---|---|---|
+| `nav.links` | Links after the built-in navigation items | 6 |
+| `nav.hide` | Built-in items left out of the navigation: `graph`, `tools`, `investigations`, `generate`, `assessment`. Their pages still open from a link. Library and Ask always stay | 5 |
+| `footer.columns` | Link columns, each with a `heading` and its `links` | 4 columns of 1 to 8 links |
+| `footer.note` | One line of plain text under the columns, such as a trademark line | 240 characters |
+| `footer.poweredBy` | `true` adds "Powered by CorpusKit", linking to corpuskit.org | |
+| `home.hero` | Optional `heading` (120 characters), `body` (400), `image` and `questions` shown as chips under the ask box (6, of 200 characters each). Without `questions`, the chips are the portal's suggested questions | |
+| `home.sections` | The sections under the hero, in order | 10 |
+
+A footer, when set, keeps the organisation, product name and tagline beside its columns. The home
+page keeps the ask box in its hero, and a question asked there, or picked from a chip or a question
+card, opens Ask with the question already sent. Each section is one of these kinds:
+
+| `kind` | Fields |
+|---|---|
+| `cards` | `heading`, an optional `intro` and 1 to 12 `cards`, each with a `title` (100 characters), an optional `body` (300), an `href` and an optional `image` |
+| `resources` | `heading`, an optional `intro`, 1 to 12 `resourceIds` from the knowledge box and an optional `moreHref`. An id that no longer resolves, or that the reader may not see, is left out, and so is the section when none is left |
+| `recent` | `heading` and an optional `limit` from 1 to 12 (6 when absent): the most recently added items |
+| `questions` | `heading`, an optional `intro` and 1 to 8 `questions` (200 characters each) |
+| `about` | `heading`, a `body` (2,000 characters, where a blank line starts a new paragraph), an optional `image` and up to 4 `links` |
+| `topics` | The topic rows from Explore. With no topics to show, it shows nothing |
+
+A heading is at most 120 characters and an `intro` at most 400. Every piece of text renders as
+plain text, never as HTML or Markdown. Headings, labels and notes are one line; an `intro` and
+each `body` may hold line breaks.
+
+A link is `{"label": "...", "href": "..."}`, with a label of at most 48 characters. Its `href` is
+one of:
+
+- an absolute `https://` address without a user name or password. It opens in the same tab and is
+  marked for sighted readers and screen readers as leaving the portal;
+- a portal path starting with `/`, such as `/library`, `/search?q=soil`, `/entity/Example` or
+  `/ask`, which opens under the portal (`/t/:slug/library`).
+
+Anything else is refused, including `javascript:`, `data:` and `http:` addresses, a
+protocol-relative `//host` and a path that climbs out of the portal.
+
+### Layout images
+
+An `image` is `{"asset": "<name>", "alt": "<text>"}`. `asset` names an image uploaded to the
+portal, and `alt` describes it for people who cannot see it; an empty `alt` marks it as decorative.
+Images have their own routes, with the same permission as the other branding uploads, and the
+operator credential may use them:
+
+| Purpose | Method and route |
+|---|---|
+| Upload or replace an image | `POST /api/admin/t/:slug/branding/image/:name` |
+| Delete an image | `DELETE /api/admin/t/:slug/branding/image/:name` |
+| Read an image | `GET /api/t/:slug/branding/image/:name` |
+
+- The upload's body is the image itself, sent with `Content-Type: image/png`, `image/jpeg` or
+  `image/webp`, up to 5 MB. SVG is refused. A name is 1 to 40 lower-case letters, digits and
+  hyphens, starting with a letter or a digit.
+- A portal holds at most 24 images. Uploading a 25th answers `409 too_many_images`; replacing an
+  image under a name it already has does not count as another.
+- Refusals: `400 invalid_name`, `415 unsupported_type`, `400 empty_file` and
+  `413 file_too_large`. Deleting a name with no image answers `404 not_found`.
+- Images are served like the other branding files: to whoever may read the portal, with
+  `cache-control: private, no-store`, under the sandboxing content security policy and as an
+  attachment.
+- In the configuration the portal's pages read (`GET /api/t/:slug/config`), each image reference
+  carries `url`, the image's address with a version (`/api/t/:slug/branding/image/hero?v=...`),
+  so a replaced image is fetched afresh. A reference to an image that was never uploaded, or has
+  been deleted, is left out of that configuration rather than drawn broken. A `url` sent in a
+  `PATCH` is discarded.
+
+### Where a layout is stored
+
+The layout is part of the portal's branding, in the portal registry: `TENANTS_PATH` on the local
+server and the Durable Object's `tenants` record on Cloudflare. Layout images are kept with the
+other branding files: in the Durable Object's `branding_assets` table under
+`branding:<slug>:image-<name>`, and on the local server under `BRANDING_PATH/images/<slug>/`.
+Erasing a deleted portal removes them with its other branding.
 
 ## Portal lifecycle, limits and usage
 

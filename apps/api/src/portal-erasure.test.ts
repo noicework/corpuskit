@@ -215,10 +215,10 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
   },
   kgProposals: (f, slug) => f.stores.kgProposals.set(slug, proposal),
   branding: (f, slug) => {
-    for (const kind of ['logo', 'font-body'] as const) {
+    for (const kind of ['logo', 'font-body', 'image-banner'] as const) {
       f.stores.branding.put(slug, kind, {
         bytes: new TextEncoder().encode(`${kind} bytes`),
-        contentType: kind === 'logo' ? 'image/png' : 'font/woff2',
+        contentType: kind === 'font-body' ? 'font/woff2' : 'image/png',
         version: 'v1',
       })
     }
@@ -664,6 +664,7 @@ Deno.test('the operator delete does what an owner delete does and can erase in t
     expect(f.stores.mcpKeys.list(SLUG)).toEqual([])
     expect(f.stores.sessions.list(SLUG, researcher)).toEqual([])
     expect(f.stores.branding.get(SLUG, 'logo')).toBeNull()
+    expect(f.stores.branding.images(SLUG)).toEqual([])
     // Only this request's own records about the portal remain.
     const requestId = response.headers.get('x-request-id')!
     const keyed = f.database.all<AuditEvent>(

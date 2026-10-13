@@ -93,6 +93,7 @@ import {
   canAssignPalette,
   DEFAULT_RESEARCH_ENRICHMENT,
   DensityIdSchema,
+  describeLayoutIssues,
   type Enrichment,
   ENRICHMENT_AGENTS,
   type EnrichmentAgentStatus,
@@ -100,7 +101,14 @@ import {
   EnrichmentSchema,
   ExtractionRulesSchema,
   GenerateKindSchema,
+  LAYOUT_IMAGE_NAME,
+  type LayoutImage,
+  layoutImageNames,
+  mapLayoutImages,
+  MAX_LAYOUT_IMAGES,
   PaletteChoiceSchema,
+  type PortalLayout,
+  PortalLayoutSchema,
   ShapeIdSchema,
   studyDesignLabel,
   TextScaleIdSchema,
@@ -134,6 +142,7 @@ import {
   TenantStore,
   type TenantStoreApi,
   tenantSummary,
+  withLayout,
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
@@ -828,6 +837,12 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  /**
+   * The portal's header links, footer and home page, or null to clear them. Checked against
+   * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
+   * appearance learns nothing from the answer.
+   */
+  layout: z.unknown().optional(),
 }).strict()
 /** Portal settings this route writes as behaviour; every other field is appearance. */
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
@@ -931,7 +946,10 @@ const sourceIsKnown = (source: string, knownTitles: string[]): boolean => {
   )
 }
 
-export type BrandingKind = 'logo' | 'hero' | 'font-heading' | 'font-body'
+/** A layout image's slot in the branding store: `image-<name>`, the name an admin uploaded it as. */
+export type LayoutImageKind = `image-${string}`
+
+export type BrandingKind = 'logo' | 'hero' | 'font-heading' | 'font-body' | LayoutImageKind
 
 export interface BrandingAsset {
   bytes: Uint8Array<ArrayBuffer>
@@ -942,6 +960,10 @@ export interface BrandingAsset {
 export interface BrandingAssetStore {
   get(slug: string, kind: BrandingKind): BrandingAsset | null
   put(slug: string, kind: BrandingKind, asset: BrandingAsset): void
+  /** Remove one uploaded layout image; whether there was one. */
+  remove(slug: string, kind: LayoutImageKind): boolean
+  /** The portal's uploaded layout images, by name, with each one's version and no bytes. */
+  images(slug: string): { name: string; version: string }[]
   /** Remove every asset of a deleted portal; returns how many there were. */
   erase(slug: string): number
 }
@@ -2336,16 +2358,60 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const brandingDir = opts.brandingPath ?? process.env.BRANDING_PATH ?? './data/branding'
   const BRANDING_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg'] as const
   const BRANDING_FONT_EXTS = ['woff2', 'woff', 'ttf', 'otf'] as const
-  const isBrandingKind = (kind: string): kind is BrandingKind =>
+  type FixedBrandingKind = Exclude<BrandingKind, LayoutImageKind>
+  const isBrandingKind = (kind: string): kind is FixedBrandingKind =>
     kind === 'logo' || kind === 'hero' || kind === 'font-heading' || kind === 'font-body'
-  const brandingExts = (kind: BrandingKind): readonly string[] =>
+  const brandingExts = (kind: FixedBrandingKind): readonly string[] =>
     kind === 'logo' || kind === 'hero' ? BRANDING_IMAGE_EXTS : BRANDING_FONT_EXTS
-  const brandingFile = (slug: string, kind: BrandingKind): string | null => {
+  const brandingFile = (slug: string, kind: FixedBrandingKind): string | null => {
     for (const ext of brandingExts(kind)) {
       const path = `${brandingDir}/${slug}-${kind}.${ext}`
       if (existsSync(path)) return path
     }
     return null
+  }
+  // Layout images on disk live in a directory per portal rather than beside the fixed kinds,
+  // where a hyphenated slug could share a file name with another portal's image.
+  const LAYOUT_IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' } as const
+  type LayoutImageExt = keyof typeof LAYOUT_IMAGE_TYPES
+  const LAYOUT_IMAGE_EXTS = Object.keys(LAYOUT_IMAGE_TYPES) as LayoutImageExt[]
+  const layoutImageDir = (slug: string) => `${brandingDir}/images/${slug}`
+  const layoutImageFile = (slug: string, name: string): string | null => {
+    for (const ext of LAYOUT_IMAGE_EXTS) {
+      const path = `${layoutImageDir(slug)}/${name}.${ext}`
+      if (existsSync(path)) return path
+    }
+    return null
+  }
+  /** The portal's uploaded layout images and their versions (on disk, each file's mtime). */
+  const layoutImages = (slug: string): { name: string; version: string }[] => {
+    if (opts.branding) return opts.branding.images(slug)
+    let entries: Deno.DirEntry[]
+    try {
+      entries = [...Deno.readDirSync(layoutImageDir(slug))]
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return []
+      throw error
+    }
+    return entries.flatMap((entry) => {
+      const match = /^([a-z0-9][a-z0-9-]{0,39})\.(?:png|jpg|webp)$/.exec(entry.name)
+      if (!entry.isFile || !match) return []
+      const { mtimeMs } = statSync(`${layoutImageDir(slug)}/${entry.name}`)
+      return [{ name: match[1]!, version: String(Math.round(mtimeMs)) }]
+    })
+  }
+  /** Remove one layout image's file, whatever its type; whether there was one. */
+  const removeLayoutImageFile = (slug: string, name: string): boolean => {
+    let removed = false
+    for (const ext of LAYOUT_IMAGE_EXTS) {
+      try {
+        Deno.removeSync(`${layoutImageDir(slug)}/${name}.${ext}`)
+        removed = true
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error
+      }
+    }
+    return removed
   }
   /** Remove every uploaded branding file of a deleted portal, returning how many there were. */
   const eraseBrandingFiles = (slug: string): number => {
@@ -2361,10 +2427,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }
       }
     }
+    try {
+      erased += [...Deno.readDirSync(layoutImageDir(slug))].filter((entry) => entry.isFile).length
+      Deno.removeSync(layoutImageDir(slug), { recursive: true })
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error
+    }
     return erased
   }
   // mtime-versioned so replacing a file behind the stable path busts caches.
-  const brandingUrl = (slug: string, kind: BrandingKind): string | null => {
+  const brandingUrl = (slug: string, kind: FixedBrandingKind): string | null => {
     if (opts.branding) {
       const asset = opts.branding.get(slug, kind)
       return asset ? `/api/t/${slug}/branding/${kind}?v=${asset.version}` : null
@@ -2379,11 +2451,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
       config,
       brandingUrl(config.slug, 'logo') ?? config.branding.logoUrl ?? null,
     )
+  /**
+   * The layout as the web app receives it: each image reference carries its uploaded image's
+   * versioned address, and a reference to an image that is not there is left out.
+   */
+  const servedLayout = (slug: string, layout: PortalLayout): PortalLayout => {
+    if (layoutImageNames(layout).length === 0) return layout
+    const versions = new Map(layoutImages(slug).map((image) => [image.name, image.version]))
+    return mapLayoutImages(layout, (image): LayoutImage | undefined => {
+      const version = versions.get(image.asset)
+      return version === undefined ? undefined : {
+        ...image,
+        url: `/api/t/${slug}/branding/image/${image.asset}?v=${encodeURIComponent(version)}`,
+      }
+    })
+  }
   const withBrandingUrls = (config: TenantConfig): TenantConfig => {
     const logo = brandingUrl(config.slug, 'logo')
     const hero = brandingUrl(config.slug, 'hero')
     const headingFont = brandingUrl(config.slug, 'font-heading')
     const bodyFont = brandingUrl(config.slug, 'font-body')
+    const layout = config.branding.layout
     return {
       ...config,
       branding: {
@@ -2392,6 +2480,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ...(hero ? { heroImageUrl: hero } : {}),
         ...(headingFont ? { headingFontUrl: headingFont } : {}),
         ...(bodyFont ? { bodyFontUrl: bodyFont } : {}),
+        ...(layout ? { layout: servedLayout(config.slug, layout) } : {}),
       },
     }
   }
@@ -2426,6 +2515,23 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? `font/${ext}`
       : `image/${ext === 'jpg' ? 'jpeg' : ext}`
     return new Response(readFileSync(path), { headers: storedFileHeaders(type) })
+  })
+
+  app.get(declaredRoute('GET', '/api/t/:slug/branding/image/:name'), (c) => {
+    const config = tenant(c.req.param('slug'))
+    const name = c.req.param('name')
+    if (!config || !LAYOUT_IMAGE_NAME.test(name)) return c.json({ error: 'not_found' }, 404)
+    if (opts.branding) {
+      const stored = opts.branding.get(config.slug, `image-${name}`)
+      if (!stored) return c.json({ error: 'not_found' }, 404)
+      return new Response(stored.bytes, { headers: storedFileHeaders(stored.contentType) })
+    }
+    const path = layoutImageFile(config.slug, name)
+    if (!path) return c.json({ error: 'not_found' }, 404)
+    const ext = path.slice(path.lastIndexOf('.') + 1) as LayoutImageExt
+    return new Response(readFileSync(path), {
+      headers: storedFileHeaders(LAYOUT_IMAGE_TYPES[ext]),
+    })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id/thumbnail'), async (c) => {
@@ -5041,7 +5147,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
         message: 'That palette was made for another organisation and is not available here.',
       }, 400)
     }
-    const { name, searchPlaceholder, regionalDiscovery, ...branding } = parsed.data
+    // Like the palette, checked only after authorisation.
+    let layout: PortalLayout | null | undefined
+    if (parsed.data.layout !== undefined) {
+      const checked = PortalLayoutSchema.nullable().safeParse(parsed.data.layout)
+      if (!checked.success) {
+        return c.json(
+          { error: 'invalid_layout', message: describeLayoutIssues(checked.error) },
+          400,
+        )
+      }
+      // Image addresses are the server's to write when it serves the layout.
+      layout = checked.data &&
+        mapLayoutImages(checked.data, ({ asset, alt }) => ({ asset, alt }))
+    }
+    const {
+      name,
+      searchPlaceholder,
+      regionalDiscovery,
+      layout: _layout,
+      ...branding
+    } = parsed.data
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
@@ -5053,7 +5179,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
         subAction(c, '/api/admin/tenants/:slug', 'tenant.behaviour.update', () =>
           tenants.patch(config.slug, {
             ...behaviour,
-            branding: { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
+            branding: withLayout(
+              { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
+              layout,
+            ),
           }), { changedFields: behaviourFields.join(',') }), {
         changedFields: appearanceFields.join(','),
       })
@@ -5085,6 +5214,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
             textScale: parsed.data.textScale,
             density: parsed.data.density,
             paletteId: parsed.data.paletteId,
+            layout,
           }),
         { changedFields: appearanceFields.join(',') },
       )
@@ -5511,6 +5641,62 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     writeFileSync(`${brandingDir}/${config.slug}-${kind}.${ext}`, bytes)
     return c.json({ ok: true, url: `/api/t/${config.slug}/branding/${kind}` })
+  })
+
+  app.post(declaredRoute('POST', '/api/admin/t/:slug/branding/image/:name'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const name = c.req.param('name')
+    if (!LAYOUT_IMAGE_NAME.test(name)) {
+      return c.json({
+        error: 'invalid_name',
+        message: 'Name the image with up to 40 lower-case letters, digits and hyphens, ' +
+          'starting with a letter or digit.',
+      }, 400)
+    }
+    // SVG is refused, as for the logo: it is a document that can carry script.
+    const contentType = c.req.header('content-type') ?? ''
+    const ext = LAYOUT_IMAGE_EXTS.find((candidate) => LAYOUT_IMAGE_TYPES[candidate] === contentType)
+    if (!ext) return c.json({ error: 'unsupported_type', message: 'Use PNG, JPEG or WebP.' }, 415)
+    const bytes = new Uint8Array(await c.req.arrayBuffer())
+    if (bytes.length === 0) return c.json({ error: 'empty_file' }, 400)
+    if (bytes.length > 5 * 1024 * 1024) return c.json({ error: 'file_too_large' }, 413)
+    // Counted after the body is read, with no wait before the write below, so two uploads at
+    // once cannot both take the last place.
+    const existing = layoutImages(config.slug)
+    if (existing.length >= MAX_LAYOUT_IMAGES && !existing.some((image) => image.name === name)) {
+      return c.json({
+        error: 'too_many_images',
+        message: `A portal holds at most ${MAX_LAYOUT_IMAGES} layout images. ` +
+          'Delete one before uploading another.',
+      }, 409)
+    }
+    const url = `/api/t/${config.slug}/branding/image/${name}`
+    if (opts.branding) {
+      opts.branding.put(config.slug, `image-${name}`, {
+        bytes,
+        contentType,
+        version: String(Date.now()),
+      })
+      return c.json({ ok: true, url })
+    }
+    mkdirSync(layoutImageDir(config.slug), { recursive: true })
+    // Replacing an image under another type leaves only the new file.
+    removeLayoutImageFile(config.slug, name)
+    writeFileSync(`${layoutImageDir(config.slug)}/${name}.${ext}`, bytes)
+    return c.json({ ok: true, url })
+  })
+
+  app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/branding/image/:name'), (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const name = c.req.param('name')
+    if (!LAYOUT_IMAGE_NAME.test(name)) return c.json({ error: 'not_found' }, 404)
+    const removed = opts.branding
+      ? opts.branding.remove(config.slug, `image-${name}`)
+      : removeLayoutImageFile(config.slug, name)
+    // A layout still naming the image leaves it out from now on.
+    return removed ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/prompts'), (c) => {

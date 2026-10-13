@@ -60,6 +60,8 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
     audit: rbac.audit,
     breakGlass: ingress.breakGlass,
     requestContext: ingress.requestContext,
+    // Uploaded branding stays in the fixture's own directory.
+    brandingPath: `${directory}/branding`,
   })
   const invoke = (
     path: string,
@@ -255,6 +257,47 @@ Deno.test('local operator reads and sets portal lifecycle and reads usage with i
     })
     expect(events.every((event) => event.actor_id === 'operator:hosting-test')).toBe(true)
     expect(JSON.stringify(events)).not.toContain(operatorKey)
+  } finally {
+    f.dispose()
+  }
+})
+
+Deno.test('local operator sets a portal layout and uploads and deletes its images', async () => {
+  const f = fixture()
+  try {
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    const uploaded = await f.invoke('/api/admin/t/marine/branding/image/banner', {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: png,
+    })
+    expect(uploaded.status).toBe(200)
+    const layout = {
+      nav: { hide: ['tools'] },
+      footer: { poweredBy: true },
+      home: { hero: { image: { asset: 'banner', alt: '' } }, sections: [{ kind: 'topics' }] },
+    }
+    const saved = await f.invoke('/api/admin/tenants/marine', json('PATCH', { layout }))
+    expect(saved.status).toBe(200)
+    expect(f.tenants.get('marine')?.branding.layout).toEqual(layout)
+    const invalid = await f.invoke(
+      '/api/admin/tenants/marine',
+      json('PATCH', { layout: { nav: { links: [{ label: 'x', href: 'javascript:x' }] } } }),
+    )
+    expect(invalid.status).toBe(400)
+    expect((await invalid.json()).error).toBe('invalid_layout')
+    const removed = await f.invoke('/api/admin/t/marine/branding/image/banner', {
+      method: 'DELETE',
+    })
+    expect(removed.status).toBe(200)
+    const cleared = await f.invoke('/api/admin/tenants/marine', json('PATCH', { layout: null }))
+    expect(cleared.status).toBe(200)
+    expect(f.tenants.get('marine')?.branding.layout).toBeUndefined()
+    const events = f.events()
+    expect(
+      events.filter((event) => event.action === 'tenant.appearance.update').length,
+    ).toBeGreaterThan(0)
+    expect(events.every((event) => event.actor_id === 'operator:hosting-test')).toBe(true)
   } finally {
     f.dispose()
   }

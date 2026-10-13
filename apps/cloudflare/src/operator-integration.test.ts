@@ -558,6 +558,80 @@ Deno.test('Worker refuses SVG branding and serves stored branding sandboxed as a
   }
 })
 
+Deno.test('Worker operator sets a portal layout and its images, and appearance shows after a mixed PATCH', async () => {
+  const f = await fixture()
+  const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  try {
+    const created = await f.invoke(
+      '/api/admin/tenants',
+      jsonRequest('POST', { name: 'Example Group' }),
+    )
+    expect(created.status).toBe(200)
+    const { slug } = await created.json()
+    // Behaviour and appearance together store the whole branding in the portal's override.
+    const mixed = await f.invoke(
+      `/api/admin/tenants/${slug}`,
+      jsonRequest('PATCH', { name: 'Example Portal', searchPlaceholder: 'Search talks' }),
+    )
+    expect(mixed.status).toBe(200)
+    const uploaded = await f.invoke(`/api/admin/t/${slug}/branding/image/banner`, {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: png,
+    })
+    expect(uploaded.status).toBe(200)
+    expect(f.stores.branding.images(slug).map((image) => image.name)).toEqual(['banner'])
+    const layout = {
+      nav: { links: [{ label: 'Events', href: 'https://example.org/events' }] },
+      home: {
+        hero: { heading: 'Talks from the community', image: { asset: 'banner', alt: '' } },
+        sections: [{ kind: 'topics' }],
+      },
+    }
+    // Appearance alone, after that: it must show rather than be shadowed by the override.
+    const appearance = await f.invoke(
+      `/api/admin/tenants/${slug}`,
+      jsonRequest('PATCH', { tagline: 'Talks and slides', layout }),
+    )
+    expect(appearance.status).toBe(200)
+    const stored = f.stores.tenants.get(slug)!
+    expect(stored.branding.tagline).toBe('Talks and slides')
+    expect(stored.branding.productName).toBe('Example Portal')
+    expect(stored.branding.layout).toEqual(layout)
+    expect(stored.searchPlaceholder).toBe('Search talks')
+    const config = await f.invoke(`/api/t/${slug}/config`, {}, '')
+    expect(config.status).toBe(200)
+    const served = await config.json()
+    expect(served.branding.layout.home.hero.image.url).toMatch(
+      new RegExp(`^/api/t/${slug}/branding/image/banner\\?v=\\d+$`),
+    )
+    const image = await f.invoke(`/api/t/${slug}/branding/image/banner`, {}, '')
+    expect(image.status).toBe(200)
+    expect(image.headers.get('content-type')).toBe('image/png')
+    expect(image.headers.get('content-disposition')).toBe('attachment')
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(png)
+    const removed = await f.invoke(`/api/admin/t/${slug}/branding/image/banner`, {
+      method: 'DELETE',
+    })
+    expect(removed.status).toBe(200)
+    expect(f.stores.branding.images(slug)).toEqual([])
+    const after = await (await f.invoke(`/api/t/${slug}/config`, {}, '')).json()
+    expect(after.branding.layout.home.hero).toEqual({ heading: 'Talks from the community' })
+    const cleared = await f.invoke(
+      `/api/admin/tenants/${slug}`,
+      jsonRequest('PATCH', { layout: null }),
+    )
+    expect(cleared.status).toBe(200)
+    expect(f.stores.tenants.get(slug)?.branding.layout).toBeUndefined()
+    expect(f.stores.tenants.get(slug)?.branding.tagline).toBe('Talks and slides')
+    const events = f.events()
+    expect(events.some((event) => event.action === 'tenant.appearance.update')).toBe(true)
+    expect(events.every((event) => event.actor_id === 'operator:hosting-automation')).toBe(true)
+  } finally {
+    f.close()
+  }
+})
+
 Deno.test('Operator KB binding accepts endpoint or legacy url and rejects ambiguous or missing endpoints', async () => {
   const f = await fixture()
   const originalGetJson = KbClient.prototype.getJson

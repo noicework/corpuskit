@@ -10,7 +10,9 @@ import {
   type FacetCounts,
   FacetCountsSchema,
   type Labelset,
+  MAX_LAYOUT_IMAGES,
   type Permission,
+  type PortalLayout,
   type Question,
   type ResourceSummary,
   type Role,
@@ -407,6 +409,8 @@ describe('independent admin route permission matrix', () => {
     ['POST', 'questions/run', 'enrichments.write', { limit: 1 }],
     ['POST', 'resources/:id/enrich', 'enrichments.write', {}],
     ['POST', 'branding/:kind', 'appearance.write', 'image bytes'],
+    ['POST', 'branding/image/:name', 'appearance.write', 'image bytes'],
+    ['DELETE', 'branding/image/:name', 'appearance.write'],
     ['GET', 'prompts', 'behaviour.write'],
     ['PUT', 'prompts', 'behaviour.write', { ask: 'Research evidence only.' }],
     ['GET', 'search-configs', 'behaviour.write'],
@@ -690,6 +694,13 @@ describe('independent admin route permission matrix', () => {
           }])
           fixture.stores.kgProposals.set('a', proposal)
           if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
+          if (method === 'DELETE' && suffix === 'branding/image/:name') {
+            fixture.stores.branding.put('a', 'image-banner', {
+              bytes: new TextEncoder().encode('layout image bytes'),
+              contentType: 'image/png',
+              version: 'fixture',
+            })
+          }
           if (method === 'DELETE' && suffix === 'aliases/:hostname') {
             fixture.stores.tenants.setAlias('a', 'research.example.org', undefined, 5)
           }
@@ -727,6 +738,7 @@ describe('independent admin route permission matrix', () => {
           Deno.env.set('ARAG_ACCOUNT', 'fixture-account')
           const path =
             template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
+              .replace(':name', 'banner')
               .replace(':hostname', 'research.example.org')
               .replace(
                 ':id',
@@ -2331,6 +2343,238 @@ describe('appearance (typography, shape, branding fonts)', () => {
       body: new Uint8Array([1, 2, 3]),
     })
     expect(response.status).toBe(400)
+  })
+})
+
+describe('portal layout (header links, footer, home page and images)', () => {
+  const passcode = 'test-passcode'
+  const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
+  const layoutApp = (brandingPath = `${Deno.makeTempDirSync()}/branding`) => {
+    const tenants = freshTenants()
+    return {
+      tenants,
+      brandingPath,
+      app: buildApp({
+        provider: new StubProvider(),
+        tenants,
+        adminPasscode: passcode,
+        brandingPath,
+      }),
+    }
+  }
+  const admin = (app: ReturnType<typeof buildApp>, path: string, init: RequestInit = {}) =>
+    app.request(path, {
+      ...init,
+      headers: { 'x-admin-passcode': passcode, ...init.headers as Record<string, string> },
+    })
+  const patch = (app: ReturnType<typeof buildApp>, body: unknown, slug = 'marine') =>
+    admin(app, `/api/admin/tenants/${slug}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const upload = (app: ReturnType<typeof buildApp>, name: string, type = 'image/png') =>
+    admin(app, `/api/admin/t/marine/branding/image/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': type },
+      body: PNG,
+    })
+  // The served config is read as JSON: the strict schema would refuse the served image `url`.
+  const served = async (app: ReturnType<typeof buildApp>, slug = 'marine') =>
+    (await (await app.request(`/api/t/${slug}/config`)).json()) as TenantConfig
+  const layout: PortalLayout = {
+    nav: { links: [{ label: 'Events', href: 'https://example.org/events' }], hide: ['tools'] },
+    footer: { note: 'Example User Group is run by volunteers.', poweredBy: true },
+    home: {
+      hero: { heading: 'Talks from the community', image: { asset: 'banner', alt: '' } },
+      sections: [
+        { kind: 'questions', heading: 'Ask about', questions: ['Where do I start?'] },
+        { kind: 'topics' },
+      ],
+    },
+  }
+
+  it('saves a layout through PATCH, serves it with the config and clears it with null', async () => {
+    const { app } = layoutApp()
+    expect((await served(app)).branding.layout).toBeUndefined()
+    expect((await patch(app, { layout })).status).toBe(200)
+    const config = await served(app)
+    // The hero image was never uploaded, so it is left out rather than drawn broken.
+    expect(config.branding.layout).toEqual({
+      ...layout,
+      home: { ...layout.home!, hero: { heading: 'Talks from the community' } },
+    })
+    // The rest of the appearance is untouched.
+    expect(config.branding.productName).toBe(tenantConfig('marine')!.branding.productName)
+    expect((await patch(app, { tagline: 'A new tagline' })).status).toBe(200)
+    expect((await served(app)).branding.layout?.nav).toEqual(layout.nav)
+    expect((await patch(app, { layout: null })).status).toBe(200)
+    const cleared = await served(app)
+    expect(cleared.branding.layout).toBeUndefined()
+    expect(cleared.branding.tagline).toBe('A new tagline')
+  })
+
+  it('refuses an invalid layout with a 400 that says where the problem is', async () => {
+    const { app } = layoutApp()
+    for (
+      const [body, says] of [
+        [
+          { nav: { links: [{ label: 'Bad', href: 'javascript:alert(1)' }] } },
+          'layout.nav.links[0].href',
+        ],
+        [
+          { nav: { links: [{ label: 'Plain', href: 'http://example.org' }] } },
+          'layout.nav.links[0].href',
+        ],
+        [{ nav: { hide: ['library'] } }, 'layout.nav.hide[0]'],
+        [{ footer: { colums: [] } }, 'unknown field "colums"'],
+        [{ home: { sections: [{ kind: 'video' }] } }, 'layout.home.sections[0].kind'],
+        [
+          { home: { sections: Array.from({ length: 11 }, () => ({ kind: 'topics' })) } },
+          'layout.home.sections: must hold at most 10 sections',
+        ],
+        ['a string', 'layout:'],
+      ] as const
+    ) {
+      const response = await patch(app, { layout: body })
+      expect(response.status).toBe(400)
+      const answer = await response.json()
+      expect(answer.error).toBe('invalid_layout')
+      expect([body, answer.message]).toEqual([body, expect.stringContaining(says)])
+    }
+    expect((await served(app)).branding.layout).toBeUndefined()
+  })
+
+  it('keeps image addresses the server writes, never ones sent in', async () => {
+    const { app } = layoutApp()
+    expect((await upload(app, 'banner')).status).toBe(200)
+    const forged = {
+      home: {
+        hero: { image: { asset: 'banner', alt: '', url: 'https://example.org/forged.png' } },
+        sections: [],
+      },
+    }
+    expect((await patch(app, { layout: forged })).status).toBe(200)
+    const url = (await served(app)).branding.layout?.home?.hero?.image?.url
+    expect(url).toMatch(/^\/api\/t\/marine\/branding\/image\/banner\?v=\d+$/)
+  })
+
+  it('uploads, serves, versions and deletes a layout image', async () => {
+    const { app } = layoutApp()
+    const uploaded = await upload(app, 'banner', 'image/webp')
+    expect(uploaded.status).toBe(200)
+    expect(await uploaded.json()).toEqual({
+      ok: true,
+      url: '/api/t/marine/branding/image/banner',
+    })
+    const image = await app.request('/api/t/marine/branding/image/banner')
+    expect(image.status).toBe(200)
+    expect(image.headers.get('content-type')).toBe('image/webp')
+    expect(image.headers.get('cache-control')).toBe('private, no-store')
+    expect(image.headers.get('content-security-policy')).toBe(STORED_FILE_POLICY)
+    expect(image.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(PNG)
+    // Replacing it under another type leaves one file, served with the new type.
+    expect((await upload(app, 'banner', 'image/png')).status).toBe(200)
+    const replaced = await app.request('/api/t/marine/branding/image/banner')
+    expect(replaced.headers.get('content-type')).toBe('image/png')
+    await replaced.body?.cancel()
+    expect((await patch(app, { layout })).status).toBe(200)
+    expect((await served(app)).branding.layout?.home?.hero?.image).toEqual({
+      asset: 'banner',
+      alt: '',
+      url: expect.stringMatching(/^\/api\/t\/marine\/branding\/image\/banner\?v=\d+$/),
+    })
+    const removed = await admin(app, '/api/admin/t/marine/branding/image/banner', {
+      method: 'DELETE',
+    })
+    expect(removed.status).toBe(200)
+    expect((await app.request('/api/t/marine/branding/image/banner')).status).toBe(404)
+    // The layout still names it, and the served config leaves the reference out.
+    expect((await served(app)).branding.layout?.home?.hero).toEqual({
+      heading: 'Talks from the community',
+    })
+    const again = await admin(app, '/api/admin/t/marine/branding/image/banner', {
+      method: 'DELETE',
+    })
+    expect(again.status).toBe(404)
+  })
+
+  it('refuses bad names, types, sizes and a portal already holding its limit of images', async () => {
+    const { app, brandingPath } = layoutApp()
+    for (const name of ['Banner', '-banner', 'a'.repeat(41), 'ban_ner', 'banner.png']) {
+      const response = await upload(app, name)
+      expect([name, response.status]).toEqual([name, 400])
+      expect((await response.json()).error).toBe('invalid_name')
+    }
+    const svg = await upload(app, 'banner', 'image/svg+xml')
+    expect(svg.status).toBe(415)
+    expect(await svg.json()).toEqual({
+      error: 'unsupported_type',
+      message: 'Use PNG, JPEG or WebP.',
+    })
+    const empty = await admin(app, '/api/admin/t/marine/branding/image/banner', {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array(),
+    })
+    expect(empty.status).toBe(400)
+    const large = await admin(app, '/api/admin/t/marine/branding/image/banner', {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array(5 * 1024 * 1024 + 1),
+    })
+    expect(large.status).toBe(413)
+    for (let index = 0; index < MAX_LAYOUT_IMAGES; index++) {
+      expect((await upload(app, `image-${index}`)).status).toBe(200)
+    }
+    const over = await upload(app, 'one-more')
+    expect(over.status).toBe(409)
+    expect((await over.json()).error).toBe('too_many_images')
+    // Replacing one the portal already has is not another image.
+    expect((await upload(app, 'image-0', 'image/jpeg')).status).toBe(200)
+    expect([...Deno.readDirSync(`${brandingPath}/images/marine`)].length).toBe(MAX_LAYOUT_IMAGES)
+    expect((await app.request('/api/t/marine/branding/image/NOPE')).status).toBe(404)
+  })
+
+  it('needs the appearance permission for the layout and its images', async () => {
+    const { app } = layoutApp()
+    expect(
+      (await app.request('/api/admin/tenants/marine', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layout }),
+      })).status,
+    ).toBe(401)
+    for (const method of ['POST', 'DELETE']) {
+      expect(
+        (await app.request('/api/admin/t/marine/branding/image/banner', {
+          method,
+          headers: { 'content-type': 'image/png' },
+          ...(method === 'POST' ? { body: PNG } : {}),
+        })).status,
+      ).toBe(401)
+    }
+    expect((await served(app)).branding.layout).toBeUndefined()
+  })
+
+  it('shows appearance changes on a created portal after a PATCH that also changed behaviour', async () => {
+    const { app, tenants } = layoutApp()
+    const created = tenants.add({ name: 'Example User Group' })
+    // A PATCH that mixes behaviour and appearance stores a whole branding in the override.
+    expect(
+      (await patch(app, { searchPlaceholder: 'Search talks', tagline: 'First' }, created.slug))
+        .status,
+    ).toBe(200)
+    expect((await served(app, created.slug)).branding.tagline).toBe('First')
+    // Appearance alone must still show, rather than being shadowed by that override.
+    expect((await patch(app, { tagline: 'Second', shape: 'soft' }, created.slug)).status).toBe(200)
+    expect((await patch(app, { layout }, created.slug)).status).toBe(200)
+    const config = await served(app, created.slug)
+    expect(config.branding.tagline).toBe('Second')
+    expect(config.branding.shape).toBe('soft')
+    expect(config.branding.layout?.nav).toEqual(layout.nav)
+    expect(config.searchPlaceholder).toBe('Search talks')
   })
 })
 

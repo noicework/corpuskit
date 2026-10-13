@@ -2159,6 +2159,106 @@ label.rp-btn:has(input:focus-visible) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Portal layout: a portal's own header links, footer and home page
+ * (`branding.layout`). Everything paints from the tenant tokens, so a layout
+ * follows the palette, shape, density and scheme like the built-in pages.
+ * ------------------------------------------------------------------------- */
+
+/* The arrow after a link that leaves the portal; its words are for screen readers. */
+.rp-external-mark {
+  display: inline-block;
+  flex: none;
+  width: 0.7em;
+  height: 0.7em;
+  margin-inline-start: 0.35em;
+  opacity: 0.8;
+}
+
+/* Sections stack on the density rhythm, so a spacious portal breathes more. */
+.rp-layout-section {
+  padding-block: calc(3rem * var(--rp-density, 1));
+}
+
+@media (min-width: 640px) {
+  .rp-layout-section {
+    padding-block: calc(3.5rem * var(--rp-density, 1));
+  }
+}
+
+/* A full-width band that sets a section apart from its neighbours. */
+.rp-layout-band {
+  background: var(--rp-surface);
+  border-block: 1px solid var(--rp-line);
+}
+
+/* The hero's own image: framed beside the ask on a wide screen, under it on a narrower one. */
+.rp-layout-hero-figure {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-width: 42rem;
+  overflow: hidden;
+  border-radius: var(--rp-radius);
+  box-shadow: var(--rp-shadow-xl), 0 0 0 1px color-mix(in srgb, var(--rp-on-hero) 22%, transparent);
+}
+
+@media (min-width: 1024px) {
+  .rp-layout-hero-figure {
+    aspect-ratio: 4 / 3;
+    max-width: none;
+  }
+}
+
+/* The brand's own artwork, where a card or picture has no uploaded image. */
+.rp-layout-art {
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'%3E%3Ccircle cx='1.5' cy='1.5' r='1' fill='%23ffffff' fill-opacity='0.16'/%3E%3C/svg%3E"),
+    radial-gradient(70% 90% at 85% 0%, color-mix(in srgb, var(--rp-accent) 45%, transparent),
+    transparent 70%),
+    linear-gradient(135deg, var(--rp-hero-from), var(--rp-hero-to));
+  background-size: 22px 22px, auto, auto;
+}
+
+.rp-layout-card-arrow {
+  display: inline-flex;
+  align-items: center;
+  font-size: 1.125rem;
+  line-height: 1;
+  transition: transform 200ms var(--rp-ease);
+}
+
+.group:hover .rp-layout-card-arrow,
+.group:focus-visible .rp-layout-card-arrow {
+  transform: translateX(3px);
+}
+
+.rp-layout-question-icon {
+  color: var(--rp-brand-fg);
+}
+
+/* Footer links on the brand surface: a comfortable tap target, underlined on hover. */
+.rp-layout-footer-link {
+  display: inline-flex;
+  align-items: center;
+  padding-block: 0.375rem;
+  border-radius: var(--rp-radius-btn);
+  color: color-mix(in srgb, var(--rp-on-primary) 88%, transparent);
+  transition: color 150ms var(--rp-ease);
+}
+
+.rp-layout-footer-link:hover {
+  color: var(--rp-on-primary);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .group:hover .rp-layout-card-arrow,
+  .group:focus-visible .rp-layout-card-arrow {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Floating map panels align to the same gutter as the header, so the navigator
  * sits under the logo rather than 16px off it. The rail is the shell's own
  * geometry (max width plus padding) expressed as an inset, so it keeps matching

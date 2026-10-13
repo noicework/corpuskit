@@ -5,6 +5,7 @@ import {
   AccessModeSchema,
   DEFAULT_PORTAL_COLOURS,
   NEW_PORTAL_PALETTE,
+  type PortalLayout,
   type TenantConfig,
   TenantConfigSchema,
   type TenantSummary,
@@ -268,6 +269,63 @@ export function validateTenantPatch(value: unknown): TenantPatch {
   return patch as TenantPatch
 }
 
+/** What `patchBranding` may change; an absent field keeps the portal's current value. */
+export interface BrandingPatch {
+  productName?: string
+  organisation?: string
+  tagline?: string
+  colours?: TenantConfig['branding']['colours']
+  typography?: TenantConfig['branding']['typography']
+  shape?: TenantConfig['branding']['shape']
+  textScale?: TenantConfig['branding']['textScale']
+  density?: TenantConfig['branding']['density']
+  paletteId?: TenantConfig['branding']['paletteId']
+  /** The portal's header links, footer and home page; null removes them. */
+  layout?: PortalLayout | null
+}
+
+/**
+ * Branding with its layout replaced (a layout), removed (null) or kept (undefined). Branding is
+ * always stored whole, so leaving the key out is all that clearing a layout takes.
+ */
+export function withLayout(
+  branding: TenantConfig['branding'],
+  layout: PortalLayout | null | undefined,
+): TenantConfig['branding'] {
+  if (layout === undefined) return branding
+  const { layout: _previous, ...rest } = branding
+  return layout === null ? rest : { ...rest, layout }
+}
+
+/** The portal's branding with a patch applied. */
+export function patchedBranding(
+  branding: TenantConfig['branding'],
+  patch: BrandingPatch,
+): TenantConfig['branding'] {
+  return withLayout({
+    ...branding,
+    ...(patch.productName ? { productName: patch.productName } : {}),
+    ...(patch.organisation ? { organisation: patch.organisation } : {}),
+    ...(patch.tagline ? { tagline: patch.tagline } : {}),
+    ...(patch.colours ? { colours: patch.colours } : {}),
+    ...(patch.typography ? { typography: patch.typography } : {}),
+    ...(patch.shape ? { shape: patch.shape } : {}),
+    ...(patch.textScale ? { textScale: patch.textScale } : {}),
+    ...(patch.density ? { density: patch.density } : {}),
+    ...(patch.paletteId ? { paletteId: patch.paletteId } : {}),
+  }, patch.layout)
+}
+
+/**
+ * Where a portal's branding is written: the layer it is read from. A portal created in the app
+ * keeps its branding in its own record, until a PATCH that changed behaviour and appearance at
+ * once stores a whole branding in its override. Reads take the override's over the record's from
+ * then on, so every later change must go there too, or it is accepted and never shown.
+ */
+export function brandingLayer(custom: boolean, override: TenantPatch): 'custom' | 'override' {
+  return custom && !override.branding ? 'custom' : 'override'
+}
+
 /** Slugs recorded as retired, from a persisted `retired` list. Anything else reads as none. */
 export function retiredSlugs(value: unknown): string[] {
   return Array.isArray(value)
@@ -467,39 +525,19 @@ export class TenantStore {
     this.persist()
   }
 
-  /** Rename or re-theme a portal (product name, organisation, tagline, palette, type, shape). */
-  patchBranding(
-    slug: string,
-    branding: {
-      productName?: string
-      organisation?: string
-      tagline?: string
-      colours?: TenantConfig['branding']['colours']
-      typography?: TenantConfig['branding']['typography']
-      shape?: TenantConfig['branding']['shape']
-      textScale?: TenantConfig['branding']['textScale']
-      density?: TenantConfig['branding']['density']
-      paletteId?: TenantConfig['branding']['paletteId']
-    },
-  ): void {
+  /**
+   * Rename or re-theme a portal (product name, organisation, tagline, palette, type, shape,
+   * layout), writing to the layer reads take its branding from (see `brandingLayer`).
+   */
+  patchBranding(slug: string, branding: BrandingPatch): void {
     const base = this.get(slug)
     if (!base) return
-    const merged = {
-      ...base.branding,
-      ...(branding.productName ? { productName: branding.productName } : {}),
-      ...(branding.organisation ? { organisation: branding.organisation } : {}),
-      ...(branding.tagline ? { tagline: branding.tagline } : {}),
-      ...(branding.colours ? { colours: branding.colours } : {}),
-      ...(branding.typography ? { typography: branding.typography } : {}),
-      ...(branding.shape ? { shape: branding.shape } : {}),
-      ...(branding.textScale ? { textScale: branding.textScale } : {}),
-      ...(branding.density ? { density: branding.density } : {}),
-      ...(branding.paletteId ? { paletteId: branding.paletteId } : {}),
-    }
-    if (this.custom[slug]) {
+    const merged = patchedBranding(base.branding, branding)
+    const override = this.existingPatch(slug)
+    if (brandingLayer(this.isCustom(slug), override) === 'custom') {
       this.custom[slug] = { ...TenantConfigSchema.parse(this.custom[slug]), branding: merged }
     } else {
-      this.overrides[slug] = { ...this.existingPatch(slug), branding: merged }
+      this.overrides[slug] = { ...override, branding: merged }
     }
     this.persist()
   }
