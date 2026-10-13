@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { createContext, useContext, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
 import {
@@ -12,11 +12,13 @@ import {
 import { getCatalog, getResource } from '../api/client.ts'
 import { Skeleton, TypeBadge, typeLabel } from '../components/ui.tsx'
 import { ResourceThumb, resourceTypeGlyph } from '../components/ResourceThumb.tsx'
-import { ExternalMark, LayoutAnchor } from '../components/LayoutLink.tsx'
+import { EXTERNAL_LINK_NOTE, ExternalMark, LayoutAnchor } from '../components/LayoutLink.tsx'
 import { ExplorePage, Hero, TopicRows, useAskNavigation } from './ExplorePage.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 type LayoutHome = NonNullable<PortalLayout['home']>
+/** Whether this home's cards end in an arrow (`home.cardArrows`, true unless set false). */
+const CardArrows = createContext(true)
 /** What a home row's card shows: a full summary, or a catalogue item with fewer fields. */
 type CardResource =
   & Pick<ResourceSummary, 'id' | 'title' | 'type'>
@@ -38,18 +40,20 @@ export function PortalHome({ config, home }: { config: TenantConfig; home: Layou
   const ask = useAskNavigation(config.slug)
   const hasRecent = home.sections.some((section) => section.kind === 'recent')
   return (
-    <main>
-      <Hero config={config} onAsk={ask} hero={home.hero ?? {}} showRecent={!hasRecent} />
-      {home.sections.map((section, index) => (
-        <HomeSectionView
-          key={`${index}-${section.kind}`}
-          config={config}
-          section={section}
-          id={`home-section-${index}`}
-          onAsk={ask}
-        />
-      ))}
-    </main>
+    <CardArrows.Provider value={home.cardArrows !== false}>
+      <main>
+        <Hero config={config} onAsk={ask} hero={home.hero ?? {}} showRecent={!hasRecent} />
+        {home.sections.map((section, index) => (
+          <HomeSectionView
+            key={`${index}-${section.kind}`}
+            config={config}
+            section={section}
+            id={`home-section-${index}`}
+            onAsk={ask}
+          />
+        ))}
+      </main>
+    </CardArrows.Provider>
   )
 }
 
@@ -171,6 +175,7 @@ function CardsSection(
   // Once one card has a picture, the rest get the brand artwork in the same frame, so the grid
   // keeps one rhythm instead of mixing tall and short cards.
   const pictured = section.cards.some((card) => card.image?.url)
+  const arrows = useContext(CardArrows)
   return (
     <section aria-labelledby={id} className='rp-shell rp-layout-section'>
       <SectionHeader id={id} heading={section.heading} intro={section.intro} />
@@ -207,11 +212,17 @@ function CardsSection(
                     </p>
                   )
                   : null}
-                <span className='rp-layout-card-arrow mt-auto pt-2 text-[var(--rp-accent-fg)]'>
-                  {layoutHrefTarget(card.href, slug)?.external
-                    ? <ExternalMark />
-                    : <span aria-hidden='true'>&rarr;</span>}
-                </span>
+                {arrows
+                  ? (
+                    <span className='rp-layout-card-arrow mt-auto pt-2 text-[var(--rp-accent-fg)]'>
+                      {layoutHrefTarget(card.href, slug)?.external
+                        ? <ExternalMark />
+                        : <span aria-hidden='true'>&rarr;</span>}
+                    </span>
+                  )
+                  : layoutHrefTarget(card.href, slug)?.external
+                  ? <span className='sr-only'>{EXTERNAL_LINK_NOTE}</span>
+                  : null}
               </div>
             </LayoutAnchor>
           </li>
@@ -265,6 +276,7 @@ function ResourceRow(
  */
 function HomeResourceCard({ slug, resource }: { slug: string; resource: CardResource }) {
   const [hasThumbnail, setHasThumbnail] = useState(false)
+  const arrows = useContext(CardArrows)
   return (
     <Link
       to={`/t/${slug}/library/${resource.id}`}
@@ -325,12 +337,16 @@ function HomeResourceCard({ slug, resource }: { slug: string; resource: CardReso
           <h3 className='rp-display rp-layout-textcard-title rp-clamp-3 break-words text-xl text-ink sm:text-[1.375rem]'>
             {resource.title}
           </h3>
-          <span
-            aria-hidden='true'
-            className='rp-layout-card-arrow relative z-10 mt-auto pt-3 text-[var(--rp-accent-fg)]'
-          >
-            &rarr;
-          </span>
+          {arrows
+            ? (
+              <span
+                aria-hidden='true'
+                className='rp-layout-card-arrow relative z-10 mt-auto pt-3 text-[var(--rp-accent-fg)]'
+              >
+                &rarr;
+              </span>
+            )
+            : null}
           <svg
             viewBox='0 0 24 24'
             fill='none'

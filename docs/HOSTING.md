@@ -216,9 +216,12 @@ gain access through it, and a deployment without Entra refuses such an assignmen
 `400 {"error":"invalid_input"}`.
 
 Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, `colours`,
-`typography`, `shape`, `textScale`, `density`, `paletteId` and `layout`, see
+`typography`, `shape`, `textScale`, `density`, `colourScheme`, `paletteId` and `layout`, see
 [Portal layout](#portal-layout)) and the behaviour fields `searchPlaceholder` and
-`regionalDiscovery`. The regional discovery band on Explore is off unless
+`regionalDiscovery`. A portal follows each viewer's system light or dark setting and offers a
+toggle in the header; send `{"colourScheme": "light"}` to keep it light for every viewer, sign-in
+screen included, with no toggle, and `{"colourScheme": "viewer"}` to offer both again. Manage >
+Appearance sets the same choice. The regional discovery band on Explore is off unless
 a portal opts in: send `{"regionalDiscovery": true}` to show it and `{"regionalDiscovery": false}`
 to hide it again. A palette made for one organisation (`listed: false` in
 `packages/core/src/palettes.ts`) is refused with `400 {"error":"palette_not_available"}` unless
@@ -375,6 +378,7 @@ A layout for a user group's portal might be:
 | `footer.poweredBy` | `true` adds "Powered by CorpusKit", linking to corpuskit.org | |
 | `home.hero` | Optional `heading` (120 characters), `body` (400), `image` and `questions` shown as chips under the ask box (6, of 200 characters each). Without `questions`, the chips are the portal's suggested questions | |
 | `home.sections` | The sections under the hero, in order | 10 |
+| `home.cardArrows` | `false` drops the arrow that ends each card in the `cards`, `resources` and `recent` sections, with the space it kept. The whole card stays the link, and a card leaving the portal is still announced to screen readers. Question cards keep their arrow. Absent means `true` | |
 
 A footer, when set, keeps the organisation, product name and tagline beside its columns. The home
 page keeps the ask box in its hero, and a question asked there, or picked from a chip or a question

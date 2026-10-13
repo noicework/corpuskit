@@ -385,6 +385,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
           'shape',
           'textScale',
           'density',
+          'colourScheme',
           'paletteId',
           'layout',
         ],

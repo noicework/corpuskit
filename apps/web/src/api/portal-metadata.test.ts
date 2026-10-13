@@ -46,12 +46,18 @@ Deno.test('old active metadata remains compatible and unknown lifecycle states f
   const plainBrand = await readSafePortalMetadata(
     Response.json({
       ...safe,
-      branding: { ...safe.branding, logoUrl: null, paletteId: null },
+      branding: { ...safe.branding, logoUrl: null, paletteId: null, colourScheme: null },
     }),
     'marine',
   )
   expect(plainBrand.branding.logoUrl).toBeUndefined()
   expect(plainBrand.branding.paletteId).toBeUndefined()
+  expect(plainBrand.branding.colourScheme).toBeUndefined()
+  const lightOnly = await readSafePortalMetadata(
+    Response.json({ ...safe, branding: { ...safe.branding, colourScheme: 'light' } }),
+    'marine',
+  )
+  expect(lightOnly.branding.colourScheme).toBe('light')
   await expect(readSafePortalMetadata(Response.json({ ...safe, status: 'invalid' }), 'marine'))
     .rejects.toThrow()
 })

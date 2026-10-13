@@ -2148,6 +2148,7 @@ describe('appearance (typography, shape, branding fonts)', () => {
       shape: 'soft',
       textScale: 'larger',
       density: 'compact',
+      colourScheme: 'light',
       paletteId: 'fathom',
     })
     expect(response.status).toBe(200)
@@ -2159,7 +2160,18 @@ describe('appearance (typography, shape, branding fonts)', () => {
     expect(config.branding.shape).toBe('soft')
     expect(config.branding.textScale).toBe('larger')
     expect(config.branding.density).toBe('compact')
+    expect(config.branding.colourScheme).toBe('light')
     expect(config.branding.paletteId).toBe('fathom')
+  })
+
+  it('lets a light-only portal offer light and dark again', async () => {
+    const app = appearanceApp()
+    expect((await patch(app, { colourScheme: 'light' })).status).toBe(200)
+    expect((await patch(app, { colourScheme: 'viewer' })).status).toBe(200)
+    const config = TenantConfigSchema.parse(
+      await (await app.request('/api/t/marine/config')).json(),
+    )
+    expect(config.branding.colourScheme).toBe('viewer')
   })
 
   it('accepts the custom and default typography choices', async () => {
@@ -2182,12 +2194,13 @@ describe('appearance (typography, shape, branding fonts)', () => {
     expect(reloaded.get('marine')?.branding.shape).toBe('rounded')
   })
 
-  it('rejects an unknown pairing, shape, text scale or density', async () => {
+  it('rejects an unknown pairing, shape, text scale, density or colour scheme', async () => {
     const app = appearanceApp()
     expect((await patch(app, { typography: 'comic-sans' })).status).toBe(400)
     expect((await patch(app, { shape: 'blobby' })).status).toBe(400)
     expect((await patch(app, { textScale: 'enormous' })).status).toBe(400)
     expect((await patch(app, { density: 'cramped' })).status).toBe(400)
+    expect((await patch(app, { colourScheme: 'dark' })).status).toBe(400)
     expect((await patch(app, { paletteId: 'neon' })).status).toBe(400)
   })
 

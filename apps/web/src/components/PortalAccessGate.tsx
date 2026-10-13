@@ -58,7 +58,9 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
   const failed = authorityFailed || safe.isError
   const paused = !loading && !failed && (suspended || safe.data?.status === 'suspended')
   const branding: Branding = safe.data ? { ...safe.data.branding, tagline: '' } : houseBranding
-  const { scheme } = useViewerScheme()
+  const { scheme: viewerScheme } = useViewerScheme()
+  // A portal set to light signs viewers in on light too.
+  const scheme = branding.colourScheme === 'light' ? 'light' : viewerScheme
   useBodyTheme(branding, scheme)
   const name = safe.data?.branding.productName ?? 'This portal'
   const anonymous = state.session?.authenticated === false

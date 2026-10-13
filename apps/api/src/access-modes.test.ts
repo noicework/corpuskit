@@ -680,6 +680,7 @@ Deno.test('tenant reads deny before dispatch and safe config is an exact D9 proj
         logoUrl: null,
         colours: stored.branding.colours,
         paletteId: stored.branding.paletteId,
+        colourScheme: null,
       },
     })
   } finally {

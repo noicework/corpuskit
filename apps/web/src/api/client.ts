@@ -14,6 +14,7 @@ import type {
   AnalyseEvent,
   AskEvent,
   CatalogPage,
+  ColourSchemeId,
   DensityId,
   EnrichmentAgentStatus,
   EnrichmentRunEvent,
@@ -951,7 +952,10 @@ export function renamePortal(
   })
 }
 
-/** Save the portal's typography, text-scale, shape and/or density choice (same PATCH as rename). */
+/**
+ * Save the portal's typography, text-scale, shape, density and/or dark-mode choice (same PATCH
+ * as rename).
+ */
 export function updatePortalAppearance(
   slug: string,
   passcode: AdminRequestAccess,
@@ -960,6 +964,7 @@ export function updatePortalAppearance(
     shape?: ShapeId
     textScale?: TextScaleId
     density?: DensityId
+    colourScheme?: ColourSchemeId
     paletteId?: PaletteChoice
   },
 ): Promise<{ ok: boolean }> {

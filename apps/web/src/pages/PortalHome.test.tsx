@@ -174,6 +174,22 @@ describe('portal home', () => {
     expect(html).toContain('rp-layout-art')
   })
 
+  it('ends cards in arrows unless the home turns them off, keeping the note for leaving', async () => {
+    const withArrows = await render(withLayout({ home }))
+    expect(withArrows).toContain('rp-layout-card-arrow')
+    expect(withArrows).toContain('rp-external-mark')
+    const html = await render(withLayout({ home: { ...home, cardArrows: false } }))
+    expect(html).not.toContain('rp-layout-card-arrow')
+    // The card that leaves the portal loses its marker but still says so to a screen reader, and
+    // stays the link.
+    const meetups = html.slice(html.indexOf('href="https://example.org/meetups"'))
+    const card = meetups.slice(0, meetups.indexOf('</a>'))
+    expect(card).not.toContain('rp-external-mark')
+    expect(card).toContain(EXTERNAL_LINK_NOTE)
+    // The question cards keep their own arrow.
+    expect(html).toContain('rp-suggest-arrow')
+  })
+
   it('shows chosen resources in order and leaves out hidden and missing ones', async () => {
     const html = await render(withLayout({ home }))
     expect(html).toContain('First talk')

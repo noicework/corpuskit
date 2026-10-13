@@ -355,7 +355,9 @@ export function TenantLayout() {
   const [demoScheme, setDemoScheme] = useState<'light' | 'dark'>('light')
   const isCorpusKit = config?.branding.paletteId === 'corpuskit'
   const isAcmd = config?.branding.paletteId === 'acmd'
-  const scheme = isCorpusKit || isAcmd ? demoScheme : viewerScheme
+  // A portal set to light stays light for every viewer, and offers no toggle.
+  const lightOnly = config?.branding.colourScheme === 'light'
+  const scheme = lightOnly ? 'light' : isCorpusKit || isAcmd ? demoScheme : viewerScheme
   const schemeLabel = scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
   const toggleScheme = () => {
     const next = scheme === 'dark' ? 'light' : 'dark'
@@ -443,18 +445,20 @@ export function TenantLayout() {
                   ))}
                 </nav>
                 <div className='acmd-portal-tools'>
-                  <span className='hidden sm:inline-flex'>
-                    <button
-                      type='button'
-                      onClick={toggleScheme}
-                      aria-label={schemeLabel}
-                      title={schemeLabel}
-                      aria-pressed={scheme === 'dark'}
-                      className='acmd-scheme rp-focus'
-                    >
-                      <SchemeIcon scheme={scheme} className='h-5 w-5' />
-                    </button>
-                  </span>
+                  {!lightOnly && (
+                    <span className='hidden sm:inline-flex'>
+                      <button
+                        type='button'
+                        onClick={toggleScheme}
+                        aria-label={schemeLabel}
+                        title={schemeLabel}
+                        aria-pressed={scheme === 'dark'}
+                        className='acmd-scheme rp-focus'
+                      >
+                        <SchemeIcon scheme={scheme} className='h-5 w-5' />
+                      </button>
+                    </span>
+                  )}
                   <span className='hidden sm:inline-flex'>
                     <HelpMenu slug={config.slug} />
                   </span>
@@ -622,22 +626,24 @@ export function TenantLayout() {
                 * the menu toggle below - component classes set their own
                 * display and would beat a utility on the element itself. */
                     }
-                    <span className='hidden sm:inline-flex'>
-                      <button
-                        type='button'
-                        onClick={toggleScheme}
-                        aria-label={schemeLabel}
-                        title={schemeLabel}
-                        aria-pressed={scheme === 'dark'}
-                        className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
-                        style={{
-                          borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-                          color: 'var(--rp-brand-fg)',
-                        }}
-                      >
-                        <SchemeIcon scheme={scheme} className='h-6 w-6' />
-                      </button>
-                    </span>
+                    {!lightOnly && (
+                      <span className='hidden sm:inline-flex'>
+                        <button
+                          type='button'
+                          onClick={toggleScheme}
+                          aria-label={schemeLabel}
+                          title={schemeLabel}
+                          aria-pressed={scheme === 'dark'}
+                          className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
+                          style={{
+                            borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
+                            color: 'var(--rp-brand-fg)',
+                          }}
+                        >
+                          <SchemeIcon scheme={scheme} className='h-6 w-6' />
+                        </button>
+                      </span>
+                    )}
                     <span className='hidden sm:inline-flex'>
                       <HelpMenu slug={config.slug} />
                     </span>
@@ -845,15 +851,17 @@ export function TenantLayout() {
               }`}
               style={{ '--rp-stage-i': navigation.length + customLinks.length } as CSSProperties}
             >
-              <button
-                type='button'
-                onClick={toggleScheme}
-                aria-pressed={scheme === 'dark'}
-                className='rp-navsheet-action rp-focus-inverse'
-              >
-                <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
-                {scheme === 'dark' ? 'Light mode' : 'Dark mode'}
-              </button>
+              {!lightOnly && (
+                <button
+                  type='button'
+                  onClick={toggleScheme}
+                  aria-pressed={scheme === 'dark'}
+                  className='rp-navsheet-action rp-focus-inverse'
+                >
+                  <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
+                  {scheme === 'dark' ? 'Light mode' : 'Dark mode'}
+                </button>
+              )}
               {helpMenuItems(config.slug).map((item) => (
                 <NavLink
                   key={item.key}

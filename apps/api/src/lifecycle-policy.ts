@@ -36,10 +36,17 @@ export function readLifecycle(
  * decided. `logoUrl` is the portal's resolved logo, so both uses show the same image.
  */
 export function safePortalProjection(config: TenantConfig, logoUrl: string | null) {
-  const { productName, organisation, colours, paletteId } = config.branding
+  const { productName, organisation, colours, paletteId, colourScheme } = config.branding
   return {
     slug: config.slug,
-    branding: { productName, organisation, logoUrl, colours, paletteId: paletteId ?? null },
+    branding: {
+      productName,
+      organisation,
+      logoUrl,
+      colours,
+      paletteId: paletteId ?? null,
+      colourScheme: colourScheme ?? null,
+    },
     accessMode: config.accessMode,
   }
 }
