@@ -1054,7 +1054,14 @@ export const DOC_PAGES: DocPage[] = [
           'whether a resource may carry one value or several, and add its labels with their ' +
           'definitions. Nothing carries a brand-new set, so creating one neither creates nor ' +
           'restarts any agent; a labeller for it comes from running analysis or the knowledge ' +
-          'graph tools. Editing a set later restarts only the labellers that carry it.',
+          'graph tools. Editing a set later restarts only the labellers that carry it.\n\n' +
+          'Analyse and configure, under Manage > Taxonomy, reads the corpus and designs the ' +
+          'topic and kind label sets, labels the resources it sampled and writes suggested ' +
+          'questions. Writing a label set replaces it whole, so analysis never replaces a ' +
+          'topic or kind set this portal did not create: on a knowledge box that already has ' +
+          'its own, it stops before changing anything and says which set is in the way. ' +
+          'Rename or remove that set in the knowledge box, then run analysis again. Running ' +
+          'analysis again over the sets an earlier run wrote replaces them as before.',
       },
       {
         heading: 'Enrichments',

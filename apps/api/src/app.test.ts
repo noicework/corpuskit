@@ -192,7 +192,7 @@ function buildApp(options: BuildAppOptions & { adminPasscode?: string }) {
     })),
   })
 }
-import { TenantStore } from './tenants.ts'
+import { tenantConfig, TenantStore } from './tenants.ts'
 import { tenantsWithNeuro } from './fixtures/neuro-tenant.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import type { PortalDomainProvisioner } from './cloudflare-domains.ts'
@@ -565,7 +565,14 @@ describe('independent admin route permission matrix', () => {
         }
         const values: Record<string, (...args: unknown[]) => unknown> = {
           listResources: () => [resourceOne],
-          labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
+          // The box's topic set is the one the portal's own analysis wrote, so
+          // analysis may run again over it.
+          labelsets: () => [{
+            id: 'topic',
+            title: 'Topic',
+            labels: tenantConfig('marine')!.topics.map((topic) => topic.id),
+            multiple: true,
+          }],
           counters: () => ({ resources: 1 }),
           resourceCount: () => 1,
           recentResources: () => [resourceOne],

@@ -505,7 +505,16 @@ export const AnalyseEventSchema = z.discriminatedUnion('type', [
     labelled: z.number().int().nonnegative(),
     questions: z.number().int().nonnegative(),
   }),
-  z.object({ type: z.literal('error'), message: z.string() }),
+  z.object({
+    type: z.literal('error'),
+    message: z.string(),
+    /**
+     * Set when analysis refused before writing anything: `labelset_exists`,
+     * the box already has a `topic` or `kind` label set this portal did not
+     * create, which analysis would replace.
+     */
+    error: z.enum(['labelset_exists']).optional(),
+  }),
 ])
 
 /** Progress events streamed by the knowledge-box migration tool. */

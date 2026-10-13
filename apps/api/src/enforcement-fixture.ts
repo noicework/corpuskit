@@ -974,7 +974,14 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
     }
     const values: Record<string, (...args: unknown[]) => unknown> = {
       listResources: () => [matrixResource],
-      labelsets: () => [{ id: 'topic', title: 'Topic', labels: ['Research'], multiple: true }],
+      // The box's topic set is the one the portal's own analysis wrote, so
+      // analysis may run again over it.
+      labelsets: () => [{
+        id: 'topic',
+        title: 'Topic',
+        labels: tenantConfig('marine')!.topics.map((topic) => topic.id),
+        multiple: true,
+      }],
       counters: () => ({ resources: 1 }),
       resourceCount: () => 1,
       recentResources: () => [matrixResource],
