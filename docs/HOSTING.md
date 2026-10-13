@@ -389,6 +389,10 @@ card, opens Ask with the question already sent. Each section is one of these kin
 | `about` | `heading`, a `body` (2,000 characters, where a blank line starts a new paragraph), an optional `image` and up to 4 `links` |
 | `topics` | The topic rows from Explore. With no topics to show, it shows nothing |
 
+In the `resources` and `recent` rows, an item with a thumbnail shows it, and an item without one
+shows as a text card: its type in a band of the accent wash, then its title. The two kinds of card
+are the same height, so a row that mixes them stays even.
+
 A heading is at most 120 characters and an `intro` at most 400. Every piece of text renders as
 plain text, never as HTML or Markdown. Headings, labels and notes are one line; an `intro` and
 each `body` may hold line breaks.

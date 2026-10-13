@@ -1,27 +1,26 @@
 import { useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { useOutletContext } from 'react-router-dom'
+import { Link, useOutletContext } from 'react-router-dom'
 import {
   type HomeSection,
   layoutHrefTarget,
   type LayoutImage,
   type PortalLayout,
+  type ResourceSummary,
   type TenantConfig,
 } from '@research-portal/core'
 import { getCatalog, getResource } from '../api/client.ts'
-import { Skeleton } from '../components/ui.tsx'
+import { Skeleton, TypeBadge, typeLabel } from '../components/ui.tsx'
+import { ResourceThumb, resourceTypeGlyph } from '../components/ResourceThumb.tsx'
 import { ExternalMark, LayoutAnchor } from '../components/LayoutLink.tsx'
-import {
-  type CardResource,
-  ExplorePage,
-  Hero,
-  ResourceCard,
-  TopicRows,
-  useAskNavigation,
-} from './ExplorePage.tsx'
+import { ExplorePage, Hero, TopicRows, useAskNavigation } from './ExplorePage.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 type LayoutHome = NonNullable<PortalLayout['home']>
+/** What a home row's card shows: a full summary, or a catalogue item with fewer fields. */
+type CardResource =
+  & Pick<ResourceSummary, 'id' | 'title' | 'type'>
+  & Partial<Pick<ResourceSummary, 'summary'>>
 type SectionOf<K extends HomeSection['kind']> = Extract<HomeSection, { kind: K }>
 
 /** The portal's home: its own composition when its layout sets one, otherwise Explore. */
@@ -251,13 +250,102 @@ function ResourceRow(
           </div>
         ))
         : items.map((resource) => (
-          <ResourceCard
-            key={resource.id}
-            slug={slug}
-            resource={resource}
-          />
+          <HomeResourceCard key={resource.id} slug={slug} resource={resource} />
         ))}
     </div>
+  )
+}
+
+/**
+ * A resource in a home row. With a platform thumbnail it is the topic rows' card. Without one (a
+ * recording, say) it is a text card: a band in the accent wash naming the type, then the title in
+ * the display face. Both faces share the thumbnail card's frame, so a row that mixes them stays
+ * even, and the text face shows until a thumbnail has actually loaded, so a row of items without
+ * thumbnails never shows a run of empty grey boxes.
+ */
+function HomeResourceCard({ slug, resource }: { slug: string; resource: CardResource }) {
+  const [hasThumbnail, setHasThumbnail] = useState(false)
+  return (
+    <Link
+      to={`/t/${slug}/library/${resource.id}`}
+      className='rp-card rp-lift rp-focus group relative flex w-64 shrink-0 flex-col overflow-hidden sm:w-72'
+    >
+      {
+        /* The thumbnail card. Until its thumbnail loads it is laid out but hidden, from sight and
+         * from screen readers, and gives the text face its size; then the two cross-fade. */
+      }
+      <div
+        className={`flex flex-1 flex-col ${hasThumbnail ? 'rp-anim-fade' : 'invisible'}`}
+        aria-hidden={hasThumbnail ? undefined : 'true'}
+      >
+        <div className='relative aspect-[4/3] w-full overflow-hidden bg-surface-2'>
+          <div className='rp-shadow-sm absolute inset-x-6 bottom-0 top-6 overflow-hidden bg-surface'>
+            <ResourceThumb
+              slug={slug}
+              id={resource.id}
+              type={resource.type}
+              className='rp-zoom'
+              imgClassName='object-top'
+              onThumbnail={setHasThumbnail}
+            />
+          </div>
+          <span className='absolute left-2 top-2 z-10'>
+            <TypeBadge type={resource.type} />
+          </span>
+        </div>
+        <div className='flex flex-1 flex-col gap-1.5 border-t border-line p-3.5'>
+          <h3 className='rp-clamp-2 text-[0.9375rem] font-semibold leading-snug tracking-[-0.01em] text-ink'>
+            {resource.title}
+          </h3>
+          {resource.summary && resource.summary !== resource.title
+            ? <p className='rp-clamp-3 text-sm leading-relaxed text-ink-3'>{resource.summary}</p>
+            : null}
+        </div>
+      </div>
+      <div
+        className={`absolute inset-0 flex flex-col${hasThumbnail ? ' rp-layout-textcard-out' : ''}`}
+        aria-hidden={hasThumbnail ? 'true' : undefined}
+      >
+        <div className='rp-layout-textcard-band flex items-center gap-2 px-4 py-2.5'>
+          <svg
+            viewBox='0 0 24 24'
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='1.6'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+            aria-hidden='true'
+            className='h-4 w-4 shrink-0'
+          >
+            <path d={resourceTypeGlyph(resource.type)} />
+          </svg>
+          <span className='rp-eyebrow'>{typeLabel(resource.type)}</span>
+        </div>
+        <div className='relative flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
+          <h3 className='rp-display rp-layout-textcard-title rp-clamp-3 break-words text-xl text-ink sm:text-[1.375rem]'>
+            {resource.title}
+          </h3>
+          <span
+            aria-hidden='true'
+            className='rp-layout-card-arrow relative z-10 mt-auto pt-3 text-[var(--rp-accent-fg)]'
+          >
+            &rarr;
+          </span>
+          <svg
+            viewBox='0 0 24 24'
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='1.2'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+            aria-hidden='true'
+            className='rp-layout-textcard-glyph'
+          >
+            <path d={resourceTypeGlyph(resource.type)} />
+          </svg>
+        </div>
+      </div>
+    </Link>
   )
 }
 
@@ -318,7 +406,6 @@ function RecentSection(
       title: item.title,
       type: item.type ?? 'document',
       summary: item.summary,
-      sourceName: item.sourceName,
     }))
   if (!isLoading && items.length === 0) return null
   return (

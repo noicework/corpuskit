@@ -433,12 +433,7 @@ function RegionBand({ slug }: { slug: string }) {
  * Topic rows
  * ---------------------------------------------------------------------- */
 
-/** What a resource card shows: a full summary, or a catalogue item with fewer fields. */
-export type CardResource =
-  & Pick<ResourceSummary, 'id' | 'title' | 'type'>
-  & Partial<Pick<ResourceSummary, 'summary' | 'sourceName'>>
-
-export function ResourceCard({ slug, resource }: { slug: string; resource: CardResource }) {
+function ResourceCard({ slug, resource }: { slug: string; resource: ResourceSummary }) {
   return (
     <Link
       to={`/t/${slug}/library/${resource.id}`}

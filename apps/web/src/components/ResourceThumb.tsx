@@ -31,6 +31,11 @@ export function resourceThumbLabel(type: ResourceType | string): string {
   return THUMB_LABELS[type] ?? 'Resource'
 }
 
+/** The line glyph (an SVG path on a 24-unit grid) for a content type. */
+export function resourceTypeGlyph(type: ResourceType | string): string {
+  return TYPE_GLYPHS[type] ?? TYPE_GLYPHS.document!
+}
+
 /**
  * Resource artwork used everywhere resources appear: the platform thumbnail
  * when one exists, otherwise a token-driven folio with its content type.
@@ -42,6 +47,7 @@ export function ResourceThumb({
   label: labelOverride,
   className = '',
   imgClassName = '',
+  onThumbnail,
 }: {
   slug: string
   id: string
@@ -55,6 +61,8 @@ export function ResourceThumb({
   className?: string
   /** Extra classes for the image itself, e.g. `object-top` to anchor the crop. */
   imgClassName?: string
+  /** Told once the platform thumbnail has loaded (`true`) or turned out not to exist (`false`). */
+  onThumbnail?: (exists: boolean) => void
 }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const src = thumbnailUrl(slug, id)
@@ -64,7 +72,7 @@ export function ResourceThumb({
   const requested = requestedSrc === src
   const loaded = loadedSrc === src
   const failed = failedSrc === src
-  const glyph = TYPE_GLYPHS[type] ?? TYPE_GLYPHS.document
+  const glyph = resourceTypeGlyph(type)
   const label = labelOverride ?? resourceThumbLabel(type)
 
   // Native lazy loading looks several viewports ahead. In a long card list that
@@ -123,8 +131,14 @@ export function ResourceThumb({
           loading='eager'
           fetchPriority='high'
           decoding='async'
-          onLoad={() => setLoadedSrc(src)}
-          onError={() => setFailedSrc(src)}
+          onLoad={() => {
+            setLoadedSrc(src)
+            onThumbnail?.(true)
+          }}
+          onError={() => {
+            setFailedSrc(src)
+            onThumbnail?.(false)
+          }}
           // Invisible until it genuinely loads - never a broken-image glyph.
           className={`rp-thumb-image absolute inset-0 h-full w-full object-cover ${imgClassName} ${
             loaded ? 'rp-thumb-image-loaded' : ''

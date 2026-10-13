@@ -183,6 +183,26 @@ describe('portal home', () => {
     expect(html).not.toContain('res-gone')
   })
 
+  it('draws a home row item as a text card until its thumbnail loads, and leaves Explore alone', async () => {
+    const html = await render(withLayout({ home }))
+    const card = html.slice(
+      html.indexOf('href="/t/example/library/res-1"'),
+      html.indexOf('href="/t/example/library/res-2"'),
+    )
+    // The text face: the type in a band of the accent wash, then the title in the display face.
+    expect(card).toContain('rp-layout-textcard-band')
+    expect(card).toContain('<span class="rp-eyebrow">Document</span>')
+    expect(card).toMatch(/<h3 class="rp-display rp-layout-textcard-title[^"]*">First talk<\/h3>/)
+    // No generated summary on the text face.
+    expect(card.slice(card.indexOf('rp-layout-textcard-band'))).not.toContain(
+      'First talk in brief.',
+    )
+    // The thumbnail card is laid out to size the text face, hidden from sight and screen readers.
+    expect(card).toContain('<div class="flex flex-1 flex-col invisible" aria-hidden="true">')
+    // The topic rows on Explore keep their own card.
+    expect(await render(base)).not.toContain('rp-layout-textcard')
+  })
+
   it('leaves out a featured section when none of its resources can be shown', async () => {
     const html = await render(withLayout({
       home: {
