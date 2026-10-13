@@ -50,6 +50,11 @@ operator credential, see `HOSTING.md`) turns it on or off with `PATCH /api/admin
 and a body of `{"regionalDiscovery": true}` or `{"regionalDiscovery": false}`, which needs
 `behaviour.write` on the portal as well as the route's `appearance.write`.
 
+A portal's own header links, footer and home page are an optional `layout` in its branding,
+validated by `PortalLayoutSchema` in `packages/core/src/layout.ts` and set with the same route
+(`HOSTING.md`, "Portal layout"). Without one, the built-in navigation, footer and Explore render,
+and with one every piece of its text still renders as plain text.
+
 Server-side, a tenant record also holds the knowledge-box binding: zone, KB id, service-account
 token (minted at provision time, never sent to the client). The Deno development server uses the
 file stores in `apps/api`; Cloudflare production injects equivalent synchronous adapters over a

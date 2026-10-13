@@ -240,6 +240,11 @@ Deno.test('the local server erases every file and row a deleted portal left', as
           headers: { 'content-type': 'image/png' },
           body: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
         }, 200],
+        [`/api/admin/t/${SLUG}/branding/image/banner`, {
+          method: 'POST',
+          headers: { 'content-type': 'image/webp' },
+          body: new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]),
+        }, 200],
         [`/api/admin/t/${SLUG}/lifecycle`, json('PUT', { status: 'suspended', limits: null }), 200],
       ] as const
     ) {
@@ -374,6 +379,8 @@ Deno.test('the local server erases every file and row a deleted portal left', as
     expect(body.erasure.erased.sessions).toBe(2)
     expect(body.erasure.erased.investigations).toBe(2)
     expect(body.erasure.erased.watches).toBe(2)
+    // The logo and the layout image, in its own directory.
+    expect(body.erasure.erased.branding).toBe(2)
 
     // Only the registry still names the portal, as a retired slug.
     const remaining = files(s.directory)

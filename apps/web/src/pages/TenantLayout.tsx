@@ -21,8 +21,10 @@ import {
 import { HelpItemIcon, HelpMenu } from '../components/HelpMenu.tsx'
 import { helpMenuItems } from '../components/help-menu-items.ts'
 import { pageTitle } from '../lib/page-title.ts'
+import { portalNavigation } from '../lib/portal-nav.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
+import { LayoutAnchor } from '../components/LayoutLink.tsx'
 import { AcmdSiteFooter, AcmdSiteHeader } from '../components/AcmdChrome.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
@@ -45,15 +47,40 @@ function FullPageSpinner() {
   )
 }
 
-// Explore is reached by the logo and Help by its own icon.
-const NAV_ITEMS: { path: string; label: string; end: boolean; permission: Permission }[] = [
-  { path: '/library', label: 'Library', end: false, permission: 'portal.read' },
-  { path: '/ask', label: 'Ask', end: false, permission: 'portal.ask' },
-  { path: '/graph', label: 'Graph', end: false, permission: 'portal.read' },
-  { path: '/tools', label: 'Tools', end: false, permission: 'portal.read' },
-  { path: '/investigations', label: 'Investigations', end: false, permission: 'portal.read' },
-  { path: '/generate', label: 'Generate', end: false, permission: 'portal.generate' },
-  { path: '/assessment', label: 'Assessment', end: false, permission: 'portal.generate' },
+// Explore is reached by the logo and Help by its own icon. A portal layout may leave the items
+// it can hide (`HIDEABLE_NAV_ITEMS`) out of the navigation; their routes still work.
+const NAV_ITEMS: {
+  id: string
+  path: string
+  label: string
+  end: boolean
+  permission: Permission
+}[] = [
+  { id: 'library', path: '/library', label: 'Library', end: false, permission: 'portal.read' },
+  { id: 'ask', path: '/ask', label: 'Ask', end: false, permission: 'portal.ask' },
+  { id: 'graph', path: '/graph', label: 'Graph', end: false, permission: 'portal.read' },
+  { id: 'tools', path: '/tools', label: 'Tools', end: false, permission: 'portal.read' },
+  {
+    id: 'investigations',
+    path: '/investigations',
+    label: 'Investigations',
+    end: false,
+    permission: 'portal.read',
+  },
+  {
+    id: 'generate',
+    path: '/generate',
+    label: 'Generate',
+    end: false,
+    permission: 'portal.generate',
+  },
+  {
+    id: 'assessment',
+    path: '/assessment',
+    label: 'Assessment',
+    end: false,
+    permission: 'portal.generate',
+  },
 ]
 
 // One name for the account control, read by both the header icon and the phone
@@ -135,7 +162,7 @@ export function TenantLayout() {
   const portalRole = auth?.user ? roleLabel(auth.portalAccess?.effectiveRole) : null
   const platformRole = auth?.user ? roleLabel(auth.effectiveRoles.platformRole) : null
   const scope = { kind: 'portal' as const, slug: slug ?? '' }
-  const navigation = NAV_ITEMS.filter((item) => access.can(item.permission, scope))
+  const permitted = NAV_ITEMS.filter((item) => access.can(item.permission, scope))
   const section = location.pathname.split('/')[3] ?? ''
   // Manage owns exact section permission checks and the first-allowed fallback.
   // The outer route gate must not reject a stale or forbidden tab before that runs.
@@ -348,6 +375,12 @@ export function TenantLayout() {
   }
   if (isError || !config) return <AccessUnavailable failedRead />
 
+  // The portal's own header links follow the built-in items it keeps.
+  const { items: navigation, links: customLinks } = portalNavigation(
+    permitted,
+    config.branding.layout,
+  )
+
   // Links sit on the solid brand band, so the active state is white type over
   // an accent underline (see .rp-navlink in styles.css) rather than the accent
   // wash the old light-background header used.
@@ -396,6 +429,17 @@ export function TenantLayout() {
                     >
                       {item.label}
                     </NavLink>
+                  ))}
+                  {customLinks.map((link, index) => (
+                    <LayoutAnchor
+                      key={`custom-${index}`}
+                      href={link.href}
+                      slug={config.slug}
+                      className='rp-navlink'
+                      nav
+                    >
+                      {link.label}
+                    </LayoutAnchor>
                   ))}
                 </nav>
                 <div className='acmd-portal-tools'>
@@ -651,6 +695,17 @@ export function TenantLayout() {
                         {item.label}
                       </NavLink>
                     ))}
+                    {customLinks.map((link, index) => (
+                      <LayoutAnchor
+                        key={`custom-${index}`}
+                        href={link.href}
+                        slug={config.slug}
+                        className='rp-navlink'
+                        nav
+                      >
+                        {link.label}
+                      </LayoutAnchor>
+                    ))}
                   </nav>
                 </div>
               </div>
@@ -754,6 +809,27 @@ export function TenantLayout() {
                   </NavLink>
                 </li>
               ))}
+              {customLinks.map((link, index) => (
+                <li
+                  key={`custom-${index}`}
+                  className={navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'}
+                  style={{ '--rp-stage-i': navigation.length + index } as CSSProperties}
+                >
+                  <LayoutAnchor
+                    href={link.href}
+                    slug={config.slug}
+                    className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
+                  >
+                    <span
+                      aria-hidden='true'
+                      className='transition-transform duration-200 group-hover:translate-x-1'
+                    >
+                      &rarr;
+                    </span>
+                    {link.label}
+                  </LayoutAnchor>
+                </li>
+              ))}
             </ul>
 
             {
@@ -767,7 +843,7 @@ export function TenantLayout() {
               className={`mt-7 flex min-w-0 flex-col gap-2.5 ${
                 navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'
               }`}
-              style={{ '--rp-stage-i': navigation.length } as CSSProperties}
+              style={{ '--rp-stage-i': navigation.length + customLinks.length } as CSSProperties}
             >
               <button
                 type='button'
@@ -847,7 +923,7 @@ export function TenantLayout() {
         ? null
         : isAcmd
         ? <AcmdSiteFooter />
-        : <PortalFooter branding={config.branding} />}
+        : <PortalFooter branding={config.branding} slug={config.slug} />}
 
       {signInOpen ? <SignInDialog user={auth?.user} onClose={() => setSignInOpen(false)} /> : null}
 

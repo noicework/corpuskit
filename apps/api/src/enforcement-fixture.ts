@@ -31,6 +31,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['POST', '/api/ask-estate', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['GET', '/api/t/:slug/config', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/branding/:kind', 'portal.read', 'viewer'],
+  ['GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources/:id/thumbnail', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/search', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/docs/search', 'portal.read', 'viewer'],
@@ -157,6 +158,8 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
     'DELETE /api/admin/t/:slug/members/:id',
     'GET /api/admin/t/:slug/counters',
     'POST /api/admin/t/:slug/branding/:kind',
+    'POST /api/admin/t/:slug/branding/image/:name',
+    'DELETE /api/admin/t/:slug/branding/image/:name',
     'POST /api/admin/migrate',
     'GET /api/admin/t/:slug/lifecycle',
     'PUT /api/admin/t/:slug/lifecycle',
@@ -262,6 +265,11 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       contentType: 'image/png',
       version: 'fixture',
     })
+    f.stores.branding.put('a', 'image-banner', {
+      bytes: new TextEncoder().encode('layout image bytes'),
+      contentType: 'image/webp',
+      version: 'fixture',
+    })
     await f.stores.bindings.initialize()
     await f.stores.bindings.set('a', {
       baseUrl: 'https://example.test/kb/a',
@@ -287,7 +295,10 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       template.replace(':slug', 'a').replace(':id', id).replace(':eid', evidence.id).replace(
         ':kind',
         'logo',
-      ).replace(':topicId', 'stock-assessment').replace(':fieldId', 'original').replace(
+      ).replace(':name', 'banner').replace(':topicId', 'stock-assessment').replace(
+        ':fieldId',
+        'original',
+      ).replace(
         '*',
         'a/assistant',
       ) + '?q=abalone&name=Abalone&labelsets=topic,kind'
@@ -405,6 +416,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         '/api/tenants': 'a',
         '/api/t/:slug/config': 'a',
         '/api/t/:slug/branding/:kind': 'branding bytes',
+        '/api/t/:slug/branding/image/:name': 'layout image bytes',
         '/api/t/:slug/knowledge-box': 'connected',
         '/api/t/:slug/sessions': 'Seeded history',
         '/api/t/:slug/sessions/:id': 'Seeded history',
@@ -868,6 +880,8 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['POST', 'questions/run', 'enrichments.write', { limit: 1 }],
   ['POST', 'resources/:id/enrich', 'enrichments.write', {}],
   ['POST', 'branding/:kind', 'appearance.write', 'image bytes'],
+  ['POST', 'branding/image/:name', 'appearance.write', 'image bytes'],
+  ['DELETE', 'branding/image/:name', 'appearance.write'],
   ['GET', 'prompts', 'behaviour.write'],
   ['PUT', 'prompts', 'behaviour.write', { ask: 'Research evidence only.' }],
   ['GET', 'search-configs', 'behaviour.write'],
@@ -1099,6 +1113,13 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       }])
       fixture.stores.kgProposals.set('a', proposal)
       if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
+      if (method === 'DELETE' && suffix === 'branding/image/:name') {
+        fixture.stores.branding.put('a', 'image-banner', {
+          bytes: new TextEncoder().encode('layout image bytes'),
+          contentType: 'image/png',
+          version: 'fixture',
+        })
+      }
       if (method === 'DELETE' && suffix === 'aliases/:hostname') {
         fixture.stores.tenants.setAlias('a', 'research.example.org', undefined, 5)
       }
@@ -1137,6 +1158,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       Deno.env.set('ARAG_ACCOUNT', 'fixture-account')
       const path =
         template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
+          .replace(':name', 'banner')
           .replace(':hostname', 'research.example.org')
           .replace(
             ':id',

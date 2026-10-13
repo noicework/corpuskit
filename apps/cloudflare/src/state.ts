@@ -9,7 +9,12 @@ import {
   TenantConfigSchema,
   type TenantSummary,
 } from '@research-portal/core'
-import type { BrandingAsset, BrandingAssetStore, BrandingKind } from '../../api/src/app.ts'
+import type {
+  BrandingAsset,
+  BrandingAssetStore,
+  BrandingKind,
+  LayoutImageKind,
+} from '../../api/src/app.ts'
 import { type BindingStoreApi, SealedBindingStore } from '../../api/src/bindings.ts'
 import { BindingCryptoError } from '../../api/src/binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
@@ -52,7 +57,10 @@ import type {
   WatchStoreApi,
 } from '../../api/src/stores.ts'
 import {
+  brandingLayer,
+  type BrandingPatch,
   type NewTenantInput,
+  patchedBranding,
   retiredSlugs,
   showcasePortals,
   tenantConfig,
@@ -863,6 +871,26 @@ export class DurableState {
     }
   }
 
+  /** Each stored asset's key and version under `prefix`, without its bytes. */
+  assetVersions(prefix: string): { key: string; version: string }[] {
+    return this.sql.exec<{ key: string; version: string }>(
+      'SELECT key, version FROM branding_assets WHERE key >= ? AND key < ? ORDER BY key',
+      prefix,
+      prefixUpperBound(prefix),
+    ).toArray()
+  }
+
+  /** Delete one stored asset; whether there was one. */
+  deleteAsset(key: string): boolean {
+    this.guardLocalWrite()
+    const found = this.sql.exec<{ n: number }>(
+      'SELECT count(*) AS n FROM branding_assets WHERE key = ?',
+      key,
+    ).one().n
+    if (found) this.sql.exec('DELETE FROM branding_assets WHERE key = ?', key)
+    return found > 0
+  }
+
   putAsset(key: string, asset: BrandingAsset): void {
     this.guardLocalWrite()
     const bytes = asset.bytes.buffer.slice(
@@ -1172,38 +1200,17 @@ export class DurableTenantStore implements TenantStoreApi {
     this.save({ ...data, disabled: [...set] })
   }
 
-  patchBranding(
-    slug: string,
-    branding: {
-      productName?: string
-      organisation?: string
-      tagline?: string
-      colours?: TenantConfig['branding']['colours']
-      typography?: TenantConfig['branding']['typography']
-      shape?: TenantConfig['branding']['shape']
-      textScale?: TenantConfig['branding']['textScale']
-      density?: TenantConfig['branding']['density']
-      paletteId?: TenantConfig['branding']['paletteId']
-    },
-  ): void {
+  /** See `TenantStore.patchBranding`: the write lands on the layer reads take branding from. */
+  patchBranding(slug: string, branding: BrandingPatch): void {
     const base = this.get(slug)
     if (!base) return
     const data = this.load()
-    const merged = {
-      ...base.branding,
-      ...(branding.productName ? { productName: branding.productName } : {}),
-      ...(branding.organisation ? { organisation: branding.organisation } : {}),
-      ...(branding.tagline ? { tagline: branding.tagline } : {}),
-      ...(branding.colours ? { colours: branding.colours } : {}),
-      ...(branding.typography ? { typography: branding.typography } : {}),
-      ...(branding.shape ? { shape: branding.shape } : {}),
-      ...(branding.textScale ? { textScale: branding.textScale } : {}),
-      ...(branding.density ? { density: branding.density } : {}),
-      ...(branding.paletteId ? { paletteId: branding.paletteId } : {}),
-    }
-    if (data.custom[slug]) {
+    const merged = patchedBranding(base.branding, branding)
+    const override = this.existingPatch(data, slug)
+    const custom = Object.hasOwn(data.custom, slug) && !tenantConfig(slug)
+    if (brandingLayer(custom, override) === 'custom') {
       data.custom[slug] = { ...TenantConfigSchema.parse(data.custom[slug]), branding: merged }
-    } else data.overrides[slug] = { ...this.existingPatch(data, slug), branding: merged }
+    } else data.overrides[slug] = { ...override, branding: merged }
     this.save(data)
   }
 
@@ -2034,7 +2041,19 @@ export class DurableBrandingStore implements BrandingAssetStore {
     this.state.putAsset(key('branding', slug, kind), asset)
   }
 
-  /** Remove every uploaded asset of the portal: logo, hero image and fonts. */
+  remove(slug: string, kind: LayoutImageKind): boolean {
+    return this.state.deleteAsset(key('branding', slug, kind))
+  }
+
+  images(slug: string): { name: string; version: string }[] {
+    const prefix = `${key('branding', slug)}:image-`
+    return this.state.assetVersions(prefix).map((row) => ({
+      name: row.key.slice(prefix.length),
+      version: row.version,
+    }))
+  }
+
+  /** Remove every uploaded asset of the portal: logo, hero image, fonts and layout images. */
   erase(slug: string): number {
     const plain = portalSegment(slug)
     return this.state.erasePrefix('branding_assets', plain && `${key('branding', plain)}:`)

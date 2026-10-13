@@ -191,7 +191,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     // Deleting a document removes the enrichments kept for it; the delete needs only content.write.
     ['enrichments', ['forgetResource'], 'content.write', 'portal'],
     ['kgProposals', ['set'], 'graph.write', 'portal'],
-    ['branding', ['put'], 'appearance.write', 'portal'],
+    ['branding', ['put', 'remove'], 'appearance.write', 'portal'],
     ['mcpKeys', ['add', 'revoke'], 'keys.manage', 'portal'],
   ] as const).flatMap(([store, methods, permission, scope]) =>
     methods.map((method) =>
@@ -220,6 +220,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       'D9 permits only the safe pre-auth projection without portal.read; full config remains protected.',
   }),
   entry('http', 'GET', '/api/t/:slug/branding/:kind', 'portal.read', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/thumbnail', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/search', 'portal.read', 'portal'),
   entry('http', 'POST', '/api/t/:slug/route', 'portal.ask', 'portal'),
@@ -385,6 +386,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
           'textScale',
           'density',
           'paletteId',
+          'layout',
         ],
       },
       {
@@ -427,6 +429,12 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/questions/run', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/enrich', 'enrichments.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/branding/:kind', 'appearance.write', 'portal', {
+    operator: true,
+  }),
+  entry('http', 'POST', '/api/admin/t/:slug/branding/image/:name', 'appearance.write', 'portal', {
+    operator: true,
+  }),
+  entry('http', 'DELETE', '/api/admin/t/:slug/branding/image/:name', 'appearance.write', 'portal', {
     operator: true,
   }),
   entry('http', 'GET', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),

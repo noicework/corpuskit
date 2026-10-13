@@ -2,6 +2,7 @@ import { type FormEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import {
+  type PortalLayout,
   type ResourceSummary,
   showsRegionalDiscovery,
   type TenantConfig,
@@ -57,17 +58,32 @@ function HeroBackdrop({ imageUrl }: { imageUrl?: string }) {
   )
 }
 
-function Hero({
+/** A portal layout's hero: its own heading, body, image and question chips. */
+type LayoutHero = NonNullable<NonNullable<PortalLayout['home']>['hero']>
+
+export function Hero({
   config,
   onAsk,
+  hero,
+  showRecent = true,
 }: {
   config: TenantConfig
   /** The hero's own question path: submitting or picking a suggestion. */
   onAsk: (text: string) => void
+  /** Set on a portal with its own home page; absent, the built-in hero. */
+  hero?: LayoutHero
+  /** Whether the recently added list sits beside the ask when there is no hero image. */
+  showRecent?: boolean
 }) {
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
   const isAcmd = config.branding.paletteId === 'acmd'
+  // A layout's own chips replace the suggested questions, even with an empty list.
+  const chips = hero?.questions ??
+    config.suggestedQuestions.slice(0, 3).map((question) => question.text)
+  const heroImage = hero?.image?.url ? hero.image : undefined
+  // A layout's chips are often whole questions, which wrap on a phone.
+  const chipAlign = hero ? ' text-left' : ''
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -95,12 +111,23 @@ function Hero({
         <HeroBackdrop imageUrl={config.branding.heroImageUrl} />
       )}
 
-      <div className='rp-shell grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-14'>
+      <div
+        className={`rp-shell grid items-center gap-10 lg:gap-14 ${
+          heroImage
+            ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)]'
+            : 'lg:grid-cols-[minmax(0,1fr)_22rem]'
+        }`}
+      >
         <div className='min-w-0'>
           {isAcmd && <p className='rp-acmd-demo-label'>ACMD Research Portal · Demo</p>}
           <h1 className='rp-display rp-anim-rise text-4xl text-[var(--rp-on-hero)] sm:text-5xl lg:text-6xl'>
-            {isAcmd ? config.branding.tagline : 'What would you like to explore?'}
+            {isAcmd ? config.branding.tagline : hero?.heading ?? 'What would you like to explore?'}
           </h1>
+          {!isAcmd && hero?.body && (
+            <p className='rp-anim-rise rp-delay-1 mt-5 max-w-2xl whitespace-pre-line text-lg leading-relaxed text-[var(--rp-on-hero)] opacity-90'>
+              {hero.body}
+            </p>
+          )}
           {isAcmd && (
             <p className='rp-acmd-intro'>
               Explore connected knowledge. Ask a question, discover the evidence and follow it back
@@ -150,17 +177,17 @@ function Hero({
             </div>
           </form>
 
-          {config.suggestedQuestions.length > 0
+          {chips.length > 0
             ? (
               <div className='rp-anim-rise rp-delay-2 mt-4 flex max-w-2xl flex-wrap gap-2'>
-                {config.suggestedQuestions.slice(0, 3).map((question) => (
+                {chips.map((text, index) => (
                   <button
-                    key={question.id}
+                    key={`${index}-${text}`}
                     type='button'
-                    onClick={() => onAsk(question.text)}
-                    className='rp-focus-inverse rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-hero)]/30 bg-[var(--rp-on-hero)]/12 px-3 py-1.5 text-sm text-[var(--rp-on-hero)] backdrop-blur-sm transition-colors duration-150 hover:bg-[var(--rp-on-hero)]/25'
+                    onClick={() => onAsk(text)}
+                    className={`rp-focus-inverse rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-hero)]/30 bg-[var(--rp-on-hero)]/12 px-3 py-1.5 text-sm text-[var(--rp-on-hero)] backdrop-blur-sm transition-colors duration-150 hover:bg-[var(--rp-on-hero)]/25${chipAlign}`}
                   >
-                    {question.text}
+                    {text}
                   </button>
                 ))}
               </div>
@@ -181,9 +208,32 @@ function Hero({
               </div>
             </div>
           )
-          : <RecentDocuments slug={config.slug} />}
+          : heroImage
+          ? <HeroFigure image={heroImage} />
+          : showRecent
+          ? <RecentDocuments slug={config.slug} />
+          : null}
       </div>
     </section>
+  )
+}
+
+/**
+ * A layout hero's own image, framed beside the ask on a wide screen and under it on a narrower
+ * one. A failed load removes the frame rather than leaving an empty box.
+ */
+function HeroFigure({ image }: { image: { url?: string; alt: string } }) {
+  const [failed, setFailed] = useState(false)
+  if (failed || !image.url) return null
+  return (
+    <div className='rp-anim-rise rp-delay-3 rp-layout-hero-figure min-w-0'>
+      <img
+        src={image.url}
+        alt={image.alt}
+        onError={() => setFailed(true)}
+        className='h-full w-full object-cover'
+      />
+    </div>
   )
 }
 
@@ -404,7 +454,7 @@ function ResourceCard({ slug, resource }: { slug: string; resource: ResourceSumm
             imgClassName='object-top'
           />
         </div>
-        <span className='absolute left-2 top-2'>
+        <span className='absolute left-2 top-2 z-10'>
           <TypeBadge type={resource.type} />
         </span>
       </div>
@@ -462,7 +512,7 @@ function SectionHeading(
   )
 }
 
-function TopicRowSkeleton() {
+export function TopicRowSkeleton() {
   return (
     <div>
       <Skeleton className='h-6 w-56' />
@@ -500,10 +550,13 @@ const TOPIC_ROW_LIMIT = 12
  * Page
  * ---------------------------------------------------------------------- */
 
-export function ExplorePage() {
-  const { config } = useOutletContext<TenantOutletContext>()
-  const navigate = useNavigate()
-
+/**
+ * The topic rows: one scrolling row per topic the box has filed resources under. `emptyState`
+ * says so when there are none; a home page made of other sections leaves it out instead.
+ */
+export function TopicRows(
+  { config, emptyState = true }: { config: TenantConfig; emptyState?: boolean },
+) {
   // The box's real classification index, not per-resource topicIds (the DA
   // classifier's labels don't reliably land in a listed resource's own
   // usermetadata - see the provider's `topicResources` doc comment). Facet
@@ -533,17 +586,116 @@ export function ExplorePage() {
     })),
   })
 
-  // The hero asks rather than searches - Search no longer answers questions,
-  // so a question the reader types (or picks from the suggestions) goes
-  // straight to Ask with the question pre-filled and auto-sent.
-  const ask = useCallback(
-    (text: string) => navigate(`/t/${config.slug}/ask?ask=${encodeURIComponent(text)}`),
-    [navigate, config.slug],
-  )
-
   // Genuinely empty only when the box's classification index has zero topic
   // facets - never because a per-resource topicIds field came back empty.
   const hasRows = nonEmptyTopics.length > 0
+
+  if (!emptyState && !isLoading && !isError && !hasRows) return null
+
+  return (
+    <section className='rp-shell space-y-10 pb-16 pt-12'>
+      {isError
+        ? (
+          <ErrorCard
+            message={error instanceof Error ? error.message : 'Could not load resources.'}
+            onRetry={() => void refetch()}
+          />
+        )
+        : null}
+
+      {isLoading
+        ? (
+          <>
+            <TopicRowSkeleton />
+            <TopicRowSkeleton />
+          </>
+        )
+        : null}
+
+      {emptyState && !isLoading && !isError && !hasRows
+        ? (
+          <EmptyState
+            title='Nothing to browse yet'
+            description='This portal has no resources filed against its topics yet. Topics appear here once documents are added and analysed.'
+          >
+            <div className='flex flex-wrap gap-3'>
+              <AddDocumentsLink slug={config.slug} />
+              <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-outline'>
+                Open the library
+              </Link>
+            </div>
+          </EmptyState>
+        )
+        : null}
+
+      {!isLoading && !isError
+        ? nonEmptyTopics.map(({ topic, count }, index) => {
+          const rowQuery = topicRowQueries[index]
+          if (rowQuery?.isLoading) return <TopicRowSkeleton key={topic.id} />
+          // A row's own fetch failing, or resolving empty (e.g. every
+          // matching resource is hidden/junk), quietly drops that one row
+          // rather than mislabelling the whole portal empty.
+          const items = rowQuery?.data
+          if (!items || items.length === 0) return null
+
+          return (
+            <div key={topic.id}>
+              <SectionHeading
+                slug={config.slug}
+                topicId={topic.id}
+                label={topic.label}
+                count={count}
+              />
+              {
+                /* On a phone the track spans the whole viewport rather than
+                 * stopping at the shell's gutter, so cards pass under both
+                 * screen edges as the row scrolls instead of being sliced off
+                 * against an invisible margin 1.5rem in. The negative margin
+                 * releases the track; the equal padding inside it supplies
+                 * the resting inset, so at scroll 0 the first card still sits
+                 * on the 1.5rem gutter, in line with the heading above it,
+                 * and the last card keeps the same clearance at the far end.
+                 *
+                 * The 1.5rem is written out rather than taken from the
+                 * spacing scale on purpose. `rp-shell`'s gutter is a fixed
+                 * 1.5rem, but Tailwind's spacing utilities resolve against
+                 * `--spacing`, which the tenant density dial scales - a
+                 * `comfortable` or `spacious` portal would give this track a
+                 * negative margin wider than the gutter it is cancelling and
+                 * push the whole page sideways.
+                 *
+                 * `scroll-pl` matches the padding so snapping and any
+                 * scroll-into-view (keyboard focus, for one) come to rest on
+                 * the visual gutter rather than against the screen edge. */
+              }
+              <div className='rp-scroll-row rp-no-scrollbar -mx-[1.5rem] mt-3.5 flex gap-3 overflow-x-auto scroll-pl-[1.5rem] px-[1.5rem] pb-4 pt-1 sm:mx-0 sm:scroll-pl-0 sm:px-0'>
+                {items.map((resource) => (
+                  <ResourceCard key={resource.id} slug={config.slug} resource={resource} />
+                ))}
+              </div>
+            </div>
+          )
+        })
+        : null}
+    </section>
+  )
+}
+
+/** Open Ask with the question pre-filled and auto-sent. */
+export function useAskNavigation(slug: string): (text: string) => void {
+  const navigate = useNavigate()
+  // The hero asks rather than searches - Search no longer answers questions,
+  // so a question the reader types (or picks from the suggestions) goes
+  // straight to Ask with the question pre-filled and auto-sent.
+  return useCallback(
+    (text: string) => navigate(`/t/${slug}/ask?ask=${encodeURIComponent(text)}`),
+    [navigate, slug],
+  )
+}
+
+export function ExplorePage() {
+  const { config } = useOutletContext<TenantOutletContext>()
+  const ask = useAskNavigation(config.slug)
 
   return (
     <main>
@@ -553,91 +705,7 @@ export function ExplorePage() {
 
       {showsRegionalDiscovery(config) && <RegionBand slug={config.slug} />}
 
-      <section className='rp-shell space-y-10 pb-16 pt-12'>
-        {isError
-          ? (
-            <ErrorCard
-              message={error instanceof Error ? error.message : 'Could not load resources.'}
-              onRetry={() => void refetch()}
-            />
-          )
-          : null}
-
-        {isLoading
-          ? (
-            <>
-              <TopicRowSkeleton />
-              <TopicRowSkeleton />
-            </>
-          )
-          : null}
-
-        {!isLoading && !isError && !hasRows
-          ? (
-            <EmptyState
-              title='Nothing to browse yet'
-              description='This portal has no resources filed against its topics yet. Topics appear here once documents are added and analysed.'
-            >
-              <div className='flex flex-wrap gap-3'>
-                <AddDocumentsLink slug={config.slug} />
-                <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-outline'>
-                  Open the library
-                </Link>
-              </div>
-            </EmptyState>
-          )
-          : null}
-
-        {!isLoading && !isError
-          ? nonEmptyTopics.map(({ topic, count }, index) => {
-            const rowQuery = topicRowQueries[index]
-            if (rowQuery?.isLoading) return <TopicRowSkeleton key={topic.id} />
-            // A row's own fetch failing, or resolving empty (e.g. every
-            // matching resource is hidden/junk), quietly drops that one row
-            // rather than mislabelling the whole portal empty.
-            const items = rowQuery?.data
-            if (!items || items.length === 0) return null
-
-            return (
-              <div key={topic.id}>
-                <SectionHeading
-                  slug={config.slug}
-                  topicId={topic.id}
-                  label={topic.label}
-                  count={count}
-                />
-                {
-                  /* On a phone the track spans the whole viewport rather than
-                   * stopping at the shell's gutter, so cards pass under both
-                   * screen edges as the row scrolls instead of being sliced off
-                   * against an invisible margin 1.5rem in. The negative margin
-                   * releases the track; the equal padding inside it supplies
-                   * the resting inset, so at scroll 0 the first card still sits
-                   * on the 1.5rem gutter, in line with the heading above it,
-                   * and the last card keeps the same clearance at the far end.
-                   *
-                   * The 1.5rem is written out rather than taken from the
-                   * spacing scale on purpose. `rp-shell`'s gutter is a fixed
-                   * 1.5rem, but Tailwind's spacing utilities resolve against
-                   * `--spacing`, which the tenant density dial scales - a
-                   * `comfortable` or `spacious` portal would give this track a
-                   * negative margin wider than the gutter it is cancelling and
-                   * push the whole page sideways.
-                   *
-                   * `scroll-pl` matches the padding so snapping and any
-                   * scroll-into-view (keyboard focus, for one) come to rest on
-                   * the visual gutter rather than against the screen edge. */
-                }
-                <div className='rp-scroll-row rp-no-scrollbar -mx-[1.5rem] mt-3.5 flex gap-3 overflow-x-auto scroll-pl-[1.5rem] px-[1.5rem] pb-4 pt-1 sm:mx-0 sm:scroll-pl-0 sm:px-0'>
-                  {items.map((resource) => (
-                    <ResourceCard key={resource.id} slug={config.slug} resource={resource} />
-                  ))}
-                </div>
-              </div>
-            )
-          })
-          : null}
-      </section>
+      <TopicRows config={config} />
     </main>
   )
 }
