@@ -28,6 +28,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- In the dark scheme, the brand-coloured text on Explore's tiles now reads at AA on its tinted background. With a bright accent it fell to 3.6:1 before, because it was only checked against the page. ([#77](https://github.com/noicework/corpuskit/pull/77))
 - Analyse and configure no longer replaces a knowledge box's own `topic` or `kind` label set. When the box already has one the portal did not create, analysis stops before changing anything and the Analyse panel says which set is in the way. A re-run over the sets an earlier run wrote works as before. ([#76](https://github.com/noicework/corpuskit/pull/76))
 - Answers no longer fail with "The answer service had a problem" when the model cites a document's generated summary. The citation points at the document itself, never at the summary's words, and is checked against the document's own text; a citation to a summary of a document outside the answer's scope is dropped instead. ([#76](https://github.com/noicework/corpuskit/pull/76))
 - Link previews of a portal on its own subdomain or hostname show the CorpusKit share image, which the page now names on the host that served it rather than on the platform domain. ([#74](https://github.com/noicework/corpuskit/pull/74))

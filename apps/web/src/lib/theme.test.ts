@@ -191,14 +191,26 @@ describe('paletteVars', () => {
     expect(vars['--rp-on-primary']).toBe('#ffffff')
   })
 
-  it("lifts a portal's own brand colours for the dark scheme exactly as before", async () => {
+  it("lifts a portal's own brand colours for the dark scheme", async () => {
     const { DARK_GREY_SUITE, ensureContrast } = await import('./theme.ts')
+    const { mixHex } = await import('@research-portal/core')
     const colours = { ...DEFAULT_PORTAL_COLOURS }
     const vars = paletteVars(branding({ colours }), 'dark')
     const surface = DARK_GREY_SUITE['--rp-surface']!
     expect(vars['--rp-accent-fg']).toBe(ensureContrast(colours.accent, surface, 4.5))
-    expect(vars['--rp-brand-fg']).toBe(ensureContrast(colours.primary, surface, 4.5))
     expect(vars['--rp-focus']).toBe(ensureContrast(colours.accent, surface, 3))
+    // The brand ink also has to read on the washes Explore's tiles use, so it
+    // is lifted past the surface-only value when that falls short there.
+    const grounds = [
+      surface,
+      mixHex(colours.accent, surface, 0.18),
+      mixHex(colours.accent, surface, 0.3),
+    ]
+    for (const ground of grounds) {
+      expect(contrastRatio(vars['--rp-brand-fg']!, ground), ground).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(contrastRatio(ensureContrast(colours.primary, surface, 4.5), grounds[2]!))
+      .toBeLessThan(4.5)
   })
 
   it('gives every palette and scheme a field edge at 3:1', async () => {
@@ -363,6 +375,27 @@ describe('viewer dark scheme', () => {
     expect(vars['--rp-primary']).toBe('#2e2359')
     expect(vars['--rp-ok-bg']).toBe('#0e2f24')
     expect(tenantThemeVars(branding(), 'dark').colorScheme).toBe('dark')
+  })
+
+  it('keeps the brand ink at AA on the accent washes, not only on the surface', async () => {
+    const { DARK_GREY_SUITE, ensureContrast } = await import('./theme.ts')
+    const { contrastRatio, mixHex } = await import('@research-portal/core')
+    // A near-black brand colour with a bright accent: lifted against the
+    // surface alone, the brand ink fell to about 3.6:1 on the tiles' wash.
+    const accent = '#5ce500'
+    const vars = paletteVars(
+      branding({
+        colours: { primary: '#1e2226', accent, heroFrom: '#0b0f12', heroTo: '#1e2226' },
+      }),
+      'dark',
+    )
+    const surface = DARK_GREY_SUITE['--rp-surface']!
+    for (const ground of [surface, mixHex(accent, surface, 0.18), mixHex(accent, surface, 0.3)]) {
+      expect(contrastRatio(vars['--rp-brand-fg']!, ground), ground).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(vars['--rp-accent-fg']).toBe(ensureContrast(accent, surface, 4.5))
+    expect(vars['--rp-wash']).toBe(`color-mix(in srgb, ${accent} 18%, ${surface})`)
+    expect(vars['--rp-wash-strong']).toBe(`color-mix(in srgb, ${accent} 30%, ${surface})`)
   })
 
   it('gives the CorpusKit navigation a dark surface and readable links', async () => {

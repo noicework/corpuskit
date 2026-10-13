@@ -8,6 +8,7 @@ import {
   FONT_PAIRINGS,
   type FontPairingId,
   FontPairingIdSchema,
+  mixHex,
   type Palette,
   paletteFromColours,
   type ShapeId,
@@ -254,23 +255,51 @@ export function ensureContrast(hex: string, surface: string, minimum: number): s
 }
 
 /**
+ * `ensureContrast` over several grounds at once: the ink is lightened until it
+ * clears the ratio on every one of them.
+ */
+function ensureContrastOn(hex: string, grounds: readonly string[], minimum: number): string {
+  if (!hexToRgb(hex)) return hex
+  let candidate = hex
+  for (let step = 0; step <= 10; step++) {
+    candidate = mixWithWhite(hex, step / 10)
+    if (grounds.every((ground) => contrastRatio(candidate, ground) >= minimum)) return candidate
+  }
+  return candidate
+}
+
+/** The shares of accent in the dark washes, as `--rp-wash` and `--rp-wash-strong` mix them. */
+const DARK_WASH_SHARE = 0.18
+const DARK_WASH_STRONG_SHARE = 0.3
+
+/**
  * Token overrides for the viewer's dark scheme on a portal whose own
  * palette is light: the dark grey suite, dark-polarity status colours, an
  * opaque-enough glass, washes mixed from the accent over the dark surface,
- * and brand/accent inks lightened to AA on the dark surface.
+ * and brand/accent inks lightened to AA on the dark surface. Brand ink is
+ * also checked on both washes, since Explore's tiles set it on them: a bright
+ * accent makes a wash light enough that a brand ink checked against the
+ * surface alone fell under AA there. Accent ink is drawn on the surface only
+ * (on a wash the accent is a border), so it keeps the surface check.
  */
 function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
   const surface = DARK_GREY_SUITE['--rp-surface']!
   const accent = roles['--rp-accent'] ?? '#888888'
+  const washes = hexToRgb(accent)
+    ? [mixHex(accent, surface, DARK_WASH_SHARE), mixHex(accent, surface, DARK_WASH_STRONG_SHARE)]
+    : []
+  const inkGrounds = [surface, ...washes]
   return {
     ...DARK_GREY_SUITE,
     ...DARK_STATUS_VARS,
     '--rp-glass-bg': `color-mix(in srgb, ${surface} 92%, transparent)`,
-    '--rp-brand-fg': ensureContrast(roles['--rp-brand-fg'] ?? accent, surface, 4.5),
+    '--rp-brand-fg': ensureContrastOn(roles['--rp-brand-fg'] ?? accent, inkGrounds, 4.5),
     '--rp-accent-fg': ensureContrast(roles['--rp-accent-fg'] ?? accent, surface, 4.5),
     '--rp-focus': ensureContrast(roles['--rp-focus'] ?? accent, surface, 3),
-    '--rp-wash': `color-mix(in srgb, ${accent} 18%, ${surface})`,
-    '--rp-wash-strong': `color-mix(in srgb, ${accent} 30%, ${surface})`,
+    '--rp-wash': `color-mix(in srgb, ${accent} ${DARK_WASH_SHARE * 100}%, ${surface})`,
+    '--rp-wash-strong': `color-mix(in srgb, ${accent} ${
+      DARK_WASH_STRONG_SHARE * 100
+    }%, ${surface})`,
   }
 }
 
