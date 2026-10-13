@@ -10,17 +10,17 @@
  *    that titles some of the retrieved papers, a figure sentence may cite
  *    only those papers unless it names another study itself;
  *  - the rescue: before a sentence is withheld, its figures are looked up
- *    in the full text of every retrieved resource, the papers cited in the
- *    session's earlier turns and the data-augmentation summary and key
- *    takeaways, and a resource that carries every figure beside the claim
- *    lends the sentence its marker;
+ *    in the full text of every retrieved resource and the papers cited in
+ *    the session's earlier turns, and a resource that carries every figure
+ *    beside the claim lends the sentence its marker. A data-augmentation
+ *    summary is never evidence: the answer may have been written from it;
  *  - the replacement: a removed sentence about a named paper is replaced
  *    by that paper's own figure sentence, quoted verbatim and cited.
  *
- * Everything here is string matching over the platform's extracted texts
- * and DA fields; no model is in the loop.
+ * Everything here is string matching over the platform's extracted texts;
+ * no model is in the loop.
  */
-import type { Citation, ScoredResource } from '@research-portal/core'
+import type { Citation } from '@research-portal/core'
 import {
   abbreviationPairs,
   bracketSpan,
@@ -214,22 +214,11 @@ export function namesOtherStudy(sentence: string, terms: readonly string[]): boo
 // The pool of texts a figure may be found in
 // ---------------------------------------------------------------------------
 
+/** A paper's extracted text, never its generated summary. */
 export interface PoolText {
   resourceId: string
   title: string
   text: string
-  /** True for the data-augmentation summary and key takeaways rather than the paper. */
-  generated: boolean
-}
-
-/** The DA summary and key takeaways of a resource as one text, or undefined when it has neither. */
-export function generatedText(
-  resource: Pick<ScoredResource, 'summary' | 'keyTakeaways'>,
-): string | undefined {
-  const parts = [...(resource.keyTakeaways ?? []), resource.summary ?? ''].filter((p) =>
-    p.trim().length > 0
-  )
-  return parts.length > 0 ? parts.join('\n\n') : undefined
 }
 
 // ---------------------------------------------------------------------------

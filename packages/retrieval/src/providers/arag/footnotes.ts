@@ -2,6 +2,7 @@
 // by [1]: block-AA definitions and a separate footnote_to_context event.
 // Keep answer offsets in UTF-16, just like the existing browser renderer.
 import type { Citation } from '@research-portal/core'
+import type { GeneratedCitations } from './citations.ts'
 
 /** Fixed, non-content diagnostics. Never attach source IDs, text or wire payloads. */
 export type FootnoteFailureReason =
@@ -14,7 +15,6 @@ export type FootnoteFailureReason =
   | 'unsupported_context'
   | 'anonymous_context'
   | 'metadata_context'
-  | 'generated_context'
   | 'out_of_scope'
   | 'stream_rewrite'
   | 'unexpected_standard_citations'
@@ -29,16 +29,24 @@ export class FootnoteError extends Error {
  * Preserve CorpusKit's resource-level numbering contract while taking anchor
  * positions from the model's verified block references, not offset attribution.
  * Validate every referenced block before emitting any citation.
+ *
+ * A reference to a data-augmentation field (`<rid>/t/da-...`, a generated
+ * summary rather than the document) is the one exception to failing closed:
+ * it binds to its resource at resource level, sharing that resource's number,
+ * or is dropped, marker and all, when the resource is not citable here. The
+ * citation never carries the generated text, and the sentence audit checks
+ * the claim against the document's own text.
  */
 export function bindFootnotes(
   parsed: ReturnType<FootnoteStream['finish']>,
   citable: (resourceId: string) => boolean,
   resolveTitle: (resourceId: string) => string,
   extraContextSources: ReadonlyMap<string, string> = new Map(),
-): { text: string; citations: Citation[] } {
+): { text: string; citations: Citation[]; generated: GeneratedCitations } {
   const citations: Citation[] = []
   const byResource = new Map<string, number>()
   const inserts = new Map<number, Set<number>>()
+  const generated: GeneratedCitations = { remapped: 0, dropped: 0 }
   for (const anchor of parsed.anchors) {
     const suppliedResource = extraContextSources.get(anchor.id)
     const match = /^([^/]+)\/(t|f|l|c)\/([^/]+)(?:\/(?:[^/]+\/)?\d+-\d+)?$/.exec(anchor.id)
@@ -50,11 +58,16 @@ export function bindFootnotes(
         : 'unsupported_context'
       throw new FootnoteError(reason)
     }
-    if (match?.[3]?.startsWith('da-')) throw new FootnoteError('generated_context')
     // Supplied context has a verified resource identity, not a fabricated
     // native paragraph ID. Both paths retain the same scope validation.
     const resourceId = suppliedResource ?? match![1]!
-    if (!citable(resourceId)) throw new FootnoteError('out_of_scope')
+    if (match?.[3]?.startsWith('da-')) {
+      if (!citable(resourceId)) {
+        generated.dropped += 1
+        continue
+      }
+      generated.remapped += 1
+    } else if (!citable(resourceId)) throw new FootnoteError('out_of_scope')
     let index = byResource.get(resourceId)
     if (index === undefined) {
       index = citations.length + 1
@@ -70,7 +83,7 @@ export function bindFootnotes(
     const markers = [...indices].sort((a, b) => a - b).map((n) => `[${n}]`).join('')
     text = text.slice(0, pos) + markers + text.slice(pos)
   }
-  return { text, citations }
+  return { text, citations, generated }
 }
 export interface FootnoteReference {
   number: string

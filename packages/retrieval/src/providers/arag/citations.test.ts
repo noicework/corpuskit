@@ -3,6 +3,7 @@ import { expect } from '@std/expect'
 import {
   assignCitationIndices,
   parseCitationRanges,
+  scopeCitationsMap,
   spliceCitationMarkers,
   stripInlineMarkers,
 } from './citations.ts'
@@ -170,5 +171,56 @@ describe('spliceCitationMarkers', () => {
     const map = { 'res-a/text/body/0': [[0, 9999]] }
     const result = spliceCitationMarkers(raw, map, titleFor)
     expect(result.text).toBe('Short answer.[1]')
+  })
+})
+
+describe('scopeCitationsMap', () => {
+  const citable = (id: string) => id !== 'res-out'
+
+  it('keeps citable keys and drops the rest, as before', () => {
+    const map = { 'res-a/t/body/0-5': [[0, 5]], 'res-out/t/body/6-9': [[6, 9]] }
+    expect(scopeCitationsMap(map, citable)).toEqual({
+      citations: { 'res-a/t/body/0-5': [[0, 5]] },
+      generated: { remapped: 0, dropped: 0 },
+    })
+  })
+
+  it('re-keys a generated-summary key to its resource alone, or drops it when not citable', () => {
+    const map = {
+      'res-a/t/da-summary/0-10': [[0, 10]],
+      'res-a/t/da-takeaways/0-4': [[12, 20]],
+      'res-out/t/da-summary/0-10': [[22, 30]],
+    }
+    expect(scopeCitationsMap(map, citable)).toEqual({
+      // No paragraph id survives, so nothing can quote the generated text.
+      citations: { 'res-a': [[0, 10], [12, 20]] },
+      generated: { remapped: 2, dropped: 1 },
+    })
+  })
+
+  it('cites a resource once whether its own text or its summary came first', () => {
+    const raw = 'Stocks fell. Closures followed. Recovery was slow.'
+    for (
+      const map of [
+        { 'res-a/t/da-summary/0-10': [[0, 12]], 'res-a/f/pdf/0-9': [[0, 31]] },
+        { 'res-a/f/pdf/0-9': [[0, 12]], 'res-a/t/da-summary/0-10': [[0, 31]] },
+      ]
+    ) {
+      const scoped = scopeCitationsMap({ ...map, 'res-b/f/pdf/0-9': [[0, 50]] }, citable)
+      const result = spliceCitationMarkers(raw, scoped.citations, titleFor)
+      expect(result.citations).toEqual([
+        { index: 1, resourceId: 'res-a', title: 'Report A' },
+        { index: 2, resourceId: 'res-b', title: 'Report B' },
+      ])
+      expect(result.text).toBe('Stocks fell.[1] Closures followed.[1] Recovery was slow.[2]')
+    }
+  })
+
+  it('resolves supplied-context aliases to their resource', () => {
+    const map = { USER_CONTEXT_0: [[0, 5]] }
+    expect(scopeCitationsMap(map, citable, new Map([['USER_CONTEXT_0', 'res-a']]))).toEqual({
+      citations: { 'res-a': [[0, 5]] },
+      generated: { remapped: 0, dropped: 0 },
+    })
   })
 })

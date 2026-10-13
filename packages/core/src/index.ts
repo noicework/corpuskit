@@ -1195,7 +1195,7 @@ export const AskEventSchema = z.discriminatedUnion('type', [
      */
     sentencesRemoved: z.number().int().nonnegative().optional(),
     figuresRemoved: z.string().array().optional(),
-    /** Figures found in a retrieved, prior-turn or generated text after the cited passages failed them. */
+    /** Figures found in a retrieved or prior-turn paper's own text after the cited passages failed them. */
     figuresRescued: z.string().array().optional(),
     /** Sentences replaced by the named paper's own figure sentence, quoted and cited. */
     sentencesReplaced: z.number().int().nonnegative().optional(),

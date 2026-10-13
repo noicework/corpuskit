@@ -20,7 +20,7 @@ export interface AnswerAudit {
   /** Sentences the figure gate removed because no cited passage carries their figures, and those figures. */
   sentencesRemoved?: number
   figuresRemoved?: string[]
-  /** Figures found in a retrieved, prior-turn or generated text after the cited passages failed them. */
+  /** Figures found in a retrieved or prior-turn paper's own text after the cited passages failed them. */
   figuresRescued?: string[]
   /** Sentences replaced by the named paper's own figure sentence, quoted and cited. */
   sentencesReplaced?: number

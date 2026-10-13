@@ -159,7 +159,10 @@ search configurations are all configurable objects ON the KB, viewable in the ad
   the first 50. Never assume.
 - **Native faceted aggregation costs 40s+ per call** - unusable interactively; paginate-and-count.
 - **DA-generated fields can come back as citation hits** on later retrieval (e.g. a stored JSON
-  blob showing up as a "source"). Exclude any `da-`/`/t/da-` field id from citations.
+  blob showing up as a "source"), in standard attribution and as footnote references alike. Never
+  cite a `da-`/`/t/da-` field as a passage: the portal binds such a hit to its resource at
+  resource level, or drops it when that resource is out of scope, and the audit never reads a
+  generated field as evidence (docs/LLM-FOOTNOTES.md).
 - **Task status reporting is unreliable** - a registered task can sit in `configs` and never show
   in `/tasks` `done` even when its output is verifiably on every resource. Verify by fetching the
   resource's fields, not just the status flag.

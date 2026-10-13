@@ -121,11 +121,10 @@ Deno.test('footnotes: resource numbering stays compatible with CorpusKit evidenc
   expect(bound.text).not.toContain('[1][1]')
 })
 
-Deno.test('footnotes: excluded, generated and anonymous extra-context references cannot bind', () => {
+Deno.test('footnotes: excluded and anonymous extra-context references cannot bind', () => {
   for (
     const id of [
       'excluded/f/pdf/0-5',
-      'doc/t/da-summary/0-5',
       'USER_CONTEXT_0',
       'javascript:alert(1)',
     ]
@@ -179,7 +178,6 @@ Deno.test('footnotes: context failure classifications do not loosen citation val
   for (
     const [id, reason] of [
       ['USER_CONTEXT_0', 'anonymous_context'],
-      ['doc/t/da-private-summary/0-5', 'generated_context'],
       ['doc/a/title', 'metadata_context'],
       ['doc/a/summary/0-5', 'metadata_context'],
       ['excluded/f/pdf/0-5', 'out_of_scope'],
@@ -190,5 +188,123 @@ Deno.test('footnotes: context failure classifications do not loosen citation val
     parsed.anchors[0]!.id = id!
     expect(failureReason(() => bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')))
       .toBe(reason)
+    // A generated-summary reference elsewhere in the same answer, bound or
+    // dropped, never masks the failure.
+    for (const generated of ['other/t/da-summary/0-5', 'excluded/t/da-summary/0-5']) {
+      const mixed = finish([answer])
+      mixed.anchors[0]!.id = id!
+      mixed.anchors[1]!.id = generated
+      expect(
+        failureReason(() => bindFootnotes(mixed, (rid) => rid !== 'excluded', () => 'Report')),
+      ).toBe(reason)
+    }
   }
+})
+
+// A reference to a data-augmentation field: a generated summary of a
+// document, not the document. It binds to that resource or is dropped.
+const generatedAnswer = 'First claim [1].\n\nSecond claim [2].\n\nThird claim [3].\n\n' +
+  '[1]: block-AA\n[2]: block-BB\n[3]: block-CC\n'
+
+function bindGenerated(contexts: Record<string, string>, citable = (rid: string) => rid !== 'out') {
+  const stream = new FootnoteStream()
+  stream.consume({ type: 'answer', text: generatedAnswer })
+  stream.consume({ type: 'footnote_citations', footnote_to_context: contexts })
+  return bindFootnotes(stream.finish(), citable, (id) => `${id} title`)
+}
+
+/** Every marker resolves to a citation, and the citations are numbered 1..n with no gaps. */
+function expectConsistentNumbering(bound: ReturnType<typeof bindFootnotes>) {
+  const markers = [...bound.text.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]))
+  const indices = bound.citations.map((c) => c.index)
+  expect(indices).toEqual(indices.map((_, i) => i + 1))
+  expect(markers.every((m) => indices.includes(m))).toBe(true)
+  expect(indices.every((i) => markers.includes(i))).toBe(true)
+}
+
+Deno.test('footnotes: a generated-summary reference binds to its citable resource, never as a quote', () => {
+  const bound = bindGenerated({
+    'block-AA': 'doc/f/pdf/0-5',
+    'block-BB': 'summarised/t/da-summary/0-40',
+    'block-CC': 'doc/f/pdf/9-14',
+  })
+  expect(bound.text).toBe('First claim.[1]\n\nSecond claim.[2]\n\nThird claim.[1]\n\n')
+  // Resource level only: no passage, so the generated text is never shown as the source's words.
+  expect(bound.citations).toEqual([
+    { index: 1, resourceId: 'doc', title: 'doc title' },
+    { index: 2, resourceId: 'summarised', title: 'summarised title' },
+  ])
+  expect(bound.generated).toEqual({ remapped: 1, dropped: 0 })
+  expectConsistentNumbering(bound)
+})
+
+Deno.test('footnotes: a generated-summary reference reuses the number its resource already has', () => {
+  for (
+    const contexts of [
+      // The document's own text is cited first, its summary later.
+      { 'block-AA': 'doc/f/pdf/0-5', 'block-BB': 'doc/t/da-summary/0-40' },
+      // The summary is cited first: the document's later text shares its number.
+      { 'block-AA': 'doc/t/da-summary/0-40', 'block-BB': 'doc/f/pdf/0-5' },
+    ]
+  ) {
+    const bound = bindGenerated({ ...contexts, 'block-CC': 'other/f/pdf/0-5' })
+    expect(bound.text).toBe('First claim.[1]\n\nSecond claim.[1]\n\nThird claim.[2]\n\n')
+    expect(bound.citations.map((c) => c.resourceId)).toEqual(['doc', 'other'])
+    expect(bound.generated).toEqual({ remapped: 1, dropped: 0 })
+    expectConsistentNumbering(bound)
+  }
+})
+
+Deno.test('footnotes: a generated-summary reference to a resource that is not citable is dropped', () => {
+  const bound = bindGenerated({
+    'block-AA': 'doc/f/pdf/0-5',
+    'block-BB': 'out/t/da-summary/0-40',
+    'block-CC': 'other/f/pdf/0-5',
+  })
+  // No marker where the dropped reference stood, and no gap in the numbering.
+  expect(bound.text).toBe('First claim.[1]\n\nSecond claim.\n\nThird claim.[2]\n\n')
+  expect(bound.citations.map((c) => c.resourceId)).toEqual(['doc', 'other'])
+  expect(bound.generated).toEqual({ remapped: 0, dropped: 1 })
+  expectConsistentNumbering(bound)
+
+  const only = bindGenerated({
+    'block-AA': 'out/t/da-summary/0-40',
+    'block-BB': 'out/t/da-takeaways/0-12',
+    'block-CC': 'out/t/da-summary/41-90',
+  })
+  expect(only.text).toBe('First claim.\n\nSecond claim.\n\nThird claim.\n\n')
+  expect(only.citations).toEqual([])
+  expect(only.generated).toEqual({ remapped: 0, dropped: 3 })
+})
+
+Deno.test('footnotes: a mixed answer keeps one number per resource and no dead markers', () => {
+  const stream = new FootnoteStream()
+  stream.consume({
+    type: 'answer',
+    text: 'Stocks fell [1][2]. Closures followed [3]. Recovery took years [4][5].\n\n' +
+      'Monitoring continues [2][6].\n\n' +
+      '[1]: block-A1\n[2]: block-A2\n[3]: block-A3\n[4]: block-A4\n[5]: block-A5\n[6]: block-A6\n',
+  })
+  stream.consume({
+    type: 'footnote_citations',
+    footnote_to_context: {
+      'block-A1': 'out/t/da-summary/0-10',
+      'block-A2': 'survey/t/da-summary/0-10',
+      'block-A3': 'closure/f/pdf/0-10',
+      'block-A4': 'survey/f/pdf/20-40',
+      'block-A5': 'out/t/da-takeaways/0-10',
+      'block-A6': 'closure/t/da-summary/0-10',
+    },
+  })
+  const bound = bindFootnotes(stream.finish(), (rid) => rid !== 'out', (id) => `${id} title`)
+  expect(bound.text).toBe(
+    'Stocks fell.[1] Closures followed.[2] Recovery took years.[1]\n\nMonitoring continues.[1][2]\n\n',
+  )
+  expect(bound.citations).toEqual([
+    { index: 1, resourceId: 'survey', title: 'survey title' },
+    { index: 2, resourceId: 'closure', title: 'closure title' },
+  ])
+  // Counted per reference: [2] is used twice.
+  expect(bound.generated).toEqual({ remapped: 3, dropped: 2 })
+  expectConsistentNumbering(bound)
 })

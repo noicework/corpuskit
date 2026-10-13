@@ -286,6 +286,47 @@ describe('citation integrity - every marker in done.text has a citation event', 
     expect(bound.markers).toEqual([])
   })
 
+  it('binds a generated-summary hit to its resource, or drops it, without a dead marker', async () => {
+    // A data-augmentation field (a generated summary) is not the document:
+    // its hit cites the resource at resource level, sharing the number the
+    // resource's own text has, and a hit on a resource out of scope leaves
+    // neither a marker nor a gap.
+    const originalInfo = console.info
+    console.info = () => {}
+    try {
+      const events = await collect(
+        provider({
+          catalog: {
+            ...catalogued('res-a', 'Report A'),
+            ...catalogued('res-b', 'Report B'),
+          },
+          askLines: [
+            { item: { type: 'retrieval', results: { resources: hit('res-a', 'Report A') } } },
+            { item: { type: 'answer', text: 'One finding. Two finding. Three finding.' } },
+            {
+              item: {
+                type: 'citations',
+                citations: {
+                  'res-a/t/da-summary/0-12': [[0, 12]],
+                  'res-ghost/t/da-summary/13-26': [[13, 26]],
+                  'res-b/t/da-summary/27-40': [[27, 40]],
+                  'res-a/t/text/27-40': [[27, 40]],
+                },
+              },
+            },
+          ],
+        }).ask(TENANT, 'What were the findings?'),
+      )
+      const bound = bind(events)
+      expectEveryMarkerResolves(bound)
+      expect(bound.citedIndices).toEqual([1, 2])
+      expect(bound.citedResourceIds).toEqual(['res-a', 'res-b'])
+      expect(bound.text).toBe('One finding.[1] Two finding. Three finding.[1][2]')
+    } finally {
+      console.info = originalInfo
+    }
+  })
+
   it("strips the model's own markers rather than leaving them unresolved", async () => {
     // The model writes its own [n]; those are untrusted prose noise and must
     // never survive into done.text, where they would read as dead markers.

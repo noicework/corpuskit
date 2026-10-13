@@ -515,7 +515,11 @@ export const DOC_PAGES: DocPage[] = [
           "the cited papers' text: a sentence keeps a marker only when the cited paper carries " +
           'its words, its figures and the names it hangs on, so the number you click resolves to ' +
           'a passage that grounds that claim. Markers never sit on headings, and an item in a ' +
-          'list takes the citation of the paragraph it belongs to.',
+          'list takes the citation of the paragraph it belongs to.\n\n' +
+          "A document's generated summary and key takeaways are never a source in their own " +
+          'right. When an answer leans on one, its citation points at the document itself, ' +
+          "never at the summary's words, and the claim is checked against the document's own " +
+          'text: a figure only the summary carries is removed like any other unverified figure.',
       },
       {
         heading: 'Every figure is checked before you see it',
