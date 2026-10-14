@@ -171,12 +171,13 @@ export async function rollback(
 }
 
 /**
- * How many times live verification asks for the exact version, five seconds apart: five minutes.
+ * How many times live verification asks for the exact version, five seconds apart: ten minutes.
  * The app answers health from its Durable Object, and Cloudflare moves a Durable Object to new code
- * "in an eventually consistent manner". The demo switches in seconds, but production took longer
- * than the minute this used to allow, and three releases rolled back on that alone.
+ * "in an eventually consistent manner". A switch can be immediate, but production took longer than
+ * the minute this once allowed, so four releases rolled back on that alone, and the demo's rollback
+ * on 14 October 2026 took five minutes (attempt 58) to show the restored version.
  */
-export const VERIFY_ATTEMPTS = 60
+export const VERIFY_ATTEMPTS = 120
 
 /** A healthy response from an older edge version must not pass candidate/recovery verification. */
 export async function verifyLive(
