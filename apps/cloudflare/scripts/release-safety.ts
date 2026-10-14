@@ -170,17 +170,29 @@ export async function rollback(
   throw new Error('Rollback did not restore the exact previous version')
 }
 
+/**
+ * How many times live verification asks for the exact version, five seconds apart: five minutes.
+ * The app answers health from its Durable Object, and Cloudflare moves a Durable Object to new code
+ * "in an eventually consistent manner". The demo switches in seconds, but production took longer
+ * than the minute this used to allow, and three releases rolled back on that alone.
+ */
+export const VERIFY_ATTEMPTS = 60
+
 /** A healthy response from an older edge version must not pass candidate/recovery verification. */
 export async function verifyLive(
   snapshot: Snapshot,
   request: typeof fetch = fetch,
   wait: () => Promise<void> = () => new Promise((resolve) => setTimeout(resolve, 5_000)),
+  log: (line: string) => void = console.log,
 ): Promise<void> {
   validateSnapshot(snapshot.worker, snapshot.accountId, snapshot)
   const origin = snapshot.worker === 'corpuskit'
     ? 'https://corpuskit.org'
     : 'https://demo.corpuskit.org'
-  for (let attempt = 0; attempt < 12; attempt++) {
+  // What health last answered, logged when it changes so a run shows how long the switch took.
+  let seen = ''
+  for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt++) {
+    let answer = 'no answer'
     try {
       const response = await request(`${origin}/api/health`, {
         cache: 'no-store',
@@ -188,16 +200,27 @@ export async function verifyLive(
       })
       if (response.ok) {
         const health = record(await response.json())
-        if (health.ok === true && health.version === snapshot.versionId) return
+        if (health.ok === true && health.version === snapshot.versionId) {
+          log(`Health reports ${snapshot.versionId} on attempt ${attempt + 1}`)
+          return
+        }
+        answer = typeof health.version === 'string' ? health.version : 'no version'
       } else {
         await response.body?.cancel()
+        answer = `HTTP ${response.status}`
       }
     } catch {
       // Edge propagation and temporary network failures get a bounded retry.
     }
-    if (attempt < 11) await wait()
+    if (answer !== seen) {
+      log(`Health reports ${answer} on attempt ${attempt + 1}; waiting for ${snapshot.versionId}`)
+      seen = answer
+    }
+    if (attempt < VERIFY_ATTEMPTS - 1) await wait()
   }
-  throw new Error('Live health did not confirm the exact expected Worker version')
+  throw new Error(
+    `Live health did not confirm the exact expected Worker version (last answer: ${seen})`,
+  )
 }
 
 async function wrangler(args: string[]): Promise<string> {

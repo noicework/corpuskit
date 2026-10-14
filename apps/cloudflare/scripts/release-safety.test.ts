@@ -7,6 +7,7 @@ import {
   rollback,
   type Run,
   validateSnapshot,
+  VERIFY_ATTEMPTS,
   verifyLive,
 } from './release-safety.ts'
 
@@ -173,25 +174,68 @@ Deno.test('rollback failure and unconfirmed recovery remain failures', async () 
 
 Deno.test('live verification retries stale edge versions and checks the exact Worker origin', async () => {
   const urls: string[] = []
-  await verifyLive(before, (url) => {
-    urls.push(String(url))
-    return Promise.resolve(Response.json({
-      ok: true,
-      version: urls.length === 1 ? candidateVersion : previousVersion,
-    }))
-  }, () => Promise.resolve())
+  const lines: string[] = []
+  await verifyLive(
+    before,
+    (url) => {
+      urls.push(String(url))
+      return Promise.resolve(Response.json({
+        ok: true,
+        version: urls.length === 1 ? candidateVersion : previousVersion,
+      }))
+    },
+    () => Promise.resolve(),
+    (line) => lines.push(line),
+  )
   expect(urls).toEqual(['https://corpuskit.org/api/health', 'https://corpuskit.org/api/health'])
-  await verifyLive({ ...before, worker: 'corpuskit-demo' }, (url) => {
-    expect(String(url)).toBe('https://demo.corpuskit.org/api/health')
-    return Promise.resolve(Response.json({ ok: true, version: previousVersion }))
-  })
+  expect(lines).toEqual([
+    `Health reports ${candidateVersion} on attempt 1; waiting for ${previousVersion}`,
+    `Health reports ${previousVersion} on attempt 2`,
+  ])
+  await verifyLive(
+    { ...before, worker: 'corpuskit-demo' },
+    (url) => {
+      expect(String(url)).toBe('https://demo.corpuskit.org/api/health')
+      return Promise.resolve(Response.json({ ok: true, version: previousVersion }))
+    },
+    () => Promise.resolve(),
+    () => {},
+  )
+})
+
+Deno.test('live verification waits out a slow Durable Object switch', async () => {
+  // Production's Durable Object has taken more than a minute to move to new code.
+  let calls = 0
+  const lines: string[] = []
+  await verifyLive(
+    before,
+    () => {
+      calls++
+      return Promise.resolve(Response.json({
+        ok: true,
+        version: calls < 30 ? candidateVersion : previousVersion,
+      }))
+    },
+    () => Promise.resolve(),
+    (line) => lines.push(line),
+  )
+  expect(calls).toBe(30)
+  // One line per change of answer, not one per attempt.
+  expect(lines).toHaveLength(2)
 })
 
 Deno.test('live verification rejects healthy but wrong-version responses', async () => {
   let calls = 0
-  await expect(verifyLive(before, () => {
-    calls++
-    return Promise.resolve(Response.json({ ok: true, version: candidateVersion }))
-  }, () => Promise.resolve())).rejects.toThrow('exact expected Worker version')
-  expect(calls).toBe(12)
+  await expect(verifyLive(
+    before,
+    () => {
+      calls++
+      return Promise.resolve(Response.json({ ok: true, version: candidateVersion }))
+    },
+    () => Promise.resolve(),
+    () => {},
+  )).rejects.toThrow(
+    `exact expected Worker version (last answer: ${candidateVersion})`,
+  )
+  expect(calls).toBe(VERIFY_ATTEMPTS)
 })
