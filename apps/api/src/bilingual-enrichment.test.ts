@@ -27,10 +27,83 @@ Deno.test('a faithful authored transcript takes precedence over a broken office 
         fieldId: 'texts/native_source',
         text: '日本語の実験ノート\n\n| 条件 | 結果 |\n| A | 22.4 |',
       },
+      { fieldId: 'texts/da-pagesummary-f-source', text: 'An English generated summary.' },
     ],
   } as ResourceContent
   expect(documentTextFor(content, undefined)).toContain('日本語の実験ノート')
   expect(documentTextFor(content, undefined)).not.toContain('レレレレレ')
+  expect(documentTextFor(content, undefined)).not.toContain('English generated summary')
+})
+
+Deno.test('generated DA text is never an original source fallback', () => {
+  const content = {
+    texts: [{ fieldId: 'texts/da-pagesummary-f-source', text: 'An English generated summary.' }],
+  } as ResourceContent
+  expect(documentTextFor(content, undefined)).toBe('')
+})
+
+Deno.test('Japanese file text survives a generated summary in the provider texts group', async (t) => {
+  const sourceText = '日本語の試験記録と測定結果。熱サイクル後の接着強さは結果表に記載。'
+  const generatedSummary =
+    'An English summary translated during ingestion with no original Japanese source text.'
+  const generatedAnswer = {
+    title: '熱サイクル後の接着強さ',
+    summary: '試験記録に基づく日本語の要約。',
+    keyTakeaways: [],
+    quotesOfInterest: [],
+  }
+  const queries: string[] = []
+  const base = tenantConfig('grains')!
+  const management = new AragProvider({
+    resolveBinding: () => ({ baseUrl: 'https://example.test/api/v1/kb/test', token: 'test-token' }),
+    fetchImpl: (input, init) => {
+      const url = String(input)
+      if (url.includes('/resource/')) {
+        return Promise.resolve(Response.json({
+          title: '日本語の試験記録',
+          data: {
+            files: { source: { extracted: { text: { text: sourceText } } } },
+            texts: {
+              'da-pagesummary-f-source': { extracted: { text: { text: generatedSummary } } },
+            },
+          },
+        }))
+      }
+      if (url.includes('/catalog')) return Promise.resolve(Response.json({ resources: {} }))
+      if (url.endsWith('/ask')) {
+        queries.push(JSON.parse(String(init?.body)).query)
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ item: { type: 'answer_json', object: generatedAnswer } }) + '\n',
+          ),
+        )
+      }
+      throw new Error(`Unexpected mocked request: ${url}`)
+    },
+  })
+
+  await t.step(
+    'bilingual generation embeds the original file and keeps its native summary',
+    async () => {
+      const config = TenantConfigSchema.parse({
+        ...base,
+        languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
+      })
+      const enrichment = await generateEnrichment(management, config, 'ja-source')
+      expect(queries[0]).toContain(sourceText)
+      expect(queries[0]).not.toContain(generatedSummary)
+      expect(enrichment.data.summary).toBe(generatedAnswer.summary)
+      expect(enrichment.usedPageSummary).toBeUndefined()
+    },
+  )
+
+  await t.step('ordinary tenants retain deliberate ingest-summary reuse', async () => {
+    const enrichment = await generateEnrichment(management, base, 'ja-source')
+    expect(queries[1]).toContain(generatedSummary)
+    expect(queries[1]).not.toContain(sourceText)
+    expect(enrichment.data.summary).toBe(generatedSummary)
+    expect(enrichment.usedPageSummary).toBe(true)
+  })
 })
 
 Deno.test('a bilingual portal must offer its configured default language', () => {

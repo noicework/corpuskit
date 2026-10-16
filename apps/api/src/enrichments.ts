@@ -373,10 +373,13 @@ export function documentTextFor(
 ): string {
   if (pageSummary) return pageSummary
   if (!content) return ''
-  // An authored text field may hold a faithful transcript alongside a file whose conversion
-  // lost glyphs. Prefer that original body over duplicate machine-extracted file text.
-  const authored = content.texts.filter((t) => t.fieldId.startsWith('texts/'))
-  const joined = (authored.length ? authored : content.texts).map((t) => t.text).join('\n\n').trim()
+  // The texts group also contains generated DA fields, including ingest summaries that may
+  // be translated. They are not original source text. A native_source field explicitly marks
+  // a faithful transcript for a file whose conversion lost glyphs; prefer only that marker.
+  const original = content.texts.filter((t) => !/(^|\/)da-/i.test(t.fieldId))
+  const nativeSource = original.filter((t) => t.fieldId === 'texts/native_source')
+  const joined = (nativeSource.length ? nativeSource : original).map((t) => t.text).join('\n\n')
+    .trim()
   return joined.slice(0, DOCUMENT_TEXT_BUDGET)
 }
 
