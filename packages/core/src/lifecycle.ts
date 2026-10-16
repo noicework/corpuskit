@@ -5,11 +5,31 @@ export type PortalStatus = z.infer<typeof PortalStatusSchema>
 
 const LimitSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 
+/** The longest message a portal shows in place of the daily question limit's own words. */
+export const ASK_LIMIT_MESSAGE_MAX = 300
+
+/**
+ * Plain text a person reads when the portal refuses a question: no markup, no hidden or control
+ * characters, and nothing that looks like a credential.
+ */
+export function isPlainLimitMessage(value: string): boolean {
+  return value.length >= 1 && value.length <= ASK_LIMIT_MESSAGE_MAX && !/[<>]/.test(value) &&
+    isSafeLifecycleNote(value)
+}
+
 export const PortalLimitsSchema = z.object({
   maxResources: LimitSchema.optional(),
   maxBytes: LimitSchema.optional(),
   asksPerDay: LimitSchema.optional(),
   agentsEnabled: z.boolean().optional(),
+  /**
+   * Every generation the portal asks the knowledge box for uses the box's own configured model:
+   * no request names another one, and features that can only run on another model are refused.
+   */
+  boxModelOnly: z.boolean().optional(),
+  /** Shown instead of the daily question limit's own words when `asksPerDay` refuses a question. */
+  askLimitMessage: z.string().trim().refine(isPlainLimitMessage, 'Invalid ask limit message')
+    .optional(),
 }).strict()
 export type PortalLimits = z.infer<typeof PortalLimitsSchema>
 

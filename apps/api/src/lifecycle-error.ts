@@ -13,8 +13,12 @@ export function lifecycleMessage(body: { error: string; [key: string]: unknown }
       return "This portal's usage could not be checked, so no content was added. Try again later."
     case 'agents_disabled':
       return 'Agents are disabled for this portal.'
+    case 'box_model_only':
+      return "This portal uses only its knowledge box's own model, so this is not available here."
     case 'ask_quota_exceeded':
-      return 'This portal has reached its daily question limit.'
+      return typeof body.message === 'string' && body.message
+        ? body.message
+        : 'This portal has reached its daily question limit.'
     case 'rate_limited':
       return 'This portal is answering as many questions as it can. Try again in a minute.'
     default:

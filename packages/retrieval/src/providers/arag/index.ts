@@ -1213,6 +1213,12 @@ export interface AragProviderOptions {
    * reader waits on a walk. Deployments use the defaults (10 s each).
    */
   catalogueTiming?: { pageTimeoutMs?: number; readerWaitMs?: number }
+  /**
+   * Whether a portal generates only on its knowledge box's own model, read on every request
+   * (the hosting limit `boxModelOnly`). For such a portal no request names another model, and
+   * answers carry no quality score, since scoring runs on a model of its own.
+   */
+  boxModelOnly?: (slug: string) => boolean
 }
 
 /**
@@ -1274,7 +1280,12 @@ export class AragProvider implements RetrievalProvider {
     if (existing) return existing
     // A new binding for this slug invalidates anything cached for the old one.
     this.invalidate(tenant.slug)
-    const client = new KbClient(binding, this.opts.fetchImpl ?? fetch)
+    const boxModelOnly = this.opts.boxModelOnly
+    const client = new KbClient(
+      binding,
+      this.opts.fetchImpl ?? fetch,
+      boxModelOnly ? { boxModelOnly: () => boxModelOnly(tenant.slug) } : {},
+    )
     this.clients.set(key, client)
     return client
   }
@@ -4568,7 +4579,9 @@ export class AragProvider implements RetrievalProvider {
         // consumed, it adds the cap minus the audit's own time at most, not
         // a fixed tail on every answer (D2-17).
         let capTimer: ReturnType<typeof setTimeout> | undefined
-        const qualityPending = fullAnswer.trim() && contextTexts.length > 0
+        // Scoring runs on a model of its own, which a box-model-only portal does not use.
+        const scored = !this.opts.boxModelOnly?.(tenant.slug)
+        const qualityPending = scored && fullAnswer.trim() && contextTexts.length > 0
           ? Promise.race([
             this.remi(tenant, {
               question: query,

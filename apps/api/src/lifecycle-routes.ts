@@ -24,13 +24,16 @@ export interface LifecycleRouteServices {
 export function lifecycleAuditDetail(
   input: LifecycleInput,
 ): Record<string, string | number | boolean> {
-  const { maxResources, maxBytes, asksPerDay, agentsEnabled } = input.limits ?? {}
+  const { maxResources, maxBytes, asksPerDay, agentsEnabled, boxModelOnly, askLimitMessage } =
+    input.limits ?? {}
   return {
     lifecycleStatus: input.status,
     ...(maxResources !== undefined ? { maxResources } : {}),
     ...(maxBytes !== undefined ? { maxBytes } : {}),
     ...(asksPerDay !== undefined ? { asksPerDay } : {}),
     ...(agentsEnabled !== undefined ? { agentsEnabled } : {}),
+    ...(boxModelOnly !== undefined ? { boxModelOnly } : {}),
+    ...(askLimitMessage !== undefined ? { askLimitMessage } : {}),
     ...(input.note !== undefined ? { note: input.note } : {}),
   }
 }

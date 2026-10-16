@@ -1,5 +1,6 @@
 import {
   AccessModeSchema,
+  isPlainLimitMessage,
   isSafeLifecycleNote,
   PERMISSIONS,
   PORTAL_ROLES,
@@ -209,6 +210,9 @@ const fields = {
   maxBytes: count,
   asksPerDay: count,
   agentsEnabled: flag,
+  boxModelOnly: flag,
+  askLimitMessage: (value: unknown): value is string =>
+    typeof value === 'string' && isPlainLimitMessage(value),
   note: isSafeLifecycleNote,
   previousAccessMode: member(AccessModeSchema.options),
   accessMode: member(AccessModeSchema.options),
@@ -284,6 +288,8 @@ const actionFields = {
     'maxBytes',
     'asksPerDay',
     'agentsEnabled',
+    'boxModelOnly',
+    'askLimitMessage',
     'note',
     'code',
   ],

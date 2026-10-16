@@ -1,9 +1,11 @@
 import { PortalLifecycleStore } from './lifecycle-store.ts'
-import { PortalLifecycleError } from './lifecycle-error.ts'
+import { lifecycleMessage, PortalLifecycleError } from './lifecycle-error.ts'
 import {
   admitAsks,
   type AskReceipt,
   assertAgentsEnabled,
+  assertTaskModelAllowed,
+  boxModelOnly,
   enforceAccessChange,
   enforceReadOnly,
   enforceSuspension,
@@ -129,6 +131,7 @@ import type {
 import {
   AragApiError,
   type AragProvider,
+  BoxModelOnlyError,
   KbClient,
   KnowledgeBoxNotConnectedError,
   looksLikeReferenceChunk,
@@ -2012,6 +2015,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return c.json({ error: 'knowledge_box_not_connected', slug: err.slug }, 503)
     }
     if (err instanceof PortalLifecycleError) return c.json(err.body, err.status)
+    if (err instanceof BoxModelOnlyError) return c.json({ error: 'box_model_only' }, 403)
     console.error(err)
     return c.json({ error: 'internal_error' }, 500)
   })
@@ -2703,6 +2707,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const unavailable = requireManagement(c)
     if (unavailable) return unavailable
     const lab = labTenant(config)
+    if (boxModelOnly(lifecycle, config.slug)) {
+      // The lab's methods send pages through vision and table models, which this portal does
+      // not use, so none are registered and the lab is not offered.
+      return c.json({
+        lab: lab.slug,
+        available: false,
+        methods: [],
+        rules: config.extraction ?? null,
+        poppler: await popplerAvailable(),
+        error: 'box_model_only',
+        message: lifecycleMessage({ error: 'box_model_only' }),
+      })
+    }
     try {
       const methods = await ensureLabMethods(management!, lab)
       return c.json({
@@ -2747,6 +2764,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (unavailable) return unavailable
     const parsed = extractionCompareSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    assertTaskModelAllowed(lifecycle, config.slug)
     return streamSSE(c, async (stream) => {
       try {
         for await (const event of compareExtraction(management!, config, parsed.data)) {
@@ -5252,6 +5270,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const parsed = kgImplementSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
     assertAgentsEnabled(lifecycle, config.slug)
+    assertTaskModelAllowed(lifecycle, config.slug)
     return streamSSE(c, async (stream) => {
       for await (
         const event of implementKgStrategy(management!, config, proposal, {
@@ -5312,7 +5331,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       )
     ) return adminNotFound(c)
     // Graph suggestions replace the graph agent; taxonomy suggestions start none.
-    if (action === 'suggestion.graph.write') assertAgentsEnabled(lifecycle, config.slug)
+    if (action === 'suggestion.graph.write') {
+      assertAgentsEnabled(lifecycle, config.slug)
+      assertTaskModelAllowed(lifecycle, config.slug)
+    }
     try {
       const summary = await subAction(
         c,
@@ -5364,6 +5386,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (problems.length > 0) return c.json({ error: 'invalid_strategy', problems }, 422)
     // Replacing the strategy removes the running agent before starting its successor.
     assertAgentsEnabled(lifecycle, config.slug)
+    assertTaskModelAllowed(lifecycle, config.slug)
     return streamSSE(c, async (stream) => {
       for await (const event of replaceGraphStrategy(management!, config, input)) {
         await stream.writeSSE({ data: JSON.stringify(event) })
@@ -5823,12 +5846,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const id = c.req.param('id')
     const existing = await provider.labelsets(config).catch(() => [])
     if (!existing.some((ls) => ls.id === id)) return adminNotFound(c)
-    // Saving restarts the labellers that carry this set; with agents disabled, refuse before
-    // anything is written rather than leave a labeller removed.
+    // Saving restarts the labellers that carry this set; with agents disabled, or on a portal kept
+    // to its box's model, refuse before anything is written rather than leave a labeller removed.
     if (
-      lifecycle.get(config.slug).limits?.agentsEnabled === false &&
+      (lifecycle.get(config.slug).limits?.agentsEnabled === false ||
+        boxModelOnly(lifecycle, config.slug)) &&
       planLabelsetRebuild(await management!.agentConfigs(config), { id, ...parsed.data }).length
-    ) assertAgentsEnabled(lifecycle, config.slug)
+    ) {
+      assertAgentsEnabled(lifecycle, config.slug)
+      assertTaskModelAllowed(lifecycle, config.slug)
+    }
     try {
       const result = await applyLabelsetUpdate(management!, config, { id, ...parsed.data })
       return c.json({ ok: true, ...result })

@@ -15,6 +15,8 @@ export function hostingErrorMessage(body: unknown): string | undefined {
       return 'A link added earlier could not be processed, so its space is still counted and this cannot be added. Delete the stuck link from Recent additions to free its space, or ask your hosting operator to check it or raise the storage limit.'
     case 'agents_disabled':
       return 'Agents are disabled for this portal. Contact your portal administrator to enable them.'
+    case 'box_model_only':
+      return "This portal uses only its knowledge box's own model, so this feature is not available here."
     case 'limit_exceeded':
       if (record.limit === 'maxResources') {
         return 'This portal has reached its resource limit. Remove existing content or contact your portal administrator before adding more.'
@@ -24,6 +26,8 @@ export function hostingErrorMessage(body: unknown): string | undefined {
       }
       return 'This content exceeds a portal limit. Contact your portal administrator for help.'
     case 'ask_quota_exceeded': {
+      // The portal's own words, when its hosting gives them, stand in for the daily limit's.
+      if (typeof record.message === 'string' && record.message.trim()) return record.message.trim()
       const at = typeof record.resetsAt === 'string' ? Date.parse(record.resetsAt) : NaN
       const reset = Number.isFinite(at)
         ? ` Try again after ${new Date(at).toLocaleString('en-AU', { timeZoneName: 'short' })}.`

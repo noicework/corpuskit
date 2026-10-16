@@ -7,6 +7,7 @@ import {
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { PortalLifecycleError } from './lifecycle-error.ts'
+import { boxModelOnly } from './lifecycle-policy.ts'
 import {
   type AddAdmission,
   type AddOutcome,
@@ -72,6 +73,29 @@ const MUTATIONS = new Set([
   'uploadFile',
 ])
 const ADDS = new Set(['createText', 'createLink', 'uploadFile'])
+/** Provider methods whose `model` option names a generative model other than the box's own. */
+const MODEL_OVERRIDES = new Map<string, number>([
+  // Where the options sit among the arguments that follow the portal's config.
+  ['askStructured', 2],
+  ['classifyIntent', 1],
+])
+
+/**
+ * A write a box-model-only portal refuses because it would run on another model: an agent
+ * start (data-augmentation tasks run on a task model), an extraction method other than the
+ * platform default, and an upload that names one.
+ */
+function needsOtherModel(name: string, args: unknown[]): boolean {
+  if (name === 'startAgent') return true
+  if (name === 'registerExtractionMethod') {
+    return (args[0] as { kind?: unknown } | undefined)?.kind !== 'default'
+  }
+  if (name === 'uploadFile') {
+    const method = (args[0] as { method?: unknown } | undefined)?.method
+    return typeof method === 'string' && method !== '' && method !== 'default'
+  }
+  return false
+}
 const queues = new WeakMap<object, Map<string, Promise<void>>>()
 const encoder = new TextEncoder()
 
@@ -697,11 +721,25 @@ export function guardManagement(
               }),
           })
         }
+      } else if (MODEL_OVERRIDES.has(name)) {
+        // A box-model-only portal generates on its box's own model, whatever the caller named.
+        const at = MODEL_OVERRIDES.get(name)!
+        wrapped = (config: TenantConfig, ...args: unknown[]) => {
+          const given = args[at] as { model?: unknown } | undefined
+          if (given?.model !== undefined && boxModelOnly(lifecycle, config.slug)) {
+            const { model: _named, ...rest } = given
+            args[at] = rest
+          }
+          return value.call(receiver, config, ...args)
+        }
       } else if (MUTATIONS.has(name)) {
         wrapped = async (config: TenantConfig, ...args: unknown[]) => {
           assertManagementWritable(lifecycle, config.slug, options)
           if (name === 'startAgent' && lifecycle.get(config.slug).limits?.agentsEnabled === false) {
             throw new PortalLifecycleError(403, { error: 'agents_disabled' })
+          }
+          if (needsOtherModel(name, args) && boxModelOnly(lifecycle, config.slug)) {
+            throw new PortalLifecycleError(403, { error: 'box_model_only' })
           }
           if (ADDS.has(name)) {
             const bytes = addBytes(name, args[0])

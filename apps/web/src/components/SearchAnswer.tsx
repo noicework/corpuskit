@@ -189,7 +189,8 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
       if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       setStageLabel(null)
       setErrorMessage(
-        err instanceof ApiError && err.status === 429
+        // A question limit carries its own words; any other 429 is the portal being busy.
+        err instanceof ApiError && err.status === 429 && err.code !== 'ask_quota_exceeded'
           ? RATE_LIMIT_MESSAGE
           : err instanceof Error
           ? err.message

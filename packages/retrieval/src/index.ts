@@ -4,12 +4,13 @@ export type { AgentConfig } from './providers/arag/index.ts'
 export {
   ALLOWED_KB_HOSTS,
   AragApiError,
+  BoxModelOnlyError,
   KbClient,
   ndjson,
   parseKbUrl,
   regionalBase,
 } from './providers/arag/client.ts'
-export type { KbBinding } from './providers/arag/client.ts'
+export type { KbBinding, KbClientPolicy } from './providers/arag/client.ts'
 export { createProviderFromEnv, envBindings, labBindings } from './env.ts'
 export {
   baselineMerchandising,

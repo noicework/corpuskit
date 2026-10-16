@@ -98,6 +98,34 @@ export function assertAgentsEnabled(store: PortalLifecycleStore, slug: string): 
   }
 }
 
+/**
+ * Whether a portal generates only on its knowledge box's own model (the `boxModelOnly` limit).
+ * Its Extraction Lab sandbox (`<slug>-lab`) follows the portal it belongs to.
+ */
+export function boxModelOnly(store: PortalLifecycleStore, slug: string): boolean {
+  if (store.get(slug).limits?.boxModelOnly === true) return true
+  return slug.endsWith('-lab') && store.get(slug.slice(0, -'-lab'.length)).limits
+        ?.boxModelOnly === true
+}
+
+/**
+ * Compound operations that would start a data-augmentation task, which runs on a task model of
+ * its own, call this before their first write, as they call `assertAgentsEnabled`.
+ */
+export function assertTaskModelAllowed(store: PortalLifecycleStore, slug: string): void {
+  if (boxModelOnly(store, slug)) throw new PortalLifecycleError(403, { error: 'box_model_only' })
+}
+
+/** The refusal for a question over the daily limit, with the portal's own words when it has them. */
+function askQuotaRefusal(store: PortalLifecycleStore, slug: string, denied: object) {
+  const message = store.get(slug).limits?.askLimitMessage
+  return new PortalLifecycleError(429, {
+    error: 'ask_quota_exceeded',
+    ...denied,
+    ...(message ? { message } : {}),
+  })
+}
+
 /** The asks one request counted: returned if the request is refused before it is answered. */
 export interface AskReceipt {
   slugs: string[]
@@ -118,12 +146,12 @@ export function admitAsks(
 ): AskReceipt | null {
   for (const config of targets) {
     const denied = store.askQuota(config.slug, config.timezone ?? 'UTC', at)
-    if (denied) throw new PortalLifecycleError(429, { error: 'ask_quota_exceeded', ...denied })
+    if (denied) throw askQuotaRefusal(store, config.slug, denied)
   }
   if (use === 'gate') return null
   for (const config of targets) {
     const denied = store.consumeAsk(config.slug, config.timezone ?? 'UTC', at)
-    if (denied) throw new PortalLifecycleError(429, { error: 'ask_quota_exceeded', ...denied })
+    if (denied) throw askQuotaRefusal(store, config.slug, denied)
   }
   return { slugs: targets.map((config) => config.slug), at }
 }

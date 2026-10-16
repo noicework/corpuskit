@@ -99,18 +99,74 @@ export class AragApiError extends Error {
 
 export const regionalBase = (zone: string) => `https://${zone}.rag.progress.cloud/api/v1`
 
+/**
+ * A request refused before it was sent because its portal generates only on its knowledge box's
+ * own model, and the request would run on another one (a named model, answer-quality scoring, a
+ * data-augmentation task or an LLM extraction strategy).
+ */
+export class BoxModelOnlyError extends Error {
+  constructor(readonly what: string) {
+    super(`This portal uses only its knowledge box's own model, so ${what} is not available.`)
+    this.name = 'BoxModelOnlyError'
+  }
+}
+
+/** Per-request rules a portal's hosting places on what its client may ask the platform for. */
+export interface KbClientPolicy {
+  /**
+   * Read on every request. When it answers true, no request names a generative model of its own
+   * (`generative_model` is removed), and requests that can only run on another model are refused
+   * with `BoxModelOnlyError` before anything is sent.
+   */
+  boxModelOnly?: () => boolean
+}
+
+/** A JSON body without the top-level model override it may carry. */
+function withoutModelOverride(body: unknown): unknown {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !('generative_model' in body)) {
+    return body
+  }
+  const { generative_model: _dropped, ...rest } = body as Record<string, unknown>
+  return rest
+}
+
+/** What a request would run on a model other than the box's own, if anything. */
+function otherModelUse(plane: 'kb' | 'dp', method: string, path: string, body: unknown) {
+  const route = path.split('?')[0]!
+  if (plane === 'dp') return method === 'POST' && route === '/task/start' ? 'an agent' : null
+  if (method !== 'POST') return null
+  if (route === '/predict/remi') return 'answer-quality scoring'
+  if (route === '/extract_strategies' && body && typeof body === 'object') {
+    const strategy = body as Record<string, unknown>
+    if (strategy.vllm_config || strategy.ai_tables) return 'an LLM extraction method'
+  }
+  return null
+}
+
 export class KbClient {
   private readonly fetchImpl: typeof fetch
 
   constructor(
     private readonly binding: KbBinding,
     fetchImpl: typeof fetch = globalThis.fetch,
+    private readonly policy: KbClientPolicy = {},
   ) {
     // Cloudflare's host-provided fetch validates its receiver. Calling a bare
     // reference later as `this.fetchImpl(...)` gives it the KbClient instance
     // as `this`, which Workers rejects with "Illegal invocation". Pin the
     // receiver at the integration boundary so every ARAG operation is safe.
     this.fetchImpl = fetchImpl.bind(globalThis)
+  }
+
+  /**
+   * The body a request may send under the portal's policy, read at the moment it is sent. One
+   * place for every JSON request, so a feature added later cannot name another model by mistake.
+   */
+  private governed(plane: 'kb' | 'dp', method: string, path: string, body: unknown): unknown {
+    if (!this.policy.boxModelOnly?.()) return body
+    const use = otherModelUse(plane, method, path, body)
+    if (use) throw new BoxModelOnlyError(use)
+    return withoutModelOverride(body)
   }
 
   private url(path: string) {
@@ -142,10 +198,11 @@ export class KbClient {
     extra?: Record<string, string>,
   ): Promise<T> {
     const url = this.url(path)
+    const sent = this.governed('kb', 'POST', path, body)
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.headers(extra),
-      body: JSON.stringify(body),
+      body: JSON.stringify(sent),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json()) as T
@@ -160,6 +217,13 @@ export class KbClient {
     extraHeaders: Record<string, string> = {},
   ): Promise<unknown> {
     const url = this.url(path)
+    // A named extraction strategy may send pages through a vision or table model.
+    const strategy = Object.keys(extraHeaders).some((name) =>
+      name.toLowerCase() === 'x-extract-strategy'
+    )
+    if (strategy && this.policy.boxModelOnly?.()) {
+      throw new BoxModelOnlyError('a custom extraction method')
+    }
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: {
@@ -187,10 +251,11 @@ export class KbClient {
 
   async patchJson<T = unknown>(path: string, body: unknown): Promise<T> {
     const url = this.url(path)
+    const sent = this.governed('kb', 'PATCH', path, body)
     const res = await this.fetchImpl(url, {
       method: 'PATCH',
       headers: this.headers(),
-      body: JSON.stringify(body),
+      body: JSON.stringify(sent),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json().catch(() => ({}))) as T
@@ -203,10 +268,11 @@ export class KbClient {
 
   async dpJson<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
     const url = this.dpUrl(path)
+    const sent = this.governed('dp', method, path, body)
     const res = await this.fetchImpl(url, {
       method,
       headers: this.headers(),
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: sent === undefined ? undefined : JSON.stringify(sent),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json().catch(() => ({}))) as T
@@ -227,10 +293,11 @@ export class KbClient {
   /** POST returning the raw streaming response (NDJSON body). */
   async postStream(path: string, body: unknown, extra?: Record<string, string>): Promise<Response> {
     const url = this.url(path)
+    const sent = this.governed('kb', 'POST', path, body)
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.headers({ accept: 'application/x-ndjson', ...extra }),
-      body: JSON.stringify(body),
+      body: JSON.stringify(sent),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return res

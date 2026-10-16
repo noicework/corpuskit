@@ -1561,3 +1561,112 @@ Deno.test('an app built without a lifecycle store keeps hosting state in memory 
     Deno.removeSync(directory, { recursive: true })
   }
 })
+
+Deno.test('box-model-only and an ask limit message round-trip, are audited, and refuse what needs another model', async () => {
+  const calls: string[] = []
+  const management = new AragProvider({ resolveBinding: () => undefined })
+  const record = (name: string, value: unknown) => () => {
+    calls.push(name)
+    return Promise.resolve(value)
+  }
+  Object.assign(management, {
+    augmentationModel: record('augmentationModel', 'fixture-model'),
+    listAgents: record('listAgents', [{ id: 'kg-1', title: 'kg-a', task: 'llm-graph' }]),
+    listExtractionMethods: record('listExtractionMethods', []),
+    registerExtractionMethod: record('registerExtractionMethod', { id: 'm', name: 'm' }),
+    deleteAgent: record('deleteAgent', undefined),
+    startAgent: record('startAgent', undefined),
+    updateLabelset: record('updateLabelset', undefined),
+    labelsets: record('labelsets', [{ id: 'topic', title: 'Topic', labels: [], multiple: true }]),
+    agentConfigs: record('agentConfigs', [{
+      id: 'labeller-1',
+      title: 'Topic labeller',
+      task: 'labeler',
+      operations: [{ label: { ident: 'topic', labels: [], multiple: true } }],
+    }]),
+  })
+  const f = createEnforcementFixture({ management })
+  try {
+    await f.stores.bindings.set('a', {
+      baseUrl: 'https://example.test/kb/a',
+      token: 'fixture',
+      kbId: 'a',
+    })
+    const platform = f.sessionFor('platform-admin')
+    const path = '/api/admin/t/a/lifecycle'
+    const message = 'This trial has used its questions. Talk to us about keeping it.'
+    const put = await f.requestAs(
+      platform,
+      path,
+      json('PUT', {
+        status: 'active',
+        limits: { asksPerDay: 0, boxModelOnly: true, askLimitMessage: `  ${message} ` },
+      }),
+    )
+    expect(put.status).toBe(200)
+    expect((await put.json()).lifecycle.limits).toEqual({
+      asksPerDay: 0,
+      boxModelOnly: true,
+      askLimitMessage: message,
+    })
+    expect((await (await f.requestAs(platform, path)).json()).limits).toEqual({
+      asksPerDay: 0,
+      boxModelOnly: true,
+      askLimitMessage: message,
+    })
+    const update = f.rbac.audit.read({ scope: { kind: 'platform' } }).find((e) =>
+      e.action === 'portal.lifecycle.update' && e.outcome === 'success'
+    )!
+    expect(JSON.parse(update.detail_json)).toMatchObject({
+      asksPerDay: 0,
+      boxModelOnly: true,
+      askLimitMessage: message,
+    })
+    for (
+      const limits of [
+        { boxModelOnly: 'yes' },
+        { askLimitMessage: '<b>Upgrade</b>' },
+        { askLimitMessage: 'x'.repeat(301) },
+      ]
+    ) {
+      const invalid = await f.requestAs(platform, path, json('PUT', { status: 'active', limits }))
+      expect(invalid.status).toBe(400)
+    }
+
+    // The portal's own words reach a refused question, with no reset time to show.
+    const viewer = f.sessionFor('viewer')
+    const ask = await f.requestAs(viewer, '/api/t/a/ask', json('POST', { query: 'What is known?' }))
+    expect(ask.status).toBe(429)
+    expect(await ask.json()).toMatchObject({ error: 'ask_quota_exceeded', limit: 0, message })
+
+    // Work that can only run on another model is refused before anything is written.
+    const curator = f.sessionFor('portal-admin')
+    for (
+      const [method, suffix] of [
+        ['PUT', 'kg/strategy'],
+        ['PUT', 'labelsets/topic'],
+        ['POST', 'extraction/compare'],
+      ] as const
+    ) {
+      const response = await f.requestAs(
+        curator,
+        `/api/admin/t/a/${suffix}`,
+        json(method, matrixBody(method, suffix.replace('topic', ':id'))),
+      )
+      expect(response.status, suffix).toBe(403)
+      expect(await response.json()).toEqual({ error: 'box_model_only' })
+    }
+    expect(calls.filter((name) => !['agentConfigs', 'labelsets'].includes(name))).toEqual([])
+    // The Extraction Lab is not offered, and registers none of its LLM methods.
+    const methods = await f.requestAs(curator, '/api/admin/t/a/extraction/methods')
+    expect(methods.status).toBe(200)
+    expect(await methods.json()).toMatchObject({
+      available: false,
+      methods: [],
+      error: 'box_model_only',
+    })
+    expect(calls).not.toContain('registerExtractionMethod')
+  } finally {
+    f.close()
+  }
+})

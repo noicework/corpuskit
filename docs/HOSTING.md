@@ -475,7 +475,9 @@ PUT /api/admin/t/:slug/lifecycle
     "maxResources": 200,
     "maxBytes": 524288000,
     "asksPerDay": 100,
-    "agentsEnabled": false
+    "agentsEnabled": false,
+    "boxModelOnly": true,
+    "askLimitMessage": "Plain text shown when a question is over the daily limit."
   } | null,
   "note": "optional free text for the audit log"
 }
@@ -491,8 +493,10 @@ It is what the [operator delete](#operator-delete-of-a-suspended-portal) counts 
 replaces the whole lifecycle. A portal with no lifecycle record is `active` with no limits.
 Every limit field is optional and an absent field means unlimited, so `limits: null` and
 `limits: {}` both mean unlimited. Limits are whole numbers from zero upwards. A zero limit is
-allowed: `asksPerDay: 0` refuses every ask. Invalid input, including unknown fields, is
-refused with 400 `invalid_request`.
+allowed: `asksPerDay: 0` refuses every ask. `agentsEnabled` and `boxModelOnly` are `true` or
+`false`. `askLimitMessage` is plain text of 1 to 300 characters once trimmed, with no `<` or `>`,
+no control characters or bidirectional overrides, and nothing shaped like a credential. Invalid
+input, including unknown fields, is refused with 400 `invalid_request`.
 
 Each change is audited at platform scope as `portal.lifecycle.update`, with the portal as the
 target; a change made with the operator credential names the actor `operator:<OPERATOR_ID>`. The record holds the new status, each limit that is set, and the note. The note is at
@@ -599,8 +603,9 @@ recorded as failed.
 |---|---|---|
 | `maxResources` | 413 | `{ "error": "limit_exceeded", "limit": "maxResources", "value": n, "max": n }` |
 | `maxBytes` | 413 | `{ "error": "limit_exceeded", "limit": "maxBytes", "value": n, "max": n }` |
-| `asksPerDay` | 429 | `{ "error": "ask_quota_exceeded", "limit": n, "resetsAt": "ISO" }` |
+| `asksPerDay` | 429 | `{ "error": "ask_quota_exceeded", "limit": n, "resetsAt": "ISO" }`, plus `"message"` when `askLimitMessage` is set |
 | `agentsEnabled: false` | 403 | `{ "error": "agents_disabled" }` |
+| `boxModelOnly: true` | 403 | `{ "error": "box_model_only" }` |
 
 `value` is the total the refused add would have reached.
 
@@ -711,6 +716,33 @@ under way when agents are disabled stops before its next model call (see
 would restart a labeller that carries the set. Every operation that would replace an agent is
 refused before its first write, so a refusal never leaves a strategy or labeller half
 replaced. Existing knowledge-box agents keep running, and one can still be deleted.
+
+**`askLimitMessage`** gives the words a person sees when `asksPerDay` refuses their question.
+The 429 body carries it as `message`, the app shows it in place of "This portal has reached its
+daily question limit" with no reset time, on Ask, the Search answer panel and every other place
+a question can be refused, and a refused MCP call returns it in the same body. Without it the
+refusal is unchanged. It pairs with `asksPerDay: 0` to stop a portal's questions for a reason of
+the host's own, in the host's own words.
+
+**`boxModelOnly: true`** keeps every generation the portal asks for on its knowledge box's own
+configured model, so whatever model and key the box is set up with is the only one the portal's
+answers can reach:
+
+- No request names a model of its own. Follow-up suggestions, suggested questions, question
+  routing and every other generation that would pick a faster or cheaper model use the box's
+  model instead. This is enforced where requests leave for the platform, so a feature added
+  later cannot get round it.
+- Answers carry no quality score, since the platform scores answers on a model of its own.
+- Anything that can only run on another model is refused with 403 `box_model_only` before its
+  first write: knowledge-box agents (`kg/implement`, `PUT kg/strategy`, graph suggestions, and
+  saving a label set that would restart a labeller), Extraction Lab comparisons
+  (`POST extraction/compare`) and any extraction method other than the platform default. The
+  Extraction Lab answers `available: false` with `error: "box_model_only"` and registers none of
+  its methods.
+- Enrichment and suggested-question runs still run when agents are enabled, on the box's model.
+
+The box's own model is set on the knowledge box, not here (see
+[Developing on Progress Agentic RAG](ARAG-DEV.md)). Absent or `false`, nothing changes.
 
 ### Usage
 

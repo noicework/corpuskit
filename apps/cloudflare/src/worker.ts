@@ -52,6 +52,7 @@ import {
 } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
 import { linkProvisionalBytes } from '../../api/src/lifecycle-management.ts'
+import { boxModelOnly } from '../../api/src/lifecycle-policy.ts'
 import { embeddedWebBuild } from './build-stamp.ts'
 import { AragProvider } from '@research-portal/retrieval'
 import {
@@ -184,6 +185,7 @@ export class PortalDurableObject extends DurableObject<Env> {
     this.provider = new AragProvider({
       resolveBinding: (slug) => this.stores.bindings.get(slug),
       augmentationModel: bindings.ARAG_DA_AGENT_MODEL,
+      boxModelOnly: (slug) => boxModelOnly(this.stores.lifecycle, slug),
     })
     // Rate limits key on the `cf-connecting-ip` the Worker passes in the trusted context, never
     // on a forwarding header, so `TRUST_PROXY_HOPS` has no meaning here.

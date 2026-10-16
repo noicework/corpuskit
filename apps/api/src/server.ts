@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import process from 'node:process'
 import { AragProvider, labBindings } from '@research-portal/retrieval'
 import { buildApp } from './app.ts'
+import { boxModelOnly } from './lifecycle-policy.ts'
 import { BindingStore } from './bindings.ts'
 import { SourceStore } from './stores.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
@@ -39,9 +40,6 @@ const bindings = new BindingStore()
 await bindings.initialize()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
-const provider = new AragProvider({
-  resolveBinding: (slug) => bindings.get(slug) ?? labs[slug],
-})
 // Constructed once and shared with startScheduler below - a scheduled sync
 // and a concurrent HTTP write (e.g. POST /watches) must serialise through
 // the same in-process store, not two separate instances racing to
@@ -51,6 +49,11 @@ const enrichments = new EnrichmentStore()
 const { database, rbac } = openLocalRbac(process.env)
 const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
 const tenants = owned.tenants!
+const lifecycle = owned.lifecycle
+const provider = new AragProvider({
+  resolveBinding: (slug) => bindings.get(slug) ?? labs[slug],
+  ...(lifecycle ? { boxModelOnly: (slug: string) => boxModelOnly(lifecycle, slug) } : {}),
+})
 const { watches } = owned
 const ingress = new LocalIngress({
   rbac,

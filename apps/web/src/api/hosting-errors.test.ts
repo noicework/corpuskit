@@ -106,6 +106,27 @@ Deno.test('daily ask quotas carry a distinct code and reset time while burst lim
     .toContain('after the daily limit resets')
 })
 
+Deno.test('a portal limit message replaces the daily limit words and its reset time', async () => {
+  const message = 'This trial has used its questions. Talk to us about keeping it.'
+  const error = await askError(
+    Response.json({
+      error: 'ask_quota_exceeded',
+      limit: 0,
+      resetsAt: '2026-10-17T00:00:00.000Z',
+      message: `  ${message} `,
+    }, { status: 429 }),
+    'Unavailable',
+  )
+  expect(error.code).toBe('ask_quota_exceeded')
+  expect(error.message).toBe(message)
+  // A blank message falls back to the daily limit's own words.
+  expect(hostingErrorMessage({ error: 'ask_quota_exceeded', message: '  ' }))
+    .toContain('daily question limit')
+  expect(hostingErrorMessage({ error: 'box_model_only' })).toBe(
+    "This portal uses only its knowledge box's own model, so this feature is not available here.",
+  )
+})
+
 Deno.test('read-only and suspended API errors retain their code and useful messages', async () => {
   const original = globalThis.fetch
   try {

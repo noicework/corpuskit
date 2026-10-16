@@ -86,6 +86,8 @@ type ChatMessage = {
   error?: string
   /** The error was the server asking us to wait (HTTP 429): retry after this many seconds. */
   rateLimited?: boolean
+  /** The portal's question limit refused this one (HTTP 429 `ask_quota_exceeded`). */
+  limitReached?: boolean
   retryAfterSec?: number
   pending?: boolean
   /** How the platform interpreted/rephrased the question (first turn only). */
@@ -845,12 +847,17 @@ function tailStyle(index: number): CSSProperties {
  * down and retries by itself - the reader can also retry at once. The copy
  * is the same sentence the Search page uses (`RATE_LIMIT_MESSAGE`).
  */
-function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
-  message: string
-  rateLimited: boolean
-  retryAfterSec?: number
-  onRetry: () => void
-}) {
+export function AnswerErrorCard(
+  { message, rateLimited, limitReached = false, retryAfterSec, onRetry }: {
+    message: string
+    rateLimited: boolean
+    /** The portal's question limit refused it: a notice, not a fault, and nothing counts down. */
+    limitReached?: boolean
+    retryAfterSec?: number
+    onRetry: () => void
+  },
+) {
+  const notice = rateLimited || limitReached
   const wait = Math.max(1, retryAfterSec ?? (secondsUntilRetry() || RETRY_FALLBACK_SEC))
   const [left, setLeft] = useState(rateLimited ? wait : 0)
   const onRetryRef = useRef(onRetry)
@@ -875,19 +882,23 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
     <div
       role='status'
       className='rounded-[calc(var(--rp-radius)+4px)] border p-3 sm:p-5'
-      style={rateLimited
+      style={notice
         ? { borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }
         : { borderColor: 'var(--rp-bad-line)', background: 'var(--rp-bad-bg)' }}
     >
       <p
         className='text-sm font-medium'
-        style={{ color: rateLimited ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
+        style={{ color: notice ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
       >
-        {rateLimited ? 'The portal is busy' : 'Something went wrong'}
+        {rateLimited
+          ? 'The portal is busy'
+          : limitReached
+          ? 'Question limit reached'
+          : 'Something went wrong'}
       </p>
       <p
         className='mt-1 text-sm'
-        style={{ color: rateLimited ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
+        style={{ color: notice ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
       >
         {message}
       </p>
@@ -895,7 +906,7 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
         <button
           type='button'
           onClick={onRetry}
-          className={rateLimited ? 'rp-btn rp-btn-outline' : 'rp-btn rp-btn-danger'}
+          className={notice ? 'rp-btn rp-btn-outline' : 'rp-btn rp-btn-danger'}
         >
           {rateLimited ? 'Retry now' : 'Retry'}
         </button>
@@ -1019,6 +1030,7 @@ function AnswerCard({
       <AnswerErrorCard
         message={message.error}
         rateLimited={message.rateLimited === true}
+        limitReached={message.limitReached === true}
         retryAfterSec={message.retryAfterSec}
         onRetry={onRetry}
       />
@@ -2354,6 +2366,7 @@ export function AskPage() {
           pending: false,
           error: thrown.message,
           rateLimited: thrown.code !== 'ask_quota_exceeded',
+          limitReached: thrown.code === 'ask_quota_exceeded',
           retryAfterSec: thrown.retryAfterSec,
         }))
       } else {
