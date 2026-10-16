@@ -151,7 +151,7 @@ export function endsMidSentence(text: string): boolean {
   if (/^\s*\|.*\|\s*$/.test(last)) return false
   if (/^\s*\|/.test(last)) return true
   if (LIST_ITEM.test(last) && /(?:\d|%|\))\s*$/.test(last)) return false
-  if (/[.!?。！？]["'”’)*_」』]*$/.test(last)) return false
+  if (/[.!?。！？]["'”’)*_」』）】》〉〕]*$/.test(last)) return false
   if (/[,;:\-–]$/.test(last)) return true
   // Japanese sentences may run together without spaces before an unfinished tail.
   return DANGLING_WORD.test(last) || /\s\S+$/.test(last) || /[。！？]/.test(last)
@@ -173,7 +173,7 @@ export function trimTruncatedTail(text: string): { text: string; truncated: bool
   // Keep markers with their sentence. Japanese boundaries need no following space;
   // English stops still require one so decimal points are not sentence boundaries.
   const boundary =
-    /[.!?]["'”’)*_」』]*(?:\s*\[\d{1,3}\])*(?=\s+\S)|[。！？]["'”’)*_」』]*(?:\s*\[\d{1,3}\])*(?=\s*\S)/g
+    /[.!?]["'”’)*_」』）】》〉〕]*(?:\s*\[\d{1,3}\])*(?=\s+\S)|[。！？]["'”’)*_」』）】》〉〕]*(?:\s*\[\d{1,3}\])*(?=\s*\S)/g
   let cut = -1
   let m: RegExpExecArray | null
   while ((m = boundary.exec(last)) !== null) cut = m.index + m[0].length
