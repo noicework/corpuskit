@@ -39,7 +39,7 @@ replace the inventory and browser audit of unwrapped copy or dynamic labels.
 | Research controls | Answer rendering/journey/stream, chat, command palette, comparisons, sources/evidence, confidence/currency, PDF, maps, pipeline stages, search/typeahead/views, exports and assessment | Research | Pending |
 | Platform | Connections/Admin, People, Audit, tenant picker and not-found states | Platform | Pending |
 | Account/access | Account menu, assignments, confirmation/delete dialogs, emergency access, sign-in/profile, access/paused/denied states and portal switcher | Platform | Pending |
-| Help/chrome | Help menu, footer, ACMD chrome, Docs navigation/controls, static HowItWorks prose and diagrams | Platform | Pending; fetched authored articles stay in their source language |
+| Help/chrome | Help menu, footer, ACMD chrome, Docs navigation/controls and app-owned help bodies, HowItWorks prose and diagrams | Platform | Pending; research source documents and repository-only developer documentation remain authored |
 | Shared primitives | Empty/error/loading states, resource type labels, document-add links, built-in schema display names/descriptions | Manage | Pending |
 
 ## Completion evidence required
@@ -50,7 +50,7 @@ replace the inventory and browser audit of unwrapped copy or dynamic labels.
   field key and authored custom schema name/description.
 - Exercise dates, counts and templates in both languages. Audit catalog collisions and missing keys.
 - Audit visible hardcoded English in Japanese, explicitly excluding source content, technical IDs,
-  recognised product/protocol names, language options and browser-owned file-picker chrome.
+  recognised product/protocol names, language options and the browser-owned file-picker dialog. App file-selection controls are localised.
 - Verify Japanese and English in light/dark, desktop and a measured 390px viewport, including 22px
   root text. Include dialogs, errors, empty/loading states, keyboard flow and surrounding chrome.
 - Pass the full required gate and web build on the exact reviewed head. Implementation, merge,
