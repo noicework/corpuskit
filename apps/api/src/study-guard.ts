@@ -68,8 +68,8 @@ export function distinctiveTerms(query: string, lexicon: readonly string[] = [])
 /** Quoted fragments long enough to be a title, straight or curly quotes. */
 export function quotedTitles(query: string): string[] {
   const out: string[] = []
-  for (const m of query.matchAll(/["“]([^"”]{12,})["”]/g)) {
-    const fragment = m[1]?.trim()
+  for (const m of query.matchAll(/["“]([^"”]{12,})["”]|「([^」]{12,})」|『([^』]{12,})』/g)) {
+    const fragment = (m[1] ?? m[2] ?? m[3])?.trim()
     if (fragment && !out.includes(fragment)) out.push(fragment)
   }
   return out
