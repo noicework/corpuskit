@@ -83,6 +83,16 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
         const scene = `${dark ? 'dark' : 'light'}-${width}`
         console.log(`[graph-chrome] ${scene}`)
         const browser = await launch(), page = await browser.newPage('about:blank')
+        const protocolErrors: unknown[] = []
+        page.unsafelyGetCelestialBindings().ws.addEventListener('message', (event) => {
+          const response = JSON.parse(event.data)
+          // Astral 0.5.6 resolves CDP errors as undefined. Retain the actual
+          // protocol fault so a failed native gesture is diagnosable in CI.
+          if (response.error) {
+            protocolErrors.push(response.error)
+            console.error(`[graph-chrome] ${scene} protocol error`, response.error)
+          }
+        })
         try {
           await page.bringToFront()
           await page.setViewportSize({ width, height: mobile ? 844 : 960 })
@@ -166,18 +176,79 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
                 },
               ),
             ).toBe(true)
-            await page.evaluate(() => scrollTo(0, 0))
+            await page.evaluate(async () => {
+              scrollTo(0, 0)
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+              )
+            })
+            // The menu changed the scroll lock and the document was reset.
+            // Commit a frame before native input: Chromium's hit-test data
+            // can lag the DOM, especially beside the touch-none canvas.
+            await Deno.writeFile(`${directory}/${scene}-gesture-ready.png`, await page.screenshot())
+            const gesture = await page.evaluate(() => {
+              const masthead = [...document.querySelectorAll('[data-graph-masthead]')]
+                .find((element) => element.getBoundingClientRect().height > 0)!
+              const bounds = masthead.getBoundingClientRect()
+              const x = 10, y = bounds.top + bounds.height / 2
+              const hit = document.elementFromPoint(x, y)!
+              const actions: string[] = []
+              for (let element: Element | null = hit; element; element = element.parentElement) {
+                actions.push(getComputedStyle(element).touchAction)
+              }
+              const touches: unknown[] = []
+              Reflect.set(globalThis, '__graphChromeTouches', touches)
+              addEventListener('touchstart', (event) => {
+                const target = event.target as Element
+                touches.push({
+                  trusted: event.isTrusted,
+                  tag: target.tagName,
+                  inMasthead: masthead.contains(target),
+                  inStage: !!target.closest('[data-graph-stage]'),
+                  scroll: scrollY,
+                })
+              }, { capture: true, passive: true })
+              return {
+                x,
+                y,
+                distance: -document.querySelector('[data-graph-stage]')!
+                  .getBoundingClientRect().top - 100,
+                scroll: scrollY,
+                inMasthead: masthead.contains(hit),
+                inStage: !!hit.closest('[data-graph-stage]'),
+                actions,
+              }
+            })
+            console.log(`[graph-chrome] ${scene} gesture-ready`, JSON.stringify(gesture))
+            expect(gesture.scroll).toBe(0)
+            expect(gesture.inMasthead).toBe(true)
+            expect(gesture.inStage).toBe(false)
+            expect(gesture.actions.every((action) => action === 'auto')).toBe(true)
             // A real Chromium touch gesture scrolls the document, rather than
             // relying only on programmatic window scrolling for this contract.
             await page.unsafelyGetCelestialBindings().Input.synthesizeScrollGesture({
-              x: 10,
-              y: before.stage.top - 10,
-              yDistance: -before.stage.top - 100,
+              x: gesture.x,
+              y: gesture.y,
+              yDistance: gesture.distance,
               gestureSourceType: 'touch',
               speed: 600,
               preventFling: true,
             })
             const after = await geometry(page)
+            const touches = await page.evaluate(() =>
+              Reflect.get(globalThis, '__graphChromeTouches') as {
+                trusted: boolean
+                inMasthead: boolean
+                inStage: boolean
+              }[]
+            )
+            console.log(
+              `[graph-chrome] ${scene} native-swipe`,
+              JSON.stringify({ after, touches, protocolErrors }),
+            )
+            expect(protocolErrors).toEqual([])
+            expect(touches.some((touch) => touch.trusted && touch.inMasthead && !touch.inStage))
+              .toBe(true)
             expect(after.scroll).toBeGreaterThan(before.header.height)
             expect(after.header.bottom).toBeLessThanOrEqual(0)
             expect(after.masthead.bottom).toBeLessThanOrEqual(1)
@@ -185,7 +256,7 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
             expect(after.stage.height).toBe(before.stage.height)
             expect(after.canvas.height).toBe(before.canvas.height)
             await Deno.writeFile(`${directory}/${scene}-scrolled.png`, await page.screenshot())
-            evidence.push({ scene, scrolled: after, menu })
+            evidence.push({ scene, scrolled: after, menu, gesture, touches })
             // Canvas touch gestures still belong to the graph. A native tap
             // on its visible return control must always recover navigation.
             const back = await page.evaluate((browseLabel) => {
@@ -260,6 +331,15 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
           await page.waitForFunction(() => document.documentElement.lang === 'ja')
           await Deno.writeFile(`${directory}/${scene}.png`, await page.screenshot())
           evidence.push({ scene, before, final: await geometry(page) })
+        } catch (error) {
+          // Deno prints an assertion's stack only after the complete browser
+          // suite. Publish the exact scene and geometry at the failure now.
+          console.error(`[graph-chrome] ${scene} failed`, error)
+          console.error(
+            `[graph-chrome] ${scene} final geometry`,
+            await geometry(page).catch(() => ({ unavailable: true })),
+          )
+          throw error
         } finally {
           await page.close()
           await browser.close()
