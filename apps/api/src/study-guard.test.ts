@@ -190,3 +190,12 @@ describe('distinctiveTerms', () => {
     expect(distinctiveTerms('lamotrigines are not lamotrigine', LEXICON)).toEqual(['lamotrigine'])
   })
 })
+
+Deno.test('Japanese title quotes preserve the complete title and the existing English forms', () => {
+  const ja = '高分子材料の吸水と加工損傷に関する探索実験ノート'
+  const en = 'Water sorption and machining damage repeat experiment'
+  expect(quotedTitles(`「${ja}」 and "${en}" and 『${ja}』`)).toEqual([ja, en])
+  expect(quotedTitles('「短い引用」 and "short"')).toEqual([])
+  expect(matchStudies(`「${ja}」`, [resource('ja', ja), resource('other', en)]).map((r) => r.id))
+    .toEqual(['ja'])
+})

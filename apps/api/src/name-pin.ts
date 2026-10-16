@@ -225,7 +225,7 @@ export function questionNames(query: string, lexicon: readonly string[] = []): Q
   const out: QuestionName[] = []
   const add = (text: string, kind: NameKind) => {
     const w = words(text)
-    if (w.length === 0) return
+    if (w.length === 0 && kind !== 'title') return
     if (out.some((n) => n.text.toLowerCase() === text.toLowerCase())) return
     out.push({ text, kind, words: w })
   }
@@ -303,6 +303,22 @@ export function resolveNames(
       titles: matched.map((r) => r.title),
     })
   for (const name of names) {
+    // A quoted title names its literal phrase, including scripts without Latin
+    // word boundaries. Tokenising a Japanese title first used to discard it,
+    // or reduce a mixed title to its generic English words (for example CAD
+    // CAM), leaving only the English half of a bilingual comparison pinned.
+    if (name.kind === 'title') {
+      const normalise = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').trim()
+      const literal = normalise(name.text)
+      const matches = articles.filter((r) => normalise(r.title).includes(literal))
+      if (matches.length > 0 && matches.length <= MAX_ARTICLES_PER_NAME) {
+        asTitle(name, matches)
+        continue
+      }
+      // No empty-word match across the entire catalogue; a title with no
+      // Latin tokens must resolve literally or remain unresolved.
+      if (name.words.length === 0 || /\p{L}/u.test(name.text.replace(/[a-z]/gi, ''))) continue
+    }
     // An antigen or a trial acronym is matched in the case the question
     // wrote it before anything else, so "EXPERIENCE" reaches the pooled
     // analysis rather than every paper that reports an experience.

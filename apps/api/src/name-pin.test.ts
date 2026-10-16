@@ -230,3 +230,35 @@ describe('the retrieval pin (D7-01, D7-02, D7-09)', () => {
     expect(pin?.resourceIds.length).toEqual(6)
   })
 })
+
+describe('quoted bilingual source titles', () => {
+  const ja = '高分子材料の吸水と加工損傷に関する探索実験ノート'
+  const mixed = 'CAD CAM材料の吸水と加工損傷に関する探索実験ノート'
+  const en = 'Water sorption and machining damage repeat experiment'
+  const first = '積層材料の冷却と微小亀裂に関する技術報告（初版）'
+  const revised = '積層材料の冷却と微小亀裂に関する技術報告（改訂版）'
+  const papers = [
+    resource('ja', ja),
+    resource('mixed', mixed),
+    resource('en', en),
+    resource('first', first),
+    resource('revised', revised),
+    resource('other', 'CAD CAM material preparation protocol'),
+  ]
+  it('keeps a Japanese title and its English repeat in the same retrieval pin', () => {
+    expect(resolvePin(`Compare "${ja}" and "${en}".`, papers)?.resourceIds)
+      .toEqual(['ja', 'en'])
+  })
+  it('matches a mixed-script title literally before its generic Latin words', () => {
+    expect(resolvePin(`Compare 「${mixed}」 and "${en}".`, papers)?.resourceIds)
+      .toEqual(['mixed', 'en'])
+  })
+  it('keeps near-copy Japanese version titles distinct with native quotation marks', () => {
+    expect(resolvePin(`『${first}』と「${revised}」を比較してください。`, papers)?.resourceIds)
+      .toEqual(['first', 'revised'])
+  })
+  it('never resolves an unknown non-Latin quoted title through empty or generic Latin tokens', () => {
+    expect(resolvePin('Compare "未知の積層材料の冷却に関する探索実験ノート".', papers)).toBeNull()
+    expect(resolvePin('Compare "CAD CAM未知の材料の冷却に関する実験ノート".', papers)).toBeNull()
+  })
+})
