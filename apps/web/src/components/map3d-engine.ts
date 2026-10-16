@@ -10,6 +10,44 @@ import {
   shortLabel,
 } from './KnowledgeMap.tsx'
 import { type Centre3D, clusterCentres3D, ForceSim3D, type SimNode3D } from '../lib/force3d.ts'
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+
+type PopupSubject =
+  | { kind: 'category'; group: string; entities: number; links: number }
+  | { kind: 'entity'; label: string; group: string; relations: number; mentions: number }
+
+/** Fixed interface copy only; authored graph names are never translation inputs. */
+export function mapPopupCopy(subject: PopupSubject, ui: ResearchUi = englishResearchUi) {
+  return subject.kind === 'category'
+    ? {
+      name: subject.group || ui('Entity'),
+      category: ui('category'),
+      counts: `${
+        ui(subject.entities === 1 ? '1 entity' : '{count} entities', {
+          count: subject.entities,
+        })
+      } · ${
+        ui(subject.links === 1 ? '1 link out' : '{count} links out', {
+          count: subject.links,
+        })
+      }`,
+      hint: ui('Click to open the category'),
+    }
+    : {
+      name: subject.label,
+      category: subject.group || ui('Entity'),
+      counts: `${
+        ui(subject.relations === 1 ? '1 relation' : '{count} relations', {
+          count: subject.relations,
+        })
+      } · ${
+        ui(subject.mentions === 1 ? '1 mention' : '{count} mentions', {
+          count: subject.mentions,
+        })
+      }`,
+      hint: ui('Click to explore'),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The knowledge map's 3D engine.
@@ -540,6 +578,7 @@ export class KnowledgeMapEngine {
   private renderDirty = true
   private resizeObserver: ResizeObserver
   private disposed = false
+  private ui: ResearchUi
   private width = 1
   private height = 1
 
@@ -548,7 +587,9 @@ export class KnowledgeMapEngine {
     labelLayer: HTMLDivElement,
     onSelect: (id: string | null) => void,
     onContextLost?: () => void,
+    ui: ResearchUi = englishResearchUi,
   ) {
+    this.ui = ui
     this.canvas = canvas
     this.labelLayer = labelLayer
     this.onSelect = onSelect
@@ -586,7 +627,7 @@ export class KnowledgeMapEngine {
     this.popupCounts.className = 'rp-map3d-popup-counts'
     this.popupHint = document.createElement('div')
     this.popupHint.className = 'rp-map3d-popup-hint'
-    this.popupHint.textContent = 'Click to explore'
+    this.popupHint.textContent = this.ui('Click to explore')
     this.popup.append(this.popupName, this.popupMeta, this.popupCounts, this.popupHint)
     labelLayer.appendChild(this.popup)
 
@@ -1456,34 +1497,49 @@ export class KnowledgeMapEngine {
     dot.className = 'rp-map3d-popup-dot'
     const category = document.createElement('span')
     if (hub) {
-      this.popupName.textContent = hub.group || 'Entity'
+      const copy = mapPopupCopy({
+        kind: 'category',
+        group: hub.group,
+        entities: hub.count,
+        links: hub.flows.length,
+      }, this.ui)
+      this.popupName.textContent = copy.name
       dot.style.background = `var(--rp-cat-${hub.anchor.slot + 1})`
-      category.textContent = 'category'
+      category.textContent = copy.category
       category.style.color = `var(--rp-cat-${hub.anchor.slot + 1}-ink)`
-      const entities = hub.count === 1 ? '1 entity' : `${hub.count} entities`
-      const links = hub.flows.length === 1 ? '1 link out' : `${hub.flows.length} links out`
-      this.popupCounts.textContent = `${entities} · ${links}`
-      this.popupHint.textContent = 'Click to open the category'
+      this.popupCounts.textContent = copy.counts
+      this.popupHint.textContent = copy.hint
     } else if (visual) {
-      this.popupName.textContent = visual.node.label
+      const copy = mapPopupCopy({
+        kind: 'entity',
+        label: visual.node.label,
+        group: visual.node.group,
+        relations: visual.degree,
+        mentions: visual.node.weight,
+      }, this.ui)
+      this.popupName.textContent = copy.name
       if (visual.hollow) {
         dot.style.background = 'transparent'
         dot.style.boxShadow = `inset 0 0 0 2px var(--rp-cat-${visual.slot + 1})`
       } else {
         dot.style.background = `var(--rp-cat-${visual.slot + 1})`
       }
-      category.textContent = visual.node.group || 'Entity'
+      category.textContent = copy.category
       category.style.color = `var(--rp-cat-${visual.slot + 1}-ink)`
-      const relations = visual.degree === 1 ? '1 relation' : `${visual.degree} relations`
-      const mentions = visual.node.weight === 1 ? '1 mention' : `${visual.node.weight} mentions`
-      this.popupCounts.textContent = `${relations} · ${mentions}`
-      this.popupHint.textContent = 'Click to explore'
+      this.popupCounts.textContent = copy.counts
+      this.popupHint.textContent = copy.hint
     }
     this.popupMeta.append(dot, category)
     // Kept as the layer's last child so it rides above every label.
     this.labelLayer.appendChild(this.popup)
     this.popup.style.display = 'block'
     this.positionPopup()
+  }
+
+  /** Refresh visible copy without rebuilding the scene or changing the current view. */
+  setUi(ui: ResearchUi): void {
+    this.ui = ui
+    this.updatePopup()
   }
 
   /** Pin the card beside the hovered mark, flipped inside the canvas edges. */

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -66,6 +67,7 @@ export interface SearchAnswerProps {
  * the wait when there is one, and lets the reader run it anyway.
  */
 function DeferredNotice({ onRun }: { onRun: () => void }) {
+  const { ui } = usePortalLocale()
   const [wait, setWait] = useState(secondsUntilRetry())
   useEffect(() => {
     if (wait <= 0) return
@@ -79,11 +81,11 @@ function DeferredNotice({ onRun }: { onRun: () => void }) {
       style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
     >
       <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
-        Answer paused - showing results only
+        {ui('Answer paused - showing results only')}
       </p>
       <p className='mt-1 text-sm leading-relaxed' style={{ color: 'var(--rp-warn-ink)' }}>
-        {RATE_LIMIT_MESSAGE}
-        {wait > 0 ? ` The portal will take another question in ${wait} s.` : ''}
+        {ui(RATE_LIMIT_MESSAGE)}
+        {wait > 0 ? ui(' The portal will take another question in {wait} s.', { wait: wait }) : ''}
       </p>
       <button
         type='button'
@@ -91,7 +93,7 @@ function DeferredNotice({ onRun }: { onRun: () => void }) {
         disabled={wait > 0}
         className='rp-btn rp-btn-outline mt-3'
       >
-        {wait > 0 ? `Answer in ${wait} s` : 'Answer this search'}
+        {wait > 0 ? ui('Answer in {wait} s', { wait: wait }) : ui('Answer this search')}
       </button>
     </div>
   )
@@ -105,6 +107,7 @@ export function SearchAnswer(props: SearchAnswerProps) {
 }
 
 function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const context = access.controller.context
   const canAsk = () =>
@@ -193,7 +196,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
           ? RATE_LIMIT_MESSAGE
           : err instanceof Error
           ? err.message
-          : 'The answer service is unavailable.',
+          : ui('The answer service is unavailable.'),
       )
       setStatus('error')
     })
@@ -221,29 +224,31 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   }
 
   const liveMessage = status === 'streaming'
-    ? (stageLabel ?? 'Answer in progress')
+    ? (stageLabel ? ui(stageLabel) : ui('Answer in progress'))
     : status === 'done'
-    ? (refused ? 'No direct evidence found' : 'Answer complete')
+    ? (refused ? ui('No direct evidence found') : ui('Answer complete'))
     : status === 'error'
-    ? 'Answer unavailable'
+    ? ui('Answer unavailable')
     : status === 'deferred'
-    ? 'Answer paused - results only'
+    ? ui('Answer paused - results only')
     : ''
 
   const headerSummary = status === 'streaming'
-    ? (stageLabel ?? '')
+    ? (stageLabel ? ui(stageLabel) : '')
     : status === 'error'
-    ? 'Unavailable'
+    ? ui('Unavailable')
     : status === 'deferred'
-    ? 'Paused'
+    ? ui('Paused')
     : refused
-    ? 'No direct evidence found'
-    : `${citations.length} ${citations.length === 1 ? 'citation' : 'citations'}`
+    ? ui('No direct evidence found')
+    : ui(citations.length === 1 ? '{count} citation' : '{count} citations', {
+      count: citations.length,
+    })
 
   const askHref = `/t/${slug}/ask?ask=${encodeURIComponent(trimmed)}`
 
   return (
-    <section className='rp-card p-5' aria-label='AI answer'>
+    <section className='rp-card p-5' aria-label={ui('AI answer')}>
       <LiveStatus message={liveMessage} />
       <div className='flex items-center justify-between gap-3'>
         <div className='flex min-w-0 items-center gap-2'>
@@ -252,7 +257,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
             style={{ backgroundColor: 'var(--rp-accent)' }}
             aria-hidden='true'
           />
-          <p className='rp-eyebrow shrink-0 text-ink-3'>AI answer</p>
+          <p className='rp-eyebrow shrink-0 text-ink-3'>{ui('AI answer')}</p>
           {collapsed
             ? (
               <p className='flex min-w-0 items-center gap-1.5 truncate text-xs text-ink-3'>
@@ -277,7 +282,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
           aria-controls='search-answer-body'
           className='rp-focus inline-flex min-h-6 shrink-0 items-center rounded-[var(--rp-radius)] px-1.5 text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
         >
-          {collapsed ? 'Show' : 'Hide'}
+          {collapsed ? ui('Show') : ui('Hide')}
         </button>
       </div>
 
@@ -287,7 +292,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
             {status === 'deferred' ? <DeferredNotice onRun={retry} /> : status === 'error'
               ? (
                 <ErrorCard
-                  message={errorMessage ?? 'The answer service is unavailable.'}
+                  message={errorMessage ?? ui('The answer service is unavailable.')}
                   onRetry={retry}
                 />
               )
@@ -303,7 +308,9 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                   {refused
                     ? (
                       <div className='mb-3'>
-                        <span className='rp-badge rp-badge-quiet'>No direct evidence found</span>
+                        <span className='rp-badge rp-badge-quiet'>
+                          {ui('No direct evidence found')}
+                        </span>
                       </div>
                     )
                     : null}
@@ -340,7 +347,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                       <div className='rp-answer-in mt-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
                         <ConfidenceIndicator quality={quality} audit={audit} />
                         <AuditBadge audit={audit} />
-                        <p className='text-xs text-ink-3'>{citations.length} cited</p>
+                        <p className='text-xs text-ink-3'>{citations.length} {ui('cited')}</p>
                         <CurrencyNote
                           sources={sources.filter((source) =>
                             citations.some((citation) => citation.resourceId === source.id)
@@ -357,7 +364,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                 to={askHref}
                 className='rp-chip inline-flex h-9 items-center gap-1.5 font-semibold sm:h-7'
               >
-                Continue in Ask
+                {ui('Continue in Ask')}
                 <span aria-hidden='true'>&rarr;</span>
               </Link>
             </div>

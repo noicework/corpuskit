@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext, useParams } from 'react-router-dom'
@@ -93,8 +94,9 @@ function MentionCard({ resource, slug }: { resource: ScoredResource; slug: strin
 
 /** The relations list while the dossier loads: the name itself never waits (D3-17). */
 function RelationsSkeleton() {
+  const { ui } = usePortalLocale()
   return (
-    <div className='space-y-2.5' aria-busy='true' aria-label='Loading connections'>
+    <div className='space-y-2.5' aria-busy='true' aria-label={ui('Loading connections')}>
       <Skeleton className='h-11 w-full' />
       <Skeleton className='h-11 w-full' />
       <Skeleton className='h-11 w-3/4' />
@@ -103,6 +105,7 @@ function RelationsSkeleton() {
 }
 
 export function EntityPage() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const params = useParams<{ name: string }>()
   // React Router has already decoded the path param - decoding again throws
@@ -132,7 +135,7 @@ export function EntityPage() {
   }, [data, name])
 
   const askHref = `/t/${config.slug}/ask?ask=${
-    encodeURIComponent(`What does the research say about ${name}?`)
+    encodeURIComponent(ui('What does the research say about {name}?', { name }))
   }`
 
   return (
@@ -141,7 +144,7 @@ export function EntityPage() {
         to={`/t/${config.slug}/graph`}
         className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-sm font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
       >
-        &larr; Back to graph
+        {ui('← Back to graph')}
       </Link>
 
       {isLoading
@@ -149,15 +152,15 @@ export function EntityPage() {
           <>
             <div className='mt-4 flex flex-wrap items-start justify-between gap-4'>
               <div className='min-w-0'>
-                <p className='rp-eyebrow text-ink-3'>Entity</p>
+                <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
                 <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{name}</h1>
               </div>
               <Link to={askHref} className='rp-btn rp-btn-primary shrink-0'>
-                Ask about this
+                {ui('Ask about this')}
               </Link>
             </div>
             <section className='mt-8'>
-              <h2 className='rp-eyebrow text-ink-3'>Connections</h2>
+              <h2 className='rp-eyebrow text-ink-3'>{ui('Entity connections')}</h2>
               <div className='mt-3'>
                 <RelationsSkeleton />
               </div>
@@ -169,18 +172,20 @@ export function EntityPage() {
       {unknown
         ? (
           <div className='mt-4'>
-            <p className='rp-eyebrow text-ink-3'>Entity</p>
+            <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
             <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{name}</h1>
             <div className='mt-6'>
               <EmptyState
-                title='Nothing on this yet'
-                description='No paper in the corpus mentions this name and the knowledge graph has no relations for it. Check the spelling, or search the library for a broader term.'
+                title={ui('Nothing on this yet')}
+                description={ui(
+                  'No paper in the corpus mentions this name and the knowledge graph has no relations for it. Check the spelling, or search the library for a broader term.',
+                )}
               >
                 <Link
                   to={`/t/${config.slug}/search?q=${encodeURIComponent(name)}`}
                   className='rp-btn rp-btn-outline'
                 >
-                  Search the library
+                  {ui('Search the library')}
                 </Link>
               </EmptyState>
             </div>
@@ -190,7 +195,7 @@ export function EntityPage() {
         ? (
           <div className='mt-4'>
             <ErrorCard
-              message={error instanceof Error ? error.message : 'Could not load this entity.'}
+              message={error instanceof Error ? error.message : ui('Could not load this entity.')}
               onRetry={() => void refetch()}
             />
           </div>
@@ -202,7 +207,7 @@ export function EntityPage() {
           <>
             <div className='mt-4 flex flex-wrap items-start justify-between gap-4'>
               <div className='min-w-0'>
-                <p className='rp-eyebrow text-ink-3'>Entity</p>
+                <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
                 <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{data.name}</h1>
                 {groups.length > 0
                   ? (
@@ -220,18 +225,20 @@ export function EntityPage() {
                   : null}
               </div>
               <Link to={askHref} className='rp-btn rp-btn-primary shrink-0'>
-                Ask about this
+                {ui('Ask about this')}
               </Link>
             </div>
 
             <section className='mt-8'>
-              <h2 className='rp-eyebrow text-ink-3'>Connections</h2>
+              <h2 className='rp-eyebrow text-ink-3'>{ui('Entity connections')}</h2>
               {relatedEdges.length === 0
                 ? (
                   <div className='mt-3'>
                     <EmptyState
-                      title='No connections recorded yet'
-                      description='The knowledge graph has no relations for this entity so far. The papers below still mention it.'
+                      title={ui('No connections recorded yet')}
+                      description={ui(
+                        'The knowledge graph has no relations for this entity so far. The papers below still mention it.',
+                      )}
                     />
                   </div>
                 )
@@ -250,13 +257,15 @@ export function EntityPage() {
             </section>
 
             <section className='mt-8'>
-              <h2 className='rp-eyebrow text-ink-3'>Mentioned in</h2>
+              <h2 className='rp-eyebrow text-ink-3'>{ui('Mentioned in')}</h2>
               {data.resources.length === 0
                 ? (
                   <div className='mt-3'>
                     <EmptyState
-                      title='No resources reference this entity yet'
-                      description='It may only appear in the knowledge graph so far, without an indexed passage.'
+                      title={ui('No resources reference this entity yet')}
+                      description={ui(
+                        'It may only appear in the knowledge graph so far, without an indexed passage.',
+                      )}
                     />
                   </div>
                 )

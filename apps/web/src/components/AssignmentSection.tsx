@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { type Permission, PLATFORM_ROLES, PORTAL_ROLES, type Scope } from '@research-portal/core'
@@ -118,6 +119,7 @@ export function AssignmentSection(
 function Section(
   { scope, name, family }: { scope: Scope; name: string; family: AssignmentFamily },
 ) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const id = useId()
   const permission = scope.kind === 'portal' ? 'members.manage' : 'platform.members.manage'
@@ -132,28 +134,35 @@ function Section(
   const supported = family !== 'groups' || rows.data?.capability === 'enabled'
   return (
     <section className='mt-6 min-w-0' aria-labelledby={id} data-assignment-section={family}>
-      <h3 id={id} className='rp-display mb-4 text-xl'>{title}</h3>
+      <h3 id={id} className='rp-display mb-4 text-xl'>{ui(title)}</h3>
       {notice && (
-        <p role='alert' className='mb-4 text-sm text-[var(--rp-bad-ink)]'>{unconfirmedMessage}</p>
+        <p role='alert' className='mb-4 text-sm text-[var(--rp-bad-ink)]'>
+          {ui(unconfirmedMessage)}
+        </p>
       )}
       {!supported && (
         <p className='mb-4 text-base text-ink-2'>
-          Group mappings are unavailable. Use individual assignments until group support is
-          confirmed.
+          {ui(
+            'Group mappings are unavailable. Use individual assignments until group support is confirmed.',
+          )}
         </p>
       )}
       {rows.isLoading && (
-        <p role='status' className='text-base text-ink-2'>Loading {title.toLowerCase()}...</p>
+        <p role='status' className='text-base text-ink-2'>
+          {ui('Loading {items}...', { items: ui(title.toLowerCase()) })}
+        </p>
       )}
       {rows.isError && (
         <div role='alert'>
-          <p className='text-base text-ink-2'>Could not load {title.toLowerCase()}. Try again.</p>
+          <p className='text-base text-ink-2'>
+            {ui('Could not load {items}. Try again.', { items: ui(title.toLowerCase()) })}
+          </p>
           <button
             type='button'
             className='rp-btn rp-btn-outline mt-4 min-h-[44px]'
             onClick={() => void rows.refetch()}
           >
-            Try again
+            {ui('Try again')}
           </button>
         </div>
       )}

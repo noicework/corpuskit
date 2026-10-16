@@ -1,3 +1,6 @@
+import { stageText } from './shared.ts'
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { useState } from 'react'
@@ -37,6 +40,8 @@ export function followAnalysis(
  * applies all of it - live progress below.
  */
 function AnalysePanelContent({ slug }: { slug: string }) {
+  const { language, ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAllowed } = usePermissionAdminAccess('behaviour.write', {
     kind: 'portal',
     slug,
@@ -55,7 +60,7 @@ function AnalysePanelContent({ slug }: { slug: string }) {
     setMessage(null)
     const job = new StreamedJob<AnalyseDone>(assertCurrent, 'Analysis failed - please retry.')
     try {
-      const result = await runExplicit('Analyse and configure this portal', async (access) => {
+      const result = await runExplicit(ui('Analyse and configure this portal'), async (access) => {
         await analysePortal(
           slug,
           access,
@@ -65,16 +70,26 @@ function AnalysePanelContent({ slug }: { slug: string }) {
       })
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: `Analysis complete - ${result.topics} topics, ${result.kinds} kinds, ` +
-          `${result.labelled} resources labelled, ${result.questions} suggested questions. ` +
-          'The portal now reflects what is in the box.',
-      })
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
+          'Analysis complete - {topics} topics, {kinds} kinds, {labelled} resources labelled, {questions} suggested questions. The portal now reflects what is in the box.',
+          {
+            topics: result.topics,
+            kinds: result.kinds,
+            labelled: result.labelled,
+            questions: result.questions,
+          },
+        )))
       if (sessionAllowed) await queryClient.invalidateQueries()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage(failedJobMessage(job, err, 'Analysis failed - please retry.'))
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            failedJobMessage(job, err, 'Analysis failed - please retry.', localError).text,
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setRunning(false)
     }
@@ -84,9 +99,9 @@ function AnalysePanelContent({ slug }: { slug: string }) {
     <div className='mt-6 border-t border-line pt-5'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <h3 className='text-sm font-semibold text-ink'>Analyse and configure</h3>
+          <h3 className='text-sm font-semibold text-ink'>{ui('Analyse and configure')}</h3>
           <p className='mt-0.5 text-xs text-ink-2'>
-            Derives the taxonomy, graph dimensions and suggested questions from the corpus.
+            {ui('Derives the taxonomy, graph dimensions and suggested questions from the corpus.')}
           </p>
         </div>
         <button
@@ -95,13 +110,15 @@ function AnalysePanelContent({ slug }: { slug: string }) {
           onClick={() => void run()}
           className='rp-btn rp-btn-primary'
         >
-          {running ? 'Analysing…' : 'Run analysis'}
+          {running ? ui('Analysing…') : ui('Run analysis')}
         </button>
       </div>
 
       {running && (
         <p role='status' className='mt-3 text-sm text-ink-3'>
-          Waiting for the confirmed result. Progress may arrive together when the action finishes.
+          {ui(
+            'Waiting for the confirmed result. Progress may arrive together when the action finishes.',
+          )}
         </p>
       )}
       {log.length > 0 && (
@@ -109,16 +126,22 @@ function AnalysePanelContent({ slug }: { slug: string }) {
           {log.map((event, index) => (
             <li key={index} className='flex gap-2'>
               {event.type === 'stage' && (
-                <span className='font-semibold text-ink'>{event.label}</span>
+                <span className='font-semibold text-ink'>
+                  {stageText(event.label, { language, ui })}
+                </span>
               )}
               {event.type === 'item' && (
                 <span className='text-ink-2' title={event.detail}>{event.label}</span>
               )}
               {event.type === 'done' && (
-                <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>Finished.</span>
+                <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>
+                  {ui('Finished.')}
+                </span>
               )}
               {event.type === 'error' && (
-                <span style={{ color: 'var(--rp-bad-ink)' }}>{event.message}</span>
+                <span style={{ color: 'var(--rp-bad-ink)' }}>
+                  {localError(event.message, 'The action failed. Please try again.')}
+                </span>
               )}
             </li>
           ))}

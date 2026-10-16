@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import {
   type KeyboardEvent,
   type RefObject,
@@ -203,6 +204,7 @@ export function useTypeahead(
  * positioned, so the element carrying `wrapRef` must be `relative`.
  */
 export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
+  const { ui } = usePortalLocale()
   const { open, loading, entities, titles, items, highlight, setHighlight, pick, listboxId } = state
   if (!open) return null
 
@@ -211,7 +213,7 @@ export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
       id={listboxId}
       className='rp-card rp-anim-fade absolute left-0 right-0 top-full z-40 mt-2 p-2.5 text-left'
       role='listbox'
-      aria-label='Suggestions'
+      aria-label={ui('Suggestions')}
     >
       {items.length === 0 && loading
         ? (
@@ -231,7 +233,7 @@ export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
       {entities.length > 0
         ? (
           <div>
-            <p className='rp-eyebrow px-1 pb-1.5 text-ink-3'>Entities</p>
+            <p className='rp-eyebrow px-1 pb-1.5 text-ink-3'>{ui('Entities')}</p>
             <div className='flex flex-wrap gap-1.5'>
               {entities.map((text, index) => (
                 <div
@@ -260,7 +262,7 @@ export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
       {titles.length > 0
         ? (
           <div className={entities.length > 0 ? 'mt-3 border-t border-line pt-2.5' : ''}>
-            <p className='rp-eyebrow px-1 pb-1 text-ink-3'>Resources</p>
+            <p className='rp-eyebrow px-1 pb-1 text-ink-3'>{ui('Resources')}</p>
             <div className='flex flex-col'>
               {titles.map((text, index) => {
                 const flatIndex = entities.length + index

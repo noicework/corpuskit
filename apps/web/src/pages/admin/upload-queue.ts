@@ -1,3 +1,5 @@
+import type { Locale } from '../../lib/portal-locale.tsx'
+import { englishUi } from './shared.ts'
 import type { RecentResource } from '@research-portal/core'
 
 /** The largest file the portal accepts, checked before any bytes are sent. */
@@ -90,7 +92,7 @@ export function followed(rows: UploadRow[]): UploadRow[] {
 }
 
 /** One line that sums up a batch, such as "3 files: 1 uploading, 1 processing, 1 ready". */
-export function summarise(rows: UploadRow[]): string {
+export function summarise(rows: UploadRow[], ui: Locale['ui'] = englishUi): string {
   const count = (status: UploadStatus) => rows.filter((row) => row.status === status).length
   const parts = [
     [count('queued'), 'waiting'],
@@ -98,23 +100,36 @@ export function summarise(rows: UploadRow[]): string {
     [count('processing'), 'processing'],
     [count('ready'), 'ready'],
     [count('failed'), 'failed'],
-  ].filter(([n]) => (n as number) > 0).map(([n, label]) => `${n} ${label}`)
-  const files = `${rows.length} ${rows.length === 1 ? 'file' : 'files'}`
+  ].filter(([n]) => (n as number) > 0).map(([n, label]) =>
+    ui('{count} {status}', { count: Number(n), status: ui(String(label)) })
+  )
+  const files = ui(rows.length === 1 ? '{count} file' : '{count} files', { count: rows.length })
   return parts.length ? `${files}: ${parts.join(', ')}` : files
 }
 
 /** What a screen reader hears when an upload changes state. */
-export function announce(row: UploadRow): string {
+export function announce(
+  row: UploadRow,
+  ui: Locale['ui'] = englishUi,
+  localError?: Locale['error'],
+): string {
   switch (row.status) {
     case 'queued':
-      return `${row.name} is waiting to upload.`
+      return ui('{name} is waiting to upload.', { name: row.name })
     case 'uploading':
-      return `Uploading ${row.name}.`
+      return ui('Uploading {name}.', { name: row.name })
     case 'processing':
-      return row.stalled ? `${row.name} is still processing.` : `${row.name} uploaded. Processing.`
+      return row.stalled
+        ? ui('{name} is still processing.', { name: row.name })
+        : ui('{name} uploaded. Processing.', { name: row.name })
     case 'ready':
-      return `${row.name} is ready.`
+      return ui('{name} is ready.', { name: row.name })
     case 'failed':
-      return `${row.name} failed. ${row.error ?? ''}`.trim()
+      return ui('{name} failed. {reason}', {
+        name: row.name,
+        reason: localError
+          ? localError(row.error, 'Upload failed. Please try again.')
+          : row.error ?? '',
+      }).trim()
   }
 }

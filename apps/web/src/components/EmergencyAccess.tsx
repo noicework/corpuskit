@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { createPortal } from 'react-dom'
 import type { AuthSession } from '../api/auth.ts'
 import type { Permission, Scope } from '@research-portal/core'
@@ -96,6 +97,8 @@ export function EmergencyAccessProvider({ session, children }: {
   session: AuthSession | null | undefined
   children: ReactNode
 }) {
+  const locale = usePortalLocale()
+  const { ui, number } = locale
   const enabled = session?.breakGlassEnabled === true
 
   const [pending, setPending] = useState<PendingOperation | null>(null)
@@ -279,10 +282,10 @@ export function EmergencyAccessProvider({ session, children }: {
       const safe = failure instanceof AdminAccessError ? failure : new AdminAccessError()
       setError(
         safe.status === 429 || (safe.status === 403 && safe.retryAfter !== undefined)
-          ? `Emergency access is temporarily locked. Try again in ${
-            Math.ceil((safe.retryAfter ?? 600) / 60)
-          } minutes.`
-          : safe.message,
+          ? ui('Emergency access is temporarily locked. Try again in {minutes} minutes.', {
+            minutes: number(Math.ceil((safe.retryAfter ?? 600) / 60)),
+          })
+          : locale.error(safe, 'Emergency access could not be confirmed.'),
       )
       operation.reject(safe)
     } finally {
@@ -324,13 +327,14 @@ export function EmergencyAccessProvider({ session, children }: {
               className='rp-card rp-focus w-full min-w-0 max-w-md overflow-y-auto p-6'
               style={{ maxHeight: 'calc(100dvh - 2rem)' }}
             >
-              <h2 id={`${id}-title`} className='rp-display text-xl'>Emergency access</h2>
+              <h2 id={`${id}-title`} className='rp-display text-xl'>{ui('Emergency access')}</h2>
               <p id={`${id}-description`} className='mt-4 text-sm leading-relaxed text-ink-2'>
-                Enter the passcode for this action. You will need to enter it again for another
-                action.
+                {ui(
+                  'Enter the passcode for this action. You will need to enter it again for another action.',
+                )}
               </p>
               <p id={`${id}-action`} className='my-4 min-w-0 break-words text-sm font-semibold'>
-                {pending.label}
+                {ui(pending.label)}
               </p>
               <form
                 className='flex min-w-0 flex-col gap-4'
@@ -340,7 +344,9 @@ export function EmergencyAccessProvider({ session, children }: {
                 }}
               >
                 <div className='min-w-0'>
-                  <label htmlFor={`${id}-passcode`} className='mb-2 block text-sm'>Passcode</label>
+                  <label htmlFor={`${id}-passcode`} className='mb-2 block text-sm'>
+                    {ui('Passcode')}
+                  </label>
                   <input
                     ref={attachInput}
                     id={`${id}-passcode`}
@@ -368,7 +374,7 @@ export function EmergencyAccessProvider({ session, children }: {
                   )
                   : null}
                 {sending
-                  ? <p role='status' className='text-sm text-ink-2'>Sending request...</p>
+                  ? <p role='status' className='text-sm text-ink-2'>{ui('Sending request...')}</p>
                   : null}
                 <div className='flex min-w-0 flex-wrap gap-2'>
                   <button
@@ -381,7 +387,7 @@ export function EmergencyAccessProvider({ session, children }: {
                       paddingBlock: '0.5rem',
                     }}
                   >
-                    Continue with this action
+                    {ui('Continue with this action')}
                   </button>
                   <button
                     ref={cancelRef}
@@ -391,7 +397,7 @@ export function EmergencyAccessProvider({ session, children }: {
                     onClick={cancel}
                     className='rp-btn rp-btn-ghost'
                   >
-                    Cancel
+                    {ui('Cancel')}
                   </button>
                 </div>
               </form>

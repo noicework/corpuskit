@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Scope } from '@research-portal/core'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -16,6 +17,8 @@ import {
 import { AuditDownload, type AuditDownloadResult } from '../../lib/audit-download.ts'
 
 export function AuditPanel({ scope, name }: { scope: Scope; name: string }) {
+  const { ui } = usePortalLocale()
+
   const access = useAccess()
   const kind = scope.kind, slug = scope.kind === 'portal' ? scope.slug : null
   const fixed = useMemo<Scope>(
@@ -26,13 +29,15 @@ export function AuditPanel({ scope, name }: { scope: Scope; name: string }) {
   if (!read && !exporting) return null
   return (
     <section className='min-w-0' data-audit-panel>
-      <h2 className='rp-display text-xl'>Audit</h2>
+      <h2 className='rp-display text-xl'>{ui('Audit')}</h2>
       <p className='mt-2 break-words text-base text-ink-2'>
-        {scope.kind === 'platform' ? 'All portals and platform events' : `Events for ${name}`}
+        {scope.kind === 'platform'
+          ? ui('All portals and platform events')
+          : ui('Events for {name}', { name: name })}
       </p>
       {!read && (
         <p className='mt-4 text-base text-ink-2' data-audit-export-only>
-          Audit export access is available for this scope. Event viewing is unavailable.
+          {ui('Audit export access is available for this scope. Event viewing is unavailable.')}
         </p>
       )}
       <AuditWorkspace key={`${access.generation}:${scope.kind}:${slug}`} scope={fixed} />
@@ -40,6 +45,8 @@ export function AuditPanel({ scope, name }: { scope: Scope; name: string }) {
   )
 }
 function AuditWorkspace({ scope }: { scope: Scope }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const access = useAccess(), controller = access.controller
   const read = access.can('audit.read', scope)
   const [exportSelection, setExportSelection] = useState<{ sequence: number; query: AuditQuery }>({
@@ -124,26 +131,26 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
   }
   const field = (key: string, label: string, choices?: readonly string[]) => (
     <label className='min-w-0 text-sm text-ink-2' key={key}>
-      <span className='mb-2 block'>{label}</span>
+      <span className='mb-2 block'>{ui(label)}</span>
       {choices
         ? (
           <select
             className='rp-input w-full min-w-0'
-            aria-label={label}
+            aria-label={ui(label)}
             value={draft[key] ?? ''}
             onChange={(e) => {
               resetExport()
               setDraft({ ...draft, [key]: e.target.value })
             }}
           >
-            <option value=''>Any</option>
-            {choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+            <option value=''>{ui('Any')}</option>
+            {choices.map((choice) => <option key={choice} value={choice}>{ui(choice)}</option>)}
           </select>
         )
         : (
           <input
             className='rp-input w-full min-w-0'
-            aria-label={label}
+            aria-label={ui(label)}
             aria-describedby={key === 'from' || key === 'to' ? 'audit-time-help' : undefined}
             aria-invalid={validation || undefined}
             maxLength={key === 'from' || key === 'to' ? 24 : 160}
@@ -160,7 +167,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
     <div className='mt-6 min-w-0' data-audit-reader={read ? '' : undefined}>
       <form
         className='rp-card p-4'
-        aria-label='Audit filters'
+        aria-label={ui('Audit filters')}
         onSubmit={(e) => {
           e.preventDefault()
           apply()
@@ -177,15 +184,15 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
           {field('limit', 'Events per page', ['25', '100', '250', '1000'])}
         </div>
         <p id='audit-time-help' className='mt-4 break-words text-sm text-ink-2'>
-          Use UTC timestamps, for example 2026-09-12T00:00:00.000Z.
+          {ui('Use UTC timestamps, for example 2026-09-12T00:00:00.000Z.')}
         </p>
         {validation && (
           <p role='alert' className='mt-3 text-sm text-ink'>
-            Check the filters, identifiers and UTC time range, then apply again.
+            {ui('Check the filters, identifiers and UTC time range, then apply again.')}
           </p>
         )}
         <div className='mt-4 flex flex-wrap gap-3'>
-          <button className='rp-btn rp-btn-primary' type='submit'>Apply filters</button>
+          <button className='rp-btn rp-btn-primary' type='submit'>{ui('Apply filters')}</button>
           <button
             type='button'
             className='rp-btn'
@@ -196,7 +203,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
               resetExport({})
             }}
           >
-            Clear filters
+            {ui('Clear filters')}
           </button>
         </div>
       </form>
@@ -208,11 +215,13 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
         />
       )}
       {read && !validation && !page && !error && (
-        <p role='status' className='mt-6 text-base text-ink-2'>Loading audit events...</p>
+        <p role='status' className='mt-6 text-base text-ink-2'>{ui('Loading audit events...')}</p>
       )}
       {error && (
         <div className='rp-card mt-6 p-4'>
-          <p role='alert' className='text-base text-ink'>{error.message}</p>
+          <p role='alert' className='text-base text-ink'>
+            {localError(error, 'Could not load audit events. Try again.')}
+          </p>
           <button
             type='button'
             className='rp-btn mt-4'
@@ -224,22 +233,23 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
               )
             }}
           >
-            {error.status === 410 ? 'Restart events' : 'Try again'}
+            {error.status === 410 ? ui('Restart events') : ui('Try again')}
           </button>
         </div>
       )}
       {page && (
         <div className='mt-6 min-w-0' data-audit-results>
           <p role='status' className='mb-4 text-sm text-ink-2'>
-            {page.items.length} events on this page.{' '}
-            {page.complete ? 'End of snapshot.' : 'More events available.'}
+            {page.items.length}
+            {ui(' events on this page.')}{' '}
+            {page.complete ? ui('End of snapshot.') : ui('More events available.')}
           </p>
           {!page.items.length
             ? (
               <div className='rp-card p-6'>
-                <h3 className='rp-display text-lg'>No events match these filters</h3>
+                <h3 className='rp-display text-lg'>{ui('No events match these filters')}</h3>
                 <p className='mt-2 text-base text-ink-2'>
-                  Change the time range or clear filters to check again.
+                  {ui('Change the time range or clear filters to check again.')}
                 </p>
               </div>
             )
@@ -247,7 +257,9 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
               <>
                 <div className='hidden min-w-0 xl:block'>
                   <table className='w-full table-fixed text-left text-sm'>
-                    <caption className='sr-only'>Audit events in the selected scope</caption>
+                    <caption className='sr-only'>
+                      {ui('Audit events in the selected scope')}
+                    </caption>
                     <thead>
                       <tr>
                         {[
@@ -264,7 +276,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
                             key={label}
                             scope='col'
                           >
-                            {label}
+                            {ui(label)}
                           </th>
                         ))}
                       </tr>
@@ -276,7 +288,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
                             row.at,
                             row.actor_label ?? row.actor_id ?? row.actor_kind,
                             row.action,
-                            row.scope_slug ?? 'Platform',
+                            row.scope_slug ?? ui('Platform'),
                             [row.target_kind, row.target_id].filter(Boolean).join(': '),
                             row.outcome,
                           ].map((value, i) => (
@@ -296,7 +308,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
                     </tbody>
                   </table>
                 </div>
-                <ul className='space-y-4 xl:hidden' aria-label='Audit events'>
+                <ul className='space-y-4 xl:hidden' aria-label={ui('Audit events')}>
                   {page.items.map((row) => (
                     <li className='rp-card min-w-0 p-4' key={row.id} data-audit-event={row.id}>
                       <h3 className='rp-display break-words text-lg'>{row.action}</h3>
@@ -304,13 +316,13 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
                         {[
                           ['Time (UTC)', row.at],
                           ['Actor', row.actor_label ?? row.actor_id ?? row.actor_kind],
-                          ['Scope', row.scope_slug ?? 'Platform'],
+                          ['Scope', row.scope_slug ?? ui('Platform')],
                           ['Target', [row.target_kind, row.target_id].filter(Boolean).join(': ')],
                           ['Outcome', row.outcome],
                           ['Request ID', row.request_id],
                         ].map(([label, value]) => (
                           <div key={label}>
-                            <dt className='text-ink-2'>{label}</dt>
+                            <dt className='text-ink-2'>{ui(label ?? '')}</dt>
                             <dd className='break-words [overflow-wrap:anywhere]'>{value}</dd>
                           </div>
                         ))}
@@ -328,7 +340,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
               onClick={() =>
                 select({ ...selection.query, cursor: page.nextCursor! }, page.snapshot)}
             >
-              Next events page
+              {ui('Next events page')}
             </button>
           )}
         </div>
@@ -337,6 +349,8 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
   )
 }
 function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }) {
+  const { ui } = usePortalLocale()
+
   const access = useAccess(), download = useRef<AuditDownload | null>(null), operation = useRef(0)
   const [pending, setPending] = useState(false)
   const [result, setResult] = useState<{ format: AuditFormat; page: AuditDownloadResult } | null>(
@@ -374,23 +388,31 @@ function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }
     }
   }
   return (
-    <section className='rp-card mt-6 min-w-0 p-4' data-audit-export aria-label='Audit export'>
-      <h3 className='rp-display text-lg'>Export audit events</h3>
+    <section className='rp-card mt-6 min-w-0 p-4' data-audit-export aria-label={ui('Audit export')}>
+      <h3 className='rp-display text-lg'>{ui('Export audit events')}</h3>
       <p className='mt-2 text-sm text-ink-2'>
-        Each action downloads one page, up to 512 KiB, using the applied filters. Partial pages need
-        a separate action to continue. Stopping cannot remove files already saved.
+        {ui(
+          'Each action downloads one page, up to 512 KiB, using the applied filters. Partial pages need a separate action to continue. Stopping cannot remove files already saved.',
+        )}
       </p>
       <div className='mt-4 flex flex-wrap gap-3'>
-        <button type='button' className='rp-btn' disabled={pending} onClick={() => void run('csv')}>
-          Export CSV
+        <button
+          type='button'
+          className='rp-btn'
+          disabled={pending}
+          onClick={() =>
+            void run('csv')}
+        >
+          {ui('Export CSV')}
         </button>
         <button
           type='button'
           className='rp-btn'
           disabled={pending}
-          onClick={() => void run('json')}
+          onClick={() =>
+            void run('json')}
         >
-          Export JSON
+          {ui('Export JSON')}
         </button>
         {pending && (
           <button
@@ -406,18 +428,20 @@ function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }
               setStopped(true)
             }}
           >
-            Stop export
+            {ui('Stop export')}
           </button>
         )}
       </div>
-      {pending && <p role='status' className='mt-4 text-sm text-ink-2'>Preparing export page...</p>}
-      {stopped && <p role='status' className='mt-4 text-sm text-ink-2'>Export stopped.</p>}
+      {pending && (
+        <p role='status' className='mt-4 text-sm text-ink-2'>{ui('Preparing export page...')}</p>
+      )}
+      {stopped && <p role='status' className='mt-4 text-sm text-ink-2'>{ui('Export stopped.')}</p>}
       {result && (
         <div className='mt-4' data-audit-export-result>
           <p role='status' className='text-sm text-ink-2'>
             {result.page.complete
-              ? 'Complete: final export page downloaded.'
-              : 'Partial: export page downloaded. More events remain in this snapshot.'}
+              ? ui('Complete: final export page downloaded.')
+              : ui('Partial: export page downloaded. More events remain in this snapshot.')}
           </p>
           {!result.page.complete && result.page.nextCursor && (
             <button
@@ -425,7 +449,9 @@ function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }
               className='rp-btn mt-4'
               onClick={() => void run(result.format, result.page)}
             >
-              Export next {result.format.toUpperCase()} page
+              {ui('Export next ')}
+              {result.format.toUpperCase()}
+              {ui(' page')}
             </button>
           )}
         </div>
@@ -434,13 +460,17 @@ function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }
         <div className='mt-4'>
           <p role='alert' className='text-sm text-ink'>
             {error.status === 410
-              ? 'This export snapshot has expired. Restart export to begin a new snapshot.'
+              ? ui('This export snapshot has expired. Restart export to begin a new snapshot.')
               : error.status === 429
-              ? 'Too many event snapshots are open. Wait before trying again.'
-              : 'Could not download the audit page. Restart export to try a new snapshot.'}
+              ? ui('Too many event snapshots are open. Wait before trying again.')
+              : ui('Could not download the audit page. Restart export to try a new snapshot.')}
           </p>
-          <button type='button' className='rp-btn mt-4' onClick={() => void run(error.format)}>
-            Restart export
+          <button
+            type='button'
+            className='rp-btn mt-4'
+            onClick={() => void run(error.format)}
+          >
+            {ui('Restart export')}
           </button>
         </div>
       )}
@@ -448,16 +478,18 @@ function AuditExporter({ scope, filters }: { scope: Scope; filters: AuditQuery }
   )
 }
 function Detail({ row }: { row: AuditEvent }) {
+  const { ui } = usePortalLocale()
+
   return (
     <details className='mt-3 min-w-0'>
-      <summary className='rp-focus cursor-pointer text-sm'>Event details</summary>
+      <summary className='rp-focus cursor-pointer text-sm'>{ui('Event details')}</summary>
       <dl className='mt-3 space-y-2 text-sm'>
         {[['Event ID', row.id], ['Actor kind', row.actor_kind], [
           'Actor ID',
-          row.actor_id ?? 'None',
+          row.actor_id ?? ui('None'),
         ]].map(([label, value]) => (
           <div key={label}>
-            <dt className='text-ink-2'>{label}</dt>
+            <dt className='text-ink-2'>{ui(label ?? '')}</dt>
             <dd className='break-words [overflow-wrap:anywhere]'>{value}</dd>
           </div>
         ))}

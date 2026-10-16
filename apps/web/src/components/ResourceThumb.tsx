@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useRef, useState } from 'react'
 import type { ResourceType } from '@research-portal/core'
 import { thumbnailUrl } from '../api/client.ts'
@@ -64,6 +65,7 @@ export function ResourceThumb({
   /** Told once the platform thumbnail has loaded (`true`) or turned out not to exist (`false`). */
   onThumbnail?: (exists: boolean) => void
 }) {
+  const { ui } = usePortalLocale()
   const frameRef = useRef<HTMLDivElement>(null)
   const src = thumbnailUrl(slug, id)
   const [requestedSrc, setRequestedSrc] = useState<string | null>(null)
@@ -73,7 +75,7 @@ export function ResourceThumb({
   const loaded = loadedSrc === src
   const failed = failedSrc === src
   const glyph = resourceTypeGlyph(type)
-  const label = labelOverride ?? resourceThumbLabel(type)
+  const label = labelOverride ?? ui(resourceThumbLabel(type))
 
   // Native lazy loading looks several viewports ahead. In a long card list that
   // made every large thumbnail compete at once, so the visible row was last to

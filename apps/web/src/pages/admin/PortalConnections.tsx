@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { type ComponentProps, type FormEvent, useEffect, useRef, useState } from 'react'
@@ -15,6 +17,8 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
   resourceCount: number | null
   onChanged: () => Promise<unknown>
 }) {
+  const { ui } = usePortalLocale()
+
   const { sessionAllowed, breakGlassEnabled, runExplicit, pending } = usePermissionAdminAccess(
     'bindings.write',
     { kind: 'portal', slug },
@@ -39,7 +43,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
   }
 
   if (!sessionAllowed && !breakGlassEnabled) {
-    return <p className='text-sm text-ink-2'>Connection management is unavailable.</p>
+    return <p className='text-sm text-ink-2'>{ui('Connection management is unavailable.')}</p>
   }
 
   async function onConnect(event: FormEvent) {
@@ -48,7 +52,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
     setMessage(null)
     try {
       const outcome = await runExplicit(
-        `Connect the knowledge box for ${name}`,
+        ui('Connect the knowledge box for {name}', { name: name }),
         (access) => {
           assertCurrent()
           return connectKnowledgeBox(slug, { url, token }, access)
@@ -58,19 +62,23 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
       if (outcome === undefined) return
       setUrl('')
       setToken('')
-      setMessage({
-        tone: 'ok',
-        text: `Connected - the knowledge box responded with ${outcome.resourceCount} ${
-          outcome.resourceCount === 1 ? 'resource' : 'resources'
-        }.`,
-      })
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
+          outcome.resourceCount === 1
+            ? 'Connected - the knowledge box responded with {count} resource.'
+            : 'Connected - the knowledge box responded with {count} resources.',
+          { count: outcome.resourceCount },
+        )))
       await onChanged()
     } catch (error) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(error, 'Connection failed - please try again.'),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(error, 'Connection failed - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
@@ -81,7 +89,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
     setMessage(null)
     try {
       const result = await runExplicit(
-        `Revert ${name} to its demo knowledge box`,
+        ui('Revert {name} to its demo knowledge box', { name: name }),
         (access) => {
           assertCurrent()
           return revertKnowledgeBox(slug, access)
@@ -89,14 +97,17 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({ tone: 'ok', text: 'Reverted to the demo knowledge box.' })
+      setMessage(messageFor('ok', ({ ui }) => ui('Reverted to the demo knowledge box.')))
       await onChanged()
     } catch (error) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(error, 'Could not revert - please try again.'),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(error, 'Could not revert - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
@@ -104,39 +115,39 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
 
   return (
     <section data-portal-connections className='min-w-0'>
-      <h2 className='text-sm font-semibold text-ink'>Connection</h2>
+      <h2 className='text-sm font-semibold text-ink'>{ui('Connection')}</h2>
       <dl className='mt-3 grid min-w-0 grid-cols-1 gap-3 text-sm sm:grid-cols-2'>
         <div className='min-w-0 rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-          <dt className='rp-eyebrow text-ink-3'>Knowledge box</dt>
+          <dt className='rp-eyebrow text-ink-3'>{ui('Knowledge box')}</dt>
           <dd className='mt-1 break-all font-mono text-ink'>
-            {knowledgeBox.kbId ?? 'Not connected'}
+            {knowledgeBox.kbId ?? ui('Not connected')}
           </dd>
         </div>
         <div className='rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-          <dt className='rp-eyebrow text-ink-3'>Documents</dt>
-          <dd className='mt-1 text-ink'>{resourceCount ?? 'Unavailable'}</dd>
+          <dt className='rp-eyebrow text-ink-3'>{ui('Documents')}</dt>
+          <dd className='mt-1 text-ink'>{resourceCount ?? ui('Unavailable')}</dd>
         </div>
       </dl>
       <form onSubmit={onConnect} className='mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2'>
         <div className='min-w-0'>
           <label htmlFor={`kb-id-${slug}`} className='mb-1.5 block text-sm font-medium text-ink'>
             {knowledgeBox.status === 'connected' || knowledgeBox.status === 'unavailable'
-              ? 'Replace with knowledge box endpoint'
-              : 'Knowledge box API endpoint'}
+              ? ui('Replace with knowledge box endpoint')
+              : ui('Knowledge box API endpoint')}
           </label>
           <input
             id={`kb-id-${slug}`}
             className='rp-input w-full min-w-0'
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder='https://<region>.rag.progress.cloud/api/v1/kb/<box-id>'
+            placeholder={ui('https://<region>.rag.progress.cloud/api/v1/kb/<box-id>')}
             autoComplete='off'
             required
           />
         </div>
         <div className='min-w-0'>
           <label htmlFor={`kb-token-${slug}`} className='mb-1.5 block text-sm font-medium text-ink'>
-            Service account API key
+            {ui('Service account API key')}
           </label>
           <input
             id={`kb-token-${slug}`}
@@ -144,7 +155,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
             className='rp-input w-full min-w-0'
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            placeholder='Paste the service account key'
+            placeholder={ui('Paste the service account key')}
             autoComplete='off'
             required
           />
@@ -162,7 +173,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
               maxWidth: '100%',
             }}
           >
-            {busy ? 'Working...' : 'Verify and connect'}
+            {busy ? ui('Working...') : ui('Verify and connect')}
           </button>
           {(knowledgeBox.status === 'connected' || knowledgeBox.status === 'unavailable') && (
             <button
@@ -178,14 +189,15 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
                 maxWidth: '100%',
               }}
             >
-              {knowledgeBox.status === 'unavailable' ? 'Disconnect' : 'Revert to demo box'}
+              {knowledgeBox.status === 'unavailable' ? ui('Disconnect') : ui('Revert to demo box')}
             </button>
           )}
         </div>
       </form>
       <p className='mt-2 text-xs text-ink-3'>
-        The connection is verified against the live platform before it is saved. Tokens are stored
-        server-side only.
+        {ui(
+          'The connection is verified against the live platform before it is saved. Tokens are stored server-side only.',
+        )}
       </p>
       {message && <MessagePanel message={message} className='mt-4' />}
     </section>

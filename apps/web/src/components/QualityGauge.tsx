@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -22,21 +24,20 @@ const METRICS: { key: keyof QualityScores; label: string; description: string }[
   {
     key: 'answerRelevance',
     label: 'Relevance',
-    description: "Answer relevance: the platform's own self-assessment of how directly the " +
-      "answer addresses the question asked. Not the portal's check of the figures.",
+    description:
+      "Answer relevance: the platform's own self-assessment of how directly the answer addresses the question asked. Not the portal's check of the figures.",
   },
   {
     key: 'groundedness',
     label: 'Groundedness',
-    description: "Groundedness: the platform's own self-assessment of how firmly the answer " +
-      "is supported by the retrieved material. It is not the portal's check of the figures " +
-      'against the cited texts, and the two can disagree.',
+    description:
+      "Groundedness: the platform's own self-assessment of how firmly the answer is supported by the retrieved material. It is not the portal's check of the figures against the cited texts, and the two can disagree.",
   },
   {
     key: 'contextRelevance',
     label: 'Context',
-    description: "Context relevance: the platform's own self-assessment of how well the " +
-      'retrieved passages match the question asked.',
+    description:
+      "Context relevance: the platform's own self-assessment of how well the retrieved passages match the question asked.",
   },
 ]
 
@@ -155,6 +156,7 @@ type PresentMetric = { key: keyof QualityScores; label: string; description: str
  * attribute. A null metric is skipped; if every metric is null nothing renders.
  */
 export function TrustSignals({ quality, showLabel = true }: TrustSignalsProps) {
+  const { ui } = usePortalLocale()
   const present: PresentMetric[] = []
   for (const metric of METRICS) {
     const score = quality[metric.key]
@@ -172,15 +174,15 @@ export function TrustSignals({ quality, showLabel = true }: TrustSignalsProps) {
               'tracking-wide text-ink-3'}
           >
             <ShieldCheckIcon />
-            Platform self-assessment
+            {ui('Platform self-assessment')}
           </span>
         )
         : null}
       {present.map((metric) => (
         <MiniMeter
           key={metric.key}
-          label={metric.label}
-          description={metric.description}
+          label={ui(metric.label)}
+          description={ui(metric.description)}
           score={metric.score}
         />
       ))}
@@ -226,11 +228,17 @@ export interface ConfidenceIndicatorProps {
  * the verdict, otherwise the platform-score explanation. Shared by the pill
  * and the disclosure so the two never explain the same level differently.
  */
-function confidenceDetail(confidence: Confidence, audit: AnswerAudit | undefined): string {
-  const audited = auditSummary(audit)
+function confidenceDetail(
+  confidence: Confidence,
+  audit: AnswerAudit | undefined,
+  ui: ResearchUi = englishResearchUi,
+): string {
+  const audited = auditSummary(audit, ui)
   return confidence.basis === 'audit' && audited
-    ? `Checked against the cited texts: ${audited.charAt(0).toLowerCase()}${audited.slice(1)}`
-    : CONFIDENCE_DETAIL[confidence.state]
+    ? ui('Checked against the cited texts: {detail}', {
+      detail: audited.charAt(0).toLowerCase() + audited.slice(1),
+    })
+    : ui(CONFIDENCE_DETAIL[confidence.state])
 }
 
 /**
@@ -247,6 +255,7 @@ function confidenceDetail(confidence: Confidence, audit: AnswerAudit | undefined
  *    colour alone), and copy that explicitly points at the evidence below.
  */
 export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps) {
+  const { ui } = usePortalLocale()
   const confidence = assessConfidence(quality, audit)
 
   if (confidence.state === 'unscored') {
@@ -256,7 +265,7 @@ export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps
         data-confidence={confidence.state}
       >
         <InfoCircleIcon />
-        Confidence not scored for this answer
+        {ui('Confidence not scored for this answer')}
       </span>
     )
   }
@@ -265,11 +274,11 @@ export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps
     return (
       <span
         className='rp-badge rp-badge-ok inline-flex items-center gap-1'
-        title={confidenceDetail(confidence, audit)}
+        title={confidenceDetail(confidence, audit, ui)}
         data-confidence={confidence.state}
       >
         <CheckCircleIcon />
-        High confidence
+        {ui('High confidence')}
       </span>
     )
   }
@@ -277,8 +286,8 @@ export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps
   return (
     <ConfidencePill
       tone={confidence.state === 'moderate' ? 'warn' : 'bad'}
-      label={confidence.label}
-      detail={confidenceDetail(confidence, audit)}
+      label={ui(confidence.label)}
+      detail={confidenceDetail(confidence, audit, ui)}
       state={confidence.state}
     />
   )
@@ -458,55 +467,75 @@ export interface AnswerQualityDisclosureProps {
  * matches Tailwind's own `sm` rather than guessing at a `max-width` epsilon.
  */
 /** What the audit found, in one sentence, for the disclosure panel. */
-export function auditSummary(audit: AnswerAudit | undefined): string | null {
+export function auditSummary(
+  audit: AnswerAudit | undefined,
+  ui: ResearchUi = englishResearchUi,
+): string | null {
   if (!audit) return null
   const parts: string[] = []
   const unsupported = audit.figuresUnsupported.length + audit.yearsUnsupported.length
   if (audit.figuresChecked > 0) {
     parts.push(
       unsupported === 0
-        ? `${
-          audit.figuresChecked === 1 ? '1 figure' : `${audit.figuresChecked} figures`
-        } found beside ${
-          audit.figuresChecked === 1 ? 'its claim' : 'their claims'
-        } in the cited passages`
-        : `${unsupported} of ${
-          audit.figuresChecked + audit.yearsUnsupported.length
-        } figures not found beside their claim: ${
-          [...audit.figuresUnsupported, ...audit.yearsUnsupported].map(figureLabel).join(', ')
-        }`,
+        ? ui(
+          audit.figuresChecked === 1
+            ? '{count} figure found beside its claim in the cited passages'
+            : '{count} figures found beside their claims in the cited passages',
+          { count: audit.figuresChecked },
+        )
+        : ui('{unsupported} of {total} figures not found beside their claim: {figures}', {
+          unsupported,
+          total: audit.figuresChecked + audit.yearsUnsupported.length,
+          figures: [...audit.figuresUnsupported, ...audit.yearsUnsupported].map(figureLabel).join(
+            ', ',
+          ),
+        }),
     )
   }
   if ((audit.sentencesRemoved ?? 0) > 0) {
     const removed = audit.sentencesRemoved!
     const figures = (audit.figuresRemoved ?? []).map(figureLabel).join(', ')
     parts.push(
-      `${
-        removed === 1 ? '1 sentence' : `${removed} sentences`
-      } removed because no cited passage carries ${
-        removed === 1 ? 'its' : 'their'
-      } figures beside the claim${figures ? ` (${figures})` : ''}`,
+      ui(
+        removed === 1
+          ? '{count} sentence removed because no cited passage carries its figures beside the claim{figures}'
+          : '{count} sentences removed because no cited passage carries their figures beside the claim{figures}',
+        { count: removed, figures: figures ? ` (${figures})` : '' },
+      ),
     )
   }
   if (typeof audit.sentencesChecked === 'number' && audit.sentencesChecked > 0) {
     parts.push(
-      `${audit.sentencesCited ?? 0} of ${audit.sentencesChecked} sentences carry a citation`,
+      ui('{cited} of {total} sentences carry a citation', {
+        cited: audit.sentencesCited ?? 0,
+        total: audit.sentencesChecked,
+      }),
     )
   }
   if (audit.contraindicationsUnsupported.length > 0) {
+    const count = audit.contraindicationsUnsupported.length
     parts.push(
-      `${audit.contraindicationsUnsupported.length} unsupported contraindication${
-        audit.contraindicationsUnsupported.length === 1 ? '' : 's'
-      } removed`,
+      ui(
+        count === 1
+          ? '{count} unsupported contraindication removed'
+          : '{count} unsupported contraindications removed',
+        { count },
+      ),
     )
   }
   if ((audit.denominatorsMissing ?? []).length > 0) {
     parts.push(
-      `stated without a denominator: ${audit.denominatorsMissing!.map(figureLabel).join(', ')}`,
+      ui('stated without a denominator: {figures}', {
+        figures: audit.denominatorsMissing!.map(figureLabel).join(', '),
+      }),
     )
   }
   if ((audit.attributionsCorrected ?? []).length > 0) {
-    parts.push(`attribution corrected for ${audit.attributionsCorrected!.join(', ')}`)
+    parts.push(
+      ui('attribution corrected for {figures}', {
+        figures: audit.attributionsCorrected!.join(', '),
+      }),
+    )
   }
   if (parts.length === 0) return null
   const sentence = parts.join('; ')
@@ -516,6 +545,7 @@ export function auditSummary(audit: AnswerAudit | undefined): string | null {
 export function AnswerQualityDisclosure(
   { quality, audit, onReanswerDeeply, sparselyGrounded = false }: AnswerQualityDisclosureProps,
 ) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
@@ -575,7 +605,7 @@ export function AnswerQualityDisclosure(
   }
 
   const confidence = assessConfidence(quality, audit)
-  const detail = confidenceDetail(confidence, audit)
+  const detail = confidenceDetail(confidence, audit, ui)
   const { tone, labelled } = TRIGGER_TONE[confidence.state]
   const loud = tone !== 'quiet'
 
@@ -596,7 +626,7 @@ export function AnswerQualityDisclosure(
           {glyph('md')}
         </span>
         <div className='min-w-0'>
-          <p className='text-sm font-semibold text-ink'>{confidence.label}</p>
+          <p className='text-sm font-semibold text-ink'>{ui(confidence.label)}</p>
           <p className='mt-1 text-xs leading-relaxed text-ink-2'>{detail}</p>
         </div>
       </div>
@@ -607,9 +637,9 @@ export function AnswerQualityDisclosure(
             {confidence.basis === 'audit'
               ? (
                 <p className='mb-2 text-xs leading-relaxed text-ink-3'>
-                  The platform's self-assessment, shown for reference - it scores its own answer and
-                  can disagree with the check above, which is the portal's own audit of the figures
-                  against the cited texts.
+                  {ui(
+                    "The platform's self-assessment, shown for reference - it scores its own answer and can disagree with the check above, which is the portal's own audit of the figures against the cited texts.",
+                  )}
                 </p>
               )
               : null}
@@ -633,7 +663,7 @@ export function AnswerQualityDisclosure(
             style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
           >
             <p className='text-xs leading-relaxed text-[var(--rp-warn-ink)]'>
-              This answer is thinly grounded - re-answer with full-document context?
+              {ui('This answer is thinly grounded - re-answer with full-document context?')}
             </p>
             <button
               type='button'
@@ -643,15 +673,16 @@ export function AnswerQualityDisclosure(
               }}
               className='rp-btn rp-btn-outline mt-2 h-8 px-3 text-xs'
             >
-              Re-answer deeply
+              {ui('Re-answer deeply')}
             </button>
           </div>
         )
         : sparselyGrounded
         ? (
           <p className='mt-3 text-xs leading-relaxed text-[var(--rp-warn-ink)]'>
-            Parts of this answer go beyond the retrieved passages - open the retrieved sources below
-            to check it before relying on it.
+            {ui(
+              'Parts of this answer go beyond the retrieved passages - open the retrieved sources below to check it before relying on it.',
+            )}
           </p>
         )
         : null}
@@ -670,19 +701,19 @@ export function AnswerQualityDisclosure(
           tabIndex={-1}
           role='dialog'
           aria-modal='true'
-          aria-label={`Answer quality: ${confidence.label}`}
+          aria-label={ui('Answer quality: {value1}', { value1: ui(confidence.label) })}
           onKeyDown={trapTab}
           style={{ '--rp-stage-i': 1 } as CSSProperties}
           className='rp-answer-tail absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-[var(--rp-radius)] border-t border-line bg-surface p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] shadow-lg outline-none'
         >
           <div className='flex items-center justify-between gap-2 pb-3'>
             <p className='text-xs font-medium uppercase tracking-wide text-ink-3'>
-              Answer quality
+              {ui('Answer quality')}
             </p>
             <button
               type='button'
               onClick={() => setOpen(false)}
-              aria-label='Close'
+              aria-label={ui('Close')}
               className='rp-focus -mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:text-ink'
             >
               <CloseIcon />
@@ -698,12 +729,12 @@ export function AnswerQualityDisclosure(
         ref={panelRef}
         tabIndex={-1}
         role='dialog'
-        aria-label={`Answer quality: ${confidence.label}`}
+        aria-label={ui('Answer quality: {value1}', { value1: ui(confidence.label) })}
         onKeyDown={trapTab}
         className='rp-answer-tail absolute right-0 top-full z-30 mt-1.5 w-80 rounded-[var(--rp-radius)] border border-line bg-surface p-3.5 shadow-lg outline-none'
       >
         <p className='pb-2 text-xs font-medium uppercase tracking-wide text-ink-3'>
-          Answer quality
+          {ui('Answer quality')}
         </p>
         {body}
       </div>
@@ -720,8 +751,8 @@ export function AnswerQualityDisclosure(
         // Leads with the level, so a screen-reader user gets the same signal a
         // sighted one takes from the colour without opening anything - and, on
         // the loud states, starts with the visible label it repeats.
-        aria-label={`${confidence.label}. Answer quality details.`}
-        title={`${confidence.label} - answer quality`}
+        aria-label={ui('{value1}. Answer quality details.', { value1: ui(confidence.label) })}
+        title={ui('{value1} - answer quality', { value1: ui(confidence.label) })}
         className={`rp-focus flex h-9 shrink-0 items-center justify-center gap-1 rounded-[var(--rp-radius-btn)] transition-colors duration-150 ${
           labelled ? 'px-2 text-[0.6875rem] font-semibold' : 'w-9'
         } ${loud ? 'border' : 'text-ink-3 hover:bg-[var(--rp-surface-2)] hover:text-ink'}`}
@@ -734,7 +765,7 @@ export function AnswerQualityDisclosure(
           : undefined}
       >
         {glyph('lg')}
-        {labelled ? <span>{confidence.label}</span> : null}
+        {labelled ? <span>{ui(confidence.label)}</span> : null}
       </button>
       {open ? panel : null}
     </div>

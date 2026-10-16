@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import { type FormEvent, useState } from 'react'
@@ -16,31 +18,35 @@ import type { TenantOutletContext } from './TenantLayout.tsx'
 // ---------------------------------------------------------------------------
 
 /** Coarse relative time - "3 hours ago" - good enough for a last-updated hint. */
-function timeAgo(iso: string): string {
+function timeAgo(iso: string, ui: ResearchUi = englishResearchUi): string {
   const ms = Date.now() - new Date(iso).getTime()
   const sec = Math.round(ms / 1000)
-  if (sec < 60) return 'just now'
+  if (sec < 60) return ui('just now')
   const min = Math.round(sec / 60)
-  if (min < 60) return `${min} ${min === 1 ? 'minute' : 'minutes'} ago`
+  if (min < 60) return ui(min === 1 ? '{count} minute ago' : '{count} minutes ago', { count: min })
   const hr = Math.round(min / 60)
-  if (hr < 24) return `${hr} ${hr === 1 ? 'hour' : 'hours'} ago`
+  if (hr < 24) return ui(hr === 1 ? '{count} hour ago' : '{count} hours ago', { count: hr })
   const day = Math.round(hr / 24)
-  if (day < 30) return `${day} ${day === 1 ? 'day' : 'days'} ago`
+  if (day < 30) return ui(day === 1 ? '{count} day ago' : '{count} days ago', { count: day })
   const month = Math.round(day / 30)
-  if (month < 12) return `${month} ${month === 1 ? 'month' : 'months'} ago`
+  if (month < 12) {
+    return ui(month === 1 ? '{count} month ago' : '{count} months ago', { count: month })
+  }
   const year = Math.round(month / 12)
-  return `${year} ${year === 1 ? 'year' : 'years'} ago`
+  return ui(year === 1 ? '{count} year ago' : '{count} years ago', { count: year })
 }
 
 function StatusBadge({ status }: { status: 'active' | 'closed' }) {
+  const { ui } = usePortalLocale()
   return status === 'active'
-    ? <span className='rp-badge rp-badge-ok'>Active</span>
-    : <span className='rp-badge rp-badge-quiet'>Closed</span>
+    ? <span className='rp-badge rp-badge-ok'>{ui('Active')}</span>
+    : <span className='rp-badge rp-badge-quiet'>{ui('Closed')}</span>
 }
 
 function InvestigationCard(
   { slug, investigation }: { slug: string; investigation: InvestigationMeta },
 ) {
+  const { ui } = usePortalLocale()
   const current = useCurrentInvestigation(slug)
   const isCurrent = current?.id === investigation.id
 
@@ -48,25 +54,29 @@ function InvestigationCard(
     <div className='rp-card relative flex flex-col gap-2.5 p-4 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'>
       <Link
         to={`/t/${slug}/investigations/${investigation.id}`}
-        aria-label={investigation.name || 'Untitled investigation'}
+        aria-label={investigation.name || ui('Untitled investigation')}
         className='rp-focus absolute inset-0 rounded-[inherit]'
       />
       <div className='flex items-start justify-between gap-3'>
         <h3 className='min-w-0 truncate text-sm font-semibold text-ink'>{investigation.name}</h3>
         <div className='flex shrink-0 items-center gap-1.5'>
-          {isCurrent ? <span className='rp-badge rp-badge-ok'>Current</span> : null}
+          {isCurrent ? <span className='rp-badge rp-badge-ok'>{ui('Current')}</span> : null}
           <StatusBadge status={investigation.status} />
         </div>
       </div>
       {investigation.question
         ? <p className='rp-clamp-2 text-sm leading-relaxed text-ink-2'>{investigation.question}</p>
-        : <p className='text-sm italic text-ink-3'>No research question set</p>}
+        : <p className='text-sm italic text-ink-3'>{ui('No research question set')}</p>}
       <div className='mt-auto flex items-center justify-between gap-3 pt-1 text-xs text-ink-3'>
         <span>
-          {investigation.evidenceCount} {investigation.evidenceCount === 1 ? 'item' : 'items'}{' '}
-          of evidence
+          {ui(
+            investigation.evidenceCount === 1
+              ? '{count} item of evidence'
+              : '{count} items of evidence',
+            { count: investigation.evidenceCount },
+          )}
         </span>
-        <span>Updated {timeAgo(investigation.updatedAt)}</span>
+        <span>{ui('Updated')} {timeAgo(investigation.updatedAt, ui)}</span>
       </div>
       <div className='relative z-10 flex justify-end'>
         <MakeCurrentToggle slug={slug} investigation={investigation} />
@@ -76,8 +86,9 @@ function InvestigationCard(
 }
 
 function CreateInvestigationForm({ slug }: { slug: string }) {
+  const { ui, language } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
-  const copy = tenantCopy(config)
+  const copy = tenantCopy(config, { language, ui })
   const access = useAccess()
   const context = access.controller.context
   const canWrite = () =>
@@ -115,7 +126,7 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
     <form onSubmit={onSubmit} className='rp-card flex flex-col gap-3 p-5'>
       <div>
         <label htmlFor='investigation-name' className='mb-1.5 block text-sm font-medium text-ink'>
-          Name
+          {ui('Name')}
         </label>
         <input
           id='investigation-name'
@@ -132,21 +143,22 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
           htmlFor='investigation-question'
           className='mb-1.5 block text-sm font-medium text-ink'
         >
-          Research question <span className='font-normal text-ink-3'>(optional)</span>
+          {ui('Research question')}{' '}
+          <span className='font-normal text-ink-3'>{ui('(optional)')}</span>
         </label>
         <input
           id='investigation-question'
           type='text'
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
-          placeholder='The question this investigation is trying to answer'
+          placeholder={ui('The question this investigation is trying to answer')}
           className='rp-input'
         />
       </div>
       {mutation.isError
         ? (
           <p className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
-            Could not start the investigation - try again.
+            {ui('Could not start the investigation - try again.')}
           </p>
         )
         : null}
@@ -156,7 +168,7 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
           disabled={mutation.isPending || name.trim().length === 0}
           className='rp-btn rp-btn-primary'
         >
-          {mutation.isPending ? 'Starting…' : 'Start investigation'}
+          {mutation.isPending ? ui('Starting…') : ui('Start investigation')}
         </button>
       </div>
     </form>
@@ -164,6 +176,7 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
 }
 
 export function InvestigationsPage() {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const { config } = useOutletContext<TenantOutletContext>()
   const { data, isLoading, isError, error, refetch } = useQuery({
@@ -178,9 +191,9 @@ export function InvestigationsPage() {
 
   return (
     <main className='rp-shell py-10'>
-      <h1 className='text-2xl font-semibold tracking-tight text-ink'>Investigations</h1>
+      <h1 className='text-2xl font-semibold tracking-tight text-ink'>{ui('Investigations')}</h1>
       <p className='mt-1 text-sm text-ink-3'>
-        Named research questions that accumulate evidence, sessions and outputs.
+        {ui('Named research questions that accumulate evidence, sessions and outputs.')}
       </p>
 
       {access.can('portal.investigate', { kind: 'portal', slug: config.slug })
@@ -203,7 +216,9 @@ export function InvestigationsPage() {
         {isError
           ? (
             <ErrorCard
-              message={error instanceof Error ? error.message : 'Could not load investigations.'}
+              message={error instanceof Error
+                ? error.message
+                : ui('Could not load investigations.')}
               onRetry={() => void refetch()}
             />
           )
@@ -212,10 +227,12 @@ export function InvestigationsPage() {
         {!isLoading && !isError && sorted.length === 0
           ? (
             <EmptyState
-              title='No investigations yet'
+              title={ui('No investigations yet')}
               description={access.can('portal.investigate', { kind: 'portal', slug: config.slug })
-                ? 'Start an investigation to keep every passage, verdict and note you gather - your conclusions stay linked to their evidence.'
-                : 'Your saved investigations will appear here.'}
+                ? ui(
+                  'Start an investigation to keep every passage, verdict and note you gather - your conclusions stay linked to their evidence.',
+                )
+                : ui('Your saved investigations will appear here.')}
             />
           )
           : null}

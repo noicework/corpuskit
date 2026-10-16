@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { type EvidenceVerdict } from '../api/client.ts'
@@ -107,8 +109,9 @@ export function openLabel(
   type: ResourceType | undefined,
   page: number | undefined,
   summaryMatch = false,
+  ui: ResearchUi = englishResearchUi,
 ): string {
-  if (summaryMatch) return 'Open in the reader'
+  if (summaryMatch) return ui('Open in the reader')
   const noun = type === 'pdf'
     ? 'PDF'
     : type === 'video'
@@ -117,8 +120,8 @@ export function openLabel(
     ? 'page'
     : 'document'
   return page && type !== 'video' && type !== 'web'
-    ? `Open ${noun} in the reader at page ${page}`
-    : `Open ${noun} in the reader`
+    ? ui('Open {type} in the reader at page {page}', { type: ui(noun), page })
+    : ui('Open {type} in the reader', { type: ui(noun) })
 }
 
 export interface EvidenceVerdictInfo {
@@ -151,8 +154,8 @@ function verdictBadgeClass(verdict: string): string {
   return VERDICT_BADGE_CLASS[verdict] ?? 'rp-badge-quiet'
 }
 
-function verdictLabel(verdict: string): string {
-  return VERDICT_LABEL[verdict] ?? verdict
+function verdictLabel(verdict: string, ui: ResearchUi = englishResearchUi): string {
+  return VERDICT_LABEL[verdict] ? ui(VERDICT_LABEL[verdict]!) : verdict
 }
 
 /**
@@ -168,13 +171,16 @@ function verdictLabel(verdict: string): string {
 export function evidenceSummary(
   sources: readonly EvidenceSource[],
   citedCount?: number,
+  ui: ResearchUi = englishResearchUi,
 ): string {
   const parts: string[] = []
   if (sources.length > 0) {
-    parts.push(`${sources.length} retrieved`)
-    if (citedCount !== undefined && citedCount > 0) parts.push(`${citedCount} cited`)
+    parts.push(ui('{count} retrieved', { count: sources.length }))
+    if (citedCount !== undefined && citedCount > 0) {
+      parts.push(ui('{count} cited', { count: citedCount }))
+    }
   } else if (citedCount !== undefined && citedCount > 0) {
-    parts.push(`${citedCount} cited`)
+    parts.push(ui('{count} cited', { count: citedCount }))
   }
 
   const { span } = assessCurrency(sources)
@@ -216,6 +222,7 @@ function EvidenceRow({
   citationsKnown: boolean
   anchorId?: string
 }) {
+  const { ui } = usePortalLocale()
   const [expanded, setExpanded] = useState(false)
   // Whether the three-line clamp is actually hiding anything. Measured rather
   // than guessed from a character count: the same passage clamps on a 390px
@@ -289,15 +296,15 @@ function EvidenceRow({
             ? <span className='text-xs tabular-nums text-ink-3'>{scorePct}%</span>
             : null}
           {source.referenceChunk
-            ? <span className='text-[11px] text-ink-3'>reference list</span>
+            ? <span className='text-[11px] text-ink-3'>{ui('reference list')}</span>
             : null}
           {summaryMatch
             ? (
               <span
                 className='text-[11px] text-ink-3'
-                title='The match came from the generated summary, not the document text'
+                title={ui('The match came from the generated summary, not the document text')}
               >
-                matched the summary
+                {ui('matched the summary')}
               </span>
             )
             : null}
@@ -305,9 +312,12 @@ function EvidenceRow({
             ? (
               <span
                 className='rp-badge rp-badge-warn'
-                title={`Retrieval scored this source ${scorePct}% for the question: it was retrieved but matches only weakly, so it is unlikely to carry the answer.`}
+                title={ui(
+                  'Retrieval scored this source {scorePct}% for the question: it was retrieved but matches only weakly, so it is unlikely to carry the answer.',
+                  { scorePct: scorePct },
+                )}
               >
-                weak match
+                {ui('weak match')}
               </span>
             )
             : null}
@@ -321,11 +331,11 @@ function EvidenceRow({
             : verdict
             ? (
               <span className={`rp-badge ${verdictBadgeClass(verdict.verdict)}`}>
-                {verdictLabel(verdict.verdict)}
+                {verdictLabel(verdict.verdict, ui)}
               </span>
             )
             : verdictsKnown
-            ? <span className='text-xs text-ink-3'>Verdict unavailable</span>
+            ? <span className='text-xs text-ink-3'>{ui('Verdict unavailable')}</span>
             : null}
         </div>
       </div>
@@ -334,7 +344,7 @@ function EvidenceRow({
         ? (
           <p className='mt-1.5'>
             <span className='rp-badge rp-badge-warn'>
-              Supporting evidence not used in the answer
+              {ui('Supporting evidence not used in the answer')}
             </span>
           </p>
         )
@@ -375,11 +385,11 @@ function EvidenceRow({
           <Link
             to={href}
             aria-label={`${
-              openLabel(source.type, source.matchedPage, summaryMatch)
+              openLabel(source.type, source.matchedPage, summaryMatch, ui)
             }: ${source.title}`}
             className='rp-focus inline-flex min-h-6 items-center gap-1 rounded-[var(--rp-radius)] text-xs font-medium text-[var(--rp-accent-fg)] hover:underline'
           >
-            {openLabel(source.type, source.matchedPage, summaryMatch)}
+            {openLabel(source.type, source.matchedPage, summaryMatch, ui)}
             <svg
               viewBox='0 0 24 24'
               fill='none'
@@ -401,11 +411,11 @@ function EvidenceRow({
                 aria-expanded={expanded}
                 aria-controls={passageId}
                 aria-label={expanded
-                  ? `Show less of the passage from ${source.title}`
-                  : `Show more of the passage from ${source.title}`}
+                  ? ui('Show less of the passage from {value1}', { value1: source.title })
+                  : ui('Show more of the passage from {value1}', { value1: source.title })}
                 className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius)] text-xs font-medium text-[var(--rp-accent-fg)] hover:underline'
               >
-                {expanded ? 'Show less' : 'Show more'}
+                {expanded ? ui('Show less') : ui('Show more')}
               </button>
             )
             : null}
@@ -481,11 +491,12 @@ export function EvidenceTable({
   sources,
   verdicts,
   judging = false,
-  title = 'retrieved sources',
+  title = undefined,
   citations,
   anchorPrefix,
   collapsible = true,
 }: EvidenceTableProps) {
+  const { ui } = usePortalLocale()
   const reactId = useId()
   const [open, setOpen] = useState(false)
   const knownVerdicts = verdicts ?? {}
@@ -537,7 +548,7 @@ export function EvidenceTable({
   const advisoryNote = verdictsKnown || judging
     ? (
       <p className='text-[11px] text-ink-3'>
-        AI verdicts are advisory - open a source to judge for yourself.
+        {ui('AI verdicts are advisory - open a source to judge for yourself.')}
       </p>
     )
     : null
@@ -552,7 +563,7 @@ export function EvidenceTable({
             <div className='flex items-center gap-2 pt-1' role='separator'>
               <span className='h-px flex-1' style={{ backgroundColor: 'var(--rp-line)' }} />
               <span className='shrink-0 text-[11px] font-medium uppercase tracking-wide text-ink-3'>
-                Retrieved, but not cited in the answer
+                {ui('Retrieved, but not cited in the answer')}
               </span>
               <span className='h-px flex-1' style={{ backgroundColor: 'var(--rp-line)' }} />
             </div>
@@ -571,7 +582,7 @@ export function EvidenceTable({
       <div>
         <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
           <h3 className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-            {title}: {sources.length}
+            {title ?? ui('retrieved sources')}: {sources.length}
           </h3>
           {advisoryNote}
         </div>
@@ -585,8 +596,8 @@ export function EvidenceTable({
       regionId={`${anchorPrefix ?? reactId}-evidence-rows`}
       open={open}
       onToggle={() => setOpen((prev) => !prev)}
-      label={title}
-      summary={evidenceSummary(sources, citationsKnown ? citedSources.length : undefined)}
+      label={title ?? ui('retrieved sources')}
+      summary={evidenceSummary(sources, citationsKnown ? citedSources.length : undefined, ui)}
       heading
     >
       {advisoryNote ? <div className='mb-2'>{advisoryNote}</div> : null}

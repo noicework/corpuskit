@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -27,11 +28,13 @@ const KIND_COPY: Record<SetupSuggestion['kind'], string> = {
 }
 
 function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
+  const { ui } = usePortalLocale()
+
   if (suggestion.kind === 'labelset' && suggestion.labelset) {
     return (
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         <span className='text-xs text-ink-3'>
-          {suggestion.labelset.paragraphs ? 'Passage-level' : 'Document-level'}:
+          {suggestion.labelset.paragraphs ? ui('Passage-level') : ui('Document-level')}:
         </span>
         {suggestion.labelset.labels.map((label) => (
           <span key={label} className='rp-chip text-xs'>{label}</span>
@@ -42,7 +45,7 @@ function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
   if (suggestion.kind === 'label-addition' && suggestion.labels) {
     return (
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
-        <span className='text-xs text-ink-3'>Add to {suggestion.labels.labelsetId}:</span>
+        <span className='text-xs text-ink-3'>{ui('Add to ')}{suggestion.labels.labelsetId}:</span>
         {suggestion.labels.labels.map((label) => (
           <span key={label} className='rp-chip text-xs'>{label}</span>
         ))}
@@ -60,7 +63,11 @@ function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
   if (suggestion.kind === 'graph-example' && suggestion.example) {
     return (
       <div className='mt-2 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-2.5'>
-        <p className='text-xs italic text-ink-2'>&ldquo;{suggestion.example.text}&rdquo;</p>
+        <p className='text-xs italic text-ink-2'>
+          {ui('“')}
+          {suggestion.example.text}
+          {ui('”')}
+        </p>
         {suggestion.example.relations.length > 0
           ? (
             <p className='mt-1.5 text-xs text-ink-3'>
@@ -89,6 +96,8 @@ function SuggestionCard({
   suggestion: SetupSuggestion
   onDecided: (status: SetupSuggestion['status']) => void
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
     'behaviour.write',
     {
@@ -123,7 +132,7 @@ function SuggestionCard({
     setBusy('implement')
     setError(null)
     try {
-      const result = await runExplicit('Implement this setup suggestion', async (access) => {
+      const result = await runExplicit(ui('Implement this setup suggestion'), async (access) => {
         assertCurrent()
         if (
           subPermission === null ||
@@ -150,7 +159,7 @@ function SuggestionCard({
     setBusy('ignore')
     setError(null)
     try {
-      const result = await runExplicit('Ignore this setup suggestion', async (access) => {
+      const result = await runExplicit(ui('Ignore this setup suggestion'), async (access) => {
         const result = await ignoreSuggestion(slug, access, suggestion.id)
         if (result?.ok !== true) throw new AdminAccessError()
         return true
@@ -181,12 +190,16 @@ function SuggestionCard({
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='rp-badge'>
-              {KIND_COPY[suggestion.kind] ?? 'Unsupported suggestion'}
+              {KIND_COPY[suggestion.kind] ?? ui('Unsupported suggestion')}
             </span>
             {status === 'implemented'
-              ? <span className='text-xs font-medium text-[var(--rp-ok-ink)]'>Implemented</span>
+              ? (
+                <span className='text-xs font-medium text-[var(--rp-ok-ink)]'>
+                  {ui('Implemented')}
+                </span>
+              )
               : status === 'ignored'
-              ? <span className='text-xs text-ink-3'>Ignored</span>
+              ? <span className='text-xs text-ink-3'>{ui('Ignored')}</span>
               : null}
           </div>
           <h4 className='mt-1.5 text-sm font-semibold text-ink'>{suggestion.title}</h4>
@@ -204,7 +217,7 @@ function SuggestionCard({
                   onClick={() => void implement()}
                   className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
                 >
-                  {busy === 'implement' ? 'Implementing…' : 'Implement'}
+                  {busy === 'implement' ? ui('Implementing…') : ui('Implement')}
                 </button>
               )}
               <button
@@ -214,19 +227,27 @@ function SuggestionCard({
                 onClick={() => void ignore()}
                 className='rp-btn rp-btn-ghost h-8 px-2.5 text-xs'
               >
-                Ignore
+                {ui('Ignore')}
               </button>
             </div>
           )
           : null}
       </div>
       {outcome ? <p className='mt-2 text-xs text-[var(--rp-ok-ink)]'>{outcome}</p> : null}
-      {error ? <p className='mt-2 text-xs text-[var(--rp-bad-ink)]'>{error}</p> : null}
+      {error
+        ? (
+          <p className='mt-2 text-xs text-[var(--rp-bad-ink)]'>
+            {localError(error, 'The action failed. Please try again.')}
+          </p>
+        )
+        : null}
     </div>
   )
 }
 
 function InterrogatePanelContent({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
     { kind: 'portal', slug },
@@ -253,7 +274,7 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
     setRunError(null)
     try {
       const fresh = await runExplicit(
-        readOnly ? 'Load setup suggestions' : 'Interrogate this knowledge box',
+        readOnly ? ui('Load setup suggestions') : ui('Interrogate this knowledge box'),
         async (access) => {
           const result = await (readOnly ? getSuggestions : runInterrogation)(slug, access)
           if (
@@ -306,10 +327,11 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
     <div className='mt-6 border-t border-line pt-5'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <h3 className='text-sm font-semibold text-ink'>Interrogate the knowledge box</h3>
+          <h3 className='text-sm font-semibold text-ink'>{ui('Interrogate the knowledge box')}</h3>
           <p className='mt-0.5 text-xs text-ink-2'>
-            Examines the corpus and current setup, then proposes discrete improvements to labelsets
-            and the knowledge graph - implement or ignore each with one click.
+            {ui(
+              'Examines the corpus and current setup, then proposes discrete improvements to labelsets and the knowledge graph - implement or ignore each with one click.',
+            )}
           </p>
         </div>
         <button
@@ -318,7 +340,7 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
           onClick={() => void interrogate()}
           className='rp-btn rp-btn-primary'
         >
-          {running ? 'Interrogating…' : 'Run interrogation'}
+          {running ? ui('Interrogating…') : ui('Run interrogation')}
         </button>
       </div>
       <button
@@ -328,17 +350,24 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
         disabled={running}
         onClick={() => void interrogate(true)}
       >
-        Load suggestions
+        {ui('Load suggestions')}
       </button>
       {running
         ? (
           <p className='mt-3 text-xs text-ink-3' role='status'>
-            Reading the corpus and comparing it with the current setup - this takes up to half a
-            minute…
+            {ui(
+              'Reading the corpus and comparing it with the current setup - this takes up to half a minute…',
+            )}
           </p>
         )
         : null}
-      {runError ? <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>{runError}</p> : null}
+      {runError
+        ? (
+          <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>
+            {localError(runError, 'The interrogation could not complete - try again.')}
+          </p>
+        )
+        : null}
 
       {isLoading ? <Skeleton className='mt-4 h-20' /> : null}
 
@@ -364,7 +393,7 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
         : !isLoading && !running
         ? (
           <p className='mt-4 text-xs text-ink-3'>
-            No pending suggestions - run an interrogation to generate some.
+            {ui('No pending suggestions - run an interrogation to generate some.')}
           </p>
         )
         : null}
@@ -373,7 +402,8 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
         ? (
           <details className='mt-4'>
             <summary className='cursor-pointer text-xs text-ink-3'>
-              Decision history ({decided.length})
+              {ui('Decision history (')}
+              {decided.length})
             </summary>
             <div className='mt-2 space-y-2'>
               {decided.slice(0, 12).map((suggestion) => (

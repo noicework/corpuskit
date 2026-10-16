@@ -1,3 +1,8 @@
+import { stageText } from './shared.ts'
+import { messageFor } from './shared.ts'
+import type { Locale } from '../../lib/portal-locale.tsx'
+import { englishUi } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -84,19 +89,21 @@ function referencedTypes(draft: Draft): Map<string, number[]> {
 }
 
 /** Mirrors the server's validation so problems surface before a save attempt. */
-function validate(draft: Draft): string[] {
+function validate(draft: Draft, ui: Locale['ui'] = englishUi): string[] {
   const problems: string[] = []
 
-  if (draft.entityTypes.length === 0) problems.push('Add at least one entity type.')
+  if (draft.entityTypes.length === 0) problems.push(ui('Add at least one entity type.'))
   if (draft.entityTypes.some((t) => !t.label.trim())) {
-    problems.push('Every entity type needs a name.')
+    problems.push(ui('Every entity type needs a name.'))
   }
   const seenTypes = new Set<string>()
   for (const t of draft.entityTypes) {
     const key = t.label.trim().toLowerCase()
     if (!key) continue
     if (seenTypes.has(key)) {
-      problems.push(`Entity type "${t.label.trim()}" is defined more than once.`)
+      problems.push(
+        ui('Entity type "{value1}" is defined more than once.', { value1: t.label.trim() }),
+      )
     }
     seenTypes.add(key)
   }
@@ -104,44 +111,66 @@ function validate(draft: Draft): string[] {
   if (draft.examples.length < 6) {
     const remaining = 6 - draft.examples.length
     problems.push(
-      `Add ${remaining} more worked ${remaining === 1 ? 'example' : 'examples'} (6 minimum).`,
+      ui(
+        remaining === 1
+          ? 'Add {remaining} more worked example (6 minimum).'
+          : 'Add {remaining} more worked examples (6 minimum).',
+        {
+          remaining: remaining,
+        },
+      ),
     )
   }
 
   draft.examples.forEach((example, i) => {
     const n = i + 1
-    if (!example.text.trim()) problems.push(`Example ${n}: the text is empty.`)
-    if (example.entities.length < 2) problems.push(`Example ${n}: needs at least 2 entities.`)
-    if (example.relations.length < 1) problems.push(`Example ${n}: needs at least 1 relation.`)
+    if (!example.text.trim()) problems.push(ui('Example {n}: the text is empty.', { n: n }))
+    if (example.entities.length < 2) {
+      problems.push(ui('Example {n}: needs at least 2 entities.', { n: n }))
+    }
+    if (example.relations.length < 1) {
+      problems.push(ui('Example {n}: needs at least 1 relation.', { n: n }))
+    }
 
     const names = new Set<string>()
     example.entities.forEach((en) => {
       const name = en.name.trim()
-      if (!name) problems.push(`Example ${n}: an entity has no name.`)
+      if (!name) problems.push(ui('Example {n}: an entity has no name.', { n: n }))
       else names.add(name.toLowerCase())
       if (!en.label.trim()) {
-        problems.push(`Example ${n}: entity "${name || '(unnamed)'}" has no type.`)
+        problems.push(
+          ui('Example {n}: entity "{value2}" has no type.', {
+            n: n,
+            value2: name || ui('(unnamed)'),
+          }),
+        )
       } else if (!seenTypes.has(en.label.trim().toLowerCase())) {
         problems.push(
-          `Example ${n}: entity "${name || '(unnamed)'}" uses undefined type "${en.label.trim()}".`,
+          ui('Example {n}: entity "{value2}" uses undefined type "{value3}".', {
+            n: n,
+            value2: name || ui('(unnamed)'),
+            value3: en.label.trim(),
+          }),
         )
       }
     })
 
     example.relations.forEach((r) => {
-      if (!r.label.trim()) problems.push(`Example ${n}: a relation has no label.`)
+      if (!r.label.trim()) problems.push(ui('Example {n}: a relation has no label.', { n: n }))
       if (!r.source.trim() || !names.has(r.source.trim().toLowerCase())) {
         problems.push(
-          `Example ${n}: relation source "${
-            r.source || '(none)'
-          }" is not one of this example's entities.`,
+          ui('Example {n}: relation source "{value2}" is not one of this example\'s entities.', {
+            n: n,
+            value2: r.source || ui('(none)'),
+          }),
         )
       }
       if (!r.target.trim() || !names.has(r.target.trim().toLowerCase())) {
         problems.push(
-          `Example ${n}: relation target "${
-            r.target || '(none)'
-          }" is not one of this example's entities.`,
+          ui('Example {n}: relation target "{value2}" is not one of this example\'s entities.', {
+            n: n,
+            value2: r.target || ui('(none)'),
+          }),
         )
       }
     })
@@ -215,10 +244,12 @@ function EntityTypeRow({
   onChange: (patch: Partial<DraftEntityType>) => void
   onRemove: () => void
 }) {
+  const { ui } = usePortalLocale()
+
   const disabled = usedIn.length > 0
-  const reason = `Used by example ${
-    usedIn.map((i) => i + 1).join(', ')
-  } - remove those references first.`
+  const reason = ui('Used by example {examples} - remove those references first.', {
+    examples: usedIn.map((i) => i + 1).join(', '),
+  })
 
   return (
     <div className='flex flex-wrap items-start gap-2'>
@@ -229,13 +260,13 @@ function EntityTypeRow({
       />
       <input
         className='rp-input min-w-0 w-full basis-full sm:flex-1'
-        placeholder='Type name, e.g. Person'
+        placeholder={ui('Type name, e.g. Person')}
         value={type.label}
         onChange={(e) => onChange({ label: e.target.value })}
       />
       <input
         className='rp-input min-w-0 w-full basis-full sm:flex-[2]'
-        placeholder='Description (optional)'
+        placeholder={ui('Description (optional)')}
         value={type.description}
         onChange={(e) => onChange({ description: e.target.value })}
       />
@@ -247,7 +278,7 @@ function EntityTypeRow({
         className='rp-btn rp-btn-ghost h-9 shrink-0 px-2.5 text-xs'
         style={disabled ? undefined : { color: 'var(--rp-bad-ink)' }}
       >
-        Remove
+        {ui('Remove')}
       </button>
       {disabled && <p className='basis-full pl-[1.125rem] text-xs text-ink-3'>{reason}</p>}
     </div>
@@ -267,6 +298,8 @@ function ExampleCard({
   onChange: (next: DraftExample) => void
   onRemove: () => void
 }) {
+  const { ui } = usePortalLocale()
+
   const updateEntity = (i: number, patch: Partial<DraftEntity>) => {
     onChange({
       ...example,
@@ -301,10 +334,10 @@ function ExampleCard({
   return (
     <div className='rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
       <div className='flex items-center justify-between gap-3'>
-        <p className='text-xs font-semibold text-ink-3'>Example {index + 1}</p>
+        <p className='text-xs font-semibold text-ink-3'>{ui('Example ')}{index + 1}</p>
         <ConfirmButton
-          label='Remove example'
-          confirmLabel='Click again to remove'
+          label={ui('Remove example')}
+          confirmLabel={ui('Click again to remove')}
           onConfirm={onRemove}
           className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
           confirmClassName='rp-btn rp-btn-danger h-7 px-2 text-xs'
@@ -314,13 +347,13 @@ function ExampleCard({
       <textarea
         className='rp-input mt-2'
         rows={3}
-        placeholder='Paste or write a representative passage…'
+        placeholder={ui('Paste or write a representative passage…')}
         value={example.text}
         onChange={(e) => onChange({ ...example, text: e.target.value })}
       />
 
       <div className='mt-3'>
-        <p className='rp-eyebrow text-ink-3'>Entities</p>
+        <p className='rp-eyebrow text-ink-3'>{ui('Entities')}</p>
         <div className='mt-1.5 space-y-1.5'>
           {example.entities.map((en, i) => {
             const typeIndex = entityTypes.findIndex((t) =>
@@ -336,7 +369,7 @@ function ExampleCard({
                 />
                 <input
                   className='rp-input min-w-[8rem] flex-1'
-                  placeholder='Name'
+                  placeholder={ui('Name')}
                   value={en.name}
                   onChange={(e) => updateEntity(i, { name: e.target.value })}
                 />
@@ -345,9 +378,9 @@ function ExampleCard({
                   value={en.label}
                   onChange={(e) => updateEntity(i, { label: e.target.value })}
                 >
-                  <option value=''>Type…</option>
+                  <option value=''>{ui('Type…')}</option>
                   {entityTypes.map((t, ti) => (
-                    <option key={ti} value={t.label}>{t.label || '(unnamed)'}</option>
+                    <option key={ti} value={t.label}>{t.label || ui('(unnamed)')}</option>
                   ))}
                 </select>
                 <button
@@ -355,7 +388,7 @@ function ExampleCard({
                   onClick={() => removeEntity(i)}
                   className='rp-btn rp-btn-ghost h-9 shrink-0 px-2.5 text-xs'
                 >
-                  Remove
+                  {ui('Remove')}
                 </button>
               </div>
             )
@@ -366,12 +399,12 @@ function ExampleCard({
           onClick={addEntity}
           className='rp-btn rp-btn-outline mt-2 h-8 px-2.5 text-xs'
         >
-          Add entity
+          {ui('Add entity')}
         </button>
       </div>
 
       <div className='mt-3'>
-        <p className='rp-eyebrow text-ink-3'>Relations</p>
+        <p className='rp-eyebrow text-ink-3'>{ui('Relations')}</p>
         <div className='mt-1.5 space-y-1.5'>
           {example.relations.map((r, i) => (
             <div key={i} className='flex flex-wrap items-center gap-1.5'>
@@ -381,24 +414,24 @@ function ExampleCard({
                 onChange={(e) =>
                   updateRelation(i, { source: e.target.value })}
               >
-                <option value=''>source…</option>
+                <option value=''>{ui('source…')}</option>
                 {entityNames.map((name, ni) => <option key={ni} value={name}>{name}</option>)}
               </select>
               <span aria-hidden='true' className='text-sm text-ink-3'>-</span>
               <input
                 className='rp-input min-w-[8rem] flex-1'
-                placeholder='e.g. funds, develops, studies'
+                placeholder={ui('e.g. funds, develops, studies')}
                 value={r.label}
                 onChange={(e) =>
                   updateRelation(i, { label: e.target.value })}
               />
-              <span aria-hidden='true' className='text-sm text-ink-3'>-&gt;</span>
+              <span aria-hidden='true' className='text-sm text-ink-3'>{ui('→')}</span>
               <select
                 className='rp-input w-36 shrink-0'
                 value={r.target}
                 onChange={(e) => updateRelation(i, { target: e.target.value })}
               >
-                <option value=''>target…</option>
+                <option value=''>{ui('target…')}</option>
                 {entityNames.map((name, ni) => <option key={ni} value={name}>{name}</option>)}
               </select>
               <button
@@ -406,7 +439,7 @@ function ExampleCard({
                 onClick={() => removeRelation(i)}
                 className='rp-btn rp-btn-ghost h-9 shrink-0 px-2.5 text-xs'
               >
-                Remove
+                {ui('Remove')}
               </button>
             </div>
           ))}
@@ -416,7 +449,7 @@ function ExampleCard({
           onClick={addRelation}
           className='rp-btn rp-btn-outline mt-2 h-8 px-2.5 text-xs'
         >
-          Add relation
+          {ui('Add relation')}
         </button>
       </div>
     </div>
@@ -431,6 +464,8 @@ function ExampleCard({
  * is registered on the box.
  */
 function KgStrategyEditorContent({ slug }: { slug: string }) {
+  const { language, ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess('graph.write', {
     kind: 'portal',
     slug,
@@ -475,7 +510,7 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
 
   const load = async () => {
     try {
-      const result = await runExplicit('Load the current graph strategy', async (access) => {
+      const result = await runExplicit(ui('Load the current graph strategy'), async (access) => {
         const result = await getGraphStrategy(slug, access)
         if (
           !result ||
@@ -492,7 +527,12 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load the strategy.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load the strategy.', localError),
+        ),
+      )
     }
   }
   const readControl = (
@@ -502,7 +542,7 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
       className='rp-btn rp-btn-outline'
       onClick={() => void load()}
     >
-      Load current strategy
+      {ui('Load current strategy')}
     </button>
   )
   if (isLoading) return <Skeleton className='h-9 w-full' />
@@ -512,20 +552,22 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
         {readControl}
         {isError && (
           <ErrorCard
-            message='Could not load the knowledge-graph strategy.'
+            message={ui('Could not load the knowledge-graph strategy.')}
             onRetry={() => void load()}
           />
         )}
         <EmptyState
-          title='Load the current graph strategy'
-          description='Read the strategy before editing. If no agent is registered, propose and implement one above.'
+          title={ui('Load the current graph strategy')}
+          description={ui(
+            'Read the strategy before editing. If no agent is registered, propose and implement one above.',
+          )}
         />
         {message && <MessagePanel message={message} />}
       </div>
     )
   }
 
-  const problems = validate(draft)
+  const problems = validate(draft, ui)
   const referenced = referencedTypes(draft)
   const canSave = dirty && problems.length === 0 && !saving
 
@@ -534,7 +576,7 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
     setLog([])
     setMessage(null)
     try {
-      const result = await runExplicit('Save the graph strategy', async (access) => {
+      const result = await runExplicit(ui('Save the graph strategy'), async (access) => {
         let completed = false
         let failed = false
         await saveGraphStrategy(
@@ -562,12 +604,13 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             if (event.type === 'error') failed = true
             if (event.type === 'done') {
               completed = Number.isFinite(event.agents)
-              setMessage({
-                tone: 'ok',
-                text: `Strategy saved - ${event.agents} ${
-                  event.agents === 1 ? 'agent' : 'agents'
-                } re-registered.`,
-              })
+              setMessage(messageFor('ok', ({ ui }) =>
+                ui(
+                  event.agents === 1
+                    ? 'Strategy saved - {count} agent re-registered.'
+                    : 'Strategy saved - {count} agents re-registered.',
+                  { count: event.agents },
+                )))
             }
             if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
           },
@@ -585,7 +628,12 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the strategy.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save the strategy.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setSaving(false)
     }
@@ -595,8 +643,10 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
     <div className='space-y-5 pb-1'>
       {readControl}
       <div>
-        <p className='text-sm font-semibold text-ink'>Entity types</p>
-        <p className='mt-0.5 text-xs text-ink-3'>The kinds of things the extractor recognises.</p>
+        <p className='text-sm font-semibold text-ink'>{ui('Entity types')}</p>
+        <p className='mt-0.5 text-xs text-ink-3'>
+          {ui('The kinds of things the extractor recognises.')}
+        </p>
         <div className='mt-2 space-y-2'>
           {draft.entityTypes.map((t, i) => (
             <EntityTypeRow
@@ -623,22 +673,25 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             })}
           className='rp-btn rp-btn-outline mt-2'
         >
-          Add entity type
+          {ui('Add entity type')}
         </button>
       </div>
 
       <div>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <div>
-            <p className='text-sm font-semibold text-ink'>Worked examples</p>
+            <p className='text-sm font-semibold text-ink'>{ui('Worked examples')}</p>
             <p className='mt-0.5 text-xs text-ink-3'>
-              Worked examples teach the extractor which relations matter - at least six are needed.
+              {ui(
+                'Worked examples teach the extractor which relations matter - at least six are needed.',
+              )}
             </p>
           </div>
           <span
             className={`rp-badge ${draft.examples.length >= 6 ? 'rp-badge-ok' : 'rp-badge-warn'}`}
           >
-            {draft.examples.length} of 6+ examples
+            {draft.examples.length}
+            {ui(' of 6+ examples')}
           </span>
         </div>
         <div className='mt-3 space-y-3'>
@@ -663,7 +716,7 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
           onClick={() => setDraft({ ...draft, examples: [...draft.examples, blankExample()] })}
           className='rp-btn rp-btn-outline mt-3'
         >
-          Add example
+          {ui('Add example')}
         </button>
       </div>
 
@@ -676,7 +729,7 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             color: 'var(--rp-warn-ink)',
           }}
         >
-          <p className='font-medium'>Before this can be saved:</p>
+          <p className='font-medium'>{ui('Before this can be saved:')}</p>
           <ul className='mt-1 list-disc space-y-0.5 pl-5'>
             {problems.map((p, i) => <li key={i}>{p}</li>)}
           </ul>
@@ -690,16 +743,22 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
           {log.map((event, index) => (
             <li key={index} className='flex gap-2'>
               {event.type === 'stage' && (
-                <span className='font-semibold text-ink'>{event.label}</span>
+                <span className='font-semibold text-ink'>
+                  {stageText(event.label, { language, ui })}
+                </span>
               )}
               {event.type === 'item' && (
                 <span className='text-ink-2' title={event.detail}>{event.label}</span>
               )}
               {event.type === 'done' && (
-                <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>Finished.</span>
+                <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>
+                  {ui('Finished.')}
+                </span>
               )}
               {event.type === 'error' && (
-                <span style={{ color: 'var(--rp-bad-ink)' }}>{event.message}</span>
+                <span style={{ color: 'var(--rp-bad-ink)' }}>
+                  {localError(event.message, 'The action failed. Please try again.')}
+                </span>
               )}
             </li>
           ))}
@@ -718,9 +777,11 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
                 className='mt-0.5'
               />
               <span>
-                Re-extract across existing resources
+                {ui('Re-extract across existing resources')}
                 <span className='block text-xs text-ink-3'>
-                  Runs the new strategy over everything already ingested, not just future additions.
+                  {ui(
+                    'Runs the new strategy over everything already ingested, not just future additions.',
+                  )}
                 </span>
               </span>
             </label>
@@ -730,12 +791,13 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
               onClick={() => void onSave()}
               className='rp-btn rp-btn-primary shrink-0'
             >
-              {saving ? 'Saving…' : 'Save and re-register agent'}
+              {saving ? ui('Saving…') : ui('Save and re-register agent')}
             </button>
           </div>
           <p className='mt-2 text-xs text-ink-3'>
-            Saving replaces the live extraction agent. Existing graph data remains until
-            re-extraction updates it.
+            {ui(
+              'Saving replaces the live extraction agent. Existing graph data remains until re-extraction updates it.',
+            )}
           </p>
         </div>
       )}

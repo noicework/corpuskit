@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -31,10 +33,14 @@ function StatusDot({ status }: { status: Status }) {
 }
 
 function StatusBadge({ status }: { status: Status }) {
-  if (status === 'connected') return <span className='rp-badge rp-badge-ok'>Connected</span>
-  if (status === 'demo') return <span className='rp-badge rp-badge-warn'>Demo only</span>
-  if (status === 'unavailable') return <span className='rp-badge rp-badge-bad'>Unavailable</span>
-  return <span className='rp-badge rp-badge-quiet'>Not connected</span>
+  const { ui } = usePortalLocale()
+
+  if (status === 'connected') return <span className='rp-badge rp-badge-ok'>{ui('Connected')}</span>
+  if (status === 'demo') return <span className='rp-badge rp-badge-warn'>{ui('Demo only')}</span>
+  if (status === 'unavailable') {
+    return <span className='rp-badge rp-badge-bad'>{ui('Unavailable')}</span>
+  }
+  return <span className='rp-badge rp-badge-quiet'>{ui('Not connected')}</span>
 }
 
 /**
@@ -53,6 +59,8 @@ function PortalRowContent({
   expanded: boolean
   onToggleExpanded: () => void
 }) {
+  const { ui } = usePortalLocale()
+
   const emergency = useAdminAccess()
   const authority = useAccess()
   const context = authority.controller.context
@@ -120,12 +128,12 @@ function PortalRowContent({
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: `Portal ${
-          row.disabled ? 'enabled' : 'disabled'
-        }. Refresh the overview to see its latest state.`,
-      })
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
+          row.disabled
+            ? 'Portal enabled. Refresh the overview to see its latest state.'
+            : 'Portal disabled. Refresh the overview to see its latest state.',
+        )))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
@@ -134,17 +142,23 @@ function PortalRowContent({
       if (!emergencyOnly) await authority.refresh()
     } catch (err) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: err instanceof Error ? err.message : 'Could not update the portal.',
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error }) => error(err, 'Could not update the portal.'),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
   }
 
   const onRemove = async () => {
-    if (!globalThis.confirm(`Remove the '${row.tenant.productName}' portal from the app?`)) return
+    if (
+      !globalThis.confirm(
+        ui("Remove the '{name}' portal from the app?", { name: row.tenant.productName }),
+      )
+    ) return
     setBusy(true)
     setMessage(null)
     try {
@@ -157,20 +171,24 @@ function PortalRowContent({
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: 'Portal removed. Refresh the overview to see its latest state.',
-      })
+      setMessage(
+        messageFor(
+          'ok',
+          ({ ui }) => ui('Portal removed. Refresh the overview to see its latest state.'),
+        ),
+      )
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
     } catch (err) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: err instanceof Error ? err.message : 'Could not remove the portal.',
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error }) => error(err, 'Could not remove the portal.'),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
@@ -193,12 +211,12 @@ function PortalRowContent({
         </span>
         <span className='flex shrink-0 items-center gap-2'>
           <StatusBadge status={row.knowledgeBox.status} />
-          {row.disabled && <span className='rp-badge rp-badge-quiet'>Hidden</span>}
+          {row.disabled && <span className='rp-badge rp-badge-quiet'>{ui('Hidden')}</span>}
         </span>
         <span className='flex shrink-0 items-center gap-2'>
           <span className='text-sm text-ink-3'>
             {row.resourceCount === null
-              ? 'unreachable'
+              ? ui('unreachable')
               : `${row.resourceCount} ${row.resourceCount === 1 ? 'document' : 'documents'}`}
           </span>
           <span
@@ -238,7 +256,7 @@ function PortalRowContent({
                         onClick={() => setRenaming(true)}
                         className='text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
                       >
-                        Rename
+                        {ui('Rename')}
                       </button>
                     )}
                   </div>
@@ -258,7 +276,7 @@ function PortalRowContent({
                     paddingBlock: '0.5rem',
                   }}
                 >
-                  Open portal management &rarr;
+                  {ui('Open portal management →')}
                 </Link>
               )}
               {canRead && (
@@ -266,7 +284,7 @@ function PortalRowContent({
                   to={`/t/${row.tenant.slug}`}
                   className='text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
                 >
-                  View portal
+                  {ui('View portal')}
                 </Link>
               )}
             </div>
@@ -296,10 +314,10 @@ function PortalRowContent({
                   onClick={() => void onToggleDisabled()}
                   className='min-h-11 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)] disabled:opacity-60'
                   title={row.disabled
-                    ? 'Show this portal in the switcher and portal list again'
-                    : 'Hide this portal from the switcher and portal list'}
+                    ? ui('Show this portal in the switcher and portal list again')
+                    : ui('Hide this portal from the switcher and portal list')}
                 >
-                  {row.disabled ? 'Enable' : 'Disable'}
+                  {row.disabled ? ui('Enable') : ui('Disable')}
                 </button>
               )}
               {row.custom && (canRemove || (emergencyOnly && !row.disabled)) && (
@@ -309,9 +327,11 @@ function PortalRowContent({
                   disabled={busy}
                   onClick={() => void onRemove()}
                   className='rp-btn rp-btn-danger'
-                  title='Removes this portal from the app - the knowledge box itself is untouched'
+                  title={ui(
+                    'Removes this portal from the app - the knowledge box itself is untouched',
+                  )}
                 >
-                  Remove
+                  {ui('Remove')}
                 </button>
               )}
             </div>

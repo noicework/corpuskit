@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 
 const ACMD = 'https://acmd.org.au'
@@ -24,6 +25,7 @@ const footerGroups = [
 
 /** ACMD's public-site navigation, with the search action opening this portal. */
 export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () => void }) {
+  const { ui } = usePortalLocale()
   const [openGroup, setOpenGroup] = useState<string | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
@@ -63,7 +65,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
         <Link
           to={`/t/${slug}`}
           className='rp-focus acmd-site-logo'
-          aria-label='ACMD Research Portal home'
+          aria-label={ui('ACMD Research Portal home')}
         >
           <img src='/brands/acmd/logo.png' alt='ACMD' width='164' height='30' />
         </Link>
@@ -79,7 +81,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
             setOpenGroup(null)
           }}
         >
-          {mobileOpen ? 'Close' : 'Menu'}
+          {mobileOpen ? ui('Close') : ui('Menu')}
           <svg
             viewBox='0 0 24 24'
             width='24'
@@ -94,7 +96,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
         </button>
         <nav
           id='acmd-site-navigation'
-          aria-label='ACMD website'
+          aria-label={ui('ACMD website')}
           className={`acmd-site-nav${mobileOpen ? ' acmd-site-nav-open' : ''}`}
         >
           {groups.map((group, index) => (
@@ -115,7 +117,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
                   setOpenGroup(openGroup === group.label ? null : group.label)
                 }}
               >
-                {group.label}
+                {ui(group.label)}
                 <svg
                   viewBox='0 0 20 11'
                   width='14'
@@ -132,18 +134,18 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
                 <ul id={`acmd-site-group-${index}`} className='acmd-site-dropdown'>
                   {group.links.map(([label, path]) => (
                     <li key={path}>
-                      <a className='rp-focus' href={`${ACMD}${path}`}>{label}</a>
+                      <a className='rp-focus' href={`${ACMD}${path}`}>{ui(label!)}</a>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
           ))}
-          <a href={`${ACMD}/contact`} className='rp-focus'>Contact</a>
+          <a href={`${ACMD}/contact`} className='rp-focus'>{ui('Contact')}</a>
           <button
             type='button'
             className='acmd-site-search rp-focus'
-            aria-label='Search research portal'
+            aria-label={ui('Search research portal')}
             onClick={() => {
               setMobileOpen(false)
               setOpenGroup(null)
@@ -163,7 +165,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
               <path d='m18 18 8 8' />
             </svg>
           </button>
-          <a href={`${ACMD}/support-us`} className='acmd-pill rp-focus'>Support Us</a>
+          <a href={`${ACMD}/support-us`} className='acmd-pill rp-focus'>{ui('Support Us')}</a>
         </nav>
       </div>
     </div>
@@ -172,6 +174,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
 
 /** Public ACMD destinations and acknowledgement, taken from its existing footer. */
 export function AcmdSiteFooter() {
+  const { ui } = usePortalLocale()
   return (
     <footer className='acmd-site-footer'>
       <div className='acmd-newsletter'>
@@ -185,23 +188,23 @@ export function AcmdSiteFooter() {
               loading='lazy'
             />
           </a>
-          <h2>Sign up to our newsletter</h2>
-          <p>Discover the latest research, projects and events from the ACMD.</p>
+          <h2>{ui('Sign up to our newsletter')}</h2>
+          <p>{ui('Discover the latest research, projects and events from the ACMD.')}</p>
           <a href={`${ACMD}/#signupForm`} className='acmd-pill rp-focus'>
-            Sign up <span aria-hidden='true'>↗</span>
+            {ui('Sign up')} <span aria-hidden='true'>↗</span>
           </a>
-          <p className='acmd-newsletter-note'>Subscribe on the ACMD website.</p>
+          <p className='acmd-newsletter-note'>{ui('Subscribe on the ACMD website.')}</p>
         </div>
       </div>
       <div className='acmd-footer-main'>
         <div className='acmd-footer-inner'>
-          <h2 className='acmd-footer-tagline'>Engineering the future of healthcare</h2>
-          <nav aria-label='ACMD footer' className='acmd-footer-links'>
+          <h2 className='acmd-footer-tagline'>{ui('Engineering the future of healthcare')}</h2>
+          <nav aria-label={ui('ACMD footer')} className='acmd-footer-links'>
             {footerGroups.map((links, index) => (
               <ul key={index}>
                 {links.map(([label, path]) => (
                   <li key={path}>
-                    <a href={`${ACMD}${path}`} className='rp-focus-inverse'>{label}</a>
+                    <a href={`${ACMD}${path}`} className='rp-focus-inverse'>{ui(label!)}</a>
                   </li>
                 ))}
               </ul>
@@ -211,7 +214,7 @@ export function AcmdSiteFooter() {
             <a
               href='https://www.linkedin.com/company/aikenhead-centre-for-medical-discovery/'
               className='rp-focus-inverse acmd-linkedin'
-              aria-label='ACMD on LinkedIn'
+              aria-label={ui('ACMD on LinkedIn')}
             >
               <svg
                 viewBox='0 0 24 24'
@@ -228,18 +231,18 @@ export function AcmdSiteFooter() {
               </svg>
             </a>
             <a href={`${ACMD}/contact`} className='acmd-pill acmd-pill-white rp-focus-inverse'>
-              Contact Us
+              {ui('Contact Us')}
             </a>
           </div>
           <p className='acmd-acknowledgement'>
-            The ACMD recognises the Traditional Owners/Custodians of the land on which its many
-            sites are located. We pay our respects to the Elders past and present and welcome all
-            Aboriginal and/or Torres Strait Islander people to the ACMD.
+            {ui(
+              'The ACMD recognises the Traditional Owners/Custodians of the land on which its many sites are located. We pay our respects to the Elders past and present and welcome all Aboriginal and/or Torres Strait Islander people to the ACMD.',
+            )}
           </p>
           <button
             type='button'
             className='acmd-back-top rp-focus-inverse'
-            aria-label='Back to top'
+            aria-label={ui('Back to top')}
             onClick={() =>
               globalThis.scrollTo({
                 top: 0,

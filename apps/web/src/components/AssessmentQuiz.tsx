@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -56,13 +58,13 @@ export function isAssessment(value: unknown): value is AssessmentObject {
 }
 
 /** Short, honest read on a score - never harsh, never empty praise. */
-function scoreVerdict(score: number, total: number): string {
+function scoreVerdict(score: number, total: number, ui: ResearchUi = englishResearchUi): string {
   if (total === 0) return ''
   const pct = score / total
-  if (pct === 1) return 'Perfect score.'
-  if (pct >= 0.8) return 'Strong result.'
-  if (pct >= 0.5) return 'A reasonable start - the explanations below fill the gaps.'
-  return 'Worth another pass once you have reviewed the explanations below.'
+  if (pct === 1) return ui('Perfect score.')
+  if (pct >= 0.8) return ui('Strong result.')
+  if (pct >= 0.5) return ui('A reasonable start - the explanations below fill the gaps.')
+  return ui('Worth another pass once you have reviewed the explanations below.')
 }
 
 /**
@@ -81,6 +83,7 @@ export function AssessmentQuiz({
   /** Portal slug for the per-question source links; without it the source shows as text. */
   slug?: string
 }) {
+  const { ui } = usePortalLocale()
   const [selected, setSelected] = useState<Record<number, number>>({})
   const [submitted, setSubmitted] = useState(false)
 
@@ -98,16 +101,16 @@ export function AssessmentQuiz({
           <div className='flex flex-wrap items-baseline justify-between gap-3'>
             <div>
               <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-                Your result
+                {ui('Your result')}
               </p>
               <p className='mt-1 text-2xl font-semibold tracking-tight text-ink'>
                 {score} / {total}
               </p>
-              <p className='mt-1 text-sm text-ink-2'>{scoreVerdict(score, total)}</p>
+              <p className='mt-1 text-sm text-ink-2'>{scoreVerdict(score, total, ui)}</p>
             </div>
             {onRetake && (
               <button type='button' onClick={onRetake} className='rp-btn rp-btn-outline shrink-0'>
-                Try another
+                {ui('Try another')}
               </button>
             )}
           </div>
@@ -117,44 +120,48 @@ export function AssessmentQuiz({
       {(data.requested ?? 0) > data.questions.length
         ? (
           <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
-            {data.questions.length === 1 ? 'One' : data.questions.length} of the {data.requested}
-            {' '}
-            questions asked for survived the source check.
+            {ui(
+              data.questions.length === 1
+                ? 'One of the {requested} questions asked for survived the source check.'
+                : '{count} of the {requested} questions asked for survived the source check.',
+              { count: data.questions.length, requested: data.requested ?? 0 },
+            )}
           </p>
         )
         : null}
       {(data.omitted_questions ?? 0) > 0
         ? (
           <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
-            {data.omitted_questions === 1
-              ? 'One question was left out'
-              : `${data.omitted_questions} questions were left out`} because{' '}
-            {data.omitted_questions === 1 ? 'it was' : 'they were'}{' '}
-            written from a reference list rather than from what a source reports.
+            {ui(
+              data.omitted_questions === 1
+                ? 'One question was left out because it was written from a reference list rather than from what a source reports.'
+                : '{count} questions were left out because they were written from a reference list rather than from what a source reports.',
+              { count: data.omitted_questions ?? 0 },
+            )}
           </p>
         )
         : null}
       {(data.omitted_secondhand ?? 0) > 0
         ? (
           <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
-            {data.omitted_secondhand === 1
-              ? 'One question was left out'
-              : `${data.omitted_secondhand} questions were left out`} because{' '}
-            {data.omitted_secondhand === 1 ? 'its' : 'their'}{' '}
-            answer key was a figure the source paper only quotes from earlier studies, not its own
-            result.
+            {ui(
+              data.omitted_secondhand === 1
+                ? 'One question was left out because its answer key was a figure the source paper only quotes from earlier studies, not its own result.'
+                : '{count} questions were left out because their answer key was a figure the source paper only quotes from earlier studies, not its own result.',
+              { count: data.omitted_secondhand ?? 0 },
+            )}
           </p>
         )
         : null}
       {(data.omitted_unsourced ?? 0) > 0
         ? (
           <p className='mb-4 text-xs leading-relaxed text-ink-3' role='note'>
-            {data.omitted_unsourced === 1
-              ? 'One question was left out'
-              : `${data.omitted_unsourced} questions were left out`} because{' '}
-            {data.omitted_unsourced === 1 ? 'the sentence it quoted' : 'the sentences they quoted'}
-            {' '}
-            could not be found in any of the papers retrieved for this topic.
+            {ui(
+              data.omitted_unsourced === 1
+                ? 'One question was left out because the sentence it quoted could not be found in any of the papers retrieved for this topic.'
+                : '{count} questions were left out because the sentences they quoted could not be found in any of the papers retrieved for this topic.',
+              { count: data.omitted_unsourced ?? 0 },
+            )}
           </p>
         )
         : null}
@@ -193,11 +200,11 @@ export function AssessmentQuiz({
                 }
                 const answerHint = submitted
                   ? isChosen && isCorrect
-                    ? ' - your answer, correct'
+                    ? ui(' - your answer, correct')
                     : isChosen
-                    ? ' - your answer, incorrect'
+                    ? ui(' - your answer, incorrect')
                     : isCorrect
-                    ? ' - correct answer'
+                    ? ui(' - correct answer')
                     : null
                   : null
                 return (
@@ -224,7 +231,7 @@ export function AssessmentQuiz({
                 {q.source_resource_id && q.source_title
                   ? (
                     <>
-                      Source: {slug
+                      {ui('Source:')} {slug
                         ? (
                           <Link
                             to={`/t/${slug}/library/${encodeURIComponent(q.source_resource_id)}`}
@@ -237,7 +244,9 @@ export function AssessmentQuiz({
                         : <span className='font-medium text-ink-2'>{q.source_title}</span>}
                     </>
                   )
-                  : 'Source: not attributed - the question could not be tied to one retrieved document.'}
+                  : ui(
+                    'Source: not attributed - the question could not be tied to one retrieved document.',
+                  )}
               </p>
             )}
           </div>
@@ -252,10 +261,10 @@ export function AssessmentQuiz({
             onClick={() => setSubmitted(true)}
             className='rp-btn rp-btn-primary'
           >
-            Submit answers
+            {ui('Submit answers')}
           </button>
           <p className='text-xs text-ink-3'>
-            {answeredCount} / {total} answered
+            {ui('{answered} / {total} answered', { answered: answeredCount, total })}
           </p>
         </div>
       )}

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import { type FormEvent, type RefObject, useEffect, useRef, useState } from 'react'
@@ -35,6 +36,7 @@ const CUSTOM_TOPIC_ID = 'custom-topic'
 
 /** A free-text topic beside the tiles: the registrar's "autoimmune encephalitis" (P8-05). */
 function TopicForm({ onSubmit }: { onSubmit: (topic: string) => void }) {
+  const { ui } = usePortalLocale()
   const [draft, setDraft] = useState('')
   const usable = isUsableTopic(draft)
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -45,10 +47,10 @@ function TopicForm({ onSubmit }: { onSubmit: (topic: string) => void }) {
   return (
     <form onSubmit={submit} className='rp-card mt-4 p-5'>
       <label htmlFor='assessment-topic' className='text-sm font-medium text-ink'>
-        Or type your own topic
+        {ui('Or type your own topic')}
       </label>
       <p className='mt-1 text-xs text-ink-3'>
-        A syndrome, a drug, a gene, a method - anything this portal's sources cover.
+        {ui("A syndrome, a drug, a gene, a method - anything this portal's sources cover.")}
       </p>
       <div className='mt-3 flex flex-col gap-2 sm:flex-row'>
         <input
@@ -57,7 +59,7 @@ function TopicForm({ onSubmit }: { onSubmit: (topic: string) => void }) {
           value={draft}
           maxLength={120}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder='For example: autoimmune encephalitis'
+          placeholder={ui('For example: autoimmune encephalitis')}
           className='rp-input min-w-0 flex-1'
         />
         <button
@@ -65,7 +67,7 @@ function TopicForm({ onSubmit }: { onSubmit: (topic: string) => void }) {
           disabled={!usable}
           className='rp-btn rp-btn-primary shrink-0 disabled:cursor-not-allowed'
         >
-          Build on this topic
+          {ui('Build on this topic')}
         </button>
       </div>
     </form>
@@ -123,6 +125,7 @@ function AreaCard({
   countLoading: boolean
   onSelect: () => void
 }) {
+  const { ui } = usePortalLocale()
   return (
     <button
       type='button'
@@ -135,7 +138,7 @@ function AreaCard({
         : count !== null
         ? (
           <span className='text-xs font-medium uppercase tracking-wide text-ink-3'>
-            {count} {count === 1 ? 'source' : 'sources'}
+            {ui(count === 1 ? '{count} source' : '{count} sources', { count: count ?? 0 })}
           </span>
         )
         : null}
@@ -143,7 +146,7 @@ function AreaCard({
         className='mt-2 inline-flex items-center gap-1 text-sm font-medium transition-transform duration-150 group-hover:translate-x-0.5'
         style={{ color: 'var(--rp-accent-fg)' }}
       >
-        Build an assessment
+        {ui('Build an assessment')}
         <svg viewBox='0 0 16 16' fill='currentColor' className='h-3.5 w-3.5' aria-hidden='true'>
           <path
             d='M6 3.5l4.5 4.5L6 12.5'
@@ -165,6 +168,7 @@ function AreaCard({
  * interactive quiz with a results summary and a source per question.
  */
 export function AssessmentPage() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const access = useAccess()
   return access.can('portal.generate', { kind: 'portal', slug: config.slug })
@@ -172,11 +176,11 @@ export function AssessmentPage() {
     : (
       <main className='rp-shell py-10'>
         <EmptyState
-          title='This page is unavailable'
-          description='You can continue exploring the portal.'
+          title={ui('This page is unavailable')}
+          description={ui('You can continue exploring the portal.')}
         >
           <Link className='rp-btn rp-btn-outline' to={`/t/${config.slug}/library`}>
-            Back to Library
+            {ui('Back to Library')}
           </Link>
         </EmptyState>
       </main>
@@ -184,6 +188,7 @@ export function AssessmentPage() {
 }
 
 function AssessmentWorkspace() {
+  const { ui, error: localError } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const access = useAccess()
@@ -282,21 +287,19 @@ function AssessmentWorkspace() {
 
   const isRateLimited = mutation.error instanceof ApiError && mutation.error.status === 429
   const errorMessage = isRateLimited
-    ? 'You are asking faster than the portal can answer - please wait a moment and try again.'
-    : mutation.error instanceof Error
-    ? mutation.error.message
-    : 'The assessment could not be generated - try again.'
+    ? ui('You are asking faster than the portal can answer - please wait a moment and try again.')
+    : localError(mutation.error, 'The assessment could not be generated - try again.')
 
   const assessmentObject = mutation.data && isAssessment(mutation.data.object)
     ? mutation.data.object
     : null
 
   const liveMessage = mutation.isPending
-    ? `Generating your ${
-      selectedTopic?.label ?? ''
-    } assessment - this can take up to half a minute…`
+    ? ui('Generating your {topic} assessment - this can take up to half a minute…', {
+      topic: selectedTopic?.label ?? '',
+    })
     : mutation.isSuccess
-    ? 'Assessment ready.'
+    ? ui('Assessment ready.')
     : mutation.isError
     ? errorMessage
     : ''
@@ -304,13 +307,16 @@ function AssessmentWorkspace() {
   return (
     <main className='mx-auto max-w-6xl px-6 py-10'>
       <LiveStatus message={liveMessage} />
-      <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>Self assessment</p>
+      <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
+        {ui('Self assessment')}
+      </p>
       <h1 className='mt-1 text-2xl font-semibold tracking-tight text-ink'>
-        {config.assessmentHeading ?? 'Knowledge areas'}
+        {config.assessmentHeading ?? ui('Knowledge areas')}
       </h1>
       <p className='mt-1 max-w-2xl text-sm text-ink-2'>
-        Pick a knowledge area or type a topic, choose how many questions and how deep to go, then
-        take a generated knowledge check grounded in this portal's content.
+        {ui(
+          "Pick a knowledge area or type a topic, choose how many questions and how deep to go, then take a generated knowledge check grounded in this portal's content.",
+        )}
       </p>
 
       {currentView === 'areas' && (
@@ -320,18 +326,20 @@ function AssessmentWorkspace() {
             tabIndex={-1}
             className='text-sm font-semibold uppercase tracking-wide text-ink-3'
           >
-            Choose a knowledge area
+            {ui('Choose a knowledge area')}
           </h2>
 
           {config.topics.length === 0
             ? (
               <div className='mt-4'>
                 <EmptyState
-                  title='No knowledge areas yet'
-                  description='This portal has no topics defined yet. Type a topic below to build a check on it, or an administrator can add categories from Taxonomy or run a corpus analysis to build the taxonomy automatically.'
+                  title={ui('No knowledge areas yet')}
+                  description={ui(
+                    'This portal has no topics defined yet. Type a topic below to build a check on it, or an administrator can add categories from Taxonomy or run a corpus analysis to build the taxonomy automatically.',
+                  )}
                 >
                   <Link to={`/t/${slug}/taxonomy`} className='rp-btn rp-btn-primary'>
-                    Open taxonomy
+                    {ui('Open taxonomy')}
                   </Link>
                 </EmptyState>
               </div>
@@ -361,19 +369,19 @@ function AssessmentWorkspace() {
               tabIndex={-1}
               className='text-lg font-semibold tracking-tight text-ink'
             >
-              Build your assessment: {selectedTopic.label}
+              {ui('Build your assessment:')} {selectedTopic.label}
             </h2>
             <button type='button' onClick={changeArea} className='rp-btn rp-btn-ghost shrink-0'>
-              Change topic
+              {ui('Change topic')}
             </button>
           </div>
 
           {!mutation.isPending && (
             <div className='rp-card mt-4 space-y-6 p-6'>
               <div>
-                <p className='mb-2 text-sm font-medium text-ink'>Number of questions</p>
+                <p className='mb-2 text-sm font-medium text-ink'>{ui('Number of questions')}</p>
                 <PillRadioGroup
-                  label='Number of questions'
+                  label={ui('Number of questions')}
                   value={count}
                   onChange={setCount}
                   options={COUNT_OPTIONS.map((c) => ({ id: c, label: String(c) }))}
@@ -381,12 +389,12 @@ function AssessmentWorkspace() {
               </div>
 
               <div>
-                <p className='mb-2 text-sm font-medium text-ink'>Depth</p>
+                <p className='mb-2 text-sm font-medium text-ink'>{ui('Depth')}</p>
                 <PillRadioGroup
-                  label='Depth'
+                  label={ui('Depth')}
                   value={depth}
                   onChange={setDepth}
-                  options={DEPTH_OPTIONS.map((d) => ({ id: d.id, label: d.label }))}
+                  options={DEPTH_OPTIONS.map((d) => ({ id: d.id, label: ui(d.label) }))}
                 />
               </div>
 
@@ -395,7 +403,7 @@ function AssessmentWorkspace() {
                 onClick={() => generate(selectedTopic, count, depth)}
                 className='rp-btn rp-btn-primary'
               >
-                Generate assessment
+                {ui('Generate assessment')}
               </button>
             </div>
           )}
@@ -403,8 +411,9 @@ function AssessmentWorkspace() {
           {mutation.isPending && (
             <div className='mt-4 animate-pulse rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-8'>
               <p className='text-sm font-medium text-ink'>
-                Generating your {selectedTopic.label}{' '}
-                assessment - this can take up to half a minute…
+                {ui('Generating your {topic} assessment - this can take up to half a minute…', {
+                  topic: selectedTopic.label,
+                })}
               </p>
               <div className='mt-5 h-4 w-1/3 rounded bg-surface-3' />
               <div className='mt-4 h-3 w-full rounded bg-surface-2' />
@@ -456,6 +465,7 @@ function ResultsView({
   onTryAnother: () => void
   onChangeArea: () => void
 }) {
+  const { ui, language } = usePortalLocale()
   return (
     <section className='mt-8'>
       <div className='flex items-center justify-between gap-3'>
@@ -464,10 +474,10 @@ function ResultsView({
           tabIndex={-1}
           className='text-lg font-semibold tracking-tight text-ink'
         >
-          {topic.label} knowledge check
+          {ui('{topic} knowledge check', { topic: topic.label })}
         </h2>
         <button type='button' onClick={onChangeArea} className='rp-btn rp-btn-ghost shrink-0'>
-          Change topic
+          {ui('Change topic')}
         </button>
       </div>
 
@@ -475,12 +485,15 @@ function ResultsView({
         {result.insufficientGrounding
           ? (
             <EmptyState
-              title='Not enough to work with'
-              description={result.message ??
-                `There is not enough source material in this portal to generate a grounded assessment on ${topic.label}. Try a broader topic or check the Library for coverage.`}
+              title={ui('Not enough to work with')}
+              description={(language === 'en' ? result.message : undefined) ??
+                ui(
+                  'There is not enough source material in this portal to generate a grounded assessment on {value1}. Try a broader topic or check the Library for coverage.',
+                  { value1: topic.label },
+                )}
             >
               <button type='button' onClick={onTryAnother} className='rp-btn rp-btn-outline'>
-                Try another
+                {ui('Try another')}
               </button>
             </EmptyState>
           )
@@ -492,10 +505,10 @@ function ResultsView({
               style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
             >
               <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
-                This result did not match the expected quiz shape.
+                {ui('This result did not match the expected quiz shape.')}
               </p>
               <button type='button' onClick={onTryAnother} className='rp-btn rp-btn-outline mt-3'>
-                Try another
+                {ui('Try another')}
               </button>
             </div>
           )}
@@ -504,7 +517,12 @@ function ResultsView({
       {!result.insufficientGrounding && (
         <div className='mt-6 border-t border-line pt-5'>
           <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-            Grounded in {result.sources.length} {result.sources.length === 1 ? 'source' : 'sources'}
+            {ui(
+              result.sources.length === 1
+                ? 'Grounded in {count} source'
+                : 'Grounded in {count} sources',
+              { count: result.sources.length },
+            )}
           </p>
           {result.sources.length > 0 && (
             <div className='mt-2 flex flex-wrap gap-2'>

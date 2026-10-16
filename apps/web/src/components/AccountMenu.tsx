@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 import {
   type AccountEntry,
@@ -65,6 +66,7 @@ export function AccountMenu({
   variant = 'header',
   onTabOut,
 }: AccountMenuProps) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const generatedId = useId()
   const triggerId = `account-trigger-${generatedId}`
@@ -230,11 +232,11 @@ export function AccountMenu({
       {(portalRole || platformRole) && (
         <div
           role='group'
-          aria-label='Current access'
+          aria-label={ui('Current access')}
           className='border-b border-line px-3 py-2 text-sm text-ink-2 break-words'
         >
-          {portalRole && <p>{portalName}: {portalRole}</p>}
-          {platformRole && <p>Platform: {platformRole}</p>}
+          {portalRole && <p>{portalName}: {ui(portalRole)}</p>}
+          {platformRole && <p>{ui('Platform')}: {ui(platformRole)}</p>}
         </div>
       )}
       {entries.map((entry) => (
@@ -246,7 +248,7 @@ export function AccountMenu({
           onClick={() => setOpen(false)}
           className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
         >
-          {entry.label}
+          {ui(entry.label)}
         </Link>
       ))}
       <button
@@ -262,7 +264,7 @@ export function AccountMenu({
         }}
         className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-left text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
       >
-        Profile
+        {ui('Profile')}
       </button>
     </div>
   )

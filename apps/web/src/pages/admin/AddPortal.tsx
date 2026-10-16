@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
@@ -14,6 +16,8 @@ import { errorMessage, type Message } from './shared.ts'
  * compete with the portal list for attention.
  */
 function AddPortalContent() {
+  const { ui } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('portal.create', { kind: 'platform' })
   const authority = useAccess()
   const context = authority.controller.context
@@ -42,7 +46,7 @@ function AddPortalContent() {
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit('Create a portal', (access) => {
+      const result = await runExplicit(ui('Create a portal'), (access) => {
         assertCurrent()
         return addPortal(access, {
           name,
@@ -55,19 +59,23 @@ function AddPortalContent() {
       setName('')
       setOrganisation('')
       setTagline('')
-      setMessage({
-        tone: 'ok',
-        text:
-          `Portal '${result.slug}' added - use its card below to create a fresh knowledge box ` +
-          'on the platform or connect an existing endpoint.',
-      })
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
+          "Portal '{slug}' added - use its card below to create a fresh knowledge box on the platform or connect an existing endpoint.",
+          { slug: result.slug },
+        )))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
     } catch (err) {
       if (!current()) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not add the portal.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not add the portal.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
@@ -86,28 +94,31 @@ function AddPortalContent() {
       >
         <span className='flex items-center gap-2'>
           <span aria-hidden='true' className='text-ink-3'>{open ? '▾' : '▸'}</span>
-          <span className='text-sm font-semibold text-ink'>Add a knowledge box</span>
+          <span className='text-sm font-semibold text-ink'>{ui('Add a knowledge box')}</span>
         </span>
-        {!open && <span className='hidden text-xs text-ink-3 sm:inline'>Creates a new portal</span>}
+        {!open && (
+          <span className='hidden text-xs text-ink-3 sm:inline'>{ui('Creates a new portal')}</span>
+        )}
       </button>
 
       {open && (
         <div className='border-t border-line px-6 py-5'>
           <p className='text-sm text-ink-3'>
-            Creates a new portal. You then either deploy a fresh knowledge box on the platform or
-            connect an existing one from its card.
+            {ui(
+              'Creates a new portal. You then either deploy a fresh knowledge box on the platform or connect an existing one from its card.',
+            )}
           </p>
           <form onSubmit={onSubmit} className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3'>
             <div>
               <label htmlFor='portal-name' className='mb-1.5 block text-sm font-medium text-ink'>
-                Name
+                {ui('Name')}
               </label>
               <input
                 id='portal-name'
                 className='rp-input'
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder='e.g. AgriFutures Research Hub'
+                placeholder={ui('e.g. AgriFutures Research Hub')}
                 autoComplete='off'
                 required
                 minLength={2}
@@ -115,7 +126,8 @@ function AddPortalContent() {
             </div>
             <div>
               <label htmlFor='portal-org' className='mb-1.5 block text-sm font-medium text-ink'>
-                Organisation <span className='font-normal text-ink-3'>(optional)</span>
+                {ui('Organisation ')}
+                <span className='font-normal text-ink-3'>{ui('(optional)')}</span>
               </label>
               <input
                 id='portal-org'
@@ -127,7 +139,8 @@ function AddPortalContent() {
             </div>
             <div>
               <label htmlFor='portal-tagline' className='mb-1.5 block text-sm font-medium text-ink'>
-                Tagline <span className='font-normal text-ink-3'>(optional)</span>
+                {ui('Tagline ')}
+                <span className='font-normal text-ink-3'>{ui('(optional)')}</span>
               </label>
               <input
                 id='portal-tagline'
@@ -139,7 +152,7 @@ function AddPortalContent() {
             </div>
             <div className='sm:col-span-3'>
               <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-                {busy ? 'Adding…' : 'Add portal'}
+                {busy ? ui('Adding…') : ui('Add portal')}
               </button>
             </div>
           </form>

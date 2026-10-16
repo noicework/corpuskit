@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { type FormEvent, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
@@ -22,10 +23,6 @@ const roleLabel = (role: PortalRole) =>
     curator: 'Curator',
     'portal-admin': 'Portal administrator',
   })[role]
-const date = (value: string) =>
-  new Intl.DateTimeFormat('en-AU', { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(value),
-  )
 export function KeysPanel({ slug }: { slug: string }) {
   const access = useAccess()
   const location = useLocation()
@@ -35,6 +32,8 @@ export function KeysPanel({ slug }: { slug: string }) {
   return <KeyManager key={`${slug}:${access.generation}:${location.key}`} slug={slug} />
 }
 function KeyManager({ slug }: { slug: string }) {
+  const { ui, date, error: localError } = usePortalLocale()
+
   const access = useAccess()
   const controller = access.controller
   const context = controller.context
@@ -145,7 +144,7 @@ function KeyManager({ slug }: { slug: string }) {
       void rows.refetch()
     } catch (failure) {
       if (current(signal)) {
-        setError(failure instanceof KeyError ? failure.message : keyUnconfirmed)
+        setError(failure instanceof Error ? failure.message : keyUnconfirmed)
         setUncertain(!(failure instanceof KeyError && failure.correctable))
       }
     } finally {
@@ -171,7 +170,7 @@ function KeyManager({ slug }: { slug: string }) {
     } catch (failure) {
       if (current(signal)) {
         setRevoke(null)
-        setError(failure instanceof KeyError ? failure.message : keyUnconfirmed)
+        setError(failure instanceof Error ? failure.message : keyUnconfirmed)
         setUncertain(true)
       }
     } finally {
@@ -187,9 +186,11 @@ function KeyManager({ slug }: { slug: string }) {
       data-keys-panel
       className='mt-8 min-w-0 border-t border-line pt-6'
     >
-      <h3 id='access-keys' tabIndex={-1} className='rp-display scroll-mt-24 text-xl'>Keys</h3>
+      <h3 id='access-keys' tabIndex={-1} className='rp-display scroll-mt-24 text-xl'>
+        {ui('Keys')}
+      </h3>
       <p className='mt-2 text-base text-ink-2'>
-        Connect a tool to this portal. Keys cannot manage portal access or settings.
+        {ui('Connect a tool to this portal. Keys cannot manage portal access or settings.')}
       </p>
       <form onSubmit={(event) => void create(event)} data-key-form className='mt-4 min-w-0'>
         <fieldset
@@ -197,7 +198,8 @@ function KeyManager({ slug }: { slug: string }) {
           className='grid min-w-0 gap-4 lg:grid-cols-3'
         >
           <label className='block min-w-0 text-sm' htmlFor={`${id}-label`}>
-            Key label<input
+            {ui('Key label')}
+            <input
               id={`${id}-label`}
               data-key-label
               aria-describedby={error ? `${id}-error` : undefined}
@@ -210,7 +212,8 @@ function KeyManager({ slug }: { slug: string }) {
             />
           </label>
           <label className='block min-w-0 text-sm' htmlFor={`${id}-role`}>
-            Role<select
+            {ui('Role')}
+            <select
               id={`${id}-role`}
               data-key-role
               aria-describedby={error ? `${id}-error` : undefined}
@@ -223,7 +226,8 @@ function KeyManager({ slug }: { slug: string }) {
             </select>
           </label>
           <label className='block min-w-0 text-sm' htmlFor={`${id}-expiry`}>
-            Expiry (optional, local time)<input
+            {ui('Expiry (optional, local time)')}
+            <input
               id={`${id}-expiry`}
               data-key-expiry
               aria-describedby={error ? `${id}-error` : undefined}
@@ -239,12 +243,12 @@ function KeyManager({ slug }: { slug: string }) {
             className='rp-btn rp-btn-primary min-h-[44px] justify-self-start'
             disabled={!roles.includes(role)}
           >
-            {busy ? 'Creating key...' : 'Create key'}
+            {busy ? ui('Creating key...') : ui('Create key')}
           </button>
         </fieldset>
       </form>
       <p className='mt-3 text-sm text-ink-2'>
-        A key is shown once. Its effective role cannot exceed the creator's current access.
+        {ui("A key is shown once. Its effective role cannot exceed the creator's current access.")}
       </p>
       {error && (
         <p
@@ -254,20 +258,20 @@ function KeyManager({ slug }: { slug: string }) {
           role='alert'
           className='mt-4 text-sm text-[var(--rp-bad-ink)]'
         >
-          {error}
+          {localError(error, keyUnconfirmed)}
         </p>
       )}
-      {notice && <p role='status' className='mt-4 text-sm'>{notice}</p>}
+      {notice && <p role='status' className='mt-4 text-sm'>{ui(notice)}</p>}
       {rows.isPending
-        ? <p role='status' className='mt-4'>Loading keys...</p>
+        ? <p role='status' className='mt-4'>{ui('Loading keys...')}</p>
         : rows.isError
-        ? <p role='alert' className='mt-4'>Could not load keys. Try again.</p>
+        ? <p role='alert' className='mt-4'>{ui('Could not load keys. Try again.')}</p>
         : rows.data?.length === 0
         ? (
           <div className='mt-6'>
-            <h4 className='font-semibold'>No keys</h4>
+            <h4 className='font-semibold'>{ui('No keys')}</h4>
             <p className='mt-2 text-ink-2'>
-              Create a key to connect an authorised tool to this portal.
+              {ui('Create a key to connect an authorised tool to this portal.')}
             </p>
           </div>
         )
@@ -283,18 +287,28 @@ function KeyManager({ slug }: { slug: string }) {
                   <h4 className='font-semibold'>{row.label}</h4>
                   <p className='mt-2 text-ink-2'>{row.prefix}... · {row.id}</p>
                   <p className='mt-2'>
-                    Role: {roleLabel(row.role)}. Effective role:{' '}
-                    {row.effectiveRole ? roleLabel(row.effectiveRole) : 'None'}.
+                    {ui('Role: ')}
+                    {ui(roleLabel(row.role))}
+                    {ui('. Effective role:')}{' '}
+                    {row.effectiveRole ? ui(roleLabel(row.effectiveRole)) : ui('None')}.
                   </p>
                   {row.effectiveRole && row.effectiveRole !== row.role && (
-                    <p className='mt-2'>The creator's current access limits this key.</p>
+                    <p className='mt-2'>{ui("The creator's current access limits this key.")}</p>
                   )}
-                  <p className='mt-2'>{keyExplanation(row)}</p>
-                  {row.legacy && <p className='mt-2'>legacy, viewer, cannot be upgraded</p>}
+                  <p className='mt-2'>{ui(keyExplanation(row))}</p>
+                  {row.legacy && <p className='mt-2'>{ui('legacy, viewer, cannot be upgraded')}</p>}
                   <p className='mt-2 text-ink-2'>
-                    Created {date(row.createdAt)}.{' '}
-                    {row.expiresAt ? `Expires ${date(row.expiresAt)}.` : 'No expiry.'}
-                    {row.revokedAt && ` Revoked ${date(row.revokedAt)}.`}
+                    {ui('Created ')}
+                    {date(row.createdAt, { dateStyle: 'medium', timeStyle: 'short' })}.{' '}
+                    {row.expiresAt
+                      ? ui('Expires {value1}.', {
+                        value1: date(row.expiresAt, { dateStyle: 'medium', timeStyle: 'short' }),
+                      })
+                      : ui('No expiry.')}
+                    {row.revokedAt &&
+                      ui(' Revoked {date}.', {
+                        date: date(row.revokedAt, { dateStyle: 'medium', timeStyle: 'short' }),
+                      })}
                   </p>
                 </div>
                 {!row.revokedAt && (
@@ -307,7 +321,7 @@ function KeyManager({ slug }: { slug: string }) {
                       setError(null)
                     }}
                   >
-                    Revoke key
+                    {ui('Revoke key')}
                   </button>
                 )}
               </li>
@@ -320,14 +334,17 @@ function KeyManager({ slug }: { slug: string }) {
         disabled={busy || rows.isFetching}
         onClick={() => void refreshList()}
       >
-        Refresh key list
+        {ui('Refresh key list')}
       </button>
       {revoke && (
         <ConfirmActionDialog
-          title='Revoke key'
-          description={`Revoke ${revoke.label}? Tools using this key will lose access. This cannot be undone.`}
-          cancelLabel='Keep key'
-          confirmLabel='Revoke key'
+          title={ui('Revoke key')}
+          description={ui(
+            'Revoke {label}? Tools using this key will lose access. This cannot be undone.',
+            { label: revoke.label },
+          )}
+          cancelLabel={ui('Keep key')}
+          confirmLabel={ui('Revoke key')}
           busy={busy}
           onCancel={() => setRevoke(null)}
           onConfirm={() => void remove()}
@@ -347,7 +364,7 @@ function KeyManager({ slug }: { slug: string }) {
 }
 function keyExplanation(row: KeySummary) {
   return {
-    active: 'Active',
+    active: 'Active key',
     expired: 'Expired: create a replacement key if access is still needed.',
     revoked: 'Revoked',
     unproven_creator: 'Inert: the creator could not be verified.',
@@ -357,6 +374,8 @@ function keyExplanation(row: KeySummary) {
   }[row.inactiveReason]
 }
 function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
+  const { ui } = usePortalLocale()
+
   const id = useId(),
     dialog = useRef<HTMLDialogElement>(null),
     close = useRef<HTMLButtonElement>(null)
@@ -408,11 +427,11 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
         }
       }}
     >
-      <h2 id={`${id}-title`} className='rp-display text-xl'>Copy your key</h2>
+      <h2 id={`${id}-title`} className='rp-display text-xl'>{ui('Copy your key')}</h2>
       <p className='mt-4 text-base'>
-        This key is shown once. Copy it to your secure credential store before closing.
+        {ui('This key is shown once. Copy it to your secure credential store before closing.')}
       </p>
-      <label htmlFor={`${id}-value`} className='sr-only'>One-time key</label>
+      <label htmlFor={`${id}-value`} className='sr-only'>{ui('One-time key')}</label>
       <textarea
         id={`${id}-value`}
         data-key-secret
@@ -422,7 +441,7 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
         className='rp-input mt-4 min-h-24 w-full break-all text-sm'
         value={value}
       />
-      <p role='status' className='mt-3 text-sm'>{status}</p>
+      <p role='status' className='mt-3 text-sm'>{ui(status)}</p>
       <div className='mt-6 flex flex-wrap gap-3'>
         <button
           type='button'
@@ -430,14 +449,14 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
           className='rp-btn rp-btn-outline min-h-[44px]'
           onClick={onClose}
         >
-          Close key
+          {ui('Close key')}
         </button>
         <button
           type='button'
           className='rp-btn rp-btn-primary min-h-[44px]'
           onClick={() => void copy()}
         >
-          Copy key
+          {ui('Copy key')}
         </button>
       </div>
     </dialog>,

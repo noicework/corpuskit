@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useState } from 'react'
 import type { AskStage } from '@research-portal/core'
 
@@ -107,12 +108,13 @@ export function StageTimeline(
     reading?: string[]
   },
 ) {
+  const { ui } = usePortalLocale()
   const activeLabel = STAGE_STEPS.find((s) => statuses[s.key] === 'active')?.label
   const shortlist = reading.filter((t) => t.trim().length > 0).slice(0, 3)
 
   return (
     <div className='py-1'>
-      <p className='sr-only' role='status'>{activeLabel ?? 'Working'}</p>
+      <p className='sr-only' role='status'>{activeLabel ? ui(activeLabel) : ui('Working')}</p>
       {shortlist.length > 0
         ? (
           <p
@@ -120,7 +122,7 @@ export function StageTimeline(
               exiting ? 'rp-stage-row-exit' : ''
             }`}
           >
-            <span className='font-medium text-ink-2'>Reading</span>{' '}
+            <span className='font-medium text-ink-2'>{ui('Reading')}</span>{' '}
             {shortlist.map((title, index) => (
               <span key={title}>
                 {index > 0 ? <span aria-hidden='true' className='mx-1'>&middot;</span> : null}
@@ -158,7 +160,7 @@ export function StageTimeline(
               <span
                 className={`rp-stage-pill ${state === 'pending' ? 'rp-stage-pill-idle' : ''}`}
               >
-                {step.label}
+                {ui(step.label)}
               </span>
             </li>
           )

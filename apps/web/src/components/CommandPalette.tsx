@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
@@ -45,6 +46,7 @@ export function CommandPalette({
   suggestedQuestions: Question[]
   onClose: () => void
 }) {
+  const { ui } = usePortalLocale()
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(-1)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -88,13 +90,13 @@ export function CommandPalette({
     }
     for (
       const destination of destinations.filter((d) =>
-        d.label.toLowerCase().includes(trimmed.toLowerCase())
+        ui(d.label).toLowerCase().includes(trimmed.toLowerCase())
       )
     ) {
       list.push({ kind: 'destination', text: destination.label, href: destination.href })
     }
     return list
-  }, [trimmed, suggestedQuestions, canAsk, canRead, canGenerate, access.generation])
+  }, [trimmed, suggestedQuestions, canAsk, canRead, canGenerate, access.generation, ui])
 
   // Editing the query re-selects the top result, matching the omnibox
   // convention this dialog borrows from; navigating with the arrow keys
@@ -207,7 +209,7 @@ export function CommandPalette({
         ref={dialogRef}
         role='dialog'
         aria-modal='true'
-        aria-label='Search or ask'
+        aria-label={ui('Search or ask')}
         className='rp-card rp-shadow-xl w-full max-w-lg overflow-hidden'
       >
         <div className='flex items-center gap-2.5 border-b border-line px-4 py-3'>
@@ -224,7 +226,7 @@ export function CommandPalette({
             <path d='M13.2 13.2L17 17' />
           </svg>
           <label htmlFor='command-palette-input' className='sr-only'>
-            Search the library or ask a question
+            {ui('Search the library or ask a question')}
           </label>
           <input
             id='command-palette-input'
@@ -234,7 +236,7 @@ export function CommandPalette({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onInputKeyDown}
-            placeholder='Search the library or ask a question'
+            placeholder={ui('Search the library or ask a question')}
             role='combobox'
             aria-autocomplete='list'
             aria-expanded={options.length > 0}
@@ -242,19 +244,19 @@ export function CommandPalette({
             aria-activedescendant={highlight >= 0 ? `${listboxId}-option-${highlight}` : undefined}
             className='min-w-0 flex-1 border-0 bg-transparent py-1 text-[0.95rem] text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none'
           />
-          <kbd className='rp-badge rp-badge-quiet shrink-0 font-mono text-[10px]'>Esc</kbd>
+          <kbd className='rp-badge rp-badge-quiet shrink-0 font-mono text-[10px]'>{ui('Esc')}</kbd>
         </div>
 
         <ul
           id={listboxId}
           role='listbox'
-          aria-label='Quick actions'
+          aria-label={ui('Quick actions')}
           className='max-h-80 overflow-y-auto p-2'
         >
           {options.length === 0
             ? (
               <li className='px-3 py-8 text-center text-sm text-ink-3'>
-                Type to search the library, or pick a suggested question below.
+                {ui('Type to search the library, or pick a suggested question below.')}
               </li>
             )
             : null}
@@ -275,7 +277,7 @@ export function CommandPalette({
               }`}
             >
               {option.kind === 'destination'
-                ? <span className='min-w-0'>{option.text}</span>
+                ? <span className='min-w-0'>{ui(option.text)}</span>
                 : null}
               {option.kind === 'search'
                 ? (
@@ -293,7 +295,7 @@ export function CommandPalette({
                       <path d='M13.2 13.2L17 17' />
                     </svg>
                     <span className='min-w-0 truncate'>
-                      Search for{' '}
+                      {ui('Search for')}{' '}
                       <span className='font-medium text-ink'>&ldquo;{option.text}&rdquo;</span>
                     </span>
                   </>
@@ -315,7 +317,8 @@ export function CommandPalette({
                       <path d='M3 4.5h14v9H8.5L5 16.5v-3H3z' />
                     </svg>
                     <span className='min-w-0 truncate'>
-                      Ask <span className='font-medium text-ink'>&ldquo;{option.text}&rdquo;</span>
+                      {ui('Ask')}{' '}
+                      <span className='font-medium text-ink'>&ldquo;{option.text}&rdquo;</span>
                     </span>
                   </>
                 )

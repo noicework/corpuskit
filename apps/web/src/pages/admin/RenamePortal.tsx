@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { type ComponentProps, type FormEvent, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { renamePortal } from '../../api/client.ts'
@@ -27,6 +29,8 @@ function RenamePortalContent({
   onCancel: () => void
   onSaved: () => void
 }) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -43,16 +47,19 @@ function RenamePortalContent({
     setBusy(true)
     setMessage(null)
     try {
-      const completed = await runExplicit(`Rename ${initialName}`, async (access) => {
-        const result = await renamePortal(slug, access, {
-          name: name.trim(),
-          organisation: organisation.trim(),
-          tagline: tagline.trim(),
-        })
-        assertCurrent()
-        if (result?.ok !== true) throw new AdminAccessError()
-        return true
-      })
+      const completed = await runExplicit(
+        ui('Rename {initialName}', { initialName: initialName }),
+        async (access) => {
+          const result = await renamePortal(slug, access, {
+            name: name.trim(),
+            organisation: organisation.trim(),
+            tagline: tagline.trim(),
+          })
+          assertCurrent()
+          if (result?.ok !== true) throw new AdminAccessError()
+          return true
+        },
+      )
       assertCurrent()
       if (completed === undefined) return
       await Promise.all([
@@ -63,7 +70,12 @@ function RenamePortalContent({
       onSaved()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not rename the portal.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not rename the portal.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -73,38 +85,38 @@ function RenamePortalContent({
     <form onSubmit={onSubmit} className='min-w-0 flex-1 space-y-2.5'>
       <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-3'>
         <div>
-          <label htmlFor={`rename-name-${slug}`} className='sr-only'>Name</label>
+          <label htmlFor={`rename-name-${slug}`} className='sr-only'>{ui('Name')}</label>
           <input
             id={`rename-name-${slug}`}
             className='rp-input'
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder='Product name'
+            placeholder={ui('Product name')}
             autoComplete='off'
             required
             minLength={2}
           />
         </div>
         <div>
-          <label htmlFor={`rename-org-${slug}`} className='sr-only'>Organisation</label>
+          <label htmlFor={`rename-org-${slug}`} className='sr-only'>{ui('Organisation')}</label>
           <input
             id={`rename-org-${slug}`}
             className='rp-input'
             value={organisation}
             onChange={(e) => setOrganisation(e.target.value)}
-            placeholder='Organisation'
+            placeholder={ui('Organisation')}
             autoComplete='off'
             required
           />
         </div>
         <div>
-          <label htmlFor={`rename-tagline-${slug}`} className='sr-only'>Tagline</label>
+          <label htmlFor={`rename-tagline-${slug}`} className='sr-only'>{ui('Tagline')}</label>
           <input
             id={`rename-tagline-${slug}`}
             className='rp-input'
             value={tagline}
             onChange={(e) => setTagline(e.target.value)}
-            placeholder='Tagline'
+            placeholder={ui('Tagline')}
             autoComplete='off'
             required
           />
@@ -112,10 +124,10 @@ function RenamePortalContent({
       </div>
       <div className='flex flex-wrap items-center gap-3'>
         <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-          {busy ? 'Sending request...' : 'Save'}
+          {busy ? ui('Sending request...') : ui('Save')}
         </button>
         <button type='button' disabled={busy} onClick={onCancel} className='rp-btn rp-btn-outline'>
-          Cancel
+          {ui('Cancel')}
         </button>
       </div>
       {message && <MessagePanel message={message} />}

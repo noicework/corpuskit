@@ -1,3 +1,6 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { HELP_PAGES_JA } from '../lib/help-pages-ja.ts'
+import { HelpMarkdown } from './DocsPage.tsx'
 import type { ReactNode } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -58,6 +61,24 @@ export const FLOW_STEPS: FlowStep[] = [
 
 /** Greedy word wrap to at most `max` characters per line. */
 export function wrapWords(text: string, max: number): string[] {
+  // Japanese has no space-delimited words. Two Latin-width units per full-width glyph
+  // keeps the SVG labels within the same measured line budget as English.
+  if (/[\u2e80-\u9fff\uf900-\ufaff\uff01-\uff60]/u.test(text)) {
+    const lines: string[] = []
+    let line = '', width = 0
+    for (const char of text.normalize('NFC')) {
+      const size = /[\u2e80-\u9fff\uf900-\ufaff\uff01-\uff60]/u.test(char) ? 2 : 1
+      if (line && width + size > max) {
+        lines.push(line.trim())
+        line = ''
+        width = 0
+      }
+      line += char
+      width += size
+    }
+    if (line.trim()) lines.push(line.trim())
+    return lines
+  }
   const lines: string[] = []
   let current = ''
   for (const word of text.split(/\s+/)) {
@@ -72,11 +93,6 @@ export function wrapWords(text: string, max: number): string[] {
   if (current) lines.push(current)
   return lines
 }
-
-const FLOW_DESCRIPTION = FLOW_STEPS.map((step, index) =>
-  `${index + 1}. ${step.title}: ${step.detail}.`
-)
-  .join(' ')
 
 const ROW = { width: 168, height: 150, gap: 38.4, top: 20 }
 // Narrow enough that a 390px phone renders it at roughly 1:1, so 14-unit text is 14px.
@@ -152,6 +168,7 @@ function StepBox({
 }
 
 function FlowRow() {
+  const { ui } = usePortalLocale()
   const width = FLOW_STEPS.length * ROW.width + (FLOW_STEPS.length - 1) * ROW.gap
   const height = ROW.height + ROW.top * 2
   return (
@@ -165,7 +182,7 @@ function FlowRow() {
       <ArrowMarker id='how-flow-arrow-row' />
       {FLOW_STEPS.map((step, index) => {
         const x = index * (ROW.width + ROW.gap)
-        const lines = wrapWords(step.detail, 22)
+        const lines = wrapWords(ui(step.detail), 22)
         return (
           <g key={step.title}>
             <StepBox
@@ -177,7 +194,7 @@ function FlowRow() {
               last={index === FLOW_STEPS.length - 1}
             >
               <text x='14' y='62' fontSize='15' fontWeight='600' style={{ fill: 'var(--rp-ink)' }}>
-                {step.title}
+                {ui(step.title)}
               </text>
               {lines.map((line, lineIndex) => (
                 <text
@@ -212,8 +229,12 @@ function FlowRow() {
 }
 
 function FlowColumn() {
+  const { ui } = usePortalLocale()
   // Per-step heights: a title row, then one line per wrapped detail line.
-  const layout = FLOW_STEPS.map((step) => ({ step, lines: wrapWords(step.detail, COLUMN.wrap) }))
+  const layout = FLOW_STEPS.map((step) => ({
+    step,
+    lines: wrapWords(ui(step.detail), COLUMN.wrap),
+  }))
   const heights = layout.map(({ lines }) => COLUMN.titleRow + lines.length * COLUMN.lineHeight)
   const tops = heights.map((_, index) =>
     heights.slice(0, index).reduce((sum, h) => sum + h + COLUMN.gap, 0)
@@ -242,7 +263,7 @@ function FlowColumn() {
               last={index === FLOW_STEPS.length - 1}
             >
               <text x='44' y='29' fontSize='16' fontWeight='600' style={{ fill: 'var(--rp-ink)' }}>
-                {step.title}
+                {ui(step.title)}
               </text>
               {lines.map((line, lineIndex) => (
                 <text
@@ -276,18 +297,22 @@ function FlowColumn() {
   )
 }
 
-function FlowDiagram() {
+export function FlowDiagram() {
+  const { ui } = usePortalLocale()
+  const description = FLOW_STEPS.map((step, index) =>
+    `${index + 1}. ${ui(step.title)}: ${ui(step.detail)}.`
+  ).join(' ')
   return (
     <figure
       className='rp-card p-3 sm:p-6'
       data-testid='how-it-works-flow'
       role='img'
-      aria-label={`The flow of one question through the portal. ${FLOW_DESCRIPTION}`}
+      aria-label={ui('The flow of one question through the portal. {description}', { description })}
     >
       <FlowRow />
       <FlowColumn />
       <figcaption className='mt-4 text-xs text-ink-3'>
-        The flow of one question, from the collection to the checked answer.
+        {ui('The flow of one question, from the collection to the checked answer.')}
       </figcaption>
     </figure>
   )
@@ -299,17 +324,16 @@ function FlowDiagram() {
 // prose falls back to wording that carries no number.
 // ---------------------------------------------------------------------------
 
-const numberFormat = new Intl.NumberFormat('en-AU')
-
 function Figure({ label, value }: { label: string; value: number | null }) {
+  const { ui, number } = usePortalLocale()
   return (
     <div className='flex items-baseline justify-between gap-3 rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3 sm:block'>
-      <dt className='rp-eyebrow text-ink-3'>{label}</dt>
+      <dt className='rp-eyebrow text-ink-3'>{ui(label)}</dt>
       {value === null
         ? <Skeleton className='h-6 w-16 sm:mt-1.5' />
         : (
           <dd className='font-display text-xl font-semibold text-ink sm:mt-1'>
-            {numberFormat.format(value)}
+            {number(value)}
           </dd>
         )}
     </div>
@@ -317,15 +341,16 @@ function Figure({ label, value }: { label: string; value: number | null }) {
 }
 
 function LiveFigures({ counters, pending }: { counters?: KbCounters; pending: boolean }) {
+  const { ui } = usePortalLocale()
   if (!counters && !pending) return null
   return (
-    <section aria-label='The collection today' data-testid='how-it-works-figures'>
+    <section aria-label={ui('The collection today')} data-testid='how-it-works-figures'>
       <dl className='grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3'>
         <Figure label='Resources' value={counters?.resources ?? null} />
         <Figure label='Paragraphs' value={counters?.paragraphs ?? null} />
         <Figure label='Sentences' value={counters?.sentences ?? null} />
       </dl>
-      <p className='mt-2 text-xs text-ink-3'>Live from the knowledge index.</p>
+      <p className='mt-2 text-xs text-ink-3'>{ui('Live from the knowledge index.')}</p>
     </section>
   )
 }
@@ -355,11 +380,28 @@ function Steps({ children }: { children: ReactNode }) {
   )
 }
 
-function Section({ id, children, wide }: { id: SectionId; children: ReactNode; wide?: boolean }) {
+function Section(
+  { id, children, wide, after }: {
+    id: SectionId
+    children: ReactNode
+    wide?: boolean
+    after?: ReactNode
+  },
+) {
+  const { language } = usePortalLocale()
+  const index = HOW_IT_WORKS_SECTIONS.findIndex((section) => section.id === id)
+  const translated = language === 'ja'
+    ? HELP_PAGES_JA['how-this-works']?.sections[index]
+    : undefined
   return (
     <section id={id} className='scroll-mt-24'>
-      <h2 className='font-display text-xl font-semibold text-ink'>{headingFor(id)}</h2>
-      <div className={`mt-3 space-y-3.5 ${wide ? '' : 'rp-measure'}`}>{children}</div>
+      <h2 className='font-display text-xl font-semibold text-ink'>
+        {translated?.heading ?? headingFor(id)}
+      </h2>
+      <div className={`mt-3 space-y-3.5 ${wide ? '' : 'rp-measure'}`}>
+        {translated && id !== 'tools' ? <HelpMarkdown text={translated.body} /> : children}
+        {after}
+      </div>
     </section>
   )
 }
@@ -382,17 +424,20 @@ function TextLink({ to, children }: { to: string; children: ReactNode }) {
 }
 
 function OnThisPage() {
+  const { language, ui } = usePortalLocale()
   return (
-    <nav aria-label='On this page' className='space-y-0.5'>
-      <p className='rp-eyebrow px-2 text-ink-3'>On this page</p>
+    <nav aria-label={ui('On this page')} className='space-y-0.5'>
+      <p className='rp-eyebrow px-2 text-ink-3'>{ui('On this page')}</p>
       <ul className='mt-1.5 space-y-0.5'>
-        {HOW_IT_WORKS_SECTIONS.map((section) => (
+        {HOW_IT_WORKS_SECTIONS.map((section, index) => (
           <li key={section.id}>
             <a
               href={`#${section.id}`}
               className='rp-focus block rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-sm text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink'
             >
-              {section.heading}
+              {language === 'ja'
+                ? HELP_PAGES_JA['how-this-works']!.sections[index]!.heading
+                : section.heading}
             </a>
           </li>
         ))}
@@ -466,13 +511,14 @@ function tools(slug: string): Tool[] {
 }
 
 function ToolCard({ tool }: { tool: Tool }) {
+  const { ui } = usePortalLocale()
   return (
     <Link
       to={tool.path}
       className='rp-card rp-focus group flex h-full flex-col gap-1.5 p-4 no-underline transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
     >
       <span className='flex items-center justify-between gap-2'>
-        <span className='font-display text-base font-semibold text-ink'>{tool.title}</span>
+        <span className='font-display text-base font-semibold text-ink'>{ui(tool.title)}</span>
         <svg
           viewBox='0 0 20 20'
           fill='none'
@@ -486,7 +532,7 @@ function ToolCard({ tool }: { tool: Tool }) {
           <path d='M7.5 5l5 5-5 5' />
         </svg>
       </span>
-      <span className='text-sm leading-relaxed text-ink-2'>{tool.detail}</span>
+      <span className='text-sm leading-relaxed text-ink-2'>{ui(tool.detail)}</span>
     </Link>
   )
 }
@@ -496,6 +542,7 @@ function ToolCard({ tool }: { tool: Tool }) {
 // ---------------------------------------------------------------------------
 
 export function HowItWorksPage() {
+  const { ui, number, language } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const counters = useQuery({
@@ -509,14 +556,15 @@ export function HowItWorksPage() {
   return (
     <main className='rp-shell py-6 sm:py-8 lg:py-10'>
       <div className='mb-6'>
-        <p className='rp-eyebrow text-ink-3'>Help</p>
+        <p className='rp-eyebrow text-ink-3'>{ui('Help')}</p>
         <h1 className='mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl'>
-          How this works
+          {ui('How this works')}
         </h1>
         <p className='mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-2'>
-          How {config.branding.productName}{' '}
-          turns a collection of papers into cited answers, and what it checks before it shows you
-          one.
+          {ui(
+            'How {name} turns a collection of papers into cited answers, and what it checks before it shows you one.',
+            { name: config.branding.productName },
+          )}
         </p>
       </div>
 
@@ -533,32 +581,37 @@ export function HowItWorksPage() {
         </aside>
 
         <div className='min-w-0 space-y-10'>
-          <Section id='content'>
+          <Section
+            id='content'
+            after={
+              <P>
+                {counters.data && (
+                  <>
+                    {ui(
+                      'The collection currently holds {resources} resources, indexed as {paragraphs} paragraphs and {sentences} sentences.',
+                      {
+                        resources: number(counters.data.resources),
+                        paragraphs: number(counters.data.paragraphs),
+                        sentences: number(counters.data.sentences),
+                      },
+                    )}
+                    {' '}
+                  </>
+                )}
+                {language === 'en' ? 'The ' : null}
+                <TextLink to={`/t/${slug}/library`}>{ui('Library')}</TextLink>
+                {language === 'en' ? ' ' : null}
+                {counters.data
+                  ? ui('lists every one of them.')
+                  : ui('lists every resource in the collection and shows the current count.')}
+              </P>
+            }
+          >
             <P>
               The portal reads one collection: research papers, their supplementary files and video
               material, loaded into the portal's knowledge index by the people who run it. Nothing
               else is read. What you can search, ask and browse is exactly what is in that
               collection.
-            </P>
-            <P>
-              {counters.data
-                ? (
-                  <>
-                    The collection currently holds{' '}
-                    <strong className='font-semibold text-ink'>
-                      {numberFormat.format(counters.data.resources)} resources
-                    </strong>, indexed as {numberFormat.format(counters.data.paragraphs)}{' '}
-                    paragraphs and {numberFormat.format(counters.data.sentences)} sentences. The
-                    {' '}
-                    <TextLink to={`/t/${slug}/library`}>Library</TextLink> lists every one of them.
-                  </>
-                )
-                : (
-                  <>
-                    The <TextLink to={`/t/${slug}/library`}>Library</TextLink>{' '}
-                    lists every resource in the collection and shows the current count.
-                  </>
-                )}
             </P>
           </Section>
 
@@ -593,7 +646,24 @@ export function HowItWorksPage() {
             </P>
           </Section>
 
-          <Section id='answered'>
+          <Section
+            id='answered'
+            after={intents.length > 0
+              ? (
+                <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'>
+                  <p className='rp-eyebrow text-ink-3'>{ui('The configurations on this portal')}</p>
+                  <dl className='mt-2 space-y-2'>
+                    {intents.map((intent) => (
+                      <div key={intent.id} className='text-sm leading-relaxed'>
+                        <dt className='inline font-semibold text-ink'>{intent.label}.</dt>{' '}
+                        <dd className='inline text-ink-2'>{intent.description}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )
+              : null}
+          >
             <P>Four things happen between the question and the answer:</P>
             <Steps>
               <li>
@@ -632,21 +702,6 @@ export function HowItWorksPage() {
                 that passage in the paper.
               </li>
             </Steps>
-            {intents.length > 0
-              ? (
-                <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'>
-                  <p className='rp-eyebrow text-ink-3'>The configurations on this portal</p>
-                  <dl className='mt-2 space-y-2'>
-                    {intents.map((intent) => (
-                      <div key={intent.id} className='text-sm leading-relaxed'>
-                        <dt className='inline font-semibold text-ink'>{intent.label}.</dt>{' '}
-                        <dd className='inline text-ink-2'>{intent.description}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              )
-              : null}
           </Section>
 
           <Section id='checked'>
@@ -760,7 +815,18 @@ export function HowItWorksPage() {
             </ul>
           </Section>
 
-          <Section id='under-the-hood'>
+          <Section
+            id='under-the-hood'
+            after={
+              <p className='text-sm text-ink-3'>
+                {ui('More on reading an answer:')}{' '}
+                <TextLink to={`/t/${slug}/help/trust-and-citations`}>
+                  {ui('Trust, citations and confidence')}
+                </TextLink>
+                {language === 'ja' ? '。' : '.'}
+              </p>
+            }
+          >
             <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4 sm:p-5'>
               <p className='rp-eyebrow text-ink-3'>For technical readers</p>
               <p className='mt-2 text-sm leading-relaxed text-ink-2'>
@@ -773,12 +839,6 @@ export function HowItWorksPage() {
                 the portal, and the credentials for it never reach the browser.
               </p>
             </div>
-            <p className='text-sm text-ink-3'>
-              More on reading an answer:{' '}
-              <TextLink to={`/t/${slug}/help/trust-and-citations`}>
-                Trust, citations and confidence
-              </TextLink>.
-            </p>
           </Section>
         </div>
       </div>

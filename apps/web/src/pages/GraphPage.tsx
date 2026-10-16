@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
@@ -253,6 +254,7 @@ function NodeSearch({
   onDismiss?: () => void
   className?: string
 }) {
+  const { ui } = usePortalLocale()
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
@@ -292,8 +294,8 @@ function NodeSearch({
             onDismiss()
           }
         }}
-        placeholder='Find in the map…'
-        aria-label='Find an entity in the map'
+        placeholder={ui('Find in the map…')}
+        aria-label={ui('Find an entity in the map')}
         className={`rp-input rp-input-icon w-full text-sm ${className}`}
       />
       {matches.length > 0
@@ -342,6 +344,7 @@ function NodeSearch({
 // ---------------------------------------------------------------------------
 
 function EvidenceList({ slug, name }: { slug: string; name: string }) {
+  const { ui } = usePortalLocale()
   const { data, isLoading } = useQuery({
     queryKey: ['graph-evidence', slug, name],
     queryFn: () => searchTenantFull(slug, name, { mode: 'hybrid' }),
@@ -363,7 +366,7 @@ function EvidenceList({ slug, name }: { slug: string; name: string }) {
   }
   const resources = (data?.resources ?? []).slice(0, 3)
   if (resources.length === 0) {
-    return <p className='text-xs text-ink-3'>No indexed passages mention this yet.</p>
+    return <p className='text-xs text-ink-3'>{ui('No indexed passages mention this yet.')}</p>
   }
   return (
     <ul className='space-y-2'>
@@ -411,10 +414,11 @@ function DetailDock({
   panelRef: (el: HTMLElement | null) => void
   children: React.ReactNode
 }) {
+  const { ui } = usePortalLocale()
   return (
     <aside
       ref={panelRef}
-      aria-label='Selection details'
+      aria-label={ui('Selection details')}
       // Focusable so a selection made from the rail or the find field can
       // hand the reading position to the details it opened; -1 keeps it out
       // of the tab order itself.
@@ -424,7 +428,7 @@ function DetailDock({
       <button
         type='button'
         onClick={onClose}
-        aria-label='Close details'
+        aria-label={ui('Close details')}
         className='rp-btn rp-btn-ghost absolute right-2 top-2 z-10 h-8 w-8 !px-0'
       >
         <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
@@ -463,6 +467,7 @@ function EntityPanel({
   onClearPath: () => void
   expanding: boolean
 }) {
+  const { ui } = usePortalLocale()
   const connections = useMemo(() => {
     const grouped = new Map<string, { other: string; outgoing: boolean }[]>()
     for (const edge of edges) {
@@ -480,7 +485,7 @@ function EntityPanel({
   return (
     <>
       <div className='pr-8'>
-        <p className='rp-eyebrow text-ink-3'>Entity</p>
+        <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
         <div className='mt-1 flex items-start gap-2'>
           <span
             className='mt-1.5 inline-block h-3 w-3 shrink-0 rounded-full'
@@ -497,15 +502,15 @@ function EntityPanel({
             className='font-semibold uppercase tracking-wide'
             style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
           >
-            {node.group || 'Entity'}
+            {node.group || ui('Entity')}
           </span>
           <span className='text-ink-3' aria-hidden='true'>·</span>
           <span className='text-ink-2'>
-            {degree} {degree === 1 ? 'relation' : 'relations'}
+            {ui(degree === 1 ? '{count} relation' : '{count} relations', { count: degree })}
           </span>
           <span className='text-ink-3' aria-hidden='true'>·</span>
           <span className='text-ink-2'>
-            {node.weight} {node.weight === 1 ? 'mention' : 'mentions'}
+            {ui(node.weight === 1 ? '{count} mention' : '{count} mentions', { count: node.weight })}
           </span>
         </p>
       </div>
@@ -517,7 +522,7 @@ function EntityPanel({
           disabled={expanding}
           className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
         >
-          {expanding ? 'Expanding…' : 'Expand connections'}
+          {expanding ? ui('Expanding…') : ui('Expand connections')}
         </button>
         <button
           type='button'
@@ -526,14 +531,14 @@ function EntityPanel({
             pathState.from === node.id ? 'rp-btn-primary' : 'rp-btn-outline'
           }`}
         >
-          {pathState.from === node.id ? 'Cancel trace' : 'Trace a connection'}
+          {pathState.from === node.id ? ui('Cancel trace') : ui('Trace a connection')}
         </button>
       </div>
 
       {pathState.from === node.id && !pathState.path
         ? (
           <p className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-2.5 text-xs text-ink-2'>
-            Now select any other entity to trace how the two are connected.
+            {ui('Now select any other entity to trace how the two are connected.')}
           </p>
         )
         : null}
@@ -547,19 +552,21 @@ function EntityPanel({
               color: 'var(--rp-warn-ink)',
             }}
           >
-            No connection found between these two in the current map.
+            {ui('No connection found between these two in the current map.')}
           </p>
         )
         : null}
       {pathState.path && pathState.path.length > 0
         ? (
           <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-2.5'>
-            <p className='text-xs font-medium uppercase tracking-wide text-ink-3'>Connection</p>
+            <p className='text-xs font-medium uppercase tracking-wide text-ink-3'>
+              {ui('Connection')}
+            </p>
             <ol className='mt-1.5 space-y-1'>
               {pathState.path.map((step, i) => (
                 <li key={i} className='text-xs text-ink'>
                   <span className='font-medium'>{step.source}</span>{' '}
-                  <span className='text-ink-3'>{step.label || 'related to'} →</span>{' '}
+                  <span className='text-ink-3'>{step.label || ui('related to')} →</span>{' '}
                   <span className='font-medium'>{step.target}</span>
                 </li>
               ))}
@@ -569,7 +576,7 @@ function EntityPanel({
               onClick={onClearPath}
               className='rp-btn rp-btn-ghost mt-2 h-7 px-2 text-xs'
             >
-              Clear
+              {ui('Clear')}
             </button>
           </div>
         )
@@ -578,7 +585,9 @@ function EntityPanel({
       {connections.length > 0
         ? (
           <div>
-            <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>Connections</h3>
+            <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>
+              {ui('Entity connections')}
+            </h3>
             <div className='mt-2 space-y-2.5'>
               {connections.map(([label, list]) => (
                 <div key={label}>
@@ -612,13 +621,16 @@ function EntityPanel({
         )
         : (
           <p className='text-xs text-ink-3'>
-            No extracted relations for this entity yet - it appears in the corpus, but the
-            knowledge-graph agent has not linked it to anything.
+            {ui(
+              'No extracted relations for this entity yet - it appears in the corpus, but the knowledge-graph agent has not linked it to anything.',
+            )}
           </p>
         )}
 
       <div>
-        <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>Mentioned in</h3>
+        <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>
+          {ui('Mentioned in')}
+        </h3>
         <div className='mt-2'>
           <EvidenceList slug={slug} name={node.label} />
         </div>
@@ -629,15 +641,15 @@ function EntityPanel({
           to={`/t/${slug}/entity/${encodeURIComponent(node.label)}`}
           className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
         >
-          Open dossier
+          {ui('Open dossier')}
         </Link>
         <Link
           to={`/t/${slug}/ask?ask=${
-            encodeURIComponent(`What does the research say about ${node.label}?`)
+            encodeURIComponent(ui('What does the research say about {name}?', { name: node.label }))
           }`}
           className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
         >
-          Ask about this
+          {ui('Ask about this')}
         </Link>
       </div>
     </>
@@ -659,6 +671,7 @@ function ConceptPanel({
   groupStyle: GroupStyle | undefined
   onSelect: (id: string) => void
 }) {
+  const { ui } = usePortalLocale()
   const related = edges
     .filter((e) => e.source === node.id || e.target === node.id)
     .map((e) => ({
@@ -684,20 +697,22 @@ function ConceptPanel({
   return (
     <>
       <div className='pr-8'>
-        <p className='rp-eyebrow text-ink-3'>{isTopic ? 'Topic' : 'Kind'}</p>
+        <p className='rp-eyebrow text-ink-3'>{isTopic ? ui('Topic') : ui('Kind')}</p>
         <h2 className='mt-1 font-display text-lg text-ink'>{node.label}</h2>
         <p
           className='mt-1 text-xs font-semibold uppercase tracking-wide'
           style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
         >
-          on {node.weight} {node.weight === 1 ? 'resource' : 'resources'}
+          {ui(node.weight === 1 ? 'on {count} resource' : 'on {count} resources', {
+            count: node.weight,
+          })}
         </p>
       </div>
       {related.length > 0
         ? (
           <div>
             <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>
-              Appears together with
+              {ui('Appears together with')}
             </h3>
             <ul className='mt-2 space-y-1'>
               {related.map(({ otherId, count }) => (
@@ -713,9 +728,9 @@ function ConceptPanel({
                     <Link
                       to={libraryHref(otherId)}
                       className='shrink-0 text-xs text-ink-3 underline-offset-2 hover:text-[var(--rp-ink)] hover:underline'
-                      title='View the resources where both appear'
+                      title={ui('View the resources where both appear')}
                     >
-                      {count} {count === 1 ? 'resource' : 'resources'}
+                      {ui(count === 1 ? '{count} resource' : '{count} resources', { count })}
                     </Link>
                   </div>
                   {/* The same overlap the map draws as line weight, read as a bar. */}
@@ -733,13 +748,15 @@ function ConceptPanel({
             </ul>
           </div>
         )
-        : <p className='text-xs text-ink-3'>No overlaps recorded yet.</p>}
+        : <p className='text-xs text-ink-3'>{ui('No overlaps recorded yet.')}</p>}
       <div className='mt-auto border-t border-line pt-3'>
         <Link
           to={libraryHref()}
           className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
         >
-          View these {node.weight} {node.weight === 1 ? 'resource' : 'resources'}
+          {ui(node.weight === 1 ? 'View these {count} resource' : 'View these {count} resources', {
+            count: node.weight,
+          })}
         </Link>
       </div>
     </>
@@ -776,6 +793,7 @@ function NavigatorRail({
   selectedId: string | null
   panelRef: (el: HTMLElement | null) => void
 }) {
+  const { ui } = usePortalLocale()
   const isEntity = mode === 'entity'
   // The 3D canvas does not expose its marks to the keyboard or a screen
   // reader the way the 2D SVG's tabbable nodes did, so this list is the
@@ -792,13 +810,13 @@ function NavigatorRail({
   return (
     <aside
       ref={panelRef}
-      aria-label='Map navigator'
+      aria-label={ui('Map navigator')}
       className='rp-anim-fade absolute inset-x-0 bottom-0 z-20 flex max-h-[60%] flex-col overflow-hidden rounded-t-[var(--rp-radius)] border border-line rp-map-panel rp-map-gutter-left md:inset-x-auto md:bottom-auto md:top-1/2 md:max-h-[calc(100%-2rem)] md:w-[300px] md:-translate-y-1/2 md:rounded-[calc(var(--rp-radius)+4px)]'
     >
       <button
         type='button'
         onClick={onClose}
-        aria-label='Hide navigator'
+        aria-label={ui('Hide navigator')}
         className='rp-btn rp-btn-ghost absolute right-2 top-2 z-10 h-8 w-8 shrink-0 !px-0'
       >
         <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
@@ -811,9 +829,9 @@ function NavigatorRail({
           ? (
             <div className='mb-4'>
               <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>
-                Legend
+                {ui('Legend')}
                 <span className='ml-1.5 font-normal normal-case tracking-normal text-ink-3'>
-                  (tap to show or hide)
+                  {ui('(tap to show or hide)')}
                 </span>
               </h3>
               <div className='mt-2 flex flex-wrap gap-1.5'>
@@ -835,7 +853,7 @@ function NavigatorRail({
                       }}
                       aria-hidden='true'
                     />
-                    {group || 'Entity'}
+                    {group || ui('Entity')}
                     <span className='text-ink-3'>{style.count}</span>
                   </button>
                 ))}
@@ -847,8 +865,8 @@ function NavigatorRail({
         <div>
           <h3 className='text-xs font-medium uppercase tracking-wide text-ink-3'>
             {showAll
-              ? (isEntity ? 'All entities, most connected first' : 'All categories')
-              : (isEntity ? 'Most connected' : 'Largest categories')}
+              ? (isEntity ? ui('All entities, most connected first') : ui('All categories'))
+              : (isEntity ? ui('Most connected') : ui('Largest categories'))}
           </h3>
           <ul className='mt-2 space-y-0.5'>
             {top.map((node) => {
@@ -890,9 +908,10 @@ function NavigatorRail({
                 onClick={() => setShowAll((v) => !v)}
                 className='rp-btn rp-btn-ghost mt-1.5 h-8 px-2 text-xs'
               >
-                {showAll
-                  ? 'Show fewer'
-                  : `Show all ${ranked.length} ${isEntity ? 'entities' : 'categories'}`}
+                {showAll ? ui('Show fewer') : ui('Show all {value1} {value2}', {
+                  value1: ranked.length,
+                  value2: isEntity ? 'entities' : 'categories',
+                })}
               </button>
             )
             : null}
@@ -932,6 +951,7 @@ function IconSegmented<T extends string>({
   options: SegmentOption<T>[]
   onChange: (value: T) => void
 }) {
+  const { ui } = usePortalLocale()
   return (
     <div
       role='group'
@@ -945,8 +965,8 @@ function IconSegmented<T extends string>({
             key={option.value}
             type='button'
             aria-pressed={active}
-            aria-label={option.label}
-            title={`${option.label} - ${option.title}`}
+            aria-label={ui(option.label)}
+            title={`${ui(option.label)} - ${ui(option.title)}`}
             onClick={() => onChange(option.value)}
             className={`rp-focus flex h-full w-9 items-center justify-center transition-colors duration-150 ${
               index > 0 ? 'border-l border-[var(--rp-on-primary)]/35' : ''
@@ -973,33 +993,39 @@ function ModeToggle({
   onChange: (mode: Mode) => void
   compact?: boolean
 }) {
+  const { ui } = usePortalLocale()
   const options: SegmentOption<Mode>[] = [
     {
       value: 'entity',
-      label: 'Entity graph',
-      title: 'The entities and the relations between them',
+      label: ui('Entity graph'),
+      title: ui('The entities and the relations between them'),
       icon: <EntityGlyph />,
     },
     {
       value: 'concept',
-      label: 'Concept map',
-      title: 'The topics and kinds that share resources',
+      label: ui('Concept map'),
+      title: ui('The topics and kinds that share resources'),
       icon: <ConceptGlyph />,
     },
   ]
   if (compact) {
     return (
-      <IconSegmented groupLabel='Graph mode' value={mode} options={options} onChange={onChange} />
+      <IconSegmented
+        groupLabel={ui('Graph mode')}
+        value={mode}
+        options={options}
+        onChange={onChange}
+      />
     )
   }
   return (
     <div
       role='group'
-      aria-label='Graph mode'
+      aria-label={ui('Graph mode')}
       className='inline-flex h-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center overflow-hidden rounded-[var(--rp-radius-btn)] border border-[var(--rp-on-primary)]/30'
     >
       <span className='px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--rp-on-primary)]/60'>
-        View
+        {ui('View')}
       </span>
       {options.map((option) => (
         <button
@@ -1013,7 +1039,7 @@ function ModeToggle({
               : 'text-[var(--rp-on-primary)]/65 hover:bg-[var(--rp-on-primary)]/10 hover:text-[var(--rp-on-primary)]'
           }`}
         >
-          {option.label}
+          {ui(option.label)}
         </button>
       ))}
     </div>
@@ -1033,33 +1059,39 @@ function LayoutToggle({
   onChange: (layout: MapLayout) => void
   compact?: boolean
 }) {
+  const { ui } = usePortalLocale()
   const options: SegmentOption<MapLayout>[] = [
     {
       value: 'grouped',
-      label: 'Grouped',
-      title: 'Gather each category into its own territory',
+      label: ui('Grouped'),
+      title: ui('Gather each category into its own territory'),
       icon: <GroupedGlyph />,
     },
     {
       value: 'free',
-      label: 'Free',
-      title: 'One open force layout, no category grouping',
+      label: ui('Free'),
+      title: ui('One open force layout, no category grouping'),
       icon: <FreeGlyph />,
     },
   ]
   if (compact) {
     return (
-      <IconSegmented groupLabel='Map layout' value={layout} options={options} onChange={onChange} />
+      <IconSegmented
+        groupLabel={ui('Map layout')}
+        value={layout}
+        options={options}
+        onChange={onChange}
+      />
     )
   }
   return (
     <div
       role='group'
-      aria-label='Map layout'
+      aria-label={ui('Map layout')}
       className='inline-flex h-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center overflow-hidden rounded-[var(--rp-radius-btn)] border border-[var(--rp-on-primary)]/30'
     >
       <span className='px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--rp-on-primary)]/60'>
-        Layout
+        {ui('Layout')}
       </span>
       {options.map((option) => (
         <button
@@ -1074,7 +1106,7 @@ function LayoutToggle({
               : 'text-[var(--rp-on-primary)]/65 hover:bg-[var(--rp-on-primary)]/10 hover:text-[var(--rp-on-primary)]'
           }`}
         >
-          {option.label}
+          {ui(option.label)}
         </button>
       ))}
     </div>
@@ -1143,6 +1175,7 @@ function CanvasNotice({ children }: { children: React.ReactNode }) {
 }
 
 export function GraphPage() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const access = useAccess()
   const canConfigure = access.can('graph.write', { kind: 'portal', slug: config.slug })
@@ -1254,10 +1287,13 @@ export function GraphPage() {
       // weight, so "2 750 resources in common" reads differently from "8".
       edges: data.edges.map((e) => ({
         ...e,
-        label: `together on ${e.weight} ${e.weight === 1 ? 'resource' : 'resources'}`,
+        label: ui(
+          e.weight === 1 ? 'together on {count} resource' : 'together on {count} resources',
+          { count: e.weight },
+        ),
       })),
     }
-  }, [mode, entityGraph, conceptQuery.data])
+  }, [mode, entityGraph, conceptQuery.data, ui])
 
   const groupStyles = useMemo(() => buildGroupStyles(nodes), [nodes])
   const degrees = useMemo(() => buildDegrees(edges), [edges])
@@ -1374,14 +1410,18 @@ export function GraphPage() {
     (relationsQuery.data as { extracting?: boolean } | undefined)?.extracting === true
 
   const nodeCount = mode === 'entity'
-    ? `${nodes.length} ${nodes.length === 1 ? 'entity' : 'entities'}`
-    : `${nodes.length} ${nodes.length === 1 ? 'category' : 'categories'}`
+    ? ui(nodes.length === 1 ? '{count} entity' : '{count} entities', { count: nodes.length })
+    : ui(nodes.length === 1 ? '{count} category' : '{count} categories', { count: nodes.length })
   const edgeCount = mode === 'entity'
-    ? `${edges.length} ${edges.length === 1 ? 'relation' : 'relations'}`
-    : `${edges.length} ${edges.length === 1 ? 'overlap' : 'overlaps'}`
+    ? ui(edges.length === 1 ? '{count} relation' : '{count} relations', { count: edges.length })
+    : ui(edges.length === 1 ? '{count} overlap' : '{count} overlaps', { count: edges.length })
   const counts = `${nodeCount} · ${edgeCount}`
   const subtitle = mode === 'entity'
-    ? `${counts} · ${groupStyles.size} ${groupStyles.size === 1 ? 'category' : 'categories'}`
+    ? `${counts} · ${
+      ui(groupStyles.size === 1 ? '{count} category' : '{count} categories', {
+        count: groupStyles.size,
+      })
+    }`
     : counts
 
   return (
@@ -1443,7 +1483,7 @@ export function GraphPage() {
                   guard, which still catches a single unbreakable word. */
               }
               <h1 className='rp-display truncate text-2xl text-[var(--rp-on-primary)]'>
-                Knowledge map
+                {ui('Knowledge map')}
               </h1>
               {hasGraph
                 ? (
@@ -1464,9 +1504,9 @@ export function GraphPage() {
             <div className='mt-2 flex items-center justify-end gap-1.5'>
               <button
                 type='button'
-                aria-label='Find in the map'
+                aria-label={ui('Find in the map')}
                 aria-expanded={searchOpen}
-                title='Find in the map'
+                title={ui('Find in the map')}
                 onClick={() => setSearchOpen((open) => !open)}
                 className={`rp-focus flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] border transition-colors duration-150 ${
                   searchOpen
@@ -1515,7 +1555,7 @@ export function GraphPage() {
         <div className='relative px-4 py-10 sm:px-6 sm:py-14'>
           <div className='mx-auto max-w-3xl text-center'>
             <h1 className='rp-display text-3xl text-[var(--rp-on-primary)] sm:text-4xl'>
-              Knowledge map
+              {ui('Knowledge map')}
             </h1>
             {hasGraph
               ? <p className='mt-3 text-sm text-[var(--rp-on-primary)]/75'>{subtitle}</p>
@@ -1536,14 +1576,14 @@ export function GraphPage() {
         aria-busy={mapBusy}
       >
         <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
-          {mapBusy ? 'Loading knowledge map.' : hasGraph ? 'Knowledge map ready.' : ''}
+          {mapBusy ? ui('Loading knowledge map.') : hasGraph ? ui('Knowledge map ready.') : ''}
         </p>
         {loading || (hasGraph && !mapReady) ? <CanvasSkeleton /> : null}
         {loading ? null : error
           ? (
             <CanvasNotice>
               <ErrorCard
-                message={error instanceof Error ? error.message : 'The map could not load.'}
+                message={error instanceof Error ? error.message : ui('The map could not load.')}
                 onRetry={() => void refetch()}
               />
             </CanvasNotice>
@@ -1553,17 +1593,23 @@ export function GraphPage() {
             <CanvasNotice>
               <EmptyState
                 title={mode !== 'entity'
-                  ? 'No taxonomy overlaps yet'
+                  ? ui('No taxonomy overlaps yet')
                   : extracting
-                  ? 'Building the knowledge graph'
-                  : 'No knowledge graph yet'}
+                  ? ui('Building the knowledge graph')
+                  : ui('No knowledge graph yet')}
                 description={mode !== 'entity'
-                  ? 'Once resources carry topics and kinds, their overlaps appear here.'
+                  ? ui('Once resources carry topics and kinds, their overlaps appear here.')
                   : extracting
-                  ? 'The knowledge-graph agent is working through the corpus now. Relations appear here as it extracts them - check back shortly.'
+                  ? ui(
+                    'The knowledge-graph agent is working through the corpus now. Relations appear here as it extracts them - check back shortly.',
+                  )
                   : canConfigure
-                  ? 'No knowledge-graph agent has run over this corpus yet - configure one from Manage and the entities and relations will appear here.'
-                  : 'The map is built from relations extracted across the corpus, and none are available yet. Search and the library work as usual in the meantime.'}
+                  ? ui(
+                    'No knowledge-graph agent has run over this corpus yet - configure one from Manage and the entities and relations will appear here.',
+                  )
+                  : ui(
+                    'The map is built from relations extracted across the corpus, and none are available yet. Search and the library work as usual in the meantime.',
+                  )}
               />
             </CanvasNotice>
           )
@@ -1586,7 +1632,7 @@ export function GraphPage() {
                   onSelect={select}
                   focusId={focusId}
                   insets={insets}
-                  hint='Drag to orbit · scroll to zoom · click a node to explore it'
+                  hint={ui('Drag to orbit · scroll to zoom · click a node to explore it')}
                   onReady={() => setMapReady(true)}
                 />
               </div>
@@ -1595,15 +1641,15 @@ export function GraphPage() {
                 ? (
                   <CanvasNotice>
                     <EmptyState
-                      title='Everything is hidden'
-                      description='The legend filters have hidden every category on the map.'
+                      title={ui('Everything is hidden')}
+                      description={ui('The legend filters have hidden every category on the map.')}
                     >
                       <button
                         type='button'
                         onClick={() => setHiddenGroups(new Set())}
                         className='rp-btn rp-btn-outline'
                       >
-                        Show everything again
+                        {ui('Show everything again')}
                       </button>
                     </EmptyState>
                   </CanvasNotice>
@@ -1627,9 +1673,9 @@ export function GraphPage() {
                       aria-hidden='true'
                     />
                     <span className='text-ink'>
-                      Tracing from <span className='font-semibold'>{labelById.get(pathFrom)}</span>
-                      {' '}
-                      - pick another entity
+                      {ui('Tracing from')}{' '}
+                      <span className='font-semibold'>{labelById.get(pathFrom)}</span>{' '}
+                      {ui('- pick another entity')}
                     </span>
                   </div>
                 )
@@ -1653,7 +1699,7 @@ export function GraphPage() {
                     >
                       <path d='M4 6h12M4 10h12M4 14h8' strokeLinecap='round' />
                     </svg>
-                    Browse
+                    {ui('Browse')}
                   </button>
                 )
                 : (

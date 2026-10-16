@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { type ComponentProps, useEffect, useRef, useState } from 'react'
@@ -20,6 +22,8 @@ function CreateKbBoxContent({
   row: AdminTenantOverview
   onCreated: () => Promise<unknown>
 }) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('bindings.write', {
     kind: 'portal',
     slug: row.tenant.slug,
@@ -46,7 +50,7 @@ function CreateKbBoxContent({
     setMessage(null)
     try {
       const result = await runExplicit(
-        `Create a knowledge box for ${row.tenant.productName}`,
+        ui('Create a knowledge box for {productName}', { productName: row.tenant.productName }),
         (access) => {
           assertCurrent()
           return createAdminKb(row.tenant.slug, access)
@@ -54,17 +58,22 @@ function CreateKbBoxContent({
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: 'Created a new knowledge box and connected this portal to it.',
-      })
+      setMessage(
+        messageFor(
+          'ok',
+          ({ ui }) => ui('Created a new knowledge box and connected this portal to it.'),
+        ),
+      )
       await onCreated()
     } catch (err) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not create a knowledge box - please try again.'),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not create a knowledge box - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
@@ -77,7 +86,7 @@ function CreateKbBoxContent({
         style={{ borderStyle: 'dashed' }}
       >
         <p className='text-sm text-ink-2'>
-          This portal has no knowledge box yet. Create one to start adding content.
+          {ui('This portal has no knowledge box yet. Create one to start adding content.')}
         </p>
         <button
           type='button'
@@ -92,7 +101,7 @@ function CreateKbBoxContent({
             maxWidth: '100%',
           }}
         >
-          {busy ? 'Creating…' : 'Create a knowledge box'}
+          {busy ? ui('Creating…') : ui('Create a knowledge box')}
         </button>
         {message && <MessagePanel message={message} className='mt-3' />}
       </div>
@@ -116,10 +125,10 @@ function CreateKbBoxContent({
               maxWidth: '100%',
             }}
           >
-            {busy ? 'Creating…' : 'Create new box'}
+            {busy ? ui('Creating…') : ui('Create new box')}
           </button>
           <p className='text-xs text-ink-3'>
-            Creates a fresh box on the platform and connects this portal to it.
+            {ui('Creates a fresh box on the platform and connects this portal to it.')}
           </p>
         </div>
         {message && <MessagePanel message={message} className='mt-3' />}

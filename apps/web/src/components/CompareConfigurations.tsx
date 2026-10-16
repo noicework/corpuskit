@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 /**
  * Compare configurations: the same question run through two stored search
  * configurations side by side, each column showing its own citations,
@@ -40,6 +41,7 @@ function RateLimitedColumn(
     onRetry: () => void
   },
 ) {
+  const { ui, error: localError } = usePortalLocale()
   const wait = Math.max(1, retryAfterSec ?? RETRY_FALLBACK_SEC)
   const [left, setLeft] = useState(wait)
   const onRetryRef = useRef(onRetry)
@@ -65,21 +67,23 @@ function RateLimitedColumn(
       style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
     >
       <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
-        The portal is busy
+        {ui('The portal is busy')}
       </p>
-      <p className='mt-1 text-sm' style={{ color: 'var(--rp-warn-ink)' }}>{message}</p>
+      <p className='mt-1 text-sm' style={{ color: 'var(--rp-warn-ink)' }}>
+        {localError(message, 'The answer service is unavailable.')}
+      </p>
       <div className='mt-3 flex flex-wrap items-center gap-3'>
         <button
           type='button'
           onClick={onRetry}
           className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
         >
-          Retry now
+          {ui('Retry now')}
         </button>
         {left > 0
           ? (
             <span className='text-xs tabular-nums' style={{ color: 'var(--rp-warn-ink)' }}>
-              Retrying in {left} s
+              {ui('Retrying in {seconds} s', { seconds: left })}
             </span>
           )
           : null}
@@ -102,6 +106,7 @@ export function CompareConfigurations(
     onClose: () => void
   },
 ) {
+  const { ui, error: localError } = usePortalLocale()
   const [columns, setColumns] = useState<Column[]>(
     initial.map((intent) => ({ intent, text: '', sources: [], pending: false })),
   )
@@ -134,7 +139,7 @@ export function CompareConfigurations(
         update((c) => ({
           ...c,
           pending: false,
-          error: err instanceof Error ? err.message : 'The answer service is unavailable.',
+          error: err instanceof Error ? err.message : ui('The answer service is unavailable.'),
           rateLimited,
           retryAfterSec: rateLimited ? err.retryAfterSec : undefined,
         }))
@@ -151,14 +156,15 @@ export function CompareConfigurations(
   return (
     <section
       className='rp-card mt-4 p-4'
-      aria-label='Compare retrieval configurations'
+      aria-label={ui('Compare retrieval configurations')}
     >
       <div className='flex items-start justify-between gap-3'>
         <div className='min-w-0 max-w-2xl'>
-          <p className='rp-eyebrow text-ink-3'>Compare configurations</p>
+          <p className='rp-eyebrow text-ink-3'>{ui('Compare configurations')}</p>
           <p className='mt-1 text-sm text-ink-2'>
-            The same question, two retrieval policies. Each column names the stored configuration it
-            ran under.
+            {ui(
+              'The same question, two retrieval policies. Each column names the stored configuration it ran under.',
+            )}
           </p>
         </div>
         <button
@@ -166,7 +172,7 @@ export function CompareConfigurations(
           onClick={onClose}
           className='rp-btn rp-btn-ghost h-8 shrink-0 px-2 text-xs'
         >
-          Close
+          {ui('Close')}
         </button>
       </div>
       <div className='mt-4 grid gap-4 lg:grid-cols-2'>
@@ -179,7 +185,9 @@ export function CompareConfigurations(
             >
               <div className='flex flex-wrap items-center justify-between gap-2'>
                 <label className='flex items-center gap-2 text-xs text-ink-3'>
-                  <span className='sr-only'>Intent for column {index + 1}</span>
+                  <span className='sr-only'>
+                    {ui('Intent for column {index}', { index: index + 1 })}
+                  </span>
                   <select
                     value={col.intent}
                     onChange={(e) => run(index, e.target.value)}
@@ -191,13 +199,17 @@ export function CompareConfigurations(
                   </select>
                 </label>
                 <span className='text-xs tabular-nums text-ink-3'>
-                  {col.pending ? 'answering…' : col.seconds ? `${col.seconds.toFixed(1)} s` : ''}
+                  {col.pending
+                    ? ui('answering…')
+                    : col.seconds
+                    ? ui('{value1} s', { value1: col.seconds.toFixed(1) })
+                    : ''}
                 </span>
               </div>
               {intent
                 ? (
                   <p className='mt-2 text-[11px] leading-relaxed text-ink-3'>
-                    {intentSummary(intent)}
+                    {intentSummary(intent, ui)}
                   </p>
                 )
                 : null}
@@ -213,13 +225,15 @@ export function CompareConfigurations(
                   : col.error
                   ? (
                     <div className='flex flex-wrap items-center gap-3'>
-                      <p className='text-[var(--rp-bad-ink)]'>{col.error}</p>
+                      <p className='text-[var(--rp-bad-ink)]'>
+                        {localError(col.error, 'The answer service is unavailable.')}
+                      </p>
                       <button
                         type='button'
                         onClick={() => run(index, col.intent)}
                         className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
                       >
-                        Retry
+                        {ui('Retry')}
                       </button>
                     </div>
                   )
@@ -237,7 +251,9 @@ export function CompareConfigurations(
               {col.sources.length > 0
                 ? (
                   <div className='mt-3 border-t border-line pt-2'>
-                    <p className='rp-eyebrow text-ink-3'>{col.sources.length} sources</p>
+                    <p className='rp-eyebrow text-ink-3'>
+                      {ui('{count} sources', { count: col.sources.length })}
+                    </p>
                     <ol className='mt-1.5 space-y-1'>
                       {col.sources.slice(0, 8).map((s) => (
                         <li

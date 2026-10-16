@@ -1,6 +1,8 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import { pageTitle, surfaceName } from './page-title.ts'
+import { createPortalLocale } from './portal-locale.tsx'
+import { missingPortalMessages } from './locale-messages.ts'
 
 describe('per-route page titles (D6-14)', () => {
   it('names every surface of a portal', () => {
@@ -36,5 +38,41 @@ describe('per-route page titles (D6-14)', () => {
     expect(pageTitle('/t/neuro/nowhere', 'Neurology Research Portal')).toBe(
       'Neurology Research Portal',
     )
+  })
+
+  it('localises only fixed surface labels and keeps authored known keys and braces verbatim', () => {
+    const { ui } = createPortalLocale('ja')
+    expect(pageTitle('/t/neuro/library', 'Summary {name}', ui)).toBe('ライブラリ | Summary {name}')
+    expect(pageTitle('/t/neuro/manage', 'Library', ui)).toBe('管理 | Library')
+    expect(pageTitle('/t/neuro/entity/Library', 'Summary {name}', ui)).toBe(
+      'Library | Summary {name}',
+    )
+    expect(pageTitle('/t/neuro/entity/Summary%20%7Bname%7D', 'Library', ui)).toBe(
+      'Summary {name} | Library',
+    )
+    expect(pageTitle('/t/neuro/entity/%E0%A4%A', 'Library', ui)).toBe('エンティティ | Library')
+    expect(pageTitle('/t/neuro', 'Summary {name}', ui)).toBe('Summary {name}')
+    expect(pageTitle('/t/neuro/unknown', 'Library', ui)).toBe('Library')
+    const routes = [
+      'ask',
+      'search',
+      'library/doc',
+      'library',
+      'investigations/id',
+      'investigations',
+      'agentic',
+      'generate',
+      'assessment',
+      'graph',
+      'tools',
+      'help',
+      'how-it-works',
+      'taxonomy',
+      'manage',
+    ]
+    expect(missingPortalMessages(routes.map((route) => surfaceName(`/t/neuro/${route}`)!)))
+      .toEqual([])
+    // Default callers retain the exact English title contract.
+    expect(pageTitle('/t/neuro/manage', 'Library')).toBe('Manage | Library')
   })
 })

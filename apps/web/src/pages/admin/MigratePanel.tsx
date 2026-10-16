@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess, useScopeAccess } from '../../components/AccessProvider.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -33,6 +35,8 @@ const OUTCOME_BADGE: Record<ItemEvent['outcome'], string> = {
 function MigratePanelContent(
   { rows }: { rows: AdminTenantOverview[] },
 ) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit, sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
     'platform.settings.write',
     { kind: 'platform' },
@@ -106,7 +110,7 @@ function MigratePanelContent(
     try {
       const events: MigrationEvent[] = []
       const completed = await runExplicit(
-        `Migrate resources from ${from} to ${to}`,
+        ui('Migrate resources from {from} to {to}', { from: from, to: to }),
         async (access) => {
           assertPermitted()
           const checkedAccess = {
@@ -140,7 +144,13 @@ function MigratePanelContent(
       ])
     } catch (err) {
       if (!current()) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Migration failed - please try again.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Migration failed - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setRunning(false)
     }
@@ -156,11 +166,11 @@ function MigratePanelContent(
       >
         <span className='flex items-center gap-2'>
           <span aria-hidden='true' className='text-ink-3'>{open ? '▾' : '▸'}</span>
-          <span className='text-sm font-semibold text-ink'>Migrate resources</span>
+          <span className='text-sm font-semibold text-ink'>{ui('Migrate resources')}</span>
         </span>
         {!open && (
           <span className='hidden text-xs text-ink-3 sm:inline'>
-            Copy resources between portals
+            {ui('Copy resources between portals')}
           </span>
         )}
       </button>
@@ -168,14 +178,15 @@ function MigratePanelContent(
       {open && (
         <div className='border-t border-line px-6 py-5'>
           <p className='text-sm text-ink-3'>
-            Copy every resource from one portal's knowledge box into another's. Results appear after
-            the request is confirmed.
+            {ui(
+              "Copy every resource from one portal's knowledge box into another's. Results appear after the request is confirmed.",
+            )}
           </p>
 
           <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
             <div>
               <label htmlFor='migrate-from' className='mb-1.5 block text-sm font-medium text-ink'>
-                From portal
+                {ui('From portal')}
               </label>
               <select
                 id='migrate-from'
@@ -183,7 +194,7 @@ function MigratePanelContent(
                 value={from}
                 onChange={(e) => setFrom(e.target.value)}
               >
-                <option value=''>Choose a portal</option>
+                <option value=''>{ui('Choose a portal')}</option>
                 {options.map((o) => (
                   <option key={o.slug} value={o.slug}>
                     {o.label}
@@ -193,7 +204,7 @@ function MigratePanelContent(
             </div>
             <div>
               <label htmlFor='migrate-to' className='mb-1.5 block text-sm font-medium text-ink'>
-                To portal
+                {ui('To portal')}
               </label>
               <select
                 id='migrate-to'
@@ -201,7 +212,7 @@ function MigratePanelContent(
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
               >
-                <option value=''>Choose a portal</option>
+                <option value=''>{ui('Choose a portal')}</option>
                 {options.filter((o) => o.slug !== from).map((o) => (
                   <option key={o.slug} value={o.slug}>
                     {o.label}
@@ -214,7 +225,7 @@ function MigratePanelContent(
           {unavailable
             ? (
               <p role='status' className='mt-4 text-sm text-ink-2'>
-                Migration is unavailable for this selection.
+                {ui('Migration is unavailable for this selection.')}
               </p>
             )
             : (
@@ -224,13 +235,18 @@ function MigratePanelContent(
                 onClick={() => void onRun()}
                 className='rp-btn rp-btn-primary mt-4'
               >
-                {running ? 'Sending request...' : 'Run migration'}
+                {running ? ui('Sending request...') : ui('Run migration')}
               </button>
             )}
 
           {total !== null && (
             <div className='mt-5'>
-              <p className='text-sm text-ink-2'>{items.length} of {total} processed</p>
+              <p className='text-sm text-ink-2'>
+                {items.length}
+                {ui(' of ')}
+                {total}
+                {ui(' processed')}
+              </p>
               <ul className='mt-2 max-h-64 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>
                 {items.map((item) => (
                   <li
@@ -242,7 +258,7 @@ function MigratePanelContent(
                       title={item.detail}
                       className={`rp-badge shrink-0 ${OUTCOME_BADGE[item.outcome]}`}
                     >
-                      {OUTCOME_LABEL[item.outcome]}
+                      {ui(OUTCOME_LABEL[item.outcome])}
                     </span>
                   </li>
                 ))}
@@ -252,7 +268,11 @@ function MigratePanelContent(
 
           {summary && (
             <p className='mt-3 text-sm text-ink-2'>
-              Copied {summary.copied}, skipped {summary.skipped}, {summary.errors} errors.
+              {ui('Copied ')}
+              {summary.copied}
+              {ui(', skipped ')}
+              {summary.skipped}, {summary.errors}
+              {ui(' errors.')}
             </p>
           )}
 

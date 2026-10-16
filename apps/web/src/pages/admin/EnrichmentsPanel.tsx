@@ -1,3 +1,6 @@
+import { messageFor } from './shared.ts'
+import { enrichmentDisplay } from '../../lib/enrichment-display.ts'
+import { createPortalLocale, type Locale, usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError, adminFetch, type AdminRequestAccess } from '../../api/break-glass.ts'
@@ -36,6 +39,7 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 function SchemaFields({ agent }: { agent: EnrichmentAgent }) {
+  const { ui } = usePortalLocale()
   return (
     <ul className='mt-3 space-y-2'>
       {agent.fields.map((field) => (
@@ -49,7 +53,7 @@ function SchemaFields({ agent }: { agent: EnrichmentAgent }) {
               {field.key}
             </code>
             <span className='rp-badge rp-badge-quiet'>
-              {KIND_LABEL[field.kind] ?? field.kind}
+              {ui(KIND_LABEL[field.kind] ?? field.kind)}
             </span>
           </div>
           <p className='mt-1 text-xs leading-relaxed text-ink-3'>{field.description}</p>
@@ -60,13 +64,15 @@ function SchemaFields({ agent }: { agent: EnrichmentAgent }) {
 }
 
 function Coverage({ done, total }: { done: number; total: number }) {
+  const { ui, number } = usePortalLocale()
+
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
   return (
     <div className='mt-4'>
       <div className='flex flex-wrap items-baseline justify-between gap-2 text-sm'>
-        <span className='font-medium text-ink-2'>Coverage</span>
+        <span className='font-medium text-ink-2'>{ui('Coverage')}</span>
         <span className='tabular-nums text-ink-3'>
-          {done.toLocaleString()} of {total.toLocaleString()} resources
+          {ui('{done} of {total} resources', { done: number(done), total: number(total) })}
           {total > 0 ? ` (${pct}%)` : ''}
         </span>
       </div>
@@ -119,19 +125,28 @@ export function followEnrichmentRun(
 }
 
 /** The message a finished run leaves. */
-export function enrichmentDoneMessage(done: RunDone): Message {
+export function enrichmentDoneMessage(
+  done: RunDone,
+  locale: Pick<Locale, 'ui' | 'number'> = createPortalLocale('en'),
+): Message {
+  const { ui, number } = locale
   return {
     tone: done.errors > 0 ? 'error' : 'ok',
     text: done.enriched === 0 && done.errors === 0
-      ? 'Every resource in scope is already enriched.'
-      : `Enriched ${done.enriched} resource${done.enriched === 1 ? '' : 's'}` +
-        (done.errors > 0 ? `, ${done.errors} could not be generated.` : '.'),
+      ? ui('Every resource in scope is already enriched.')
+      : ui(done.enriched === 1 ? 'Enriched {count} resource' : 'Enriched {count} resources', {
+        count: number(done.enriched),
+      }) + (done.errors > 0
+        ? ui(', {count} could not be generated.', { count: number(done.errors) })
+        : '.'),
   }
 }
 
 function AgentCard(
   { slug, status }: { slug: string; status: EnrichmentAgentStatus },
 ) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit, sessionAllowed } = usePermissionAdminAccess('enrichments.write', {
     kind: 'portal',
     slug,
@@ -140,7 +155,7 @@ function AgentCard(
   const context = authority.controller.context
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const queryClient = useQueryClient()
-  const { agent } = status
+  const agent = enrichmentDisplay(status.agent, ui)
   const [scope, setScope] = useState<'missing' | 'all'>('missing')
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
@@ -156,7 +171,7 @@ function AgentCard(
     const job = new StreamedJob<RunDone>(assertCurrent, 'Enrichment run failed - please retry.')
     try {
       const result = await runExplicit(
-        scope === 'missing' ? 'Generate missing enrichments' : 'Regenerate all enrichments',
+        scope === 'missing' ? ui('Generate missing enrichments') : ui('Regenerate all enrichments'),
         async (access) => {
           await runEnrichment(
             slug,
@@ -169,13 +184,24 @@ function AgentCard(
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage(enrichmentDoneMessage(result))
+      setMessage(
+        messageFor(
+          result.errors > 0 ? 'error' : 'ok',
+          (locale) => enrichmentDoneMessage(result, locale).text,
+        ),
+      )
       if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['enrichment-agents', slug] })
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage(failedJobMessage(job, err, 'Enrichment run failed - please retry.'))
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            failedJobMessage(job, err, 'Enrichment run failed - please retry.', localError).text,
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setRunning(false)
     }
@@ -187,12 +213,14 @@ function AgentCard(
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
             <h3 className='rp-display text-lg text-ink'>{agent.title}</h3>
-            {agent.isDefault ? <span className='rp-badge rp-badge-quiet'>Default</span> : null}
+            {agent.isDefault
+              ? <span className='rp-badge rp-badge-quiet'>{ui('Default')}</span>
+              : null}
             <span className='rp-badge rp-badge-quiet'>
-              {agent.scope === 'resource' ? 'Resource level' : 'Paragraph level'}
+              {agent.scope === 'resource' ? ui('Resource level') : ui('Paragraph level')}
             </span>
             <span className='rp-badge rp-badge-quiet'>
-              {agent.cardinality === 'single' ? 'One per resource' : 'Multiple'}
+              {agent.cardinality === 'single' ? ui('One per resource') : ui('Multiple')}
             </span>
           </div>
           <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
@@ -205,13 +233,13 @@ function AgentCard(
 
       <div className='mt-5'>
         <div className='flex items-center justify-between'>
-          <p className='rp-eyebrow text-ink-3'>JSON schema</p>
+          <p className='rp-eyebrow text-ink-3'>{ui('JSON schema')}</p>
           <button
             type='button'
             onClick={() => setShowSchema((v) => !v)}
             className='rp-focus rounded-[var(--rp-radius-btn)] text-xs font-medium text-ink-3 hover:text-ink'
           >
-            {showSchema ? 'Hide raw schema' : 'Show raw schema'}
+            {showSchema ? ui('Hide raw schema') : ui('Show raw schema')}
           </button>
         </div>
         <SchemaFields agent={agent} />
@@ -225,14 +253,14 @@ function AgentCard(
       </div>
 
       <p className='mt-4 rounded-[calc(var(--rp-radius))] border border-line bg-surface-2 px-3 py-2.5 text-xs leading-relaxed text-ink-3'>
-        {status.generationNote}
+        {ui(status.generationNote)}
       </p>
 
       <div className='mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4'>
         <div
           className='flex overflow-hidden rounded-[var(--rp-radius)] border border-line'
           role='group'
-          aria-label='Run scope'
+          aria-label={ui('Run scope')}
         >
           {(['missing', 'all'] as const).map((value) => (
             <button
@@ -248,7 +276,7 @@ function AgentCard(
                   : 'bg-surface text-ink-2 hover:text-ink'
               }`}
             >
-              {value === 'missing' ? 'Missing only' : 'Regenerate all'}
+              {value === 'missing' ? ui('Missing only') : ui('Regenerate all')}
             </button>
           ))}
         </div>
@@ -259,14 +287,19 @@ function AgentCard(
           onClick={() => void run()}
           className='rp-btn rp-btn-primary'
         >
-          {running ? 'Running…' : scope === 'missing' ? 'Generate missing' : 'Regenerate all'}
+          {running
+            ? ui('Running…')
+            : scope === 'missing'
+            ? ui('Generate missing')
+            : ui('Regenerate all')}
         </button>
         {running && progress
           ? (
             <span className='text-sm tabular-nums text-ink-3'>
               {progress.done}
-              {progress.total > 0 ? ` / ${progress.total}` : ''} done
-              {progress.errors > 0 ? `, ${progress.errors} failed` : ''}
+              {progress.total > 0 ? ` / ${progress.total}` : ''}
+              {ui(' done')}
+              {progress.errors > 0 ? ui(', {errors} failed', { errors: progress.errors }) : ''}
             </span>
           )
           : null}
@@ -274,7 +307,9 @@ function AgentCard(
 
       {running && (
         <p role='status' className='mt-3 text-sm text-ink-3'>
-          Waiting for the confirmed result. Progress may arrive together when the action finishes.
+          {ui(
+            'Waiting for the confirmed result. Progress may arrive together when the action finishes.',
+          )}
         </p>
       )}
       {running && progress && progress.total > 0
@@ -296,8 +331,15 @@ function AgentCard(
   )
 }
 
-const recordLabel = (count: number, existing = false) =>
-  `${count.toLocaleString()} ${existing ? 'existing ' : ''}record${count === 1 ? '' : 's'}`
+const recordLabel = (count: number, existing: boolean, locale: Pick<Locale, 'ui' | 'number'>) =>
+  locale.ui(
+    existing
+      ? count === 1 ? '{count} existing record' : '{count} existing records'
+      : count === 1
+      ? '{count} record'
+      : '{count} records',
+    { count: locale.number(count) },
+  )
 
 /** A reviewed archive is submitted only through the current ordinary owner/curator session. */
 export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImported }: {
@@ -306,7 +348,10 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
   assertCurrent(): void
   onImported(): Promise<void>
 }) {
+  const { ui, number } = usePortalLocale()
+
   const id = useId()
+  const fileInput = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [review, setReview] = useState<EnrichmentArchiveReview | null>(null)
   const [message, setMessage] = useState<Message | null>(null)
@@ -332,7 +377,13 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
         return
       }
       if (sequence.current === attempt) {
-        setMessage({ tone: 'error', text: errorMessage(error, 'Could not read this archive.') })
+        setMessage(
+          messageFor(
+            'error',
+            ({ error: localError }) =>
+              errorMessage(error, 'Could not read this archive.', localError),
+          ),
+        )
       }
     } finally {
       pending.current = false
@@ -351,22 +402,25 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
       assertCurrent()
       if (sequence.current !== attempt) return
       setReview(null)
-      setMessage({
-        tone: 'ok',
-        text: `Imported ${recordLabel(result.imported)}. Kept ${
-          recordLabel(result.skipped, true)
-        } unchanged.`,
-      })
+      setMessage(
+        messageFor('ok', ({ ui, number }) =>
+          ui('Imported {records}. Kept {existing} unchanged.', {
+            records: recordLabel(result.imported, false, { ui, number }),
+            existing: recordLabel(result.skipped, true, { ui, number }),
+          })),
+      )
       try {
         await onImported()
       } catch {
         assertCurrent()
-        setMessage({
-          tone: 'error',
-          text: `Imported ${recordLabel(result.imported)} and kept ${
-            recordLabel(result.skipped, true)
-          }. Reload this page to refresh coverage.`,
-        })
+        setMessage(messageFor('error', ({ ui, number }) =>
+          ui(
+            'Imported {records} and kept {existing}. Reload this page to refresh coverage.',
+            {
+              records: recordLabel(result.imported, false, { ui, number }),
+              existing: recordLabel(result.skipped, true, { ui, number }),
+            },
+          )))
       }
     } catch (error) {
       try {
@@ -375,13 +429,12 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
         return
       }
       if (sequence.current === attempt) {
-        setMessage({
-          tone: 'error',
-          text: errorMessage(
+        setMessage(messageFor('error', ({ error: localError }) =>
+          errorMessage(
             error,
             'Could not import this archive. Check the result before retrying.',
-          ),
-        })
+            localError,
+          )))
       }
     } finally {
       pending.current = false
@@ -396,23 +449,33 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
     >
       <div>
         <h2 id={`${id}-heading`} className='rp-display text-xl text-ink'>
-          Import enrichment archive
+          {ui('Import enrichment archive')}
         </h2>
         <p id={`${id}-help`} className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
-          Restore reviewed titles, summaries and other enrichments from an exported JSON archive.
-          Existing records stay unchanged. Maximum file size: 8 MB.
+          {ui(
+            'Restore reviewed titles, summaries and other enrichments from an exported JSON archive. Existing records stay unchanged. Maximum file size: 8 MB.',
+          )}
         </p>
       </div>
       <div className='space-y-2'>
-        <label htmlFor={`${id}-file`} className='block text-sm font-medium text-ink'>
-          Archive file
-        </label>
+        <p className='text-sm font-medium text-ink'>{ui('Archive file')}</p>
+        <button
+          type='button'
+          className='rp-btn rp-btn-outline'
+          disabled={busy !== null}
+          onClick={() => fileInput.current?.click()}
+        >
+          {ui('Choose archive file')}
+        </button>
         <input
+          ref={fileInput}
           id={`${id}-file`}
           type='file'
+          tabIndex={-1}
           accept='.json,application/json'
-          className='rp-input w-full min-w-0'
-          aria-describedby={`${id}-help`}
+          className='sr-only'
+          aria-label={ui('Choose archive file')}
+          aria-describedby={`${id}-help ${id}-filename`}
           disabled={busy !== null}
           data-enrichments-import-file
           onChange={(event) => {
@@ -422,6 +485,9 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
             setMessage(null)
           }}
         />
+        <p id={`${id}-filename`} className='break-words text-sm text-ink-2'>
+          {file?.name ?? ui('No file selected')}
+        </p>
       </div>
       <button
         type='button'
@@ -430,7 +496,7 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
         data-enrichments-import-review
         onClick={() => void reviewFile()}
       >
-        {busy === 'review' ? 'Reviewing…' : 'Review archive'}
+        {busy === 'review' ? ui('Reviewing…') : ui('Review archive')}
       </button>
       {review
         ? (
@@ -440,10 +506,13 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
           >
             <p className='break-words text-sm font-medium text-ink'>{file?.name}</p>
             <p role='status' className='text-sm text-ink-2'>
-              Ready to import {recordLabel(review.recordCount)} from{' '}
-              {review.agentCount.toLocaleString()} schema{review.agentCount === 1 ? '' : 's'} into
-              {' '}
-              <span className='break-all font-medium'>{slug}</span>.
+              {ui('Ready to import {records} from {schemas} into {slug}.', {
+                records: recordLabel(review.recordCount, false, { ui, number }),
+                schemas: ui(review.agentCount === 1 ? '{count} schema' : '{count} schemas', {
+                  count: number(review.agentCount),
+                }),
+                slug,
+              })}
             </p>
             <button
               type='button'
@@ -452,7 +521,7 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
               data-enrichments-import-confirm
               onClick={() => void confirmImport()}
             >
-              {busy === 'import' ? 'Importing…' : 'Import reviewed archive'}
+              {busy === 'import' ? ui('Importing…') : ui('Import reviewed archive')}
             </button>
           </div>
         )
@@ -461,8 +530,8 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
         ? (
           <p role='status' className='text-sm text-ink-3'>
             {busy === 'review'
-              ? 'Checking the archive before import.'
-              : 'Waiting for the confirmed import result.'}
+              ? ui('Checking the archive before import.')
+              : ui('Waiting for the confirmed import result.')}
           </p>
         )
         : null}
@@ -472,6 +541,8 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
 }
 
 function EnrichmentsPanelContent({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'enrichments.write',
     { kind: 'portal', slug },
@@ -495,7 +566,7 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Load enrichment schemas and coverage',
+        ui('Load enrichment schemas and coverage'),
         async (access) =>
           EnrichmentAgentStatusSchema.array().parse(await getEnrichmentAgents(slug, access)),
       )
@@ -505,7 +576,12 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load enrichments.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load enrichments.', localError),
+        ),
+      )
     }
   }
 
@@ -536,7 +612,12 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not export enrichments.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not export enrichments.', localError),
+        ),
+      )
     }
   }
 
@@ -548,7 +629,7 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
         className='rp-btn rp-btn-outline'
         onClick={() => void load()}
       >
-        Load enrichment schemas
+        {ui('Load enrichment schemas')}
       </button>
       {message && <MessagePanel message={message} />}
       <button
@@ -557,7 +638,7 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
         className='rp-btn rp-btn-outline'
         onClick={() => void exportArchive()}
       >
-        Export enrichment archive
+        {ui('Export enrichment archive')}
       </button>
       {sessionAllowed
         ? (
@@ -575,12 +656,11 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
         )
         : null}
       <div className='rp-card p-5'>
-        <h2 className='rp-display text-xl text-ink'>Enrichments</h2>
+        <h2 className='rp-display text-xl text-ink'>{ui('Enrichments')}</h2>
         <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
-          Enrichments are schema-driven generator agents that read each resource and write a real
-          title, summary, key takeaways and quotes, so the library never shows a raw filename. The
-          app renders whatever fields a schema defines, so new fields flow through everywhere. Run
-          the default agent below to merchandise the corpus.
+          {ui(
+            'Enrichments are schema-driven generator agents that read each resource and write a real title, summary, key takeaways and quotes, so the library never shows a raw filename. The app renders whatever fields a schema defines, so new fields flow through everywhere. Run the default agent below to merchandise the corpus.',
+          )}
         </p>
       </div>
 
@@ -597,7 +677,7 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
       {isError
         ? (
           <ErrorCard
-            message={error instanceof Error ? error.message : 'Could not load enrichments.'}
+            message={error instanceof Error ? error.message : ui('Could not load enrichments.')}
             onRetry={() => void load()}
           />
         )

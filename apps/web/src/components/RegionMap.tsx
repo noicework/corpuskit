@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type KeyboardEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MAP_HEIGHT, MAP_WIDTH, STATES } from './australia-paths.ts'
@@ -21,6 +22,7 @@ export const REGIONS = STATES.map((state) => ({
  * hand-drawn - it is generated from public state boundaries and simplified.
  */
 export function RegionMap({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   const navigate = useNavigate()
   const [active, setActive] = useState<string | null>(null)
 
@@ -38,7 +40,7 @@ export function RegionMap({ slug }: { slug: string }) {
       viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`}
       className='h-auto w-full overflow-visible'
       role='group'
-      aria-label='Map of Australia - choose a region to search its documents'
+      aria-label={ui('Map of Australia - choose a region to search its documents')}
     >
       {STATES.map((state) => {
         const on = active === state.id
@@ -48,7 +50,7 @@ export function RegionMap({ slug }: { slug: string }) {
               d={state.path}
               role='link'
               tabIndex={0}
-              aria-label={`Search ${state.label} documents`}
+              aria-label={ui('Search {value1} documents', { value1: state.label })}
               onClick={() => go(state.label)}
               onKeyDown={(event) => onKey(event, state.label)}
               onMouseEnter={() => setActive(state.id)}

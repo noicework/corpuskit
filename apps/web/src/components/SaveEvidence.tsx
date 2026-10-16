@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import {
   createResearchStorageContext,
@@ -210,6 +211,7 @@ export function MakeCurrentToggle({
   variant?: 'chip' | 'icon'
   className?: string
 }) {
+  const { ui } = usePortalLocale()
   const current = useCurrentInvestigation(slug)
   const storage = useResearchStorage(slug)
   const access = useAccess()
@@ -237,13 +239,15 @@ export function MakeCurrentToggle({
         type='button'
         onClick={toggle}
         aria-pressed={isCurrent}
-        title={isCurrent ? 'This is your current investigation' : 'Make current'}
+        title={isCurrent ? ui('This is your current investigation') : ui('Make current')}
         className={`rp-btn rp-btn-ghost h-7 w-7 shrink-0 p-0 ${
           isCurrent ? 'text-[var(--rp-accent-fg)]' : 'text-ink-3'
         } ${className ?? ''}`}
       >
         <PinIcon className='h-3.5 w-3.5' />
-        <span className='sr-only'>{isCurrent ? 'Current investigation' : 'Make current'}</span>
+        <span className='sr-only'>
+          {isCurrent ? ui('Current investigation') : ui('Make current')}
+        </span>
       </button>
     )
   }
@@ -256,7 +260,7 @@ export function MakeCurrentToggle({
       className={`rp-chip ${isCurrent ? 'rp-chip-active' : ''} ${className ?? ''}`}
     >
       <PinIcon className='h-3.5 w-3.5' />
-      {isCurrent ? 'Current ✓' : 'Make current'}
+      {isCurrent ? ui('Current ✓') : ui('Make current')}
     </button>
   )
 }
@@ -307,6 +311,7 @@ function InvestigationPicker({
   panelRef: MutableRefObject<HTMLDivElement | null>
   ariaLabel: string
 }) {
+  const { ui } = usePortalLocale()
   const compact = useCompactViewport()
   const keyboardInset = useKeyboardInset()
 
@@ -344,7 +349,7 @@ function InvestigationPicker({
       {error
         ? (
           <p className='px-1 pb-1 text-xs text-[var(--rp-bad-ink)]'>
-            Could not save - try again.
+            {ui('Could not save - try again.')}
           </p>
         )
         : null}
@@ -369,7 +374,7 @@ function InvestigationPicker({
         {investigations && investigations.length === 0
           ? (
             <p className='px-2 py-1.5 text-xs text-ink-3'>
-              No investigations yet - start one below.
+              {ui('No investigations yet - start one below.')}
             </p>
           )
           : null}
@@ -385,8 +390,8 @@ function InvestigationPicker({
           type='text'
           value={newName}
           onChange={(event) => onNewNameChange(event.target.value)}
-          placeholder='New investigation…'
-          aria-label='New investigation name'
+          placeholder={ui('New investigation…')}
+          aria-label={ui('New investigation name')}
           className={`rp-input min-w-0 flex-1 ${compact ? 'h-11 text-sm' : 'h-8 text-xs'}`}
         />
         <button
@@ -396,7 +401,7 @@ function InvestigationPicker({
             compact ? 'h-11 text-sm' : 'h-8 px-2 text-xs'
           }`}
         >
-          {busy ? '…' : 'Create'}
+          {busy ? '…' : ui('Create')}
         </button>
       </form>
     </>
@@ -412,7 +417,7 @@ function InvestigationPicker({
         className='absolute right-0 z-30 mt-1 w-64 outline-none rounded-[var(--rp-radius)] border border-line bg-surface p-2 shadow-lg'
       >
         <p className='px-1 pb-1 text-xs font-medium uppercase tracking-wide text-ink-3'>
-          Save to investigation
+          {ui('Save to investigation')}
         </p>
         {body}
       </div>
@@ -440,12 +445,12 @@ function InvestigationPicker({
       >
         <div className='flex items-center justify-between gap-2 pb-2'>
           <p className='text-xs font-medium uppercase tracking-wide text-ink-3'>
-            Save to investigation
+            {ui('Save to investigation')}
           </p>
           <button
             type='button'
             onClick={onClose}
-            aria-label='Close'
+            aria-label={ui('Close')}
             className='rp-focus -mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:text-ink'
           >
             <CloseIcon className='h-4 w-4' />
@@ -469,6 +474,7 @@ export function SaveEvidenceButton({
   compact?: boolean
   label?: string
 }) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const [saved, setSaved] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -568,7 +574,7 @@ export function SaveEvidenceButton({
         }`}
         role='status'
       >
-        Saved to {saved}
+        {ui('Saved to {name}', { name: saved })}
       </span>
     )
   }
@@ -586,21 +592,23 @@ export function SaveEvidenceButton({
           <button
             type='button'
             disabled={busy}
-            title={`Save to ${current.name}`}
-            aria-label={`Save to ${current.name}`}
+            title={ui('Save to {value1}', { value1: current.name })}
+            aria-label={ui('Save to {value1}', { value1: current.name })}
             onClick={() => void saveTo(current.id, current.name)}
             className={`rp-btn rp-btn-outline ${sizeClass}`}
           >
-            {busy ? 'Saving…' : (
+            {busy ? ui('Saving…') : (
               <>
                 {icon}
-                <span>Save</span>
+                <span>{ui('Save')}</span>
                 {
                   /* The destination is worth its width on a wide screen; on a
                   * phone it is in the accessible name, the tooltip and the
                   * picker, and the confirmation names it after the save. */
                 }
-                <span className='hidden sm:inline'>to {truncateName(current.name)}</span>
+                <span className='hidden sm:inline'>
+                  {ui('to {name}', { name: truncateName(current.name) })}
+                </span>
               </>
             )}
           </button>
@@ -611,11 +619,11 @@ export function SaveEvidenceButton({
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-haspopup='dialog'
-            aria-label={label === 'Save' ? 'Save to investigation' : undefined}
+            aria-label={label === 'Save' ? ui('Save to investigation') : undefined}
             className={`rp-btn rp-btn-outline ${sizeClass}`}
           >
             {icon}
-            {label}
+            {label === 'Save' ? ui('Save') : label}
           </button>
         )}
       {current
@@ -625,8 +633,8 @@ export function SaveEvidenceButton({
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-haspopup='true'
-            aria-label='Choose a different investigation'
-            title='Choose a different investigation'
+            aria-label={ui('Choose a different investigation')}
+            title={ui('Choose a different investigation')}
             className={`rp-btn rp-btn-outline px-1.5 ${compact ? 'h-7' : 'h-8'}`}
           >
             <ChevronDownIcon className='h-3.5 w-3.5' />
@@ -646,7 +654,7 @@ export function SaveEvidenceButton({
             onCreate={() => void createAndSave()}
             onClose={() => setOpen(false)}
             panelRef={panelRef}
-            ariaLabel='Save to investigation'
+            ariaLabel={ui('Save to investigation')}
           />
         )
         : null}
@@ -665,6 +673,7 @@ export function SaveArtefactButton({
   slug: string
   artefact: { kind: string; title: string; data: unknown }
 }) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const [saved, setSaved] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -756,7 +765,7 @@ export function SaveArtefactButton({
         className='inline-flex items-center gap-1 px-1 text-xs text-[var(--rp-ok-ink)]'
         role='status'
       >
-        Saved to {saved}
+        {ui('Saved to {name}', { name: saved })}
       </span>
     )
   }
@@ -768,16 +777,18 @@ export function SaveArtefactButton({
           <button
             type='button'
             disabled={busy}
-            title={`Save to ${current.name}`}
-            aria-label={`Save to ${current.name}`}
+            title={ui('Save to {value1}', { value1: current.name })}
+            aria-label={ui('Save to {value1}', { value1: current.name })}
             onClick={() => void saveTo(current.id, current.name)}
             className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
           >
-            {busy ? 'Saving…' : (
+            {busy ? ui('Saving…') : (
               <>
                 <SaveIcon className='h-4 w-4 shrink-0' />
-                <span>Save</span>
-                <span className='hidden sm:inline'>to {truncateName(current.name)}</span>
+                <span>{ui('Save')}</span>
+                <span className='hidden sm:inline'>
+                  {ui('to {name}', { name: truncateName(current.name) })}
+                </span>
               </>
             )}
           </button>
@@ -788,12 +799,12 @@ export function SaveArtefactButton({
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-haspopup='dialog'
-            aria-label='Save to investigation'
+            aria-label={ui('Save to investigation')}
             className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
           >
             <SaveIcon className='h-4 w-4 shrink-0' />
-            <span>Save</span>
-            <span className='hidden sm:inline'>to investigation</span>
+            <span>{ui('Save')}</span>
+            <span className='hidden sm:inline'>{ui('to investigation')}</span>
           </button>
         )}
       {current
@@ -803,8 +814,8 @@ export function SaveArtefactButton({
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-haspopup='true'
-            aria-label='Choose a different investigation'
-            title='Choose a different investigation'
+            aria-label={ui('Choose a different investigation')}
+            title={ui('Choose a different investigation')}
             className='rp-btn rp-btn-outline h-8 px-1.5'
           >
             <ChevronDownIcon className='h-3.5 w-3.5' />
@@ -824,7 +835,7 @@ export function SaveArtefactButton({
             onCreate={() => void createAndSave()}
             onClose={() => setOpen(false)}
             panelRef={panelRef}
-            ariaLabel='Save artefact to investigation'
+            ariaLabel={ui('Save artefact to investigation')}
           />
         )
         : null}

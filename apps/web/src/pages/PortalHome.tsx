@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { createContext, useContext, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
@@ -100,6 +101,7 @@ function SectionHeader(
     more?: { href: string; slug: string }
   },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <div className='flex flex-wrap items-end justify-between gap-x-6 gap-y-3'>
       <div className='min-w-0 max-w-3xl'>
@@ -121,7 +123,8 @@ function SectionHeader(
             slug={more.slug}
             className='rp-focus -my-3 inline-flex shrink-0 items-center gap-1 rounded-[var(--rp-radius-btn)] py-3 text-sm font-medium text-[var(--rp-accent-fg)] hover:underline'
           >
-            See all<span aria-hidden='true'>&rarr;</span>
+            {ui('See all')}
+            <span aria-hidden='true'>&rarr;</span>
           </LayoutAnchor>
         )
         : null}
@@ -275,6 +278,7 @@ function ResourceRow(
  * thumbnails never shows a run of empty grey boxes.
  */
 function HomeResourceCard({ slug, resource }: { slug: string; resource: CardResource }) {
+  const { ui } = usePortalLocale()
   const [hasThumbnail, setHasThumbnail] = useState(false)
   const arrows = useContext(CardArrows)
   return (
@@ -331,7 +335,7 @@ function HomeResourceCard({ slug, resource }: { slug: string; resource: CardReso
           >
             <path d={resourceTypeGlyph(resource.type)} />
           </svg>
-          <span className='rp-eyebrow'>{typeLabel(resource.type)}</span>
+          <span className='rp-eyebrow'>{typeLabel(resource.type, ui)}</span>
         </div>
         <div className='relative flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
           <h3 className='rp-display rp-layout-textcard-title rp-clamp-3 break-words text-xl text-ink sm:text-[1.375rem]'>

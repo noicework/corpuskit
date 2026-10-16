@@ -5,10 +5,11 @@ import { Link } from 'react-router-dom'
 import { useAccess } from './AccessProvider.tsx'
 import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
+import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 import { readSafePortalMetadata } from '../api/portal-metadata.ts'
 
 const housePalette = DEFAULT_PALETTES.corpuskit.palette
-const houseBranding: Branding = {
+export const platformBranding: Branding = {
   productName: 'CorpusKit',
   organisation: 'CorpusKit',
   tagline: '',
@@ -39,6 +40,7 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
   failedRead?: boolean
   suspended?: boolean
 }) {
+  const { ui } = usePortalLocale()
   const { state, slug, identityKey, generation, refresh, controller, safeClient } = useAccess()
   const loading = state.status === 'loading'
   const authorityFailed = state.status === 'unavailable' || (failedRead && !suspended)
@@ -57,12 +59,12 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
   }, safeClient)
   const failed = authorityFailed || safe.isError
   const paused = !loading && !failed && (suspended || safe.data?.status === 'suspended')
-  const branding: Branding = safe.data ? { ...safe.data.branding, tagline: '' } : houseBranding
+  const branding: Branding = safe.data ? { ...safe.data.branding, tagline: '' } : platformBranding
   const { scheme: viewerScheme } = useViewerScheme(branding.defaultColourScheme)
   // A portal set to light signs viewers in on light too.
   const scheme = branding.colourScheme === 'light' ? 'light' : viewerScheme
   useBodyTheme(branding, scheme)
-  const name = safe.data?.branding.productName ?? 'This portal'
+  const name = safe.data?.branding.productName ?? ui('This portal')
   const anonymous = state.session?.authenticated === false
   const heading = useRef<HTMLHeadingElement>(null)
   const [profile, setProfile] = useState(false)
@@ -70,16 +72,19 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
     heading.current?.focus()
   }, [loading, failed, safe.data])
   const title = loading
-    ? 'Checking access...'
+    ? ui('Checking access...')
     : failed
-    ? 'Access could not be checked. Try again.'
+    ? ui('Access could not be checked. Try again.')
     : paused
-    ? `${name} is paused`
+    ? ui('{name} is paused', { name })
     : anonymous && slug
-    ? `Sign in to ${name}`
+    ? ui('Sign in to {name}', { name })
     : slug
-    ? `${name} is unavailable`
-    : 'This administration page is unavailable.'
+    ? ui('{name} is unavailable', { name })
+    : ui('This administration page is unavailable.')
+  useEffect(() => {
+    document.title = `${title} | CorpusKit`
+  }, [title])
   return (
     <div
       className='rp-tenant min-h-screen bg-app text-ink'
@@ -90,6 +95,7 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
       <header className='border-b border-line bg-surface'>
         <div className='rp-shell flex min-w-0 flex-wrap items-center justify-between gap-4 py-4'>
           <a className='rp-focus rp-display text-xl' href='/'>CorpusKit</a>
+          <AppLanguageSwitch />
           {state.session?.user
             ? (
               <div className='flex flex-wrap gap-3'>
@@ -99,14 +105,14 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
                   onClick={() => setProfile(!profile)}
                   aria-expanded={profile}
                 >
-                  Profile
+                  {ui('Profile')}
                 </button>
                 <a
                   href='/auth/logout'
                   className='rp-btn rp-btn-ghost'
                   onClick={() => controller.invalidate('sign out')}
                 >
-                  Sign out
+                  {ui('Sign out')}
                 </a>
               </div>
             )
@@ -116,8 +122,8 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
       <main className='rp-shell min-w-0 py-12'>
         {profile && state.session?.user
           ? (
-            <section className='mb-8 break-words' aria-label='Profile'>
-              <h2 className='rp-display text-xl'>Your organisation account</h2>
+            <section className='mb-8 break-words' aria-label={ui('Profile')}>
+              <h2 className='rp-display text-xl'>{ui('Your organisation account')}</h2>
               <p>{state.session.user.email}</p>
             </section>
           )
@@ -131,14 +137,14 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
         </h1>
         <p className='mt-4 max-w-prose text-ink-2' role='status'>
           {loading
-            ? 'Please wait while we check this page.'
+            ? ui('Please wait while we check this page.')
             : failed
-            ? 'Try again to check your current access.'
+            ? ui('Try again to check your current access.')
             : paused
-            ? 'This portal is temporarily paused. Contact your portal administrator for help.'
+            ? ui('This portal is temporarily paused. Contact your portal administrator for help.')
             : anonymous
-            ? 'Use your organisation account to continue.'
-            : 'You cannot open this portal with your current account.'}
+            ? ui('Use your organisation account to continue.')
+            : ui('You cannot open this portal with your current account.')}
         </p>
         <div className='mt-6 flex flex-wrap gap-3'>
           {failed
@@ -150,7 +156,7 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
                   void refresh().catch(() => {})
                 }}
               >
-                Try again
+                {ui('Try again')}
               </button>
             )
             : null}
@@ -161,7 +167,7 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
                 className='rp-btn rp-btn-primary whitespace-normal text-center'
                 href={microsoftLoginUrl()}
               >
-                Sign in with Microsoft
+                {ui('Sign in with Microsoft')}
               </a>
             )
             : null}
@@ -176,7 +182,7 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
               </a>
             )
             : null}
-          <Link className='rp-btn rp-btn-outline' to='/'>Back to portals</Link>
+          <Link className='rp-btn rp-btn-outline' to='/'>{ui('Back to portals')}</Link>
         </div>
       </main>
     </div>

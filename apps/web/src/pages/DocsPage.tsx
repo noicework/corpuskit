@@ -1,3 +1,5 @@
+import { type Locale, usePortalLocale } from '../lib/portal-locale.tsx'
+import { localiseHelpPage } from '../lib/help-pages-ja.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useOutletContext, useParams } from 'react-router-dom'
@@ -59,7 +61,7 @@ function DotBullet({ children, small }: { children: ReactNode; small?: boolean }
   )
 }
 
-function Markdown({
+export function HelpMarkdown({
   text,
   citation,
 }: {
@@ -213,6 +215,8 @@ type AnswerState = {
 }
 
 function DocsAssistant({ slug }: { slug: string }) {
+  const locale = usePortalLocale()
+  const { ui, language } = locale
   const access = useAccess()
   const context = access.controller.context
   const canAsk = () =>
@@ -342,24 +346,24 @@ function DocsAssistant({ slug }: { slug: string }) {
 
   return (
     <section
-      aria-label='Ask the documentation'
+      aria-label={ui('Ask the documentation')}
       className='rp-card overflow-hidden p-5 sm:p-6'
     >
       <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
-        <h2 className='font-display text-lg font-semibold text-ink'>How do I…?</h2>
-        <p className='text-xs text-ink-3'>Answers drawn only from this documentation</p>
+        <h2 className='font-display text-lg font-semibold text-ink'>{ui('How do I…?')}</h2>
+        <p className='text-xs text-ink-3'>{ui('Answers drawn only from this documentation')}</p>
       </div>
       <form onSubmit={handleSubmit} className='mt-3'>
         <div className='flex flex-col gap-2 sm:flex-row'>
           <label htmlFor='docs-ask' className='sr-only'>
-            Ask a question about using the portal
+            {ui('Ask a question about using the portal')}
           </label>
           <input
             id='docs-ask'
             type='search'
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder='e.g. How do I ask a question and see its sources?'
+            placeholder={ui('e.g. How do I ask a question and see its sources?')}
             className='rp-input h-11 min-w-0 flex-1'
           />
           {streaming
@@ -369,7 +373,7 @@ function DocsAssistant({ slug }: { slug: string }) {
                 onClick={stop}
                 className='rp-btn rp-btn-outline h-11 shrink-0'
               >
-                Stop
+                {ui('Stop')}
               </button>
             )
             : (
@@ -378,14 +382,18 @@ function DocsAssistant({ slug }: { slug: string }) {
                 disabled={draft.trim().length === 0}
                 className='rp-btn rp-btn-primary h-11 shrink-0'
               >
-                Ask
+                {ui('Ask')}
               </button>
             )}
         </div>
       </form>
 
       <LiveStatus
-        message={streaming ? 'Answer in progress' : answer && !answer.pending ? 'Answer ready' : ''}
+        message={streaming
+          ? ui('Answer in progress')
+          : answer && !answer.pending
+          ? ui('Answer ready')
+          : ''}
       />
 
       {answer
@@ -401,7 +409,7 @@ function DocsAssistant({ slug }: { slug: string }) {
                     className='h-1.5 w-1.5 animate-pulse rounded-full'
                     style={{ backgroundColor: 'var(--rp-accent)' }}
                   />
-                  {stage}
+                  {ui(stage)}
                 </p>
               )
               : null}
@@ -416,12 +424,12 @@ function DocsAssistant({ slug }: { slug: string }) {
                     color: 'var(--rp-bad-ink)',
                   }}
                 >
-                  {answer.error}
+                  {locale.error(answer.error, 'The help assistant could not answer.')}
                 </div>
               )
               : answer.text.length > 0
               ? (
-                <Markdown
+                <HelpMarkdown
                   text={normaliseAnswerBullets(answer.text)}
                   citation={citationNode(answer.citations)}
                 />
@@ -434,7 +442,7 @@ function DocsAssistant({ slug }: { slug: string }) {
                     <span />
                     <span />
                   </span>
-                  <span className='sr-only'>Working</span>
+                  <span className='sr-only'>{ui('Working')}</span>
                 </p>
               )
               : null}
@@ -460,7 +468,9 @@ function DocsAssistant({ slug }: { slug: string }) {
                         >
                           {citation.index}
                         </span>
-                        <span className='max-w-[12rem] truncate'>{citation.title}</span>
+                        <span className='max-w-[12rem] truncate'>
+                          {page ? localiseHelpPage(page, language).title : citation.title}
+                        </span>
                       </>
                     )
                     return page
@@ -490,12 +500,13 @@ function DocsAssistant({ slug }: { slug: string }) {
 // ---------------------------------------------------------------------------
 
 function DocsNav({ slug, activeId }: { slug: string; activeId: string }) {
+  const { ui, language } = usePortalLocale()
   const groups = useMemo(() => docPagesByCategory(), [])
   return (
-    <nav aria-label='Documentation' className='space-y-5'>
+    <nav aria-label={ui('Documentation')} className='space-y-5'>
       {groups.map((group) => (
         <div key={group.category}>
-          <p className='rp-eyebrow px-2 text-ink-3'>{group.category}</p>
+          <p className='rp-eyebrow px-2 text-ink-3'>{ui(group.category)}</p>
           <ul className='mt-1.5 space-y-0.5'>
             {group.pages.map((page) => {
               const isActive = page.id === activeId
@@ -511,7 +522,7 @@ function DocsNav({ slug, activeId }: { slug: string; activeId: string }) {
                     }`}
                     style={isActive ? { backgroundColor: 'var(--rp-wash)' } : {}}
                   >
-                    {page.title}
+                    {localiseHelpPage(page, language).title}
                   </Link>
                 </li>
               )
@@ -534,33 +545,35 @@ function sectionAnchor(heading: string): string {
 /** Pages that also exist as a designed surface outside Help: page id to route. */
 const ILLUSTRATED_PAGES: Record<string, string> = { 'how-this-works': 'how-it-works' }
 
-function Article({ page, slug }: { page: DocPage; slug: string }) {
+export function HelpArticle({ page, slug }: { page: DocPage; slug: string }) {
+  const { ui, language } = usePortalLocale()
+  const translated = localiseHelpPage(page, language)
   const illustrated = ILLUSTRATED_PAGES[page.id]
   return (
     <article className='rp-measure'>
       <header>
         <h1 className='font-display text-3xl font-semibold tracking-tight text-ink'>
-          {page.title}
+          {localiseHelpPage(page, language).title}
         </h1>
-        <p className='mt-2 text-base leading-relaxed text-ink-2'>{page.summary}</p>
+        <p className='mt-2 text-base leading-relaxed text-ink-2'>{translated.summary}</p>
         {illustrated
           ? (
             <Link to={`/t/${slug}/${illustrated}`} className='rp-btn rp-btn-outline mt-4'>
-              See the illustrated page, with the flow diagram and live figures
+              {ui('See the illustrated page, with the flow diagram and live figures')}
             </Link>
           )
           : null}
       </header>
       <div className='mt-8 space-y-8'>
-        {page.sections.map((section) => (
+        {translated.sections.map((section, index) => (
           <section
-            key={section.heading}
-            id={sectionAnchor(section.heading)}
+            key={page.sections[index]!.heading}
+            id={sectionAnchor(page.sections[index]!.heading)}
             className='scroll-mt-24'
           >
             <h2 className='font-display text-xl font-semibold text-ink'>{section.heading}</h2>
             <div className='mt-3'>
-              <Markdown text={section.body} />
+              <HelpMarkdown text={section.body} />
             </div>
           </section>
         ))}
@@ -574,19 +587,20 @@ function Article({ page, slug }: { page: DocPage; slug: string }) {
 // obvious to anyone reading Help (D1-21).
 // ---------------------------------------------------------------------------
 
-function buildLine(build: { sha: string; builtAt: string }): string {
+function buildLine(build: { sha: string; builtAt: string }, locale: Locale): string {
   const when = new Date(build.builtAt)
-  const stamp = Number.isNaN(when.getTime()) ? build.builtAt : when.toLocaleString('en-AU', {
+  const stamp = Number.isNaN(when.getTime()) ? build.builtAt : locale.date(when, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   })
-  return `Portal build ${build.sha} - built ${stamp}`
+  return locale.ui('Portal build {sha} - built {date}', { sha: build.sha, date: stamp })
 }
 
 function BuildStamp() {
+  const locale = usePortalLocale()
   const { data } = useQuery({
     queryKey: ['health'],
     queryFn: getHealth,
@@ -594,7 +608,9 @@ function BuildStamp() {
     retry: false,
   })
   if (!data) return null
-  const text = data.build ? buildLine(data.build) : `Portal build ${data.version}`
+  const text = data.build
+    ? buildLine(data.build, locale)
+    : locale.ui('Portal build {version}', { version: data.version })
   return (
     <p className='mt-10 border-t border-line pt-4 text-xs text-ink-3' data-testid='build-stamp'>
       {text}
@@ -607,6 +623,7 @@ function BuildStamp() {
 // ---------------------------------------------------------------------------
 
 export function DocsPage() {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const { config } = useOutletContext<TenantOutletContext>()
   const { pageId } = useParams<{ pageId: string }>()
@@ -618,7 +635,7 @@ export function DocsPage() {
   if (!activePage) {
     return (
       <main className='rp-shell py-12'>
-        <p className='text-sm text-ink-2'>No documentation is available.</p>
+        <p className='text-sm text-ink-2'>{ui('No documentation is available.')}</p>
       </main>
     )
   }
@@ -626,25 +643,27 @@ export function DocsPage() {
   return (
     <main className='rp-shell py-6 sm:py-8 lg:py-10'>
       <div className='mb-6'>
-        <p className='rp-eyebrow text-ink-3'>Help</p>
+        <p className='rp-eyebrow text-ink-3'>{ui('Help')}</p>
         <h1 className='mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl'>
-          {config.branding.productName} documentation
+          {ui('{name} documentation', { name: config.branding.productName })}
         </h1>
         <p className='mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-2'>
-          Everything you need to use the portal - and a help assistant that answers your questions
-          from these pages only.
+          {ui(
+            'Everything you need to use the portal - and a help assistant that answers your questions from these pages only.',
+          )}
         </p>
         <p className='mt-2 max-w-2xl text-sm leading-relaxed text-ink-2'>
-          New here?{' '}
+          {ui('New here?')}{' '}
           <Link
             to={`/t/${slug}/how-it-works`}
             className='rp-focus rounded-[var(--rp-radius-btn)] font-medium underline underline-offset-2'
             style={{ color: 'var(--rp-accent-fg)' }}
           >
-            Read how this works
+            {ui('Read how this works')}
           </Link>{' '}
-          - where the content comes from, how a question is answered and what is checked before you
-          see it.
+          {ui(
+            '- where the content comes from, how a question is answered and what is checked before you see it.',
+          )}
         </p>
       </div>
 
@@ -662,7 +681,7 @@ export function DocsPage() {
           aria-expanded={navOpen}
           className='rp-btn rp-btn-outline h-10 w-full justify-between'
         >
-          <span>Browse the documentation</span>
+          <span>{ui('Browse the documentation')}</span>
           <svg
             viewBox='0 0 20 20'
             fill='none'
@@ -692,7 +711,7 @@ export function DocsPage() {
           </div>
         </aside>
         <div className='min-w-0'>
-          <Article page={activePage} slug={slug} />
+          <HelpArticle page={activePage} slug={slug} />
           <BuildStamp />
         </div>
       </div>

@@ -1,3 +1,8 @@
+import { labelsetDisplayTitle } from '../../lib/labelset-display.ts'
+import { messageFor } from './shared.ts'
+import type { Locale } from '../../lib/portal-locale.tsx'
+import { englishUi } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -57,64 +62,93 @@ export function labelsetIdFrom(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
-export function validate(draft: Draft): string[] {
+export function validate(draft: Draft, ui: Locale['ui'] = englishUi): string[] {
   const problems: string[] = []
   const title = draft.title.trim()
-  if (!title) problems.push('The set needs a name.')
-  if (title.length > TITLE_MAX) problems.push(`The name is longer than ${TITLE_MAX} characters.`)
-  if (draft.labels.length === 0) problems.push('Add at least one label.')
+  if (!title) problems.push(ui('The set needs a name.'))
+  if (title.length > TITLE_MAX) {
+    problems.push(ui('The name is longer than {TITLE_MAX} characters.', { TITLE_MAX: TITLE_MAX }))
+  }
+  if (draft.labels.length === 0) problems.push(ui('Add at least one label.'))
   if (draft.labels.length > LABELS_MAX) {
-    problems.push(`A set can hold at most ${LABELS_MAX} labels.`)
+    problems.push(ui('A set can hold at most {LABELS_MAX} labels.', { LABELS_MAX: LABELS_MAX }))
   }
   const seen = new Set<string>()
   draft.labels.forEach((label, index) => {
     const name = label.title.trim()
     const n = index + 1
     if (!name) {
-      problems.push(`Label ${n} has no name.`)
+      problems.push(ui('Label {n} has no name.', { n: n }))
       return
     }
     if (name.length > LABEL_MAX) {
-      problems.push(`Label "${name}" is longer than ${LABEL_MAX} characters.`)
+      problems.push(
+        ui('Label "{name}" is longer than {LABEL_MAX} characters.', {
+          name: name,
+          LABEL_MAX: LABEL_MAX,
+        }),
+      )
     }
     if (label.text.trim().length > TEXT_MAX) {
-      problems.push(`The definition of "${name}" is longer than ${TEXT_MAX} characters.`)
+      problems.push(
+        ui('The definition of "{name}" is longer than {TEXT_MAX} characters.', {
+          name: name,
+          TEXT_MAX: TEXT_MAX,
+        }),
+      )
     }
     const key = name.toLowerCase()
-    if (seen.has(key)) problems.push(`Label "${name}" appears more than once.`)
+    if (seen.has(key)) problems.push(ui('Label "{name}" appears more than once.', { name: name }))
     seen.add(key)
   })
   return problems
 }
 
 /** Validation for a set that does not exist yet: the derived id must be usable and free. */
-export function validateNew(draft: Draft, existingIds: string[]): string[] {
-  const problems = validate(draft)
+export function validateNew(
+  draft: Draft,
+  existingIds: string[],
+  ui: Locale['ui'] = englishUi,
+): string[] {
+  const problems = validate(draft, ui)
   const title = draft.title.trim()
   if (title) {
     const id = labelsetIdFrom(title)
-    if (!id) problems.push('The name needs at least one letter or digit.')
+    if (!id) problems.push(ui('The name needs at least one letter or digit.'))
     else if (existingIds.includes(id)) {
-      problems.push(`A set with the id "${id}" already exists - choose another name.`)
+      problems.push(
+        ui('A set with the id "{id}" already exists - choose another name.', { id: id }),
+      )
     }
   }
   return problems
 }
 
-export function resultMessage(title: string, result: LabelsetUpdateResult): string {
+export function resultMessage(
+  title: string,
+  result: LabelsetUpdateResult,
+  ui: Locale['ui'] = englishUi,
+): string {
   if (result.agents.length === 0) {
-    return `Saved "${title}". No labeller carries this set, so no agent was restarted.`
+    return ui('Saved "{title}". No labeller carries this set, so no agent was restarted.', {
+      title: title,
+    })
   }
   const names = result.agents
-    .map((a) => `${a.newTitle} (previous agent ${a.previousId} removed)`)
+    .map((a) =>
+      ui('{value1} (previous agent {value2} removed)', { value1: a.newTitle, value2: a.previousId })
+    )
     .join(', ')
-  const noun = result.agents.length === 1 ? 'labeller' : 'labellers'
-  return `Saved "${title}". Re-instantiated ${result.agents.length} ${noun} for new resources ` +
-    `only: ${names}.`
+  return ui(
+    result.agents.length === 1
+      ? 'Saved "{title}". Re-instantiated {count} labeller for new resources only: {names}.'
+      : 'Saved "{title}". Re-instantiated {count} labellers for new resources only: {names}.',
+    { title, count: result.agents.length, names },
+  )
 }
 
-export function createdMessage(title: string): string {
-  return `Created "${title}". No labeller was created or restarted.`
+export function createdMessage(title: string, ui: Locale['ui'] = englishUi): string {
+  return ui('Created "{title}". No labeller was created or restarted.', { title: title })
 }
 
 function CardinalitySwitch({
@@ -126,6 +160,7 @@ function CardinalitySwitch({
   disabled: boolean
   onChange: (multiple: boolean) => void
 }) {
+  const { ui } = usePortalLocale()
   const option = (value: boolean, label: string) => (
     <button
       type='button'
@@ -143,8 +178,8 @@ function CardinalitySwitch({
   )
   return (
     <div className='inline-flex rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
-      {option(false, 'Single')}
-      {option(true, 'Multiple')}
+      {option(false, ui('Single'))}
+      {option(true, ui('Multiple'))}
     </div>
   )
 }
@@ -164,6 +199,8 @@ function LabelRow({
   onChange: (patch: Partial<DraftLabel>) => void
   onRemove: () => void
 }) {
+  const { ui } = usePortalLocale()
+
   const nameId = `ls-${setId}-label-${index}`
   const textId = `ls-${setId}-text-${index}`
   return (
@@ -173,8 +210,8 @@ function LabelRow({
       <input
         id={nameId}
         className='rp-input'
-        placeholder='Label'
-        aria-label={`Label ${index + 1} name`}
+        placeholder={ui('Label')}
+        aria-label={ui('Label {value1} name', { value1: index + 1 })}
         value={label.title}
         maxLength={LABEL_MAX}
         disabled={disabled}
@@ -185,8 +222,8 @@ function LabelRow({
         id={textId}
         className='rp-input'
         rows={2}
-        placeholder='Definition'
-        aria-label={`Definition of label ${label.title.trim() || index + 1}`}
+        placeholder={ui('Definition')}
+        aria-label={ui('Definition of label {value1}', { value1: label.title.trim() || index + 1 })}
         value={label.text}
         maxLength={TEXT_MAX}
         disabled={disabled}
@@ -199,7 +236,7 @@ function LabelRow({
         className='rp-btn rp-btn-ghost h-[calc(2.25rem*var(--rp-density-ctl,1))] shrink-0 justify-self-end px-2.5 text-xs md:justify-self-auto'
         style={{ color: 'var(--rp-bad-ink)' }}
       >
-        Remove
+        {ui('Remove')}
       </button>
     </div>
   )
@@ -220,6 +257,8 @@ function DraftFields({
   /** For a set that does not exist yet: the derived id, shown once a name is typed. */
   idPreview?: string
 }) {
+  const { ui } = usePortalLocale()
+
   const update = (patch: Partial<Draft>) => onChange({ ...draft, ...patch })
   const updateLabel = (index: number, patch: Partial<DraftLabel>) =>
     update({ labels: draft.labels.map((l, i) => i === index ? { ...l, ...patch } : l) })
@@ -232,7 +271,7 @@ function DraftFields({
             htmlFor={`ls-${setId}-title`}
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Name
+            {ui('Name')}
           </label>
           <input
             id={`ls-${setId}-title`}
@@ -241,19 +280,20 @@ function DraftFields({
             maxLength={TITLE_MAX}
             disabled={busy}
             autoComplete='off'
-            placeholder={idPreview !== undefined ? 'e.g. Region' : undefined}
+            placeholder={idPreview !== undefined ? ui('e.g. Region') : undefined}
             onChange={(e) => update({ title: e.target.value })}
           />
           {idPreview
             ? (
               <p className='mt-1 text-xs text-ink-3'>
-                Id: <span className='font-mono'>{idPreview}</span>
+                {ui('Id: ')}
+                <span className='font-mono'>{idPreview}</span>
               </p>
             )
             : null}
         </div>
         <div>
-          <p className='mb-1.5 block text-sm font-medium text-ink'>Values per resource</p>
+          <p className='mb-1.5 block text-sm font-medium text-ink'>{ui('Values per resource')}</p>
           <CardinalitySwitch
             multiple={draft.multiple}
             disabled={busy}
@@ -264,15 +304,17 @@ function DraftFields({
 
       <div className='mt-5'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
-          <p className='text-sm font-medium text-ink'>Labels and definitions</p>
+          <p className='text-sm font-medium text-ink'>{ui('Labels and definitions')}</p>
           <span className='rp-badge'>
-            {draft.labels.length} of {LABELS_MAX}
+            {draft.labels.length}
+            {ui(' of ')}
+            {LABELS_MAX}
           </span>
         </div>
 
         <div className='mt-3 hidden grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] gap-2 md:grid'>
-          <p className='rp-eyebrow text-ink-3'>Label</p>
-          <p className='rp-eyebrow text-ink-3'>Definition</p>
+          <p className='rp-eyebrow text-ink-3'>{ui('Label')}</p>
+          <p className='rp-eyebrow text-ink-3'>{ui('Definition')}</p>
           <span aria-hidden='true' />
         </div>
 
@@ -288,7 +330,7 @@ function DraftFields({
               onRemove={() => update({ labels: draft.labels.filter((_, i) => i !== index) })}
             />
           ))}
-          {draft.labels.length === 0 && <p className='text-sm text-ink-3'>No labels.</p>}
+          {draft.labels.length === 0 && <p className='text-sm text-ink-3'>{ui('No labels.')}</p>}
         </div>
 
         <button
@@ -297,7 +339,7 @@ function DraftFields({
           onClick={() => update({ labels: [...draft.labels, { title: '', text: '' }] })}
           className='rp-btn rp-btn-outline mt-3'
         >
-          Add label
+          {ui('Add label')}
         </button>
       </div>
     </>
@@ -305,6 +347,8 @@ function DraftFields({
 }
 
 function ProblemList({ problems }: { problems: string[] }) {
+  const { ui } = usePortalLocale()
+
   if (problems.length === 0) return null
   return (
     <div
@@ -315,7 +359,7 @@ function ProblemList({ problems }: { problems: string[] }) {
         color: 'var(--rp-warn-ink)',
       }}
     >
-      <p className='font-medium'>Before this can be saved:</p>
+      <p className='font-medium'>{ui('Before this can be saved:')}</p>
       <ul className='mt-1 list-disc space-y-0.5 pl-5'>
         {problems.map((p, i) => <li key={i}>{p}</li>)}
       </ul>
@@ -341,6 +385,8 @@ function LabelsetEditor({
   onSaved: () => Promise<unknown>
   organisation: string
 }) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -351,7 +397,7 @@ function LabelsetEditor({
 
   const baseline = draftFrom(labelset)
   const dirty = !sameDraft(draft, baseline)
-  const problems = validate(draft)
+  const problems = validate(draft, ui)
   const canSave = dirty && problems.length === 0 && !saving
 
   const onSave = async () => {
@@ -360,18 +406,27 @@ function LabelsetEditor({
     setPrevious(null)
     const body = normalise(draft)
     try {
-      const result = await runExplicit(`Save label set ${body.title}`, async (access) => {
-        const saved = await updateAdminLabelset(slug, access, labelset.id, body)
-        if (saved?.ok !== true || !Array.isArray(saved.agents)) throw new AdminAccessError()
-        return saved
-      })
+      const result = await runExplicit(
+        ui('Save label set {title}', { title: body.title }),
+        async (access) => {
+          const saved = await updateAdminLabelset(slug, access, labelset.id, body)
+          if (saved?.ok !== true || !Array.isArray(saved.agents)) throw new AdminAccessError()
+          return saved
+        },
+      )
       assertCurrent()
       if (result === undefined) return
-      setMessage({ tone: 'ok', text: resultMessage(body.title, result) })
+      setMessage(messageFor('ok', ({ ui }) => resultMessage(body.title, result, ui)))
       onDraft(null)
       await onSaved()
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save this label set.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not save this label set.', localError),
+        ),
+      )
       if (err instanceof LabelsetSaveError && err.previous) setPrevious(err.previous)
     } finally {
       setSaving(false)
@@ -385,12 +440,12 @@ function LabelsetEditor({
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='min-w-0'>
           <p className='text-sm font-semibold text-ink'>
-            {prettyLabel(labelset.title, organisation)}
+            {prettyLabel(labelsetDisplayTitle(labelset, ui), organisation)}
           </p>
           <p className='mt-0.5 font-mono text-xs text-ink-3'>{labelset.id}</p>
         </div>
         <span className='rp-badge'>
-          {labelset.kind === 'PARAGRAPHS' ? 'Passage level' : 'Document level'}
+          {labelset.kind === 'PARAGRAPHS' ? ui('Passage level') : ui('Document level')}
         </span>
       </div>
 
@@ -405,7 +460,7 @@ function LabelsetEditor({
       {previous !== null && (
         <details className='mt-3 text-sm text-ink-2'>
           <summary className='cursor-pointer font-medium text-ink'>
-            Previous agent configuration - keep this to restore the labeller by hand
+            {ui('Previous agent configuration - keep this to restore the labeller by hand')}
           </summary>
           <pre className='mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[var(--rp-radius)] bg-surface-2 p-3 font-mono text-xs text-ink-2'>
             {JSON.stringify(previous, null, 2)}
@@ -417,7 +472,7 @@ function LabelsetEditor({
         <div className='sticky bottom-0 z-10 mt-4 border-t border-line bg-surface py-3'>
           <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3'>
             <p className='text-xs text-ink-3'>
-              Saving restarts this set's labellers for new resources.
+              {ui("Saving restarts this set's labellers for new resources.")}
             </p>
             <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
               <button
@@ -430,7 +485,7 @@ function LabelsetEditor({
                 }}
                 className='rp-btn rp-btn-outline w-full sm:w-auto'
               >
-                Discard
+                {ui('Discard')}
               </button>
               <button
                 type='button'
@@ -438,7 +493,7 @@ function LabelsetEditor({
                 onClick={() => void onSave()}
                 className='rp-btn rp-btn-primary w-full sm:w-auto'
               >
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? ui('Saving…') : ui('Save')}
               </button>
             </div>
           </div>
@@ -465,6 +520,8 @@ function NewLabelsetForm({
   /** Absent for the first set, where there is nothing to go back to. */
   onCancel?: () => void
 }) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -474,7 +531,7 @@ function NewLabelsetForm({
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
-  const problems = validateNew(draft, existingIds)
+  const problems = validateNew(draft, existingIds, ui)
   const id = labelsetIdFrom(draft.title)
   const canCreate = problems.length === 0 && !busy
 
@@ -483,16 +540,25 @@ function NewLabelsetForm({
     setMessage(null)
     const body = normalise(draft)
     try {
-      const created = await runExplicit(`Create label set ${body.title}`, async (access) => {
-        const result = await createAdminLabelset(slug, access, body)
-        if (result?.ok !== true || typeof result.id !== 'string') throw new AdminAccessError()
-        return result
-      })
+      const created = await runExplicit(
+        ui('Create label set {title}', { title: body.title }),
+        async (access) => {
+          const result = await createAdminLabelset(slug, access, body)
+          if (result?.ok !== true || typeof result.id !== 'string') throw new AdminAccessError()
+          return result
+        },
+      )
       assertCurrent()
       if (created === undefined) return
       await onCreated(created.id, body.title)
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not create this label set.') })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not create this label set.', localError),
+        ),
+      )
     } finally {
       setBusy(false)
     }
@@ -502,14 +568,14 @@ function NewLabelsetForm({
     <div className='min-w-0'>
       {onCancel && (
         <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
-          <p className='text-sm font-semibold text-ink'>New label set</p>
+          <p className='text-sm font-semibold text-ink'>{ui('New label set')}</p>
           <button
             type='button'
             disabled={busy}
             onClick={onCancel}
             className='rp-btn rp-btn-ghost h-8 px-2.5 text-xs'
           >
-            Cancel
+            {ui('Cancel')}
           </button>
         </div>
       )}
@@ -536,7 +602,7 @@ function NewLabelsetForm({
           onClick={() => void onSubmit()}
           className='rp-btn rp-btn-primary w-full sm:w-auto'
         >
-          {busy ? 'Creating…' : 'Create label set'}
+          {busy ? ui('Creating…') : ui('Create label set')}
         </button>
       </div>
     </div>
@@ -559,6 +625,8 @@ function LabelsetsPanelContent({
   slug: string
   organisation?: string
 }) {
+  const { ui } = usePortalLocale()
+
   const authority = useAccess()
   const context = authority.controller.context
   const access = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
@@ -598,7 +666,7 @@ function LabelsetsPanelContent({
   const onCreated = async (id: string, title: string) => {
     await refresh()
     authority.controller.assertCurrent(context)
-    setNotice({ tone: 'ok', text: createdMessage(title) })
+    setNotice(messageFor('ok', ({ ui }) => createdMessage(title, ui)))
     setSelectedId(id)
     setCreating(false)
   }
@@ -610,7 +678,7 @@ function LabelsetsPanelContent({
   }
 
   return (
-    <section aria-label='Label sets' className='mt-4'>
+    <section aria-label={ui('Label sets')} className='mt-4'>
       {isLoading && (
         <div className='grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
           <div className='space-y-2'>
@@ -623,14 +691,14 @@ function LabelsetsPanelContent({
 
       {isError && (
         <ErrorCard
-          message='Could not load the label sets.'
+          message={ui('Could not load the label sets.')}
           onRetry={() => void refetch()}
         />
       )}
 
       {labelsets && labelsets.length === 0 && (
         <>
-          <p className='text-sm text-ink-2'>No label sets yet.</p>
+          <p className='text-sm text-ink-2'>{ui('No label sets yet.')}</p>
           <div className='mt-3'>
             <NewLabelsetForm
               slug={slug}
@@ -653,10 +721,10 @@ function LabelsetsPanelContent({
               aria-pressed={creating}
               className={`rp-btn w-full ${creating ? 'rp-btn-primary' : 'rp-btn-outline'}`}
             >
-              New label set
+              {ui('New label set')}
             </button>
             <ul
-              aria-label='Label sets'
+              aria-label={ui('Label sets')}
               className='rp-no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 md:mx-0 md:flex-col md:overflow-visible md:px-0'
             >
               {labelsets.map((ls) => {
@@ -675,22 +743,22 @@ function LabelsetsPanelContent({
                     >
                       <span className='flex items-center gap-2'>
                         <span className='truncate text-sm font-medium'>
-                          {prettyLabel(ls.title, organisation)}
+                          {prettyLabel(labelsetDisplayTitle(ls, ui), organisation)}
                         </span>
                         {dirtyIds.has(ls.id) && (
                           <span
                             className='h-1.5 w-1.5 shrink-0 rounded-full'
                             style={{ background: 'var(--rp-warn-ink)' }}
-                            aria-label='Unsaved changes'
+                            aria-label={ui('Unsaved changes')}
                           />
                         )}
                       </span>
                       <span className='mt-0.5 block whitespace-nowrap text-xs text-ink-3 md:whitespace-normal'>
                         <span className='font-mono'>{ls.id}</span>
                         {' · '}
-                        {ls.multiple ? 'Multiple' : 'Single'}
+                        {ls.multiple ? ui('Multiple') : ui('Single')}
                         {' · '}
-                        {ls.labels.length} {ls.labels.length === 1 ? 'label' : 'labels'}
+                        {ls.labels.length} {ls.labels.length === 1 ? ui('label') : ui('labels')}
                       </span>
                     </button>
                   </li>

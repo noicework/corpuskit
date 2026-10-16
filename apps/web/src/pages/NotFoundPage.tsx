@@ -1,4 +1,8 @@
+import { platformBranding } from '../components/PortalAccessGate.tsx'
+import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 import { Link, useParams } from 'react-router-dom'
+import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
+import { useEffect } from 'react'
 
 // ---------------------------------------------------------------------------
 // Not-found pages - the catch-all for any route the app does not recognise.
@@ -15,6 +19,7 @@ import { Link, useParams } from 'react-router-dom'
 
 /** Tenant-scoped 404 - rendered inside TenantLayout's outlet, keeps the portal chrome. */
 export function NotFoundPage() {
+  const { ui } = usePortalLocale()
   const { slug } = useParams<{ slug: string }>()
   const base = slug ? `/t/${slug}` : '/'
   const shortcuts = [
@@ -26,46 +31,60 @@ export function NotFoundPage() {
   ]
 
   return (
-    <div className='mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-4 py-16 text-center'>
-      <p className='rp-eyebrow text-ink-3'>Error 404</p>
-      <h1 className='mt-3 font-display text-2xl text-ink sm:text-3xl'>Page not found</h1>
+    <main className='mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-4 py-16 text-center'>
+      <p className='rp-eyebrow text-ink-3'>{ui('Error 404')}</p>
+      <h1 className='mt-3 font-display text-2xl text-ink sm:text-3xl'>{ui('Page not found')}</h1>
       <p className='mt-3 text-sm leading-relaxed text-ink-2'>
-        We could not find that page in this portal. It may have moved, or the link you followed may
-        be out of date.
+        {ui(
+          'We could not find that page in this portal. It may have moved, or the link you followed may be out of date.',
+        )}
       </p>
       <Link to={base} className='rp-btn rp-btn-primary mt-6'>
-        Back to Explore
+        {ui('Back to Explore')}
       </Link>
       <div className='mt-8 w-full border-t border-line pt-5'>
         <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-          Or jump to
+          {ui('Or jump to')}
         </p>
         <div className='mt-3 flex flex-wrap justify-center gap-2'>
           {shortcuts.map((shortcut) => (
             <Link key={shortcut.label} to={shortcut.to} className='rp-chip'>
-              {shortcut.label}
+              {ui(shortcut.label)}
             </Link>
           ))}
         </div>
       </div>
-    </div>
+    </main>
   )
 }
 
 /** Root-level 404 - a standalone full-screen fallback for paths outside any portal. */
 export function RootNotFound() {
+  const { ui } = usePortalLocale()
+  useEffect(() => {
+    document.title = `${ui('Page not found')} | CorpusKit`
+  }, [ui])
+  const { scheme } = useViewerScheme()
+  useBodyTheme(platformBranding, scheme)
   return (
-    <div className='flex min-h-screen items-center justify-center bg-app p-6'>
+    <main
+      className='rp-tenant flex min-h-screen items-center justify-center bg-app p-6 text-ink'
+      style={tenantThemeVars(platformBranding, scheme)}
+      data-platform-scheme={scheme}
+    >
       <div className='rp-card max-w-md p-6 text-center'>
-        <p className='rp-eyebrow text-ink-3'>Error 404</p>
-        <h1 className='mt-3 font-display text-xl text-ink'>Page not found</h1>
+        <div className='mb-6 flex justify-center'>
+          <AppLanguageSwitch />
+        </div>
+        <p className='rp-eyebrow text-ink-3'>{ui('Error 404')}</p>
+        <h1 className='mt-3 font-display text-xl text-ink'>{ui('Page not found')}</h1>
         <p className='mt-2 text-sm text-ink-2'>
-          We could not find that page. It may have moved, or the link may be out of date.
+          {ui('We could not find that page. It may have moved, or the link may be out of date.')}
         </p>
         <Link to='/' className='rp-btn rp-btn-primary mt-4'>
-          Back to portals
+          {ui('Back to portals')}
         </Link>
       </div>
-    </div>
+    </main>
   )
 }

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { assessCurrency, type CurrencySource } from '../lib/currency.ts'
 
 export interface CurrencyNoteProps {
@@ -43,14 +44,25 @@ function CalendarGlyph() {
  * theme-token only so it reads correctly in light and dark.
  */
 export function CurrencyNote({ sources, className }: CurrencyNoteProps) {
+  const { ui } = usePortalLocale()
   const currency = assessCurrency(sources)
+  const span = currency.span
   if (!currency.recencyLabel) return null
 
   return (
     <div className={className}>
       <p className='flex items-center gap-1.5 text-xs text-ink-3'>
         <CalendarGlyph />
-        <span className='tabular-nums'>{currency.recencyLabel}</span>
+        <span className='tabular-nums'>
+          {span
+            ? ui(
+              span.earliest === span.latest
+                ? 'Most recent cited source: {latest}'
+                : 'Cited sources: {earliest}-{latest}',
+              { earliest: span.earliest, latest: span.latest },
+            )
+            : currency.recencyLabel}
+        </span>
       </p>
 
       {currency.showCaveat && currency.caveatText
@@ -59,7 +71,10 @@ export function CurrencyNote({ sources, className }: CurrencyNoteProps) {
             className='mt-2 border-l-2 border-line pl-2.5 text-xs leading-relaxed text-ink-2'
             role='note'
           >
-            {currency.caveatText}
+            {ui(
+              'This answer draws on sources up to {year} and may not reflect developments since.',
+              { year: currency.mostRecentYear ?? '' },
+            )}
           </p>
         )
         : null}

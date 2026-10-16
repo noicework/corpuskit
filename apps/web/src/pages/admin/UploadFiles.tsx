@@ -1,3 +1,5 @@
+import { messageFor } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import {
   type ChangeEvent,
   type DragEvent as ReactDragEvent,
@@ -54,36 +56,42 @@ function UploadIcon() {
 }
 
 function UploadBadge({ row }: { row: UploadRow }) {
+  const { ui } = usePortalLocale()
+
   switch (row.status) {
     case 'queued':
-      return <span className='rp-badge rp-badge-quiet'>Waiting</span>
+      return <span className='rp-badge rp-badge-quiet'>{ui('Waiting')}</span>
     case 'uploading':
       return (
         <span className='rp-badge rp-badge-quiet tabular-nums'>
-          {row.progress === null ? 'Uploading' : `Uploading ${Math.round(row.progress * 100)}%`}
+          {row.progress === null
+            ? ui('Uploading')
+            : ui('Uploading {value1}%', { value1: Math.round(row.progress * 100) })}
         </span>
       )
     case 'processing':
       return (
         <span className='rp-badge rp-badge-warn'>
           <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--rp-warn-ink)]' />
-          Processing
+          {ui('Processing')}
         </span>
       )
     case 'ready':
-      return <span className='rp-badge rp-badge-ok'>Ready</span>
+      return <span className='rp-badge rp-badge-ok'>{ui('Ready')}</span>
     case 'failed':
-      return <span className='rp-badge rp-badge-bad'>Failed</span>
+      return <span className='rp-badge rp-badge-bad'>{ui('Failed')}</span>
   }
 }
 
 function UploadProgressBar({ row }: { row: UploadRow }) {
+  const { ui } = usePortalLocale()
+
   const percent = row.progress === null ? null : Math.round(row.progress * 100)
   return (
     <div
       className='mt-2 h-1.5 overflow-hidden rounded-full bg-surface-3'
       role='progressbar'
-      aria-label={`Uploading ${row.name}`}
+      aria-label={ui('Uploading {name}', { name: row.name })}
       aria-valuemin={0}
       aria-valuemax={100}
       {...(percent === null ? {} : { 'aria-valuenow': percent })}
@@ -111,6 +119,8 @@ export function UploadFiles({ slug, onAdded }: {
   slug: string
   onAdded: () => Promise<unknown>
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAllowed, sessionAccess } = usePermissionAdminAccess(
     'content.write',
     { kind: 'portal', slug },
@@ -121,7 +131,7 @@ export function UploadFiles({ slug, onAdded }: {
   const hintId = useId()
   const queueHeadingId = useId()
   const [dragActive, setDragActive] = useState(false)
-  const [announcement, setAnnouncement] = useState('')
+  const [announcement, setAnnouncement] = useState<{ row?: UploadRow; count?: number } | null>(null)
   const [notice, setNotice] = useState<Message | null>(null)
   // A signed-in queue outlives this panel: a re-check that confirms the same person redraws the
   // page, and the uploads it was running are still here, finished or going, when it returns.
@@ -154,17 +164,14 @@ export function UploadFiles({ slug, onAdded }: {
     if (files.length === 0 || !queue) return
     setNotice(null)
     if (files.length > 1 && !sessionAllowed) {
-      setNotice({
-        tone: 'error',
-        text:
+      setNotice(messageFor('error', ({ ui }) =>
+        ui(
           'Choose one file for emergency access. Sign in with an administrator account to upload several files at once.',
-      })
+        )))
       return
     }
     const added = queue.add(files, runner)
-    setAnnouncement(
-      added.length === 1 ? announce(added[0]!) : `${added.length} files added to the uploads.`,
-    )
+    setAnnouncement(added.length === 1 ? { row: added[0]! } : { count: added.length })
   }
 
   const onChoose = (event: ChangeEvent<HTMLInputElement>) => {
@@ -201,7 +208,7 @@ export function UploadFiles({ slug, onAdded }: {
       const state = row.stalled ? 'stalled' : row.status
       const before = previous.current.get(row.key)
       if (before !== undefined && before !== state && state !== 'uploading') {
-        setAnnouncement(announce(row))
+        setAnnouncement({ row })
         if (state === 'processing' || state === 'ready') changed = true
       }
       previous.current.set(row.key, state)
@@ -271,26 +278,26 @@ export function UploadFiles({ slug, onAdded }: {
         <UploadIcon />
         <span className='text-base font-semibold text-ink'>
           {dragActive
-            ? 'Drop to upload'
+            ? ui('Drop to upload')
             : sessionAllowed
-            ? 'Drag files here to upload'
-            : 'Drag a file here to upload'}
+            ? ui('Drag files here to upload')
+            : ui('Drag a file here to upload')}
         </span>
-        <span className='text-sm text-ink-2'>or</span>
+        <span className='text-sm text-ink-2'>{ui('or')}</span>
         <span className='rp-btn rp-btn-primary' aria-hidden='true'>
-          {sessionAllowed ? 'Choose files' : 'Choose a file'}
+          {sessionAllowed ? ui('Choose files') : ui('Choose a file')}
         </span>
         <span id={hintId} className='max-w-md text-xs text-ink-3'>
           {sessionAllowed
-            ? 'Add several files at once. Up to 100 MB per file.'
-            : 'Emergency access uploads one file per confirmation. Up to 100 MB.'}
+            ? ui('Add several files at once. Up to 100 MB per file.')
+            : ui('Emergency access uploads one file per confirmation. Up to 100 MB.')}
         </span>
         <input
           id={inputId}
           type='file'
           multiple={sessionAllowed}
           className='sr-only'
-          aria-label={sessionAllowed ? 'Choose files to upload' : 'Choose a file to upload'}
+          aria-label={sessionAllowed ? ui('Choose files to upload') : ui('Choose a file to upload')}
           aria-describedby={hintId}
           onChange={onChoose}
         />
@@ -302,11 +309,11 @@ export function UploadFiles({ slug, onAdded }: {
         <section aria-labelledby={queueHeadingId} data-upload-queue>
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <h4 id={queueHeadingId} className='text-sm font-medium text-ink'>
-              {summarise(rows)}
+              {summarise(rows, ui)}
             </h4>
             {finishedCount > 0 && (
               <button type='button' className='rp-btn rp-btn-ghost' onClick={clearFinished}>
-                Clear finished
+                {ui('Clear finished')}
               </button>
             )}
           </div>
@@ -336,7 +343,7 @@ export function UploadFiles({ slug, onAdded }: {
                       className='min-w-0 flex-1 text-sm text-[var(--rp-bad-ink)]'
                       data-upload-error
                     >
-                      {row.error}
+                      {localError(row.error, 'Upload failed. Please try again.')}
                     </p>
                     {row.retryable && queue?.canRetry(row.key) && (
                       <button
@@ -344,19 +351,21 @@ export function UploadFiles({ slug, onAdded }: {
                         className='rp-btn rp-btn-outline'
                         onClick={() => retry(row.key)}
                       >
-                        Try again
+                        {ui('Try again')}
                       </button>
                     )}
                   </div>
                 )}
                 {row.status === 'processing' && !sessionAllowed && (
                   <p className='mt-1 text-xs text-ink-3'>
-                    Processing continues on the platform. Refresh Recent additions to check it.
+                    {ui(
+                      'Processing continues on the platform. Refresh Recent additions to check it.',
+                    )}
                   </p>
                 )}
                 {row.status === 'processing' && row.stalled && (
                   <p className='mt-1 text-xs text-ink-3'>
-                    Still processing. It appears in Recent additions once it is ready.
+                    {ui('Still processing. It appears in Recent additions once it is ready.')}
                   </p>
                 )}
               </li>
@@ -364,7 +373,13 @@ export function UploadFiles({ slug, onAdded }: {
           </ul>
         </section>
       )}
-      <LiveStatus message={announcement} />
+      <LiveStatus
+        message={announcement?.row
+          ? announce(announcement.row, ui, localError)
+          : announcement?.count
+          ? ui('{count} files added to the uploads.', { count: announcement.count })
+          : ''}
+      />
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { PLATFORM_ROLES, PORTAL_ROLES, type Role, type Scope } from '@research-portal/core'
 import {
@@ -46,6 +47,8 @@ export function AssignmentEditor(props: Props) {
 function Editor(
   { scope, scopeName, family, roles, items, canEdit = true, onCreate, onChange, onRemove }: Props,
 ) {
+  const locale = usePortalLocale()
+  const { ui } = locale
   const access = useAccess()
   const id = useId()
   const field = useRef<HTMLInputElement>(null)
@@ -163,18 +166,22 @@ function Editor(
   return (
     <div className='min-w-0' data-assignment-editor>
       <p className='max-w-prose text-sm text-ink-2'>
-        Local assignments for{' '}
-        {scopeName}. Other Entra or local assignments may still provide access.
+        {ui(
+          'Local assignments for {name}. Other Entra or local assignments may still provide access.',
+          { name: scopeName },
+        )}
       </p>
       {items.length === 0 && (
         <div className='py-6'>
-          <h3 className='rp-display text-xl'>{group ? 'No group mappings' : 'No local members'}</h3>
+          <h3 className='rp-display text-xl'>
+            {group ? ui('No group mappings') : ui('No local members')}
+          </h3>
           <p className='mt-2 text-base text-ink-2'>
             {group
               ? canEdit
-                ? 'Map a supported Entra group to a role for this scope.'
-                : 'Individual assignments remain available.'
-              : 'Add a person by object ID or email. Entra access may still apply.'}
+                ? ui('Map a supported Entra group to a role for this scope.')
+                : ui('Individual assignments remain available.')
+              : ui('Add a person by object ID or email. Entra access may still apply.')}
           </p>
         </div>
       )}
@@ -188,32 +195,37 @@ function Editor(
             <div className='min-w-0 flex-1 basis-64 [overflow-wrap:anywhere]'>
               <p className='text-base'>{row.subjectId}</p>
               <p className='mt-1 text-sm text-ink-2'>
-                {assignmentRoleLabel[row.role]} · Local {group ? 'group mapping' : 'assignment'}
+                {ui(assignmentRoleLabel[row.role])} ·{' '}
+                {group ? ui('Local group mapping') : ui('Local assignment')}
               </p>
               <p className='mt-1 text-sm text-ink-2'>
                 {row.subjectKind === 'pending-email'
-                  ? 'Pending sign-in'
+                  ? ui('Pending sign-in')
                   : row.subjectKind === 'group'
-                  ? canEdit ? 'Group object ID' : 'Inactive group mapping'
-                  : 'Active object ID'}
+                  ? canEdit ? ui('Group object ID') : ui('Inactive group mapping')
+                  : ui('Active object ID')}
               </p>
               {!group && sources && (
                 <p className='mt-1 text-sm text-ink-2' data-assignment-source={row.source}>
-                  Identity source:{' '}
-                  {row.source === 'external' ? 'External account' : 'Microsoft Entra'}
+                  {ui('Identity source')}:{' '}
+                  {row.source === 'external' ? ui('External account') : 'Microsoft Entra'}
                 </p>
               )}
               {row.subjectKind === 'pending-email' && (
                 <p className='mt-1 text-sm text-ink-2'>
-                  This assignment activates when the matching {!sources
-                    ? 'organisation'
-                    : row.source === 'external'
-                    ? 'external'
-                    : 'Microsoft Entra'} account signs in.
+                  {ui('This assignment activates when the matching {source} account signs in.', {
+                    source: !sources
+                      ? ui('organisation')
+                      : row.source === 'external'
+                      ? ui('external')
+                      : 'Microsoft Entra',
+                  })}
                 </p>
               )}
               {row.emailProvenance && row.subjectKind !== 'pending-email' && (
-                <p className='mt-1 text-sm text-ink-2'>Activated from {row.emailProvenance}</p>
+                <p className='mt-1 text-sm text-ink-2'>
+                  {ui('Activated from {email}', { email: row.emailProvenance })}
+                </p>
               )}
             </div>
             <div className='flex min-w-0 flex-wrap gap-2'>
@@ -227,9 +239,9 @@ function Editor(
                     setRole(row.role)
                     setError(null)
                   }}
-                  aria-label={`Edit role for ${row.subjectId}`}
+                  aria-label={ui('Edit role for {identity}', { identity: row.subjectId })}
                 >
-                  Edit role
+                  {ui('Edit role')}
                 </button>
               )}
               <button
@@ -240,9 +252,11 @@ function Editor(
                   setError(null)
                   setConfirmation({ kind: 'remove', row })
                 }}
-                aria-label={`Remove ${group ? 'mapping' : 'member'} ${row.subjectId}`}
+                aria-label={group
+                  ? ui('Remove mapping {identity}', { identity: row.subjectId })
+                  : ui('Remove member {identity}', { identity: row.subjectId })}
               >
-                Remove {group ? 'mapping' : 'member'}
+                {group ? ui('Remove mapping') : ui('Remove member')}
               </button>
             </div>
           </li>
@@ -260,7 +274,7 @@ function Editor(
             setError(null)
           }}
         >
-          {addLabel}
+          {ui(addLabel)}
         </button>
       )}
       {form && (
@@ -274,28 +288,32 @@ function Editor(
           }}
         >
           <h3 className='rp-display break-words text-xl [overflow-wrap:anywhere]'>
-            {form === 'new' ? addLabel : `Edit role for ${form.subjectId}`}
+            {form === 'new'
+              ? ui(addLabel)
+              : ui('Edit role for {identity}', { identity: form.subjectId })}
           </h3>
           <fieldset disabled={busy} className='mt-4 min-w-0 space-y-4'>
-            <legend className='sr-only'>Assignment for {scopeName}</legend>
+            <legend className='sr-only'>{ui('Assignment for {name}', { name: scopeName })}</legend>
             {form === 'new' && (
               <>
                 {!group && (
                   <label className='block text-sm' htmlFor={`${id}-kind`}>
-                    Assign by<select
+                    {ui('Assign by')}
+                    <select
                       id={`${id}-kind`}
                       className='rp-input mt-2 w-full text-base'
                       value={subjectKind}
                       onChange={(e) => setSubjectKind(e.target.value as typeof subjectKind)}
                     >
-                      <option value='pending-email'>Email</option>
-                      <option value='active-oid'>Object ID</option>
+                      <option value='pending-email'>{ui('Email')}</option>
+                      <option value='active-oid'>{ui('Object ID')}</option>
                     </select>
                   </label>
                 )}
                 {!group && sources && (
                   <label className='block text-sm' htmlFor={`${id}-source`}>
-                    Identity source<select
+                    {ui('Identity source')}
+                    <select
                       id={`${id}-source`}
                       data-assignment-source-input
                       className='rp-input mt-2 w-full text-base'
@@ -304,19 +322,21 @@ function Editor(
                       aria-describedby={`${id}-source-help`}
                     >
                       <option value='entra'>Microsoft Entra</option>
-                      <option value='external'>External account</option>
+                      <option value='external'>{ui('External account')}</option>
                     </select>
                     <span id={`${id}-source-help`} className='mt-2 block text-ink-2'>
-                      Choose how this person signs in. Access stays bound to this identity source.
+                      {ui(
+                        'Choose how this person signs in. Access stays bound to this identity source.',
+                      )}
                     </span>
                   </label>
                 )}
                 <label className='block text-sm' htmlFor={`${id}-subject`}>
                   {group
-                    ? 'Group object ID'
+                    ? ui('Group object ID')
                     : subjectKind === 'pending-email'
-                    ? 'Email'
-                    : 'Object ID'}
+                    ? ui('Email')
+                    : ui('Object ID')}
                   <input
                     ref={field}
                     id={`${id}-subject`}
@@ -338,7 +358,8 @@ function Editor(
               </>
             )}
             <label className='block text-sm' htmlFor={`${id}-role`}>
-              Role<select
+              {ui('Role')}
+              <select
                 ref={roleField}
                 id={`${id}-role`}
                 data-assignment-role
@@ -352,18 +373,23 @@ function Editor(
                 ].filter(Boolean).join(' ') || undefined}
               >
                 {allowed.map((value) => (
-                  <option key={value} value={value}>{assignmentRoleLabel[value]}</option>
+                  <option key={value} value={value}>{ui(assignmentRoleLabel[value])}</option>
                 ))}
               </select>
             </label>
             {scope.kind === 'platform' && (
               <p id={`${id}-role-help`} data-platform-role-help className='text-sm text-ink-2'>
-                {assignmentRoleLabel[role]} access applies to all present and future portals.
+                {ui('{role} access applies to all present and future portals.', {
+                  role: ui(assignmentRoleLabel[role]),
+                })}
               </p>
             )}
             {error && !confirmation && (
               <p id={`${id}-error`} role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
-                {error}
+                {locale.error(
+                  error,
+                  'The change could not be confirmed. Refresh this view before trying again.',
+                )}
               </p>
             )}
             <div className='flex flex-wrap gap-3'>
@@ -372,7 +398,7 @@ function Editor(
                 className='rp-btn rp-btn-primary min-h-[44px]'
                 disabled={!allowed.includes(role)}
               >
-                {form === 'new' ? addLabel : 'Save role'}
+                {form === 'new' ? ui(addLabel) : ui('Save role')}
               </button>
               <button
                 type='button'
@@ -380,32 +406,40 @@ function Editor(
                 onClick={clearForm}
               >
                 {form === 'new'
-                  ? group ? 'Keep mapping' : 'Close member form'
-                  : 'Keep current role'}
+                  ? group ? ui('Keep mapping') : ui('Close member form')
+                  : ui('Keep current role')}
               </button>
             </div>
           </fieldset>
-          {busy && <p role='status' className='mt-4 text-sm'>Saving change...</p>}
+          {busy && <p role='status' className='mt-4 text-sm'>{ui('Saving change...')}</p>}
         </form>
       )}
       {confirmation && (
         <ConfirmActionDialog
           title={confirmation.kind === 'owner'
-            ? 'Grant Owner'
-            : `Remove ${group ? 'mapping' : 'member'}`}
-          description={confirmation.kind === 'owner'
-            ? `Grant Owner to ${
-              form === 'new' ? subjectId : form && form.subjectId
-            }? This includes managing platform access and settings, and deleting portals.`
-            : `Remove ${confirmation.row.subjectId}'s local assignment for ${scopeName}? Other sources may still provide access.`}
-          confirmLabel={confirmation.kind === 'owner'
-            ? 'Grant Owner'
-            : `Remove ${group ? 'mapping' : 'member'}`}
-          cancelLabel={confirmation.kind === 'owner'
-            ? 'Keep current role'
+            ? ui('Grant Owner')
             : group
-            ? 'Keep mapping'
-            : 'Keep member'}
+            ? ui('Remove mapping')
+            : ui('Remove member')}
+          description={confirmation.kind === 'owner'
+            ? ui(
+              'Grant Owner to {identity}? This includes managing platform access and settings, and deleting portals.',
+              { identity: form === 'new' ? subjectId : form ? form.subjectId : '' },
+            )
+            : ui(
+              'Remove {identity}’s local assignment for {name}? Other sources may still provide access.',
+              { identity: confirmation.row.subjectId, name: scopeName },
+            )}
+          confirmLabel={confirmation.kind === 'owner'
+            ? ui('Grant Owner')
+            : group
+            ? ui('Remove mapping')
+            : ui('Remove member')}
+          cancelLabel={confirmation.kind === 'owner'
+            ? ui('Keep current role')
+            : group
+            ? ui('Keep mapping')
+            : ui('Keep member')}
           busy={busy}
           error={error}
           onCancel={() => {

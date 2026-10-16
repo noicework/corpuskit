@@ -1,5 +1,9 @@
+import { portalUi } from '../lib/locale-messages.ts'
+import { type Locale, usePortalLocale } from '../lib/portal-locale.tsx'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { isStudyDesignId, type ResourceType, studyDesignLabel } from '@research-portal/core'
+
+const originalUi: Locale['ui'] = (english, values) => portalUi('en', english, values)
 
 /**
  * A placeholder block used across loading states. A travelling shimmer rather
@@ -23,8 +27,8 @@ const TYPE_LABELS: Record<ResourceType, string> = {
 }
 
 /** The human label for a resource type, for de-duplicating against kind chips. */
-export function typeLabel(type: ResourceType): string {
-  return TYPE_LABELS[type]
+export function typeLabel(type: ResourceType, ui: Locale['ui'] = originalUi): string {
+  return ui(TYPE_LABELS[type])
 }
 
 /** Whether two chip labels say the same thing, ignoring case and separators. */
@@ -39,9 +43,10 @@ export function sameLabel(a: string, b: string): boolean {
  * reads the same in either theme.
  */
 export function TypeBadge({ type }: { type: ResourceType }) {
+  const { ui } = usePortalLocale()
   return (
     <span className='rp-badge rp-badge-quiet'>
-      {TYPE_LABELS[type]}
+      {typeLabel(type, ui)}
     </span>
   )
 }
@@ -54,6 +59,7 @@ export function ErrorCard({
   message: string
   onRetry: () => void
 }) {
+  const { ui, error } = usePortalLocale()
   return (
     <div className='rp-card p-5'>
       <div className='flex items-start gap-3'>
@@ -70,10 +76,12 @@ export function ErrorCard({
           </svg>
         </span>
         <div className='min-w-0 flex-1'>
-          <p className='text-sm font-semibold text-ink'>Something went wrong</p>
-          <p className='mt-1 text-sm leading-relaxed text-ink-2'>{message}</p>
+          <p className='text-sm font-semibold text-ink'>{ui('Something went wrong')}</p>
+          <p className='mt-1 text-sm leading-relaxed text-ink-2'>
+            {error(message, 'Something went wrong')}
+          </p>
           <button type='button' onClick={onRetry} className='rp-btn rp-btn-outline mt-3'>
-            Try again
+            {ui('Try again')}
           </button>
         </div>
       </div>
@@ -110,9 +118,13 @@ export function LiveStatus({ message }: { message: string }) {
  * ("swri-network" -> "SWRI Network"). Real display titles pass through
  * untouched; the organisation name supplies the acronym to uppercase.
  */
-export function prettyLabel(label: string, organisation?: string): string {
+export function prettyLabel(
+  label: string,
+  organisation?: string,
+  ui: Locale['ui'] = originalUi,
+): string {
   // A study design (the kind a research article carries) has its own wording.
-  if (isStudyDesignId(label)) return studyDesignLabel(label)
+  if (isStudyDesignId(label)) return ui(studyDesignLabel(label))
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(label)) return label
   const acronym = (organisation ?? '')
     .split(/\s+/)
@@ -134,8 +146,12 @@ export function prettyLabel(label: string, organisation?: string): string {
 // ---------------------------------------------------------------------------
 
 /** The notice text for a saved file: "Saved <name> (Word document)". */
-export function savedFileNotice(fileName: string, format: string): string {
-  return `Saved ${fileName} (${format})`
+export function savedFileNotice(
+  fileName: string,
+  format: string,
+  ui: Locale['ui'] = originalUi,
+): string {
+  return ui('Saved {name} ({format})', { name: fileName, format })
 }
 
 /** State for an export confirmation: `announce` shows a notice, which clears itself. */

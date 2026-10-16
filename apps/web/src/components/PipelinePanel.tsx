@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { AskStage, ScoredResource } from '@research-portal/core'
 import { type QualityScores, TrustSignals } from './QualityGauge.tsx'
 
@@ -58,6 +59,7 @@ function StageDot({ status }: { status: PipelineStageStatus }) {
 }
 
 function RetrievedSources({ sources }: { sources: ScoredResource[] }) {
+  const { ui } = usePortalLocale()
   if (sources.length === 0) return null
   return (
     <div className='mt-2 space-y-2'>
@@ -73,7 +75,7 @@ function RetrievedSources({ sources }: { sources: ScoredResource[] }) {
             aria-valuenow={Math.round(resource.relevance * 100)}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={`Relevance of ${resource.title}`}
+            aria-label={ui('Relevance of {value1}', { value1: resource.title })}
           >
             <div
               className='h-full rounded-full'
@@ -90,18 +92,20 @@ function RetrievedSources({ sources }: { sources: ScoredResource[] }) {
 }
 
 function GenerationStats({ usage }: { usage: PipelineUsage }) {
+  const { ui } = usePortalLocale()
   return (
     <dl className='mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-ink-3'>
-      <dt>Input tokens</dt>
+      <dt>{ui('Input tokens')}</dt>
       <dd className='text-right font-medium text-ink-2'>{usage.inputTokens}</dd>
-      <dt>Output tokens</dt>
+      <dt>{ui('Output tokens')}</dt>
       <dd className='text-right font-medium text-ink-2'>{usage.outputTokens}</dd>
       {usage.firstChunkSec !== undefined
         ? (
           <>
-            <dt>First chunk</dt>
+            <dt>{ui('First chunk')}</dt>
             <dd className='text-right font-medium text-ink-2'>
-              {usage.firstChunkSec.toFixed(2)}s
+              {usage.firstChunkSec.toFixed(2)}
+              {ui('s')}
             </dd>
           </>
         )
@@ -109,8 +113,11 @@ function GenerationStats({ usage }: { usage: PipelineUsage }) {
       {usage.totalSec !== undefined
         ? (
           <>
-            <dt>Total time</dt>
-            <dd className='text-right font-medium text-ink-2'>{usage.totalSec.toFixed(2)}s</dd>
+            <dt>{ui('Total time')}</dt>
+            <dd className='text-right font-medium text-ink-2'>
+              {usage.totalSec.toFixed(2)}
+              {ui('s')}
+            </dd>
           </>
         )
         : null}
@@ -136,6 +143,7 @@ export interface PipelinePanelProps {
  * timeline chrome around them.
  */
 export function PipelinePanel({ sources, usage, quality, statuses }: PipelinePanelProps) {
+  const { ui } = usePortalLocale()
   if (statuses) {
     return (
       <ol className='space-y-0'>
@@ -163,13 +171,13 @@ export function PipelinePanel({ sources, usage, quality, statuses }: PipelinePan
                     status === 'pending' ? 'text-ink-3' : 'text-ink'
                   }`}
                 >
-                  {stage.label}
+                  {ui(stage.label)}
                   <span className='sr-only'>
                     {status === 'active'
-                      ? ' - in progress'
+                      ? ui(' - in progress')
                       : status === 'complete'
-                      ? ' - complete'
-                      : ' - pending'}
+                      ? ui(' - complete')
+                      : ui(' - pending')}
                   </span>
                 </p>
                 {stage.key === 'retrieval' ? <RetrievedSources sources={sources} /> : null}
@@ -197,7 +205,7 @@ export function PipelinePanel({ sources, usage, quality, statuses }: PipelinePan
         ? (
           <div>
             <h4 className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-              Retrieved sources
+              {ui('Retrieved sources')}
             </h4>
             <RetrievedSources sources={sources} />
           </div>
@@ -207,7 +215,7 @@ export function PipelinePanel({ sources, usage, quality, statuses }: PipelinePan
         ? (
           <div>
             <h4 className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-              Generation
+              {ui('Generation')}
             </h4>
             {usage ? <GenerationStats usage={usage} /> : null}
             {quality
@@ -221,7 +229,11 @@ export function PipelinePanel({ sources, usage, quality, statuses }: PipelinePan
         )
         : null}
       {sources.length === 0 && !usage && !quality
-        ? <p className='text-xs text-ink-3'>No pipeline detail available for this answer.</p>
+        ? (
+          <p className='text-xs text-ink-3'>
+            {ui('No pipeline detail available for this answer.')}
+          </p>
+        )
         : null}
     </div>
   )

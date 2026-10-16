@@ -1,3 +1,4 @@
+import type { Locale } from '../../lib/portal-locale.tsx'
 /**
  * Following a streamed administrative job (a source sync, an enrichment run, a
  * knowledge graph implementation) to its outcome.
@@ -122,7 +123,8 @@ export function failedJobMessage(
   job: StreamedJob<unknown> | undefined,
   err: unknown,
   fallback: string,
+  localise?: Locale['error'],
 ): Message {
   const authority = job?.authorityError() ?? (err instanceof StaleAuthorityError ? err : undefined)
-  return { tone: 'error', text: errorMessage(authority ?? job?.failure ?? err, fallback) }
+  return { tone: 'error', text: errorMessage(authority ?? job?.failure ?? err, fallback, localise) }
 }

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
@@ -46,6 +47,8 @@ const TABS: { id: string; label: string; permission: Permission }[] = [
 
 /** The overview's way into adding documents, and the empty-collection prompt. */
 function AddDocumentsCard({ slug, empty }: { slug: string; empty: boolean }) {
+  const { ui } = usePortalLocale()
+
   return (
     <div
       className='rp-card flex flex-wrap items-center justify-between gap-4 p-5'
@@ -54,12 +57,12 @@ function AddDocumentsCard({ slug, empty }: { slug: string; empty: boolean }) {
     >
       <div className='min-w-0'>
         <h2 className='text-base font-semibold text-ink'>
-          {empty ? 'No documents yet' : 'Add documents'}
+          {empty ? ui('No documents yet') : ui('Add documents')}
         </h2>
         <p className='mt-1 max-w-prose text-sm text-ink-2'>
           {empty
-            ? 'This collection is empty. Upload files or add web pages to start building it.'
-            : 'Upload files, add web pages, paste text or crawl a site.'}
+            ? ui('This collection is empty. Upload files or add web pages to start building it.')
+            : ui('Upload files, add web pages, paste text or crawl a site.')}
         </p>
       </div>
       <AddDocumentsLink slug={slug} />
@@ -76,6 +79,8 @@ export function ManagePage() {
 }
 
 function ManageContent() {
+  const { ui, number } = usePortalLocale()
+
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const authority = useAccess()
@@ -143,12 +148,14 @@ function ManageContent() {
     ])
   const reachable = content.data !== undefined || status.data?.status === 'connected' ||
     status.data?.status === 'demo'
-  const unavailable = <p className='text-sm text-ink-2'>This section is currently unavailable.</p>
+  const unavailable = (
+    <p className='text-sm text-ink-2'>{ui('This section is currently unavailable.')}</p>
+  )
   if (!tab) {
     return (
       <main className='rp-shell py-10' data-route-unavailable>
-        <h1 className='rp-display text-2xl'>Manage</h1>
-        <p className='mt-4 text-ink-2'>This administration page is unavailable.</p>
+        <h1 className='rp-display text-2xl'>{ui('Manage')}</h1>
+        <p className='mt-4 text-ink-2'>{ui('This administration page is unavailable.')}</p>
       </main>
     )
   }
@@ -157,55 +164,56 @@ function ManageContent() {
     <main className='min-h-[calc(100dvh-var(--rp-header-h,126px))] bg-app' data-manage-shell>
       <div className='rp-shell py-10'>
         <div className='flex flex-wrap items-center justify-between gap-3'>
-          <h1 className='rp-display text-2xl text-ink'>Manage</h1>
+          <h1 className='rp-display text-2xl text-ink'>{ui('Manage')}</h1>
           <div className='flex min-w-0 flex-wrap items-center gap-4'>
             <Link
               to={`/t/${slug}`}
               className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
             >
-              &larr; Back to the portal
+              {ui('← Back to the portal')}
             </Link>
             {platformConnections && (
               <Link
                 to='/admin'
                 className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
               >
-                Platform connections &rarr;
+                {ui('Platform connections →')}
               </Link>
             )}
           </div>
         </div>
-        <section aria-label='Portal status' className='rp-card mt-6 min-w-0 p-5'>
+        <section aria-label={ui('Portal status')} className='rp-card mt-6 min-w-0 p-5'>
           <p className='text-sm text-ink-2' data-manage-status>
             {status.data
               ? status.data.status === 'connected'
-                ? 'Knowledge box connected'
+                ? ui('Knowledge box connected')
                 : status.data.status === 'demo'
-                ? 'Demo knowledge box'
+                ? ui('Demo knowledge box')
                 : status.data.status === 'unavailable'
-                ? 'Knowledge box connection unavailable. Reconnect or disconnect it.'
-                : 'Knowledge box not connected'
+                ? ui('Knowledge box connection unavailable. Reconnect or disconnect it.')
+                : ui('Knowledge box not connected')
               : status.isError
-              ? 'Connection status is unavailable.'
-              : 'Checking connection...'}
+              ? ui('Connection status is unavailable.')
+              : ui('Checking connection...')}
           </p>
           {can('content.write') && content.data && (
             <div className='mt-3 min-w-0 space-y-2 text-sm'>
               <p data-manage-counts>
-                <strong>{content.data.counters.resources}</strong> documents ·{' '}
-                {content.data.counters.paragraphs} paragraphs
+                <strong>{number(content.data.counters.resources)}</strong>
+                {ui(' documents ·')} {number(content.data.counters.paragraphs)}
+                {ui(' paragraphs')}
               </p>
               <p data-manage-recent className='break-words text-ink-2'>
                 {content.data.recent[0]
-                  ? `Latest addition: ${content.data.recent[0].title}`
-                  : 'No recent additions.'}
+                  ? ui('Latest addition: {title}', { title: content.data.recent[0].title })
+                  : ui('No recent additions.')}
               </p>
             </div>
           )}
           {content.isLoading && can('content.write') && <Skeleton className='mt-3 h-5 w-32' />}
           {content.isError && can('content.write') && (
             <p role='alert' className='mt-3 text-sm text-ink-2'>
-              Content statistics are unavailable.
+              {ui('Content statistics are unavailable.')}
             </p>
           )}
           {(status.data?.status === 'none' || status.data?.status === 'unavailable') &&
@@ -215,14 +223,14 @@ function ManageContent() {
               className='rp-btn rp-btn-outline mt-3'
               onClick={() => chooseTab('connections')}
             >
-              Open connections
+              {ui('Open connections')}
             </button>
           )}
         </section>
         <div className='mt-8 grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'>
           <nav
             ref={navigation}
-            aria-label='Manage sections'
+            aria-label={ui('Manage sections')}
             className='rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
           >
             {allowedTabs.map((item) => (
@@ -238,7 +246,7 @@ function ManageContent() {
                     : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
                 }`}
               >
-                {item.label}
+                {ui(item.label)}
               </button>
             ))}
           </nav>
@@ -292,9 +300,9 @@ function ManageContent() {
             {tab === 'taxonomy' && can('taxonomy.write') && (
               <div className='rp-card p-5'>
                 <div className='flex flex-wrap items-baseline justify-between gap-3'>
-                  <h2 className='text-sm font-semibold text-ink'>Label sets</h2>
+                  <h2 className='text-sm font-semibold text-ink'>{ui('Label sets')}</h2>
                   <Link to={`/t/${slug}/taxonomy`} className='text-sm text-ink-2'>
-                    Open taxonomy &rarr;
+                    {ui('Open taxonomy →')}
                   </Link>
                 </div>
                 {can('taxonomy.write') && reachable && (
@@ -344,7 +352,7 @@ function ManageContent() {
                           className='rp-btn rp-btn-outline mt-4'
                           onClick={() => setRenaming(true)}
                         >
-                          Rename
+                          {ui('Rename')}
                         </button>
                       )}
                     </>

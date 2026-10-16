@@ -1,3 +1,4 @@
+import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getTenants } from '../api/client.ts'
@@ -36,6 +37,8 @@ function Arrow() {
 }
 
 export function TenantPicker() {
+  const locale = usePortalLocale()
+  const { ui } = locale
   const access = useAccess()
   const tenants = useQuery({
     queryKey: ['tenants', access.identityKey, access.generation],
@@ -45,18 +48,19 @@ export function TenantPicker() {
   const user = access.state.session?.user
 
   useEffect(() => {
-    document.title = 'CorpusKit | Knowledge people can use'
-  }, [])
+    document.title = ui('CorpusKit | Knowledge people can use')
+  }, [ui])
 
   return (
     <main className='mk-site'>
-      <header className='mk-nav'>
-        <a href='/' className='mk-brand rp-focus' aria-label='CorpusKit home'>
+      <header className='mk-nav' style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+        <a href='/' className='mk-brand rp-focus' aria-label={ui('CorpusKit home')}>
           <CorpusMark />
           <span>CorpusKit</span>
         </a>
-        <nav aria-label='Primary' className='flex items-center gap-2 sm:gap-4'>
-          <a href='#how-it-works' className='mk-nav-link rp-focus'>How it works</a>
+        <nav aria-label={ui('Primary')} className='flex flex-wrap items-center gap-2 sm:gap-4'>
+          <AppLanguageSwitch />
+          <a href='#how-it-works' className='mk-nav-link rp-focus'>{ui('How it works')}</a>
           {user
             ? (
               <a href='#portals' className='mk-login rp-focus'>
@@ -67,7 +71,7 @@ export function TenantPicker() {
             : (
               <a href={microsoftLoginUrl('/')} className='mk-login rp-focus'>
                 <MicrosoftMark />
-                <span>Sign in</span>
+                <span>{ui('Sign in')}</span>
               </a>
             )}
         </nav>
@@ -75,37 +79,40 @@ export function TenantPicker() {
 
       <section className='mk-hero'>
         <div className='mk-hero-copy'>
-          <p className='mk-kicker'>A home for serious knowledge</p>
-          <h1>Turn a corpus into a place people can use.</h1>
+          <p className='mk-kicker'>{ui('A home for serious knowledge')}</p>
+          <h1>{ui('Turn a corpus into a place people can use.')}</h1>
           <p className='mk-intro'>
-            CorpusKit gives research organisations a clear, credible portal for their documents,
-            evidence and expertise - with answers that always lead back to the source.
+            {ui(
+              'CorpusKit gives research organisations a clear, credible portal for their documents, evidence and expertise - with answers that always lead back to the source.',
+            )}
           </p>
           <div className='mt-8 flex flex-wrap items-center gap-3'>
             <a
               href={user ? '#portals' : microsoftLoginUrl('/')}
               className='mk-cta-primary rp-focus'
             >
-              {user ? 'Open your portals' : 'Continue with Microsoft 365'}
+              {user ? ui('Open your portals') : ui('Continue with Microsoft 365')}
               {!user && <MicrosoftMark />}
               {user && <Arrow />}
             </a>
-            <a href='#how-it-works' className='mk-cta-secondary rp-focus'>See how it works</a>
+            <a href='#how-it-works' className='mk-cta-secondary rp-focus'>
+              {ui('See how it works')}
+            </a>
           </div>
         </div>
 
-        <div className='mk-corpus' aria-label='Documents become structured, cited answers'>
-          <div className='mk-corpus-label'>Inside a CorpusKit portal</div>
+        <div className='mk-corpus' aria-label={ui('Documents become structured, cited answers')}>
+          <div className='mk-corpus-label'>{ui('Inside a CorpusKit portal')}</div>
           <div className='mk-document mk-document-a'>
-            <span>RESEARCH PAPER · 042</span>
-            <strong>Climate resilience in coastal fisheries</strong>
+            <span>{ui('RESEARCH PAPER · 042')}</span>
+            <strong>{ui('Climate resilience in coastal fisheries')}</strong>
             <i />
             <i />
             <i />
           </div>
           <div className='mk-document mk-document-b'>
-            <span>TECHNICAL REPORT · 118</span>
-            <strong>Regional adoption and outcomes</strong>
+            <span>{ui('TECHNICAL REPORT · 118')}</span>
+            <strong>{ui('Regional adoption and outcomes')}</strong>
             <i />
             <i />
           </div>
@@ -116,64 +123,66 @@ export function TenantPicker() {
             <span />
           </div>
           <div className='mk-answer'>
-            <span className='mk-answer-kicker'>Grounded answer</span>
-            <p>Three findings recur across the evidence, with regional variation.</p>
+            <span className='mk-answer-kicker'>{ui('Grounded answer')}</span>
+            <p>{ui('Three findings recur across the evidence, with regional variation.')}</p>
             <div>
               <b>[1]</b>
               <b>[2]</b>
-              <b>[3]</b> View cited passages
+              <b>[3]</b> {ui('View cited passages')}
             </div>
           </div>
         </div>
       </section>
 
-      <section className='mk-proof' aria-label='Product principles'>
+      <section className='mk-proof' aria-label={ui('Product principles')}>
         <div>
           <strong>01</strong>
-          <span>Every answer is cited</span>
+          <span>{ui('Every answer is cited')}</span>
         </div>
         <div>
           <strong>02</strong>
-          <span>Your structure, not a generic chatbot</span>
+          <span>{ui('Your structure, not a generic chatbot')}</span>
         </div>
         <div>
           <strong>03</strong>
-          <span>One trusted portal for every audience</span>
+          <span>{ui('One trusted portal for every audience')}</span>
         </div>
       </section>
 
       <section id='how-it-works' className='mk-section mk-process'>
         <div className='mk-section-heading'>
-          <p className='mk-kicker'>From archive to active knowledge</p>
-          <h2>Keep the rigour. Remove the friction.</h2>
+          <p className='mk-kicker'>{ui('From archive to active knowledge')}</p>
+          <h2>{ui('Keep the rigour. Remove the friction.')}</h2>
         </div>
         <div className='mk-process-grid'>
           <article>
-            <span>Collect</span>
-            <h3>Bring the whole evidence base together.</h3>
-            <p>Documents, reports and source systems become one governed corpus.</p>
+            <span>{ui('Collect')}</span>
+            <h3>{ui('Bring the whole evidence base together.')}</h3>
+            <p>{ui('Documents, reports and source systems become one governed corpus.')}</p>
           </article>
           <article>
-            <span>Structure</span>
-            <h3>Make the organisation’s knowledge visible.</h3>
-            <p>Topics, entities and relationships create paths through complex material.</p>
+            <span>{ui('Structure')}</span>
+            <h3>{ui('Make the organisation’s knowledge visible.')}</h3>
+            <p>{ui('Topics, entities and relationships create paths through complex material.')}</p>
           </article>
           <article>
-            <span>Use</span>
-            <h3>Help people find, understand and act.</h3>
-            <p>Search and cited answers turn a collection into a dependable service.</p>
+            <span>{ui('Use')}</span>
+            <h3>{ui('Help people find, understand and act.')}</h3>
+            <p>{ui('Search and cited answers turn a collection into a dependable service.')}</p>
           </article>
         </div>
       </section>
 
       <section id='portals' className='mk-section mk-portals'>
         <div className='mk-section-heading'>
-          <p className='mk-kicker'>{user ? 'Signed in' : 'Live on CorpusKit'}</p>
-          <h2>{user ? 'Your portals' : 'Explore public portals'}</h2>
+          <p className='mk-kicker'>{user ? ui('Signed in') : ui('Live on CorpusKit')}</p>
+          <h2>{user ? ui('Your portals') : ui('Explore public portals')}</h2>
           <p>
             {user
-              ? `Welcome back, ${user.name || user.email}. Choose where you want to work.`
-              : 'See how organisations are making research easier to navigate and use.'}
+              ? ui('Welcome back, {name}. Choose where you want to work.', {
+                name: user.name || user.email,
+              })
+              : ui('See how organisations are making research easier to navigate and use.')}
           </p>
         </div>
 
@@ -189,9 +198,7 @@ export function TenantPicker() {
           {tenants.isError
             ? (
               <ErrorCard
-                message={tenants.error instanceof Error
-                  ? tenants.error.message
-                  : 'Could not load portals.'}
+                message={locale.error(tenants.error, 'Could not load portals.')}
                 onRetry={() => void tenants.refetch()}
               />
             )
@@ -209,7 +216,7 @@ export function TenantPicker() {
                 <span>{tenant.tagline}</span>
               </div>
               <span className='mk-portal-open'>
-                Open portal <Arrow />
+                {ui('Open portal')} <Arrow />
               </span>
             </a>
           ))}
@@ -218,11 +225,11 @@ export function TenantPicker() {
         {!user && (
           <div className='mk-signin-strip'>
             <div>
-              <strong>Already part of a CorpusKit organisation?</strong>
-              <span>Use your Microsoft 365 account to see your portals.</span>
+              <strong>{ui('Already part of a CorpusKit organisation?')}</strong>
+              <span>{ui('Use your Microsoft 365 account to see your portals.')}</span>
             </div>
             <a href={microsoftLoginUrl('/')} className='mk-cta-primary rp-focus'>
-              <MicrosoftMark /> Sign in with Microsoft
+              <MicrosoftMark /> {ui('Sign in with Microsoft')}
             </a>
           </div>
         )}
@@ -233,10 +240,14 @@ export function TenantPicker() {
           <CorpusMark />
           <span>CorpusKit</span>
         </a>
-        <p>Knowledge people can use.</p>
+        <p>{ui('Knowledge people can use.')}</p>
         {user
-          ? <a href='/auth/logout' className='mk-nav-link rp-focus'>Sign out</a>
-          : <a href={microsoftLoginUrl('/')} className='mk-nav-link rp-focus'>Microsoft sign in</a>}
+          ? <a href='/auth/logout' className='mk-nav-link rp-focus'>{ui('Sign out')}</a>
+          : (
+            <a href={microsoftLoginUrl('/')} className='mk-nav-link rp-focus'>
+              {ui('Microsoft sign in')}
+            </a>
+          )}
       </footer>
     </main>
   )

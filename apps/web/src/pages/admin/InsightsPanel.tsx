@@ -1,3 +1,7 @@
+import type { Locale } from '../../lib/portal-locale.tsx'
+import { englishUi } from './shared.ts'
+import { relativeTime } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -8,24 +12,12 @@ import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { Skeleton } from '../../components/ui.tsx'
 
-/** Same relative-time shape as the agentic trace table, applied to ISO timestamps. */
-function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime()
-  const minutes = Math.round(diffMs / 60000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.round(hours / 24)
-  return `${days}d ago`
-}
-
 function formatScore(value: number | null): string {
   return value === null ? '-' : `${value.toFixed(1)}/5`
 }
 
-function formatDuration(seconds: number | null): string {
-  return seconds === null ? '-' : `${seconds.toFixed(1)}s`
+function formatDuration(seconds: number | null, ui: Locale['ui'] = englishUi): string {
+  return seconds === null ? '-' : ui('{count}s', { count: seconds.toFixed(1) })
 }
 
 function StatTile({ label, value }: { label: string; value: string }) {
@@ -44,27 +36,34 @@ function StatTile({ label, value }: { label: string; value: string }) {
 export function UnhelpfulAnswers(
   { slug, feedback }: { slug: string; feedback: AnswerFeedbackSummary },
 ) {
+  const { ui } = usePortalLocale()
+
   const rated = feedback.helpful + feedback.unhelpful
   return (
     <div className='rp-card p-5' data-unhelpful-answers>
       <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
-        <h4 className='text-sm font-semibold text-ink'>Answers marked unhelpful</h4>
+        <h4 className='text-sm font-semibold text-ink'>{ui('Answers marked unhelpful')}</h4>
         <p className='text-xs text-ink-3'>
-          {rated === 0
-            ? 'No answers rated yet'
-            : `${feedback.unhelpful} of ${rated} rated ${
-              rated === 1 ? 'answer' : 'answers'
-            } marked unhelpful`}
+          {rated === 0 ? ui('No answers rated yet') : ui(
+            rated === 1
+              ? '{unhelpful} of {rated} rated answer marked unhelpful'
+              : '{unhelpful} of {rated} rated answers marked unhelpful',
+            {
+              unhelpful: feedback.unhelpful,
+              rated,
+            },
+          )}
         </p>
       </div>
       <p className='mt-1 text-xs text-ink-3'>
-        Readers' thumbs-down ratings and what they said was wrong. Ask a question again to see the
-        answer readers get now.
+        {ui(
+          "Readers' thumbs-down ratings and what they said was wrong. Ask a question again to see the answer readers get now.",
+        )}
       </p>
       {feedback.flagged.length === 0
         ? (
           <p className='mt-3 text-sm text-ink-3'>
-            No answer has been marked unhelpful in the last 90 days.
+            {ui('No answer has been marked unhelpful in the last 90 days.')}
           </p>
         )
         : (
@@ -78,9 +77,9 @@ export function UnhelpfulAnswers(
                   <Link
                     to={`/t/${slug}/ask?ask=${encodeURIComponent(item.question)}`}
                     className='rp-chip inline-flex h-9 shrink-0 items-center text-xs font-semibold sm:h-7'
-                    aria-label={`Ask again: ${item.question}`}
+                    aria-label={ui('Ask again: {question}', { question: item.question })}
                   >
-                    Ask again
+                    {ui('Ask again')}
                   </Link>
                 </div>
                 {item.comment
@@ -89,9 +88,10 @@ export function UnhelpfulAnswers(
                       {item.comment}
                     </blockquote>
                   )
-                  : <p className='mt-1.5 text-xs text-ink-3'>No comment left.</p>}
+                  : <p className='mt-1.5 text-xs text-ink-3'>{ui('No comment left.')}</p>}
                 <p className='mt-1 text-xs text-ink-3'>
-                  Marked unhelpful {relativeTime(item.ratedAt)}
+                  {ui('Marked unhelpful ')}
+                  {relativeTime(item.ratedAt, ui)}
                 </p>
               </li>
             ))}
@@ -116,6 +116,8 @@ function validFeedback(value: unknown): boolean {
  * what content to add next.
  */
 function InsightsPanelContent({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
     { kind: 'portal', slug },
@@ -139,7 +141,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
   const onRefresh = async () => {
     setError(undefined)
     try {
-      const result = await runExplicit('Read ask insights', async (access) => {
+      const result = await runExplicit(ui('Read ask insights'), async (access) => {
         const insights = await getInsights(slug, access)
         if (
           !insights ||
@@ -162,9 +164,9 @@ function InsightsPanelContent({ slug }: { slug: string }) {
     <div className='space-y-4' data-admin-insights>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <h3 className='text-sm font-semibold text-ink'>Insights</h3>
+          <h3 className='text-sm font-semibold text-ink'>{ui('Insights')}</h3>
           <p className='mt-0.5 text-xs text-ink-3'>
-            What people are asking, and where the corpus is falling short.
+            {ui('What people are asking, and where the corpus is falling short.')}
           </p>
         </div>
         <button
@@ -173,16 +175,20 @@ function InsightsPanelContent({ slug }: { slug: string }) {
           onClick={() => void onRefresh()}
           className='rp-btn rp-btn-outline'
         >
-          {isFetching ? 'Refreshing…' : 'Refresh insights'}
+          {isFetching ? ui('Refreshing…') : ui('Refresh insights')}
         </button>
       </div>
 
       {!sessionAllowed && (
         <p className='text-xs text-ink-3'>
-          Insights are a snapshot. Refresh explicitly to read them again.
+          {ui('Insights are a snapshot. Refresh explicitly to read them again.')}
         </p>
       )}
-      {error && <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
+      {error && (
+        <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
+          {localError(error, 'Could not load insights.')}
+        </p>
+      )}
       {isLoading && (
         <div className='space-y-3'>
           <div className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
@@ -195,13 +201,13 @@ function InsightsPanelContent({ slug }: { slug: string }) {
         </div>
       )}
 
-      {isError && <p className='text-sm text-ink-3'>Could not load insights.</p>}
+      {isError && <p className='text-sm text-ink-3'>{ui('Could not load insights.')}</p>}
 
       {data && data.totalAsks === 0 && (
         <div className='rounded-[var(--rp-radius)] border border-dashed border-line bg-surface-2 p-6'>
-          <p className='text-sm font-semibold text-ink'>No questions asked yet</p>
+          <p className='text-sm font-semibold text-ink'>{ui('No questions asked yet')}</p>
           <p className='mt-1 max-w-xl text-sm leading-relaxed text-ink-2'>
-            Insights appear once people start using Ask.
+            {ui('Insights appear once people start using Ask.')}
           </p>
         </div>
       )}
@@ -209,18 +215,18 @@ function InsightsPanelContent({ slug }: { slug: string }) {
       {data && data.totalAsks > 0 && (
         <>
           <dl className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
-            <StatTile label='Questions asked' value={String(data.totalAsks)} />
-            <StatTile label='Answered' value={String(data.answered)} />
-            <StatTile label='Unanswered' value={String(data.unanswered)} />
+            <StatTile label={ui('Questions asked')} value={String(data.totalAsks)} />
+            <StatTile label={ui('Answered')} value={String(data.answered)} />
+            <StatTile label={ui('Unanswered')} value={String(data.unanswered)} />
             <StatTile
-              label='Avg groundedness'
+              label={ui('Avg groundedness')}
               value={data.avgGroundedness === null ? '-' : `${data.avgGroundedness.toFixed(1)}/5`}
             />
           </dl>
 
           {data.topQuestions.length > 0 && (
             <div className='rp-card p-5'>
-              <h4 className='text-sm font-semibold text-ink'>Most asked</h4>
+              <h4 className='text-sm font-semibold text-ink'>{ui('Most asked')}</h4>
               <ul className='mt-3 divide-y divide-line'>
                 {data.topQuestions.map((q, index) => (
                   <li
@@ -229,7 +235,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                   >
                     <span className='min-w-0 truncate text-ink-2'>{q.question}</span>
                     <span className='rp-badge rp-badge-quiet shrink-0'>
-                      {q.count} {q.count === 1 ? 'ask' : 'asks'}
+                      {q.count} {q.count === 1 ? ui('ask') : ui('asks')}
                     </span>
                   </li>
                 ))}
@@ -238,13 +244,18 @@ function InsightsPanelContent({ slug }: { slug: string }) {
           )}
 
           <div className='rp-card p-5'>
-            <h4 className='text-sm font-semibold text-ink'>Knowledge gaps</h4>
+            <h4 className='text-sm font-semibold text-ink'>{ui('Knowledge gaps')}</h4>
             <p className='mt-1 text-xs text-ink-3'>
-              Questions the corpus could not answer well - add sources that cover them to close the
-              gap.
+              {ui(
+                'Questions the corpus could not answer well - add sources that cover them to close the gap.',
+              )}
             </p>
             {data.gaps.length === 0
-              ? <p className='mt-3 text-sm text-ink-3'>No gaps found - the corpus is holding up.</p>
+              ? (
+                <p className='mt-3 text-sm text-ink-3'>
+                  {ui('No gaps found - the corpus is holding up.')}
+                </p>
+              )
               : (
                 <ul className='mt-3 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
                   {data.gaps.map((gap, index) => (
@@ -255,10 +266,14 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                           className='rp-badge rp-badge-warn shrink-0'
                           style={{ whiteSpace: 'normal' }}
                         >
-                          {gap.reason}
+                          {gap.reason === 'No answer found in the corpus'
+                            ? ui('No answer found in the corpus')
+                            : /^Weak grounding \(\d(?:\.\d+)?\/5\)$/.test(gap.reason)
+                            ? ui('Weak grounding ({score}/5)', { score: gap.reason.slice(16, -3) })
+                            : gap.reason}
                         </span>
                       </div>
-                      <p className='mt-1 text-xs text-ink-3'>{relativeTime(gap.ts)}</p>
+                      <p className='mt-1 text-xs text-ink-3'>{relativeTime(gap.ts, ui)}</p>
                     </li>
                   ))}
                 </ul>
@@ -270,32 +285,32 @@ function InsightsPanelContent({ slug }: { slug: string }) {
             : null}
 
           <div className='rp-card p-5'>
-            <h4 className='text-sm font-semibold text-ink'>Recent questions</h4>
+            <h4 className='text-sm font-semibold text-ink'>{ui('Recent questions')}</h4>
             {data.recent.length === 0
-              ? <p className='mt-3 text-sm text-ink-3'>Nothing recent.</p>
+              ? <p className='mt-3 text-sm text-ink-3'>{ui('Nothing recent.')}</p>
               : (
                 <div className='mt-3 overflow-x-auto'>
                   <table className='w-full min-w-[640px] border-collapse text-sm'>
                     <thead>
                       <tr className='border-b border-line text-left text-xs text-ink-3'>
-                        <th className='py-2 pr-3 font-medium'>Question</th>
-                        <th className='py-2 pr-3 font-medium'>When</th>
-                        <th className='py-2 pr-3 font-medium'>Answered</th>
-                        <th className='py-2 pr-3 font-medium'>Citations</th>
-                        <th className='py-2 pr-3 font-medium'>Relevance</th>
-                        <th className='py-2 pr-3 font-medium'>Grounded</th>
-                        <th className='py-2 pr-3 font-medium'>Duration</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('Question')}</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('When')}</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('Answered')}</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('Citations')}</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('Relevance')}</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('Grounded')}</th>
+                        <th className='py-2 pr-3 font-medium'>{ui('Duration')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.recent.map((row: AskInsightRow, index: number) => (
                         <tr key={index} className='border-b border-line last:border-0'>
                           <td className='max-w-xs truncate py-2 pr-3 text-ink'>{row.question}</td>
-                          <td className='py-2 pr-3 text-ink-3'>{relativeTime(row.ts)}</td>
+                          <td className='py-2 pr-3 text-ink-3'>{relativeTime(row.ts, ui)}</td>
                           <td className='py-2 pr-3'>
                             {row.answered
-                              ? <span className='rp-badge rp-badge-ok'>Answered</span>
-                              : <span className='rp-badge rp-badge-bad'>Unanswered</span>}
+                              ? <span className='rp-badge rp-badge-ok'>{ui('Answered')}</span>
+                              : <span className='rp-badge rp-badge-bad'>{ui('Unanswered')}</span>}
                           </td>
                           <td className='py-2 pr-3 text-ink-2'>{row.citations}</td>
                           <td className='py-2 pr-3 text-ink-2'>
@@ -303,7 +318,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                           </td>
                           <td className='py-2 pr-3 text-ink-2'>{formatScore(row.groundedness)}</td>
                           <td className='py-2 pr-3 text-ink-2'>
-                            {formatDuration(row.durationSec)}
+                            {formatDuration(row.durationSec, ui)}
                           </td>
                         </tr>
                       ))}

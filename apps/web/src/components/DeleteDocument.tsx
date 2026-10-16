@@ -1,3 +1,4 @@
+import { createPortalLocale, type Locale, usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { ApiError, deleteAdminResource } from '../api/client.ts'
@@ -14,8 +15,14 @@ export interface DeletableDocument {
 export type DeleteOutcome = 'deleted' | 'already-deleted'
 
 /** What a list or page announces once a delete has ended. */
-export function deletedNotice(title: string, outcome: DeleteOutcome): string {
-  return outcome === 'deleted' ? `Deleted “${title}”.` : `“${title}” had already been deleted.`
+export function deletedNotice(
+  title: string,
+  outcome: DeleteOutcome,
+  ui: Locale['ui'] = createPortalLocale('en').ui,
+): string {
+  return outcome === 'deleted'
+    ? ui('Deleted “{title}”.', { title })
+    : ui('“{title}” had already been deleted.', { title })
 }
 
 /**
@@ -56,17 +63,17 @@ export function refreshAfterDelete(
  * appearing, and what happens to investigations that cite it.
  */
 export function DeleteDocumentDescription({ title }: { title: string }) {
+  const { ui } = usePortalLocale()
   return (
     <>
-      <p>
-        Delete <strong className='font-semibold'>{title}</strong>?
-      </p>
+      <p>{ui('Delete {title}?', { title })}</p>
       <ul className='mt-3 list-disc space-y-1.5 pl-5'>
-        <li>This cannot be undone.</li>
-        <li>It is removed from the Library, from search and from answers.</li>
+        <li>{ui('This cannot be undone.')}</li>
+        <li>{ui('It is removed from the Library, from search and from answers.')}</li>
         <li>
-          Investigations that cite it keep the passages people saved, shown as no longer in the
-          Library.
+          {ui(
+            'Investigations that cite it keep the passages people saved, shown as no longer in the Library.',
+          )}
         </li>
       </ul>
     </>
@@ -96,6 +103,7 @@ export function DeleteDocumentButton({
   /** Shown on the document's own page, which leaves once the delete is done. */
   onDocumentPage?: boolean
 }) {
+  const { ui } = usePortalLocale()
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -131,7 +139,7 @@ export function DeleteDocumentButton({
       let outcome: DeleteOutcome = 'deleted'
       try {
         const result = await runExplicit(
-          'Delete document',
+          ui('Delete document'),
           (access) => deleteAdminResource(slug, access, document.id),
         )
         authority.controller.assertCurrent(context)
@@ -161,7 +169,7 @@ export function DeleteDocumentButton({
       <button
         type='button'
         aria-haspopup='dialog'
-        aria-label={`${label} \u201c${document.title}\u201d`}
+        aria-label={ui('{action} “{title}”', { action: ui(label), title: document.title })}
         data-delete-document={document.id}
         disabled={busy}
         onClick={() => {
@@ -171,16 +179,16 @@ export function DeleteDocumentButton({
         className={className ??
           'rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-bad-ink)]'}
       >
-        {label}
+        {ui(label)}
       </button>
       {open && (
         <ConfirmActionDialog
-          title='Delete document'
+          title={ui('Delete document')}
           description={<DeleteDocumentDescription title={document.title} />}
-          confirmLabel={error ? 'Try again' : 'Delete document'}
-          cancelLabel='Keep document'
+          confirmLabel={error ? ui('Try again') : ui('Delete document')}
+          cancelLabel={ui('Keep document')}
           busy={busy}
-          busyLabel='Deleting document...'
+          busyLabel={ui('Deleting document...')}
           error={error}
           onCancel={() => {
             setOpen(false)
