@@ -466,8 +466,8 @@ Deno.test('topics, labelsets and entity references resolve in the portal catalog
     management: {
       entityGroups: (config: { slug: string }) =>
         Promise.resolve([{ group: 'Research', entities: [`${config.slug}-entity`] }]),
-      relationsGraph: () => {
-        calls.push('relations')
+      relationsGraph: (config: { slug: string }, options?: { entity?: string }) => {
+        calls.push(options?.entity ? 'relations' : `entity-catalogue:${config.slug}`)
         return Promise.resolve({ nodes: [], edges: [] })
       },
       listAgents: () => Promise.resolve([]),
@@ -493,11 +493,17 @@ Deno.test('topics, labelsets and entity references resolve in the portal catalog
         'graph/relations?entity=b-entity',
       ]
     ) {
+      calls.length = 0
       f.providerCalls.length = 0
       expect((await f.requestAs(user, `/api/t/a/${path}`)).status).toBe(404)
-      expect(calls).toEqual([])
+      expect(calls).toEqual(
+        path.startsWith('entity?') || path.startsWith('graph/relations?')
+          ? ['entity-catalogue:a']
+          : [],
+      )
       expect(f.providerCalls.filter((call) => call.method !== 'labelsets')).toEqual([])
     }
+    calls.length = 0
     for (
       const path of [
         'topics/a-topic/resources',
