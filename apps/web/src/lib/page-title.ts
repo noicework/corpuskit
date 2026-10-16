@@ -8,6 +8,9 @@
  * bookmark says what it points at.
  */
 
+type TitleUi = (message: string) => string
+const englishTitle: TitleUi = (message) => message
+
 /** The surface names, keyed by the path segment under `/t/:slug`. */
 const SURFACES: [RegExp, string][] = [
   [/^ask(?:\/|$)/, 'Ask'],
@@ -33,23 +36,28 @@ const SURFACES: [RegExp, string][] = [
  * alone. An entity page is named for its entity, which is the only thing
  * that distinguishes one from another.
  */
-export function surfaceName(pathname: string): string | undefined {
+export function surfaceName(pathname: string, ui: TitleUi = englishTitle): string | undefined {
   const rest = /^\/t\/[^/]+\/?(.*)$/.exec(pathname)?.[1] ?? ''
   const trimmed = rest.replace(/\/+$/, '')
   if (!trimmed) return undefined
   const entity = /^entity\/(.+)$/.exec(trimmed)
   if (entity?.[1]) {
     try {
-      return decodeURIComponent(entity[1]).replace(/\+/g, ' ').trim() || 'Entity'
+      return decodeURIComponent(entity[1]).replace(/\+/g, ' ').trim() || ui('Entity')
     } catch {
-      return 'Entity'
+      return ui('Entity')
     }
   }
-  return SURFACES.find(([pattern]) => pattern.test(trimmed))?.[1]
+  const surface = SURFACES.find(([pattern]) => pattern.test(trimmed))?.[1]
+  return surface ? ui(surface) : undefined
 }
 
 /** "Library | Southern Waters Research Portal", or the product name on the home page. */
-export function pageTitle(pathname: string, productName: string): string {
-  const surface = surfaceName(pathname)
+export function pageTitle(
+  pathname: string,
+  productName: string,
+  ui: TitleUi = englishTitle,
+): string {
+  const surface = surfaceName(pathname, ui)
   return surface ? `${surface} | ${productName}` : productName
 }

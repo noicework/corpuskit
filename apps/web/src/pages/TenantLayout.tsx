@@ -351,12 +351,12 @@ export function TenantLayout() {
   // apart by what they hold rather than by the product name alone (D6-14).
   useEffect(() => {
     if (config) {
-      document.title = pageTitle(location.pathname, config.branding.productName)
+      document.title = pageTitle(location.pathname, config.branding.productName, ui)
     }
     return () => {
-      document.title = 'Research Portal'
+      document.title = ui('Research Portal')
     }
-  }, [config, location.pathname])
+  }, [config, location.pathname, ui])
 
   // Load the faces for the tenant's typography choice, apply its text scale,
   // and mirror the theme onto <body> so portaled overlays follow it too (all

@@ -1,5 +1,7 @@
 /** Application-owned interface copy only; source content never enters this catalog. */
 export const COMMON_JA: Readonly<Record<string, string>> = {
+  'Agentic': 'エージェント調査',
+  'Research Portal': '研究ポータル',
   'Open {name}': '{name}を開く',
   'This document cannot be displayed': 'この資料を表示できません',
   'This document does not exist': 'この資料は見つかりません',

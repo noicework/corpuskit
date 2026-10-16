@@ -20,7 +20,7 @@ Deno.test('app locale retains explicit language across portal and platform witho
   const page = await browser.newPage(server.url)
   const config = server.tenants.get('marine')!
   server.tenants.patch('marine', {
-    branding: { ...config.branding, colourScheme: 'viewer' },
+    branding: { ...config.branding, colourScheme: 'viewer', productName: 'Summary {name}' },
     languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
   })
   const captures = '.planning/logs/japanese-locale-foundation'
@@ -29,12 +29,15 @@ Deno.test('app locale retains explicit language across portal and platform witho
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
     await page.goto(`${server.url}/t/marine/library`)
     await page.waitForFunction(() => document.documentElement.lang === 'ja')
+    await page.waitForFunction(() => document.title === 'ライブラリ | Summary {name}')
     await page.waitForSelector('button[aria-label="English"]')
     await (await page.waitForSelector('button[aria-label="English"]')).click()
     await page.waitForFunction(() => document.documentElement.lang === 'en-AU')
+    await page.waitForFunction(() => document.title === 'Library | Summary {name}')
     expect(await page.evaluate(() => localStorage.getItem('corpuskit-ui-language-v1'))).toBe('en')
     await (await page.waitForSelector('button[aria-label="日本語"]')).click()
     await page.waitForFunction(() => document.documentElement.lang === 'ja')
+    await page.waitForFunction(() => document.title === 'ライブラリ | Summary {name}')
     await page.goto(`${server.url}/admin`)
     await page.waitForFunction(() => document.documentElement.lang === 'ja')
     expect(await page.evaluate(() => localStorage.getItem('corpuskit-ui-language-v1'))).toBe('ja')

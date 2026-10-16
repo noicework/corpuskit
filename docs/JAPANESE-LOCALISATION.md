@@ -114,6 +114,6 @@ deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow
 ```
 
 Screenshots, measured metrics and the classified Manage English-candidate list are written under
-`.planning/logs/japanese-{locale-foundation,manage,research,platform}/`. Peer inventories and
+`.planning/logs/japanese-{locale-foundation,manage,research-ui,platform}/`. Peer inventories and
 independent review reports are retained with the local handoff evidence. Exact-head gate/build/CI
 results are recorded in PR95. Local implementation and QA do not assert deployment or live acceptance.
