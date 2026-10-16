@@ -908,6 +908,9 @@ export function startScheduler(
   lifecycle?: PortalLifecycleStore,
   bindings?: Pick<BindingStoreApi, 'status'>,
 ): () => void {
+  // Local, explicitly operated demos may allow manual agents while scheduling no upkeep.
+  // Unset or any value other than the exact string 'false' keeps the existing timers.
+  if (env.LOCAL_SCHEDULER_ENABLED === 'false') return () => {}
   // The feedback files `buildApp` keeps by default, under the same DATA_DIR.
   const stores = {
     rbac,
