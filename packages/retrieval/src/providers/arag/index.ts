@@ -4645,6 +4645,19 @@ export class AragProvider implements RetrievalProvider {
           }))
         }
         const status = err instanceof AragApiError ? err.status : 0
+        // A stored configuration may carry filter_expression while a source
+        // pin uses resource_filters. This specific platform incompatibility
+        // concerns the configuration alone: keep full-resource reading and
+        // every other requested setting on the first compatibility retry.
+        if (
+          !emitted && status === 412 && body.search_configuration &&
+          Array.isArray(body.resource_filters) && body.resource_filters.length > 0 &&
+          err instanceof AragApiError &&
+          /cannot mix old filters with filter_expression/i.test(err.message)
+        ) {
+          delete body.search_configuration
+          continue
+        }
         // A 4xx before any output usually means an optional capability
         // (graph strategy, reranker) is unsupported here - shed it and go
         // again. MAX_ATTEMPTS still bounds the loop, so this and the
