@@ -5417,12 +5417,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const ENRICHMENT_GENERATION_NOTE =
     "Generated in-app with the platform's query-time structured answer " +
     "(answer_json_schema), grounded by embedding each resource's own extracted text " +
-    'in the request rather than a second scoped retrieval, then cached. The ' +
+    'in the request and restricting retrieval to that same resource, then cached. The ' +
     "platform's ingest-time JSON generator is not available on this knowledge box, " +
     'so this schema-driven path is used instead. The summary reuses the ' +
     "platform's existing per-resource page summary where one was already " +
     'generated; a resource whose structured generation fails still gets a ' +
-    'partial entry from that page summary rather than being left unenriched.'
+    'partial entry from that page summary. Bilingual portals keep failed entries pending ' +
+    'for native-language generation rather than using a potentially translated summary.'
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/enrichments/export'), (c) => {
     const config = tenant(c.req.param('slug'))

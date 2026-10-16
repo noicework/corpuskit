@@ -181,8 +181,8 @@ function json(body: unknown): Response {
  * overrides the generated object; `pageSummary` seeds the DA field.
  *
  * `askBodies`, when passed, collects the parsed JSON body of every /ask call -
- * so a test can assert what generation actually sent (no resource_filters,
- * the document text embedded in the query).
+ * so a test can assert the original document's retrieval scope and the text
+ * embedded in the query.
  */
 function management(
   opts: {
@@ -316,14 +316,14 @@ describe('generateEnrichment', () => {
     expect(e.usedPageSummary).toBeUndefined()
   })
 
-  it("embeds the resource's own text in the query and generates WITHOUT resource_filters", async () => {
+  it("embeds the resource's own text and restricts retrieval to that same resource", async () => {
     const askBodies: Record<string, unknown>[] = []
     const e = await generateEnrichment(management({}, askBodies), config, 'r1')
     expect(askBodies.length).toBe(1)
     const body = askBodies[0]!
-    // The document's own text is embedded in the query - no dependency on
-    // scoped retrieval, so no resource_filters and no reliance on ingest status.
-    expect(body.resource_filters).toBeUndefined()
+    // Other papers may contain related measurements that do not belong in this
+    // document's summary. The request must not retrieve those papers.
+    expect(body.resource_filters).toEqual(['r1'])
     expect(String(body.query)).toContain('courses for professional fishers')
     expect(e.data.title).toContain('Echo-sounder')
   })

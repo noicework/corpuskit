@@ -53,6 +53,7 @@ Deno.test('Japanese file text survives a generated summary in the provider texts
     quotesOfInterest: [],
   }
   const queries: string[] = []
+  const scopes: unknown[] = []
   const base = tenantConfig('grains')!
   const management = new AragProvider({
     resolveBinding: () => ({ baseUrl: 'https://example.test/api/v1/kb/test', token: 'test-token' }),
@@ -71,7 +72,9 @@ Deno.test('Japanese file text survives a generated summary in the provider texts
       }
       if (url.includes('/catalog')) return Promise.resolve(Response.json({ resources: {} }))
       if (url.endsWith('/ask')) {
-        queries.push(JSON.parse(String(init?.body)).query)
+        const body = JSON.parse(String(init?.body))
+        queries.push(body.query)
+        scopes.push(body.resource_filters)
         return Promise.resolve(
           new Response(
             JSON.stringify({ item: { type: 'answer_json', object: generatedAnswer } }) + '\n',
@@ -92,6 +95,7 @@ Deno.test('Japanese file text survives a generated summary in the provider texts
       const enrichment = await generateEnrichment(management, config, 'ja-source')
       expect(queries[0]).toContain(sourceText)
       expect(queries[0]).not.toContain(generatedSummary)
+      expect(scopes[0]).toEqual(['ja-source'])
       expect(enrichment.data.summary).toBe(generatedAnswer.summary)
       expect(enrichment.usedPageSummary).toBeUndefined()
     },
@@ -101,6 +105,7 @@ Deno.test('Japanese file text survives a generated summary in the provider texts
     const enrichment = await generateEnrichment(management, base, 'ja-source')
     expect(queries[1]).toContain(generatedSummary)
     expect(queries[1]).not.toContain(sourceText)
+    expect(scopes[1]).toEqual(['ja-source'])
     expect(enrichment.data.summary).toBe(generatedSummary)
     expect(enrichment.usedPageSummary).toBe(true)
   })
