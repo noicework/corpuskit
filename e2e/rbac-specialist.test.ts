@@ -922,3 +922,82 @@ Deno.test('specialist readiness stage is exact', async () => {
   expect(entries).toHaveLength(15)
   expect(entries.filter((m) => m[2] === 'true').map((m) => m[1])).toEqual(ready)
 })
+
+Deno.test('enrichment archive import reviews locally before the normal curator session writes', async () => {
+  const browser = await launch()
+  const fixture = managementFixture()
+  const server = startTestServer({ identity: { role: 'curator' }, management: fixture.management })
+  const page = await browser.newPage(`${server.url}/t/marine/manage?tab=enrichments`)
+  try {
+    await page.waitForSelector('[data-enrichments-import-file]')
+    const selectArchive = async (value: string) => {
+      await page.evaluate((value) => {
+        const input = document.querySelector<HTMLInputElement>('[data-enrichments-import-file]')!
+        const transfer = new DataTransfer()
+        transfer.items.add(
+          new File([value], 'reviewed-enrichments.json', { type: 'application/json' }),
+        )
+        input.files = transfer.files
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+      }, { args: [value] })
+    }
+    const imports = () =>
+      server.requests.filter((r) => r.path.endsWith('/enrichments/import?collision=skip'))
+    await selectArchive('{"research-summary": []}')
+    await click(page, 'Review archive')
+    await page.waitForSelector('[data-enrichments-import] [role=alert]')
+    expect(imports()).toHaveLength(0)
+    expect(await page.$('[data-enrichments-import-confirm]')).toBeNull()
+    const archive = JSON.stringify({
+      'research-summary': {
+        'res-1': {
+          schemaId: 'research-summary',
+          generatedAt: '2026-10-16T00:00:00Z',
+          data: { title: 'Reviewed coastal evidence' },
+        },
+      },
+    })
+    await selectArchive(archive)
+    await click(page, 'Review archive')
+    await page.waitForSelector('[data-enrichments-import-preview]')
+    expect(imports()).toHaveLength(0)
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('[data-enrichments-import-preview]')!.textContent
+      ),
+    ).toContain('1 record from 1 schema')
+    const readsBefore = server.requests.filter((r) => r.path.endsWith('/enrichments')).length
+    await click(page, 'Import reviewed archive')
+    await page.waitForFunction(() =>
+      document.querySelector('[data-enrichments-import] [role=status]')?.textContent?.includes(
+        'Imported 1 record. Kept 0 existing records unchanged.',
+      )
+    )
+    expect(imports()).toHaveLength(1)
+    expect(imports()[0]?.status).toBe(200)
+    expect(server.requests.filter((r) => r.path.endsWith('/enrichments')).length).toBeGreaterThan(
+      readsBefore,
+    )
+    await selectArchive(archive)
+    await click(page, 'Review archive')
+    await click(page, 'Import reviewed archive')
+    await page.waitForFunction(() =>
+      document.querySelector('[data-enrichments-import] [role=status]')?.textContent?.includes(
+        'Imported 0 records. Kept 1 existing record unchanged.',
+      )
+    )
+    expect(imports()).toHaveLength(2)
+    expect(fixture.calls).not.toContain('askStructured')
+    expect(server.requests.some((r) => r.path.endsWith('/enrichments/run'))).toBe(false)
+    server.setAssignment({ kind: 'portal', slug: 'marine' }, 'e2e-curator', null)
+    await selectArchive(archive)
+    await click(page, 'Review archive')
+    await click(page, 'Import reviewed archive')
+    await page.waitForFunction(() => !document.querySelector('[data-enrichments-import]'))
+    expect(imports().at(-1)?.status).toBe(403)
+  } finally {
+    await page.close()
+    await server.close()
+    await browser.close()
+  }
+})
