@@ -7,6 +7,41 @@ import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 
 const captureRoot = '.planning/logs/japanese-platform'
 
+async function prepareCapture(page: Page) {
+  // Chromium pauses animation frames in hidden tabs. Activation and synchronous
+  // DOM readiness work even when another browser page has taken the foreground;
+  // the screenshot itself supplies the paint boundary, without an unbounded RAF.
+  await page.bringToFront()
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '22px'
+  })
+  await page.waitForFunction(() =>
+    document.visibilityState === 'visible' && document.fonts.status === 'loaded' &&
+    getComputedStyle(document.documentElement).fontSize === '22px'
+  )
+}
+
+Deno.test('platform capture readiness activates a backgrounded page without waiting for its animation frame', async () => {
+  const browser = await launch()
+  const page = await browser.newPage('about:blank', { waitUntil: 'load' })
+  const foreground = await browser.newPage('about:blank', { waitUntil: 'load' })
+  try {
+    expect(await page.evaluate(() => document.visibilityState)).toBe('hidden')
+    await prepareCapture(page)
+    expect(
+      await page.evaluate(() => ({
+        visibility: document.visibilityState,
+        fonts: document.fonts.status,
+        size: getComputedStyle(document.documentElement).fontSize,
+      })),
+    ).toEqual({ visibility: 'visible', fonts: 'loaded', size: '22px' })
+  } finally {
+    await foreground.close()
+    await page.close()
+    await browser.close()
+  }
+})
+
 async function clickText(page: Page, text: string) {
   await page.waitForFunction(
     (text) =>
@@ -61,14 +96,7 @@ Deno.test('Japanese platform help and access preserve source identities across d
           }, { args: [language, scheme] })
           const capture = async (name: string, target?: string) => {
             console.info(`[platform-ja] capture ${language}/${scheme}/${width}/${name}`)
-            await page.evaluate(async () => {
-              document.documentElement.style.fontSize = '22px'
-              await Promise.race([
-                document.fonts.ready,
-                new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-              ])
-              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-            })
+            await prepareCapture(page)
             if (target) {
               await page.evaluate((target) => {
                 document.querySelector(target)?.scrollIntoView({
@@ -84,6 +112,7 @@ Deno.test('Japanese platform help and access preserve source identities across d
               font: getComputedStyle(document.documentElement).fontSize,
               language: document.documentElement.lang,
               fontStatus: document.fonts.status,
+              visibility: document.visibilityState,
               colorScheme:
                 getComputedStyle(document.querySelector('main') ?? document.body).colorScheme,
               background:
@@ -95,6 +124,8 @@ Deno.test('Japanese platform help and access preserve source identities across d
             expect(metrics.width).toBe(width)
             expect(metrics.scrollWidth).toBeLessThanOrEqual(width + 1)
             expect(metrics.font).toBe('22px')
+            expect(metrics.fontStatus).toBe('loaded')
+            expect(metrics.visibility).toBe('visible')
             expect(metrics.language).toBe(language === 'ja' ? 'ja' : 'en-AU')
             expect(metrics.colorScheme).toBe(scheme)
             if (name === 'member-form') {
