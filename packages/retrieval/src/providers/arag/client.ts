@@ -11,6 +11,8 @@ export interface KbBinding {
   token: string
   /** Box id, for display only - derivable from baseUrl. */
   kbId?: string
+  /** Operator-set model restriction for every generative request from this binding. */
+  inferenceModel?: string
 }
 
 /** Hosts a knowledge box endpoint may live on - anything else is rejected (SSRF guard). */
@@ -113,6 +115,40 @@ export class KbClient {
     this.fetchImpl = fetchImpl.bind(globalThis)
   }
 
+  /** Enforce at the transport boundary so caller overrides and retries cannot bypass policy. */
+  private inferenceBody(path: string, body: unknown): unknown {
+    const model = this.binding.inferenceModel
+    if (!model) return body
+    if (!/^[A-Za-z0-9_./:-]{1,200}$/.test(model)) throw new Error('invalid_inference_policy')
+    const data = body && typeof body === 'object' ? body as Record<string, unknown> : {}
+    if (path === '/ask') return { ...data, generative_model: model }
+    if (path === '/task/start') {
+      const parameters = data.parameters as Record<string, unknown> | undefined
+      return { ...data, parameters: { ...parameters, llm: { model } } }
+    }
+    if (/^\/(?:extract|split)_strategies(?:\/|$)/.test(path)) {
+      const restrict = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(restrict)
+        if (!value || typeof value !== 'object') return value
+        return Object.fromEntries(
+          Object.entries(value).map(([key, child]) =>
+            key === 'llm'
+              ? [key, { generative_model: model }]
+              : key === 'user_keys'
+              ? [key, null]
+              : [key, restrict(child)]
+          ),
+        )
+      }
+      return restrict(data)
+    }
+    // These platform endpoints do not have a verified per-request model selector.
+    if (['/summarize', '/predict/rephrase', '/predict/remi'].includes(path)) {
+      throw new Error('inference_policy_unsupported')
+    }
+    return body
+  }
+
   private url(path: string) {
     return `${this.binding.baseUrl}${path}`
   }
@@ -145,7 +181,7 @@ export class KbClient {
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.headers(extra),
-      body: JSON.stringify(body),
+      body: JSON.stringify(this.inferenceBody(path, body)),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json()) as T
@@ -190,7 +226,7 @@ export class KbClient {
     const res = await this.fetchImpl(url, {
       method: 'PATCH',
       headers: this.headers(),
-      body: JSON.stringify(body),
+      body: JSON.stringify(this.inferenceBody(path, body)),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json().catch(() => ({}))) as T
@@ -206,7 +242,7 @@ export class KbClient {
     const res = await this.fetchImpl(url, {
       method,
       headers: this.headers(),
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(this.inferenceBody(path, body)),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json().catch(() => ({}))) as T
@@ -230,7 +266,7 @@ export class KbClient {
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.headers({ accept: 'application/x-ndjson', ...extra }),
-      body: JSON.stringify(body),
+      body: JSON.stringify(this.inferenceBody(path, body)),
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return res

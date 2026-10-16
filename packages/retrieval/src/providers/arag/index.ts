@@ -1224,7 +1224,7 @@ export interface AragProviderOptions {
 const REMI_CAP_MS = 8000
 
 export class AragProvider implements RetrievalProvider {
-  private readonly clients = new Map<string, KbClient>()
+  private readonly clients = new Map<string, { client: KbClient; token: string }>()
   /**
    * Search listings before their platform page summaries are filled: the
    * fill runs on every read (cheap: summaries are memoised per resource), so
@@ -1269,13 +1269,13 @@ export class AragProvider implements RetrievalProvider {
       this.invalidate(tenant.slug)
       throw new KnowledgeBoxNotConnectedError(tenant.slug)
     }
-    const key = `${tenant.slug}:${binding.baseUrl}`
+    const key = `${tenant.slug}:${binding.baseUrl}:${binding.inferenceModel ?? ''}`
     const existing = this.clients.get(key)
-    if (existing) return existing
+    if (existing?.token === binding.token) return existing.client
     // A new binding for this slug invalidates anything cached for the old one.
     this.invalidate(tenant.slug)
     const client = new KbClient(binding, this.opts.fetchImpl ?? fetch)
-    this.clients.set(key, client)
+    this.clients.set(key, { client, token: binding.token })
     return client
   }
 
@@ -2793,6 +2793,8 @@ export class AragProvider implements RetrievalProvider {
 
   /** The box's configured user-facing answer model. DA tasks must not inherit it. */
   async generativeModel(tenant: TenantConfig): Promise<string> {
+    const policy = this.opts.resolveBinding(tenant.slug)?.inferenceModel
+    if (policy) return policy
     try {
       const cfg = await this.client(tenant).getJson<{ generative_model?: string }>(
         '/configuration',
@@ -2804,8 +2806,8 @@ export class AragProvider implements RetrievalProvider {
   }
 
   /** The independently configured cheap model that bulk DA tasks must pin. */
-  async augmentationModel(_tenant: TenantConfig): Promise<string> {
-    return this.augmentationModelId
+  async augmentationModel(tenant: TenantConfig): Promise<string> {
+    return this.opts.resolveBinding(tenant.slug)?.inferenceModel ?? this.augmentationModelId
   }
 
   async listAgents(tenant: TenantConfig): Promise<KbAgent[]> {
@@ -2987,6 +2989,9 @@ export class AragProvider implements RetrievalProvider {
   ): Promise<
     { answerRelevance: number | null; groundedness: number | null; contextRelevance: number | null }
   > {
+    if (this.opts.resolveBinding(tenant.slug)?.inferenceModel) {
+      return { answerRelevance: null, groundedness: null, contextRelevance: null }
+    }
     const raw = await this.client(tenant).postJson<{
       answer_relevance?: { score?: number } | null
       context_relevance?: (number | null)[] | null
@@ -3184,6 +3189,31 @@ export class AragProvider implements RetrievalProvider {
     resourceIds: string[],
     kind: 'simple' | 'extended' = 'simple',
   ): Promise<string> {
+    if (this.opts.resolveBinding(tenant.slug)?.inferenceModel) {
+      const result = await this.askStructured(
+        tenant,
+        {
+          name: 'resource_summary',
+          description: 'A grounded summary of the selected resources',
+          parameters: {
+            type: 'object',
+            properties: { summary: { type: 'string' } },
+            required: ['summary'],
+          },
+        },
+        `Summarise the selected resources. Use ${
+          kind === 'extended' ? 'several paragraphs' : 'one paragraph'
+        }.`,
+        {
+          resourceIds: resourceIds.slice(0, 20),
+          requireGrounding: true,
+        },
+      )
+      const object = result.object as { summary?: unknown } | null
+      return !result.insufficientGrounding && typeof object?.summary === 'string'
+        ? object.summary
+        : ''
+    }
     const raw = await this.client(tenant).postJson<{
       summary?: string
       resources?: Record<string, { summary?: string }>
@@ -3197,6 +3227,7 @@ export class AragProvider implements RetrievalProvider {
 
   /** The platform's rephrasing of a query; null when unchanged/unavailable. */
   async rephrase(tenant: TenantConfig, question: string): Promise<string | null> {
+    if (this.opts.resolveBinding(tenant.slug)?.inferenceModel) return null
     try {
       const raw = await this.client(tenant).postJson<unknown>('/predict/rephrase', {
         question,

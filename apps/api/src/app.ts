@@ -601,9 +601,14 @@ const connectBodySchema = z.object({
   url: z.string().min(12).optional(),
   endpoint: z.string().min(12).optional(),
   token: z.string().min(20),
+  inferenceModel: z.string().regex(/^[A-Za-z0-9_./:-]{1,200}$/).nullable().optional(),
 }).strict().refine((value) => (value.url === undefined) !== (value.endpoint === undefined), {
   message: 'Supply one knowledge box endpoint',
-}).transform((value) => ({ url: value.endpoint ?? value.url!, token: value.token }))
+}).transform((value) => ({
+  url: value.endpoint ?? value.url!,
+  token: value.token,
+  inferenceModel: value.inferenceModel,
+}))
 const createKbBodySchema = z.object({ title: z.string().min(1).max(80).optional() }).strict()
 const linkBodySchema = z.object({
   url: z.string().url(),
@@ -4378,6 +4383,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.delete(declaredRoute('DELETE', '/api/admin/t/:slug/knowledge-box'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (bindings.inferenceModel(config.slug) && !requestContext(c.req.raw).operator) {
+      return c.json({ error: 'operator_managed_inference' }, 403)
+    }
     if (!await emptyAdminBody(c)) return c.json({ error: 'invalid_request' }, 400)
     bindings.remove(config.slug)
     opts.invalidate?.(config.slug)
@@ -4779,6 +4787,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/admin/t/:slug/knowledge-box/create'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (bindings.inferenceModel(config.slug) && !requestContext(c.req.raw).operator) {
+      return c.json({ error: 'operator_managed_inference' }, 403)
+    }
     bindings.assertWritable()
     if (!accountOpsAvailable()) {
       return c.json({
@@ -6298,7 +6309,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
           'https://<region>.rag.progress.cloud/api/v1/kb/<box-id>.',
       }, 400)
     }
-    const candidate = { baseUrl: target.baseUrl, token: parsed.data.token, kbId: target.kbId }
+    const previousModel = bindings.inferenceModel(config.slug)
+    const operator = requestContext(c.req.raw).operator
+    if (!operator && (previousModel || parsed.data.inferenceModel !== undefined)) {
+      return c.json({ error: 'operator_managed_inference' }, 403)
+    }
+    const inferenceModel = parsed.data.inferenceModel === undefined
+      ? previousModel
+      : parsed.data.inferenceModel ?? undefined
+    const candidate = {
+      baseUrl: target.baseUrl,
+      token: parsed.data.token,
+      kbId: target.kbId,
+      ...(inferenceModel ? { inferenceModel } : {}),
+    }
+
     const probe = new KbClient(candidate)
     let resourceCount = 0
     try {

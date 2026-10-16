@@ -1850,3 +1850,23 @@ plus whatever your own backups keep.
 
 When an owner deletes a portal themselves, erase it straight away, or on the same schedule. The
 deployment does not list retired slugs, so keep your own record of the portals you delete.
+
+
+## Per-portal generative model restriction
+
+An operator may include `inferenceModel` in the H2 knowledge-box connect body. The value is the
+model identifier configured in that knowledge box, such as `openai-compatible`, and is stored
+beside its sealed binding. Omission retains an existing policy; explicit `null` clears it after
+an operator has configured replacement inference. A portal owner cannot set, clear or bypass
+this policy by replacing, deleting or creating a knowledge box connection.
+
+The binding's model overrides all request-level generation choices at the transport boundary,
+including structured generation, classifier calls, follow-up and suggested questions, retries,
+data-augmentation agents and model-based extraction strategies. Unrestricted bindings retain
+their current behaviour. Restricted summaries use grounded structured generation; the opaque
+platform rephrase and REMi endpoints are skipped because their selected model cannot be verified.
+Embeddings, indexing, ordinary document parsing and reranking remain platform services.
+
+The operator is responsible for restricting upstream model access and credentials on the KB,
+including its automatic summary model, and for stopping legacy agents and extraction strategies
+with unrelated model configurations. The request restriction complements those upstream controls.
