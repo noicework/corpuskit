@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import {
   type CSSProperties,
@@ -102,7 +103,12 @@ function formatTimestamp(seconds: number): string {
 
 /** Small eyebrow section label used on every panel in this view. */
 function PanelHeading({ children }: { children: ReactNode }) {
-  return <h2 className='rp-eyebrow text-ink-3'>{children}</h2>
+  const { ui } = usePortalLocale()
+  return (
+    <h2 className='rp-eyebrow text-ink-3'>
+      {typeof children === 'string' ? ui(children) : children}
+    </h2>
+  )
 }
 
 /**
@@ -574,17 +580,20 @@ function SummaryMatchNotice() {
 
 /** The DA page summary under its own heading - labelled as generated, never as document text. */
 function GeneratedSummary({ text }: { text: string }) {
+  const { ui } = usePortalLocale()
   return (
     <section
       aria-labelledby='generated-summary-heading'
       className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'
     >
       <h3 id='generated-summary-heading' className='rp-eyebrow text-ink-3'>
-        Generated summary
+        {ui('Generated summary')}
       </h3>
       <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>{plainDashes(text)}</p>
       <p className='mt-2 text-[11px] text-ink-3'>
-        Written by the portal from the document's text. Check it against the document itself.
+        {ui(
+          "Written by the portal from the document's text. Check it against the document itself.",
+        )}
       </p>
     </section>
   )
@@ -616,12 +625,15 @@ function ExtractedText(
     children: ReactNode
   },
 ) {
+  const { ui } = usePortalLocale()
   if (mode === 'hidden') return null
 
   if (mode === 'always') {
     return (
       <section aria-labelledby='extracted-text-heading' className='rp-card p-5'>
-        <h3 id='extracted-text-heading' className='rp-eyebrow text-ink-3'>Extracted text</h3>
+        <h3 id='extracted-text-heading' className='rp-eyebrow text-ink-3'>
+          {ui('Extracted text')}
+        </h3>
         <p className='rp-measure mt-1 text-xs leading-relaxed text-ink-3'>
           The PDF could not be displayed, so this machine reading of the file is the only version
           available here.
@@ -645,9 +657,11 @@ function ExtractedText(
       }
       <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-x-4'>
         <div className='min-w-0 sm:flex-1'>
-          <h3 id='extracted-text-heading' className='rp-eyebrow text-ink-3'>Extracted text</h3>
+          <h3 id='extracted-text-heading' className='rp-eyebrow text-ink-3'>
+            {ui('Extracted text')}
+          </h3>
           <p className='rp-measure mt-1 text-xs leading-relaxed text-ink-3'>
-            {extractedTextHint({ open, hasMatch })}
+            {ui(extractedTextHint({ open, hasMatch }))}
           </p>
         </div>
         <button
@@ -665,7 +679,7 @@ function ExtractedText(
             /* Wraps rather than clips: at a scaled-up system font this label
              * is wider than a phone's content column. */
           }
-          <span className='min-w-0'>{extractedTextToggleLabel(open)}</span>
+          <span className='min-w-0'>{ui(extractedTextToggleLabel(open))}</span>
         </button>
       </div>
       <div
@@ -684,10 +698,11 @@ function ExtractedText(
 function OriginalFileActions(
   { fileUrl, label }: { fileUrl: string; label: string },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <div className='flex flex-wrap gap-2'>
       <a href={fileUrl} download className='rp-btn rp-btn-primary font-semibold'>
-        {label}
+        {ui(label)}
       </a>
       <a
         href={fileUrl}
@@ -695,7 +710,7 @@ function OriginalFileActions(
         rel='noopener noreferrer'
         className='rp-btn rp-btn-outline'
       >
-        Open in a new tab
+        {ui('Open in a new tab')}
       </a>
     </div>
   )
@@ -716,6 +731,7 @@ function OfficeBody(
     fileUrl: string | undefined
   },
 ) {
+  const { ui } = usePortalLocale()
   const preview = content.preview
   const previewUrl = preview ? resourceFileUrl(slug, content.id, preview.fieldId) : undefined
 
@@ -723,7 +739,7 @@ function OfficeBody(
     return (
       <div className='space-y-4'>
         <p className='text-xs text-ink-3'>
-          Showing a PDF rendition of the original document.
+          {ui('Showing a PDF rendition of the original document.')}
         </p>
         <PdfReader fileUrl={previewUrl} title={content.title} initialPage={null} />
         {fileUrl ? <OriginalFileActions fileUrl={fileUrl} label='Download original' /> : null}
@@ -746,10 +762,11 @@ function OfficeBody(
             : <ResourceThumb slug={slug} id={content.id} type='document' />}
         </div>
         <div className='min-w-0 flex-1'>
-          <p className='text-sm font-semibold text-ink'>Original document</p>
+          <p className='text-sm font-semibold text-ink'>{ui('Original document')}</p>
           <p className='mt-1 text-sm leading-relaxed text-ink-2'>
-            This is an Office document. Browsers cannot display it in place, so download the
-            original to read it exactly as authored.
+            {ui(
+              'This is an Office document. Browsers cannot display it in place, so download the original to read it exactly as authored.',
+            )}
           </p>
           {fileUrl
             ? (
@@ -953,10 +970,11 @@ function ResourceViewer(
  * accessible name stays "Back to library" at every width.
  */
 function BackToLibrary({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   return (
     <Link
       to={`/t/${slug}/library`}
-      aria-label='Back to library'
+      aria-label={ui('Back to library')}
       className='rp-focus -ml-2 inline-flex h-9 min-w-9 items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-2 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-ink'
     >
       {
@@ -965,8 +983,8 @@ function BackToLibrary({ slug }: { slug: string }) {
         * first and the affordance survives as the arrow alone. */
       }
       <span aria-hidden='true' className='shrink-0'>&larr;</span>
-      <span className='truncate sm:hidden'>Library</span>
-      <span className='hidden truncate sm:inline'>Back to library</span>
+      <span className='truncate sm:hidden'>{ui('Library')}</span>
+      <span className='hidden truncate sm:inline'>{ui('Back to library')}</span>
     </Link>
   )
 }
@@ -1028,6 +1046,7 @@ function ResourceHeader(
   // "Plan", "Framework") still shows.
   const kindBadge = kind && !sameLabel(kind, typeLabel(resource.type)) ? kind : null
 
+  const { ui } = usePortalLocale()
   const topics = resource.topicIds
     .map((id) => ({ id, label: topicLabel(id) }))
     .filter((topic): topic is { id: string; label: string } => Boolean(topic.label))
@@ -1097,7 +1116,7 @@ function ResourceHeader(
             <div className='flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3'>
               {facts.map((fact) => (
                 <span key={fact.label} className='min-w-0'>
-                  {fact.label} {fact.href
+                  {ui(fact.label)} {fact.href
                     ? (
                       <a
                         href={fact.href}
@@ -1128,7 +1147,7 @@ function ResourceHeader(
               className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-xs font-medium underline decoration-dotted underline-offset-2'
               style={{ color: 'var(--rp-accent-fg)' }}
             >
-              View original source <span aria-hidden='true'>&rarr;</span>
+              {ui('View original source')} <span aria-hidden='true'>&rarr;</span>
             </a>
           )
           : null}
@@ -1144,9 +1163,10 @@ function ResourceHeader(
  * PDFs, the reading pane for documents), so this panel stays a tight overview.
  */
 function ResourceContext({ resource }: { resource: ResourceSummary }) {
+  const { ui } = usePortalLocale()
   return (
     <article className='rp-card p-5 sm:p-6' aria-labelledby='summary-heading'>
-      <h2 id='summary-heading' className='rp-eyebrow text-ink-3'>Summary</h2>
+      <h2 id='summary-heading' className='rp-eyebrow text-ink-3'>{ui('Summary')}</h2>
       <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>{resource.summary}</p>
 
       {resource.keyTakeaways && resource.keyTakeaways.length > 0
@@ -1245,6 +1265,7 @@ function DocumentChat(
     access.controller.context === context &&
     access.controller.can('portal.ask', { kind: 'portal', slug })
   const [requestVersion, setRequestVersion] = useState(0)
+  const { ui } = usePortalLocale()
   const [draft, setDraft] = useState('')
   const [query, setQuery] = useState('')
 
@@ -1285,12 +1306,12 @@ function DocumentChat(
   ]
   const starters = generated && generated.questions.length > 0
     ? generated.questions
-    : GENERIC_STARTERS
+    : GENERIC_STARTERS.map(ui)
 
   if (!canAsk()) {
     return (
-      <section className='rp-card p-5 sm:p-6' aria-label='Questions about this document'>
-        <h2 className='text-base font-semibold text-ink'>Questions about this document</h2>
+      <section className='rp-card p-5 sm:p-6' aria-label={ui('Questions about this document')}>
+        <h2 className='text-base font-semibold text-ink'>{ui('Questions about this document')}</h2>
         <ul className='mt-3 space-y-2 text-sm text-ink-2'>
           {starters.map((text) => <li key={text}>{text}</li>)}
         </ul>
@@ -1314,7 +1335,7 @@ function DocumentChat(
           <path d='M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' />
         </svg>
         <h2 id='chat-heading' className='text-base font-semibold leading-6 text-ink'>
-          Chat with this document
+          {ui('Chat with this document')}
         </h2>
       </div>
 
@@ -1325,7 +1346,7 @@ function DocumentChat(
       }
       <form onSubmit={submit} className='mt-4'>
         <label htmlFor='ask-document' className='sr-only'>
-          Ask a question about {resource.title}
+          {ui('Ask a question about')} {resource.title}
         </label>
         <div className='rp-field flex items-center gap-2 rounded-[var(--rp-radius)] border bg-surface p-1.5 pl-3'>
           <input
@@ -1337,7 +1358,7 @@ function DocumentChat(
             className='min-w-0 flex-1 border-0 bg-transparent py-1.5 text-sm text-ink focus:outline-none'
           />
           <button type='submit' className='rp-btn rp-btn-primary shrink-0 font-semibold'>
-            Ask
+            {ui('Ask')}
           </button>
         </div>
       </form>
@@ -1432,6 +1453,7 @@ function RecommendationsRail(
     topicLabel: (id: string) => string | undefined
   },
 ) {
+  const { ui } = usePortalLocale()
   const relatedQuery = buildRelatedQuery(resource.title, resource.summary)
   const query = useQuery({
     queryKey: ['related-search', slug, resource.id, relatedQuery],
@@ -1465,7 +1487,7 @@ function RecommendationsRail(
         : query.isError
         ? (
           <p className='mt-3 text-sm text-ink-3'>
-            Related resources could not be loaded right now.
+            {ui('Related resources could not be loaded right now.')}
           </p>
         )
         : recommendations.length === 0
@@ -1582,6 +1604,7 @@ function ViewerSkeleton() {
 }
 
 export function ResourceDetailPage() {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const { config } = useOutletContext<TenantOutletContext>()
   const splitRef = useRef<HTMLDivElement | null>(null)
@@ -1747,7 +1770,7 @@ export function ResourceDetailPage() {
         {isError && notFound
           ? (
             <EmptyState
-              title='This document does not exist'
+              title={ui('This document does not exist')}
               description='It may have been removed, or the link is out of date.'
             >
               <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-primary'>
@@ -1805,7 +1828,7 @@ export function ResourceDetailPage() {
                       )
                       : (
                         <EmptyState
-                          title='This document cannot be displayed'
+                          title={ui('This document cannot be displayed')}
                           description='The full content is unavailable for this resource right now.'
                         />
                       )}

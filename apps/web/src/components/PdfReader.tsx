@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import { ErrorCard, LiveStatus, Skeleton } from './ui.tsx'
@@ -106,13 +107,14 @@ function ToolbarButton(
     children: ReactNode
   },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <button
       type='button'
       onClick={onClick}
       disabled={disabled}
-      aria-label={label}
-      title={label}
+      aria-label={ui(label)}
+      title={ui(label)}
       className='rp-focus rp-btn rp-btn-ghost h-8 w-8 shrink-0 !px-0'
     >
       {children}
@@ -172,6 +174,7 @@ export function PdfReader(
     onLoadError?: () => void
   },
 ) {
+  const { ui, language } = usePortalLocale()
   const [libFailed, setLibFailed] = useState(false)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [errorMessage, setErrorMessage] = useState('')
@@ -276,8 +279,14 @@ export function PdfReader(
 
   useEffect(() => {
     setPageInput(String(pageNumber))
-    if (numPages > 0) setAnnouncement(`Page ${pageNumber} of ${numPages}`)
-  }, [pageNumber, numPages])
+    if (numPages > 0) {
+      setAnnouncement(
+        language === 'ja'
+          ? `${numPages}ページ中${pageNumber}ページ`
+          : `Page ${pageNumber} of ${numPages}`,
+      )
+    }
+  }, [pageNumber, numPages, language])
 
   // Track the reader's width for fit-width zoom.
   useEffect(() => {
@@ -564,7 +573,7 @@ export function PdfReader(
         </ToolbarButton>
 
         <div className='mx-1 flex items-center gap-1.5 text-xs text-ink-2'>
-          <label htmlFor='pdf-page-input' className='sr-only'>Page number</label>
+          <label htmlFor='pdf-page-input' className='sr-only'>{ui('Page number')}</label>
           <input
             id='pdf-page-input'
             type='text'
@@ -581,7 +590,7 @@ export function PdfReader(
             }}
             className='rp-focus h-7 w-10 rounded-[var(--rp-radius)] border border-line bg-surface text-center text-xs tabular-nums text-ink'
           />
-          <span className='tabular-nums'>of {numPages || '–'}</span>
+          <span className='tabular-nums'>{language === 'ja' ? '/' : 'of'} {numPages || '–'}</span>
         </div>
 
         <div className='mx-1 h-4 w-px bg-line' aria-hidden='true' />
@@ -593,7 +602,7 @@ export function PdfReader(
           </svg>
         </ToolbarButton>
         <span className='w-11 shrink-0 text-center text-xs tabular-nums text-ink-2'>
-          {zoomPercent ? `${zoomPercent}%` : 'Fit'}
+          {zoomPercent ? `${zoomPercent}%` : ui('Fit')}
         </span>
         <ToolbarButton label='Zoom in' onClick={zoomIn} disabled={status !== 'ready'}>
           <svg {...ICON_PROPS}>
@@ -621,8 +630,8 @@ export function PdfReader(
         <a
           href={fileUrl}
           download
-          aria-label='Download PDF'
-          title='Download PDF'
+          aria-label={ui('Download PDF')}
+          title={ui('Download PDF')}
           className='rp-focus rp-btn rp-btn-ghost h-8 w-8 shrink-0 !px-0'
         >
           <svg {...ICON_PROPS}>
@@ -633,8 +642,8 @@ export function PdfReader(
           href={initialPage ? `${fileUrl}#page=${initialPage}` : fileUrl}
           target='_blank'
           rel='noopener noreferrer'
-          aria-label='Open PDF in a new tab'
-          title='Open in a new tab'
+          aria-label={ui('Open PDF in a new tab')}
+          title={ui('Open in a new tab')}
           className='rp-focus rp-btn rp-btn-ghost h-8 w-8 shrink-0 !px-0'
         >
           <svg {...ICON_PROPS}>
