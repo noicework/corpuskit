@@ -89,6 +89,10 @@ export const BrandingSchema = z.object({
   defaultColourScheme: z.enum(['light', 'dark']).optional(),
   /** Served when an administrator uploaded a logo for this portal. */
   logoUrl: z.string().optional(),
+  /** Optional logo width ceiling in pixels. Absent keeps the portal's existing sizing. */
+  logoMaxWidth: z.number().int().min(80).max(640).optional(),
+  /** Only explicit false hides the portal switcher beside the home link. */
+  showPortalSwitcher: z.boolean().optional(),
   /** Optional logo variant with contrast on dark portal surfaces. */
   logoDarkUrl: z.string().optional(),
   /** Served when an administrator uploaded a hero image for this portal. */

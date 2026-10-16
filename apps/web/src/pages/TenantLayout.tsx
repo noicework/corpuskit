@@ -539,6 +539,10 @@ export function TenantLayout() {
                               : config.branding.logoUrl}
                             alt={config.branding.organisation}
                             onError={() => setLogoFailed(true)}
+                            style={config.branding.logoMaxWidth === undefined ? undefined : {
+                              maxWidth:
+                                `min(${config.branding.logoMaxWidth}px, var(--rp-logo-width-cap), 100%)`,
+                            }}
                             // Tenant logos vary wildly in aspect ratio (a wordmark
                             // with a tagline under it can be 4:1 while a compact
                             // wordmark is closer to 2:1), so a fixed height alone
@@ -551,7 +555,11 @@ export function TenantLayout() {
                             // intrinsic width, so without it the logo refuses to
                             // shrink and simply paints over its neighbours. Desktop is
                             // untouched - `sm:` restores h-16 with the 20rem cap.
-                            className='h-auto max-h-10 w-[8.5rem] shrink-0 object-contain sm:h-16 sm:max-h-none sm:w-auto sm:max-w-[20rem]'
+                            className={`h-auto max-h-10 w-[8.5rem] shrink-0 object-contain sm:h-16 sm:max-h-none sm:w-auto sm:max-w-[20rem] ${
+                              config.branding.logoMaxWidth === undefined
+                                ? ''
+                                : '[--rp-logo-width-cap:170px] sm:[--rp-logo-width-cap:640px]'
+                            }`}
                           />
                         )
                         : (
@@ -564,7 +572,7 @@ export function TenantLayout() {
                       /* Portal switcher, beside the logo - each portal is its own
                 * knowledge box, content and branding. */
                     }
-                    <KbSwitcher config={config} />
+                    {config.branding.showPortalSwitcher !== false && <KbSwitcher config={config} />}
                   </div>
                   {
                     /* Header search, centred and full-measure: it is the only search

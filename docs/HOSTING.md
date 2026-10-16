@@ -231,6 +231,13 @@ default preserves existing behaviour. `colourScheme: "light"` still forces light
 toggle. The pre-auth branding projection includes the default so sign-in uses the same scheme;
 it continues to exclude portal topics, questions and private configuration.
 
+`branding.logoMaxWidth` optionally caps a logo at an integer pixel width from 80 through 640.
+The rendered logo also fits the available header space and a 170px phone / 640px desktop cap.
+Omitting the field keeps existing logo sizing. `branding.showPortalSwitcher: false` hides the
+switcher beside the logo; omitted or `true` keeps it. The logo remains a link to the portal home.
+Both fields are accepted by the strict configuration import. The safe pre-auth projection includes
+only the logo width; it has no portal switcher.
+
 ### Portal members
 
 Create an email assignment with a body such as

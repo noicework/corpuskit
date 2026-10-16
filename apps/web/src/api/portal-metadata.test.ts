@@ -1,6 +1,8 @@
 import { expect } from '@std/expect'
 import { DEFAULT_PALETTES } from '@research-portal/core'
 import { readSafePortalMetadata, retryTenantConfig } from './portal-metadata.ts'
+import { safePortalProjection } from '../../../api/src/lifecycle-policy.ts'
+import { TenantConfigSchema } from '@research-portal/core'
 
 const palette = DEFAULT_PALETTES.corpuskit.palette
 const safe = {
@@ -36,6 +38,34 @@ Deno.test('paused portal metadata retains only public branding and status', asyn
   expect(JSON.stringify(result)).not.toContain('Private')
   expect(result).not.toHaveProperty('limits')
   expect(result).not.toHaveProperty('resources')
+})
+
+Deno.test('safe logo width survives projection and parsing without discovery or switcher state', async () => {
+  const config = TenantConfigSchema.parse({
+    ...safe,
+    branding: { ...safe.branding, logoMaxWidth: 300, showPortalSwitcher: false },
+    searchPlaceholder: 'Private search',
+    topics: [],
+    suggestedQuestions: [],
+    entityTypes: [],
+    relationTypes: [],
+  })
+  const projection = safePortalProjection(config, '/logo.svg')
+  const metadata = await readSafePortalMetadata(Response.json(projection), 'marine')
+  expect(metadata.branding.logoMaxWidth).toBe(300)
+  expect(metadata.branding.logoUrl).toBe('/logo.svg')
+  expect(projection.branding).not.toHaveProperty('showPortalSwitcher')
+  expect(metadata).not.toHaveProperty('topics')
+  expect(JSON.stringify(metadata)).not.toContain('Private')
+  for (const width of [79, 641, '300']) {
+    await expect(readSafePortalMetadata(
+      Response.json({
+        ...projection,
+        branding: { ...projection.branding, logoMaxWidth: width },
+      }),
+      'marine',
+    )).rejects.toThrow()
+  }
 })
 
 Deno.test('old active metadata remains compatible and unknown lifecycle states fail closed', async () => {

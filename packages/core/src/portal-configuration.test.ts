@@ -1,5 +1,6 @@
 import { expect } from '@std/expect'
 import {
+  BrandingSchema,
   portalConfigurationExport,
   PortalConfigurationImportSchema,
   TenantConfigSchema,
@@ -31,6 +32,27 @@ const config = TenantConfigSchema.parse({
   relationTypes: [],
   timezone: 'Asia/Tokyo',
   extraction: { default: 'default', rules: [] },
+})
+
+Deno.test('logo controls are bounded opt-in settings in both branding and operator imports', () => {
+  const base = portalConfigurationExport(config)
+  expect(base.branding.logoMaxWidth).toBeUndefined()
+  expect(base.branding.showPortalSwitcher).toBeUndefined()
+  for (const width of [80, 300, 640]) {
+    const branding = { ...base.branding, logoMaxWidth: width, showPortalSwitcher: false }
+    expect(BrandingSchema.parse(branding).logoMaxWidth).toBe(width)
+    const imported = PortalConfigurationImportSchema.parse({ ...base, branding })
+    expect(imported.branding.showPortalSwitcher).toBe(false)
+    expect(portalConfigurationExport({ ...config, branding }).branding.logoMaxWidth).toBe(width)
+  }
+  for (const width of [79, 641, 100.5, '300', null]) {
+    expect(BrandingSchema.safeParse({ ...base.branding, logoMaxWidth: width }).success).toBe(false)
+  }
+  for (const value of ['false', 0, null]) {
+    expect(BrandingSchema.safeParse({ ...base.branding, showPortalSwitcher: value }).success).toBe(
+      false,
+    )
+  }
 })
 
 Deno.test('configuration export is a complete importable presentation without access or hosting policy', () => {
