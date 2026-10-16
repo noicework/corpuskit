@@ -9,6 +9,7 @@ const safeMetadataSchema = z.object({
     productName: true,
     organisation: true,
     logoUrl: true,
+    logoMaxWidth: true,
     colours: true,
     paletteId: true,
     colourScheme: true,
