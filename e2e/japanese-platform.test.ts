@@ -8,35 +8,51 @@ import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 const captureRoot = '.planning/logs/japanese-platform'
 
 async function prepareCapture(page: Page) {
-  // Chromium pauses animation frames in hidden tabs. Activation and synchronous
-  // DOM readiness work even when another browser page has taken the foreground;
-  // the screenshot itself supplies the paint boundary, without an unbounded RAF.
+  // Chromium pauses animation frames in hidden tabs, and activation does not
+  // guarantee visibility after repeated captures. Fonts and synchronous layout
+  // can be ready in a background page; CDP screenshots supply the paint boundary.
   await page.bringToFront()
   await page.evaluate(() => {
     document.documentElement.style.fontSize = '22px'
   })
   await page.waitForFunction(() =>
-    document.visibilityState === 'visible' && document.fonts.status === 'loaded' &&
+    document.fonts.status === 'loaded' &&
     getComputedStyle(document.documentElement).fontSize === '22px'
   )
 }
 
-Deno.test('platform capture readiness activates a backgrounded page without waiting for its animation frame', async () => {
+Deno.test('platform capture measures a backgrounded page and captures its activated layout without waiting for an animation frame', async () => {
   const browser = await launch()
   const page = await browser.newPage('about:blank', { waitUntil: 'load' })
   const foreground = await browser.newPage('about:blank', { waitUntil: 'load' })
   try {
+    await page.setViewportSize({ width: 390, height: 240 })
+    await page.evaluate(() => {
+      document.body.style.cssText = 'margin:0;background:#121316;color:#f2f3f5'
+      document.body.innerHTML = '<main>日本語 background capture</main>'
+    })
     await foreground.bringToFront()
     await page.waitForFunction(() => document.visibilityState === 'hidden')
     expect(await page.evaluate(() => document.visibilityState)).toBe('hidden')
     await prepareCapture(page)
+    // Hidden pages have usable DOM/font layout; screenshot compositing needs
+    // the activated target on this Chromium build.
+    await foreground.bringToFront()
+    await page.waitForFunction(() => document.visibilityState === 'hidden')
     expect(
       await page.evaluate(() => ({
         visibility: document.visibilityState,
         fonts: document.fonts.status,
         size: getComputedStyle(document.documentElement).fontSize,
       })),
-    ).toEqual({ visibility: 'visible', fonts: 'loaded', size: '22px' })
+    ).toEqual({ visibility: 'hidden', fonts: 'loaded', size: '22px' })
+    await page.bringToFront()
+    await page.waitForFunction(() => document.visibilityState === 'visible')
+    const png = await page.screenshot({ captureBeyondViewport: false })
+    expect([...png.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect(png.length).toBeGreaterThan(100)
+    await Deno.mkdir(captureRoot, { recursive: true })
+    await Deno.writeFile(`${captureRoot}/background-layout-regression.png`, png)
   } finally {
     await foreground.close()
     await page.close()
@@ -64,7 +80,7 @@ async function clickText(page: Page, text: string) {
 Deno.test('Japanese platform help and access preserve source identities across desktop/mobile light/dark at 22px', async () => {
   const server = startTestServer({ identity: { role: 'owner' }, breakGlass: true })
   server.setGroupCapability(true)
-  const browser = await launch()
+  let browser = await launch()
   let page = await browser.newPage(server.url + '/admin/people')
   // Readiness follows the actual app element below, rather than unrelated third-party
   // network idle events. Marking the old document prevents stale selector matches.
@@ -127,7 +143,6 @@ Deno.test('Japanese platform help and access preserve source identities across d
             expect(metrics.scrollWidth).toBeLessThanOrEqual(width + 1)
             expect(metrics.font).toBe('22px')
             expect(metrics.fontStatus).toBe('loaded')
-            expect(metrics.visibility).toBe('visible')
             expect(metrics.language).toBe(language === 'ja' ? 'ja' : 'en-AU')
             expect(metrics.colorScheme).toBe(scheme)
             if (name === 'member-form') {
@@ -250,6 +265,11 @@ Deno.test('Japanese platform help and access preserve source identities across d
           server.setIdentity(owner)
           server.setAccessMode('marine', 'public')
           await page.close()
+          // Each visual variant gets an isolated browser compositor. Reusing
+          // one Chromium across the matrix can leave a later target hidden
+          // despite activation, with DOM ready but no screenshot frame.
+          await browser.close()
+          browser = await launch()
           page = await browser.newPage(server.url + '/admin/people')
           await page.waitForSelector('main h1')
         }
