@@ -207,6 +207,48 @@ describe('trimTruncatedTail', () => {
     const text = 'One.[1] Two.[2]'
     expect(trimTruncatedTail(text)).toEqual({ text, truncated: false })
   })
+
+  it('preserves complete Japanese cited bullet paragraphs', () => {
+    const text = [
+      '- FEL22 v1では保持率が64.2%でした。[1]',
+      '',
+      '- FEL22 v2では結論が更新されました。[2]',
+    ].join('\n')
+    expect(endsMidSentence(text)).toBe(false)
+    expect(trimTruncatedTail(text)).toEqual({ text, truncated: false })
+  })
+
+  it('recognises Japanese sentence punctuation and closing quotes', () => {
+    for (
+      const text of [
+        '- 比較は完了しました。',
+        '- 再試験が必要です！[1]',
+        '- 条件は一致していますか？[2]',
+        '- 「比較は完了しました。」[1]',
+        '- 『条件は一致していますか？』[2]',
+        '- **「比較は完了しました。」**[1]',
+      ]
+    ) {
+      expect(endsMidSentence(text)).toBe(false)
+      expect(trimTruncatedTail(text)).toEqual({ text, truncated: false })
+    }
+  })
+
+  it('trims an incomplete Japanese tail without requiring spaces between sentences', () => {
+    for (
+      const complete of [
+        '比較は完了しました。[1][2]',
+        '再試験が必要です！[1]',
+        '条件は一致していますか？[2]',
+        '「比較は完了しました。」[1]',
+        '『条件は一致していますか？』[2]',
+      ]
+    ) {
+      const text = `${complete}追加の比較は`
+      expect(endsMidSentence(text)).toBe(true)
+      expect(trimTruncatedTail(text)).toEqual({ text: complete, truncated: true })
+    }
+  })
 })
 
 describe('SentinelStream across line breaks', () => {
