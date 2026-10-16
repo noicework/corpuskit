@@ -1,0 +1,99 @@
+name: Disposable native graph touch diagnostic
+
+# Experiment only. Never merge this workflow or its copied test into main/PR97.
+on:
+  push:
+    branches: [codex/graph-touch-diagnostic-20261016]
+
+permissions:
+  contents: read
+
+jobs:
+  touch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASTRAL_BIN_ARGS: --no-sandbox
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Confirm unchanged reviewed application source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD^)" = "294ee1873e7419b5ba6887a279102c3f8b669e4e"
+          git diff --exit-code HEAD^ HEAD -- apps packages
+      - name: Install same pinned build tooling as normal CI
+        env:
+          ESBUILD_VERSION: 0.28.2
+          TAILWINDCSS_VERSION: 4.3.3
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWINDCSS_VERSION}/tailwindcss-linux-x64" \
+            -o /usr/local/bin/tailwindcss
+          chmod +x /usr/local/bin/tailwindcss
+          { curl -fsSL --retry 3 --retry-all-errors \
+              "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+              -o /tmp/esbuild.tgz \
+            && tar -xzf /tmp/esbuild.tgz -C /tmp \
+            && sudo mv /tmp/package/bin/esbuild /usr/local/bin/esbuild ; } \
+          || curl -fsSL --retry 3 --retry-all-errors \
+              "https://unpkg.com/@esbuild/linux-x64@${ESBUILD_VERSION}/bin/esbuild" \
+              -o /usr/local/bin/esbuild
+          sudo chmod +x /usr/local/bin/esbuild
+      - name: Build local synthetic fixture assets
+        run: |
+          mkdir -p diagnostic-output
+          deno --version > diagnostic-output/runtime.txt
+          uname -a >> diagnostic-output/runtime.txt
+          deno task build:web
+          sha256sum apps/web/dist/app.js apps/web/dist/styles.css > diagnostic-output/bundles.sha256
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/astral
+          key: astral-chromium-${{ runner.os }}-${{ hashFiles('deno.json') }}
+      - name: Control 600px per second
+        id: control
+        continue-on-error: true
+        shell: bash
+        env:
+          DIAGNOSTIC_FLICK_SPEED: '600'
+        run: |
+          deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys \
+            e2e/graph-touch-diagnostic.test.ts 2>&1 | tee diagnostic-output/control-600.log
+      - name: Candidate 1000px per second
+        id: candidate
+        shell: bash
+        env:
+          DIAGNOSTIC_FLICK_SPEED: '1000'
+        run: |
+          deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys \
+            e2e/graph-touch-diagnostic.test.ts 2>&1 | tee diagnostic-output/candidate-1000.log
+      - name: Record diagnostic artifact manifest
+        if: always()
+        env:
+          CONTROL_OUTCOME: ${{ steps.control.outcome }}
+          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          output = Path('diagnostic-output')
+          output.mkdir(exist_ok=True)
+          files = [{'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                   for p in sorted(output.rglob('*')) if p.is_file()]
+          manifest = {'head': os.environ['GITHUB_SHA'], 'control': os.environ['CONTROL_OUTCOME'],
+                      'candidate': os.environ['CANDIDATE_OUTCOME'], 'files': files,
+                      'scope': 'Synthetic localhost fixture only. No secrets, deployment or inference.'}
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: graph-touch-diagnostic-${{ github.sha }}
+          path: diagnostic-output/
+          retention-days: 1
