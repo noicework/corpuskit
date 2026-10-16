@@ -1,4 +1,5 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
 import {
   Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -1398,7 +1399,7 @@ export function KnowledgeMap({
                         style={{ pointerEvents: 'none' }}
                       >
                         <textPath href={`#rp-map-edge-${i}`} startOffset='50%' textAnchor='middle'>
-                          {edge.label}
+                          {graphRelationLabel(edge.label, ui)}
                         </textPath>
                       </text>
                     )
@@ -1425,7 +1426,7 @@ export function KnowledgeMap({
                     paintOrder='stroke'
                     opacity={focus ? 0.35 : 1}
                   >
-                    {t.group.toUpperCase()} · {t.style.count}
+                    {graphGroupLabel(t.group, ui)} · {t.style.count}
                   </text>
                 ))}
               </g>
@@ -1462,7 +1463,7 @@ export function KnowledgeMap({
                     degree === 1
                       ? '{name} - {group}, {count} relation'
                       : '{name} - {group}, {count} relations',
-                    { name: node.label, group: node.group || ui('entity'), count: degree },
+                    { name: node.label, group: graphGroupLabel(node.group, ui), count: degree },
                   )}
                   aria-pressed={isSelected}
                   className='rp-map-node rp-map-fade cursor-pointer'

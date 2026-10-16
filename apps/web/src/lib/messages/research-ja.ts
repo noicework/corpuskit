@@ -1,5 +1,12 @@
 /** Application-owned research interface copy. Authored evidence is never translated here. */
 export const RESEARCH_JA: Readonly<Record<string, string>> = {
+  'Experiment': '実験',
+  'Material': '材料',
+  'Research topic': '研究テーマ',
+  'examines': '検討する',
+  'uses material': '材料として使用する',
+  'Show all {count} entities': 'すべての項目を表示（{count}件）',
+  'Show all {count} categories': 'すべての分類を表示（{count}件）',
   ' - complete': ' - 完了',
   ' - counts are passages': ' - 件数は引用箇所の数です',
   ' - in progress': ' - 処理中',

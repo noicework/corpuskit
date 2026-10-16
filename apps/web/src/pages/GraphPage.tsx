@@ -23,6 +23,7 @@ import {
   type MapNode,
 } from '../components/KnowledgeMap.tsx'
 import { KnowledgeMap3D } from '../components/KnowledgeMap3D.tsx'
+import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 // ---------------------------------------------------------------------------
@@ -327,7 +328,7 @@ function NodeSearch({
                     {node.label}
                   </span>
                   <span className='shrink-0 self-start pt-0.5 text-xs text-ink-3'>
-                    {node.group}
+                    {graphGroupLabel(node.group, ui)}
                   </span>
                 </button>
               </li>
@@ -474,7 +475,7 @@ function EntityPanel({
       if (edge.source !== node.id && edge.target !== node.id) continue
       const outgoing = edge.source === node.id
       const other = outgoing ? edge.target : edge.source
-      const label = edge.label || 'related to'
+      const label = edge.label
       const list = grouped.get(label)
       if (list) list.push({ other, outgoing })
       else grouped.set(label, [{ other, outgoing }])
@@ -502,7 +503,7 @@ function EntityPanel({
             className='font-semibold uppercase tracking-wide'
             style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
           >
-            {node.group || ui('Entity')}
+            {graphGroupLabel(node.group, ui)}
           </span>
           <span className='text-ink-3' aria-hidden='true'>·</span>
           <span className='text-ink-2'>
@@ -566,7 +567,7 @@ function EntityPanel({
               {pathState.path.map((step, i) => (
                 <li key={i} className='text-xs text-ink'>
                   <span className='font-medium'>{step.source}</span>{' '}
-                  <span className='text-ink-3'>{step.label || ui('related to')} →</span>{' '}
+                  <span className='text-ink-3'>{graphRelationLabel(step.label, ui)} →</span>{' '}
                   <span className='font-medium'>{step.target}</span>
                 </li>
               ))}
@@ -591,7 +592,7 @@ function EntityPanel({
             <div className='mt-2 space-y-2.5'>
               {connections.map(([label, list]) => (
                 <div key={label}>
-                  <p className='text-xs italic text-ink-2'>{label}</p>
+                  <p className='text-xs italic text-ink-2'>{graphRelationLabel(label, ui)}</p>
                   <div className='mt-1 flex flex-wrap gap-1.5'>
                     {list.map(({ other, outgoing }) => (
                       // !py: rp-chip's own padding is unlayered and would win
@@ -604,8 +605,8 @@ function EntityPanel({
                         onClick={() => onSelect(other)}
                         className='rp-chip gap-1 !py-1 text-left text-xs'
                         title={outgoing
-                          ? `${node.label} ${label} ${other}`
-                          : `${other} ${label} ${node.label}`}
+                          ? `${node.label} ${graphRelationLabel(label, ui)} ${other}`
+                          : `${other} ${graphRelationLabel(label, ui)} ${node.label}`}
                       >
                         <span className='shrink-0 text-ink-3' aria-hidden='true'>
                           {outgoing ? '→' : '←'}
@@ -853,7 +854,7 @@ function NavigatorRail({
                       }}
                       aria-hidden='true'
                     />
-                    {group || ui('Entity')}
+                    {graphGroupLabel(group, ui)}
                     <span className='text-ink-3'>{style.count}</span>
                   </button>
                 ))}
@@ -908,10 +909,10 @@ function NavigatorRail({
                 onClick={() => setShowAll((v) => !v)}
                 className='rp-btn rp-btn-ghost mt-1.5 h-8 px-2 text-xs'
               >
-                {showAll ? ui('Show fewer') : ui('Show all {value1} {value2}', {
-                  value1: ranked.length,
-                  value2: isEntity ? 'entities' : 'categories',
-                })}
+                {showAll ? ui('Show fewer') : ui(
+                  isEntity ? 'Show all {count} entities' : 'Show all {count} categories',
+                  { count: ranked.length },
+                )}
               </button>
             )
             : null}
@@ -1261,19 +1262,19 @@ export function GraphPage() {
     return { nodes, edges }
   }, [relationsQuery.data, extraGraph])
 
+  // Language changes refresh display aliases through setUi, retaining the native scene.
+  const entityMap = useMemo((): { nodes: MapNode[]; edges: MapEdge[] } => ({
+    nodes: (entityGraph?.nodes ?? []).map((n) => ({
+      id: n.id,
+      label: n.id,
+      group: n.group || 'Entity',
+      weight: n.weight,
+    })),
+    edges: (entityGraph?.edges ?? []).map((e) => ({ ...e, weight: 1 })),
+  }), [entityGraph])
+
   const { nodes, edges } = useMemo((): { nodes: MapNode[]; edges: MapEdge[] } => {
-    if (mode === 'entity') {
-      if (!entityGraph) return { nodes: [], edges: [] }
-      return {
-        nodes: entityGraph.nodes.map((n) => ({
-          id: n.id,
-          label: n.id,
-          group: n.group || 'Entity',
-          weight: n.weight,
-        })),
-        edges: entityGraph.edges.map((e) => ({ ...e, weight: 1 })),
-      }
-    }
+    if (mode === 'entity') return entityMap
     const data = conceptQuery.data
     if (!data) return { nodes: [], edges: [] }
     return {
@@ -1293,7 +1294,7 @@ export function GraphPage() {
         ),
       })),
     }
-  }, [mode, entityGraph, conceptQuery.data, ui])
+  }, [mode, entityMap, conceptQuery.data, ui])
 
   const groupStyles = useMemo(() => buildGroupStyles(nodes), [nodes])
   const degrees = useMemo(() => buildDegrees(edges), [edges])
