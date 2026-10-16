@@ -1575,10 +1575,12 @@ label.rp-btn:has(input:focus-visible) {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  height: calc(2.25rem * var(--rp-density-ctl, 1));
+  /* Keep the usual control height, but let translated labels grow at large text sizes. */
+  min-height: calc(2.25rem * var(--rp-density-ctl, 1));
+  height: auto;
   /* Pills need a touch more air at their rounded ends - the shape dial sets
    * --rp-btn-px (see lib/theme.ts). */
-  padding: 0 var(--rp-btn-px, 0.875rem);
+  padding: calc(0.25rem * var(--rp-density-ctl, 1)) var(--rp-btn-px, 0.875rem);
   border-radius: var(--rp-radius-btn);
   font-size: 0.875rem;
   font-weight: 500;

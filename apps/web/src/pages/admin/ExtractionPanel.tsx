@@ -147,7 +147,7 @@ function kindLabel(kind: ExtractionMethod['kind']): string {
 type LabInfo = Awaited<ReturnType<typeof getExtractionMethods>>
 
 function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
 
   return (
     <div className='rp-card p-5'>
@@ -173,7 +173,9 @@ function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
       {lab && !lab.available
         ? (
           <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>
-            {lab.message ?? ui('Bind a lab box (ARAG_KB_<SLUG>_LAB) to enable the lab.')}
+            {lab.message
+              ? localError(lab.message, 'Extraction sandbox is unavailable.')
+              : ui('Bind a lab box (ARAG_KB_<SLUG>_LAB) to enable the lab.')}
           </p>
         )
         : null}

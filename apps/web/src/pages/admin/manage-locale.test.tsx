@@ -66,6 +66,19 @@ Deno.test('Manage templates keep authored keys and braces and English helper def
   expect(announce(row)).toBe('Summary {name}.pdf is ready.')
   expect(announce(row, japanese.ui, japanese.error)).toBe('Summary {name}.pdfの準備ができました。')
   expect(summarise([row], japanese.ui)).toBe('ファイル1件: 準備完了1件')
+  // The retained queue row is language-neutral: switching renders again without an upload.
+  const originalRow = structuredClone(row)
+  const renderUpload = (language: 'en' | 'ja') => {
+    const locale = createPortalLocale(language)
+    return [announce(row, locale.ui, locale.error), summarise([row], locale.ui)]
+  }
+  expect(renderUpload('en')).toEqual(['Summary {name}.pdf is ready.', '1 file: 1 ready'])
+  expect(renderUpload('ja')).toEqual([
+    'Summary {name}.pdfの準備ができました。',
+    'ファイル1件: 準備完了1件',
+  ])
+  expect(renderUpload('en')).toEqual(['Summary {name}.pdf is ready.', '1 file: 1 ready'])
+  expect(row).toEqual(originalRow)
 })
 
 Deno.test('archive validation stays canonical while its presentation and chooser are Japanese', () => {

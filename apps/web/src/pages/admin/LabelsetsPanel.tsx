@@ -1,3 +1,4 @@
+import { labelsetDisplayTitle } from '../../lib/labelset-display.ts'
 import { messageFor } from './shared.ts'
 import type { Locale } from '../../lib/portal-locale.tsx'
 import { englishUi } from './shared.ts'
@@ -439,7 +440,7 @@ function LabelsetEditor({
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='min-w-0'>
           <p className='text-sm font-semibold text-ink'>
-            {prettyLabel(labelset.title, organisation)}
+            {prettyLabel(labelsetDisplayTitle(labelset, ui), organisation)}
           </p>
           <p className='mt-0.5 font-mono text-xs text-ink-3'>{labelset.id}</p>
         </div>
@@ -742,7 +743,7 @@ function LabelsetsPanelContent({
                     >
                       <span className='flex items-center gap-2'>
                         <span className='truncate text-sm font-medium'>
-                          {prettyLabel(ls.title, organisation)}
+                          {prettyLabel(labelsetDisplayTitle(ls, ui), organisation)}
                         </span>
                         {dirtyIds.has(ls.id) && (
                           <span

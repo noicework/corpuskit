@@ -119,7 +119,9 @@ function RecentListContent({ slug }: { slug: string }) {
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<RecentResource[]>()
   const [error, setError] = useState<string>()
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<
+    { title: string; outcome: Parameters<typeof deletedNotice>[1] } | null
+  >(null)
   const heading = useRef<HTMLHeadingElement>(null)
   const queryClient = useQueryClient()
   const query = useQuery({
@@ -154,7 +156,7 @@ function RecentListContent({ slug }: { slug: string }) {
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
   const onDeleted =
     (resource: RecentResource) => (outcome: Parameters<typeof deletedNotice>[1]) => {
-      setNotice(deletedNotice(resource.title, outcome))
+      setNotice({ title: resource.title, outcome })
       // A snapshot taken with emergency access is not refetched: drop the row from it here.
       setSnapshot((rows) => rows?.filter((row) => row.id !== resource.id))
       // The row, and the control that had focus, go: focus the list instead of the page body.
@@ -185,7 +187,9 @@ function RecentListContent({ slug }: { slug: string }) {
           {localError(error, 'The action failed. Please try again.')}
         </p>
       )}
-      <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-2'>{notice}</p>
+      <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-2'>
+        {notice ? deletedNotice(notice.title, notice.outcome, ui) : ''}
+      </p>
 
       {isLoading && (
         <div className='mt-2 space-y-2'>

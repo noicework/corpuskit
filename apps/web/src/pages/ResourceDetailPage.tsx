@@ -1022,6 +1022,7 @@ function BackToLibrary({ slug }: { slug: string }) {
  * left to show here, so the manager goes back to the Library, which says what was deleted.
  */
 function ManagerDelete({ slug, resource }: { slug: string; resource: ResourceSummary }) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const navigate = useNavigate()
   if (!access.can('content.write', { kind: 'portal', slug })) return null
@@ -1034,7 +1035,7 @@ function ManagerDelete({ slug, resource }: { slug: string; resource: ResourceSum
         className='rp-btn rp-btn-outline min-h-[44px] hover:text-[var(--rp-bad-ink)]'
         onDeleted={(outcome) =>
           navigate(`/t/${slug}/library`, {
-            state: { notice: deletedNotice(resource.title, outcome) },
+            state: { notice: deletedNotice(resource.title, outcome, ui) },
           })}
       />
     </AdminPageAccess>

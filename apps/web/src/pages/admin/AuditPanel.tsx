@@ -288,7 +288,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
                             row.at,
                             row.actor_label ?? row.actor_id ?? row.actor_kind,
                             row.action,
-                            row.scope_slug ?? 'Platform',
+                            row.scope_slug ?? ui('Platform'),
                             [row.target_kind, row.target_id].filter(Boolean).join(': '),
                             row.outcome,
                           ].map((value, i) => (
@@ -316,7 +316,7 @@ function AuditWorkspace({ scope }: { scope: Scope }) {
                         {[
                           ['Time (UTC)', row.at],
                           ['Actor', row.actor_label ?? row.actor_id ?? row.actor_kind],
-                          ['Scope', row.scope_slug ?? 'Platform'],
+                          ['Scope', row.scope_slug ?? ui('Platform')],
                           ['Target', [row.target_kind, row.target_id].filter(Boolean).join(': ')],
                           ['Outcome', row.outcome],
                           ['Request ID', row.request_id],
@@ -486,7 +486,7 @@ function Detail({ row }: { row: AuditEvent }) {
       <dl className='mt-3 space-y-2 text-sm'>
         {[['Event ID', row.id], ['Actor kind', row.actor_kind], [
           'Actor ID',
-          row.actor_id ?? 'None',
+          row.actor_id ?? ui('None'),
         ]].map(([label, value]) => (
           <div key={label}>
             <dt className='text-ink-2'>{ui(label ?? '')}</dt>

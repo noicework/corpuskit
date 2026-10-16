@@ -500,15 +500,15 @@ function IntentsTable(
             {intents.map((intent) => (
               <tr key={intent.id} className='border-t border-line align-top'>
                 <td className='py-2 pr-3'>
-                  <span className='font-medium text-ink'>{ui(intent.label)}</span>
-                  <span className='block text-ink-3'>{ui(intent.description)}</span>
+                  <span className='font-medium text-ink'>{intent.label}</span>
+                  <span className='block text-ink-3'>{intent.description}</span>
                 </td>
                 <td className='py-2 pr-3 font-mono text-[11px] text-ink-2'>
                   {names(intent.id, intent.answer.surfaces).map((n) => (
                     <span key={n} className='block'>{n}</span>
                   ))}
                 </td>
-                <td className='py-2 pr-3 text-ink-2'>{intentSummary(intent)}</td>
+                <td className='py-2 pr-3 text-ink-2'>{intentSummary(intent, ui)}</td>
                 <td className='py-2'>
                   {names(intent.id, intent.answer.surfaces).map((n) => {
                     const st = status(n)

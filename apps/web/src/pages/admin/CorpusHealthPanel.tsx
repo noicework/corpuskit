@@ -130,7 +130,9 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [healthyOpen, setHealthyOpen] = useState(false)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<
+    { title: string; outcome: Parameters<typeof deletedNotice>[1] } | null
+  >(null)
   const heading = useRef<HTMLParagraphElement>(null)
 
   const scan = async () => {
@@ -158,7 +160,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   }
   const onDeleted = (deleted: CorpusHealthRow, outcome: DeleteOutcome) => {
     setRows((previous) => previous?.filter((row) => row.id !== deleted.id) ?? null)
-    setNotice(deletedNotice(deleted.title, outcome))
+    setNotice({ title: deleted.title, outcome })
     // The row, and the control that had focus, go: focus the panel instead of the page body.
     heading.current?.focus()
   }
@@ -213,7 +215,9 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
         : null}
 
       {error ? <MessagePanel message={{ tone: 'error', text: error }} className='mt-3' /> : null}
-      <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-3'>{notice}</p>
+      <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-3'>
+        {notice ? deletedNotice(notice.title, notice.outcome, ui) : ''}
+      </p>
 
       {rows && rows.length === 0
         ? <p className='mt-4 text-sm text-ink-3'>{ui('This corpus has no resources yet.')}</p>

@@ -1097,14 +1097,18 @@ function AppearancePanelContent({
             slug={slug}
             kind='logo'
             title={ui('Logo')}
-            guidance='PNG or WebP with transparency works best - shown in the header at 28px tall.'
+            guidance={ui(
+              'PNG or WebP with transparency works best - shown in the header at 28px tall.',
+            )}
             onUploaded={onUploaded}
           />
           <UploadCard
             slug={slug}
             kind='hero'
             title={ui('Hero image')}
-            guidance='Wide photographic image, at least 1600px - shown behind the portal hero.'
+            guidance={ui(
+              'Wide photographic image, at least 1600px - shown behind the portal hero.',
+            )}
             onUploaded={onUploaded}
           />
         </div>

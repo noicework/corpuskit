@@ -1154,4 +1154,25 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
     '{class}の資料では通常{method}を使用しますが、評価が{score}で、{best}の{bestScore}を明確に下回りました。このため、{recommended}を推奨します。',
   'No method finished, so there is nothing to recommend.':
     '完了した方法がないため、推奨する方法はありません。',
+  'Extraction sandbox is unavailable.': '抽出用サンドボックスを利用できません。',
+  'PNG or WebP with transparency works best - shown in the header at 28px tall.':
+    '背景が透明なPNGまたはWebPを推奨します。ヘッダーでは高さ28pxで表示します。',
+  'Wide photographic image, at least 1600px - shown behind the portal hero.':
+    '幅1600px以上の横長の写真を使用してください。メイン領域の背景に表示します。',
+  'Warm paper, blue ink and the CorpusKit editorial identity.':
+    '温かみのある背景と青い文字による、CorpusKitの基本の配色です。',
+  'Topic': 'テーマ',
+  'anonymous': '匿名',
+  'user': '利用者',
+  'break-glass': '緊急アクセス',
+  'key': 'APIキー',
+  'legacy-key': '旧形式のAPIキー',
+  'operator': '運用担当者',
+  'system': 'システム',
+  'intent': '操作開始',
+  'success': '成功',
+  'denied': '拒否',
+  'failure': '失敗',
+  'uncertain': '結果不明',
+  'Platform': 'プラットフォーム',
 }
