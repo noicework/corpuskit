@@ -13,6 +13,7 @@ import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { plainDashes, presentTitle } from '../lib/display-title.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 
 const PAGE_SIZE = 24
 
@@ -308,6 +309,7 @@ export function LibraryBrowser(
     notice?: string
   } = {},
 ) {
+  const { ui, language } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const access = useAccess()
 
@@ -464,12 +466,13 @@ export function LibraryBrowser(
     <main className={bare ? '' : 'rp-shell py-8'}>
       {!bare && (
         <div className='flex flex-wrap items-center justify-between gap-3'>
-          <h1 className='rp-display text-2xl text-ink'>Library</h1>
+          <h1 className='rp-display text-2xl text-ink'>{ui('Library')}</h1>
           <div className='flex flex-wrap items-center gap-3'>
             {!isInitialLoading && !isError
               ? (
                 <p className='text-sm font-medium tabular-nums text-ink-3'>
-                  {total.toLocaleString()} {total === 1 ? 'resource' : 'resources'}
+                  {total.toLocaleString()}{' '}
+                  {language === 'ja' ? '件の資料' : total === 1 ? 'resource' : 'resources'}
                 </p>
               )
               : null}
@@ -492,7 +495,7 @@ export function LibraryBrowser(
           />
           <GridDensity value={density} onChange={setDensity} view={view} className='mr-3' />
           <label htmlFor='library-sort-bare' className='text-xs font-medium text-ink-3'>
-            Sort
+            {ui('Sort')}
           </label>
           <select
             id='library-sort-bare'
@@ -502,7 +505,7 @@ export function LibraryBrowser(
           >
             {SORT_VALUES.map((value) => (
               <option key={value} value={value}>
-                {SORT_OPTIONS[value].label}
+                {ui(SORT_OPTIONS[value].label)}
               </option>
             ))}
           </select>
@@ -517,10 +520,10 @@ export function LibraryBrowser(
           }
           <SearchField
             id='library-search'
-            label='Search the library'
+            label={ui('Search the library')}
             value={queryDraft}
             onChange={setQueryDraft}
-            placeholder='Search within the library'
+            placeholder={ui('Search within the library')}
             className='min-w-[min(16rem,100%)] flex-1'
           />
 
@@ -536,7 +539,7 @@ export function LibraryBrowser(
           <GridDensity value={density} onChange={setDensity} view={view} />
 
           <label htmlFor='library-sort' className='sr-only'>
-            Sort by
+            {ui('Sort by')}
           </label>
           <select
             id='library-sort'
@@ -546,7 +549,7 @@ export function LibraryBrowser(
           >
             {SORT_VALUES.map((value) => (
               <option key={value} value={value}>
-                {SORT_OPTIONS[value].label}
+                {ui(SORT_OPTIONS[value].label)}
               </option>
             ))}
           </select>
@@ -567,7 +570,8 @@ export function LibraryBrowser(
                   className='rp-btn rp-btn-outline'
                   aria-expanded={filtersOpen}
                 >
-                  Filters{(selectedTopics.length + selectedKinds.length + selectedFormats.length) >
+                  {ui('Filters')}
+                  {(selectedTopics.length + selectedKinds.length + selectedFormats.length) >
                       0
                     ? ` (${selectedTopics.length + selectedKinds.length + selectedFormats.length})`
                     : ''}

@@ -378,12 +378,21 @@ export function documentTextFor(
 }
 
 /** Build the generator instruction from the agent's field descriptors (programmatic). */
-export function buildEnrichmentQuery(agent: EnrichmentAgent, documentText?: string): string {
+export function buildEnrichmentQuery(
+  agent: EnrichmentAgent,
+  documentText?: string,
+  outputLanguage?: 'ja' | 'en',
+): string {
   const fields = agent.fields.map((f) => `${f.label}: ${f.description}`).join(' ')
   const instruction = 'You are writing a catalogue entry for a SINGLE research document. ' +
     `Produce these fields. ${fields} ` +
     'Base everything strictly on the document text provided below; do not invent, and do not ' +
-    'draw on any outside or background knowledge. Australian English.'
+    'draw on any outside or background knowledge. ' +
+    (outputLanguage === 'ja'
+      ? 'Write the title, summary and takeaways in natural Japanese. This language rule overrides ' +
+        'any English language wording in the field descriptions. Keep verbatim quotations in their ' +
+        'source language. Do not translate the document into English.'
+      : 'Australian English.')
   if (!documentText) return instruction
   return `${instruction}\n\n--- DOCUMENT TEXT (use only this) ---\n${documentText}\n--- END DOCUMENT TEXT ---`
 }
@@ -466,7 +475,13 @@ export async function generateEnrichment(
     return null
   })
   const pageSummary = content?.pageSummary?.trim()
-  const documentText = documentTextFor(content, pageSummary)
+  // A bilingual abstract must not cause a Japanese document's catalogue entry to switch to
+  // English. Its native title identifies the main document language; use its extracted body
+  // rather than an ingest summary that may already have been translated by the platform.
+  const outputLanguage = config.languagePolicy
+    ? (/[\u3040-\u30ff\u3400-\u9fff]/u.test(content?.title ?? '') ? 'ja' : 'en')
+    : undefined
+  const documentText = documentTextFor(content, outputLanguage ? undefined : pageSummary)
 
   const schema = enrichmentJsonSchema(agent)
   let data: Record<string, unknown> | null = null
@@ -477,7 +492,7 @@ export async function generateEnrichment(
       const result = await management.askStructured(
         config,
         schema,
-        buildEnrichmentQuery(agent, documentText),
+        buildEnrichmentQuery(agent, documentText, outputLanguage),
       )
       data = result.object != null ? parseEnrichmentData(agent, result.object) : null
     } catch (err) {
@@ -495,7 +510,7 @@ export async function generateEnrichment(
     // per-resource summary paid for at ingest.
     let usedPageSummary = false
     const summaryField = agent.fields.find((f) => f.kind === 'summary')
-    if (summaryField && pageSummary && pageSummary.length >= 40) {
+    if (!outputLanguage && summaryField && pageSummary && pageSummary.length >= 40) {
       data[summaryField.key] = pageSummary
       usedPageSummary = true
     }
@@ -507,7 +522,10 @@ export async function generateEnrichment(
     }
   }
 
-  const partial = degradedEnrichment(agent, content, pageSummary)
+  // Neither platform summaries nor baseline summaries carry reliable native-language
+  // provenance. Leave a failed bilingual generation outstanding for retry, rather than
+  // persisting a translated fallback as if it satisfied the language contract.
+  const partial = outputLanguage ? null : degradedEnrichment(agent, content, pageSummary)
   if (partial) return partial
 
   throw new Error('No content available to generate an enrichment for this resource')

@@ -166,14 +166,23 @@ export async function* analyseTenant(
       : `the complete inventory of its ${resources.length} resources:`) +
     `\n\n${inventory}\n\n` +
     `Design the portal configuration: (1) 4 to 8 topics that partition this corpus well, each ` +
-    `with a kebab-case id, a short label in Australian English and a one-sentence description ` +
+    `with a kebab-case id, a short label in ${
+      config.languagePolicy?.defaultLanguage === 'ja' ? 'Japanese' : 'Australian English'
+    } and a one-sentence description ` +
     `of what qualifies (the classifier's prompt); (2) 3 to 5 "kinds", each with a description - a ` +
     `second, orthogonal way of classifying the same resources (for example document genre or ` +
     `research approach), also with kebab-case ids; (3) for EVERY numbered resource above, an ` +
     `assignment of exactly one topicId and one kindId; (4) 6 suggested questions a researcher ` +
     `would genuinely ask of this corpus; (5) a short search placeholder listing 3 or 4 corpus ` +
     `themes, e.g. "Search x, y, z…". Use only ids you defined. Cover every resource number ` +
-    `from 1 to ${sample.length}.`
+    `from 1 to ${sample.length}.` +
+    (config.languagePolicy
+      ? ' This is a bilingual Japanese and English corpus. Classify across both languages. ' +
+        'Write topic labels, kind labels, descriptions and search placeholder in the default ' +
+        'portal language. Suggested questions must include lookup of a table or image fact, ' +
+        'multi-report synthesis, discovery of repeated work across Japanese and English, and ' +
+        'an English question that needs Japanese source evidence.'
+      : '')
 
   yield { type: 'stage', label: 'Designing taxonomy, graph dimensions and questions' }
   const { object } = await management.askStructured(config, ANALYSE_SCHEMA, prompt)

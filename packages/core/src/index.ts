@@ -87,6 +87,8 @@ export const BrandingSchema = z.object({
   colourScheme: ColourSchemeIdSchema.optional(),
   /** Served when an administrator uploaded a logo for this portal. */
   logoUrl: z.string().optional(),
+  /** Optional logo variant with contrast on dark portal surfaces. */
+  logoDarkUrl: z.string().optional(),
   /** Served when an administrator uploaded a hero image for this portal. */
   heroImageUrl: z.string().optional(),
   /** Wide image behind slim page headers (e.g. the knowledge map). */
@@ -394,6 +396,19 @@ export const TenantSummarySchema = z.object({
 
 export const TenantConfigSchema = z.object({
   slug: z.string().min(1),
+  /** Optional bilingual portal policy. Answers follow the question language; catalogue
+   * enrichment keeps each source document's native language. Absent preserves English. */
+  languagePolicy: z.object({
+    defaultLanguage: z.enum(['ja', 'en']),
+    availableLanguages: z.enum(['ja', 'en']).array().min(1).max(2),
+    /** Exact translations of portal-authored copy. Source documents retain their native titles. */
+    translations: z.object({
+      ja: z.record(z.string(), z.string()).optional(),
+      en: z.record(z.string(), z.string()).optional(),
+    }).optional(),
+  }).refine((policy) => policy.availableLanguages.includes(policy.defaultLanguage), {
+    message: 'The default language must be available',
+  }).optional(),
   accessMode: AccessModeSchema.default('public'),
   /** Present only when this portal has a working dedicated hostname. */
   hostname: TenantHostnameSchema.optional(),

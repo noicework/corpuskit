@@ -1,5 +1,6 @@
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import {
   createResearchStorageContext,
   readResearchDraft,
@@ -1617,6 +1618,7 @@ ${turnsHtml}
 // ---------------------------------------------------------------------------
 
 export function AskPage() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const [searchParams, setSearchParams] = useSearchParams()
   const access = useAccess()
@@ -2800,9 +2802,9 @@ export function AskPage() {
               ? (
                 <div className='space-y-4 pt-6 sm:pt-10'>
                   <div className='mx-auto max-w-2xl text-center'>
-                    <h1 className='rp-display text-3xl text-ink sm:text-4xl'>Ask</h1>
+                    <h1 className='rp-display text-3xl text-ink sm:text-4xl'>{ui('Ask')}</h1>
                     <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
-                      Ask a question and get an answer grounded in this portal's research.
+                      {ui("Ask a question and get an answer grounded in this portal's research.")}
                     </p>
                   </div>
                   {suggestions && suggestions.length > 0
@@ -2923,7 +2925,7 @@ export function AskPage() {
                           className='rp-answer-tail rp-eyebrow text-ink-3'
                           style={tailStyle(0)}
                         >
-                          Ask next
+                          {ui('Ask next')}
                         </p>
                         <div className='mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap'>
                           {followUps.questions.map((question, index) => (
@@ -3008,7 +3010,7 @@ export function AskPage() {
                       <path d='M3 3v5h5' />
                       <path d='M12 7.5V12l3.2 1.9' />
                     </svg>
-                    Sessions
+                    {ui('Sessions')}
                   </button>
                 )
                 : null}
@@ -3037,7 +3039,7 @@ export function AskPage() {
                       <path d='M14.8 15.2L20 20.4' />
                       <path d='M18.6 2.6v3.6M16.8 4.4h3.6' />
                     </svg>
-                    Deep research
+                    {ui('Deep research')}
                   </button>
                 )
                 : null}
@@ -3057,7 +3059,7 @@ export function AskPage() {
             </div>
             <div className='rp-field flex items-end gap-2 rounded-[calc(var(--rp-radius)+4px)] border bg-surface p-2 shadow-sm'>
               <label htmlFor='ask-composer' className='sr-only'>
-                Ask a question
+                {ui('Ask a question')}
               </label>
               {
                 /* The placeholder is dropped on a phone (it clipped mid-word
@@ -3086,7 +3088,7 @@ export function AskPage() {
                 onKeyDown={handleKeyDown}
                 disabled={!canAsk || isStreaming}
                 rows={1}
-                placeholder={isCompact ? undefined : 'Ask a question about this research'}
+                placeholder={isCompact ? undefined : ui('Ask a question about this research')}
                 className='max-h-40 min-w-0 flex-1 resize-none rounded-[var(--rp-radius)] border-0 bg-transparent px-2 py-2 text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none disabled:opacity-60 lg:px-3'
               />
               {isStreaming
@@ -3096,7 +3098,7 @@ export function AskPage() {
                     onClick={stop}
                     className='rp-btn rp-btn-outline shrink-0'
                   >
-                    Stop
+                    {ui('Stop')}
                   </button>
                 )
                 : (
@@ -3105,7 +3107,7 @@ export function AskPage() {
                     disabled={!canAsk || draft.trim().length === 0}
                     className='rp-btn rp-btn-primary shrink-0'
                   >
-                    Send
+                    {ui('Send')}
                   </button>
                 )}
             </div>
