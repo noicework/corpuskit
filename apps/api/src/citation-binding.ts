@@ -198,6 +198,8 @@ export function contentWords(text: string): string[] {
 
 /** A cited text prepared once for many sentence checks: the audit's normalised source plus its vocabulary. */
 export interface PreparedText extends PreparedSource {
+  /** Original body retained for the literal native-claim check, without figure normalisation. */
+  literal: string
   vocab: Set<string>
   bigrams: Set<string>
 }
@@ -208,10 +210,12 @@ export function prepareText(text: string): PreparedText {
   const vocab = new Set(words)
   const bigrams = new Set<string>()
   for (let i = 1; i < words.length; i++) bigrams.add(`${words[i - 1]} ${words[i]}`)
-  return { ...source, vocab, bigrams }
+  return { ...source, literal: text, vocab, bigrams }
 }
 
 export interface SentenceFeatures {
+  /** Original claim retained so the native fallback cannot normalise away punctuation. */
+  literal: string
   words: string[]
   bigrams: string[]
   numbers: string[]
@@ -254,6 +258,7 @@ export function sentenceFeatures(
   const bigrams: string[] = []
   for (let i = 1; i < words.length; i++) bigrams.push(`${words[i - 1]} ${words[i]}`)
   return {
+    literal: plain,
     words,
     bigrams,
     numbers: extractNumbers(normaliseFigures(plain)),
@@ -313,6 +318,8 @@ export function supportScore(
    * in the field uses (D8-04).
    */
   rarePairs: readonly string[] = [],
+  /** Only a marker authored on this claim may use an exact native-body match. */
+  authoredNative = false,
 ): number {
   const { words, bigrams, numbers, entities } = features
   if (rare.length > 0 && !rare.some((w) => text.vocab.has(w))) return 0
@@ -343,6 +350,34 @@ export function supportScore(
   const numberHits = numbers.filter((n) => figureSupportedBy(n, features.claim, text).supported)
     .length
   if (numbers.length > 0 && numberHits < numbers.length) return 0
+  // Native claims without Latin vocabulary cannot use the Latin matcher's
+  // number/entity-only shortcut. An authored marker survives only for a
+  // complete original source paragraph, never a substring or a quoted clause
+  // embedded in a negated hypothesis. Keep internal punctuation and negation;
+  // extraction whitespace and one outer quotation pair are the only changes.
+  if (
+    words.length === 0 &&
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(features.literal)
+  ) {
+    const compact = (value: string): string => {
+      let literal = value.replace(/\s+/g, '')
+      for (const [open, close] of [['「', '」'], ['『', '』'], ['“', '”'], ['"', '"']]) {
+        if (literal.startsWith(open!) && literal.endsWith(close!)) {
+          literal = literal.slice(open!.length, -close!.length)
+          break
+        }
+      }
+      return literal
+    }
+    const literal = compact(features.literal)
+    const native = literal.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu) ?? []
+    if (!authoredNative || native.length < 12) return 0
+    return text.literal.split(/\r?\n[ \t]*\r?\n/).some((paragraph) =>
+        compact(paragraph) === literal
+      )
+      ? 1
+      : 0
+  }
   const wordHits = words.filter((w) => text.vocab.has(w)).length
   const wordRate = words.length > 0 ? wordHits / words.length : 0
   const bigramHits = bigrams.filter((b) => text.bigrams.has(b)).length
@@ -720,7 +755,7 @@ export function bindSentences(input: BindInput): BindResult {
         // A citation whose text could not be fetched is unverifiable: it
         // keeps a marker the sentence already had, never gains one.
         if (!text) return own.includes(index) ? 0.5 : 0
-        return supportScore(features, text, rare, rarePairs)
+        return supportScore(features, text, rare, rarePairs, own.includes(index))
       }
       let supporters = candidates.map((index) => ({ index, score: score(index) }))
         .filter((s) => s.score > 0)

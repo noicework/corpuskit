@@ -70,6 +70,32 @@ const EXPERIENCE =
   'was 14.9% (n = 1111) and the 50% responder rate was 36.9% (n = 822).\n\nDiscussion\n\n' +
   'Retention was high.'
 
+describe('literal Japanese citation pipeline', () => {
+  it('retains an exact authored source quotation and still rejects an adjacent source', async () => {
+    const claim = '材料の冷却速度を維持し、再加熱による救済を認めない。'
+    for (const correct of [true, false]) {
+      const result = await bindAndAudit({
+        management: management({
+          original: correct ? claim : '隣接する実験は加熱温度を変更した。',
+          adjacent: claim,
+        }),
+        config: { ...config, slug: `native-${crypto.randomUUID()}` },
+        query: '原文の冷却に関する結論をそのまま引用してください。',
+        text: `「${claim}」[1]`,
+        citations: [{ index: 1, resourceId: 'original', title: '冷却の実験記録' }],
+        sources: [resource('original', '冷却の実験記録', '実験の結論を記録する。')],
+        lexicon: [],
+        variant: undefined,
+        floor: 0.3,
+        pinScopeIds: ['original'],
+      })
+      expect(result.citations.map((c) => c.resourceId)).toEqual(correct ? ['original'] : [])
+      if (correct) expect(result.text).toContain('[1]')
+      else expect(result.text).not.toContain('[1]')
+    }
+  })
+})
+
 describe('bindAndAudit over the loop 4 cases', () => {
   it("removes a figure whose paper the pin excluded, keeping the pinned paper's own sentence (D4-01 under the pin)", async () => {
     const result = await bindAndAudit({

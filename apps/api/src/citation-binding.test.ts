@@ -101,6 +101,95 @@ describe('supportScore', () => {
   })
 })
 
+describe('literal Japanese citation support', () => {
+  const claim = '材料の冷却速度を維持し、再加熱による救済を認めない。'
+  const source = `実験記録\n\n${claim}\n\n次の試験は独立して行う。`
+  const bind = (text: string, body = source, extra: Record<string, unknown> = {}) =>
+    bindSentences({
+      text,
+      citations: [
+        { index: 1, resourceId: 'original', title: '冷却の実験記録' },
+        { index: 2, resourceId: 'adjacent', title: '隣接する実験記録' },
+      ],
+      texts: new Map([[1, body], [2, source]]),
+      lexicon: [],
+      ...extra,
+    })
+
+  it('keeps an authored marker only for the whole literal native claim', () => {
+    const result = bind(`「${claim}」[1]`)
+    expect(result.citations.map((c) => c.resourceId)).toEqual(['original'])
+    expect(result.sentences[0]?.bound).toEqual([1])
+    expect(result.rebound).toBe(0)
+    const splitExtraction = source.replace('冷却速度', '冷却\n速度')
+    expect(bind(`${claim}[1]`, splitExtraction).citations.length).toBe(1)
+    expect(supportScore(sentenceFeatures(claim, []), prepareText(source))).toBe(0)
+  })
+
+  it('never borrows an adjacent, inherited or unauthored marker', () => {
+    expect(bind(`${claim}[1]`, '隣接する実験は加熱温度を変更した。').citations).toEqual([])
+    expect(bind(claim).citations).toEqual([])
+    expect(bind(`実験記録を確認する。[1]\n- ${claim}`).citations).toEqual([])
+    expect(bind(`${claim}[1]`, source, { belowFloor: new Set([1]) }).citations).toEqual([])
+    expect(bind(`${claim}[1]`, source, { requiredName: 'OtherStudy' }).citations).toEqual([])
+  })
+
+  it('rejects negation, internal punctuation, paraphrase and short fragments', () => {
+    for (
+      const changed of [
+        claim.replace('認めない', '認める'),
+        claim.replace('、', '，'),
+        '冷却条件を保ち、再加熱による回復は許可しない。',
+        '冷却速度を維持する。',
+      ]
+    ) {
+      expect(bind(`${changed}[1]`).citations).toEqual([])
+    }
+  })
+
+  it('rejects changed negation and punctuation even with an unchanged entity or figure', () => {
+    for (
+      const body of [
+        'MDP接着層の冷却速度を維持し、再加熱による救済を認めない。',
+        '冷却後の曲げ強さは123.4であり、再加熱は認めない。',
+      ]
+    ) {
+      expect(bind(`${body.replace('認めない', '認める')}[1]`, body).citations).toEqual([])
+      expect(bind(`${body.replace('、', '，')}[1]`, body).citations).toEqual([])
+    }
+  })
+
+  it('requires a complete source paragraph, preserving negating prefixes and surrounding context', () => {
+    for (
+      const [body, changed] of [
+        [
+          '非加熱条件において材料の強度が維持されることを確認した。',
+          '加熱条件において材料の強度が維持されることを確認した。',
+        ],
+        [
+          '不適切な加工条件では材料の強度が低下することを確認した。',
+          '適切な加工条件では材料の強度が低下することを確認した。',
+        ],
+        [`「${claim}」という仮説は否定された。`, claim],
+        [`「${claim}」\nという仮説は否定された。`, claim],
+        [`${claim}ただし対照群では再現しなかった。`, claim],
+      ]
+    ) {
+      expect(bind(`${changed}[1]`, body).citations).toEqual([])
+    }
+  })
+
+  it('retains the existing figure, entity and mandatory-name gates', () => {
+    const figures = '冷却後の曲げ強さは１２３．４であり、再加熱は認めない。'
+    expect(bind(`${figures.replace('１２３．４', '１２３．５')}[1]`, figures).citations).toEqual([])
+    const entity = 'MDP接着層の冷却速度を維持し、再加熱による救済を認めない。'
+    expect(bind(`${entity.replace('MDP', 'ZIR')}[1]`, entity).citations).toEqual([])
+    const features = sentenceFeatures(claim, [])
+    features.claim.mandatory = ['required-study']
+    expect(supportScore(features, prepareText(source), [], [], true)).toBe(0)
+  })
+})
+
 describe('bindSentences', () => {
   it('binds each sentence to the passage that carries it and drops the paragraph spray', () => {
     const text = 'Lamotrigine is contraindicated in Dravet syndrome. ' +

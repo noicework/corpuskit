@@ -65,6 +65,28 @@ Deno.test('footnotes: punctuation and adjacent markers, including inline colon r
   }
 })
 
+Deno.test('footnotes: Japanese punctuation keeps authored anchors after complete quotation marks', () => {
+  for (
+    const [prose, expected] of [
+      ['冷却条件を維持する [6] 。', '冷却条件を維持する。[1]'],
+      ['「冷却条件を維持する [6] 。」', '「冷却条件を維持する。」[1]'],
+      [
+        '冷却条件を維持する [6] [7] 。次の試験を行う。',
+        '冷却条件を維持する。[1][2]次の試験を行う。',
+      ],
+      ['冷却条件を [6] 維持する。', '冷却条件を[1] 維持する。'],
+    ]
+  ) {
+    const raw = prose + '\n\n[6]: block-AA\n[7]: block-BB\n'
+    const output = finish([raw])
+    expect(bindFootnotes(output, () => true, (id) => id).text).toBe(expected + '\n\n')
+    for (let i = 0; i <= raw.length; i++) {
+      expect(finish([raw.slice(0, i), raw.slice(i)])).toEqual(output)
+    }
+    expect(finish(Array.from(raw))).toEqual(output)
+  }
+})
+
 Deno.test('footnotes: code, escaped brackets and Markdown links remain literal', () => {
   const tick = String.fromCharCode(96)
   const code = tick + '[1]' + tick
