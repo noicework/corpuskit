@@ -268,7 +268,7 @@ function NodeSearch({
   }, [query, nodes])
 
   return (
-    <div className='relative w-full sm:w-80'>
+    <div className='relative w-full sm:w-[16rem]'>
       <span
         aria-hidden='true'
         className='pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-3'
@@ -1426,7 +1426,10 @@ export function GraphPage() {
     : counts
 
   return (
-    <div className='flex h-[calc(100dvh-var(--rp-header-h,126px))] flex-col overflow-hidden bg-app'>
+    <div
+      data-graph-page
+      className='flex flex-col bg-app md:h-[calc(100dvh-var(--rp-header-h,126px))] md:overflow-hidden'
+    >
       {
         /* Phone chrome - one strip. A stacked hero (title, stats, a full-width
           find field and two spelled-out segmented controls) took 325px of an
@@ -1435,7 +1438,7 @@ export function GraphPage() {
           demote to a caption under the title, and find moves behind a button
           that drops the field over the canvas rather than above it. */
       }
-      <div className='relative z-30 shrink-0 md:hidden'>
+      <div data-graph-masthead='mobile' className='relative z-30 shrink-0 md:hidden'>
         <div className='relative overflow-hidden border-b border-line'>
           <HeroGround bannerImageUrl={config.branding.bannerImageUrl} />
           {
@@ -1446,27 +1449,7 @@ export function GraphPage() {
               resolve to 33.6px against the header's 24px and the map's title
               would sit visibly off the logo directly above it. */
           }
-          {
-            /* The vertical rhythm is set from the INK, not the boxes. The title
-              is .rp-display at a 1.05 leading, so its line box sits 3.6px above
-              the cap of the K and its descenders fall 1.1px below the box; the
-              padding is asymmetric to absorb that. The strip keeps a clear
-              band of air between the header rule and the title, as every other
-              page heading does; 4px there read as the title touching the rule
-              on a phone, so the top is now 16px and the bottom 12px.
-
-              The counts sit on the title's baseline rather than on the row
-              below, which is where they were and where they read wrong: an 11px
-              caption centred in a 36px row of glyph buttons floats 14.4px down
-              from the row's top no matter what the margin does, so the gap under
-              the title measured 19.3px against 11.6px above it and the block sat
-              loose and bottom-heavy. No margin could close it - at zero the
-              buttons already met the descenders of "g" and "p" - so the caption
-              had to move. On its baseline it is also the house pattern for a
-              heading with a count beside it (see the Library page), it gets more
-              width than it had in the row, and the strip gets 2px shorter. */
-          }
-          <div className='relative pb-3 pt-4' style={{ paddingInline: '1.5rem' }}>
+          <div className='relative py-3' style={{ paddingInline: '1.5rem' }}>
             <div className='flex flex-wrap items-baseline justify-between gap-x-2'>
               {
                 /* At the house heading size the title cannot share a row with
@@ -1483,7 +1466,7 @@ export function GraphPage() {
                   title to "Knowledge ma…". `truncate` stays for its overflow
                   guard, which still catches a single unbreakable word. */
               }
-              <h1 className='rp-display truncate text-2xl text-[var(--rp-on-primary)]'>
+              <h1 className='rp-display truncate text-xl text-[var(--rp-on-primary)]'>
                 {ui('Knowledge map')}
               </h1>
               {hasGraph
@@ -1551,18 +1534,21 @@ export function GraphPage() {
         /* Chrome - title, find and the lens toggle. Kept slim so the map owns
           the height below it. */
       }
-      <div className='relative z-40 hidden shrink-0 border-b border-line md:block'>
+      <div
+        data-graph-masthead='desktop'
+        className='relative z-40 hidden shrink-0 border-b border-line md:block'
+      >
         <HeroGround bannerImageUrl={config.branding.bannerImageUrl} />
-        <div className='relative px-4 py-10 sm:px-6 sm:py-14'>
-          <div className='mx-auto max-w-3xl text-center'>
-            <h1 className='rp-display text-3xl text-[var(--rp-on-primary)] sm:text-4xl'>
+        <div className='rp-shell relative flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-3'>
+          <div className='min-w-0'>
+            <h1 className='rp-display text-2xl text-[var(--rp-on-primary)]'>
               {ui('Knowledge map')}
             </h1>
             {hasGraph
-              ? <p className='mt-3 text-sm text-[var(--rp-on-primary)]/75'>{subtitle}</p>
+              ? <p className='mt-1 text-xs text-[var(--rp-on-primary)]/75'>{subtitle}</p>
               : null}
           </div>
-          <div className='mt-7 flex flex-wrap items-center justify-center gap-2.5'>
+          <div className='flex flex-wrap items-center justify-end gap-2.5'>
             <NodeSearch nodes={nodes} groupStyles={groupStyles} onPick={focusAndSelect} />
             <ModeToggle mode={mode} onChange={switchMode} />
             {hasGraph ? <LayoutToggle layout={layout} onChange={setLayout} /> : null}
@@ -1573,7 +1559,8 @@ export function GraphPage() {
       {/* Canvas stage - the map fills it; panels float over it. */}
       <div
         ref={setStageEl}
-        className='relative min-h-0 flex-1 bg-surface'
+        data-graph-stage
+        className='relative h-dvh min-h-0 bg-surface md:h-auto md:flex-1'
         aria-busy={mapBusy}
       >
         <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
@@ -1682,6 +1669,30 @@ export function GraphPage() {
                 )
                 : null}
 
+              {/* Canvas gestures orbit the map; this returns phone navigation. */}
+              <div className='absolute right-3 top-3 z-20 md:hidden'>
+                <button
+                  type='button'
+                  data-graph-back-top
+                  aria-label={ui('Back to top')}
+                  title={ui('Back to top')}
+                  onClick={() => {
+                    document.querySelector<HTMLElement>('.rp-tenant > header a[href]')?.focus({
+                      preventScroll: true,
+                    })
+                    globalThis.scrollTo({
+                      top: 0,
+                      behavior: globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
+                        ? 'instant'
+                        : 'smooth',
+                    })
+                  }}
+                  className='rp-btn rp-btn-outline rp-shadow-md gap-1.5 px-3 text-sm'
+                >
+                  <span aria-hidden='true'>↑</span>
+                  <span className='hidden min-[390px]:inline'>{ui('Back to top')}</span>
+                </button>
+              </div>
               {/* Reopen affordance when the navigator is hidden. */}
               {!railOpen
                 ? (
