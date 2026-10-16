@@ -103,8 +103,7 @@ export function DeleteDocumentButton({
   /** Shown on the document's own page, which leaves once the delete is done. */
   onDocumentPage?: boolean
 }) {
-  const locale = usePortalLocale()
-  const { ui } = locale
+  const { ui } = usePortalLocale()
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -155,7 +154,9 @@ export function DeleteDocumentButton({
       setEnded({ outcome, sentUnder: context })
     } catch (err) {
       setError(
-        locale.error(err, 'The document could not be deleted. Try again.'),
+        err instanceof Error && err.message
+          ? err.message
+          : 'The document could not be deleted. Try again.',
       )
     } finally {
       busyRef.current = false

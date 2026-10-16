@@ -380,7 +380,14 @@ function Steps({ children }: { children: ReactNode }) {
   )
 }
 
-function Section({ id, children, wide }: { id: SectionId; children: ReactNode; wide?: boolean }) {
+function Section(
+  { id, children, wide, after }: {
+    id: SectionId
+    children: ReactNode
+    wide?: boolean
+    after?: ReactNode
+  },
+) {
   const { language } = usePortalLocale()
   const index = HOW_IT_WORKS_SECTIONS.findIndex((section) => section.id === id)
   const translated = language === 'ja'
@@ -393,6 +400,7 @@ function Section({ id, children, wide }: { id: SectionId; children: ReactNode; w
       </h2>
       <div className={`mt-3 space-y-3.5 ${wide ? '' : 'rp-measure'}`}>
         {translated && id !== 'tools' ? <HelpMarkdown text={translated.body} /> : children}
+        {after}
       </div>
     </section>
   )
@@ -534,7 +542,7 @@ function ToolCard({ tool }: { tool: Tool }) {
 // ---------------------------------------------------------------------------
 
 export function HowItWorksPage() {
-  const { ui, number } = usePortalLocale()
+  const { ui, number, language } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const counters = useQuery({
@@ -573,31 +581,37 @@ export function HowItWorksPage() {
         </aside>
 
         <div className='min-w-0 space-y-10'>
-          <Section id='content'>
+          <Section
+            id='content'
+            after={
+              <P>
+                {counters.data && (
+                  <>
+                    {ui(
+                      'The collection currently holds {resources} resources, indexed as {paragraphs} paragraphs and {sentences} sentences.',
+                      {
+                        resources: number(counters.data.resources),
+                        paragraphs: number(counters.data.paragraphs),
+                        sentences: number(counters.data.sentences),
+                      },
+                    )}
+                    {' '}
+                  </>
+                )}
+                {language === 'en' ? 'The ' : null}
+                <TextLink to={`/t/${slug}/library`}>{ui('Library')}</TextLink>
+                {language === 'en' ? ' ' : null}
+                {counters.data
+                  ? ui('lists every one of them.')
+                  : ui('lists every resource in the collection and shows the current count.')}
+              </P>
+            }
+          >
             <P>
               The portal reads one collection: research papers, their supplementary files and video
               material, loaded into the portal's knowledge index by the people who run it. Nothing
               else is read. What you can search, ask and browse is exactly what is in that
               collection.
-            </P>
-            <P>
-              {counters.data
-                ? (
-                  <>
-                    The collection currently holds{' '}
-                    <strong className='font-semibold text-ink'>
-                      {number(counters.data.resources)} resources
-                    </strong>, indexed as {number(counters.data.paragraphs)} paragraphs and{' '}
-                    {number(counters.data.sentences)} sentences. The{' '}
-                    <TextLink to={`/t/${slug}/library`}>Library</TextLink> lists every one of them.
-                  </>
-                )
-                : (
-                  <>
-                    The <TextLink to={`/t/${slug}/library`}>Library</TextLink>{' '}
-                    lists every resource in the collection and shows the current count.
-                  </>
-                )}
             </P>
           </Section>
 
@@ -632,7 +646,24 @@ export function HowItWorksPage() {
             </P>
           </Section>
 
-          <Section id='answered'>
+          <Section
+            id='answered'
+            after={intents.length > 0
+              ? (
+                <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'>
+                  <p className='rp-eyebrow text-ink-3'>{ui('The configurations on this portal')}</p>
+                  <dl className='mt-2 space-y-2'>
+                    {intents.map((intent) => (
+                      <div key={intent.id} className='text-sm leading-relaxed'>
+                        <dt className='inline font-semibold text-ink'>{intent.label}.</dt>{' '}
+                        <dd className='inline text-ink-2'>{intent.description}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              )
+              : null}
+          >
             <P>Four things happen between the question and the answer:</P>
             <Steps>
               <li>
@@ -671,21 +702,6 @@ export function HowItWorksPage() {
                 that passage in the paper.
               </li>
             </Steps>
-            {intents.length > 0
-              ? (
-                <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'>
-                  <p className='rp-eyebrow text-ink-3'>The configurations on this portal</p>
-                  <dl className='mt-2 space-y-2'>
-                    {intents.map((intent) => (
-                      <div key={intent.id} className='text-sm leading-relaxed'>
-                        <dt className='inline font-semibold text-ink'>{intent.label}.</dt>{' '}
-                        <dd className='inline text-ink-2'>{intent.description}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              )
-              : null}
           </Section>
 
           <Section id='checked'>
@@ -770,7 +786,7 @@ export function HowItWorksPage() {
 
           <Section id='tools' wide>
             <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5'>
-              {tools(slug).map((tool) => <ToolCard key={ui(tool.title)} tool={tool} />)}
+              {tools(slug).map((tool) => <ToolCard key={tool.title} tool={tool} />)}
             </div>
           </Section>
 
@@ -799,7 +815,18 @@ export function HowItWorksPage() {
             </ul>
           </Section>
 
-          <Section id='under-the-hood'>
+          <Section
+            id='under-the-hood'
+            after={
+              <p className='text-sm text-ink-3'>
+                {ui('More on reading an answer:')}{' '}
+                <TextLink to={`/t/${slug}/help/trust-and-citations`}>
+                  {ui('Trust, citations and confidence')}
+                </TextLink>
+                {language === 'ja' ? '。' : '.'}
+              </p>
+            }
+          >
             <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4 sm:p-5'>
               <p className='rp-eyebrow text-ink-3'>For technical readers</p>
               <p className='mt-2 text-sm leading-relaxed text-ink-2'>
@@ -812,12 +839,6 @@ export function HowItWorksPage() {
                 the portal, and the credentials for it never reach the browser.
               </p>
             </div>
-            <p className='text-sm text-ink-3'>
-              More on reading an answer:{' '}
-              <TextLink to={`/t/${slug}/help/trust-and-citations`}>
-                Trust, citations and confidence
-              </TextLink>.
-            </p>
           </Section>
         </div>
       </div>

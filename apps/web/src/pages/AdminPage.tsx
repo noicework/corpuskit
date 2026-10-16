@@ -4,6 +4,8 @@ import { Link, NavLink } from 'react-router-dom'
 import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 import { getAdminOverview } from '../api/client.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
+import { platformBranding } from '../components/PortalAccessGate.tsx'
+import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 import { Skeleton } from '../components/ui.tsx'
 import { AddPortal } from './admin/AddPortal.tsx'
 import { MigratePanel } from './admin/MigratePanel.tsx'
@@ -57,7 +59,7 @@ export function useAdminOverview(scope: string) {
       if (result !== undefined) setSnapshot(result)
     } catch (error) {
       if (context !== controller.context) return
-      setOperationError(locale.error(error, 'Could not load the overview.'))
+      setOperationError(error instanceof Error ? error.message : 'Could not load the overview.')
     }
   }
   return {
@@ -76,7 +78,8 @@ export function useAdminOverview(scope: string) {
 export function OverviewAccess(
   { overview, returnTo }: { overview: ReturnType<typeof useAdminOverview>; returnTo: string },
 ) {
-  const { ui } = usePortalLocale()
+  const locale = usePortalLocale()
+  const { ui } = locale
   return (
     <div className='mt-5 space-y-4' data-admin-unavailable={!overview.data ? true : undefined}>
       {!overview.sessionAllowed && (
@@ -116,7 +119,7 @@ export function OverviewAccess(
       </div>
       {overview.error && (
         <p role='alert' className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
-          {overview.error}
+          {locale.error(overview.error, 'Could not load the overview.')}
         </p>
       )}
     </div>
@@ -136,6 +139,8 @@ export function PlatformAdminShell(
   { title, description, children }: { title: string; description: string; children: ReactNode },
 ) {
   const { ui } = usePortalLocale()
+  const { scheme } = useViewerScheme()
+  useBodyTheme(platformBranding, scheme)
   const access = useAccess()
   const links = [
     {
@@ -156,7 +161,11 @@ export function PlatformAdminShell(
     },
   ].filter((link) => link.allowed)
   return (
-    <main className='min-h-screen bg-app'>
+    <main
+      className='rp-tenant min-h-screen bg-app text-ink'
+      style={tenantThemeVars(platformBranding, scheme)}
+      data-platform-scheme={scheme}
+    >
       <div className='rp-shell min-w-0 py-12'>
         <div className='flex flex-wrap items-start justify-between gap-3'>
           <div className='min-w-0'>

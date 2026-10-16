@@ -9,7 +9,7 @@ import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 import { readSafePortalMetadata } from '../api/portal-metadata.ts'
 
 const housePalette = DEFAULT_PALETTES.corpuskit.palette
-const houseBranding: Branding = {
+export const platformBranding: Branding = {
   productName: 'CorpusKit',
   organisation: 'CorpusKit',
   tagline: '',
@@ -59,7 +59,7 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
   }, safeClient)
   const failed = authorityFailed || safe.isError
   const paused = !loading && !failed && (suspended || safe.data?.status === 'suspended')
-  const branding: Branding = safe.data ? { ...safe.data.branding, tagline: '' } : houseBranding
+  const branding: Branding = safe.data ? { ...safe.data.branding, tagline: '' } : platformBranding
   const { scheme: viewerScheme } = useViewerScheme(branding.defaultColourScheme)
   // A portal set to light signs viewers in on light too.
   const scheme = branding.colourScheme === 'light' ? 'light' : viewerScheme

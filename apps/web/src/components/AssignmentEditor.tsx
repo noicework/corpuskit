@@ -135,10 +135,9 @@ function Editor(
     } catch (failure) {
       if (lifetime.current !== token || access.controller.context !== context) return
       setError(
-        locale.error(
-          failure instanceof AssignmentError ? failure : undefined,
-          'The change could not be confirmed. Refresh this view before trying again.',
-        ),
+        failure instanceof AssignmentError
+          ? failure.message
+          : 'The change could not be confirmed. Refresh this view before trying again.',
       )
     } finally {
       if (lifetime.current === token) {
@@ -387,7 +386,10 @@ function Editor(
             )}
             {error && !confirmation && (
               <p id={`${id}-error`} role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
-                {error}
+                {locale.error(
+                  error,
+                  'The change could not be confirmed. Refresh this view before trying again.',
+                )}
               </p>
             )}
             <div className='flex flex-wrap gap-3'>

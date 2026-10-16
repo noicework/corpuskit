@@ -326,7 +326,7 @@ function DocsAssistant({ slug }: { slug: string }) {
       if (current()) {
         update({
           pending: false,
-          error: locale.error(err, 'The help assistant could not answer.'),
+          error: err instanceof Error ? err.message : 'The help assistant could not answer.',
         })
       }
     } finally {

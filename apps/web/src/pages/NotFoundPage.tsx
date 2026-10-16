@@ -1,3 +1,5 @@
+import { platformBranding } from '../components/PortalAccessGate.tsx'
+import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 import { Link, useParams } from 'react-router-dom'
 import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 
@@ -28,7 +30,7 @@ export function NotFoundPage() {
   ]
 
   return (
-    <div className='mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-4 py-16 text-center'>
+    <main className='mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-4 py-16 text-center'>
       <p className='rp-eyebrow text-ink-3'>{ui('Error 404')}</p>
       <h1 className='mt-3 font-display text-2xl text-ink sm:text-3xl'>{ui('Page not found')}</h1>
       <p className='mt-3 text-sm leading-relaxed text-ink-2'>
@@ -45,21 +47,27 @@ export function NotFoundPage() {
         </p>
         <div className='mt-3 flex flex-wrap justify-center gap-2'>
           {shortcuts.map((shortcut) => (
-            <Link key={ui(shortcut.label)} to={shortcut.to} className='rp-chip'>
+            <Link key={shortcut.label} to={shortcut.to} className='rp-chip'>
               {ui(shortcut.label)}
             </Link>
           ))}
         </div>
       </div>
-    </div>
+    </main>
   )
 }
 
 /** Root-level 404 - a standalone full-screen fallback for paths outside any portal. */
 export function RootNotFound() {
   const { ui } = usePortalLocale()
+  const { scheme } = useViewerScheme()
+  useBodyTheme(platformBranding, scheme)
   return (
-    <div className='flex min-h-screen items-center justify-center bg-app p-6'>
+    <main
+      className='rp-tenant flex min-h-screen items-center justify-center bg-app p-6 text-ink'
+      style={tenantThemeVars(platformBranding, scheme)}
+      data-platform-scheme={scheme}
+    >
       <div className='rp-card max-w-md p-6 text-center'>
         <div className='mb-6 flex justify-center'>
           <AppLanguageSwitch />
@@ -73,6 +81,6 @@ export function RootNotFound() {
           {ui('Back to portals')}
         </Link>
       </div>
-    </div>
+    </main>
   )
 }

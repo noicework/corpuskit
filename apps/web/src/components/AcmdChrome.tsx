@@ -102,7 +102,7 @@ export function AcmdSiteHeader({ slug, onSearch }: { slug: string; onSearch: () 
           {groups.map((group, index) => (
             <div
               className='acmd-site-nav-group'
-              key={ui(group.label)}
+              key={group.label}
               onBlur={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpenGroup(null)
               }}

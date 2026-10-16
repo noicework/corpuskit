@@ -355,13 +355,13 @@ export const PLATFORM_JA: Readonly<Record<string, string>> = {
   'Chat with a document': '資料とチャット',
   "Ask questions of one paper alone, from its page in the reader. Its answers are checked against that document's own text and badged the same way.":
     'ひとつの資料に質問し、その本文で回答を確認します。',
-  'Investigations': '調査',
+  'Investigations': '調査ノート',
   'Gather evidence around a research question over time and synthesise it.':
     '研究課題に沿って根拠を集め、統合します。',
   'Generate': '生成',
   'A briefing, comparison, timeline or set of questions and answers from the collection, with references.':
     '資料群から、参考文献付きのブリーフィング、比較、時系列、FAQを作成します。',
-  'Assessment': '理解度確認',
+  'Assessment': '理解度チェック',
   'A knowledge check built on any area of the collection.':
     '資料群の分野ごとに、理解度を確認できます。',
   'The knowledge map': 'ナレッジマップ',
@@ -373,4 +373,12 @@ export const PLATFORM_JA: Readonly<Record<string, string>> = {
   'Exports': 'エクスポート',
   'An answer trail, an investigation or a generated artefact as a Word document; a briefing as a print-ready copy for saving as a PDF (portable document format) file.':
     '回答履歴、調査、生成物をWordに保存し、ブリーフィングは印刷用画面からPDFにも保存できます。',
+  'The collection currently holds {resources} resources, indexed as {paragraphs} paragraphs and {sentences} sentences.':
+    '現在、{resources}件の資料、{paragraphs}段落、{sentences}文をインデックスに登録しています。',
+  'lists every one of them.': 'で全件を確認できます。',
+  'lists every resource in the collection and shows the current count.':
+    'で資料群の全件と現在の件数を確認できます。',
+  'The configurations on this portal': 'このポータルの検索設定',
+  'More on reading an answer:': '回答の読み方：',
+  'Trust, citations and confidence': '信頼度・引用・根拠',
 }

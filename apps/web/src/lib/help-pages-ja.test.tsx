@@ -93,3 +93,68 @@ Deno.test('Japanese diagram labels wrap by glyph width without changing English 
   expect(html).toContain('data-orientation="row"')
   expect(html).toContain('data-orientation="column"')
 })
+
+Deno.test('both guide languages retain live counters, configured intent data and navigation actions', async () => {
+  const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+  const { Outlet, Route, Routes } = await import('react-router-dom')
+  const { TenantConfigSchema } = await import('@research-portal/core')
+  const { HowItWorksPage } = await import('../pages/HowItWorksPage.tsx')
+  const config = TenantConfigSchema.parse({
+    slug: 'original',
+    branding: {
+      productName: 'Original portal',
+      organisation: 'Original organisation',
+      tagline: 'Original tagline',
+      colours: { primary: '#123456', accent: '#123456', heroFrom: '#123456', heroTo: '#123456' },
+    },
+    searchPlaceholder: '',
+    topics: [],
+    suggestedQuestions: [],
+    entityTypes: [],
+    relationTypes: [],
+    intents: [{
+      id: 'original-live-intent',
+      label: 'Authored Live Configuration',
+      description: 'Authored live configuration description.',
+      retrieval: { features: ['keyword'], topK: 4, reranker: 'noop' },
+      answer: { surfaces: ['search'], strategy: 'none', promptVariant: 'default' },
+    }],
+  })
+  for (const language of ['ja', 'en'] as const) {
+    const client = new QueryClient()
+    client.setQueryData(['counters', config.slug], {
+      resources: 1234,
+      paragraphs: 5678,
+      sentences: 9012,
+      indexMb: 1,
+    })
+    const html = renderToStaticMarkup(
+      <PortalLocaleContext.Provider value={createPortalLocale(language)}>
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/t/original/how-it-works']}>
+            <Routes>
+              <Route element={<Outlet context={{ config }} />}>
+                <Route path='/t/:slug/how-it-works' element={<HowItWorksPage />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </PortalLocaleContext.Provider>,
+    )
+    for (
+      const text of [
+        'Authored Live Configuration',
+        'Authored live configuration description.',
+        '1,234',
+        '5,678',
+        '9,012',
+      ]
+    ) expect(html).toContain(text)
+    expect(html).toContain('href="/t/original/library"')
+    expect(html).toContain('href="/t/original/help/trust-and-citations"')
+    expect(html).toContain(
+      language === 'ja' ? 'このポータルの検索設定' : 'The configurations on this portal',
+    )
+    client.clear()
+  }
+})
