@@ -188,6 +188,7 @@ The current allowlist is:
 |---|---|
 | Create a portal | `POST /api/admin/tenants` |
 | Update portal appearance, layout, search prompt and regional discovery band | `PATCH /api/admin/tenants/:slug` |
+| Import validated portal presentation and discovery configuration | `PUT /api/admin/t/:slug/configuration` |
 | Connect or disconnect a knowledge box | `POST`, `DELETE /api/admin/t/:slug/knowledge-box` |
 | Change portal access mode | `PATCH /api/admin/t/:slug/access` |
 | List and create portal members | `GET`, `POST /api/admin/t/:slug/members` |
@@ -201,6 +202,36 @@ The current allowlist is:
 | Migrate content between portals | `POST /api/admin/migrate` |
 | Delete a portal suspended for `OPERATOR_DELETE_AFTER_DAYS` | `POST /api/admin/tenants/:slug/delete-suspended` |
 | Erase a deleted portal's records | `POST /api/admin/tenants/:slug/erase` |
+
+### Importing portal configuration
+
+`PUT /api/admin/t/<slug>/configuration` accepts only the operator credential. Browser sessions,
+including owners, portal data keys and break-glass cannot import a configuration. The shared
+`PortalConfigurationImportSchema` and `portalConfigurationExport(config)` in
+`@research-portal/core` define the body; the export helper omits settings outside this route.
+
+The required fields are `slug`, `branding`, `searchPlaceholder`, `topics`, `suggestedQuestions`,
+`entityTypes` and `relationTypes`. Optional fields are `languagePolicy`, `assessmentHeading`,
+`regionalDiscovery`, `timezone` and `copy`. `slug` must exactly match the existing portal.
+`branding` replaces its complete presentation document, including its optional layout; omitted
+optional top-level fields retain their current values. The resulting configuration is validated
+before one audited store write. Success returns `{"ok":true,"slug":"<slug>"}`.
+
+Unknown fields are refused, including nested fields. Access mode, hostname and aliases, knowledge
+box binding and inference policy, prompts, extraction and retrieval settings, membership, lifecycle
+and credentials are outside the body. Use their existing administrative routes separately. The
+import does not call a knowledge box or generate content; the operator's content-read and
+generation restrictions continue to apply. Audit records contain field names, never imported copy
+or credentials. Failure of the success audit inside the store write rolls back the configuration.
+
+`branding.defaultColourScheme` may be `light` or `dark`. It supplies the initial scheme when the
+viewer has no saved choice, before the system preference. The toggle remains available when
+`branding.colourScheme` is absent or `viewer`, and a saved `rp-scheme` choice wins. An absent
+default preserves existing behaviour. `colourScheme: "light"` still forces light and hides the
+toggle. The pre-auth branding projection includes the default so sign-in uses the same scheme;
+it continues to exclude portal topics, questions and private configuration.
+
+### Portal members
 
 Create an email assignment with a body such as
 `{"subjectKind":"pending-email","subjectId":"reader@example.org","role":"viewer"}`.

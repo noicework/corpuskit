@@ -82,9 +82,11 @@ import {
   AccessModeSchema,
   authorize,
   normalisePrincipal,
+  PortalConfigurationImportSchema,
   type PortalPolicy,
   PortalPolicySchema,
   type Scope,
+  TenantConfigSchema,
 } from '@research-portal/core'
 import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
@@ -1513,6 +1515,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const { declaration, scope, policy } = target()
         if (declaration.scope === 'public') return null
         const selected = await authority(scope)
+        if (declaration.operatorOnly && selected.kind !== 'operator') return deny(scope)
         const hosted = scope.kind === 'portal' ? tenants.get(scope.slug) : undefined
         if (hosted) {
           enforceSuspension(lifecycle, hosted, selected, {
@@ -5135,6 +5138,38 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
     })
+  })
+
+  app.put(declaredRoute('PUT', '/api/admin/t/:slug/configuration'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const parsed = PortalConfigurationImportSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
+    if (parsed.data.slug !== config.slug) return c.json({ error: 'slug_mismatch' }, 400)
+    const { slug: _slug, ...presentation } = parsed.data
+    if (
+      presentation.branding.paletteId &&
+      !canAssignPalette(presentation.branding.paletteId, config.branding.paletteId)
+    ) return c.json({ error: 'palette_not_available' }, 400)
+    // Resolve uploaded layout image addresses when serving them, as the appearance route does.
+    if (presentation.branding.layout) {
+      presentation.branding.layout = mapLayoutImages(
+        presentation.branding.layout,
+        ({ asset, alt }) => ({ asset, alt }),
+      )
+    }
+    const validated = TenantConfigSchema.safeParse({ ...config, ...presentation })
+    if (!validated.success) return c.json({ error: 'invalid_request' }, 400)
+    await subAction(
+      c,
+      '/api/admin/t/:slug/configuration',
+      'tenant.configuration.update',
+      () => tenants.patch(config.slug, presentation),
+      {
+        changedFields: Object.keys(presentation).sort().join(','),
+      },
+    )
+    return c.json({ ok: true, slug: config.slug })
   })
 
   app.patch(declaredRoute('PATCH', '/api/admin/tenants/:slug'), async (c) => {

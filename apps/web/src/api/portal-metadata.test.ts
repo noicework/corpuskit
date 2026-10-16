@@ -58,6 +58,11 @@ Deno.test('old active metadata remains compatible and unknown lifecycle states f
     'marine',
   )
   expect(lightOnly.branding.colourScheme).toBe('light')
+  const lightDefault = await readSafePortalMetadata(
+    Response.json({ ...safe, branding: { ...safe.branding, defaultColourScheme: 'light' } }),
+    'marine',
+  )
+  expect(lightDefault.branding.defaultColourScheme).toBe('light')
   await expect(readSafePortalMetadata(Response.json({ ...safe, status: 'invalid' }), 'marine'))
     .rejects.toThrow()
 })

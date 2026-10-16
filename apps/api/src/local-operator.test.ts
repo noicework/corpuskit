@@ -1,4 +1,5 @@
 import { expect } from '@std/expect'
+import { portalConfigurationExport } from '@research-portal/core'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { buildApp } from './app.ts'
 import {
@@ -99,6 +100,105 @@ const json = (method: string, body: unknown): RequestInit => ({
   method,
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
+})
+
+Deno.test('local configuration import is operator-only, validated and preserves hosting identity', async () => {
+  const f = fixture()
+  try {
+    f.tenants.patch('marine', {
+      accessMode: 'restricted',
+      extraction: { default: 'default', rules: [] },
+    })
+    const before = f.tenants.get('marine')!
+    const body = {
+      ...portalConfigurationExport(before),
+      branding: {
+        ...before.branding,
+        productName: 'Synthetic import',
+        defaultColourScheme: 'light',
+      },
+      languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
+      topics: [{ id: 'new-topic', label: '研究' }],
+      suggestedQuestions: [{ id: 'new-question', text: 'What changed?' }],
+      timezone: 'Asia/Tokyo',
+    }
+    const path = '/api/admin/t/marine/configuration'
+    for (const authorization of ['', 'Bearer unrelated']) {
+      const denied = await f.invoke(path, {
+        ...json('PUT', body),
+        headers: { authorization, 'content-type': 'application/json' },
+      }, owner())
+      expect([401, 403]).toContain(denied.status)
+      expect(f.tenants.get('marine')).toEqual(before)
+    }
+    for (
+      const invalid of [
+        { ...body, slug: 'grains' },
+        { ...body, accessMode: 'public' },
+        { ...body, binding: { token: 'credential-sentinel' } },
+        { ...body, branding: { ...body.branding, token: 'credential-sentinel' } },
+        { ...body, topics: 'invalid' },
+      ]
+    ) {
+      expect((await f.invoke(path, json('PUT', invalid))).status).toBe(400)
+      expect(f.tenants.get('marine')).toEqual(before)
+    }
+    const ownerEvidence = f.database.all('SELECT * FROM rbac_owner_evidence')
+    const assignments = f.rbac.assignments.list('tenant-1')
+    const response = await f.invoke(path, json('PUT', body))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, slug: 'marine' })
+    const after = f.tenants.get('marine')!
+    expect(after).toMatchObject({
+      slug: 'marine',
+      accessMode: 'restricted',
+      hostname: before.hostname,
+      languagePolicy: body.languagePolicy,
+      topics: body.topics,
+      suggestedQuestions: body.suggestedQuestions,
+      timezone: 'Asia/Tokyo',
+      extraction: before.extraction,
+    })
+    expect(after.branding.defaultColourScheme).toBe('light')
+    const events = f.events().filter((event) => event.action === 'tenant.configuration.update')
+    expect(events.some((event) => event.outcome === 'success')).toBe(true)
+    expect(events.every((event) => event.actor_id === 'operator:hosting-test')).toBe(true)
+    expect(JSON.stringify(f.events())).not.toContain('credential-sentinel')
+    expect(JSON.stringify(f.events())).not.toContain('Synthetic import')
+    expect(f.database.all('SELECT * FROM rbac_owner_evidence')).toEqual(ownerEvidence)
+    expect(f.rbac.assignments.list('tenant-1')).toEqual(assignments)
+  } finally {
+    f.dispose()
+  }
+})
+
+Deno.test('local configuration and its success audit roll back together', async () => {
+  const f = fixture()
+  const original = console.error
+  console.error = () => {}
+  try {
+    const before = f.tenants.get('marine')!
+    f.database.exec(`CREATE TRIGGER reject_configuration_audit BEFORE INSERT ON audit_events
+      WHEN NEW.action = 'tenant.configuration.update' AND NEW.outcome = 'success'
+      BEGIN SELECT RAISE(FAIL, 'fixture'); END`)
+    const response = await f.invoke(
+      '/api/admin/t/marine/configuration',
+      json('PUT', {
+        ...portalConfigurationExport(before),
+        branding: { ...before.branding, productName: 'Must roll back' },
+      }),
+    )
+    expect(response.status).toBe(500)
+    expect(f.tenants.get('marine')).toEqual(before)
+    expect(
+      f.events().some((event) =>
+        event.action === 'tenant.configuration.update' && event.outcome === 'success'
+      ),
+    ).toBe(false)
+  } finally {
+    console.error = original
+    f.dispose()
+  }
 })
 
 Deno.test('local operator uses a signed principal without credentials, a session or assignment activation', async () => {

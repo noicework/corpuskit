@@ -238,6 +238,11 @@ export interface NewTenantInput {
 
 /** Config fields corpus analysis is allowed to rewrite. */
 export interface TenantPatch {
+  languagePolicy?: TenantConfig['languagePolicy']
+  entityTypes?: TenantConfig['entityTypes']
+  relationTypes?: TenantConfig['relationTypes']
+  timezone?: TenantConfig['timezone']
+  copy?: TenantConfig['copy']
   accessMode?: AccessMode
   hostname?: TenantConfig['hostname']
   topics?: TenantConfig['topics']

@@ -85,6 +85,8 @@ export const BrandingSchema = z.object({
   textScale: TextScaleIdSchema.optional(),
   density: DensityIdSchema.optional(),
   colourScheme: ColourSchemeIdSchema.optional(),
+  /** Fallback before a viewer chooses light/dark. Absent follows the system as before. */
+  defaultColourScheme: z.enum(['light', 'dark']).optional(),
   /** Served when an administrator uploaded a logo for this portal. */
   logoUrl: z.string().optional(),
   /** Optional logo variant with contrast on dark portal surfaces. */
@@ -466,6 +468,73 @@ export const TenantConfigSchema = z.object({
   /** Extraction routing rules (docs/EXTRACTION-LAB.md). Absent = platform default for everything. */
   extraction: ExtractionRulesSchema.optional(),
 })
+
+/**
+ * Hosting import contract: presentation and discovery only. Access, hostnames, retrieval,
+ * extraction, credentials and inference policy have separate administrative boundaries.
+ * The slug is an assertion about the existing target, never a rename operation.
+ */
+const portalConfigurationShape = TenantConfigSchema.pick({
+  slug: true,
+  branding: true,
+  languagePolicy: true,
+  searchPlaceholder: true,
+  assessmentHeading: true,
+  topics: true,
+  suggestedQuestions: true,
+  entityTypes: true,
+  relationTypes: true,
+  regionalDiscovery: true,
+  timezone: true,
+  copy: true,
+}).extend({
+  timezone: z.string().refine((timezone) => {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: timezone })
+      return true
+    } catch {
+      return false
+    }
+  }, 'Must be a recognised timezone').optional(),
+}).strict()
+
+/** Zod objects normally strip nested unknown keys; imports must refuse those keys instead. */
+function hasUnrecognisedConfigurationKeys(input: unknown, parsed: unknown): boolean {
+  if (Array.isArray(input)) {
+    return !Array.isArray(parsed) ||
+      input.some((value, index) => hasUnrecognisedConfigurationKeys(value, parsed[index]))
+  }
+  if (input && typeof input === 'object') {
+    if (!parsed || typeof parsed !== 'object') return true
+    return Object.entries(input).some(([key, value]) =>
+      !Object.hasOwn(parsed, key) ||
+      hasUnrecognisedConfigurationKeys(value, (parsed as Record<string, unknown>)[key])
+    )
+  }
+  return false
+}
+
+export const PortalConfigurationImportSchema = z.unknown().transform((input, context) => {
+  const parsed = portalConfigurationShape.safeParse(input)
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) context.addIssue(issue)
+    return z.NEVER
+  }
+  if (hasUnrecognisedConfigurationKeys(input, parsed.data)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unrecognised configuration field' })
+    return z.NEVER
+  }
+  return parsed.data
+})
+export type PortalConfigurationImport = z.infer<typeof PortalConfigurationImportSchema>
+
+/** Export only the importable public presentation fields, never hosting/access settings. */
+export function portalConfigurationExport(config: TenantConfig): PortalConfigurationImport {
+  return PortalConfigurationImportSchema.parse(Object.fromEntries(
+    portalConfigurationShape.keyof().options.filter((key) => config[key] !== undefined)
+      .map((key) => [key, config[key]]),
+  ))
+}
 
 /** Whether Explore shows the regional discovery band: only when the portal opts in. */
 export function showsRegionalDiscovery(config: Pick<TenantConfig, 'regionalDiscovery'>): boolean {

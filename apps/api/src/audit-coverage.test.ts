@@ -1,4 +1,5 @@
 import { expect } from '@std/expect'
+import { operatorRequestContext } from './operator.ts'
 import { Hono } from 'hono'
 import type { AuditEvent } from './audit.ts'
 import { TenantStore } from './tenants.ts'
@@ -529,6 +530,14 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
   for (const declaration of DECLARATIONS.filter((d) => d.kind === 'http' && isPrivileged(d))) {
     await t.step(`${declaration.method} ${declaration.path}`, async () => {
       const events: AuditEvent[] = []
+      const requestContext: NonNullable<BuildAppOptions['requestContext']> = () =>
+        declaration.operatorOnly ? operatorRequestContext('audit-fixture', 'inventory-request') : {
+          requestId: 'inventory-request',
+          session: sessionFor('owner', 'a', Date.now()),
+          coarseAdminEligible: true,
+          effectiveRoles: { platformRole: 'owner', portalRoles: [] },
+          actor: { kind: 'user', id: 'owner-a' },
+        }
       const app = buildApp({
         provider: {} as RetrievalProvider,
         audit: {
@@ -537,13 +546,7 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
           },
           read: () => events,
         },
-        requestContext: () => ({
-          requestId: 'inventory-request',
-          session: sessionFor('owner', 'a', Date.now()),
-          coarseAdminEligible: true,
-          effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-          actor: { kind: 'user', id: 'owner-a' },
-        }),
+        requestContext,
       })
       const path = declaration.path.replace(':slug', 'marine').replace(/:[^/]+/g, 'fixture')
       const response = await app.request(path, {
@@ -554,7 +557,9 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
       })
       await response.text()
       expect(events[0]?.outcome).toBe('intent')
-      expect(events[0]?.actor_id).toBe('owner-a')
+      expect(events[0]?.actor_id).toBe(
+        declaration.operatorOnly ? 'operator:audit-fixture' : 'owner-a',
+      )
       expect(events[0]?.request_id).toBe('inventory-request')
       expect(events[0]?.scope_kind).toBe(declaration.scope)
       expect(events[0]?.target_id).toBe(
@@ -580,12 +585,7 @@ Deno.test('every privileged HTTP declaration enters mandatory audit before its h
           },
           read: () => [],
         },
-        requestContext: () => ({
-          requestId: 'inventory-request',
-          session: sessionFor('owner', 'a', Date.now()),
-          coarseAdminEligible: true,
-          effectiveRoles: { platformRole: 'owner', portalRoles: [] },
-        }),
+        requestContext,
       })
       expect((await failing.request(path, { method: declaration.method })).status).toBe(500)
       expect(dispatches).toBe(0)

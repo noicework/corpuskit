@@ -361,18 +361,19 @@ export function TenantLayout() {
   useTextScale(config?.branding)
   // The viewer's light/dark scheme: system preference by default, their own
   // choice once they toggle it, persisted per browser.
-  const { scheme: viewerScheme, setChoice } = useViewerScheme()
+  const { scheme: viewerScheme, setChoice } = useViewerScheme(config?.branding.defaultColourScheme)
   // Start the CorpusKit identity in light mode, independent of browser preferences.
   const [demoScheme, setDemoScheme] = useState<'light' | 'dark'>('light')
   const isCorpusKit = config?.branding.paletteId === 'corpuskit'
   const isAcmd = config?.branding.paletteId === 'acmd'
+  const legacyDemoScheme = (isCorpusKit || isAcmd) && !config?.branding.defaultColourScheme
   // A portal set to light stays light for every viewer, and offers no toggle.
   const lightOnly = config?.branding.colourScheme === 'light'
-  const scheme = lightOnly ? 'light' : isCorpusKit || isAcmd ? demoScheme : viewerScheme
+  const scheme = lightOnly ? 'light' : legacyDemoScheme ? demoScheme : viewerScheme
   const schemeLabel = locale.ui(scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode')
   const toggleScheme = () => {
     const next = scheme === 'dark' ? 'light' : 'dark'
-    if (isCorpusKit || isAcmd) setDemoScheme(next)
+    if (legacyDemoScheme) setDemoScheme(next)
     else setChoice(next)
   }
   useBodyTheme(config?.branding, scheme)

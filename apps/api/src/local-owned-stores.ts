@@ -98,7 +98,8 @@ export function localOwnedStores(
         }),
       )
       if (
-        (operation.name === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
+        (operation.name === 'tenants.patch' &&
+          ['tenant.access.update', 'tenant.configuration.update'].includes(context.input.action)) ||
         (operation.name === 'lifecycle.set' &&
           context.input.action === 'portal.lifecycle.update') ||
         (operation.name === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||

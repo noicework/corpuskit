@@ -150,6 +150,7 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
   const operatorRoutes = new Set([
     'POST /api/admin/tenants',
     'PATCH /api/admin/tenants/:slug',
+    'PUT /api/admin/t/:slug/configuration',
     'POST /api/admin/t/:slug/knowledge-box',
     'DELETE /api/admin/t/:slug/knowledge-box',
     'PATCH /api/admin/t/:slug/access',
@@ -851,6 +852,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['POST', 'enable', 'behaviour.write'],
   ['POST', 'analyse', 'behaviour.write', {}],
   ['PATCH', '/api/admin/tenants/:slug', 'appearance.write', { name: 'Renamed portal' }],
+  ['PUT', 'configuration', 'behaviour.write', {}],
   ['POST', 'kg/propose', 'graph.write', {}],
   ['POST', 'kg/implement', 'graph.write', { applyExisting: false }],
   ['GET', 'suggestions', 'behaviour.write'],
@@ -1174,13 +1176,13 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
         role === 'wrong-portal' ? 'portal-admin' : role as Role,
         role === 'wrong-portal' ? 'b' : 'a',
       )
-      const allowed = role === 'owner' ||
+      const allowed = suffix !== 'configuration' && (role === 'owner' ||
         (role === 'platform-admin' && permission !== 'portal.delete' &&
           permission !== 'platform.settings.write') ||
         (!platform &&
           (role === 'portal-admin' ||
             role === 'curator' && curatorPermissions.has(permission) ||
-            role === 'analyst' && permission === 'portal.export'))
+            role === 'analyst' && permission === 'portal.export')))
       const response = await fixture.requestAs(session, path, {
         method,
         ...(body === undefined ? {} : {
