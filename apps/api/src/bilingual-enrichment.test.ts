@@ -1,7 +1,8 @@
 import { expect } from '@std/expect'
 import { DEFAULT_RESEARCH_ENRICHMENT, TenantConfigSchema } from '@research-portal/core'
 import { AragProvider } from '@research-portal/retrieval'
-import { buildEnrichmentQuery, generateEnrichment } from './enrichments.ts'
+import { buildEnrichmentQuery, documentTextFor, generateEnrichment } from './enrichments.ts'
+import type { ResourceContent } from '@research-portal/core'
 import { tenantConfig } from './tenants.ts'
 
 Deno.test('Japanese source enrichment overrides the English default field descriptions', () => {
@@ -16,6 +17,20 @@ Deno.test('ordinary source enrichment retains the existing English default', () 
   const query = buildEnrichmentQuery(DEFAULT_RESEARCH_ENRICHMENT, 'Source document')
   expect(query).toContain('Australian English.')
   expect(query).not.toContain('natural Japanese')
+})
+
+Deno.test('a faithful authored transcript takes precedence over a broken office conversion', () => {
+  const content = {
+    texts: [
+      { fieldId: 'files/source', text: '日日日日 レレレレレ' },
+      {
+        fieldId: 'texts/native_source',
+        text: '日本語の実験ノート\n\n| 条件 | 結果 |\n| A | 22.4 |',
+      },
+    ],
+  } as ResourceContent
+  expect(documentTextFor(content, undefined)).toContain('日本語の実験ノート')
+  expect(documentTextFor(content, undefined)).not.toContain('レレレレレ')
 })
 
 Deno.test('a bilingual portal must offer its configured default language', () => {

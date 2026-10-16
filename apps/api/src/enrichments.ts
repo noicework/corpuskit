@@ -373,7 +373,10 @@ export function documentTextFor(
 ): string {
   if (pageSummary) return pageSummary
   if (!content) return ''
-  const joined = content.texts.map((t) => t.text).join('\n\n').trim()
+  // An authored text field may hold a faithful transcript alongside a file whose conversion
+  // lost glyphs. Prefer that original body over duplicate machine-extracted file text.
+  const authored = content.texts.filter((t) => t.fieldId.startsWith('texts/'))
+  const joined = (authored.length ? authored : content.texts).map((t) => t.text).join('\n\n').trim()
   return joined.slice(0, DOCUMENT_TEXT_BUDGET)
 }
 
