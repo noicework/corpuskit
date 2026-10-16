@@ -381,6 +381,7 @@ describe('independent admin route permission matrix', () => {
     ['POST', 'analyse', 'behaviour.write', {}],
     ['PATCH', '/api/admin/tenants/:slug', 'appearance.write', { name: 'Renamed portal' }],
     ['PUT', 'configuration', 'behaviour.write', {}],
+    ['GET', 'configuration', 'behaviour.write'],
     ['POST', 'kg/propose', 'graph.write', {}],
     ['POST', 'kg/implement', 'graph.write', { applyExisting: false }],
     ['GET', 'suggestions', 'behaviour.write'],

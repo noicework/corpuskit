@@ -172,6 +172,66 @@ Deno.test('local configuration import is operator-only, validated and preserves 
   }
 })
 
+Deno.test('local operator readback returns only stored presentation and withholds it on audit failure', async () => {
+  const f = fixture()
+  const originalError = console.error
+  console.error = () => {}
+  try {
+    const initial = f.tenants.get('marine')!
+    f.tenants.patch('marine', {
+      accessMode: 'restricted',
+      branding: {
+        ...initial.branding,
+        logoUrl: '/stored-logo.svg',
+        productName: 'Readback sentinel',
+      },
+      extraction: { default: 'default', rules: [] },
+      prompts: { ask: 'Private prompt sentinel' },
+    })
+    const stored = f.tenants.get('marine')!
+    const path = '/api/admin/t/marine/configuration'
+    const upload = await f.invoke('/api/admin/t/marine/branding/logo', {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    })
+    expect(upload.status).toBe(200)
+    const ownerDenied = await f.invoke(path, { headers: { authorization: '' } }, owner())
+    expect(ownerDenied.status).toBe(403)
+    expect(await ownerDenied.text()).not.toContain('Readback sentinel')
+    expect((await f.invoke(path, { headers: { authorization: 'Operator invalid' } })).status).toBe(
+      401,
+    )
+    const response = await f.invoke(path)
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body).toEqual(portalConfigurationExport(stored))
+    expect(body.branding.logoUrl).toBe('/stored-logo.svg')
+    for (
+      const key of ['accessMode', 'hostname', 'binding', 'inferenceModel', 'extraction', 'prompts']
+    ) {
+      expect(body).not.toHaveProperty(key)
+    }
+    const events = f.events().filter((event) =>
+      event.request_id === response.headers.get('x-request-id')
+    )
+    expect(events.map((event) => event.outcome).sort()).toEqual(['intent', 'success'])
+    expect(events.every((event) => event.actor_id === 'operator:hosting-test')).toBe(true)
+    expect(JSON.stringify(f.events())).not.toContain('Readback sentinel')
+    expect(JSON.stringify(f.events())).not.toContain('Private prompt sentinel')
+    f.database.exec(`CREATE TRIGGER reject_read_completion BEFORE INSERT ON audit_events
+      WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success'
+      BEGIN SELECT RAISE(FAIL, 'fixture'); END`)
+    const failed = await f.invoke(path)
+    expect(failed.status).toBe(500)
+    expect(await failed.text()).not.toContain('Readback sentinel')
+    expect(f.tenants.get('marine')).toEqual(stored)
+  } finally {
+    console.error = originalError
+    f.dispose()
+  }
+})
+
 Deno.test('local configuration and its success audit roll back together', async () => {
   const f = fixture()
   const original = console.error

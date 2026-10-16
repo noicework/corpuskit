@@ -407,6 +407,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       },
     ],
   }),
+  entry('http', 'GET', '/api/admin/t/:slug/configuration', 'behaviour.write', 'portal', {
+    operator: true,
+    operatorOnly: true,
+  }),
   entry('http', 'PUT', '/api/admin/t/:slug/configuration', 'behaviour.write', 'portal', {
     operator: true,
     operatorOnly: true,

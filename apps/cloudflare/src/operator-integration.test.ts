@@ -232,6 +232,75 @@ Deno.test('Worker imports presentation atomically without replacing binding, inf
   }
 })
 
+Deno.test('Worker readback is operator-only, preserves stored URLs and releases no body on audit failure', async () => {
+  const f = await fixture()
+  const originalError = console.error
+  console.error = () => {}
+  try {
+    const initial = f.stores.tenants.get('marine')!
+    f.stores.tenants.patch('marine', {
+      accessMode: 'restricted',
+      branding: {
+        ...initial.branding,
+        logoUrl: '/stored-logo.svg',
+        productName: 'Readback sentinel',
+      },
+      extraction: { default: 'default', rules: [] },
+      prompts: { ask: 'Private prompt sentinel' },
+    })
+    await f.stores.bindings.set('marine', {
+      baseUrl: 'https://example.test/api/v1/kb/original',
+      kbId: 'original',
+      token: 'Private credential sentinel',
+      inferenceModel: 'model-fixture',
+    })
+    const stored = f.stores.tenants.get('marine')!
+    expect(
+      (await f.invoke('/api/admin/t/marine/branding/logo', {
+        method: 'POST',
+        headers: { 'content-type': 'image/png' },
+        body: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      })).status,
+    ).toBe(200)
+    const path = '/api/admin/t/marine/configuration'
+    for (const authorization of ['', `Operator ${'B'.repeat(43)}`, `Bearer ${operatorKey}`]) {
+      const denied = await f.invoke(path, {}, authorization)
+      expect([401, 403]).toContain(denied.status)
+      expect(await denied.text()).not.toContain('Readback sentinel')
+    }
+    const response = await f.invoke(path)
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body).toEqual(portalConfigurationExport(stored))
+    expect(body.branding.logoUrl).toBe('/stored-logo.svg')
+    expect(JSON.stringify(body)).not.toContain('Private')
+    for (
+      const key of ['accessMode', 'hostname', 'binding', 'inferenceModel', 'extraction', 'prompts']
+    ) {
+      expect(body).not.toHaveProperty(key)
+    }
+    const events = f.events().filter((event) =>
+      event.request_id === response.headers.get('x-request-id')
+    )
+    expect(events.map((event) => event.outcome).sort()).toEqual(['intent', 'success'])
+    expect(events.every((event) => event.actor_id === 'operator:hosting-automation')).toBe(true)
+    expect(JSON.stringify(f.events())).not.toContain('Readback sentinel')
+    expect(JSON.stringify(f.events())).not.toContain('Private')
+    expect((await f.invoke('/api/t/marine/config')).status).toBe(403)
+    expect((await f.invoke('/api/t/marine/resources')).status).toBe(403)
+    f.database.exec(`CREATE TRIGGER reject_read_completion BEFORE INSERT ON audit_events
+      WHEN NEW.action = 'request.privileged' AND NEW.outcome = 'success'
+      BEGIN SELECT RAISE(FAIL, 'fixture'); END`)
+    const failed = await f.invoke(path)
+    expect(failed.status).toBe(500)
+    expect(await failed.text()).not.toContain('Readback sentinel')
+    expect(f.stores.tenants.get('marine')).toEqual(stored)
+  } finally {
+    console.error = originalError
+    f.close()
+  }
+})
+
 Deno.test('Worker configuration import requires the operator and rolls back on success-audit failure', async () => {
   const f = await fixture()
   const error = console.error

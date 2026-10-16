@@ -82,6 +82,7 @@ import {
   AccessModeSchema,
   authorize,
   normalisePrincipal,
+  portalConfigurationExport,
   PortalConfigurationImportSchema,
   type PortalPolicy,
   PortalPolicySchema,
@@ -5138,6 +5139,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       }
     })
+  })
+
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/configuration'), (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    return c.json(portalConfigurationExport(config))
   })
 
   app.put(declaredRoute('PUT', '/api/admin/t/:slug/configuration'), async (c) => {

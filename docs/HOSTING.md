@@ -189,6 +189,7 @@ The current allowlist is:
 | Create a portal | `POST /api/admin/tenants` |
 | Update portal appearance, layout, search prompt and regional discovery band | `PATCH /api/admin/tenants/:slug` |
 | Import validated portal presentation and discovery configuration | `PUT /api/admin/t/:slug/configuration` |
+| Read back stored presentation and discovery configuration | `GET /api/admin/t/:slug/configuration` |
 | Connect or disconnect a knowledge box | `POST`, `DELETE /api/admin/t/:slug/knowledge-box` |
 | Change portal access mode | `PATCH /api/admin/t/:slug/access` |
 | List and create portal members | `GET`, `POST /api/admin/t/:slug/members` |
@@ -216,6 +217,14 @@ The required fields are `slug`, `branding`, `searchPlaceholder`, `topics`, `sugg
 `branding` replaces its complete presentation document, including its optional layout; omitted
 optional top-level fields retain their current values. The resulting configuration is validated
 before one audited store write. Success returns `{"ok":true,"slug":"<slug>"}`.
+
+`GET /api/admin/t/<slug>/configuration` uses the same operator-only boundary and returns the raw
+`PortalConfigurationImport` document from `portalConfigurationExport(storedConfig)`, without a
+wrapper. Use it to verify an import. Asset URLs are exactly as stored, without viewer-facing
+version query parameters or uploaded-asset substitution. The response excludes access, hostnames,
+aliases, bindings, inference policy, credentials, roles, retrieval settings and source/enrichment
+content. It is withheld if the required audit cannot complete; the operator's portal content and
+generation routes remain closed.
 
 Unknown fields are refused, including nested fields. Access mode, hostname and aliases, knowledge
 box binding and inference policy, prompts, extraction and retrieval settings, membership, lifecycle
