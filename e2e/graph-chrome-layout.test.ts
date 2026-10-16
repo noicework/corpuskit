@@ -190,7 +190,7 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
               const masthead = [...document.querySelectorAll('[data-graph-masthead]')]
                 .find((element) => element.getBoundingClientRect().height > 0)!
               const bounds = masthead.getBoundingClientRect()
-              const x = 10, y = bounds.top + bounds.height / 2
+              const x = 10, y = bounds.bottom - 32
               const hit = document.elementFromPoint(x, y)!
               const actions: string[] = []
               for (let element: Element | null = hit; element; element = element.parentElement) {
@@ -198,25 +198,39 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
               }
               const touches: unknown[] = []
               Reflect.set(globalThis, '__graphChromeTouches', touches)
-              addEventListener('touchstart', (event) => {
-                const target = event.target as Element
-                touches.push({
-                  trusted: event.isTrusted,
-                  tag: target.tagName,
-                  inMasthead: masthead.contains(target),
-                  inStage: !!target.closest('[data-graph-stage]'),
-                  scroll: scrollY,
-                })
-              }, { capture: true, passive: true })
+              for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+                // Window bubble listeners see cancellation after app listeners.
+                addEventListener(type, (event) => {
+                  const target = event.target as Element
+                  const touch = (event as TouchEvent).changedTouches[0]
+                  touches.push({
+                    type: event.type,
+                    trusted: event.isTrusted,
+                    tag: target.tagName,
+                    inMasthead: masthead.contains(target),
+                    inStage: !!target.closest('[data-graph-stage]'),
+                    scroll: scrollY,
+                    cancelable: event.cancelable,
+                    defaultPrevented: event.defaultPrevented,
+                    x: touch?.clientX,
+                    y: touch?.clientY,
+                    time: performance.now(),
+                  })
+                }, { passive: true })
+              }
               return {
                 x,
                 y,
-                distance: -document.querySelector('[data-graph-stage]')!
-                  .getBoundingClientRect().top - 100,
                 scroll: scrollY,
                 inMasthead: masthead.contains(hit),
                 inStage: !!hit.closest('[data-graph-stage]'),
                 actions,
+                roots: [document.scrollingElement!, document.body].map((element) => ({
+                  tag: element.tagName,
+                  scrollHeight: element.scrollHeight,
+                  clientHeight: element.clientHeight,
+                  overflowY: getComputedStyle(element).overflowY,
+                })),
               }
             })
             console.log(`[graph-chrome] ${scene} gesture-ready`, JSON.stringify(gesture))
@@ -224,19 +238,47 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
             expect(gesture.inMasthead).toBe(true)
             expect(gesture.inStage).toBe(false)
             expect(gesture.actions.every((action) => action === 'auto')).toBe(true)
-            // A real Chromium touch gesture scrolls the document, rather than
-            // relying only on programmatic window scrolling for this contract.
-            await page.unsafelyGetCelestialBindings().Input.synthesizeScrollGesture({
-              x: gesture.x,
-              y: gesture.y,
-              yDistance: gesture.distance,
-              gestureSourceType: 'touch',
-              speed: 600,
-              preventFling: true,
-            })
+            // Use the supported direct-touch driver. Chrome 125's experimental
+            // synthesized scroll follows different Aura/Mac gesture paths.
+            // Keep the physical finger inside the viewport: a 600px/s flick
+            // ending at 20px, then let Chromium's native fling settle.
+            const endY = 20, speed = 600
+            const distance = endY - gesture.y
+            const duration = Math.abs(distance) / speed * 1000
+            const steps = Math.ceil(duration / (1000 / 60))
+            await page.touchscreen.touchStart(gesture.x, gesture.y)
+            const started = performance.now()
+            for (let step = 1; step <= steps; step++) {
+              const due = started + duration * step / steps
+              await new Promise((resolve) =>
+                setTimeout(resolve, Math.max(0, due - performance.now()))
+              )
+              await page.touchscreen.touchMove(gesture.x, gesture.y + distance * step / steps)
+            }
+            await page.touchscreen.touchEnd()
+            const trajectory = {
+              start: { x: gesture.x, y: gesture.y },
+              end: { x: gesture.x, y: endY },
+              speed,
+              steps,
+              durationMs: duration,
+              actualDurationMs: performance.now() - started,
+            }
+            console.log(
+              `[graph-chrome] ${scene} touch-input-ended`,
+              JSON.stringify({
+                trajectory,
+                geometry: await geometry(page),
+                touches: await page.evaluate(() => Reflect.get(globalThis, '__graphChromeTouches')),
+              }),
+            )
+            await page.waitForFunction(() =>
+              document.querySelector('[data-graph-stage]')!.getBoundingClientRect().top <= 1
+            )
             const after = await geometry(page)
             const touches = await page.evaluate(() =>
               Reflect.get(globalThis, '__graphChromeTouches') as {
+                type: string
                 trusted: boolean
                 inMasthead: boolean
                 inStage: boolean
@@ -247,8 +289,13 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
               JSON.stringify({ after, touches, protocolErrors }),
             )
             expect(protocolErrors).toEqual([])
-            expect(touches.some((touch) => touch.trusted && touch.inMasthead && !touch.inStage))
+            expect(
+              touches.some((touch) =>
+                touch.type === 'touchstart' && touch.trusted && touch.inMasthead && !touch.inStage
+              ),
+            )
               .toBe(true)
+            expect(touches.some((touch) => touch.type === 'touchmove' && touch.trusted)).toBe(true)
             expect(after.scroll).toBeGreaterThan(before.header.height)
             expect(after.header.bottom).toBeLessThanOrEqual(0)
             expect(after.masthead.bottom).toBeLessThanOrEqual(1)
@@ -256,7 +303,7 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
             expect(after.stage.height).toBe(before.stage.height)
             expect(after.canvas.height).toBe(before.canvas.height)
             await Deno.writeFile(`${directory}/${scene}-scrolled.png`, await page.screenshot())
-            evidence.push({ scene, scrolled: after, menu, gesture, touches })
+            evidence.push({ scene, scrolled: after, menu, gesture, trajectory, touches })
             // Canvas touch gestures still belong to the graph. A native tap
             // on its visible return control must always recover navigation.
             const back = await page.evaluate((browseLabel) => {
