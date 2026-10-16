@@ -1,3 +1,4 @@
+import { englishResearchUi, type ResearchUi } from './research-copy.ts'
 import type { Citation, ScoredResource } from '@research-portal/core'
 import { normaliseAnswerBullets, stripRefusalTemplate } from './answer-text.ts'
 import { parseDocBlocks } from './resource-view.ts'
@@ -145,7 +146,11 @@ const doiUrl = (doi: string): string =>
   /^https?:\/\//i.test(doi) ? doi : `https://doi.org/${doi.replace(/^doi:\s*/i, '')}`
 
 /** One reference as HTML: authors. Title. Journal, year. DOI. Portal link. */
-export function referenceHtml(entry: ReferenceEntry, resourceUrl: (id: string) => string): string {
+export function referenceHtml(
+  entry: ReferenceEntry,
+  resourceUrl: (id: string) => string,
+  ui: ResearchUi = englishResearchUi,
+): string {
   const parts: string[] = []
   const authors = formatAuthors(entry.authors)
   if (authors) parts.push(escapeHtml(authors.endsWith('.') ? authors : `${authors}.`))
@@ -157,7 +162,7 @@ export function referenceHtml(entry: ReferenceEntry, resourceUrl: (id: string) =
     parts.push(`<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>.`)
   }
   const link = resourceUrl(entry.resourceId)
-  parts.push(`<a href="${escapeHtml(link)}">Open in the portal</a>.`)
+  parts.push(`<a href="${escapeHtml(link)}">${escapeHtml(ui('Open in the portal'))}</a>.`)
   return `<li>${parts.join(' ')}</li>`
 }
 
@@ -166,10 +171,11 @@ export function referenceListHtml(
   citations: Citation[],
   sources: Pick<ScoredResource, 'id' | 'title' | 'authors' | 'journal' | 'year' | 'doi'>[],
   resourceUrl: (id: string) => string,
+  ui: ResearchUi = englishResearchUi,
 ): string {
   const entries = referenceEntries(citations, sources)
   if (entries.length === 0) return ''
-  return `<h3>References</h3><ol>${
-    entries.map((entry) => referenceHtml(entry, resourceUrl)).join('')
+  return `<h3>${escapeHtml(ui('References'))}</h3><ol>${
+    entries.map((entry) => referenceHtml(entry, resourceUrl, ui)).join('')
   }</ol>`
 }

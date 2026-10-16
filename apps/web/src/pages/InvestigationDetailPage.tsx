@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import {
@@ -62,12 +64,6 @@ function useInvestigationAuthority(slug: string) {
   return { access, canWrite, run, signal: () => lifetime.current.signal }
 }
 
-function formatDate(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
 /**
  * A score is normally 0-1, shown as a percentage. A legacy item can carry a
  * score already stored as a percent (>1) - treat that as already-percent
@@ -104,6 +100,7 @@ function EditableField({
   onSave: (next: string) => void
   className?: string
 }) {
+  const { ui } = usePortalLocale()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
 
@@ -125,7 +122,8 @@ function EditableField({
   if (!editable) {
     return (
       <p className={`break-words ${className ?? ''}`}>
-        {value || (ariaLabel === 'Research question' ? 'No research question set' : placeholder)}
+        {value ||
+          (ariaLabel === 'Research question' ? ui('No research question set') : placeholder)}
       </p>
     )
   }
@@ -134,7 +132,7 @@ function EditableField({
     return (
       <input
         autoFocus
-        aria-label={ariaLabel}
+        aria-label={ui(ariaLabel)}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
@@ -233,6 +231,7 @@ function ConfirmButton({
 function InvestigationHeader(
   { slug, investigation }: { slug: string; investigation: Investigation },
 ) {
+  const { ui } = usePortalLocale()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { canWrite, run } = useInvestigationAuthority(slug)
@@ -263,7 +262,7 @@ function InvestigationHeader(
           <EditableField
             editable={canWrite()}
             value={investigation.name}
-            placeholder='Untitled investigation'
+            placeholder={ui('Untitled investigation')}
             ariaLabel='Investigation name'
             onSave={(name) => {
               if (name.length > 0) patch.mutate({ name })
@@ -274,7 +273,7 @@ function InvestigationHeader(
             <EditableField
               editable={canWrite()}
               value={investigation.question}
-              placeholder='No research question set - click to add one'
+              placeholder={ui('No research question set - click to add one')}
               ariaLabel='Research question'
               onSave={(question) => patch.mutate({ question })}
               className='text-sm text-ink-2'
@@ -283,8 +282,8 @@ function InvestigationHeader(
         </div>
         <span className='shrink-0'>
           {investigation.status === 'active'
-            ? <span className='rp-badge rp-badge-ok'>Active</span>
-            : <span className='rp-badge rp-badge-quiet'>Closed</span>}
+            ? <span className='rp-badge rp-badge-ok'>{ui('Active')}</span>
+            : <span className='rp-badge rp-badge-quiet'>{ui('Closed')}</span>}
         </span>
       </div>
 
@@ -295,7 +294,7 @@ function InvestigationHeader(
               to={`/t/${slug}/ask?ask=${encodeURIComponent(investigation.question)}`}
               className='rp-btn rp-btn-primary'
             >
-              Ask this question
+              {ui('Ask this question')}
             </Link>
           )
           : null}
@@ -308,7 +307,9 @@ function InvestigationHeader(
                 patch.mutate({ status: investigation.status === 'active' ? 'closed' : 'active' })}
               className='rp-btn rp-btn-outline'
             >
-              {investigation.status === 'active' ? 'Close investigation' : 'Reopen investigation'}
+              {investigation.status === 'active'
+                ? ui('Close investigation')
+                : ui('Reopen investigation')}
             </button>
           )
           : null}
@@ -317,8 +318,8 @@ function InvestigationHeader(
           ? (
             <div className='ml-auto'>
               <ConfirmButton
-                label='Delete'
-                confirmLabel='Confirm delete'
+                label={ui('Delete')}
+                confirmLabel={ui('Confirm delete')}
                 disabled={removeMutation.isPending}
                 onConfirm={() => removeMutation.mutate()}
                 className='rp-btn rp-btn-ghost text-[var(--rp-bad-ink)]'
@@ -335,6 +336,7 @@ function InvestigationHeader(
 // --- Notebook: debounced free-form notes ------------------------------------
 
 function NotebookSection({ slug, investigation }: { slug: string; investigation: Investigation }) {
+  const { ui } = usePortalLocale()
   const queryClient = useQueryClient()
   const { access, canWrite, run } = useInvestigationAuthority(slug)
   const [draft, setDraft] = useState(investigation.notes)
@@ -385,9 +387,9 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
   return (
     <section className='rp-card p-5'>
       <div className='flex items-center justify-between gap-3'>
-        <h2 className='text-sm font-semibold text-ink'>Notebook</h2>
+        <h2 className='text-sm font-semibold text-ink'>{ui('Notebook')}</h2>
         <span aria-live='polite' className='text-xs text-ink-3'>
-          {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ''}
+          {status === 'saving' ? ui('Saving…') : status === 'saved' ? ui('Saved') : ''}
         </span>
       </div>
       {canWrite()
@@ -396,13 +398,13 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
             rows={6}
             value={draft}
             onChange={(event) => onChange(event.target.value)}
-            placeholder='Working notes, hunches, things still to check…'
+            placeholder={ui('Working notes, hunches, things still to check…')}
             className='rp-input mt-3'
           />
         )
         : (
           <p className='mt-3 whitespace-pre-wrap break-words text-sm text-ink-2'>
-            {investigation.notes || 'No notes yet.'}
+            {investigation.notes || ui('No notes yet.')}
           </p>
         )}
     </section>
@@ -418,9 +420,10 @@ const VERDICTS: { id: EvidenceVerdict; label: string }[] = [
   { id: 'contradicts', label: 'Contradicts' },
 ]
 
-function verdictLabel(verdict: EvidenceVerdict | null): string {
-  if (!verdict) return 'Not assessed'
-  return VERDICTS.find((v) => v.id === verdict)?.label ?? verdict
+function verdictLabel(verdict: EvidenceVerdict | null, ui: ResearchUi = englishResearchUi): string {
+  if (!verdict) return ui('Not assessed')
+  const label = VERDICTS.find((v) => v.id === verdict)?.label
+  return label ? ui(label) : verdict
 }
 
 function verdictChipStyle(id: EvidenceVerdict, active: boolean): CSSProperties {
@@ -474,6 +477,7 @@ function useSourceGone(slug: string, resourceId: string): boolean {
 function EvidenceCard(
   { slug, investigationId, item }: { slug: string; investigationId: string; item: EvidenceItem },
 ) {
+  const { ui, date } = usePortalLocale()
   const queryClient = useQueryClient()
   const { access, canWrite, run } = useInvestigationAuthority(slug)
   const sourceGone = useSourceGone(slug, item.resourceId)
@@ -550,7 +554,8 @@ function EvidenceCard(
   const sourceHref = `/t/${slug}/library/${encodeURIComponent(item.resourceId)}?passage=${
     encodeURIComponent(item.passage.slice(0, 200))
   }`
-  const askQuestion = item.question || `What does the research say about ${item.resourceTitle}?`
+  const askQuestion = item.question ||
+    ui('What does the research say about {name}?', { name: item.resourceTitle })
   const askHref = `/t/${slug}/ask?ask=${encodeURIComponent(askQuestion)}`
 
   return (
@@ -585,9 +590,10 @@ function EvidenceCard(
 
       {sourceGone && (
         <p className='mt-2 text-xs text-ink-3' data-evidence-source-gone>
-          <span className='rp-badge rp-badge-quiet mr-2'>No longer in the Library</span>
-          The document this passage came from was deleted or unpublished. The passage, its verdict
-          and notes are kept.
+          <span className='rp-badge rp-badge-quiet mr-2'>{ui('No longer in the Library')}</span>
+          {ui(
+            'The document this passage came from was deleted or unpublished. The passage, its verdict and notes are kept.',
+          )}
         </p>
       )}
 
@@ -605,7 +611,7 @@ function EvidenceCard(
             onClick={() => setExpanded((e) => !e)}
             className='rp-focus mt-1 inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-xs font-medium text-ink-3 hover:text-ink'
           >
-            {expanded ? 'Show less' : 'Show more'}
+            {expanded ? ui('Show less') : ui('Show more')}
           </button>
         )
         : null}
@@ -613,13 +619,14 @@ function EvidenceCard(
       {item.question
         ? (
           <p className='mt-2 text-xs italic text-ink-3'>
-            Retrieved for &ldquo;{item.question}&rdquo;
+            {ui('Retrieved for “')}
+            {item.question}&rdquo;
           </p>
         )
         : null}
       {item.aiRelevance ? <p className='mt-1 text-xs text-ink-2'>{item.aiRelevance}</p> : null}
 
-      <div className='mt-3 flex flex-wrap gap-1.5' role='group' aria-label='Verdict'>
+      <div className='mt-3 flex flex-wrap gap-1.5' role='group' aria-label={ui('Verdict')}>
         {canWrite()
           ? VERDICTS.map((v) => {
             const active = item.verdict === v.id
@@ -633,14 +640,14 @@ function EvidenceCard(
                 style={verdictChipStyle(v.id, active)}
                 className='rp-chip'
               >
-                {v.label}
+                {ui(v.label)}
               </button>
             )
           })
-          : <span className='rp-chip'>{verdictLabel(item.verdict)}</span>}
+          : <span className='rp-chip'>{verdictLabel(item.verdict, ui)}</span>}
       </div>
 
-      <div className='mt-3 flex flex-wrap items-center gap-1.5' aria-label='Tags'>
+      <div className='mt-3 flex flex-wrap items-center gap-1.5' aria-label={ui('Tags')}>
         {item.tags.map((tag) => (
           <span key={tag} className='rp-chip'>
             {tag}
@@ -649,7 +656,7 @@ function EvidenceCard(
                 <button
                   type='button'
                   onClick={() => removeTag(tag)}
-                  aria-label={`Remove tag ${tag}`}
+                  aria-label={ui('Remove tag {tag}', { tag: tag })}
                   className='rp-focus -my-1 inline-flex min-h-6 min-w-6 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 hover:text-ink'
                 >
                   &times;
@@ -673,8 +680,8 @@ function EvidenceCard(
               onBlur={() => {
                 if (tagDraft.trim()) addTag()
               }}
-              placeholder='Add tag…'
-              aria-label={`Add tag for ${item.resourceTitle}`}
+              placeholder={ui('Add tag…')}
+              aria-label={ui('Add tag for {value1}', { value1: item.resourceTitle })}
               className='rp-input h-7 w-24 text-xs'
             />
           )
@@ -688,28 +695,30 @@ function EvidenceCard(
               type='text'
               value={note}
               onChange={(event) => onNoteChange(event.target.value)}
-              placeholder='Add a note…'
-              aria-label={`Note for ${item.resourceTitle}`}
+              placeholder={ui('Add a note…')}
+              aria-label={ui('Note for {value1}', { value1: item.resourceTitle })}
               className='rp-input h-8 text-xs'
             />
           )
           : <p className='text-xs text-ink-2 break-words'>{item.note}</p>}
         {noteMutation.isPending || noteDirty
-          ? <span className='shrink-0 text-xs text-ink-3'>Saving…</span>
+          ? <span className='shrink-0 text-xs text-ink-3'>{ui('Saving…')}</span>
           : null}
       </div>
 
       <div className='mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5'>
-        <span className='text-xs text-ink-3'>Added {formatDate(item.createdAt)}</span>
+        <span className='text-xs text-ink-3'>
+          {ui('Added')} {date(item.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}
+        </span>
         <div className='flex items-center gap-2'>
           <Link to={askHref} className='rp-btn rp-btn-ghost h-7 px-2 text-xs'>
-            Ask about this
+            {ui('Ask about this')}
           </Link>
           {canWrite()
             ? (
               <ConfirmButton
-                label='Remove'
-                confirmLabel='Confirm remove'
+                label={ui('Remove')}
+                confirmLabel={ui('Confirm remove')}
                 disabled={removeMutation.isPending}
                 onConfirm={() => removeMutation.mutate()}
                 className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
@@ -726,6 +735,7 @@ function EvidenceCard(
 // --- Artefacts: read-only, tolerant of whatever shape lands here ------------
 
 function ArtefactRow({ artefact }: { artefact: InvestigationArtefact }) {
+  const { ui, date } = usePortalLocale()
   const isViewableObject = artefact.data !== null && typeof artefact.data === 'object'
 
   return (
@@ -737,13 +747,15 @@ function ArtefactRow({ artefact }: { artefact: InvestigationArtefact }) {
           </span>
           <span className='truncate text-sm font-medium text-ink'>{artefact.title}</span>
         </div>
-        <span className='shrink-0 text-xs text-ink-3'>{formatDate(artefact.createdAt)}</span>
+        <span className='shrink-0 text-xs text-ink-3'>
+          {date(artefact.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}
+        </span>
       </div>
       {isViewableObject
         ? (
           <details className='mt-2'>
             <summary className='cursor-pointer text-xs font-medium text-ink-3 hover:text-ink'>
-              View
+              {ui('View')}
             </summary>
             <pre className='mt-2 max-h-72 overflow-auto rounded-[var(--rp-radius)] bg-surface-2 p-3 text-xs text-ink-2'>
               {JSON.stringify(artefact.data, null, 2)}
@@ -828,6 +840,7 @@ function SynthesisArtefactCard({
   highlighted: boolean
   evidence: EvidenceItem[]
 }) {
+  const { ui, date } = usePortalLocale()
   const data = readSynthesisData(artefact.data)
   const coverage = synthesisCoverage(evidence)
 
@@ -841,11 +854,13 @@ function SynthesisArtefactCard({
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='flex min-w-0 items-center gap-2'>
           <span className='rp-badge rp-badge-quiet shrink-0 uppercase tracking-[0.06em]'>
-            Synthesis
+            {ui('Synthesis')}
           </span>
           <span className='truncate text-sm font-medium text-ink'>{artefact.title}</span>
         </div>
-        <span className='shrink-0 text-xs text-ink-3'>{formatDate(artefact.createdAt)}</span>
+        <span className='shrink-0 text-xs text-ink-3'>
+          {date(artefact.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}
+        </span>
       </div>
 
       {data.summary
@@ -856,7 +871,7 @@ function SynthesisArtefactCard({
         ? (
           <div className='mt-3'>
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
-              Established by the evidence
+              {ui('Established by the evidence')}
             </h4>
             <ul className='mt-1.5 list-disc space-y-1 pl-5 text-sm leading-relaxed text-ink-2'>
               {data.supported.map((line, index) => <li key={index}>{line}</li>)}
@@ -869,7 +884,7 @@ function SynthesisArtefactCard({
         ? (
           <div className='mt-3'>
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
-              Contested
+              {ui('Contested')}
             </h4>
             <ul className='mt-1.5 space-y-1.5'>
               {data.contested.map((line, index) => (
@@ -889,7 +904,9 @@ function SynthesisArtefactCard({
       {data.gaps.length > 0
         ? (
           <div className='mt-3'>
-            <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>Gaps</h4>
+            <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
+              {ui('Gaps')}
+            </h4>
             <ul className='mt-1.5 list-disc space-y-1 pl-5 text-sm leading-relaxed text-ink-2'>
               {data.gaps.map((line, index) => <li key={index}>{line}</li>)}
             </ul>
@@ -901,15 +918,16 @@ function SynthesisArtefactCard({
         ? (
           <div className='mt-3 border-t border-line pt-3'>
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
-              What the synthesis left out
+              {ui('What the synthesis left out')}
             </h4>
             <ul className='mt-1.5 space-y-1 text-xs leading-relaxed text-ink-2'>
               {coverage.excluded.length > 0
                 ? (
                   <li>
-                    Excluded {coverage.excluded.length}{' '}
-                    {coverage.excluded.length === 1 ? 'passage' : 'passages'} marked{' '}
-                    <strong>Not relevant</strong>:{' '}
+                    {ui('Excluded')} {coverage.excluded.length}{' '}
+                    {coverage.excluded.length === 1 ? ui('passage') : ui('passages')} {ui('marked')}
+                    {' '}
+                    <strong>{ui('Not relevant')}</strong>:{' '}
                     {coverage.excluded.map((item, index) => (
                       <span key={item.id}>
                         {index > 0 ? '; ' : ''}
@@ -927,19 +945,24 @@ function SynthesisArtefactCard({
               {coverage.contradicting > 0
                 ? (
                   <li>
-                    {coverage.contradicting} {coverage.contradicting === 1 ? 'passage' : 'passages'}
-                    {' '}
-                    marked <strong>Contradicts</strong>{' '}
-                    went in as opposing evidence, not as support.
+                    {ui(
+                      coverage.contradicting === 1
+                        ? '{count} passage marked Contradicts went in as opposing evidence, not as support.'
+                        : '{count} passages marked Contradicts went in as opposing evidence, not as support.',
+                      { count: coverage.contradicting },
+                    )}
                   </li>
                 )
                 : null}
               {coverage.unjudged > 0
                 ? (
                   <li>
-                    {coverage.unjudged} unjudged{' '}
-                    {coverage.unjudged === 1 ? 'passage was' : 'passages were'}{' '}
-                    included and flagged as unjudged.
+                    {ui(
+                      coverage.unjudged === 1
+                        ? '{count} unjudged passage was included and flagged as unjudged.'
+                        : '{count} unjudged passages were included and flagged as unjudged.',
+                      { count: coverage.unjudged },
+                    )}
                   </li>
                 )
                 : null}
@@ -952,7 +975,7 @@ function SynthesisArtefactCard({
         ? (
           <div className='mt-3 border-t border-line pt-3'>
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
-              References
+              {ui('References')}
             </h4>
             <ol className='mt-1.5 space-y-1 text-sm text-ink-2'>
               {data.references.map((ref) => (
@@ -965,7 +988,11 @@ function SynthesisArtefactCard({
                     {ref.resourceTitle}
                   </Link>
                   {data.notUsed.includes(ref.n)
-                    ? <span className='ml-1.5 text-xs text-ink-3'>Not used in this synthesis</span>
+                    ? (
+                      <span className='ml-1.5 text-xs text-ink-3'>
+                        {ui('Not used in this synthesis')}
+                      </span>
+                    )
                     : null}
                 </li>
               ))}
@@ -980,7 +1007,10 @@ function SynthesisArtefactCard({
 // --- Export to Word: the audit's "outputs with references intact" ----------
 
 /** A synthesis artefact formatted as Word-friendly sections, references included. */
-function synthesisArtefactHtml(artefact: InvestigationArtefact): string {
+function synthesisArtefactHtml(
+  artefact: InvestigationArtefact,
+  ui: ResearchUi = englishResearchUi,
+): string {
   const data = readSynthesisData(artefact.data)
   const list = (items: string[]) =>
     `<ul>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`
@@ -988,34 +1018,41 @@ function synthesisArtefactHtml(artefact: InvestigationArtefact): string {
   return `<h2>${escapeHtml(artefact.title)}</h2>` +
     (data.summary ? `<p>${escapeHtml(data.summary)}</p>` : '') +
     (data.supported.length > 0
-      ? `<h3>Established by the evidence</h3>${list(data.supported)}`
+      ? `<h3>${escapeHtml(ui('Established by the evidence'))}</h3>${list(data.supported)}`
       : '') +
-    (data.contested.length > 0 ? `<h3>Contested</h3>${list(data.contested)}` : '') +
-    (data.gaps.length > 0 ? `<h3>Gaps</h3>${list(data.gaps)}` : '') +
+    (data.contested.length > 0
+      ? `<h3>${escapeHtml(ui('Contested'))}</h3>${list(data.contested)}`
+      : '') +
+    (data.gaps.length > 0 ? `<h3>${escapeHtml(ui('Gaps'))}</h3>${list(data.gaps)}` : '') +
     (data.references.length > 0
-      ? `<h3>References</h3><ol>${
+      ? `<h3>${escapeHtml(ui('References'))}</h3><ol>${
         data.references.map((r) =>
           `<li>${escapeHtml(r.resourceTitle)}${
-            data.notUsed.includes(r.n) ? ' (not used in this synthesis)' : ''
+            data.notUsed.includes(r.n) ? ' ' + ui('(not used in this synthesis)') : ''
           }</li>`
         ).join('')
       }</ol>`
       : '')
 }
 
-function investigationToHtml(investigation: Investigation): { title: string; bodyHtml: string } {
-  const title = investigation.name || 'Investigation'
+function investigationToHtml(
+  investigation: Investigation,
+  ui: ResearchUi = englishResearchUi,
+): { title: string; bodyHtml: string } {
+  const title = investigation.name || ui('Investigation')
 
   const questionHtml = investigation.question
-    ? `<h2>Research question</h2><p>${escapeHtml(investigation.question)}</p>`
+    ? `<h2>${escapeHtml(ui('Research question'))}</h2><p>${escapeHtml(investigation.question)}</p>`
     : ''
   const notesHtml = investigation.notes.trim().length > 0
-    ? `<h2>Notes</h2><p>${escapeHtml(investigation.notes).replace(/\n/g, '<br>')}</p>`
+    ? `<h2>${escapeHtml(ui('Notes'))}</h2><p>${
+      escapeHtml(investigation.notes).replace(/\n/g, '<br>')
+    }</p>`
     : ''
 
   const synthesisHtml = investigation.artefacts
     .filter((a) => a.kind === 'synthesis')
-    .map(synthesisArtefactHtml)
+    .map((artefact) => synthesisArtefactHtml(artefact, ui))
     .join('')
 
   const sorted = [...investigation.evidence].sort(
@@ -1024,25 +1061,31 @@ function investigationToHtml(investigation: Investigation): { title: string; bod
   const sourceTitles = Array.from(new Set(sorted.map((e) => e.resourceTitle)))
 
   const evidenceHtml = sorted.length > 0
-    ? `<h2>Evidence</h2>${
+    ? `<h2>${escapeHtml(ui('Evidence'))}</h2>${
       sorted
         .map((item) => {
           const refIndex = sourceTitles.indexOf(item.resourceTitle) + 1
           const scoreText = item.score != null ? `${formatScorePercent(item.score)}%` : 'n/a'
           const noteHtml = item.note.trim().length > 0
-            ? `<p><em>Note:</em> ${escapeHtml(item.note)}</p>`
+            ? `<p><em>${escapeHtml(ui('Note:'))}</em> ${escapeHtml(item.note)}</p>`
             : ''
           return `<blockquote>${escapeHtml(item.passage)}</blockquote>` +
-            `<p><strong>Source:</strong> ${escapeHtml(item.resourceTitle)} [${refIndex}] &nbsp; ` +
-            `<strong>Score:</strong> ${scoreText} &nbsp; ` +
-            `<strong>Verdict:</strong> ${escapeHtml(verdictLabel(item.verdict))}</p>${noteHtml}`
+            `<p><strong>${escapeHtml(ui('Source:'))}</strong> ${
+              escapeHtml(item.resourceTitle)
+            } [${refIndex}] &nbsp; ` +
+            `<strong>${escapeHtml(ui('Score:'))}</strong> ${scoreText} &nbsp; ` +
+            `<strong>${escapeHtml(ui('Verdict:'))}</strong> ${
+              escapeHtml(verdictLabel(item.verdict, ui))
+            }</p>${noteHtml}`
         })
         .join('')
     }`
-    : '<h2>Evidence</h2><p>No evidence recorded.</p>'
+    : `<h2>${escapeHtml(ui('Evidence'))}</h2><p>${escapeHtml(ui('No evidence recorded.'))}</p>`
 
   const referencesHtml = sourceTitles.length > 0
-    ? `<h2>References</h2><ol>${sourceTitles.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ol>`
+    ? `<h2>${escapeHtml(ui('References'))}</h2><ol>${
+      sourceTitles.map((t) => `<li>${escapeHtml(t)}</li>`).join('')
+    }</ol>`
     : ''
 
   return {
@@ -1095,8 +1138,11 @@ function slugOrDate(title: string): string {
 }
 
 /** Build complete output in memory; the shared helper owns every browser sink. */
-function investigationWordFile(investigation: Investigation): ResearchFile {
-  const { title, bodyHtml } = investigationToHtml(investigation)
+function investigationWordFile(
+  investigation: Investigation,
+  ui: ResearchUi = englishResearchUi,
+): ResearchFile {
+  const { title, bodyHtml } = investigationToHtml(investigation, ui)
   return {
     parts: ['\ufeff', wordDocumentHtml(title, bodyHtml)],
     type: 'application/msword',
@@ -1116,10 +1162,12 @@ function tagCounts(evidence: EvidenceItem[]): [string, number][] {
 }
 
 /** Clusters evidence under tag headings; untagged items land in their own group, last. */
-function groupEvidenceByTag(evidence: EvidenceItem[]): { tag: string; items: EvidenceItem[] }[] {
-  const groups = new Map<string, EvidenceItem[]>()
+function groupEvidenceByTag(
+  evidence: EvidenceItem[],
+): { tag: string | null; items: EvidenceItem[] }[] {
+  const groups = new Map<string | null, EvidenceItem[]>()
   for (const item of evidence) {
-    const tags = item.tags.length > 0 ? item.tags : ['Untagged']
+    const tags = item.tags.length > 0 ? item.tags : [null]
     for (const tag of tags) {
       const bucket = groups.get(tag)
       if (bucket) bucket.push(item)
@@ -1127,11 +1175,7 @@ function groupEvidenceByTag(evidence: EvidenceItem[]): { tag: string; items: Evi
     }
   }
   return Array.from(groups.entries())
-    .sort((a, b) => {
-      if (a[0] === 'Untagged') return 1
-      if (b[0] === 'Untagged') return -1
-      return a[0].localeCompare(b[0])
-    })
+    .sort((a, b) => a[0] === null ? 1 : b[0] === null ? -1 : a[0].localeCompare(b[0]))
     .map(([tag, items]) => ({ tag, items }))
 }
 
@@ -1148,18 +1192,19 @@ function TagsSection({
   groupByTag: boolean
   onToggleGroupByTag: () => void
 }) {
+  const { ui } = usePortalLocale()
   const tags = tagCounts(evidence)
 
   return (
     <section className='rp-card p-5'>
-      <h2 className='text-sm font-semibold text-ink'>Tags</h2>
+      <h2 className='text-sm font-semibold text-ink'>{ui('Tags')}</h2>
       <p className='mt-1 text-sm text-ink-2'>
-        Tag evidence to group it under the claims or themes you are testing.
+        {ui('Tag evidence to group it under the claims or themes you are testing.')}
       </p>
       {tags.length === 0
         ? (
           <p className='mt-3 text-sm italic text-ink-3'>
-            No tags yet - add one from any evidence card below.
+            {ui('No tags yet - add one from any evidence card below.')}
           </p>
         )
         : (
@@ -1170,7 +1215,8 @@ function TagsSection({
               onClick={() => onSelectTag(null)}
               className={`rp-chip ${activeTag === null ? 'rp-chip-active' : ''}`}
             >
-              All ({evidence.length})
+              {ui('All (')}
+              {evidence.length})
             </button>
             {tags.map(([tag, count]) => (
               <button
@@ -1189,7 +1235,7 @@ function TagsSection({
               onClick={onToggleGroupByTag}
               className={`rp-chip ml-auto ${groupByTag ? 'rp-chip-active' : ''}`}
             >
-              Group by tag
+              {ui('Group by tag')}
             </button>
           </div>
         )}
@@ -1208,6 +1254,7 @@ export function InvestigationDetailPage() {
 }
 
 function InvestigationDetailBody() {
+  const { ui, error: localError } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -1246,12 +1293,19 @@ function InvestigationDetailBody() {
     onMutate: () => {
       if (!canWrite()) return
       setSynthesisMessage(
-        `Reading ${evidenceCount} evidence ${evidenceCount === 1 ? 'item' : 'items'}…`,
+        ui(
+          evidenceCount === 1
+            ? 'Reading {count} evidence item…'
+            : 'Reading {count} evidence items…',
+          { count: evidenceCount },
+        ),
       )
       if (synthesisTimerRef.current) clearTimeout(synthesisTimerRef.current)
       synthesisTimerRef.current = setTimeout(() => {
         if (!canWrite()) return
-        setSynthesisMessage('Still working - larger evidence sets can take up to thirty seconds…')
+        setSynthesisMessage(
+          ui('Still working - larger evidence sets can take up to thirty seconds…'),
+        )
       }, 8000)
     },
     onSuccess: (result) => {
@@ -1307,14 +1361,12 @@ function InvestigationDetailBody() {
       <main className='rp-shell py-10'>
         <ErrorCard
           message={notFound
-            ? 'This investigation does not exist or has been removed.'
-            : error instanceof Error
-            ? error.message
-            : 'Could not load this investigation.'}
+            ? ui('This investigation does not exist or has been removed.')
+            : localError(error, 'Could not load this investigation.')}
           onRetry={() => void refetch()}
         />
         <Link to={`/t/${config.slug}/investigations`} className='rp-btn rp-btn-outline mt-4'>
-          Back to investigations
+          {ui('Back to investigations')}
         </Link>
       </main>
     )
@@ -1354,7 +1406,7 @@ function InvestigationDetailBody() {
     <main className='rp-shell py-10'>
       <h1 className='sr-only'>{investigation.name}</h1>
       <Link to={`/t/${config.slug}/investigations`} className='text-sm text-ink-3 hover:text-ink'>
-        &larr; Investigations
+        {ui('← Investigations')}
       </Link>
 
       {
@@ -1387,7 +1439,8 @@ function InvestigationDetailBody() {
           <section id='evidence-list' className='mt-6 xl:mt-3'>
             <div className='flex flex-wrap items-center justify-between gap-3'>
               <h2 className='text-sm font-semibold text-ink'>
-                Evidence <span className='font-normal text-ink-3'>({sortedEvidence.length})</span>
+                {ui('Evidence')}{' '}
+                <span className='font-normal text-ink-3'>({sortedEvidence.length})</span>
               </h2>
               <div className='flex flex-wrap items-center gap-2'>
                 {canWrite()
@@ -1398,7 +1451,7 @@ function InvestigationDetailBody() {
                       onClick={startSynthesis}
                       className='rp-btn rp-btn-primary disabled:cursor-not-allowed'
                     >
-                      {synthesise.isPending ? 'Synthesising…' : 'Synthesise the evidence'}
+                      {synthesise.isPending ? ui('Synthesising…') : ui('Synthesise the evidence')}
                     </button>
                   )
                   : null}
@@ -1410,10 +1463,10 @@ function InvestigationDetailBody() {
                       onClick={() => {
                         setExportError(false)
                         void exportResearchFile({ ...exportAuthority, signal: signal() }, () =>
-                          investigationWordFile(investigation)).then((filename) => {
+                          investigationWordFile(investigation, ui)).then((filename) => {
                             signal().throwIfAborted()
                             access.controller.assertCurrent(exportAuthority.context)
-                            announceExport(savedFileNotice(filename, 'Word document'))
+                            announceExport(savedFileNotice(filename, ui('Word document'), ui))
                           }).catch(() => {
                             if (
                               !signal().aborted &&
@@ -1425,7 +1478,7 @@ function InvestigationDetailBody() {
                       }}
                       className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
                     >
-                      Export to Word
+                      {ui('Export to Word')}
                     </button>
                   )
                   : null}
@@ -1433,7 +1486,7 @@ function InvestigationDetailBody() {
                 {exportError
                   ? (
                     <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
-                      Could not export this investigation. Check your access and try again.
+                      {ui('Could not export this investigation. Check your access and try again.')}
                     </p>
                   )
                   : null}
@@ -1448,7 +1501,7 @@ function InvestigationDetailBody() {
                   style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
                 >
                   <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
-                    Some of this evidence has not been weighed
+                    {ui('Some of this evidence has not been weighed')}
                   </p>
                   <ul
                     className='mt-1.5 list-disc space-y-0.5 pl-5 text-xs leading-relaxed'
@@ -1457,28 +1510,36 @@ function InvestigationDetailBody() {
                     {coverage.unjudged > 0
                       ? (
                         <li>
-                          {coverage.unjudged}{' '}
-                          {coverage.unjudged === 1 ? 'passage has' : 'passages have'}{' '}
-                          no verdict. They will be included and flagged as unjudged.
+                          {ui(
+                            coverage.unjudged === 1
+                              ? '{count} passage has no verdict. They will be included and flagged as unjudged.'
+                              : '{count} passages have no verdict. They will be included and flagged as unjudged.',
+                            { count: coverage.unjudged },
+                          )}
                         </li>
                       )
                       : null}
                     {coverage.contradicting > 0
                       ? (
                         <li>
-                          {coverage.contradicting}{' '}
-                          {coverage.contradicting === 1 ? 'passage is' : 'passages are'}{' '}
-                          marked Contradicts. They will be reported as opposing evidence, never as
-                          support.
+                          {ui(
+                            coverage.contradicting === 1
+                              ? '{count} passage is marked Contradicts. They will be reported as opposing evidence, never as support.'
+                              : '{count} passages are marked Contradicts. They will be reported as opposing evidence, never as support.',
+                            { count: coverage.contradicting },
+                          )}
                         </li>
                       )
                       : null}
                     {coverage.excluded.length > 0
                       ? (
                         <li>
-                          {coverage.excluded.length}{' '}
-                          {coverage.excluded.length === 1 ? 'passage' : 'passages'}{' '}
-                          marked Not relevant will be left out.
+                          {ui(
+                            coverage.excluded.length === 1
+                              ? '{count} passage marked Not relevant will be left out.'
+                              : '{count} passages marked Not relevant will be left out.',
+                            { count: coverage.excluded.length },
+                          )}
                         </li>
                       )
                       : null}
@@ -1489,7 +1550,7 @@ function InvestigationDetailBody() {
                       onClick={startSynthesis}
                       className='rp-btn rp-btn-primary'
                     >
-                      Synthesise anyway
+                      {ui('Synthesise anyway')}
                     </button>
                     <button
                       type='button'
@@ -1503,7 +1564,7 @@ function InvestigationDetailBody() {
                       }}
                       className='rp-btn rp-btn-outline'
                     >
-                      Judge the evidence first
+                      {ui('Judge the evidence first')}
                     </button>
                   </div>
                 </div>
@@ -1515,7 +1576,7 @@ function InvestigationDetailBody() {
             {synthesise.isError
               ? (
                 <p className='mt-2 text-xs' style={{ color: 'var(--rp-bad-ink)' }}>
-                  Could not synthesise the evidence - try again.
+                  {ui('Could not synthesise the evidence - try again.')}
                 </p>
               )
               : null}
@@ -1531,7 +1592,7 @@ function InvestigationDetailBody() {
                       onClick={() => setVerdictFilter(f)}
                       className={`rp-chip ${verdictFilter === f ? 'rp-chip-active' : ''}`}
                     >
-                      {f === 'all' ? 'All' : verdictLabel(f)} ({counts[f]})
+                      {f === 'all' ? ui('All') : verdictLabel(f, ui)} ({counts[f]})
                     </button>
                   ))}
                 </div>
@@ -1542,24 +1603,28 @@ function InvestigationDetailBody() {
               {sortedEvidence.length === 0
                 ? (
                   <EmptyState
-                    title='No evidence yet'
-                    description='Save passages from Search, Ask answers, or the document reader.'
+                    title={ui('No evidence yet')}
+                    description={ui(
+                      'Save passages from Search, Ask answers, or the document reader.',
+                    )}
                   />
                 )
                 : filteredEvidence.length === 0
                 ? (
                   <EmptyState
-                    title='No evidence matches this filter'
-                    description='Try a different verdict or tag, or clear filters to see everything.'
+                    title={ui('No evidence matches this filter')}
+                    description={ui(
+                      'Try a different verdict or tag, or clear filters to see everything.',
+                    )}
                   />
                 )
                 : groupByTag
                 ? (
                   <div className='space-y-5'>
                     {groupEvidenceByTag(filteredEvidence).map((group) => (
-                      <div key={group.tag}>
+                      <div key={group.tag === null ? 'untagged' : `tag-${group.tag}`}>
                         <h3 className='mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
-                          {group.tag}{' '}
+                          {group.tag === null ? ui('Untagged') : group.tag}{' '}
                           <span className='font-normal normal-case tracking-normal'>
                             ({group.items.length})
                           </span>
@@ -1595,15 +1660,15 @@ function InvestigationDetailBody() {
 
           <section className='mt-6'>
             <h2 className='text-sm font-semibold text-ink'>
-              Artefacts{' '}
+              {ui('Artefacts')}{' '}
               <span className='font-normal text-ink-3'>({investigation.artefacts.length})</span>
             </h2>
             <div className='mt-3'>
               {investigation.artefacts.length === 0
                 ? (
                   <EmptyState
-                    title='No artefacts yet'
-                    description='Outputs saved from research tools will appear here.'
+                    title={ui('No artefacts yet')}
+                    description={ui('Outputs saved from research tools will appear here.')}
                   />
                 )
                 : (

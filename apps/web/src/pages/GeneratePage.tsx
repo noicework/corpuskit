@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
@@ -119,24 +121,30 @@ function figureLabel(token: string): string {
 
 /** The badge that says what the briefing's figure audit checked and removed. */
 function BriefingAuditBadge({ audit }: { audit: NonNullable<BriefingObject['audit']> }) {
+  const { ui } = usePortalLocale()
   const removed = audit.sentencesRemoved + audit.takeawaysRemoved
   if (audit.figuresChecked === 0 && removed === 0) return null
   const checked = audit.figuresChecked === 1
-    ? '1 figure checked'
-    : `${audit.figuresChecked} figures checked`
+    ? ui('1 figure checked')
+    : ui('{count} figures checked', { count: audit.figuresChecked })
   const label = removed > 0
-    ? `${checked} · ${removed === 1 ? '1 sentence' : `${removed} sentences`} removed`
+    ? ui(
+      removed === 1 ? '{checked} · 1 sentence removed' : '{checked} · {count} sentences removed',
+      { checked, count: removed },
+    )
     : checked
   const figures = audit.figuresRemoved.map(figureLabel).join(', ')
   const title = removed > 0
-    ? `${
-      removed === 1 ? 'One sentence was' : `${removed} sentences were`
-    } removed because no source of ${
-      removed === 1 ? 'its' : 'their'
-    } section carries the figures beside the claim, at its outcome and for its population${
-      figures ? ` (${figures})` : ''
-    }. Every figure still in the briefing was found beside its claim.`
-    : 'Every figure in this briefing was found beside its claim, at its outcome and for its population, in a source of its section.'
+    ? ui(
+      removed === 1
+        ? 'One sentence was removed because no source of its section carries the figures beside the claim, at its outcome and for its population{figures}. Every figure still in the briefing was found beside its claim.'
+        : '{count} sentences were removed because no source of their section carries the figures beside the claim, at its outcome and for its population{figures}. Every figure still in the briefing was found beside its claim.',
+      { count: removed, figures: figures ? ` (${figures})` : '' },
+    )
+    : ui(
+      'Every figure in this briefing was found beside its claim, at its outcome and for its population, in a source of its section.',
+    )
+
   return (
     <span
       className={`rp-badge ${removed > 0 ? 'rp-badge-warn' : 'rp-badge-ok'}`}
@@ -162,6 +170,7 @@ function RefMarkers({ refs, references, slug }: {
   references: BriefingReference[]
   slug: string
 }) {
+  const { ui } = usePortalLocale()
   if (refs.length === 0) return null
   return (
     <sup className='ml-0.5 whitespace-nowrap'>
@@ -175,7 +184,9 @@ function RefMarkers({ refs, references, slug }: {
               : `/t/${slug}/generate`}
             className='rp-focus inline-block min-h-6 min-w-6 px-0.5 text-center font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
-            title={reference ? `Reference ${n} - ${reference.title}` : `Reference ${n}`}
+            title={reference
+              ? ui('Reference {n} - {value2}', { n: n, value2: reference.title })
+              : ui('Reference {n}', { n: n })}
           >
             [{n}]
           </Link>
@@ -321,13 +332,14 @@ function truncateSource(source: string, max = 40): string {
 }
 
 function ComparisonTable({ data }: { data: ComparisonObject }) {
+  const { ui } = usePortalLocale()
   return (
     <div className='overflow-x-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface shadow-sm'>
       <table className='w-full min-w-[640px] border-collapse text-sm'>
         <thead>
           <tr>
             <th className='sticky left-0 bg-surface-2 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-ink-3'>
-              Dimension
+              {ui('Dimension')}
             </th>
             {data.items.map((item) => (
               <th
@@ -355,7 +367,7 @@ function ComparisonTable({ data }: { data: ComparisonObject }) {
                     key={item.name}
                     className='border-l border-line px-4 py-3 align-top text-sm text-ink-2'
                   >
-                    <div>{rating?.assessment ?? 'Not covered'}</div>
+                    <div>{rating?.assessment ?? ui('Not covered')}</div>
                     {rating?.source
                       ? (
                         <div className='mt-1 text-xs text-ink-3' title={rating.source}>
@@ -375,6 +387,7 @@ function ComparisonTable({ data }: { data: ComparisonObject }) {
 }
 
 function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
+  const { ui } = usePortalLocale()
   const omitted = data.omitted_sections ?? []
   const references = data.references ?? []
   const takeawayRefs = data.takeaway_refs ?? []
@@ -391,7 +404,7 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
       {data.key_takeaways.length > 0 && (
         <div className='mt-5 rounded-[var(--rp-radius)] bg-surface-2 p-4'>
           <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-            Key takeaways
+            {ui('Key takeaways')}
           </p>
           <ul className='mt-2 space-y-1.5'>
             {data.key_takeaways.map((t, i) => (
@@ -407,9 +420,12 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
           {references.length > 0 && untraced > 0
             ? (
               <p className='mt-2 text-xs leading-relaxed text-ink-3'>
-                {untraced === 1 ? 'One takeaway carries' : `${untraced} takeaways carry`}{' '}
-                no marker because no section of this briefing states it - treat{' '}
-                {untraced === 1 ? 'it' : 'them'} as unverified.
+                {ui(
+                  untraced === 1
+                    ? 'One takeaway carries no marker because no section of this briefing states it - treat it as unverified.'
+                    : '{count} takeaways carry no marker because no section of this briefing states it - treat them as unverified.',
+                  { count: untraced },
+                )}
               </p>
             )
             : null}
@@ -426,7 +442,7 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
             </p>
             {(s.refs ?? []).length === 0 && s.sources && s.sources.length > 0 && (
               <p className='mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3'>
-                <span>Sources:</span>
+                <span>{ui('Sources:')}</span>
                 {s.sources.map((src) => (
                   <Link
                     key={src.resourceId}
@@ -446,7 +462,9 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
 
       {references.length > 0 && (
         <div className='mt-6 border-t border-line pt-4'>
-          <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>References</p>
+          <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
+            {ui('References')}
+          </p>
           <ol className='mt-2 space-y-1.5 text-sm'>
             {references.map((reference) => {
               const line = referenceLine(reference)
@@ -471,10 +489,12 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
 
       {omitted.length > 0 && (
         <p className='mt-5 border-t border-line pt-4 text-xs leading-relaxed text-ink-3'>
-          {omitted.length === 1 ? 'One section was' : `${omitted.length} sections were`}{' '}
-          left out because no retrieved source supported {omitted.length === 1 ? 'it' : 'them'}:
-          {' '}
-          {omitted.join('; ')}.
+          {ui(
+            omitted.length === 1
+              ? 'One section was left out because no retrieved source supported it:'
+              : '{count} sections were left out because no retrieved source supported them:',
+            { count: omitted.length },
+          )} {omitted.join('; ')}.
         </p>
       )}
     </div>
@@ -506,13 +526,14 @@ function TimelineView({ data }: { data: TimelineObject }) {
 }
 
 function ProsConsView({ data }: { data: ProsConsObject }) {
+  const { ui } = usePortalLocale()
   return (
     <div>
       <h2 className='text-lg font-semibold tracking-tight text-ink'>{data.subject}</h2>
       <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2'>
         <div className='rounded-[calc(var(--rp-radius)+4px)] border border-[var(--rp-ok-line)] bg-[var(--rp-ok-bg)] p-5'>
           <p className='text-xs font-semibold uppercase tracking-wide text-[var(--rp-ok-ink)]'>
-            Pros
+            {ui('Pros')}
           </p>
           <ul className='mt-3 space-y-3'>
             {data.pros.map((p, i) => (
@@ -524,13 +545,13 @@ function ProsConsView({ data }: { data: ProsConsObject }) {
           </ul>
           {data.pros.length === 0 && (
             <p className='mt-3 text-sm text-ink-3'>
-              None found.
+              {ui('None found.')}
             </p>
           )}
         </div>
         <div className='rounded-[calc(var(--rp-radius)+4px)] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] p-5'>
           <p className='text-xs font-semibold uppercase tracking-wide text-[var(--rp-bad-ink)]'>
-            Cons
+            {ui('Cons')}
           </p>
           <ul className='mt-3 space-y-3'>
             {data.cons.map((c, i) => (
@@ -540,7 +561,7 @@ function ProsConsView({ data }: { data: ProsConsObject }) {
               </li>
             ))}
           </ul>
-          {data.cons.length === 0 && <p className='mt-3 text-sm text-ink-3'>None found.</p>}
+          {data.cons.length === 0 && <p className='mt-3 text-sm text-ink-3'>{ui('None found.')}</p>}
         </div>
       </div>
     </div>
@@ -578,6 +599,7 @@ function FaqView({ data }: { data: FaqObject }) {
 
 /** Interactive quiz - pick an answer per question, submit reveals correct/incorrect + a score. */
 function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }) {
+  const { ui } = usePortalLocale()
   const [selected, setSelected] = useState<Record<number, number>>({})
   const [submitted, setSubmitted] = useState(false)
 
@@ -589,10 +611,10 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
   return (
     <div>
       <div className='flex items-center justify-between gap-3'>
-        <h2 className='text-lg font-semibold tracking-tight text-ink'>Assessment</h2>
+        <h2 className='text-lg font-semibold tracking-tight text-ink'>{ui('Assessment')}</h2>
         {submitted && (
           <p className='text-sm font-semibold text-ink'>
-            Score: {score} / {data.questions.length}
+            {ui('Score:')} {score} / {data.questions.length}
           </p>
         )}
       </div>
@@ -600,9 +622,12 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
       {(data.requested ?? 0) > data.questions.length
         ? (
           <p className='mt-2 text-xs leading-relaxed text-ink-3' role='note'>
-            {data.questions.length === 1 ? 'One' : data.questions.length} of the {data.requested}
-            {' '}
-            questions asked for survived the source check.
+            {ui(
+              data.questions.length === 1
+                ? 'One of the {requested} questions asked for survived the source check.'
+                : '{count} of the {requested} questions asked for survived the source check.',
+              { count: data.questions.length, requested: data.requested ?? 0 },
+            )}
           </p>
         )
         : null}
@@ -639,11 +664,11 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
                 }
                 const answerHint = submitted
                   ? isChosen && isCorrect
-                    ? ' - your answer, correct'
+                    ? ui(' - your answer, correct')
                     : isChosen
-                    ? ' - your answer, incorrect'
+                    ? ui(' - your answer, incorrect')
                     : isCorrect
-                    ? ' - correct answer'
+                    ? ui(' - correct answer')
                     : null
                   : null
                 return (
@@ -670,7 +695,7 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
                 {q.source_resource_id && q.source_title
                   ? (
                     <>
-                      Source:{' '}
+                      {ui('Source:')}{' '}
                       <Link
                         to={`/t/${slug}/library/${encodeURIComponent(q.source_resource_id)}`}
                         className='rp-focus font-medium underline-offset-2 hover:underline'
@@ -680,7 +705,9 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
                       </Link>
                     </>
                   )
-                  : 'Source: not attributed - the question could not be tied to one retrieved document.'}
+                  : ui(
+                    'Source: not attributed - the question could not be tied to one retrieved document.',
+                  )}
               </p>
             )}
           </div>
@@ -693,7 +720,7 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
           onClick={() => setSubmitted(true)}
           className='rp-btn rp-btn-primary mt-6'
         >
-          Submit answers
+          {ui('Submit answers')}
         </button>
       )}
     </div>
@@ -701,13 +728,14 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
 }
 
 function RawFallback({ value }: { value: unknown }) {
+  const { ui } = usePortalLocale()
   return (
     <div
       className='rounded-[calc(var(--rp-radius)+4px)] border p-4'
       style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
     >
       <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
-        This result did not match the expected shape - showing the raw data instead.
+        {ui('This result did not match the expected shape - showing the raw data instead.')}
       </p>
       <pre className='mt-3 max-h-96 overflow-auto rounded-[var(--rp-radius)] bg-surface p-4 text-xs text-ink-2'>
         {JSON.stringify(value, null, 2)}
@@ -717,10 +745,13 @@ function RawFallback({ value }: { value: unknown }) {
 }
 
 function SourcesRow({ sources }: { sources: ResourceSummary[] }) {
+  const { ui } = usePortalLocale()
   return (
     <div className='mt-6 border-t border-line pt-5'>
       <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
-        Grounded in {sources.length} {sources.length === 1 ? 'source' : 'sources'}
+        {ui(sources.length === 1 ? 'Grounded in {count} source' : 'Grounded in {count} sources', {
+          count: sources.length,
+        })}
       </p>
       {sources.length > 0 && (
         <div className='mt-2 flex flex-wrap gap-2'>
@@ -793,19 +824,20 @@ function artifactToHtml(
   kind: GenerateKind,
   object: unknown,
   sourceTitles: string[],
+  ui: ResearchUi = englishResearchUi,
 ): { title: string; bodyHtml: string } {
-  let title = KIND_BY_ID.get(kind)?.label ?? 'Artifact'
+  let title = ui(KIND_BY_ID.get(kind)?.label ?? 'Artifact')
   let contentHtml: string
 
   if (kind === 'comparison' && isComparison(object)) {
-    title = 'Comparison'
+    title = ui('Comparison')
     const headerCells = object.items.map((item) => `<th>${escapeHtml(item.name)}</th>`).join('')
     const rows = object.dimensions
       .map((dim) => {
         const cells = object.items
           .map((item) => {
             const rating = item.ratings.find((r) => r.dimension === dim)
-            const assessment = escapeHtml(rating?.assessment ?? 'Not covered')
+            const assessment = escapeHtml(rating?.assessment ?? ui('Not covered'))
             const sourceLine = rating?.source
               ? `<br><small>&mdash; ${escapeHtml(rating.source)}</small>`
               : ''
@@ -815,8 +847,9 @@ function artifactToHtml(
         return `<tr><th scope="row">${escapeHtml(dim)}</th>${cells}</tr>`
       })
       .join('')
-    contentHtml =
-      `<table><thead><tr><th>Dimension</th>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`
+    contentHtml = `<table><thead><tr><th>${
+      escapeHtml(ui('Dimension'))
+    }</th>${headerCells}</tr></thead><tbody>${rows}</tbody></table>`
   } else if (kind === 'briefing' && isBriefing(object)) {
     title = object.title
     const references = object.references ?? []
@@ -824,7 +857,7 @@ function artifactToHtml(
       refs && refs.length > 0 ? ` <sup>${refs.map((n) => `[${n}]`).join('')}</sup>` : ''
     const takeawayRefs = object.takeaway_refs ?? []
     const takeaways = object.key_takeaways.length > 0
-      ? `<h2>Key takeaways</h2><ul>${
+      ? `<h2>${escapeHtml(ui('Key takeaways'))}</h2><ul>${
         object.key_takeaways.map((t, i) => `<li>${escapeHtml(t)}${markers(takeawayRefs[i])}</li>`)
           .join('')
       }</ul>`
@@ -832,7 +865,7 @@ function artifactToHtml(
     const sections = object.sections
       .map((s) => {
         const sourceLine = (s.refs ?? []).length === 0 && s.sources && s.sources.length > 0
-          ? `<p><small>Sources: ${
+          ? `<p><small>${escapeHtml(ui('Sources:'))} ${
             s.sources.map((src) => escapeHtml(src.title)).join('; ')
           }</small></p>`
           : ''
@@ -842,12 +875,12 @@ function artifactToHtml(
       })
       .join('')
     const omitted = object.omitted_sections && object.omitted_sections.length > 0
-      ? `<p><small>Left out for want of a supporting source: ${
+      ? `<p><small>${escapeHtml(ui('Left out for want of a supporting source:'))} ${
         object.omitted_sections.map(escapeHtml).join('; ')
       }</small></p>`
       : ''
     const referenceList = references.length > 0
-      ? `<h2>References</h2><ol>${
+      ? `<h2>${escapeHtml(ui('References'))}</h2><ol>${
         references.map((r) => {
           const line = referenceLine(r)
           return `<li>${escapeHtml(r.title)}${line ? ` - ${escapeHtml(line)}` : ''}</li>`
@@ -880,25 +913,32 @@ function artifactToHtml(
         (c) => `<li><strong>${escapeHtml(c.point)}</strong><p>${escapeHtml(c.rationale)}</p></li>`,
       )
       .join('')
-    contentHtml = `<h2>Pros</h2><ul>${prosHtml || '<li>None found.</li>'}</ul>` +
-      `<h2>Cons</h2><ul>${consHtml || '<li>None found.</li>'}</ul>`
+    contentHtml =
+      `<h2>${escapeHtml(ui('Pros'))}</h2><ul>${
+        prosHtml || `<li>${escapeHtml(ui('None found.'))}</li>`
+      }</ul>` +
+      `<h2>${escapeHtml(ui('Cons'))}</h2><ul>${
+        consHtml || `<li>${escapeHtml(ui('None found.'))}</li>`
+      }</ul>`
   } else if (kind === 'faq' && isFaq(object)) {
     title = object.title
     contentHtml = object.entries
       .map((e) => `<h2>${escapeHtml(e.question)}</h2><p>${escapeHtml(e.answer)}</p>`)
       .join('')
   } else if (kind === 'assessment' && isAssessment(object)) {
-    title = 'Assessment'
+    title = ui('Assessment')
     contentHtml = object.questions
       .map((q, i) => {
         const options = q.options
           .map((opt, oi) =>
-            `<li>${escapeHtml(opt)}${oi === q.correct_index ? ' (correct answer)' : ''}</li>`
+            `<li>${escapeHtml(opt)}${
+              oi === q.correct_index ? ' ' + ui('(correct answer)') : ''
+            }</li>`
           )
           .join('')
         const topic = q.topic ? `<p><em>${escapeHtml(q.topic)}</em></p>` : ''
         const source = q.source_title
-          ? `<p><small>Source: ${escapeHtml(q.source_title)}</small></p>`
+          ? `<p><small>${escapeHtml(ui('Source:'))} ${escapeHtml(q.source_title)}</small></p>`
           : ''
         return `<h2>${i + 1}. ${
           escapeHtml(q.question)
@@ -909,13 +949,17 @@ function artifactToHtml(
     contentHtml = `<pre>${escapeHtml(JSON.stringify(object, null, 2))}</pre>`
   }
 
-  const sourcesHtml =
-    `<h2>Grounded in ${sourceTitles.length} ${
-      sourceTitles.length === 1 ? 'source' : 'sources'
-    }</h2>` +
+  const sourcesHtml = `<h2>${
+    escapeHtml(
+      ui(
+        sourceTitles.length === 1 ? 'Grounded in {count} source' : 'Grounded in {count} sources',
+        { count: sourceTitles.length },
+      ),
+    )
+  }</h2>` +
     (sourceTitles.length > 0
       ? `<ul>${sourceTitles.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
-      : '<p>No sources.</p>')
+      : `<p>${escapeHtml(ui('No sources.'))}</p>`)
 
   return { title, bodyHtml: `${contentHtml}${sourcesHtml}` }
 }
@@ -1004,6 +1048,7 @@ function ExportRow(
     slug: string
   },
 ) {
+  const { ui } = usePortalLocale()
   const [popupBlocked, setPopupBlocked] = useState(false)
   const { notice, announce } = useExportNotice()
   const access = useAccess()
@@ -1019,7 +1064,7 @@ function ExportRow(
     if (disabled || !canExport) return
     const current = { ...authority, signal: lifetime.current.signal }
     try {
-      const { title, bodyHtml } = artifactToHtml(kind, object, sourceTitles)
+      const { title, bodyHtml } = artifactToHtml(kind, object, sourceTitles, ui)
       if (format === 'word') {
         const filename = await exportResearchFile(current, () => ({
           parts: ['\uFEFF', wordDocumentHtml(title, bodyHtml)],
@@ -1028,18 +1073,18 @@ function ExportRow(
         }))
         current.signal.throwIfAborted()
         access.controller.assertCurrent(current.context)
-        announce(savedFileNotice(filename, 'Word document'))
+        announce(savedFileNotice(filename, ui('Word document'), ui))
       } else {
         const opened = await printResearchHtml(current, () => printDocumentHtml(title, bodyHtml))
         current.signal.throwIfAborted()
         access.controller.assertCurrent(current.context)
         setPopupBlocked(!opened)
-        if (opened) announce('Opened a print-ready copy - save it as PDF from the print dialog')
+        if (opened) announce(ui('Opened a print-ready copy - save it as PDF from the print dialog'))
       }
     } catch (error) {
       if (current.signal.aborted || access.controller.context !== current.context) return
       if (error instanceof Error && error.name === 'AbortError') return
-      announce('Could not export this artefact. Try again.')
+      announce(ui('Could not export this artefact. Try again.'))
     }
   }
 
@@ -1051,7 +1096,7 @@ function ExportRow(
             slug={slug}
             artefact={{
               kind,
-              title: artifactToHtml(kind, object, sourceTitles).title,
+              title: artifactToHtml(kind, object, sourceTitles, ui).title,
               data: { object, sourceTitles },
             }}
           />
@@ -1065,7 +1110,7 @@ function ExportRow(
             onClick={() => void output('word')}
             className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
           >
-            Export to Word
+            {ui('Export to Word')}
           </button>
           <button
             type='button'
@@ -1073,7 +1118,7 @@ function ExportRow(
             onClick={() => void output('pdf')}
             className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
           >
-            Export to PDF
+            {ui('Export to PDF')}
           </button>
         </>
       )}
@@ -1081,7 +1126,7 @@ function ExportRow(
       {popupBlocked
         ? (
           <p className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
-            Allow pop-ups to export as PDF.
+            {ui('Allow pop-ups to export as PDF.')}
           </p>
         )
         : null}
@@ -1115,12 +1160,13 @@ function SuggestedTopicChips({
   topics: { id: string; label: string }[]
   onPick: (text: string) => void
 }) {
+  const { ui } = usePortalLocale()
   const chips = useMemo(() => suggestedTopicChips(kind, topics), [kind, topics])
   if (chips.length === 0) return null
 
   return (
     <div className='mt-3'>
-      <p className='text-xs font-medium text-ink-3'>Try one of these</p>
+      <p className='text-xs font-medium text-ink-3'>{ui('Try one of these')}</p>
       <div className='mt-1.5 flex flex-wrap gap-1.5'>
         {chips.map((chip) => (
           <button
@@ -1143,6 +1189,7 @@ function SuggestedTopicChips({
  * rather than a generic document view.
  */
 export function GeneratePage() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const access = useAccess()
   return access.can('portal.generate', { kind: 'portal', slug: config.slug })
@@ -1150,11 +1197,11 @@ export function GeneratePage() {
     : (
       <main className='rp-shell py-10'>
         <EmptyState
-          title='This page is unavailable'
-          description='You can continue exploring the portal.'
+          title={ui('This page is unavailable')}
+          description={ui('You can continue exploring the portal.')}
         >
           <Link className='rp-btn rp-btn-outline' to={`/t/${config.slug}/library`}>
-            Back to Library
+            {ui('Back to Library')}
           </Link>
         </EmptyState>
       </main>
@@ -1162,6 +1209,7 @@ export function GeneratePage() {
 }
 
 function GenerateWorkspace() {
+  const { ui, language, error: localError } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const access = useAccess()
   const context = access.controller.context
@@ -1231,9 +1279,9 @@ function GenerateWorkspace() {
 
   return (
     <main className='mx-auto max-w-5xl px-6 py-10'>
-      <h1 className='text-2xl font-semibold tracking-tight text-ink'>Generate</h1>
+      <h1 className='text-2xl font-semibold tracking-tight text-ink'>{ui('Generate')}</h1>
       <p className='mt-1 text-sm text-ink-3'>
-        Schema-enforced research artifacts, grounded in the portal's content.
+        {ui("Schema-enforced research artifacts, grounded in the portal's content.")}
       </p>
 
       {
@@ -1253,7 +1301,7 @@ function GenerateWorkspace() {
                 : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
             }`}
           >
-            {k.label}
+            {ui(k.label)}
           </button>
         ))}
       </div>
@@ -1263,7 +1311,11 @@ function GenerateWorkspace() {
           htmlFor='generate-query'
           className='mb-1.5 block text-sm font-medium text-ink'
         >
-          What should the {activeMeta?.label.toLowerCase()} cover?
+          {ui('What should the {kind} cover?', {
+            kind: activeMeta
+              ? language === 'en' ? activeMeta.label.toLowerCase() : ui(activeMeta.label)
+              : '',
+          })}
         </label>
         <textarea
           id='generate-query'
@@ -1280,7 +1332,9 @@ function GenerateWorkspace() {
           disabled={mutation.isPending || drafts[kind].trim().length === 0}
           className='rp-btn rp-btn-primary mt-3'
         >
-          {mutation.isPending ? 'Generating - this can take up to half a minute…' : 'Generate'}
+          {mutation.isPending
+            ? ui('Generating - this can take up to half a minute…')
+            : ui('Generate')}
         </button>
       </form>
 
@@ -1289,11 +1343,9 @@ function GenerateWorkspace() {
           role='alert'
           className='mt-8 rounded-[calc(var(--rp-radius)+4px)] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] p-6'
         >
-          <p className='text-sm font-medium text-[var(--rp-bad-ink)]'>Generation failed</p>
+          <p className='text-sm font-medium text-[var(--rp-bad-ink)]'>{ui('Generation failed')}</p>
           <p className='mt-1 text-sm text-[var(--rp-bad-ink)]'>
-            {mutation.error instanceof Error
-              ? mutation.error.message
-              : 'Something went wrong - try a narrower request.'}
+            {localError(mutation.error, 'Something went wrong - try a narrower request.')}
           </p>
         </div>
       )}
@@ -1301,8 +1353,8 @@ function GenerateWorkspace() {
       {!mutation.data && !mutation.isError && !mutation.isPending && (
         <div className='mt-8'>
           <EmptyState
-            title={`${activeMeta?.label} artifacts`}
-            description={activeMeta?.description}
+            title={ui('{value1} artifacts', { value1: activeMeta ? ui(activeMeta.label) : '' })}
+            description={activeMeta ? ui(activeMeta.description) : ''}
           />
         </div>
       )}
@@ -1319,9 +1371,12 @@ function GenerateWorkspace() {
       {mutation.data && !mutation.isPending && mutation.data.insufficientGrounding && (
         <div className='mt-8'>
           <EmptyState
-            title='Not enough to work with'
-            description={mutation.data.message ??
-              `There is not enough source material in this portal to generate a grounded ${activeMeta?.label.toLowerCase()} on this topic. Try a broader topic or check the Library for coverage.`}
+            title={ui('Not enough to work with')}
+            description={(language === 'en' ? mutation.data.message : undefined) ??
+              ui(
+                'There is not enough source material in this portal to generate a grounded {value1} on this topic. Try a broader topic or check the Library for coverage.',
+                { value1: activeMeta ? ui(activeMeta.label) : ''.toLowerCase() },
+              )}
           />
         </div>
       )}

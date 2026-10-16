@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { AdminAccessError } from '../api/break-glass.ts'
 import { type FormEvent, useMemo, useState } from 'react'
@@ -8,7 +10,7 @@ import { createAdminLabelset, getCounters, getFacets, getLabelsets } from '../ap
 import { prettyLabel } from '../components/ui.tsx'
 import { ErrorCard, Skeleton } from '../components/ui.tsx'
 import { MessagePanel } from './admin/MessagePanel.tsx'
-import { errorMessage, inputClass, type Message } from './admin/shared.ts'
+import { inputClass, type Message } from './admin/shared.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { AdminPageAccess } from './AdminPage.tsx'
 import { usePermissionAdminAccess } from '../components/EmergencyAccess.tsx'
@@ -27,13 +29,14 @@ export function cardinalityLabel(
   labelset: Pick<Labelset, 'multiple' | 'kind'>,
   counts: Record<string, number>,
   resources: number | undefined,
+  ui: ResearchUi = englishResearchUi,
 ): string {
-  if (labelset.kind === 'PARAGRAPHS') return 'Applied to passages, not whole resources'
+  if (labelset.kind === 'PARAGRAPHS') return ui('Applied to passages, not whole resources')
   const total = Object.values(counts).reduce((n, c) => n + c, 0)
   if (!labelset.multiple && resources !== undefined && resources > 0 && total > resources) {
-    return 'Multiple values per resource (observed in the index)'
+    return ui('Multiple values per resource (observed in the index)')
   }
-  return labelset.multiple ? 'Multiple values per resource' : 'Single value per resource'
+  return ui(labelset.multiple ? 'Multiple values per resource' : 'Single value per resource')
 }
 
 function LabelsetCard({
@@ -48,6 +51,7 @@ function LabelsetCard({
   /** Resources in the box, for the observed-cardinality check. */
   resources: number | undefined
 }) {
+  const { ui } = usePortalLocale()
   const sorted = [...labelset.labels].sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0))
   const definitions = labelset.definitions ?? {}
   const hasDefinitions = sorted.some((label) => Boolean(definitions[label]))
@@ -57,10 +61,10 @@ function LabelsetCard({
     const count = counts[label] ?? 0
     return (
       <span className={`rp-chip ${count > 0 ? 'text-ink' : 'text-ink-3'}`}>
-        {prettyLabel(label, organisation)}
+        {prettyLabel(label, organisation, ui)}
         <span className='text-ink-3'>
           {count.toLocaleString()}
-          {passages ? ' passages' : ''}
+          {passages ? ui(' passages') : ''}
         </span>
       </span>
     )
@@ -70,19 +74,19 @@ function LabelsetCard({
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm'>
       <div className='flex flex-wrap items-baseline justify-between gap-3'>
         <h2 className='text-lg font-semibold tracking-tight text-ink'>
-          {prettyLabel(labelset.title, organisation)}
+          {prettyLabel(labelset.title, organisation, ui)}
         </h2>
         <span className='shrink-0 text-xs font-medium uppercase tracking-wide text-ink-3'>
-          {labelset.labels.length} {labelset.labels.length === 1 ? 'value' : 'values'}
+          {labelset.labels.length} {labelset.labels.length === 1 ? ui('value') : ui('values')}
         </span>
       </div>
       <p className='mt-1 text-xs text-ink-3'>
-        {cardinalityLabel(labelset, counts, resources)}
-        {passages ? ' - counts are passages' : ''}
+        {cardinalityLabel(labelset, counts, resources, ui)}
+        {passages ? ui(' - counts are passages') : ''}
       </p>
 
       {sorted.length === 0
-        ? <p className='mt-4 text-sm text-ink-3'>No values yet.</p>
+        ? <p className='mt-4 text-sm text-ink-3'>{ui('No values yet.')}</p>
         : hasDefinitions
         ? (
           // With definitions the card is the vocabulary reference: each value
@@ -118,6 +122,7 @@ function AddLabelsetCard({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
+  const { ui, error: localError } = usePortalLocale()
   const [title, setTitle] = useState('')
   const [multiple, setMultiple] = useState(false)
   const [seed, setSeed] = useState('')
@@ -151,14 +156,17 @@ function AddLabelsetCard({
       if (result?.ok !== true || typeof result.id !== 'string' || !result.id) {
         throw new AdminAccessError()
       }
-      setMessage({ tone: 'ok', text: `Added "${title.trim()}" - it will appear once indexed.` })
+      setMessage({
+        tone: 'ok',
+        text: ui('Added "{title}" - it will appear once indexed.', { title: title.trim() }),
+      })
       setTitle('')
       setSeed('')
       await onAdded()
     } catch (err) {
       setMessage({
         tone: 'error',
-        text: errorMessage(err, 'Could not add that category - please try again.'),
+        text: localError(err, 'Could not add that category - please try again.'),
       })
     } finally {
       setBusy(false)
@@ -167,28 +175,28 @@ function AddLabelsetCard({
 
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-dashed border-line bg-surface-2 p-6'>
-      <h2 className='text-sm font-semibold text-ink'>Add a category</h2>
+      <h2 className='text-sm font-semibold text-ink'>{ui('Add a category')}</h2>
       <form onSubmit={onSubmit} className='mt-4 space-y-3'>
         <div>
           <label
             htmlFor='taxonomy-name'
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Name
+            {ui('Name')}
           </label>
           <input
             id='taxonomy-name'
             className={inputClass}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder='e.g. Region'
+            placeholder={ui('e.g. Region')}
             autoComplete='off'
             required
           />
         </div>
 
         <div>
-          <p className='mb-1.5 block text-sm font-medium text-ink'>Values per resource</p>
+          <p className='mb-1.5 block text-sm font-medium text-ink'>{ui('Values per resource')}</p>
           <div className='inline-flex rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
             <button
               type='button'
@@ -200,7 +208,7 @@ function AddLabelsetCard({
                   : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
               }`}
             >
-              Single
+              {ui('Single')}
             </button>
             <button
               type='button'
@@ -212,7 +220,7 @@ function AddLabelsetCard({
                   : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
               }`}
             >
-              Multiple
+              {ui('Multiple')}
             </button>
           </div>
         </div>
@@ -222,14 +230,14 @@ function AddLabelsetCard({
             htmlFor='taxonomy-seed'
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Seed values
+            {ui('Seed values')}
           </label>
           <input
             id='taxonomy-seed'
             className={inputClass}
             value={seed}
             onChange={(e) => setSeed(e.target.value)}
-            placeholder='Comma-separated, e.g. North, South, East, West'
+            placeholder={ui('Comma-separated, e.g. North, South, East, West')}
             autoComplete='off'
           />
         </div>
@@ -239,7 +247,7 @@ function AddLabelsetCard({
           disabled={busy}
           className='rp-btn rp-btn-primary'
         >
-          {busy ? 'Adding…' : 'Add category'}
+          {busy ? ui('Adding…') : ui('Add category')}
         </button>
       </form>
 
@@ -275,6 +283,7 @@ export function TaxonomyPage() {
 }
 
 function TaxonomyContent() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
   const queryClient = useQueryClient()
@@ -319,9 +328,9 @@ function TaxonomyContent() {
 
   return (
     <main className='rp-shell py-10'>
-      <h1 className='rp-display text-2xl text-ink'>Taxonomy</h1>
+      <h1 className='rp-display text-2xl text-ink'>{ui('Taxonomy')}</h1>
       <p className='mt-1 text-sm text-ink-3'>
-        Categories used to classify resources. Counts reflect indexed content.
+        {ui('Categories used to classify resources. Counts reflect indexed content.')}
       </p>
 
       {isLoading && (
@@ -334,7 +343,7 @@ function TaxonomyContent() {
       {isError && (
         <div className='mt-8'>
           <ErrorCard
-            message={error instanceof Error ? error.message : 'Could not load the taxonomy.'}
+            message={error instanceof Error ? error.message : ui('Could not load the taxonomy.')}
             onRetry={() => void refetch()}
           />
         </div>
@@ -364,9 +373,12 @@ function TaxonomyContent() {
           {hiddenCount > 0
             ? (
               <p className='mt-4 text-xs text-ink-3'>
-                {hiddenCount} {hiddenCount === 1 ? 'category' : 'categories'} with no indexed values
-                {' '}
-                {hiddenCount === 1 ? 'is' : 'are'} not shown.
+                {ui(
+                  hiddenCount === 1
+                    ? '{count} category with no indexed values is not shown.'
+                    : '{count} categories with no indexed values are not shown.',
+                  { count: hiddenCount },
+                )}
               </p>
             )
             : null}

@@ -121,9 +121,11 @@ export function Hero({
         }`}
       >
         <div className='min-w-0'>
-          {isAcmd && <p className='rp-acmd-demo-label'>ACMD Research Portal · Demo</p>}
+          {isAcmd && <p className='rp-acmd-demo-label'>{ui('ACMD Research Portal · Demo')}</p>}
           <h1 className='rp-display rp-anim-rise text-4xl text-[var(--rp-on-hero)] sm:text-5xl lg:text-6xl'>
-            {isAcmd ? config.branding.tagline : hero?.heading ?? 'What would you like to explore?'}
+            {isAcmd
+              ? config.branding.tagline
+              : hero?.heading ?? ui('What would you like to explore?')}
           </h1>
           {!isAcmd && hero?.body && (
             <p className='rp-anim-rise rp-delay-1 mt-5 max-w-2xl whitespace-pre-line text-lg leading-relaxed text-[var(--rp-on-hero)] opacity-90'>
@@ -132,8 +134,9 @@ export function Hero({
           )}
           {isAcmd && (
             <p className='rp-acmd-intro'>
-              Explore connected knowledge. Ask a question, discover the evidence and follow it back
-              to its source.
+              {ui(
+                'Explore connected knowledge. Ask a question, discover the evidence and follow it back to its source.',
+              )}
             </p>
           )}
 
@@ -167,7 +170,7 @@ export function Hero({
                   ref={inputRef}
                   type='text'
                   autoComplete='off'
-                  placeholder={isAcmd ? 'Ask a question' : undefined}
+                  placeholder={isAcmd ? ui('Ask a question') : undefined}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   className='min-w-0 flex-1 border-0 bg-transparent px-2 py-2 text-[0.95rem] text-ink focus:outline-none'
@@ -202,11 +205,11 @@ export function Hero({
             <div className='rp-acmd-research-image'>
               <img
                 src={config.branding.heroImageUrl}
-                alt='Biomedical researchers working together in a laboratory'
+                alt={ui('Biomedical researchers working together in a laboratory')}
               />
               <div className='rp-acmd-image-caption'>
-                <span>Ideas into impact.</span>
-                <span>Explore. Connect. Discover.</span>
+                <span>{ui('Ideas into impact.')}</span>
+                <span>{ui('Explore. Connect. Discover.')}</span>
               </div>
             </div>
           )
@@ -245,6 +248,7 @@ function HeroFigure({ image }: { image: { url?: string; alt: string } }) {
  * reader who does not yet have a question.
  */
 function RecentDocuments({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   const { data, isLoading } = useQuery({
     queryKey: ['recent-documents', slug],
     queryFn: () => getCatalog(slug, { pageSize: 12, sort: 'created', order: 'desc' }),
@@ -259,7 +263,7 @@ function RecentDocuments({ slug }: { slug: string }) {
 
   return (
     <div className='rp-anim-rise rp-delay-3 hidden lg:block'>
-      <p className='rp-eyebrow text-[var(--rp-on-primary)]/60'>Recently added</p>
+      <p className='rp-eyebrow text-[var(--rp-on-primary)]/60'>{ui('Recently added')}</p>
       <ul className='mt-4 space-y-1'>
         {isLoading
           ? Array.from({ length: 4 }).map((_, index) => (
@@ -388,6 +392,7 @@ function QuickEntry({ slug }: { slug: string }) {
  * gone, and the label is what keeps that instruction for assistive tech.
  */
 function RegionBand({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   return (
     <section style={{ backgroundColor: 'var(--rp-primary)' }}>
       {
@@ -398,10 +403,10 @@ function RegionBand({ slug }: { slug: string }) {
       <div className='rp-shell grid gap-8 py-12 md:grid-cols-2 md:items-center md:gap-10 md:py-16'>
         <div className='min-w-0'>
           <h2 className='rp-display text-3xl text-[var(--rp-on-primary)] sm:text-4xl'>
-            Explore by region
+            {ui('Explore by region')}
           </h2>
           <p className='mt-4 max-w-md text-base leading-relaxed text-[var(--rp-on-primary)]/75'>
-            Research from every corner of the country
+            {ui('Research from every corner of the country')}
           </p>
           {
             /* On a phone the seven links fill their wrap lines, so the group
@@ -410,7 +415,7 @@ function RegionBand({ slug }: { slug: string }) {
              * is a poor target. Both are dropped at `sm:`, where the row goes
              * back to natural widths beside the map. */
           }
-          <ul aria-label='Regions' className='mt-6 flex flex-wrap gap-2'>
+          <ul aria-label={ui('Regions')} className='mt-6 flex flex-wrap gap-2'>
             {REGIONS.map((region) => (
               <li key={region.id} className='grow sm:grow-0'>
                 <Link
@@ -482,6 +487,7 @@ function ResourceCard({ slug, resource }: { slug: string; resource: ResourceSumm
 function SectionHeading(
   { slug, topicId, label, count }: { slug: string; topicId: string; label: string; count: number },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <div className='flex items-center gap-2.5'>
       {
@@ -494,7 +500,7 @@ function SectionHeading(
          * column it is left with. */
       }
       <h2 className='rp-display min-w-0 break-words text-xl text-ink sm:text-[1.375rem]'>
-        {label}
+        {ui(label)}
       </h2>
       <span className='rp-badge rp-badge-quiet shrink-0 tabular-nums'>{count}</span>
       <span className='h-px flex-1 bg-[var(--rp-line)]' aria-hidden='true' />
@@ -508,7 +514,8 @@ function SectionHeading(
         to={`/t/${slug}/library?topic=${encodeURIComponent(topicId)}`}
         className='rp-focus -my-3 shrink-0 rounded-[var(--rp-radius-btn)] py-3 text-sm font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
       >
-        See all<span aria-hidden='true'>&rarr;</span>
+        {ui('See all')}
+        <span aria-hidden='true'>&rarr;</span>
       </Link>
     </div>
   )
@@ -559,6 +566,7 @@ const TOPIC_ROW_LIMIT = 12
 export function TopicRows(
   { config, emptyState = true }: { config: TenantConfig; emptyState?: boolean },
 ) {
+  const { ui } = usePortalLocale()
   // The box's real classification index, not per-resource topicIds (the DA
   // classifier's labels don't reliably land in a listed resource's own
   // usermetadata - see the provider's `topicResources` doc comment). Facet
@@ -599,7 +607,7 @@ export function TopicRows(
       {isError
         ? (
           <ErrorCard
-            message={error instanceof Error ? error.message : 'Could not load resources.'}
+            message={error instanceof Error ? error.message : ui('Could not load resources.')}
             onRetry={() => void refetch()}
           />
         )
@@ -617,13 +625,15 @@ export function TopicRows(
       {emptyState && !isLoading && !isError && !hasRows
         ? (
           <EmptyState
-            title='Nothing to browse yet'
-            description='This portal has no resources filed against its topics yet. Topics appear here once documents are added and analysed.'
+            title={ui('Nothing to browse yet')}
+            description={ui(
+              'This portal has no resources filed against its topics yet. Topics appear here once documents are added and analysed.',
+            )}
           >
             <div className='flex flex-wrap gap-3'>
               <AddDocumentsLink slug={config.slug} />
               <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-outline'>
-                Open the library
+                {ui('Open the library')}
               </Link>
             </div>
           </EmptyState>

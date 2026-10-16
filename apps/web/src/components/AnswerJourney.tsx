@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
@@ -101,6 +102,7 @@ function ConfidenceRing({
   className?: string
   reducedMotion: boolean
 }) {
+  const { ui } = usePortalLocale()
   const percent = Math.round(score * 100)
   const radius = 40
   const circumference = 2 * Math.PI * radius
@@ -121,7 +123,10 @@ function ConfidenceRing({
     <div
       className={`relative shrink-0 ${className}`}
       role='img'
-      aria-label={`${scoreWord(score)} - ${percent} per cent confidence`}
+      aria-label={ui('{value1} - {percent} per cent confidence', {
+        value1: ui(scoreWord(score)),
+        percent: percent,
+      })}
     >
       <svg viewBox='0 0 96 96' className='h-full w-full -rotate-90'>
         <circle cx='48' cy='48' r={radius} fill='rgba(10, 10, 12, 0.5)' />
@@ -236,6 +241,7 @@ export function AnswerJourney({
   sources,
   citedIds,
 }: AnswerJourneyProps) {
+  const { ui } = usePortalLocale()
   const reducedMotion = usePrefersReducedMotion()
   const citedKey = citedIds.join(',')
 
@@ -469,10 +475,10 @@ export function AnswerJourney({
   // --- render --------------------------------------------------------------
 
   const phaseLabel = index === -1
-    ? 'How this answer was built'
+    ? ui('How this answer was built')
     : index >= total
-    ? 'The trail'
-    : `Source ${index + 1} of ${total}`
+    ? ui('The trail')
+    : ui('Source {index} of {total}', { index: index + 1, total })
 
   const accent = current ? scoreColour(current.score) : 'rgba(255, 255, 255, 0.5)'
   const relationText = relations[index] ?? ''
@@ -494,7 +500,7 @@ export function AnswerJourney({
         ref={cardRef}
         role='dialog'
         aria-modal='true'
-        aria-label='Journey through the context'
+        aria-label={ui('Journey through the context')}
         tabIndex={-1}
         className='rp-shadow-xl fixed inset-2 flex flex-col overflow-hidden rounded-[var(--rp-radius)] bg-neutral-900 text-white ring-1 ring-white/10 focus:outline-none sm:static sm:max-h-[88vh] sm:w-full sm:max-w-3xl'
       >
@@ -531,11 +537,11 @@ export function AnswerJourney({
                         <path d='M6.5 4.3l9 5.7-9 5.7z' />
                       </svg>
                     )}
-                  {playing ? 'Pause' : 'Play'}
+                  {playing ? ui('Pause') : ui('Play')}
                 </button>
               )
               : null}
-            <IconButton label='Close the journey' onClick={onClose}>
+            <IconButton label={ui('Close the journey')} onClick={onClose}>
               <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
                 <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
               </svg>
@@ -549,17 +555,18 @@ export function AnswerJourney({
             ? (
               <div className='px-6 py-16 text-center'>
                 <SparkleMark />
-                <h2 className='rp-display mt-5 text-2xl text-white'>Nothing to walk yet</h2>
+                <h2 className='rp-display mt-5 text-2xl text-white'>{ui('Nothing to walk yet')}</h2>
                 <p className='mx-auto mt-3 max-w-sm text-sm leading-relaxed text-white/60'>
-                  This answer did not come back with any retrieved sources, so there is no trail to
-                  follow.
+                  {ui(
+                    'This answer did not come back with any retrieved sources, so there is no trail to follow.',
+                  )}
                 </p>
                 <button
                   type='button'
                   onClick={onClose}
                   className='rp-focus-inverse mt-6 inline-flex items-center rounded-[var(--rp-radius-btn)] bg-white px-5 py-2 text-sm font-semibold text-neutral-900 transition-colors duration-150 hover:bg-white/90'
                 >
-                  Close
+                  {ui('Close')}
                 </button>
               </div>
             )
@@ -570,12 +577,15 @@ export function AnswerJourney({
                   <SparkleMark />
                 </div>
                 <h2 className='rp-display mt-5 text-2xl text-white sm:text-3xl'>
-                  How this answer was built
+                  {ui('How this answer was built')}
                 </h2>
                 <p className='mx-auto mt-3 max-w-md text-sm leading-relaxed text-white/60'>
-                  We grounded your answer in {total}{' '}
-                  {total === 1 ? 'source' : 'sources'}. Let&rsquo;s walk them - strongest match
-                  first - and ask each one how it relates.
+                  {ui(
+                    total === 1
+                      ? 'We grounded your answer in {count} source. Let’s walk them - strongest match first - and ask each one how it relates.'
+                      : 'We grounded your answer in {count} sources. Let’s walk them - strongest match first - and ask each one how it relates.',
+                    { count: total },
+                  )}
                 </p>
                 {query
                   ? (
@@ -589,7 +599,7 @@ export function AnswerJourney({
                   onClick={() => goTo(0)}
                   className='rp-focus-inverse mt-8 inline-flex items-center gap-2 rounded-[var(--rp-radius-btn)] bg-white px-5 py-2.5 text-sm font-semibold text-neutral-900 transition-transform duration-150 hover:-translate-y-px'
                 >
-                  Begin the journey
+                  {ui('Begin the journey')}
                   <ChevronRight />
                 </button>
               </div>
@@ -600,11 +610,12 @@ export function AnswerJourney({
                 <div className='text-center'>
                   <SparkleMark />
                   <h2 className='rp-display mt-4 text-2xl text-white sm:text-3xl'>
-                    That&rsquo;s the trail
+                    {ui('That’s the trail')}
                   </h2>
                   <p className='mx-auto mt-2 max-w-md text-sm leading-relaxed text-white/60'>
-                    Every source behind the answer, ranked by how strongly it matched. Open any of
-                    them to read it in full.
+                    {ui(
+                      'Every source behind the answer, ranked by how strongly it matched. Open any of them to read it in full.',
+                    )}
                   </p>
                 </div>
 
@@ -633,7 +644,7 @@ export function AnswerJourney({
                                   aria-hidden='true'
                                   className='h-1.5 w-1.5 rounded-full bg-emerald-400'
                                 />
-                                Cited in the answer
+                                {ui('Cited in the answer')}
                               </span>
                             )
                             : null}
@@ -645,7 +656,9 @@ export function AnswerJourney({
                           >
                             {Math.round(stop.score * 100)}%
                           </span>
-                          <span className='block text-[11px] text-white/40'>confidence</span>
+                          <span className='block text-[11px] text-white/40'>
+                            {ui('confidence')}
+                          </span>
                         </span>
                       </Link>
                     </li>
@@ -673,14 +686,14 @@ export function AnswerJourney({
                       <path d='M4 10a6 6 0 106-6' />
                       <path d='M4 5.5V10h4.5' />
                     </svg>
-                    Replay
+                    {ui('Replay')}
                   </button>
                   <button
                     type='button'
                     onClick={onClose}
                     className='rp-focus-inverse inline-flex items-center rounded-[var(--rp-radius-btn)] bg-white px-5 py-2 text-sm font-semibold text-neutral-900 transition-colors duration-150 hover:bg-white/90'
                   >
-                    Done
+                    {ui('Done')}
                   </button>
                 </div>
               </div>
@@ -705,7 +718,7 @@ export function AnswerJourney({
                           aria-hidden='true'
                           className='h-1.5 w-1.5 rounded-full bg-emerald-400'
                         />
-                        Cited in the answer
+                        {ui('Cited in the answer')}
                       </span>
                     )
                     : null}
@@ -742,7 +755,7 @@ export function AnswerJourney({
                 {/* Stop body */}
                 <div className='space-y-6 px-5 py-5 sm:px-6 sm:py-6'>
                   <section>
-                    <p className='rp-eyebrow text-white/40'>What we found here</p>
+                    <p className='rp-eyebrow text-white/40'>{ui('What we found here')}</p>
                     {current.quote
                       ? (
                         <blockquote
@@ -754,15 +767,18 @@ export function AnswerJourney({
                       )
                       : (
                         <p className='mt-2 text-sm leading-relaxed text-white/45'>
-                          This source matched the question overall, but the retrieval step did not
-                          single out one passage.
+                          {ui(
+                            'This source matched the question overall, but the retrieval step did not single out one passage.',
+                          )}
                         </p>
                       )}
                   </section>
 
                   <section>
                     <p className='rp-eyebrow text-white/40'>
-                      {query ? 'How this relates to your question' : 'What this source contributes'}
+                      {query
+                        ? ui('How this relates to your question')
+                        : ui('What this source contributes')}
                     </p>
                     {relationText
                       ? (
@@ -781,8 +797,9 @@ export function AnswerJourney({
                       : relationStatus === 'error'
                       ? (
                         <p className='mt-2 text-sm leading-relaxed text-white/45'>
-                          We could not reach the answer service for this source. The passage above
-                          is still what matched.
+                          {ui(
+                            'We could not reach the answer service for this source. The passage above is still what matched.',
+                          )}
                         </p>
                       )
                       : (
@@ -791,7 +808,7 @@ export function AnswerJourney({
                             aria-hidden='true'
                             className='h-3.5 w-3.5 animate-spin rounded-full border border-white/20 border-t-white/70'
                           />
-                          Asking this source&hellip;
+                          {ui('Asking this source…')}
                         </p>
                       )}
                   </section>
@@ -801,7 +818,7 @@ export function AnswerJourney({
                     onClick={onClose}
                     className='rp-focus-inverse inline-flex items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-3.5 py-1.5 text-xs font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-colors duration-150 hover:bg-white/10 hover:text-white'
                   >
-                    View in library
+                    {ui('View in library')}
                     <ChevronRight />
                   </Link>
                 </div>
@@ -840,7 +857,7 @@ export function AnswerJourney({
 
               <div className='mt-3 flex items-center justify-between gap-3'>
                 <IconButton
-                  label='Previous source'
+                  label={ui('Previous source')}
                   onClick={() => goTo(index - 1)}
                   disabled={index <= -1}
                 >
@@ -850,7 +867,7 @@ export function AnswerJourney({
                 <div
                   className='rp-no-scrollbar flex min-w-0 items-center justify-center gap-1.5 overflow-x-auto px-1'
                   role='group'
-                  aria-label='Sources in this journey'
+                  aria-label={ui('Sources in this journey')}
                 >
                   {stops.map((stop, stopIndex) => {
                     const active = stopIndex === index
@@ -859,7 +876,10 @@ export function AnswerJourney({
                         key={stop.resourceId}
                         type='button'
                         aria-current={active ? 'true' : undefined}
-                        aria-label={`Source ${stopIndex + 1}: ${stop.title}`}
+                        aria-label={ui('Source {value1}: {value2}', {
+                          value1: stopIndex + 1,
+                          value2: stop.title,
+                        })}
                         onClick={() => goTo(stopIndex)}
                         className='rp-focus-inverse group flex shrink-0 items-center rounded-full p-2'
                       >
@@ -875,7 +895,7 @@ export function AnswerJourney({
                 </div>
 
                 <IconButton
-                  label='Next source'
+                  label={ui('Next source')}
                   onClick={() => goTo(index + 1)}
                   disabled={index >= total}
                 >

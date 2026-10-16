@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 /**
  * How a cited answer reads on the page, shared by Ask and Search so the two
  * surfaces can never mark an answer differently: linked `[n]` markers, the
@@ -29,6 +31,8 @@ export interface InlineOptions {
   streaming: boolean
   /** Added to a marker's tooltip, to say where else the reader finds the source. */
   citationHint?: string
+  /** Application-copy translator; source text and citation titles remain verbatim. */
+  ui?: ResearchUi
 }
 
 /**
@@ -45,7 +49,7 @@ export function renderCitationMarkers(
   keyPrefix: string,
   options: InlineOptions,
 ): ReactNode[] {
-  const { unsupported, streaming, citationHint } = options
+  const { unsupported, streaming, citationHint, ui = englishResearchUi } = options
   // Bracketed runs are either the answer's own citation markers (bound to a
   // source below) or a paper's citation numbers copied verbatim ("[16,17]"),
   // which mean nothing here and are dropped.
@@ -65,7 +69,9 @@ export function renderCitationMarkers(
           key={key}
           className='rounded-[var(--rp-radius-chip)] px-0.5 underline decoration-dotted decoration-[var(--rp-warn-ink)] underline-offset-2'
           style={{ backgroundColor: 'var(--rp-warn-bg)', color: 'var(--rp-warn-ink)' }}
-          title='Not found beside this claim in the cited passages - verify against the source'
+          title={ui(
+            'Not found beside this claim in the cited passages - verify against the source',
+          )}
         >
           {segment}
         </mark>
@@ -85,10 +91,15 @@ export function renderCitationMarkers(
             to={citationHref(slug, citation.resourceId, matchedPassage, source?.matchedPage)}
             className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
-            aria-label={`Source ${citationIndex}, ${citation.title}`}
-            title={`Source ${citationIndex} - ${citation.title}${
-              citationHint ? `; ${citationHint}` : ''
-            }`}
+            aria-label={ui('Source {index}, {title}', {
+              index: citation.index,
+              title: citation.title,
+            })}
+            title={ui('Source {index} - {title}{hint}', {
+              index: citation.index,
+              title: citation.title,
+              hint: citationHint ? `; ${ui(citationHint)}` : '',
+            })}
           >
             [{citationIndex}]
           </Link>
@@ -161,7 +172,9 @@ export function AnswerText({
   citationHint?: string
   bodyClassName?: string
 }) {
+  const { ui } = usePortalLocale()
   const options: InlineOptions = {
+    ui,
     unsupported: unsupportedFigurePattern(audit),
     streaming,
     ...(citationHint ? { citationHint } : {}),
@@ -178,7 +191,8 @@ export function AnswerText({
 
 /** What the audit checked, as a badge whose tooltip names what it found and removed. */
 export function AuditBadge({ audit, className = '' }: { audit?: AnswerAudit; className?: string }) {
-  const badge = auditBadge(audit)
+  const { ui } = usePortalLocale()
+  const badge = auditBadge(audit, ui)
   if (!badge) return null
   return (
     <span
@@ -199,6 +213,7 @@ export function TruncatedNotice(
     style?: CSSProperties
   },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <div
       className={`flex flex-wrap items-center justify-between gap-2 rounded-[var(--rp-radius)] border p-3 ${className}`}
@@ -207,15 +222,16 @@ export function TruncatedNotice(
       style={{ ...style, borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
     >
       <p className='text-xs leading-relaxed text-[var(--rp-warn-ink)]'>
-        The answer stopped mid-sentence. The incomplete sentence was removed; what remains is
-        complete and cited. Ask again for the rest.
+        {ui(
+          'The answer stopped mid-sentence. The incomplete sentence was removed; what remains is complete and cited. Ask again for the rest.',
+        )}
       </p>
       <button
         type='button'
         onClick={onAskAgain}
         className='rp-btn rp-btn-outline h-8 shrink-0 px-2 text-xs'
       >
-        Ask again
+        {ui('Ask again')}
       </button>
     </div>
   )

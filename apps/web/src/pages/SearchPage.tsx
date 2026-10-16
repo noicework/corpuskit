@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { StaleAuthorityError } from '../api/access-lifecycle.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -53,12 +55,17 @@ function isAttachment(resource: { title: string; format?: string }): boolean {
     .test(resource.title)
 }
 
-export function authorCount(resources: readonly { title: string; format?: string }[]): string {
+export function authorCount(
+  resources: readonly { title: string; format?: string }[],
+  ui: ResearchUi = englishResearchUi,
+): string {
   const attachments = resources.filter(isAttachment).length
   const articles = resources.length - attachments
-  const parts = [`${articles} ${articles === 1 ? 'article' : 'articles'}`]
+  const parts = [ui(articles === 1 ? '{count} article' : '{count} articles', { count: articles })]
   if (attachments > 0) {
-    parts.push(`${attachments} ${attachments === 1 ? 'supplement' : 'supplements'}`)
+    parts.push(
+      ui(attachments === 1 ? '{count} supplement' : '{count} supplements', { count: attachments }),
+    )
   }
   return parts.join(' · ')
 }
@@ -90,20 +97,23 @@ function formatYear(iso: string): string | null {
 function RelevanceMeter(
   { relevance, referenceChunk }: { relevance: number; referenceChunk?: boolean },
 ) {
+  const { ui } = usePortalLocale()
   const percent = Math.round(relevance * 100)
   const weak = relevance < WEAK_MATCH_THRESHOLD
 
   return (
     <div className='flex shrink-0 items-center gap-2'>
-      {referenceChunk ? <span className='text-[11px] text-ink-3'>reference list</span> : null}
-      {weak ? <span className='text-[11px] text-ink-3'>weak match</span> : null}
+      {referenceChunk
+        ? <span className='text-[11px] text-ink-3'>{ui('reference list')}</span>
+        : null}
+      {weak ? <span className='text-[11px] text-ink-3'>{ui('weak match')}</span> : null}
       <div
         className='h-1 w-20 overflow-hidden rounded-[var(--rp-radius)] bg-surface-3'
         role='progressbar'
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label='Relevance'
+        aria-label={ui('Relevance')}
       >
         <div
           className='h-full'
@@ -149,9 +159,10 @@ function ResultCard(
     lookup?: boolean
   },
 ) {
+  const { ui } = usePortalLocale()
   const keyFacts = resource.keyFacts.slice(0, 3)
   const year = resource.published ? formatYear(resource.published) : null
-  const byline = bylineFor(resource)
+  const byline = bylineFor(resource, ui)
   const title = presentTitle(resource.title)
   const summary = resource.summary ? plainDashes(resource.summary) : ''
   const snippet = resource.matchedPassage ? scrubSnippetBoilerplate(resource.matchedPassage) : ''
@@ -182,7 +193,7 @@ function ResultCard(
                 /* The kind chip is dropped when it only restates the type badge
                 * (a `document` typed "Report" filed under kind "report"). */
               }
-              {resource.kind && !sameLabel(kindLabel(resource.kind), typeLabel(resource.type))
+              {resource.kind && !sameLabel(kindLabel(resource.kind), typeLabel(resource.type, ui))
                 ? <span className='rp-badge rp-badge-quiet'>{kindLabel(resource.kind)}</span>
                 : null}
               {citedIndex !== undefined
@@ -191,7 +202,7 @@ function ResultCard(
                     className='rp-badge font-semibold text-[var(--rp-on-accent)]'
                     style={{ backgroundColor: 'var(--rp-accent)', borderColor: 'var(--rp-accent)' }}
                   >
-                    Cited [{citedIndex}]
+                    {ui('Cited [{index}]', { index: citedIndex ?? '' })}
                   </span>
                 )
                 : null}
@@ -238,7 +249,7 @@ function ResultCard(
           {keyFacts.length > 0
             ? (
               <div className='mt-3.5'>
-                <p className='rp-eyebrow text-ink-3'>Key facts</p>
+                <p className='rp-eyebrow text-ink-3'>{ui('Key facts')}</p>
                 <ol className='mt-1.5 space-y-1'>
                   {keyFacts.map((fact, index) => (
                     <li key={index} className='flex gap-2 text-sm text-ink-2'>
@@ -305,6 +316,7 @@ function SummaryModal({
   onClose: () => void
   onRetry: () => void
 }) {
+  const { ui } = usePortalLocale()
   const [copied, setCopied] = useState(false)
   const dialogRef = useRef<HTMLDivElement | null>(null)
 
@@ -355,15 +367,15 @@ function SummaryModal({
         tabIndex={-1}
         role='dialog'
         aria-modal='true'
-        aria-label='Summary'
+        aria-label={ui('Summary')}
         className='rp-card rp-shadow-xl flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden'
       >
         <div className='flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3.5'>
-          <h2 className='text-sm font-semibold text-ink'>Summary</h2>
+          <h2 className='text-sm font-semibold text-ink'>{ui('Summary')}</h2>
           <button
             type='button'
             onClick={onClose}
-            aria-label='Close'
+            aria-label={ui('Close')}
             className='rp-btn rp-btn-ghost h-8 w-8 !px-0'
           >
             <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3.5 w-3.5'>
@@ -377,7 +389,12 @@ function SummaryModal({
             ? (
               <div>
                 <p className='text-sm text-ink-2'>
-                  Reading {titles.length} {titles.length === 1 ? 'document' : 'documents'}…
+                  {ui(
+                    titles.length === 1
+                      ? 'Reading {count} document…'
+                      : 'Reading {count} documents…',
+                    { count: titles.length },
+                  )}
                 </p>
                 <div className='mt-3 space-y-2' aria-hidden='true'>
                   <div className='rp-shimmer bg-surface-3 h-3.5 w-full rounded-[var(--rp-radius)]' />
@@ -398,13 +415,13 @@ function SummaryModal({
         {!loading && !error
           ? (
             <div className='shrink-0 border-t border-line px-5 py-3.5'>
-              <p className='rp-eyebrow text-ink-3'>Sources</p>
+              <p className='rp-eyebrow text-ink-3'>{ui('Sources')}</p>
               <ul className='mt-1.5 max-h-24 space-y-0.5 overflow-y-auto text-xs text-ink-3'>
                 {titles.map((title, index) => <li key={index} className='truncate'>{title}</li>)}
               </ul>
               <div className='mt-3 flex justify-end'>
                 <button type='button' onClick={copy} className='rp-btn rp-btn-outline'>
-                  {copied ? 'Copied' : 'Copy'}
+                  {copied ? ui('Copied') : ui('Copy')}
                 </button>
               </div>
             </div>
@@ -498,11 +515,12 @@ function WatchStrip(
     canWatch: boolean
   },
 ) {
+  const { ui } = usePortalLocale()
   if (watches.length === 0) return null
 
   return (
     <div className='mb-4 flex flex-wrap items-center gap-1.5'>
-      <span className='rp-eyebrow shrink-0 text-ink-3'>Watches</span>
+      <span className='rp-eyebrow shrink-0 text-ink-3'>{ui('Watches')}</span>
       {watches.map((watch) => (
         <div
           key={watch.id}
@@ -520,9 +538,9 @@ function WatchStrip(
                     role='status'
                     className='h-1.5 w-1.5 shrink-0 rounded-full'
                     style={{ backgroundColor: 'var(--rp-accent)' }}
-                    aria-label='New results'
+                    aria-label={ui('New results')}
                   />
-                  <span className='sr-only'>has new results</span>
+                  <span className='sr-only'>{ui('has new results')}</span>
                 </>
               )
               : null}
@@ -536,7 +554,7 @@ function WatchStrip(
                   event.stopPropagation()
                   onDelete(watch.id)
                 }}
-                aria-label={`Remove saved search "${watch.query}"`}
+                aria-label={ui('Remove saved search "{value1}"', { value1: watch.query })}
                 className='rp-focus flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
               >
                 <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3 w-3'>
@@ -552,6 +570,7 @@ function WatchStrip(
 }
 
 export function SearchPage() {
+  const { ui } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const access = useAccess()
   const authority = access.controller.context
@@ -644,7 +663,7 @@ export function SearchPage() {
   }
 
   const topicLabel = (id: string) => config.topics.find((topic) => topic.id === id)?.label ?? id
-  const kindLabel = (id: string) => prettyLabel(id, config.branding.organisation)
+  const kindLabel = (id: string) => prettyLabel(id, config.branding.organisation, ui)
 
   // The same aggregation, under the same query key, as the Library rail.
   const { data: facets } = useQuery({
@@ -771,7 +790,7 @@ export function SearchPage() {
     if (strength === 'strong') {
       chips.push({
         key: 'strength',
-        label: 'Strong matches only',
+        label: ui('Strong matches only'),
         onRemove: () => setStrength('all'),
       })
     }
@@ -872,16 +891,18 @@ export function SearchPage() {
         * count rides on the heading line the way the library's total does. */
       }
       <div className='flex flex-wrap items-baseline justify-between gap-2'>
-        <h1 className='rp-display text-2xl text-ink'>Search</h1>
+        <h1 className='rp-display text-2xl text-ink'>{ui('Search')}</h1>
         {hasQuery && !isLoading && !isError && results
           ? (
             <p className='text-sm font-medium tabular-nums text-ink-3'>
               {results.lookup?.kind === 'author' && results.lookup.matched
-                ? authorCount(filteredResults)
-                : `${filteredResults.length} ${
-                  filteredResults.length === 1 ? 'resource' : 'resources'
-                }`}
-              {answerMode && citedResults.length > 0 ? ` · ${citedResults.length} cited` : ''}
+                ? authorCount(filteredResults, ui)
+                : ui(filteredResults.length === 1 ? '{count} resource' : '{count} resources', {
+                  count: filteredResults.length,
+                })}
+              {answerMode && citedResults.length > 0
+                ? ui(' · {value1} cited', { value1: citedResults.length })
+                : ''}
             </p>
           )
           : null}
@@ -896,7 +917,7 @@ export function SearchPage() {
         }
         <SearchField
           id='search-query'
-          label={`Search ${config.branding.productName}`}
+          label={ui('Search {value1}', { value1: config.branding.productName })}
           value={draft}
           onChange={setDraft}
           onSubmit={submitQuery}
@@ -907,7 +928,7 @@ export function SearchPage() {
         <div
           className='inline-flex overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
           role='radiogroup'
-          aria-label='Retrieval mode'
+          aria-label={ui('Retrieval mode')}
         >
           {MODES.map((option, index) => {
             const active = mode === option.value
@@ -928,7 +949,7 @@ export function SearchPage() {
                 }`}
                 style={active ? { backgroundColor: 'var(--rp-primary)' } : undefined}
               >
-                {option.label}
+                {ui(option.label)}
               </button>
             )
           })}
@@ -946,7 +967,8 @@ export function SearchPage() {
           className='rp-chip h-9 sm:h-7'
           aria-expanded={filtersOpen}
         >
-          Filters{activeFilters.length > 0 ? ` (${activeFilters.length})` : ''}
+          {ui('Filters')}
+          {activeFilters.length > 0 ? ` (${activeFilters.length})` : ''}
         </button>
 
         {
@@ -966,7 +988,7 @@ export function SearchPage() {
                 view={libraryView}
               />
               <label htmlFor='search-sort' className='text-xs font-medium text-ink-3'>
-                Sort
+                {ui('Sort')}
               </label>
               <select
                 id='search-sort'
@@ -975,7 +997,7 @@ export function SearchPage() {
                 className='rp-focus rp-select rounded-[var(--rp-radius-input)] border border-line bg-surface px-2.5 py-1.5 text-xs text-ink'
               >
                 {SORT_VALUES.map((value) => (
-                  <option key={value} value={value}>{SORT_OPTIONS[value].label}</option>
+                  <option key={value} value={value}>{ui(SORT_OPTIONS[value].label)}</option>
                 ))}
               </select>
             </div>
@@ -990,11 +1012,11 @@ export function SearchPage() {
               onClick={() => runSearch(q, !answerMode)}
               aria-pressed={!answerMode}
               title={answerMode
-                ? 'Hide the AI answer and show only the matching resources'
-                : 'Show a cited AI answer above the results again'}
+                ? ui('Hide the AI answer and show only the matching resources')
+                : ui('Show a cited AI answer above the results again')}
               className={`rp-chip h-9 sm:h-7 ${!answerMode ? 'rp-chip-active' : ''}`}
             >
-              Results only
+              {ui('Results only')}
             </button>
           )
           : null}
@@ -1005,9 +1027,11 @@ export function SearchPage() {
               ? (
                 <span
                   className='rp-badge rp-badge-quiet'
-                  title='This search is in your Watches - it is re-checked daily and a dot appears in the strip when new results arrive.'
+                  title={ui(
+                    'This search is in your Watches - it is re-checked daily and a dot appears in the strip when new results arrive.',
+                  )}
                 >
-                  In your Watches
+                  {ui('In your Watches')}
                 </span>
               )
               : canWatch
@@ -1018,10 +1042,10 @@ export function SearchPage() {
                     if (permits('portal.watch')) addWatchMutation.mutate()
                   }}
                   disabled={addWatchMutation.isPending}
-                  title='Get notified here when new results appear for this search'
+                  title={ui('Get notified here when new results appear for this search')}
                   className='rp-chip h-9 sm:h-7'
                 >
-                  {addWatchMutation.isPending ? 'Adding…' : 'Add to Watches'}
+                  {addWatchMutation.isPending ? ui('Adding…') : ui('Add to Watches')}
                 </button>
               )
               : null
@@ -1039,7 +1063,7 @@ export function SearchPage() {
                   to={`/t/${config.slug}/ask?ask=${encodeURIComponent(q)}`}
                   className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
                 >
-                  Ask about these results
+                  {ui('Ask about these results')}
                 </Link>
               )
               : null}
@@ -1049,8 +1073,10 @@ export function SearchPage() {
       {unmatchedAuthor && results
         ? (
           <p className='mt-4 text-sm text-ink-2' role='status'>
-            No author named {results.lookup?.value}{' '}
-            is on this collection's papers. These are the resources retrieval found for the name.
+            {ui(
+              'No author named {name} is on this collection’s papers. These are the resources retrieval found for the name.',
+              { name: results.lookup?.value ?? '' },
+            )}
           </p>
         )
         : null}
@@ -1076,7 +1102,7 @@ export function SearchPage() {
               ? (
                 <div>
                   <div className='flex items-center justify-between gap-2'>
-                    <p className='rp-eyebrow text-ink-3'>Topics</p>
+                    <p className='rp-eyebrow text-ink-3'>{ui('Topics')}</p>
                     {selectedTopics.length > 0
                       ? (
                         <button
@@ -1084,7 +1110,7 @@ export function SearchPage() {
                           onClick={() => updateParams({ topics: null })}
                           className='text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                         >
-                          Clear
+                          {ui('Clear')}
                         </button>
                       )
                       : null}
@@ -1126,7 +1152,7 @@ export function SearchPage() {
               ? (
                 <div className={config.topics.length > 0 ? 'mt-5 border-t border-line pt-4' : ''}>
                   <div className='flex items-center justify-between gap-2'>
-                    <p className='rp-eyebrow text-ink-3'>Kind</p>
+                    <p className='rp-eyebrow text-ink-3'>{ui('Kind')}</p>
                     {selectedKinds.length > 0
                       ? (
                         <button
@@ -1134,7 +1160,7 @@ export function SearchPage() {
                           onClick={() => updateParams({ kinds: null })}
                           className='text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                         >
-                          Clear
+                          {ui('Clear')}
                         </button>
                       )
                       : null}
@@ -1177,11 +1203,11 @@ export function SearchPage() {
                 ? 'mt-5 border-t border-line pt-4'
                 : ''}
             >
-              <p className='rp-eyebrow text-ink-3'>Match strength</p>
+              <p className='rp-eyebrow text-ink-3'>{ui('Match strength')}</p>
               <div
                 className='mt-2.5 inline-flex overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
                 role='radiogroup'
-                aria-label='Match strength'
+                aria-label={ui('Match strength')}
               >
                 {STRENGTH_OPTIONS.map((option, index) => {
                   const active = strength === option.value
@@ -1201,13 +1227,13 @@ export function SearchPage() {
                       }`}
                       style={active ? { backgroundColor: 'var(--rp-primary)' } : undefined}
                     >
-                      {option.label}
+                      {ui(option.label)}
                     </button>
                   )
                 })}
               </div>
               <p className='mt-1.5 text-xs text-ink-3'>
-                Strong matches score 60% or higher on the calibrated relevance scale.
+                {ui('Strong matches score 60% or higher on the calibrated relevance scale.')}
               </p>
             </div>
           </div>
@@ -1225,7 +1251,7 @@ export function SearchPage() {
           {hasQuery
             ? (
               <p className='-mt-2 mb-4 text-xs text-ink-3'>
-                Watches are re-checked daily - a dot appears here when results change.
+                {ui('Watches are re-checked daily - a dot appears here when results change.')}
               </p>
             )
             : null}
@@ -1260,7 +1286,7 @@ export function SearchPage() {
           {hasQuery && isError
             ? (
               <ErrorCard
-                message={error instanceof Error ? error.message : 'Could not run this search.'}
+                message={error instanceof Error ? error.message : ui('Could not run this search.')}
                 onRetry={() => void refetch()}
               />
             )
@@ -1290,14 +1316,18 @@ export function SearchPage() {
                 {results.resources.length === 0 && results.lookup && !results.lookup.matched
                   ? (
                     <EmptyState
-                      title='No resource carries this identifier'
-                      description={`The corpus holds nothing with the ${
-                        results.lookup.kind === 'doi'
-                          ? 'DOI'
-                          : results.lookup.kind === 'author'
-                          ? 'author'
-                          : results.lookup.kind.toUpperCase()
-                      } ${results.lookup.value}. Identifiers are matched exactly against each paper's record, never against reference lists.`}
+                      title={ui('No resource carries this identifier')}
+                      description={ui(
+                        "The corpus holds nothing with the {value1} {value2}. Identifiers are matched exactly against each paper's record, never against reference lists.",
+                        {
+                          value1: results.lookup.kind === 'doi'
+                            ? 'DOI'
+                            : results.lookup.kind === 'author'
+                            ? 'author'
+                            : results.lookup.kind.toUpperCase(),
+                          value2: results.lookup.value,
+                        },
+                      )}
                     />
                   )
                   : results.resources.length === 0
@@ -1308,36 +1338,44 @@ export function SearchPage() {
                     lookupOnly
                       ? (
                         <EmptyState
-                          title={`No resource contains "${trimmedQuery}"`}
-                          description='An exact lookup returns only documents that carry every term. Ask searches by meaning and can find related work instead.'
+                          title={ui('No resource contains "{trimmedQuery}"', {
+                            trimmedQuery: trimmedQuery,
+                          })}
+                          description={ui(
+                            'An exact lookup returns only documents that carry every term. Ask searches by meaning and can find related work instead.',
+                          )}
                         >
                           <Link
                             to={`/t/${config.slug}/ask?ask=${encodeURIComponent(trimmedQuery)}`}
                             className='rp-btn rp-btn-primary'
                           >
-                            Ask this instead
+                            {ui('Ask this instead')}
                           </Link>
                         </EmptyState>
                       )
                       : (
                         <EmptyState
-                          title='No resources matched that search'
-                          description='Try broader terms, a different retrieval mode, or fewer topic filters.'
+                          title={ui('No resources matched that search')}
+                          description={ui(
+                            'Try broader terms, a different retrieval mode, or fewer topic filters.',
+                          )}
                         />
                       )
                   )
                   : filteredResults.length === 0
                   ? (
                     <EmptyState
-                      title='No results match these filters'
-                      description='The search found matches, but none clear the current filters.'
+                      title={ui('No results match these filters')}
+                      description={ui(
+                        'The search found matches, but none clear the current filters.',
+                      )}
                     >
                       <button
                         type='button'
                         onClick={() => updateParams({ topics: null, strength: null })}
                         className='rp-btn rp-btn-outline'
                       >
-                        Clear filters
+                        {ui('Clear filters')}
                       </button>
                     </EmptyState>
                   )
@@ -1349,16 +1387,18 @@ export function SearchPage() {
                             <div
                               className='inline-flex overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
                               role='radiogroup'
-                              aria-label='Results view'
+                              aria-label={ui('Results view')}
                             >
                               {[
                                 {
                                   value: 'resources' as const,
-                                  label: `Retrieved (${filteredResults.length})`,
+                                  label: ui('Retrieved ({count})', {
+                                    count: filteredResults.length,
+                                  }),
                                 },
                                 {
                                   value: 'citations' as const,
-                                  label: `Cited (${citedResults.length})`,
+                                  label: ui('Cited ({count})', { count: citedResults.length }),
                                 },
                               ].map((option, index) => {
                                 const active = resultView === option.value
@@ -1380,7 +1420,7 @@ export function SearchPage() {
                                       ? { backgroundColor: 'var(--rp-primary)' }
                                       : undefined}
                                   >
-                                    {option.label}
+                                    {ui(option.label)}
                                   </button>
                                 )
                               })}
@@ -1388,7 +1428,7 @@ export function SearchPage() {
                           )
                           : (
                             <p className='text-xs font-medium text-ink-3'>
-                              Every match, most relevant first
+                              {ui('Every match, most relevant first')}
                             </p>
                           )}
                         {canGenerate
@@ -1398,7 +1438,7 @@ export function SearchPage() {
                               onClick={summariseResults}
                               className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                             >
-                              Summarise these results
+                              {ui('Summarise these results')}
                             </button>
                           )
                           : null}
@@ -1408,17 +1448,17 @@ export function SearchPage() {
                         ? (
                           <div className='mt-2'>
                             <EmptyState
-                              title='No results have been cited yet'
+                              title={ui('No results have been cited yet')}
                               description={answer.citations.length > 0
-                                ? 'The AI answer cited resources outside the current filters.'
-                                : 'The AI answer above has not cited any of these results.'}
+                                ? ui('The AI answer cited resources outside the current filters.')
+                                : ui('The AI answer above has not cited any of these results.')}
                             >
                               <button
                                 type='button'
                                 onClick={() => setResultView('resources')}
                                 className='rp-btn rp-btn-outline'
                               >
-                                Show all resources
+                                {ui('Show all resources')}
                               </button>
                             </EmptyState>
                           </div>
@@ -1446,7 +1486,7 @@ export function SearchPage() {
                 {results.relatedQuestions.length > 0
                   ? (
                     <div className='mt-8'>
-                      <p className='rp-eyebrow text-ink-3'>People also ask</p>
+                      <p className='rp-eyebrow text-ink-3'>{ui('People also ask')}</p>
                       <div className='mt-2.5 grid gap-1.5 sm:grid-cols-2 2xl:grid-cols-3'>
                         {results.relatedQuestions.map((question) => (
                           <button

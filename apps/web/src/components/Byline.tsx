@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 /**
  * "Karoly PJ, Freestone DR, Eden D et al. · Frontiers in Neurology · 2021"
  * - the line a clinician or researcher triages by. Built only from stored
@@ -5,12 +7,13 @@
  */
 export function bylineFor(
   resource: { authors?: string[]; journal?: string; year?: string; published?: string },
+  ui: ResearchUi = englishResearchUi,
 ): string[] | null {
   const parts: string[] = []
   const authors = resource.authors ?? []
   if (authors.length > 0) {
     const shown = authors.slice(0, 3).join(', ')
-    parts.push(authors.length > 3 ? `${shown} et al.` : shown)
+    parts.push(authors.length > 3 ? ui('{authors} et al.', { authors: shown }) : shown)
   }
   if (resource.journal) parts.push(resource.journal)
   const year = resource.year || (resource.published ? resource.published.slice(0, 4) : '')
@@ -21,6 +24,7 @@ export function bylineFor(
 export function Byline(
   { parts, doi, className = '' }: { parts: string[]; doi?: string; className?: string },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <p
       className={`mt-1 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-xs text-ink-3 ${className}`}
@@ -41,7 +45,8 @@ export function Byline(
             style={{ color: 'var(--rp-accent-fg)' }}
             onClick={(event) => event.stopPropagation()}
           >
-            doi:{doi}
+            {ui('doi:')}
+            {doi}
           </a>
         )
         : null}

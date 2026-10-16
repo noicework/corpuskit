@@ -333,6 +333,7 @@ function DocumentReader(
     flashIndex: number | null
   },
 ) {
+  const { ui } = usePortalLocale()
   const highlightRef = useRef<HTMLElement | null>(null)
   const needle = passageNeedle(passage)
   const highlightIndex = needle
@@ -378,7 +379,9 @@ function DocumentReader(
   }, [flashIndex])
 
   if (blocks.length === 0) {
-    return <p className='text-sm text-ink-3'>No readable text is available for this document.</p>
+    return (
+      <p className='text-sm text-ink-3'>{ui('No readable text is available for this document.')}</p>
+    )
   }
 
   const titleNorm = normalise(title)
@@ -413,10 +416,13 @@ function DocumentReader(
               onClick={() => setBudget((current) => current + READER_STEP_CHARS)}
               className='rp-btn rp-btn-outline'
             >
-              Show more
+              {ui('Show more')}
             </button>
             <span className='text-xs tabular-nums text-ink-3'>
-              Showing {shownChars.toLocaleString()} of {totalChars.toLocaleString()} characters
+              {ui('Showing {shown} of {total} characters', {
+                shown: shownChars.toLocaleString(),
+                total: totalChars.toLocaleString(),
+              })}
             </span>
           </div>
         )
@@ -437,6 +443,7 @@ function TranscriptPanel(
     passage: string | null
   },
 ) {
+  const { ui } = usePortalLocale()
   const [search, setSearch] = useState('')
   const rowRefs = useRef(new Map<number, HTMLButtonElement>())
 
@@ -475,23 +482,23 @@ function TranscriptPanel(
 
   return (
     <div className='rp-card mt-5 p-5'>
-      <PanelHeading>Transcript</PanelHeading>
+      <PanelHeading>{ui('Transcript')}</PanelHeading>
 
       <label htmlFor='transcript-search' className='sr-only'>
-        Search the transcript
+        {ui('Search the transcript')}
       </label>
       <input
         id='transcript-search'
         type='text'
         value={search}
         onChange={(event) => setSearch(event.target.value)}
-        placeholder='Search the transcript'
+        placeholder={ui('Search the transcript')}
         className='rp-input mt-3'
       />
 
       <div className='mt-3 max-h-96 overflow-y-auto rounded-[var(--rp-radius)] border border-line'>
         {rows.length === 0
-          ? <p className='p-4 text-sm text-ink-3'>No matching transcript segments.</p>
+          ? <p className='p-4 text-sm text-ink-3'>{ui('No matching transcript segments.')}</p>
           : (
             <ul className='divide-y divide-[var(--rp-line)]'>
               {rows.map(({ segment, index }) => {
@@ -536,9 +543,10 @@ function TranscriptPanel(
  * it without scrolling past the embed first.
  */
 function MatchedPassageCard({ passage, page }: { passage: string; page: number | null }) {
+  const { ui } = usePortalLocale()
   return (
     <div className='rp-card p-4'>
-      <p className='rp-eyebrow text-ink-3'>Matched passage</p>
+      <p className='rp-eyebrow text-ink-3'>{ui('Matched passage')}</p>
       <blockquote
         className='break-words mt-2 text-sm leading-relaxed text-ink-2'
         style={{ borderColor: 'var(--rp-accent)' }}
@@ -546,7 +554,11 @@ function MatchedPassageCard({ passage, page }: { passage: string; page: number |
         &ldquo;{passage}&rdquo;
       </blockquote>
       {page
-        ? <p className='mt-2 text-xs font-medium tabular-nums text-ink-3'>From page {page}</p>
+        ? (
+          <p className='mt-2 text-xs font-medium tabular-nums text-ink-3'>
+            {ui('From page')} {page}
+          </p>
+        )
         : null}
     </div>
   )
@@ -559,6 +571,7 @@ function MatchedPassageCard({ passage, page }: { passage: string; page: number |
  * present it as the document's own words.
  */
 function SummaryMatchNotice() {
+  const { ui } = usePortalLocale()
   return (
     <div
       role='status'
@@ -569,10 +582,11 @@ function SummaryMatchNotice() {
         color: 'var(--rp-warn-ink)',
       }}
     >
-      <p className='font-semibold'>This match came from the generated summary</p>
+      <p className='font-semibold'>{ui('This match came from the generated summary')}</p>
       <p className='mt-0.5'>
-        The matching text is a summary written about this document, not a passage in it, so nothing
-        in the document can be highlighted. The summary is shown under its own heading below.
+        {ui(
+          'The matching text is a summary written about this document, not a passage in it, so nothing in the document can be highlighted. The summary is shown under its own heading below.',
+        )}
       </p>
     </div>
   )
@@ -635,8 +649,9 @@ function ExtractedText(
           {ui('Extracted text')}
         </h3>
         <p className='rp-measure mt-1 text-xs leading-relaxed text-ink-3'>
-          The PDF could not be displayed, so this machine reading of the file is the only version
-          available here.
+          {ui(
+            'The PDF could not be displayed, so this machine reading of the file is the only version available here.',
+          )}
         </p>
         <div id={EXTRACTED_TEXT_REGION_ID} data-extracted-text-region='' className='mt-4'>
           {children}
@@ -742,7 +757,7 @@ function OfficeBody(
           {ui('Showing a PDF rendition of the original document.')}
         </p>
         <PdfReader fileUrl={previewUrl} title={content.title} initialPage={null} />
-        {fileUrl ? <OriginalFileActions fileUrl={fileUrl} label='Download original' /> : null}
+        {fileUrl ? <OriginalFileActions fileUrl={fileUrl} label={ui('Download original')} /> : null}
       </div>
     )
   }
@@ -755,7 +770,7 @@ function OfficeBody(
             ? (
               <img
                 src={previewUrl}
-                alt={`Preview of ${content.title}`}
+                alt={ui('Preview of {value1}', { value1: content.title })}
                 className='h-full w-full object-cover'
               />
             )
@@ -771,10 +786,11 @@ function OfficeBody(
           {fileUrl
             ? (
               <div className='mt-3'>
-                <OriginalFileActions fileUrl={fileUrl} label='Download original' />
+                <OriginalFileActions fileUrl={fileUrl} label={ui('Download original')} />
               </div>
             )
-            : <p className='mt-3 text-sm text-ink-3'>The original file is not available.</p>}
+            : <p className='mt-3 text-sm text-ink-3'>{ui('The original file is not available.')}
+            </p>}
         </div>
       </div>
     </div>
@@ -810,6 +826,7 @@ function ResourceViewer(
     onToggleExtractedText: () => void
   },
 ) {
+  const { ui } = usePortalLocale()
   const primaryFile = content.files[0]
   const fileUrl = primaryFile ? resourceFileUrl(slug, content.id, primaryFile.fieldId) : undefined
   const variant = selectViewerVariant(content.kind)
@@ -842,8 +859,10 @@ function ResourceViewer(
             )
             : (
               <EmptyState
-                title='This PDF is not available'
-                description='The original file could not be loaded. The extracted text below is a machine reading of the document.'
+                title={ui('This PDF is not available')}
+                description={ui(
+                  'The original file could not be loaded. The extracted text below is a machine reading of the document.',
+                )}
               />
             )}
           {generatedOutside && generated ? <GeneratedSummary text={generated} /> : null}
@@ -887,7 +906,7 @@ function ResourceViewer(
                 src={fileUrl}
               />
             )
-            : <EmptyState title='This video is not available' />}
+            : <EmptyState title={ui('This video is not available')} />}
           {content.transcript.length > 0
             ? (
               <TranscriptPanel
@@ -911,7 +930,7 @@ function ResourceViewer(
                 src={fileUrl}
               />
             )
-            : <EmptyState title='This audio is not available' />}
+            : <EmptyState title={ui('This audio is not available')} />}
           {content.transcript.length > 0
             ? (
               <TranscriptPanel
@@ -932,7 +951,7 @@ function ResourceViewer(
             alt={content.title}
           />
         )
-        : <EmptyState title='This image is not available' />
+        : <EmptyState title={ui('This image is not available')} />
     case 'office':
       return <OfficeBody slug={slug} content={content} fileUrl={fileUrl} />
     default:
@@ -942,7 +961,7 @@ function ResourceViewer(
         <div className='space-y-4'>
           {summaryMatch ? <SummaryMatchNotice /> : null}
           {content.kind === 'file' && fileUrl
-            ? <OriginalFileActions fileUrl={fileUrl} label='Download file' />
+            ? <OriginalFileActions fileUrl={fileUrl} label={ui('Download file')} />
             : null}
           {generated ? <GeneratedSummary text={generated} /> : null}
           <DocumentReader
@@ -1037,16 +1056,16 @@ function ResourceHeader(
     organisation: string
   },
 ) {
-  const kind = resource.kind ? prettyLabel(resource.kind, organisation) : null
+  const { ui } = usePortalLocale()
+  const kind = resource.kind ? prettyLabel(resource.kind, organisation, ui) : null
   // The kind chip is dropped when it only restates the type badge - a
   // `document` (labelled "Report") filed under kind "report" printed the word
   // twice, on all but a handful of the corpus. Compared after prettyLabel and
   // case-insensitively, because the two values arrive from different fields in
   // different casings; a kind that genuinely adds something ("Submission",
   // "Plan", "Framework") still shows.
-  const kindBadge = kind && !sameLabel(kind, typeLabel(resource.type)) ? kind : null
+  const kindBadge = kind && !sameLabel(kind, typeLabel(resource.type, ui)) ? kind : null
 
-  const { ui } = usePortalLocale()
   const topics = resource.topicIds
     .map((id) => ({ id, label: topicLabel(id) }))
     .filter((topic): topic is { id: string; label: string } => Boolean(topic.label))
@@ -1058,7 +1077,7 @@ function ResourceHeader(
     const shown = resource.authors.slice(0, 6).join(', ')
     facts.push({
       label: 'Authors',
-      value: resource.authors.length > 6 ? `${shown} et al.` : shown,
+      value: resource.authors.length > 6 ? ui('{authors} et al.', { authors: shown }) : shown,
     })
   }
   if (resource.journal) facts.push({ label: 'Journal', value: resource.journal })
@@ -1172,7 +1191,7 @@ function ResourceContext({ resource }: { resource: ResourceSummary }) {
       {resource.keyTakeaways && resource.keyTakeaways.length > 0
         ? (
           <div className='mt-5 border-t border-line pt-4'>
-            <PanelHeading>Key takeaways</PanelHeading>
+            <PanelHeading>{ui('Key takeaways')}</PanelHeading>
             <ul className='rp-measure mt-2 space-y-1.5'>
               {resource.keyTakeaways.map((point, index) => (
                 <li key={index} className='flex gap-2 text-sm text-ink-2'>
@@ -1191,7 +1210,7 @@ function ResourceContext({ resource }: { resource: ResourceSummary }) {
       {resource.quotesOfInterest && resource.quotesOfInterest.length > 0
         ? (
           <div className='mt-5 border-t border-line pt-4'>
-            <PanelHeading>Quotes of interest</PanelHeading>
+            <PanelHeading>{ui('Quotes of interest')}</PanelHeading>
             <div className='rp-measure mt-2 space-y-2.5'>
               {resource.quotesOfInterest.map((quote, index) => (
                 <blockquote
@@ -1210,7 +1229,7 @@ function ResourceContext({ resource }: { resource: ResourceSummary }) {
       {resource.keywords?.length
         ? (
           <div className='mt-5 border-t border-line pt-4'>
-            <PanelHeading>Keywords</PanelHeading>
+            <PanelHeading>{ui('Keywords')}</PanelHeading>
             <ul className='mt-2 flex flex-wrap gap-1.5'>
               {resource.keywords.map((keyword) => (
                 <li key={keyword} className='rp-chip text-xs'>{keyword}</li>
@@ -1223,7 +1242,7 @@ function ResourceContext({ resource }: { resource: ResourceSummary }) {
       {resource.keyFacts.length > 0
         ? (
           <div className='mt-5 border-t border-line pt-4'>
-            <PanelHeading>Key facts</PanelHeading>
+            <PanelHeading>{ui('Key facts')}</PanelHeading>
             <ol className='rp-measure mt-2 space-y-1.5'>
               {resource.keyFacts.map((fact, index) => (
                 <li key={index} className='flex gap-2 text-sm text-ink-2'>
@@ -1346,7 +1365,7 @@ function DocumentChat(
       }
       <form onSubmit={submit} className='mt-4'>
         <label htmlFor='ask-document' className='sr-only'>
-          {ui('Ask a question about')} {resource.title}
+          {ui('Ask a question about {title}', { title: resource.title })}
         </label>
         <div className='rp-field flex items-center gap-2 rounded-[var(--rp-radius)] border bg-surface p-1.5 pl-3'>
           <input
@@ -1469,7 +1488,7 @@ function RecommendationsRail(
 
   return (
     <div className='rp-card p-4'>
-      <PanelHeading>You might also want</PanelHeading>
+      <PanelHeading>{ui('You might also want')}</PanelHeading>
       {query.isLoading
         ? (
           <div className='mt-3 space-y-3' aria-hidden='true'>
@@ -1491,7 +1510,7 @@ function RecommendationsRail(
           </p>
         )
         : recommendations.length === 0
-        ? <p className='mt-3 text-sm text-ink-3'>No related resources found yet.</p>
+        ? <p className='mt-3 text-sm text-ink-3'>{ui('No related resources found yet.')}</p>
         : (
           <ul className='mt-2 space-y-1'>
             {recommendations.map((r) => (
@@ -1516,11 +1535,14 @@ function MatchesPanel(
     onJump: (index: number) => void
   },
 ) {
+  const { ui } = usePortalLocale()
   if (indices.length === 0) return null
 
   return (
     <div className='rp-card p-4'>
-      <PanelHeading>Matches in this document ({indices.length})</PanelHeading>
+      <PanelHeading>
+        {ui('Matches in this document ({count})', { count: indices.length })}
+      </PanelHeading>
       <ul className='mt-3 space-y-1'>
         {indices.map((index) => (
           <li key={index}>
@@ -1552,6 +1574,7 @@ function SelectionSaveBar(
     onDismiss: () => void
   },
 ) {
+  const { ui } = usePortalLocale()
   const popoverRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -1583,7 +1606,7 @@ function SelectionSaveBar(
     >
       <SaveEvidenceButton
         slug={slug}
-        label='Save selection'
+        label={ui('Save selection')}
         evidence={{
           passage: selection.text.slice(0, 2000),
           resourceId,
@@ -1771,10 +1794,10 @@ export function ResourceDetailPage() {
           ? (
             <EmptyState
               title={ui('This document does not exist')}
-              description='It may have been removed, or the link is out of date.'
+              description={ui('It may have been removed, or the link is out of date.')}
             >
               <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-primary'>
-                Back to library
+                {ui('Back to library')}
               </Link>
             </EmptyState>
           )
@@ -1783,7 +1806,7 @@ export function ResourceDetailPage() {
         {isError && !notFound
           ? (
             <ErrorCard
-              message={error instanceof Error ? error.message : 'Could not load this document.'}
+              message={error instanceof Error ? error.message : ui('Could not load this document.')}
               onRetry={() => void refetch()}
             />
           )
@@ -1829,7 +1852,9 @@ export function ResourceDetailPage() {
                       : (
                         <EmptyState
                           title={ui('This document cannot be displayed')}
-                          description='The full content is unavailable for this resource right now.'
+                          description={ui(
+                            'The full content is unavailable for this resource right now.',
+                          )}
                         />
                       )}
                   </div>
@@ -1842,7 +1867,7 @@ export function ResourceDetailPage() {
                 <div
                   role='separator'
                   aria-orientation='vertical'
-                  aria-label='Resize the document rail'
+                  aria-label={ui('Resize the document rail')}
                   aria-valuenow={rail.width}
                   aria-valuemin={rail.min}
                   aria-valuemax={rail.max}

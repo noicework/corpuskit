@@ -134,8 +134,8 @@ describe('semantic zoom - when a category folds into one mark', () => {
 describe('knowledge map loading state', () => {
   it('keeps loading accessible without restoring the visible loader', () => {
     expect(graphPage).toContain('aria-busy={mapBusy}')
-    expect(graphPage).toContain("mapBusy ? 'Loading knowledge map.'")
-    expect(graphPage).toContain("hasGraph ? 'Knowledge map ready.'")
+    expect(graphPage).toContain("mapBusy ? ui('Loading knowledge map.')")
+    expect(graphPage).toContain("hasGraph ? ui('Knowledge map ready.')")
     expect(graphPage).not.toContain('Building the map')
     expect(mapSource).not.toContain('function MapSkeleton')
   })

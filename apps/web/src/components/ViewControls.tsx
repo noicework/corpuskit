@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useId } from 'react'
 import { VIEW_MODES, type ViewMode } from './useViewMode.ts'
 
@@ -18,11 +19,12 @@ export function ViewToggle(
     className?: string
   },
 ) {
+  const { ui } = usePortalLocale()
   return (
     <div
       className={`inline-flex overflow-hidden rounded-[var(--rp-radius-btn)] border border-line bg-surface ${className}`}
       role='radiogroup'
-      aria-label='Result layout'
+      aria-label={ui('Result layout')}
     >
       {VIEW_MODES.map((option, index) => {
         const active = value === option
@@ -47,7 +49,7 @@ export function ViewToggle(
             }`}
             style={active ? { backgroundColor: 'var(--rp-primary)' } : undefined}
           >
-            {option}
+            {ui(option)}
           </button>
         )
       })}
@@ -68,12 +70,13 @@ export function GridDensity(
     className?: string
   },
 ) {
+  const { ui } = usePortalLocale()
   const id = useId()
   const hidden = view === 'list' ? 'hidden' : ''
   return (
     <>
       <label htmlFor={id} className={`text-xs font-medium text-ink-3 ${hidden}`}>
-        Grid
+        {ui('Grid')}
       </label>
       <input
         id={id}
@@ -83,7 +86,7 @@ export function GridDensity(
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        aria-label='Cards across the grid'
+        aria-label={ui('Cards across the grid')}
         className={`rp-focus w-24 accent-[var(--rp-accent-fg)] ${className} ${hidden}`}
       />
     </>

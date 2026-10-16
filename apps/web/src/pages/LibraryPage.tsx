@@ -82,12 +82,6 @@ const STATUS_BADGES: Record<'pending' | 'error', { label: string; className: str
   error: { label: 'Error', className: 'rp-badge rp-badge-bad' },
 }
 
-function formatDate(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
 /** Publish year from an ISO date, or null when the date is missing/unparseable. */
 function formatYear(iso: string): string | null {
   const match = /^(\d{4})/.exec(iso)
@@ -116,17 +110,21 @@ function LibraryCard(
     hideAdded?: boolean
   },
 ) {
+  const { ui, date } = usePortalLocale()
   const topicLabels = item.topicIds
     .map((id) => topicLabel(id))
     .filter((label): label is string => Boolean(label))
   const statusInfo = item.status === 'processed' ? null : STATUS_BADGES[item.status]
   const publishedYear = item.published ? formatYear(item.published) : null
-  const byline = bylineFor(item)
+  const byline = bylineFor(item, ui)
   const format = formatLabel(item.format, item.type)
+  const displayFormat = format && ['Article', 'Supplement', 'Video', 'Media'].includes(format)
+    ? ui(format)
+    : format
   // The kind chip is dropped when it only restates the format badge
   // ("Supplementary Material" under "Supplement").
-  const kind = item.kind && !(format && sameLabel(prettyLabel(item.kind, organisation), format))
-    ? prettyLabel(item.kind, organisation)
+  const kind = item.kind && !(format && sameLabel(prettyLabel(item.kind, organisation, ui), format))
+    ? prettyLabel(item.kind, organisation, ui)
     : null
   const title = presentTitle(item.title)
   const summary = item.summary ? plainDashes(item.summary) : ''
@@ -158,7 +156,7 @@ function LibraryCard(
             slug={slug}
             id={item.id}
             type={item.type ?? 'document'}
-            label={format ?? undefined}
+            label={displayFormat ?? undefined}
             imgClassName='object-top'
           />
         </div>
@@ -170,7 +168,7 @@ function LibraryCard(
         {statusInfo && !list
           ? (
             <span className={`absolute left-2 top-2 ${statusInfo.className}`}>
-              {statusInfo.label}
+              {ui(statusInfo.label)}
             </span>
           )
           : null}
@@ -210,9 +208,9 @@ function LibraryCard(
           ? (
             <div className='flex flex-wrap gap-1'>
               {statusInfo && list
-                ? <span className={statusInfo.className}>{statusInfo.label}</span>
+                ? <span className={statusInfo.className}>{ui(statusInfo.label)}</span>
                 : null}
-              {format ? <span className='rp-badge rp-badge-quiet'>{format}</span> : null}
+              {format ? <span className='rp-badge rp-badge-quiet'>{displayFormat}</span> : null}
               {kind ? <span className='rp-badge rp-badge-quiet'>{kind}</span> : null}
               {topicLabels.slice(0, 3).map((label) => (
                 <span
@@ -231,9 +229,16 @@ function LibraryCard(
               {(item.created && !hideAdded) || (publishedYear && !byline)
                 ? (
                   <p className='flex flex-wrap items-baseline gap-x-1.5 text-xs tabular-nums text-ink-3'>
-                    {publishedYear && !byline ? <span>Published {publishedYear}</span> : null}
+                    {publishedYear && !byline
+                      ? <span>{ui('Published')} {publishedYear}</span>
+                      : null}
                     {item.created && !hideAdded
-                      ? <span>Added {formatDate(item.created)}</span>
+                      ? (
+                        <span>
+                          {ui('Added')}{' '}
+                          {date(item.created, { year: 'numeric', month: 'short', day: 'numeric' })}
+                        </span>
+                      )
                       : null}
                   </p>
                 )
@@ -389,7 +394,7 @@ export function LibraryBrowser(
   const untagged = facets?.untagged?.topic ?? null
   const kindCounts = facets?.kind ?? {}
   const kindIds = useMemo(() => Object.keys(kindCounts).sort(), [kindCounts])
-  const kindLabel = (id: string) => prettyLabel(id, config.branding.organisation)
+  const kindLabel = (id: string) => prettyLabel(id, config.branding.organisation, ui)
   const toggleKind = (id: string) =>
     setSelectedKinds((prev) => prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id])
   const formatCounts = facets?.format ?? {}
@@ -472,7 +477,7 @@ export function LibraryBrowser(
               ? (
                 <p className='text-sm font-medium tabular-nums text-ink-3'>
                   {total.toLocaleString()}{' '}
-                  {language === 'ja' ? '件の資料' : total === 1 ? 'resource' : 'resources'}
+                  {language === 'ja' ? '件の資料' : total === 1 ? ui('resource') : ui('resources')}
                 </p>
               )
               : null}
@@ -585,14 +590,16 @@ export function LibraryBrowser(
       {!bare && selectedKinds.length > 0
         ? (
           <div className='mt-4 flex flex-wrap items-center gap-2'>
-            <span className='text-xs uppercase tracking-wide text-ink-3'>Filtered to kind</span>
+            <span className='text-xs uppercase tracking-wide text-ink-3'>
+              {ui('Filtered to kind')}
+            </span>
             {selectedKinds.map((kind) => (
               <button
                 key={kind}
                 type='button'
                 onClick={() => setSelectedKinds((prev) => prev.filter((k) => k !== kind))}
                 className='rp-chip text-xs'
-                title='Remove this filter'
+                title={ui('Remove this filter')}
               >
                 {kindLabel(kind)}
                 <span aria-hidden='true'>×</span>
@@ -618,7 +625,7 @@ export function LibraryBrowser(
             <aside className={`${filtersOpen ? 'block' : 'hidden'} lg:block`}>
               <div className='rp-card p-4 lg:sticky lg:top-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_4)]'>
                 <div className='flex items-center justify-between gap-2'>
-                  <p className='rp-eyebrow text-ink-3'>Topics</p>
+                  <p className='rp-eyebrow text-ink-3'>{ui('Topics')}</p>
                   {selectedTopics.length > 0
                     ? (
                       <button
@@ -626,7 +633,7 @@ export function LibraryBrowser(
                         onClick={() => setSelectedTopics([])}
                         className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                       >
-                        Clear
+                        {ui('Clear')}
                       </button>
                     )
                     : null}
@@ -663,13 +670,13 @@ export function LibraryBrowser(
                     ? (
                       <p
                         className='flex items-start gap-2.5 px-1 py-1 text-sm text-ink-3'
-                        title='Resources not yet filed under a topic'
+                        title={ui('Resources not yet filed under a topic')}
                       >
                         <span
                           className='mt-[2px] inline-block h-4 w-4 shrink-0'
                           aria-hidden='true'
                         />
-                        <span className='min-w-0 flex-1 italic'>Untagged</span>
+                        <span className='min-w-0 flex-1 italic'>{ui('Untagged')}</span>
                         <span className='shrink-0 self-center text-xs tabular-nums'>
                           {untagged}
                         </span>
@@ -681,7 +688,7 @@ export function LibraryBrowser(
                   ? (
                     <div className='mt-4 border-t border-line pt-3'>
                       <div className='flex items-center justify-between gap-2'>
-                        <p className='rp-eyebrow text-ink-3'>Kind</p>
+                        <p className='rp-eyebrow text-ink-3'>{ui('Kind')}</p>
                         {selectedKinds.length > 0
                           ? (
                             <button
@@ -689,7 +696,7 @@ export function LibraryBrowser(
                               onClick={() => setSelectedKinds([])}
                               className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                             >
-                              Clear
+                              {ui('Clear')}
                             </button>
                           )
                           : null}
@@ -729,7 +736,7 @@ export function LibraryBrowser(
                   ? (
                     <div className='mt-4 border-t border-line pt-3'>
                       <div className='flex items-center justify-between gap-2'>
-                        <p className='rp-eyebrow text-ink-3'>Format</p>
+                        <p className='rp-eyebrow text-ink-3'>{ui('Format')}</p>
                         {selectedFormats.length > 0
                           ? (
                             <button
@@ -740,7 +747,7 @@ export function LibraryBrowser(
                               }}
                               className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                             >
-                              Clear
+                              {ui('Clear')}
                             </button>
                           )
                           : null}
@@ -761,7 +768,7 @@ export function LibraryBrowser(
                                 style={{ accentColor: 'var(--rp-accent)' }}
                               />
                               <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
-                                {format.label}
+                                {ui(format.label)}
                               </span>
                               <span className='shrink-0 self-center text-xs tabular-nums text-ink-3'>
                                 {formatCounts[format.id] ?? 0}
@@ -782,7 +789,7 @@ export function LibraryBrowser(
           {isError
             ? (
               <ErrorCard
-                message={error instanceof Error ? error.message : 'Could not load the library.'}
+                message={error instanceof Error ? error.message : ui('Could not load the library.')}
                 onRetry={() => void refetch()}
               />
             )
@@ -801,18 +808,18 @@ export function LibraryBrowser(
               emptyCollection
                 ? (
                   <EmptyState
-                    title='No documents yet'
+                    title={ui('No documents yet')}
                     description={canAdd
-                      ? 'This collection is empty. Add documents to make them searchable here.'
-                      : 'Documents appear here once they have been added to this collection.'}
+                      ? ui('This collection is empty. Add documents to make them searchable here.')
+                      : ui('Documents appear here once they have been added to this collection.')}
                   >
                     {canAdd ? <AddDocumentsLink slug={config.slug} /> : null}
                   </EmptyState>
                 )
                 : (
                   <EmptyState
-                    title='No resources match these filters'
-                    description='Try a different search term, or clear a filter.'
+                    title={ui('No resources match these filters')}
+                    description={ui('Try a different search term, or clear a filter.')}
                   />
                 )
             )
@@ -845,7 +852,7 @@ export function LibraryBrowser(
                         disabled={isFetching}
                         className='rp-btn rp-btn-outline'
                       >
-                        {isFetching ? 'Loading…' : 'Load more'}
+                        {isFetching ? ui('Loading…') : ui('Load more')}
                       </button>
                     </div>
                   )

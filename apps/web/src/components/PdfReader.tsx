@@ -256,7 +256,7 @@ export function PdfReader(
           setLibFailed(true)
           return
         }
-        setErrorMessage(err instanceof Error ? err.message : 'This PDF could not be opened.')
+        setErrorMessage(err instanceof Error ? err.message : ui('This PDF could not be opened.'))
         setStatus('error')
         onLoadError?.()
       })
@@ -381,7 +381,7 @@ export function PdfReader(
             setHighlightMissing(false)
             const firstRect = rects[0]
             if (firstRect) {
-              setAnnouncement(`Cited passage highlighted on page ${pageNumber}`)
+              setAnnouncement(ui('Cited passage highlighted on page {page}', { page: pageNumber }))
               scrollHighlightIntoView(canvas, firstRect, `${fileUrl}::${pageNumber}::${highlight}`)
             }
           } else {
@@ -391,7 +391,7 @@ export function PdfReader(
             // file does not have) is on screen and the passage is not on it.
             if (initialPage && pageNumber === Math.min(initialPage, numPages || initialPage)) {
               setHighlightMissing(true)
-              setAnnouncement(`Highlight not found on page ${pageNumber}`)
+              setAnnouncement(ui('Highlight not found on page {page}', { page: pageNumber }))
             }
           }
         }
@@ -400,7 +400,9 @@ export function PdfReader(
         // and not an error.
         const isCancellation = err instanceof Error && err.name === 'RenderingCancelledException'
         if (!cancelled && !isCancellation) {
-          setErrorMessage(err instanceof Error ? err.message : 'This page could not be rendered.')
+          setErrorMessage(
+            err instanceof Error ? err.message : ui('This page could not be rendered.'),
+          )
           setStatus('error')
           onLoadError?.()
         }
@@ -446,7 +448,9 @@ export function PdfReader(
       }
       if (!cancelled && scanRequested) {
         setScanOutcome('not-found')
-        setAnnouncement(`The passage was not found in the first ${limit} pages`)
+        setAnnouncement(
+          ui('The passage was not found in the first {count} pages', { count: limit }),
+        )
       }
     })()
     return () => {
@@ -554,7 +558,7 @@ export function PdfReader(
     >
       <div className='flex flex-wrap items-center gap-1 border-b border-line bg-surface-2 px-2 py-1.5'>
         <ToolbarButton
-          label='Previous page'
+          label={ui('Previous page')}
           onClick={() => goToPage(pageNumber - 1)}
           disabled={status !== 'ready' || pageNumber <= 1}
         >
@@ -563,7 +567,7 @@ export function PdfReader(
           </svg>
         </ToolbarButton>
         <ToolbarButton
-          label='Next page'
+          label={ui('Next page')}
           onClick={() => goToPage(pageNumber + 1)}
           disabled={status !== 'ready' || pageNumber >= numPages}
         >
@@ -590,12 +594,14 @@ export function PdfReader(
             }}
             className='rp-focus h-7 w-10 rounded-[var(--rp-radius)] border border-line bg-surface text-center text-xs tabular-nums text-ink'
           />
-          <span className='tabular-nums'>{language === 'ja' ? '/' : 'of'} {numPages || '–'}</span>
+          <span className='tabular-nums'>
+            {language === 'ja' ? '/' : ui('of')} {numPages || '–'}
+          </span>
         </div>
 
         <div className='mx-1 h-4 w-px bg-line' aria-hidden='true' />
 
-        <ToolbarButton label='Zoom out' onClick={zoomOut} disabled={status !== 'ready'}>
+        <ToolbarButton label={ui('Zoom out')} onClick={zoomOut} disabled={status !== 'ready'}>
           <svg {...ICON_PROPS}>
             <circle cx='11' cy='11' r='7' />
             <path d='M21 21l-4.3-4.3M8 11h6' />
@@ -604,14 +610,14 @@ export function PdfReader(
         <span className='w-11 shrink-0 text-center text-xs tabular-nums text-ink-2'>
           {zoomPercent ? `${zoomPercent}%` : ui('Fit')}
         </span>
-        <ToolbarButton label='Zoom in' onClick={zoomIn} disabled={status !== 'ready'}>
+        <ToolbarButton label={ui('Zoom in')} onClick={zoomIn} disabled={status !== 'ready'}>
           <svg {...ICON_PROPS}>
             <circle cx='11' cy='11' r='7' />
             <path d='M21 21l-4.3-4.3M11 8v6M8 11h6' />
           </svg>
         </ToolbarButton>
         <ToolbarButton
-          label='Fit to width'
+          label={ui('Fit to width')}
           onClick={() => setZoomMode('fit-width')}
           disabled={status !== 'ready'}
         >
@@ -622,7 +628,7 @@ export function PdfReader(
 
         <div className='mx-1 h-4 w-px bg-line' aria-hidden='true' />
 
-        <ToolbarButton label='Print' onClick={() => printFile(fileUrl)}>
+        <ToolbarButton label={ui('Print')} onClick={() => printFile(fileUrl)}>
           <svg {...ICON_PROPS}>
             <path d='M6 9V3h12v6M6 18H4a1 1 0 01-1-1v-5a1 1 0 011-1h16a1 1 0 011 1v5a1 1 0 01-1 1h-2M6 14h12v7H6z' />
           </svg>
@@ -665,14 +671,16 @@ export function PdfReader(
               color: 'var(--rp-warn-ink)',
             }}
           >
-            <span className='font-medium'>Highlight not found on this page.</span>
+            <span className='font-medium'>{ui('Highlight not found on this page.')}</span>
             {scanOutcome === 'searching'
-              ? <span>Searching the document for the passage…</span>
+              ? <span>{ui('Searching the document for the passage…')}</span>
               : scanOutcome === 'not-found'
               ? (
                 <span>
-                  It was not found in the first {Math.min(numPages, PASSAGE_SCAN_LIMIT)}{' '}
-                  pages either - the cited text may differ from this file's text layer.
+                  {ui(
+                    'It was not found in the first {count} pages either - the cited text may differ from this file’s text layer.',
+                    { count: Math.min(numPages, PASSAGE_SCAN_LIMIT) },
+                  )}
                 </span>
               )
               : (
@@ -681,7 +689,7 @@ export function PdfReader(
                   onClick={() => setScanRequested(true)}
                   className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2'
                 >
-                  Find it in the document
+                  {ui('Find it in the document')}
                 </button>
               )}
           </div>
@@ -713,7 +721,7 @@ export function PdfReader(
                 rel='noopener noreferrer'
                 className='rp-focus inline-block text-sm font-medium text-[var(--rp-ink-3)] underline decoration-dotted underline-offset-2 hover:text-[var(--rp-ink)]'
               >
-                Open PDF in a new tab instead
+                {ui('Open PDF in a new tab instead')}
               </a>
             </div>
           )
@@ -721,7 +729,11 @@ export function PdfReader(
 
         <div
           role='group'
-          aria-label={`${title} - PDF page ${pageNumber} of ${numPages || 1}`}
+          aria-label={ui('{title} - PDF page {pageNumber} of {value3}', {
+            title: title,
+            pageNumber: pageNumber,
+            value3: numPages || 1,
+          })}
           tabIndex={0}
           onKeyDown={handleKeyDown}
           className={`rp-focus flex justify-center p-4 ${status === 'ready' ? '' : 'hidden'}`}

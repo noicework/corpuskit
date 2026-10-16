@@ -1,3 +1,4 @@
+import { englishResearchUi, type ResearchUi } from './research-copy.ts'
 /**
  * The per-answer audit as the page shows it: a badge that says what was
  * checked, and the inline marks on figures the cited passages do not carry.
@@ -38,7 +39,7 @@ export function figureLabel(token: string): string {
 export type AuditTone = 'ok' | 'warn'
 
 /** The badge copy for an audit, or null when there was nothing to check. */
-export function auditBadge(audit: AnswerAudit | undefined): {
+export function auditBadge(audit: AnswerAudit | undefined, ui: ResearchUi = englishResearchUi): {
   label: string
   tone: AuditTone
   title: string
@@ -50,106 +51,131 @@ export function auditBadge(audit: AnswerAudit | undefined): {
   if (audit.figuresChecked === 0 && unsupported === 0 && stripped === 0 && removed === 0) {
     return null
   }
-  const checked = audit.figuresChecked === 1
-    ? '1 figure checked'
-    : `${audit.figuresChecked} figures checked`
+  const checked = ui(audit.figuresChecked === 1 ? '1 figure checked' : '{count} figures checked', {
+    count: audit.figuresChecked,
+  })
   const cited = typeof audit.sentencesChecked === 'number' && audit.sentencesChecked > 0 &&
       typeof audit.sentencesCited === 'number'
-    ? ` ${audit.sentencesCited} of ${audit.sentencesChecked} sentences carry a citation.`
+    ? ' ' +
+      ui('{cited} of {total} sentences carry a citation.', {
+        cited: audit.sentencesCited,
+        total: audit.sentencesChecked,
+      })
     : ''
   const denominators = (audit.denominatorsMissing ?? []).length > 0
-    ? ` Stated without a denominator: ${
-      (audit.denominatorsMissing ?? []).map(figureLabel).join(', ')
-    }.`
+    ? ' ' +
+      ui('Stated without a denominator: {figures}.', {
+        figures: (audit.denominatorsMissing ?? []).map(figureLabel).join(', '),
+      })
     : ''
   const replaced = audit.sentencesReplaced ?? 0
   const rescued = (audit.figuresRescued ?? []).map(figureLabel)
   const found = rescued.length > 0
-    ? ` ${rescued.length === 1 ? 'One figure' : `${rescued.length} figures`} (${
-      rescued.join(', ')
-    }) ${
-      rescued.length === 1 ? 'was' : 'were'
-    } found in a retrieved paper the platform had not cited, which now carries the marker.`
+    ? ' ' +
+      ui(
+        rescued.length === 1
+          ? 'One figure ({figures}) was found in a retrieved paper the platform had not cited, which now carries the marker.'
+          : '{count} figures ({figures}) were found in a retrieved paper the platform had not cited, which now carries the marker.',
+        { count: rescued.length, figures: rescued.join(', ') },
+      )
     : ''
   const quoted = replaced > 0
-    ? ` ${
-      replaced === 1 ? 'One sentence' : `${replaced} sentences`
-    } whose figures could not be verified ${
-      replaced === 1 ? 'was' : 'were'
-    } replaced by the named paper's own words, quoted and cited.`
+    ? ' ' +
+      ui(
+        replaced === 1
+          ? "One sentence whose figures could not be verified was replaced by the named paper's own words, quoted and cited."
+          : "{count} sentences whose figures could not be verified were replaced by the named paper's own words, quoted and cited.",
+        { count: replaced },
+      )
     : ''
   const replacedLabel = replaced > 0
-    ? ` · ${replaced === 1 ? '1 sentence' : `${replaced} sentences`} replaced`
+    ? ui(replaced === 1 ? ' · 1 sentence replaced' : ' · {count} sentences replaced', {
+      count: replaced,
+    })
     : ''
   const secondhand = (audit.figuresSecondhandRemoved ?? []).map(figureLabel)
   const corrected = audit.denominatorsCorrected ?? []
   const secondhandNote = secondhand.length > 0
-    ? ` ${secondhand.length === 1 ? 'One figure' : `${secondhand.length} figures`} (${
-      secondhand.join(', ')
-    }) ${secondhand.length === 1 ? 'was' : 'were'} removed because the cited paper carries ${
-      secondhand.length === 1 ? 'it' : 'them'
-    } only where it cites other studies.`
+    ? ' ' +
+      ui(
+        secondhand.length === 1
+          ? 'One figure ({figures}) was removed because the cited paper carries it only where it cites other studies.'
+          : '{count} figures ({figures}) were removed because the cited paper carries them only where it cites other studies.',
+        { count: secondhand.length, figures: secondhand.join(', ') },
+      )
     : ''
   const correctedNote = corrected.length > 0
-    ? ` ${
-      corrected.length === 1 ? 'One denominator was' : `${corrected.length} denominators were`
-    } corrected to the cited passage's own pairing: ${corrected.join('; ')}.`
+    ? ' ' +
+      ui(
+        corrected.length === 1
+          ? "One denominator was corrected to the cited passage's own pairing: {figures}."
+          : "{count} denominators were corrected to the cited passage's own pairing: {figures}.",
+        { count: corrected.length, figures: corrected.join('; ') },
+      )
     : ''
   if (unsupported === 0 && stripped === 0 && removed === 0) {
     return {
       label: `${checked}${replacedLabel}`,
       tone: replaced > 0 ? 'warn' : 'ok',
-      title:
-        `Every figure in this answer was found beside its claim in a cited passage.${found}${quoted}${correctedNote}${cited}${denominators}`,
+      title: ui('Every figure in this answer was found beside its claim in a cited passage.') +
+        found + quoted + correctedNote + cited + denominators,
     }
   }
   if (unsupported === 0 && stripped === 0) {
-    // The gate removed what failed: what remains has passed, and the badge
-    // says both so the reader knows the answer is shorter than it was.
     const figures = (audit.figuresRemoved ?? []).map(figureLabel).join(', ')
     return {
-      label: `${checked} · ${
-        removed === 1 ? '1 sentence' : `${removed} sentences`
-      } removed${replacedLabel}`,
+      label: ui(
+        removed === 1
+          ? '{checked} · 1 sentence removed{replaced}'
+          : '{checked} · {count} sentences removed{replaced}',
+        { checked, count: removed, replaced: replacedLabel },
+      ),
       tone: 'warn',
-      title: `${
-        removed === 1 ? 'One sentence was' : `${removed} sentences were`
-      } removed because no retrieved passage carries ${
-        removed === 1 ? 'its' : 'their'
-      } figures beside the claim${
-        figures ? ` (${figures})` : ''
-      }. Every figure still in the answer was found beside its claim.${secondhandNote}${found}${quoted}${correctedNote}${cited}${denominators}`,
+      title: ui(
+        removed === 1
+          ? 'One sentence was removed because no retrieved passage carries its figures beside the claim{figures}. Every figure still in the answer was found beside its claim.'
+          : '{count} sentences were removed because no retrieved passage carries their figures beside the claim{figures}. Every figure still in the answer was found beside its claim.',
+        { count: removed, figures: figures ? ` (${figures})` : '' },
+      ) + secondhandNote + found + quoted + correctedNote + cited + denominators,
     }
   }
   const parts: string[] = []
   if (unsupported > 0) {
     parts.push(
-      `${unsupported} of ${audit.figuresChecked + audit.yearsUnsupported.length} unverified`,
+      ui('{unsupported} of {total} unverified', {
+        unsupported,
+        total: audit.figuresChecked + audit.yearsUnsupported.length,
+      }),
     )
   }
   if (stripped > 0) {
-    parts.push(
+    parts.push(ui(
       stripped === 1
         ? '1 unsupported contraindication removed'
-        : `${stripped} unsupported contraindications removed`,
-    )
+        : '{count} unsupported contraindications removed',
+      { count: stripped },
+    ))
   }
   const detail: string[] = []
   if (audit.figuresUnsupported.length > 0) {
     detail.push(
-      `Figures not found beside their claim: ${
-        audit.figuresUnsupported.map(figureLabel).join(', ')
-      }.`,
+      ui('Figures not found beside their claim: {figures}.', {
+        figures: audit.figuresUnsupported.map(figureLabel).join(', '),
+      }),
     )
   }
   if (audit.yearsUnsupported.length > 0) {
-    detail.push(`Years the cited resources do not carry: ${audit.yearsUnsupported.join(', ')}.`)
+    detail.push(
+      ui('Years the cited resources do not carry: {years}.', {
+        years: audit.yearsUnsupported.join(', '),
+      }),
+    )
   }
   if (stripped > 0) {
     detail.push(
-      `Contraindication claims no cited passage states: ${
-        audit.contraindicationsUnsupported.join(', ')
-      }.`,
+      ui('Contraindication claims no cited passage states: {claims}.', {
+        claims: audit.contraindicationsUnsupported.join(', '),
+      }),
     )
   }
   return {

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import {
   Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -616,6 +617,7 @@ export function KnowledgeMap({
   insets: Insets
   hint: string
 }) {
+  const { ui } = usePortalLocale()
   const visibleNodes = useMemo(
     () =>
       nodes.filter((n) =>
@@ -1273,7 +1275,9 @@ export function KnowledgeMap({
         viewBox={`0 0 ${size.w} ${size.h}`}
         preserveAspectRatio='xMidYMid meet'
         role='application'
-        aria-label='Knowledge map - drag to pan, pinch or scroll to zoom, select a node to explore it'
+        aria-label={ui(
+          'Knowledge map - drag to pan, pinch or scroll to zoom, select a node to explore it',
+        )}
         tabIndex={0}
         className='rp-focus rp-map block h-full w-full cursor-grab touch-none select-none active:cursor-grabbing'
         onWheel={onWheel}
@@ -1454,9 +1458,12 @@ export function KnowledgeMap({
                   key={node.id}
                   role='button'
                   tabIndex={0}
-                  aria-label={`${node.label} - ${node.group || 'entity'}, ${degree} ${
-                    degree === 1 ? 'relation' : 'relations'
-                  }`}
+                  aria-label={ui(
+                    degree === 1
+                      ? '{name} - {group}, {count} relation'
+                      : '{name} - {group}, {count} relations',
+                    { name: node.label, group: node.group || ui('entity'), count: degree },
+                  )}
                   aria-pressed={isSelected}
                   className='rp-map-node rp-map-fade cursor-pointer'
                   opacity={dimmed ? 0.16 : unlinked && !emphasised ? 0.62 : 1}
@@ -1571,7 +1578,7 @@ export function KnowledgeMap({
       >
         <button
           type='button'
-          aria-label='Zoom in'
+          aria-label={ui('Zoom in')}
           onClick={() => zoomBy(1.3)}
           className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
         >
@@ -1579,7 +1586,7 @@ export function KnowledgeMap({
         </button>
         <button
           type='button'
-          aria-label='Zoom out'
+          aria-label={ui('Zoom out')}
           onClick={() => zoomBy(1 / 1.3)}
           className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
         >
@@ -1587,8 +1594,8 @@ export function KnowledgeMap({
         </button>
         <button
           type='button'
-          aria-label='Fit the whole map to view'
-          title='Fit to view'
+          aria-label={ui('Fit the whole map to view')}
+          title={ui('Fit to view')}
           onClick={fitView}
           className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-sm'
         >

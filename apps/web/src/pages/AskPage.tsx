@@ -1,3 +1,4 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
@@ -289,21 +290,21 @@ function makeId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function relativeAge(timestamp: number): string {
+function relativeAge(timestamp: number, ui: ResearchUi = englishResearchUi): string {
   const diffMs = Date.now() - timestamp
   const minutes = Math.round(diffMs / 60000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 1) return ui('just now')
+  if (minutes < 60) return ui('{count}m ago', { count: minutes })
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return ui('{count}h ago', { count: hours })
   const days = Math.round(hours / 24)
-  return `${days}d ago`
+  return ui('{count}d ago', { count: days })
 }
 
-function sessionTitle(session: ChatSession): string {
+function sessionTitle(session: ChatSession, ui: ResearchUi = englishResearchUi): string {
   if (session.title && session.title.trim().length > 0) return session.title
   const first = session.messages.find((message) => message.author === 'USER')
-  if (!first || first.text.trim().length === 0) return 'New conversation'
+  if (!first || first.text.trim().length === 0) return ui('New conversation')
   return first.text.length > 60 ? `${first.text.slice(0, 60)}…` : first.text
 }
 
@@ -348,12 +349,13 @@ function SessionList({
   onDelete: (id: string) => void
   onRename: (id: string, title: string) => void
 }) {
+  const { ui } = usePortalLocale()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
 
   function startEdit(session: ChatSession) {
     setEditingId(session.id)
-    setDraftTitle(sessionTitle(session))
+    setDraftTitle(sessionTitle(session, ui))
   }
 
   function commitEdit() {
@@ -369,15 +371,15 @@ function SessionList({
         onClick={onNew}
         className='rp-btn rp-btn-primary w-full'
       >
-        + New session
+        {ui('+ New session')}
       </button>
 
       <nav
-        aria-label='Chat sessions'
+        aria-label={ui('Chat sessions')}
         className='rp-scroll mt-4 flex-1 space-y-1.5 overflow-y-auto pr-1'
       >
         {sessions.length === 0
-          ? <p className='px-1 py-2 text-xs text-ink-3'>No sessions yet.</p>
+          ? <p className='px-1 py-2 text-xs text-ink-3'>{ui('No sessions yet.')}</p>
           : sessions.map((session) => {
             const isActive = session.id === activeSessionId
             const isEditing = editingId === session.id
@@ -399,7 +401,7 @@ function SessionList({
                     onKeyDown={(event) => {
                       if (event.key === 'Escape') setEditingId(null)
                     }}
-                    aria-label='Session name'
+                    aria-label={ui('Session name')}
                     autoFocus
                     className='rp-input h-9 text-sm'
                   />
@@ -420,13 +422,13 @@ function SessionList({
                   style={{ outlineColor: 'var(--rp-accent)' }}
                 >
                   <p className='rp-clamp-2 text-sm font-medium text-ink'>
-                    {sessionTitle(session)}
+                    {sessionTitle(session, ui)}
                   </p>
                   <p className='mt-0.5 text-xs text-ink-3'>
                     {session.messages.length}{' '}
-                    {session.messages.length === 1 ? 'message' : 'messages'}
+                    {session.messages.length === 1 ? ui('message') : ui('messages')}
                     {' · '}
-                    {relativeAge(session.updatedAt)}
+                    {relativeAge(session.updatedAt, ui)}
                   </p>
                 </button>
                 {isActive
@@ -437,8 +439,8 @@ function SessionList({
                         event.stopPropagation()
                         startEdit(session)
                       }}
-                      aria-label={`Rename "${sessionTitle(session)}"`}
-                      title='Rename session'
+                      aria-label={ui('Rename "{value1}"', { value1: sessionTitle(session, ui) })}
+                      title={ui('Rename session')}
                       className='rp-focus absolute right-8 top-1.5 flex h-6 w-6 items-center justify-center rounded-none text-ink-3 opacity-0 transition-opacity duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink group-hover:opacity-100 focus-visible:opacity-100'
                     >
                       ✎
@@ -451,8 +453,8 @@ function SessionList({
                     event.stopPropagation()
                     onDelete(session.id)
                   }}
-                  aria-label={`Delete "${sessionTitle(session)}"`}
-                  title='Delete session'
+                  aria-label={ui('Delete "{value1}"', { value1: sessionTitle(session, ui) })}
+                  title={ui('Delete session')}
                   className='rp-focus absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 opacity-0 transition-opacity duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-bad-ink)] group-hover:opacity-100 focus-visible:opacity-100'
                 >
                   <svg
@@ -486,6 +488,7 @@ function UserBubble({
   message: ChatMessage
   onAskSubquery: (subquery: string) => void
 }) {
+  const { ui } = usePortalLocale()
   const subqueries = message.subqueries ?? []
   const chips = (
     <div className='flex flex-wrap justify-end gap-1.5'>
@@ -521,13 +524,13 @@ function UserBubble({
             }
             <details className='w-full sm:hidden'>
               <summary className='cursor-pointer text-right text-[11px] font-medium uppercase tracking-wide text-ink-3'>
-                Searched for {subqueries.length} sub-questions
+                {ui('Searched for {count} sub-questions', { count: subqueries.length })}
               </summary>
               <div className='mt-1.5'>{chips}</div>
             </details>
             <div className='hidden flex-col items-end gap-1 sm:flex'>
               <p className='text-[11px] font-medium uppercase tracking-wide text-ink-3'>
-                Searched for
+                {ui('Searched for')}
               </p>
               {chips}
             </div>
@@ -553,6 +556,7 @@ function FeedbackControl({
   message: ChatMessage
   onFeedback: (good: boolean, text?: string) => Promise<boolean>
 }) {
+  const { ui } = usePortalLocale()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [detail, setDetail] = useState('')
@@ -565,7 +569,7 @@ function FeedbackControl({
     setBusy(true)
     const ok = await onFeedback(good)
     setBusy(false)
-    if (!ok) setError('Could not send feedback - try again.')
+    if (!ok) setError(ui('Could not send feedback - try again.'))
   }
 
   async function handleDetailSend() {
@@ -575,13 +579,13 @@ function FeedbackControl({
     const ok = await onFeedback(false, detail.trim())
     setBusy(false)
     if (ok) setDetailSent(true)
-    else setError('Could not send feedback - try again.')
+    else setError(ui('Could not send feedback - try again.'))
   }
 
   if (message.feedbackSubmitted) {
     return (
       <div className='flex flex-col items-start gap-1.5'>
-        <p className='text-xs text-ink-3'>Thanks - your feedback was sent.</p>
+        <p className='text-xs text-ink-3'>{ui('Thanks - your feedback was sent.')}</p>
         {message.feedbackGood === false && !detailSent
           ? (
             <>
@@ -590,8 +594,8 @@ function FeedbackControl({
                   type='text'
                   value={detail}
                   onChange={(event) => setDetail(event.target.value)}
-                  placeholder='What was wrong? (optional)'
-                  aria-label='What was wrong with this answer? (optional)'
+                  placeholder={ui('What was wrong? (optional)')}
+                  aria-label={ui('What was wrong with this answer? (optional)')}
                   disabled={busy}
                   className='rp-input h-7 w-48 text-xs'
                 />
@@ -601,14 +605,16 @@ function FeedbackControl({
                   disabled={busy || detail.trim().length === 0}
                   className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
                 >
-                  Send
+                  {ui('Send')}
                 </button>
               </div>
               {
                 /* A comment is kept for the portal's curators as well as sent to the
                  * platform, so the reader is told who can read it before writing one. */
               }
-              <p className='text-xs text-ink-3'>This portal's curators can read what you write.</p>
+              <p className='text-xs text-ink-3'>
+                {ui("This portal's curators can read what you write.")}
+              </p>
             </>
           )
           : null}
@@ -620,13 +626,13 @@ function FeedbackControl({
   return (
     <div className='flex items-center gap-0.5'>
       <ActionIcon
-        label='Helpful answer'
+        label={ui('Helpful answer')}
         onClick={() => handleRate(true)}
         disabled={busy}
         path={ICON_THUMB_UP}
       />
       <ActionIcon
-        label='Not a helpful answer'
+        label={ui('Not a helpful answer')}
         onClick={() => handleRate(false)}
         disabled={busy}
         path={ICON_THUMB_DOWN}
@@ -703,17 +709,18 @@ const ICON_WATCH =
  * badge on `done`.
  */
 function CheckingBadge({ figures }: { figures?: number }) {
+  const { ui } = usePortalLocale()
   // Text on screen before the check has run is unchecked text, and the
   // reader is told so from the first token, not only once the audit
   // starts: streamed prose used to appear as the answer and then be
   // withdrawn (D5-08).
   const label = figures === undefined
-    ? 'Unchecked - still streaming, the check follows'
+    ? ui('Unchecked - still streaming, the check follows')
     : figures === 0
-    ? 'Checking the answer against the cited papers'
+    ? ui('Checking the answer against the cited papers')
     : figures === 1
-    ? 'Checking 1 figure against the cited papers'
-    : `Checking ${figures} figures against the cited papers`
+    ? ui('Checking 1 figure against the cited papers')
+    : ui('Checking {count} figures against the cited papers', { count: figures })
   return (
     <div className='mt-3 flex items-center gap-2' role='status' aria-live='polite'>
       <span className='rp-badge rp-badge-quiet inline-flex items-center gap-1.5'>
@@ -725,6 +732,7 @@ function CheckingBadge({ figures }: { figures?: number }) {
 }
 
 function CopyAnswer({ text }: { text: string }) {
+  const { ui } = usePortalLocale()
   const [copied, setCopied] = useState(false)
 
   async function copy() {
@@ -740,7 +748,7 @@ function CopyAnswer({ text }: { text: string }) {
   if (text.trim().length === 0) return null
   return (
     <ActionIcon
-      label={copied ? 'Answer copied' : 'Copy the answer'}
+      label={copied ? ui('Answer copied') : ui('Copy the answer')}
       onClick={() => void copy()}
       active={copied}
       path={copied ? 'M5 12.5l4.5 4.5L19 7.5' : ICON_COPY}
@@ -756,6 +764,7 @@ function CopyAnswer({ text }: { text: string }) {
 function WatchControl(
   { question, slug, lifetime }: { question: string; slug: string; lifetime: AbortSignal },
 ) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const context = access.controller.context
   const current = () =>
@@ -779,7 +788,7 @@ function WatchControl(
   if (status === 'done') {
     return (
       <p className='text-xs text-ink-3'>
-        In your Watches - a change badge appears in Search when results change.
+        {ui('In your Watches - a change badge appears in Search when results change.')}
       </p>
     )
   }
@@ -787,7 +796,7 @@ function WatchControl(
   return (
     <div className='flex items-center gap-1.5'>
       <ActionIcon
-        label={status === 'busy' ? 'Adding to Watches' : 'Add to Watches'}
+        label={status === 'busy' ? ui('Adding to Watches') : ui('Add to Watches')}
         onClick={handleWatch}
         disabled={status === 'busy'}
         path={ICON_WATCH}
@@ -795,7 +804,7 @@ function WatchControl(
       {status === 'error'
         ? (
           <p className='text-xs text-[var(--rp-bad-ink)]'>
-            Could not add it to Watches - try again.
+            {ui('Could not add it to Watches - try again.')}
           </p>
         )
         : null}
@@ -852,6 +861,7 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
   retryAfterSec?: number
   onRetry: () => void
 }) {
+  const { ui, error: localError } = usePortalLocale()
   const wait = Math.max(1, retryAfterSec ?? (secondsUntilRetry() || RETRY_FALLBACK_SEC))
   const [left, setLeft] = useState(rateLimited ? wait : 0)
   const onRetryRef = useRef(onRetry)
@@ -884,13 +894,13 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
         className='text-sm font-medium'
         style={{ color: rateLimited ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
       >
-        {rateLimited ? 'The portal is busy' : 'Something went wrong'}
+        {rateLimited ? ui('The portal is busy') : ui('Something went wrong')}
       </p>
       <p
         className='mt-1 text-sm'
         style={{ color: rateLimited ? 'var(--rp-warn-ink)' : 'var(--rp-bad-ink)' }}
       >
-        {message}
+        {localError(message, 'The answer service is unavailable.')}
       </p>
       <div className='mt-3 flex flex-wrap items-center gap-3'>
         <button
@@ -898,7 +908,7 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
           onClick={onRetry}
           className={rateLimited ? 'rp-btn rp-btn-outline' : 'rp-btn rp-btn-danger'}
         >
-          {rateLimited ? 'Retry now' : 'Retry'}
+          {rateLimited ? ui('Retry now') : ui('Retry')}
         </button>
         {rateLimited && left > 0
           ? (
@@ -907,7 +917,7 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
               style={{ color: 'var(--rp-warn-ink)' }}
               aria-live='polite'
             >
-              Retrying in {left} s
+              {ui('Retrying in {seconds} s', { seconds: left })}
             </span>
           )
           : null}
@@ -957,6 +967,7 @@ function AnswerCard({
   canAsk: boolean
   lifetime: AbortSignal
 }) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const authority = access.controller.context
   const current = () => !lifetime.aborted && access.controller.context === authority
@@ -1068,7 +1079,7 @@ function AnswerCard({
     return (
       <div className={ANSWER_CARD}>
         <div className='mb-2 rp-answer-tail' style={tailStyle(TAIL_QUALITY)}>
-          <span className='rp-badge rp-badge-quiet'>No direct evidence found</span>
+          <span className='rp-badge rp-badge-quiet'>{ui('No direct evidence found')}</span>
         </div>
 
         {message.text.length > 0 ? renderMarkdown(message, slug) : null}
@@ -1083,7 +1094,7 @@ function AnswerCard({
                 slug={slug}
                 question={question}
                 sources={evidenceSources}
-                title='closest matches, not used'
+                title={ui('closest matches, not used')}
                 anchorPrefix={message.id}
               />
             </div>
@@ -1129,7 +1140,7 @@ function AnswerCard({
       {message.deepBadge
         ? (
           <div className='mb-2 flex flex-wrap items-center gap-2'>
-            <span className='rp-badge rp-badge-quiet'>Deep re-answer</span>
+            <span className='rp-badge rp-badge-quiet'>{ui('Deep re-answer')}</span>
           </div>
         )
         : null}
@@ -1148,12 +1159,12 @@ function AnswerCard({
                   className='rp-badge rp-badge-warn'
                   title={message.fallback.reason}
                 >
-                  Answered from {message.fallback.to
+                  {ui('Answered from')} {message.fallback.to
                     ? intents.find((i) => i.id === message.fallback?.to)?.label ??
                       message.fallback.to
-                    : 'the general configuration'} -{' '}
+                    : ui('the general configuration')} -{' '}
                   {intents.find((i) => i.id === message.fallback?.from)?.label ??
-                    message.fallback.from} found nothing usable
+                    message.fallback.from} {ui('found nothing usable')}
                 </span>
               )
               : null}
@@ -1187,9 +1198,10 @@ function AnswerCard({
             role='status'
             data-testid='first-sentence-verified'
           >
-            <span className='font-medium text-[var(--rp-ok-ink)]'>First sentence verified</span>
-            {' '}
-            against <span className='italic'>{message.verified.title}</span>
+            <span className='font-medium text-[var(--rp-ok-ink)]'>
+              {ui('First sentence verified')}
+            </span>{' '}
+            {ui('against')} <span className='italic'>{message.verified.title}</span>
           </p>
         )
         : null}
@@ -1227,14 +1239,14 @@ function AnswerCard({
             }}
           >
             <p className='text-xs text-[var(--rp-bad-ink)]'>
-              The answer was cut short - {message.error}
+              {ui('The answer was cut short -')} {message.error}
             </p>
             <button
               type='button'
               onClick={onRetry}
               className='rp-btn rp-btn-outline h-7 shrink-0 px-2 text-xs'
             >
-              Retry
+              {ui('Retry')}
             </button>
           </div>
         )
@@ -1274,10 +1286,12 @@ function AnswerCard({
                       setCompare((prev) => prev ? null : [current, other])
                     }}
                     aria-pressed={compare !== null}
-                    title='Run this question through two retrieval configurations side by side'
+                    title={ui(
+                      'Run this question through two retrieval configurations side by side',
+                    )}
                     className='rp-btn rp-btn-ghost h-8 px-2 text-xs'
                   >
-                    Compare configurations
+                    {ui('Compare configurations')}
                   </button>
                 )
                 : null}
@@ -1292,7 +1306,7 @@ function AnswerCard({
               {question.trim().length > 0
                 ? (
                   <ActionIcon
-                    label='Ask this again'
+                    label={ui('Ask this again')}
                     onClick={() => onAskSubquery?.(question)}
                     path={ICON_RETRY}
                   />
@@ -1344,7 +1358,7 @@ function AnswerCard({
               className='inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-line border-t-[var(--rp-accent)]'
               aria-hidden='true'
             />
-            <span>Retrieving evidence…</span>
+            <span>{ui('Retrieving evidence…')}</span>
             <span
               className='rp-shimmer h-3 w-28 rounded-[var(--rp-radius)] bg-surface-3'
               aria-hidden='true'
@@ -1362,8 +1376,8 @@ function AnswerCard({
               regionId={`${message.id}-evidence`}
               open={showEvidence}
               onToggle={() => setShowEvidence((prev) => !prev)}
-              label='retrieved sources'
-              summary={evidenceSummary(evidenceSources, citedSourceCount)}
+              label={ui('retrieved sources')}
+              summary={evidenceSummary(evidenceSources, citedSourceCount, ui)}
             >
               <div className='space-y-5'>
                 {message.citations.length > 0
@@ -1480,14 +1494,17 @@ function AnswerCard({
                             >
                               <path d='M7 4l6 6-6 6' />
                             </svg>
-                            {showPipeline ? 'Hide the pipeline' : 'Show the pipeline'}
+                            {showPipeline ? ui('Hide the pipeline') : ui('Show the pipeline')}
                           </button>
                         )
                         : null}
                       {message.usage
                         ? (
                           <p className='text-xs text-ink-3'>
-                            {message.usage.inputTokens} in / {message.usage.outputTokens} out tokens
+                            {ui('{input} in / {output} out tokens', {
+                              input: message.usage.inputTokens,
+                              output: message.usage.outputTokens,
+                            })}
                           </p>
                         )
                         : null}
@@ -1549,8 +1566,10 @@ function sessionToWordHtml(
   title: string,
   messages: ChatMessage[],
   resourceUrl: (resourceId: string) => string,
+  ui: ResearchUi = englishResearchUi,
+  language = 'en',
 ): string {
-  const dateLine = new Date().toLocaleDateString('en-AU', {
+  const dateLine = new Date().toLocaleDateString(language === 'ja' ? 'ja-JP' : 'en-AU', {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -1562,16 +1581,20 @@ function sessionToWordHtml(
         return `<h2>${escapeHtml(message.text)}</h2>`
       }
       if (message.error) {
-        return `<p><em>Answer unavailable - ${escapeHtml(message.error)}</em></p>`
+        return `<p><em>${escapeHtml(ui('Answer unavailable'))} - ${
+          escapeHtml(message.error)
+        }</em></p>`
       }
       const bodyHtml = answerHtml(message.text, message.citations)
-      const citationsHtml = referenceListHtml(message.citations, message.sources, resourceUrl)
+      const citationsHtml = referenceListHtml(message.citations, message.sources, resourceUrl, ui)
       const qualityHtml = message.quality
-        ? `<p><em>Answer relevance ${
+        ? `<p><em>${escapeHtml(ui('Answer relevance'))} ${
           formatScore(message.quality.answerRelevance)
-        } &middot; Groundedness ${
+        } &middot; ${escapeHtml(ui('Groundedness'))} ${
           formatScore(message.quality.groundedness)
-        } &middot; Context relevance ${formatScore(message.quality.contextRelevance)}</em></p>`
+        } &middot; ${escapeHtml(ui('Context relevance'))} ${
+          formatScore(message.quality.contextRelevance)
+        }</em></p>`
         : ''
       return `${bodyHtml}${citationsHtml}${qualityHtml}`
     })
@@ -1618,7 +1641,7 @@ ${turnsHtml}
 // ---------------------------------------------------------------------------
 
 export function AskPage() {
-  const { ui } = usePortalLocale()
+  const { ui, language } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
   const [searchParams, setSearchParams] = useSearchParams()
   const access = useAccess()
@@ -1879,7 +1902,7 @@ export function AskPage() {
       if (!permits('portal.ask')) return
       void putServerSession(config.slug, {
         id: session.id,
-        title: sessionTitle(session),
+        title: sessionTitle(session, ui),
         updatedAt: new Date(session.updatedAt).toISOString(),
         messages: session.messages,
       }).catch(() => {
@@ -2347,7 +2370,7 @@ export function AskPage() {
         update((existing) =>
           existing.text.length > 0
             ? { ...existing, pending: false }
-            : { ...existing, pending: false, error: 'Stopped before an answer arrived.' }
+            : { ...existing, pending: false, error: ui('Stopped before an answer arrived.') }
         )
       } else if (thrown instanceof ApiError && thrown.status === 429) {
         // The server asked us to wait: the card counts down and retries.
@@ -2361,7 +2384,7 @@ export function AskPage() {
       } else {
         const message = thrown instanceof Error
           ? thrown.message
-          : 'We could not complete this answer - try again.'
+          : ui('We could not complete this answer - try again.')
         update((existing) => ({ ...existing, pending: false, error: message }))
       }
     } finally {
@@ -2493,7 +2516,7 @@ export function AskPage() {
       intent: intentId,
       confidence: 1,
       stage: 'override',
-      rationale: `${intent.label}: chosen by you`,
+      rationale: ui('{label}: chosen by you', { label: intent.label }),
       configuration: isDefault ? 'portal-ask' : `portal-intent-${intentId}`,
       entities: messages.find((m) => m.id === forMessageId)?.route?.entities ?? [],
     }
@@ -2596,6 +2619,8 @@ export function AskPage() {
               `${globalThis.location.origin}/t/${config.slug}/library/${
                 encodeURIComponent(resourceId)
               }`,
+            ui,
+            language,
           ),
         ],
         type: 'application/msword',
@@ -2603,7 +2628,7 @@ export function AskPage() {
       }))
       if (!lifetime.aborted && permits('portal.export')) {
         exportNoticeLifetime.current = lifetime
-        announceExport(savedFileNotice(filename, 'Word document'))
+        announceExport(savedFileNotice(filename, ui('Word document'), ui))
       }
     } catch {
       // An obsolete or incomplete export has no file or success notice.
@@ -2649,20 +2674,22 @@ export function AskPage() {
     matchedField: source.matchedField,
   }))
   const liveMessage = isStreaming
-    ? 'Answer in progress'
+    ? ui('Answer in progress')
     : lastMessage?.author === 'AGENT' && !lastMessage.pending
     ? lastMessage.error && !lastMessage.text.trim()
-      ? (lastMessage.rateLimited ? 'The portal is busy - retrying shortly' : 'Answer unavailable')
-      : 'Answer complete'
+      ? (lastMessage.rateLimited
+        ? ui('The portal is busy - retrying shortly')
+        : ui('Answer unavailable'))
+      : ui('Answer complete')
     : ''
 
   return (
     <main
-      aria-label='Ask'
+      aria-label={ui('Ask')}
       className='mx-auto flex h-[calc(100dvh-var(--rp-header-h,126px))] max-w-[100rem] flex-col gap-3 px-4 pt-4 pb-0 sm:px-6 sm:pt-6 lg:flex-row lg:gap-6 lg:pb-6 2xl:gap-8'
     >
       <aside
-        aria-label='Chat sessions'
+        aria-label={ui('Chat sessions')}
         className='hidden w-64 min-w-0 max-w-[22%] shrink-0 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-3 lg:flex 2xl:w-72'
       >
         <SessionList
@@ -2680,12 +2707,12 @@ export function AskPage() {
           <div
             role='dialog'
             aria-modal='true'
-            aria-label='Sessions'
+            aria-label={ui('Sessions')}
             className='fixed inset-0 z-40 flex lg:hidden'
           >
             <button
               type='button'
-              aria-label='Close sessions'
+              aria-label={ui('Close sessions')}
               onClick={() => setShowSidebar(false)}
               className='flex-1 bg-black/30'
             />
@@ -2764,8 +2791,10 @@ export function AskPage() {
                       onClick={exportSession}
                       disabled={isStreaming || !hasAnsweredTurn(messages)}
                       title={isStreaming
-                        ? 'Export is available once the answer has finished'
-                        : 'Save this research trail as a Word document with a numbered reference list'}
+                        ? ui('Export is available once the answer has finished')
+                        : ui(
+                          'Save this research trail as a Word document with a numbered reference list',
+                        )}
                       className='rp-btn rp-btn-outline shrink-0 gap-2 disabled:cursor-not-allowed'
                     >
                       <svg
@@ -2780,7 +2809,7 @@ export function AskPage() {
                       >
                         <path d='M12 4v11m0 0l-4-4m4 4l4-4M5 19h14' />
                       </svg>
-                      Export
+                      {ui('Export')}
                     </button>
                   )
                   : null}
@@ -2795,7 +2824,7 @@ export function AskPage() {
             : null}
 
           <section
-            aria-label='Conversation'
+            aria-label={ui('Conversation')}
             className='rp-scroll flex-1 pb-4 lg:overflow-y-auto'
           >
             {isEmpty
@@ -3052,7 +3081,7 @@ export function AskPage() {
               {canGenerate && deepResearch
                 ? (
                   <span className='hidden text-xs text-ink-3 lg:inline'>
-                    Maps sub-questions before answering - slower, more thorough.
+                    {ui('Maps sub-questions before answering - slower, more thorough.')}
                   </span>
                 )
                 : null}
@@ -3117,7 +3146,7 @@ export function AskPage() {
               * bar that is already pinned over it. */
             }
             <p className='mt-1.5 hidden px-1 text-xs text-ink-3 lg:block'>
-              Enter to send &middot; Shift+Enter for a new line
+              {ui('Enter to send · Shift+Enter for a new line')}
             </p>
           </form>
         </div>
@@ -3131,11 +3160,11 @@ export function AskPage() {
       {railAnswer && railSources.length > 0
         ? (
           <aside
-            aria-label='Sources for the latest answer'
+            aria-label={ui('Sources for the latest answer')}
             className='hidden min-h-0 w-80 min-w-0 max-w-[28%] shrink-0 flex-col xl:flex 2xl:w-96'
           >
             <div className='rp-scroll min-h-0 flex-1 overflow-y-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
-              <p className='rp-eyebrow text-ink-3'>Sources for the latest answer</p>
+              <p className='rp-eyebrow text-ink-3'>{ui('Sources for the latest answer')}</p>
               <div className='mt-3'>
                 <EvidenceTable
                   slug={config.slug}

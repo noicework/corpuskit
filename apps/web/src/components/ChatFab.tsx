@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
@@ -36,6 +37,7 @@ function writeDismissed(slug: string) {
  * indicator or a browser chrome overlay on mobile.
  */
 export function ChatFab({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const location = useLocation()
   const [dismissed, setDismissed] = useState(() => readDismissed(slug))
@@ -66,7 +68,7 @@ export function ChatFab({ slug }: { slug: string }) {
       <button
         type='button'
         onClick={dismiss}
-        aria-label='Dismiss the Ask button for this session'
+        aria-label={ui('Dismiss the Ask button for this session')}
         className='rp-focus rp-shadow-md flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-ink-3 transition-colors duration-150 hover:text-ink'
       >
         <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3 w-3'>
@@ -75,7 +77,7 @@ export function ChatFab({ slug }: { slug: string }) {
       </button>
       <Link
         to={`/t/${slug}/ask`}
-        aria-label='Ask a question'
+        aria-label={ui('Ask a question')}
         className='rp-focus rp-shadow-lg rp-lift inline-flex h-12 shrink-0 items-center gap-2 rounded-full px-4 text-sm font-semibold text-[var(--rp-on-primary)] transition-colors duration-150 hover:brightness-110'
         style={{ backgroundColor: 'var(--rp-primary)' }}
       >
@@ -91,7 +93,7 @@ export function ChatFab({ slug }: { slug: string }) {
         >
           <path d='M3 4.5h14v9H8.5L5 16.5v-3H3z' />
         </svg>
-        <span className='hidden sm:inline'>Ask a question</span>
+        <span className='hidden sm:inline'>{ui('Ask a question')}</span>
       </Link>
     </div>
   )

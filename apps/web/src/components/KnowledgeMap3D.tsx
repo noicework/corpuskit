@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type GroupStyle,
@@ -79,6 +80,7 @@ export function KnowledgeMap3D({
   /** Called after the settled scene has rendered and crossed a paint boundary. */
   onReady?: () => void
 }) {
+  const { ui } = usePortalLocale()
   const [supported] = useState(webglAvailable)
 
   const visibleNodes = useMemo(
@@ -269,7 +271,7 @@ export function KnowledgeMap3D({
           onSelect={onSelect}
           focusId={focusId}
           insets={insets}
-          hint='Drag to pan · scroll to zoom · click a node to explore it'
+          hint={ui('Drag to pan · scroll to zoom · click a node to explore it')}
         />
       </div>
     )
@@ -280,7 +282,9 @@ export function KnowledgeMap3D({
       <canvas
         ref={canvasRef}
         role='application'
-        aria-label='Knowledge map - drag to orbit, pinch or scroll to zoom, click a node to explore it. With the keyboard: arrows orbit, plus and minus zoom, Enter selects the entity nearest the middle. The navigator list and the find field reach any entity by name.'
+        aria-label={ui(
+          'Knowledge map - drag to orbit, pinch or scroll to zoom, click a node to explore it. With the keyboard: arrows orbit, plus and minus zoom, Enter selects the entity nearest the middle. The navigator list and the find field reach any entity by name.',
+        )}
         tabIndex={0}
         className='rp-focus block h-full w-full cursor-grab touch-none select-none'
       />
@@ -307,7 +311,7 @@ export function KnowledgeMap3D({
             <button
               key='in'
               type='button'
-              aria-label='Zoom in'
+              aria-label={ui('Zoom in')}
               onClick={() => engineRef.current?.zoomBy(1.3)}
               className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
             >
@@ -318,7 +322,7 @@ export function KnowledgeMap3D({
             <button
               key='out'
               type='button'
-              aria-label='Zoom out'
+              aria-label={ui('Zoom out')}
               onClick={() => engineRef.current?.zoomBy(1 / 1.3)}
               className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
             >
@@ -329,8 +333,8 @@ export function KnowledgeMap3D({
             <button
               key='fit'
               type='button'
-              aria-label='Fit the whole map to view'
-              title='Fit to view'
+              aria-label={ui('Fit the whole map to view')}
+              title={ui('Fit to view')}
               onClick={() => engineRef.current?.fit(true)}
               className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-sm'
             >

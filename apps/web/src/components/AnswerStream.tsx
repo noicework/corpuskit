@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -70,13 +71,14 @@ export function citationHref(
  * never the literal "(inference)" the prompt asked the model to write.
  */
 export function InferenceMark() {
+  const { ui } = usePortalLocale()
   return (
     <sup
       className='ml-0.5 select-none rounded-[var(--rp-radius-chip)] px-1 text-[0.6em] font-semibold uppercase tracking-wide text-ink-3'
       style={{ backgroundColor: 'var(--rp-surface-3)' }}
-      title="The model's own inference, not a statement in the cited sources"
+      title={ui("The model's own inference, not a statement in the cited sources")}
     >
-      inference
+      {ui('inference')}
     </sup>
   )
 }
@@ -148,6 +150,7 @@ export function EvidenceDisclosure({
   heading = false,
   children,
 }: EvidenceDisclosureProps) {
+  const { ui } = usePortalLocale()
   const control = (
     <button
       type='button'
@@ -158,7 +161,9 @@ export function EvidenceDisclosure({
     >
       <span className='flex min-w-0 items-center gap-1.5'>
         <DisclosureChevron open={open} />
-        <span className='min-w-0'>{open ? 'Hide' : 'Show'} {label}</span>
+        <span className='min-w-0'>
+          {ui(open ? 'Hide {label}' : 'Show {label}', { label })}
+        </span>
       </span>
       {summary
         ? (
@@ -186,7 +191,8 @@ export function EvidenceDisclosure({
  * shown when the answer stated no figure.
  */
 function ScopedAuditBadge({ audit }: { audit: AnswerAudit | null }) {
-  const badge = auditBadge(audit ?? undefined)
+  const { ui } = usePortalLocale()
+  const badge = auditBadge(audit ?? undefined, ui)
   if (!badge) return null
   return (
     <div className='mt-3 flex flex-wrap items-center gap-2'>
@@ -196,7 +202,7 @@ function ScopedAuditBadge({ audit }: { audit: AnswerAudit | null }) {
       >
         {badge.label}
       </span>
-      <span className='text-xs text-ink-3'>Checked against this document's text</span>
+      <span className='text-xs text-ink-3'>{ui("Checked against this document's text")}</span>
     </div>
   )
 }
@@ -334,6 +340,7 @@ export function ContextJourney(props: ContextJourneyProps) {
 }
 
 function PermittedContextJourney({ slug, sources, query = '', onOpen }: ContextJourneyProps) {
+  const { ui } = usePortalLocale()
   const access = useAccess()
   const context = access.controller.context
   const [isOpen, setIsOpen] = useState(false)
@@ -374,7 +381,7 @@ function PermittedContextJourney({ slug, sources, query = '', onOpen }: ContextJ
           <circle cx='12' cy='12' r='9' />
           <path d='M15.2 8.8l-1.6 4.4-4.4 1.6 1.6-4.4z' />
         </svg>
-        Journey through the context
+        {ui('Journey through the context')}
         <span className='rounded-[var(--rp-radius-chip)] bg-surface-2 px-1.5 py-0.5 text-[10px] tabular-nums text-ink-3'>
           {Math.min(sources.length, 8)}
         </span>
@@ -421,6 +428,7 @@ function PermittedAnswerStream(
   { slug, request, onSources, onRetry, scopedToResource = false, onCitationJump }:
     AnswerStreamProps,
 ) {
+  const { ui, error: localError } = usePortalLocale()
   const access = useAccess()
   const context = access.controller.context
   const canAsk = () =>
@@ -546,7 +554,7 @@ function PermittedAnswerStream(
       // (review loop 8 D8-07). The detail stays in
       // the console, where a developer can read it.
       console.error('ask stream failed', err)
-      setErrorMessage('The answer service is unavailable - please try again.')
+      setErrorMessage(ui('The answer service is unavailable - please try again.'))
       setStatus('error')
     })
 
@@ -608,8 +616,11 @@ function PermittedAnswerStream(
             event.currentTarget.click()
           }}
           aria-label={onCitationJump
-            ? `Source ${index}, ${citation.title} - show the cited passage`
-            : `Source ${index}, ${citation.title}`}
+            ? ui('Source {index}, {value2} - show the cited passage', {
+              index: index,
+              value2: citation.title,
+            })
+            : ui('Source {index}, {value2}', { index: index, value2: citation.title })}
           className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
           style={{ color: 'var(--rp-accent-fg)' }}
         >
@@ -628,7 +639,7 @@ function PermittedAnswerStream(
           aria-hidden='true'
         />
         <p className='rp-eyebrow text-ink-3'>
-          AI answer
+          {ui('AI answer')}
         </p>
       </div>
 
@@ -646,17 +657,19 @@ function PermittedAnswerStream(
              * makes no sense when the question was checked against one
              * document. Say that plainly and offer the corpus. */
             <div className='rp-answer-in rounded-[var(--rp-radius)] border border-dashed border-line bg-surface-2 p-4'>
-              <p className='text-sm font-semibold text-ink'>This document does not answer that</p>
+              <p className='text-sm font-semibold text-ink'>
+                {ui('This document does not answer that')}
+              </p>
               <p className='mt-1 text-sm leading-relaxed text-ink-2'>
-                The question was checked against this document only, and nothing in it addresses it.
-                Try asking about something the document covers, or put the question to the whole
-                corpus.
+                {ui(
+                  'The question was checked against this document only, and nothing in it addresses it. Try asking about something the document covers, or put the question to the whole corpus.',
+                )}
               </p>
               <Link
                 to={`/t/${slug}/ask?ask=${encodeURIComponent(request.query)}`}
                 className='rp-btn rp-btn-outline mt-3'
               >
-                Ask the whole corpus
+                {ui('Ask the whole corpus')}
               </Link>
             </div>
           )
@@ -704,8 +717,10 @@ function PermittedAnswerStream(
                         <button
                           type='button'
                           onClick={() => scrollToResource(citation.resourceId)}
-                          aria-label={`Scroll to ${citation.title} in the results below`}
-                          title='Scroll to this result'
+                          aria-label={ui('Scroll to {value1} in the results below', {
+                            value1: citation.title,
+                          })}
+                          title={ui('Scroll to this result')}
                           className='rp-focus flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-xs text-[var(--rp-ink-3)] transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
                         >
                           &darr;
@@ -717,7 +732,7 @@ function PermittedAnswerStream(
               })}
             </div>
             <p className='mt-2 text-xs text-ink-3'>
-              {citations.length} cited
+              {citations.length} {ui('cited')}
             </p>
             <CurrencyNote
               className='mt-2'
@@ -731,14 +746,15 @@ function PermittedAnswerStream(
         ? (
           <div className='mt-3 flex flex-wrap items-center gap-2'>
             <p className='text-xs text-[var(--rp-bad-ink)]'>
-              Answer unavailable right now - {errorMessage}
+              {ui('Answer unavailable right now -')}{' '}
+              {localError(errorMessage, 'The answer service is unavailable.')}
             </p>
             <button
               type='button'
               onClick={retry}
               className='rp-btn rp-btn-outline h-auto px-2.5 py-1 text-xs'
             >
-              Try again
+              {ui('Try again')}
             </button>
           </div>
         )
@@ -747,8 +763,10 @@ function PermittedAnswerStream(
       {usage && !scopedToResource
         ? (
           <p className='mt-3 text-xs text-ink-3'>
-            {usage.inputTokens.toLocaleString()} in / {usage.outputTokens.toLocaleString()}{' '}
-            out tokens{usage.totalSec !== undefined ? ` - ${usage.totalSec.toFixed(1)} s` : ''}
+            {ui('{input} in / {output} out tokens', {
+              input: usage.inputTokens.toLocaleString(),
+              output: usage.outputTokens.toLocaleString(),
+            })}
           </p>
         )
         : null}

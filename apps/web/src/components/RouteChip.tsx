@@ -1,3 +1,5 @@
+import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useRef, useState } from 'react'
 import type { Intent } from '@research-portal/core'
 import type { RouteDecision } from '../api/client.ts'
@@ -15,6 +17,7 @@ export function RouteChip(
     pending?: boolean
   },
 ) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -33,7 +36,7 @@ export function RouteChip(
           className='inline-block h-3 w-3 animate-spin rounded-full border-2 border-line border-t-[var(--rp-accent)]'
           aria-hidden='true'
         />
-        Choosing the retrieval configuration…
+        {ui('Choosing the retrieval configuration…')}
       </span>
     )
   }
@@ -41,12 +44,12 @@ export function RouteChip(
   const intent = intents.find((i) => i.id === decision.intent)
   const label = intent?.label ?? decision.intent
   const stage = decision.stage === 'rule'
-    ? 'rule'
+    ? ui('rule')
     : decision.stage === 'classifier'
-    ? `classified · ${Math.round(decision.confidence * 100)}%`
+    ? ui('classified · {percent}%', { percent: Math.round(decision.confidence * 100) })
     : decision.stage === 'override'
-    ? 'chosen by you'
-    : 'default'
+    ? ui('chosen by you')
+    : ui('default')
   return (
     <div ref={ref} className='relative inline-flex items-center gap-1.5'>
       <button
@@ -131,30 +134,35 @@ export function RouteChip(
 }
 
 /** One line summarising an intent's retrieval policy, for compare mode and the Manage table. */
-export function intentSummary(intent: Intent): string {
+export function intentSummary(intent: Intent, ui: ResearchUi = englishResearchUi): string {
   const r = intent.retrieval
   const a = intent.answer
   const parts = [
     r.features.join(' + '),
-    `top ${r.topK}`,
-    r.reranker === 'noop' ? 'no rerank' : 'reranked',
+    ui('top {count}', { count: r.topK }),
+    r.reranker === 'noop' ? ui('no rerank') : ui('reranked'),
     r.only.length > 0
-      ? `only ${r.only.map((l) => l.label).join(', ')}`
+      ? ui('only {labels}', { labels: r.only.map((l) => l.label).join(', ') })
       : r.exclude.length > 0
-      ? `excl. ${r.exclude.map((l) => l.label).join(', ')}`
-      : 'all research',
+      ? ui('excl. {labels}', { labels: r.exclude.map((l) => l.label).join(', ') })
+      : ui('all research'),
     a.strategy === 'full'
-      ? 'full text'
+      ? ui('full text')
       : a.strategy === 'neighbours'
-      ? `±${a.neighbours ?? 2} paragraphs`
-      : 'no expansion',
-    a.graph ? 'graph' : '',
-    a.promptVariant !== 'default' ? `${a.promptVariant} prompt` : '',
+      ? ui('±{count} paragraphs', { count: a.neighbours ?? 2 })
+      : ui('no expansion'),
+    a.graph ? ui('graph') : '',
+    a.promptVariant !== 'default' ? ui('{variant} prompt', { variant: a.promptVariant }) : '',
     a.prequeries.length > 0
-      ? `${a.prequeries.length} mandatory sub-question${a.prequeries.length > 1 ? 's' : ''}`
+      ? ui(
+        a.prequeries.length > 1
+          ? '{count} mandatory sub-questions'
+          : '{count} mandatory sub-question',
+        { count: a.prequeries.length },
+      )
       : '',
-    a.minScore > 0.35 ? `cite ≥ ${Math.round(a.minScore * 100)}%` : '',
-    a.sortByPublished ? 'newest first' : '',
+    a.minScore > 0.35 ? ui('cite ≥ {percent}%', { percent: Math.round(a.minScore * 100) }) : '',
+    a.sortByPublished ? ui('newest first') : '',
   ].filter(Boolean)
   return parts.join(' · ')
 }
