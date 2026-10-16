@@ -64,6 +64,8 @@ const retainedEnglish = new Set([
   'fixture-portal-admin',
   'fixture-viewer',
   'marine',
+  // The extraction sandbox's technical slug is authored fixture data, not UI copy.
+  '(marine-lab)',
   'pending@example.test',
   ...[0, 1, 2].flatMap((index) => [`fixture-key-${index}`, `fixture_key_${index}`]),
 ])
@@ -208,6 +210,24 @@ Deno.test('Japanese Manage covers every panel, retains source values and switche
     for (const tab of tabs) {
       await navigate(page, tab)
       await page.waitForFunction(() => !document.querySelector('main .rp-shimmer'))
+      if (tab === 'extraction') {
+        // This asynchronous card has no shimmer. Inspect its resolved state so
+        // an early inventory cannot silently miss the sandbox's technical ID.
+        await page.waitForFunction(() =>
+          [...document.querySelectorAll('main .rp-badge')].some((badge) =>
+            badge.textContent?.trim() === 'サンドボックス利用不可' &&
+            badge.closest('.rp-card')?.textContent?.includes('(marine-lab)')
+          )
+        )
+        const card = await page.evaluate(() =>
+          [...document.querySelectorAll('main .rp-badge')]
+            .find((badge) => badge.textContent?.trim() === 'サンドボックス利用不可')
+            ?.closest('.rp-card')?.textContent ?? ''
+        )
+        expect(card).toContain('サンドボックスの抽出方法')
+        expect(card).toContain('(marine-lab)')
+        expect(card).toContain('抽出用サンドボックスを利用できません。')
+      }
       expect(await page.evaluate(() => innerWidth)).toBe(1440)
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth))
         .toBeLessThanOrEqual(1)

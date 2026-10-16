@@ -1686,9 +1686,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const scopedEntity = async (config: TenantConfig, name: string) => {
     if (!opts.management) return false
     try {
-      return (await opts.management.entityGroups(config)).some((group) =>
-        group.entities.includes(name)
-      )
+      if (
+        (await opts.management.entityGroups(config)).some((group) => group.entities.includes(name))
+      ) return true
+      // Imported user relations can be visible in this portal's native graph without
+      // appearing in the upstream entity-group catalogue. Only accept an exact node
+      // from that same authorised portal, never an arbitrary requested neighbourhood.
+      const graph = await opts.management.relationsGraph(config)
+      return Array.isArray(graph?.nodes) &&
+        graph.nodes.some((node) =>
+          node !== null && typeof node === 'object' && !Array.isArray(node) &&
+          typeof node.id === 'string' && node.id === name &&
+          typeof node.group === 'string' && typeof node.weight === 'number' &&
+          Number.isFinite(node.weight) && node.weight >= 0
+        )
     } catch {
       return false
     }

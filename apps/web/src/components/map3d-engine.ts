@@ -11,16 +11,17 @@ import {
 } from './KnowledgeMap.tsx'
 import { type Centre3D, clusterCentres3D, ForceSim3D, type SimNode3D } from '../lib/force3d.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
+import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
 
 type PopupSubject =
   | { kind: 'category'; group: string; entities: number; links: number }
   | { kind: 'entity'; label: string; group: string; relations: number; mentions: number }
 
-/** Fixed interface copy only; authored graph names are never translation inputs. */
+/** Known category display aliases and fixed interface copy; entity names stay verbatim. */
 export function mapPopupCopy(subject: PopupSubject, ui: ResearchUi = englishResearchUi) {
   return subject.kind === 'category'
     ? {
-      name: subject.group || ui('Entity'),
+      name: graphGroupLabel(subject.group, ui),
       category: ui('category'),
       counts: `${
         ui(subject.entities === 1 ? '1 entity' : '{count} entities', {
@@ -35,7 +36,7 @@ export function mapPopupCopy(subject: PopupSubject, ui: ResearchUi = englishRese
     }
     : {
       name: subject.label,
-      category: subject.group || ui('Entity'),
+      category: graphGroupLabel(subject.group, ui),
       counts: `${
         ui(subject.relations === 1 ? '1 relation' : '{count} relations', {
           count: subject.relations,
@@ -1032,7 +1033,8 @@ export class KnowledgeMapEngine {
         const caption = document.createElement('div')
         caption.className = 'rp-map3d-territory'
         caption.style.color = `var(--rp-cat-${style.slot + 1}-ink)`
-        const captionFull = `${group.toUpperCase()} · ${count}`
+        const captionShort = graphGroupLabel(group, this.ui)
+        const captionFull = `${captionShort} · ${count}`
         caption.textContent = captionFull
         caption.style.display = 'none'
         this.labelLayer.appendChild(caption)
@@ -1044,7 +1046,7 @@ export class KnowledgeMapEngine {
           material,
           caption,
           captionFull,
-          captionShort: group.toUpperCase(),
+          captionShort,
           captionW: 0,
           captionShortW: 0,
           captionHubW: 0,
@@ -1539,7 +1541,18 @@ export class KnowledgeMapEngine {
   /** Refresh visible copy without rebuilding the scene or changing the current view. */
   setUi(ui: ResearchUi): void {
     this.ui = ui
+    for (const territory of this.territories) {
+      territory.captionShort = graphGroupLabel(territory.group, ui)
+      territory.captionFull = `${territory.captionShort} · ${territory.count}`
+    }
+    for (const visual of [...this.edgeVisuals, ...this.flowVisuals]) {
+      if (!visual.label) continue
+      visual.label.textContent = graphRelationLabel(visual.edge.label, ui)
+      visual.labelW = visual.label.textContent.length * 5.4
+    }
+    this.measureLabels()
     this.updatePopup()
+    this.renderDirty = true
   }
 
   /** Pin the card beside the hovered mark, flipped inside the canvas edges. */
@@ -3197,10 +3210,10 @@ export class KnowledgeMapEngine {
     if (!visual.label) {
       const el = document.createElement('div')
       el.className = 'rp-map3d-edge-label'
-      el.textContent = visual.edge.label
+      el.textContent = graphRelationLabel(visual.edge.label, this.ui)
       this.labelLayer.appendChild(el)
       visual.label = el
-      visual.labelW = visual.edge.label.length * 5.4
+      visual.labelW = el.textContent.length * 5.4
     }
     this.labelVec.copy(visual.from.pos).add(visual.to.pos).multiplyScalar(0.5).project(this.camera)
     if (this.labelVec.z > 1 || this.labelVec.z < -1) {

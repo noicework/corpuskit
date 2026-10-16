@@ -7,6 +7,7 @@ import { ApiError, type EntityDossier, getEntityDossier } from '../api/client.ts
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
 import { passageIsQuotable } from '../lib/passage.ts'
+import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 type RelationEdge = EntityDossier['relations']['edges'][number]
@@ -22,6 +23,7 @@ function sameEntity(a: string, b: string): boolean {
  * into its own dossier.
  */
 function RelationChip({ edge, slug, name }: { edge: RelationEdge; slug: string; name: string }) {
+  const { ui } = usePortalLocale()
   const renderSide = (value: string) => {
     if (sameEntity(value, name)) {
       return <span className='font-semibold text-ink'>{value}</span>
@@ -40,7 +42,7 @@ function RelationChip({ edge, slug, name }: { edge: RelationEdge; slug: string; 
   return (
     <div className='flex flex-wrap items-center gap-1.5 rounded-[var(--rp-radius)] border border-line bg-surface px-3.5 py-2.5 text-sm text-ink-2'>
       {renderSide(edge.source)}
-      <span className='text-ink-3'>- {edge.label} &rarr;</span>
+      <span className='text-ink-3'>- {graphRelationLabel(edge.label, ui)} &rarr;</span>
       {renderSide(edge.target)}
     </div>
   )
@@ -217,7 +219,7 @@ export function EntityPage() {
                           key={group}
                           className='rp-badge rp-badge-quiet uppercase tracking-[0.06em]'
                         >
-                          {group}
+                          {graphGroupLabel(group, ui)}
                         </span>
                       ))}
                     </div>

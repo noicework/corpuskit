@@ -83,6 +83,12 @@ Tools clipboard success/failure notices also switch JA → EN → JA with one co
 the 3D-map popup refreshes its finite labels/counts in place without rebuilding the scene or
 translating graph names.
 
+Graph category displays additionally recognise exactly `Entity`, `Topic`, `Kind`, `Experiment`,
+`Material` and `Research topic`; predicate displays recognise exactly `examines` and `uses material`.
+These are display aliases only: native group/predicate identities, entity names, request parameters,
+filters and trace keys stay unchanged. Unknown values, including other catalog keys and braces,
+remain verbatim. Empty relation labels use the translated application fallback.
+
 The one-shot ResourceDetail deletion notice passed through router navigation is rendered in the
 language of the deletion action; it is consumed as a single navigation announcement. It does not
 persist or rerun a mutation when the language changes. Research exported files likewise use the
@@ -102,6 +108,7 @@ The committed suites provide reproducible local checks with synthetic fixtures a
 | `e2e/japanese-manage.test.ts` | All 13 Japanese Manage tabs, classified visible English audit, import review/result switching, 40 theme/viewport scenes, real button/text bounds and density sizing |
 | `e2e/japanese-research.test.ts` | 80 research route/theme/language/viewport scenes with source preservation and no provider generation |
 | `e2e/japanese-map-copy.test.ts` | Real WebGL popup locale switching with authored known-key/braces graph labels preserved |
+| `e2e/japanese-graph-display.test.ts` | Known category/predicate aliases, retained WebGL scene and selection/trace, SVG trace identity, raw expansion requests, and wide/390 light/dark at 22px |
 | `e2e/japanese-platform.test.ts` | 72 platform/access/help scenes plus all 17 help pages, dialogs, keyboard flow and actual computed theme |
 
 The browser matrices use English/Japanese, light/dark, 1440px desktop and measured 390px layout
