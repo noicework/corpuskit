@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -39,6 +40,8 @@ function StatTilesContent({
   slug: string
   resourceCount: number
 }) {
+  const { ui } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
     { kind: 'portal', slug },
@@ -60,7 +63,7 @@ function StatTilesContent({
   const refresh = async () => {
     setError(undefined)
     try {
-      const result = await runExplicit('Read corpus metrics', async (access) => {
+      const result = await runExplicit(ui('Read corpus metrics'), async (access) => {
         const counters = await readCounters(slug, access)
         if (
           !counters ||
@@ -73,7 +76,7 @@ function StatTilesContent({
       if (sessionAllowed) client.setQueryData(['admin-counters', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load metrics.')
+      setError(err instanceof Error ? err.message : ui('Could not load metrics.'))
     }
   }
 
@@ -85,30 +88,30 @@ function StatTilesContent({
         disabled={pending || query.isFetching}
         onClick={() => void refresh()}
       >
-        Refresh metrics
+        {ui('Refresh metrics')}
       </button>
       {!sessionAllowed && (
         <p className='text-xs text-ink-3'>
-          Metrics are a snapshot. Refresh explicitly to read them again.
+          {ui('Metrics are a snapshot. Refresh explicitly to read them again.')}
         </p>
       )}
       {(error || query.isError) && (
         <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
-          {error ?? 'Could not load metrics.'}
+          {error ?? ui('Could not load metrics.')}
         </p>
       )}
       <dl className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
-        <StatTile label='Documents' value={String(resourceCount)} />
+        <StatTile label={ui('Documents')} value={String(resourceCount)} />
         <StatTile
-          label='Paragraphs'
+          label={ui('Paragraphs')}
           value={data ? String(data.paragraphs) : query.isLoading ? null : '-'}
         />
         <StatTile
-          label='Sentences'
+          label={ui('Sentences')}
           value={data ? String(data.sentences) : query.isLoading ? null : '-'}
         />
         <StatTile
-          label='Index MB'
+          label={ui('Index MB')}
           value={data ? data.indexMb.toFixed(1) : query.isLoading ? null : '-'}
         />
       </dl>

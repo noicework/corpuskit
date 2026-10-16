@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -70,6 +71,8 @@ function ChipGroup({
 function KgPanelContent(
   { slug, open }: { slug: string; open: boolean },
 ) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess('graph.write', {
     kind: 'portal',
     slug,
@@ -100,7 +103,7 @@ function KgPanelContent(
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Propose a graph strategy',
+        ui('Propose a graph strategy'),
         async (access) => KgProposalSchema.parse(await proposeKg(slug, access)),
       )
       assertCurrent()
@@ -110,7 +113,7 @@ function KgPanelContent(
       if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
-        text: errorMessage(err, 'Could not propose a strategy - please try again.'),
+        text: errorMessage(err, 'Could not propose a strategy - please try again.', localError),
       })
     } finally {
       if (context === authority.controller.context) setProposing(false)
@@ -126,7 +129,7 @@ function KgPanelContent(
       'Implementation failed - please retry.',
     )
     try {
-      const result = await runExplicit('Implement the graph strategy', async (access) => {
+      const result = await runExplicit(ui('Implement the graph strategy'), async (access) => {
         await implementKg(
           slug,
           access,
@@ -139,9 +142,12 @@ function KgPanelContent(
       if (result === undefined) return
       setMessage({
         tone: 'ok',
-        text: `Strategy implemented - ${result.agents} ${
-          result.agents === 1 ? 'agent' : 'agents'
-        } installed on the box.`,
+        text: ui(
+          result.agents === 1
+            ? 'Strategy implemented - {count} agent installed on the box.'
+            : 'Strategy implemented - {count} agents installed on the box.',
+          { count: result.agents },
+        ),
       })
       if (sessionAllowed) {
         await Promise.all([
@@ -151,7 +157,7 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage(failedJobMessage(job, err, 'Implementation failed - please retry.'))
+      setMessage(failedJobMessage(job, err, 'Implementation failed - please retry.', localError))
     } finally {
       if (context === authority.controller.context) setImplementing(false)
     }
@@ -160,7 +166,7 @@ function KgPanelContent(
   const onRemoveAgent = async (taskId: string) => {
     setMessage(null)
     try {
-      const result = await runExplicit('Remove this graph agent', async (access) => {
+      const result = await runExplicit(ui('Remove this graph agent'), async (access) => {
         const result = await deleteAgent(slug, access, taskId)
         if (result?.ok !== true) throw new AdminAccessError()
         return true
@@ -173,13 +179,16 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not remove the agent.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not remove the agent.', localError),
+      })
     }
   }
 
   const onReadAgents = async () => {
     try {
-      const result = await runExplicit('Load graph agents', async (access) => {
+      const result = await runExplicit(ui('Load graph agents'), async (access) => {
         const agents = await getAgents(slug, access)
         return KbAgentSchema.array().parse(agents)
       })
@@ -190,7 +199,7 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load agents.') })
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load agents.', localError) })
     }
   }
   const agents = (sessionAllowed ? agentsQuery.data : snapshot) ?? []
@@ -199,10 +208,11 @@ function KgPanelContent(
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <p className='text-sm font-semibold text-ink'>Knowledge graph</p>
+          <p className='text-sm font-semibold text-ink'>{ui('Knowledge graph')}</p>
           <p className='mt-0.5 text-xs text-ink-3'>
-            Interrogates the corpus, designs a knowledge-graph strategy, and - once you approve it -
-            installs it as agents on the box.
+            {ui(
+              'Interrogates the corpus, designs a knowledge-graph strategy, and - once you approve it - installs it as agents on the box.',
+            )}
           </p>
         </div>
         <button
@@ -211,22 +221,24 @@ function KgPanelContent(
           onClick={() => void onPropose()}
           className='rp-btn rp-btn-primary'
         >
-          {proposing ? 'Interrogating the corpus…' : 'Propose strategy'}
+          {proposing ? ui('Interrogating the corpus…') : ui('Propose strategy')}
         </button>
       </div>
 
       {(proposing || implementing) && (
         <p role='status' className='mt-3 text-sm text-ink-3'>
-          Waiting for the confirmed result. Progress may arrive together when the action finishes.
+          {ui(
+            'Waiting for the confirmed result. Progress may arrive together when the action finishes.',
+          )}
         </p>
       )}
       {proposal && (
         <div className='mt-4 space-y-3 rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
           <p className='text-sm text-ink-2'>{proposal.rationale}</p>
 
-          <ChipGroup title='Entity types' items={proposal.entityTypes} />
-          <ChipGroup title='Document labels' items={proposal.resourceLabels} />
-          <ChipGroup title='Passage labels' items={proposal.chunkLabels} />
+          <ChipGroup title={ui('Entity types')} items={proposal.entityTypes} />
+          <ChipGroup title={ui('Document labels')} items={proposal.resourceLabels} />
+          <ChipGroup title={ui('Passage labels')} items={proposal.chunkLabels} />
 
           <div className='flex flex-wrap items-center gap-4 border-t border-line pt-3'>
             <label className='flex items-center gap-2 text-sm text-ink-2'>
@@ -235,7 +247,7 @@ function KgPanelContent(
                 checked={applyExisting}
                 onChange={(e) => setApplyExisting(e.target.checked)}
               />
-              Run over existing resources
+              {ui('Run over existing resources')}
             </label>
             <label className='flex items-center gap-2 text-sm text-ink-2'>
               <input
@@ -243,7 +255,7 @@ function KgPanelContent(
                 checked={includeSummaries}
                 onChange={(e) => setIncludeSummaries(e.target.checked)}
               />
-              Generate page summaries
+              {ui('Generate page summaries')}
             </label>
             <label className='flex items-center gap-2 text-sm text-ink-2'>
               <input
@@ -251,12 +263,13 @@ function KgPanelContent(
                 checked={includeMemory}
                 onChange={(e) => setIncludeMemory(e.target.checked)}
               />
-              Conversation memory agent
+              {ui('Conversation memory agent')}
             </label>
           </div>
           <p className='text-xs text-ink-3'>
-            Conversation memory agent: remembers each user's research interests across conversations
-            and sharpens future answers.
+            {ui(
+              "Conversation memory agent: remembers each user's research interests across conversations and sharpens future answers.",
+            )}
           </p>
 
           <button
@@ -265,7 +278,7 @@ function KgPanelContent(
             onClick={() => void onImplement()}
             className='rp-btn rp-btn-primary'
           >
-            {implementing ? 'Implementing…' : 'Implement strategy'}
+            {implementing ? ui('Implementing…') : ui('Implement strategy')}
           </button>
 
           {log.length > 0 && (
@@ -280,7 +293,7 @@ function KgPanelContent(
                   )}
                   {event.type === 'done' && (
                     <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>
-                      Finished.
+                      {ui('Finished.')}
                     </span>
                   )}
                   {event.type === 'error' && (
@@ -296,22 +309,28 @@ function KgPanelContent(
       {message && <MessagePanel message={message} className='mt-3' />}
 
       <div className='mt-4 border-t border-line pt-3'>
-        <p className='text-sm font-medium text-ink'>Agents on this box</p>
+        <p className='text-sm font-medium text-ink'>{ui('Agents on this box')}</p>
         <button
           type='button'
           data-graph-read='agents'
           className='rp-btn rp-btn-outline mt-2'
           onClick={() => void onReadAgents()}
         >
-          Load graph agents
+          {ui('Load graph agents')}
         </button>
 
-        {open && agentsQuery.isLoading && <p className='mt-2 text-sm text-ink-3'>Loading…</p>}
+        {open && agentsQuery.isLoading && (
+          <p className='mt-2 text-sm text-ink-3'>{ui('Loading…')}</p>
+        )}
 
-        {agentsQuery.isError && <p className='mt-2 text-sm text-ink-3'>Could not load agents.</p>}
+        {agentsQuery.isError && (
+          <p className='mt-2 text-sm text-ink-3'>{ui('Could not load agents.')}</p>
+        )}
 
         {open && !agentsQuery.isLoading && !agentsQuery.isError && agents.length === 0 && (
-          <p className='mt-2 text-sm text-ink-3'>No agents yet - propose a strategy above.</p>
+          <p className='mt-2 text-sm text-ink-3'>
+            {ui('No agents yet - propose a strategy above.')}
+          </p>
         )}
 
         {agents.length > 0 && (
@@ -331,7 +350,7 @@ function KgPanelContent(
                   className='shrink-0 text-sm font-medium transition-colors duration-150'
                   style={{ color: 'var(--rp-bad-ink)' }}
                 >
-                  Remove
+                  {ui('Remove')}
                 </button>
               </li>
             ))}
@@ -340,10 +359,11 @@ function KgPanelContent(
       </div>
 
       <div className='mt-4 border-t border-line pt-3'>
-        <p className='text-sm font-medium text-ink'>Current strategy</p>
+        <p className='text-sm font-medium text-ink'>{ui('Current strategy')}</p>
         <p className='mt-0.5 text-xs text-ink-3'>
-          The entity types and worked examples that teach the extraction agent what to pull out -
-          fully editable.
+          {ui(
+            'The entity types and worked examples that teach the extraction agent what to pull out - fully editable.',
+          )}
         </p>
         <div className='mt-3'>
           <KgStrategyEditor slug={slug} />

@@ -1,9 +1,11 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import type { Message } from './shared.ts'
 
 /** ok / error inline panel, shared by every admin action. */
 export function MessagePanel(
   { message, className = '' }: { message: Message; className?: string },
 ) {
+  const { error } = usePortalLocale()
   const tone = message.tone === 'ok'
     ? {
       background: 'var(--rp-ok-bg)',
@@ -22,7 +24,9 @@ export function MessagePanel(
       className={`rounded-[calc(var(--rp-radius)+4px)] border px-4 py-3 text-sm ${className}`}
       style={tone}
     >
-      {message.text}
+      {message.tone === 'error'
+        ? error(message.text, 'The action failed. Please try again.')
+        : message.text}
     </div>
   )
 }

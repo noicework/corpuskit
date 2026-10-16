@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -41,6 +42,8 @@ export type TenantOutletContext = {
 }
 
 function FullPageSpinner() {
+  const { ui } = usePortalLocale()
+
   return (
     <div className='flex min-h-screen items-center justify-center bg-app' role='status'>
       <div
@@ -48,7 +51,7 @@ function FullPageSpinner() {
         style={{ borderTopColor: 'var(--rp-ink)' }}
         aria-hidden='true'
       />
-      <span className='sr-only'>Loading portal</span>
+      <span className='sr-only'>{ui('Loading portal')}</span>
     </div>
   )
 }
@@ -163,7 +166,7 @@ export function TenantLayout() {
   const [signInOpen, setSignInOpen] = useState(false)
   const access = useAccess()
   const auth = access.state.session
-  const accountLabel = auth?.user?.name || ACCOUNT_LABEL
+  const accountName = auth?.user?.name
   const menuEntries = slug ? accountEntries(slug, access.can) : []
   const portalRole = auth?.user ? roleLabel(auth.portalAccess?.effectiveRole) : null
   const platformRole = auth?.user ? roleLabel(auth.effectiveRoles.platformRole) : null
@@ -310,6 +313,7 @@ export function TenantLayout() {
     retry: retryTenantConfig,
   })
   const locale = usePortalLocaleState(sourceConfig)
+  const { ui } = locale
   const config = useMemo(
     () => sourceConfig ? localisePortalConfig(sourceConfig, locale.language) : undefined,
     [sourceConfig, locale.language],
@@ -407,7 +411,7 @@ export function TenantLayout() {
       portalRole={portalRole}
       platformRole={platformRole}
       portalName={config.branding.productName}
-      label={accountLabel}
+      label={accountName || ui(ACCOUNT_LABEL)}
       onProfile={() => setSignInOpen(true)}
     />
   )
@@ -433,9 +437,9 @@ export function TenantLayout() {
               <div className='acmd-portal-bar'>
                 <div className='rp-shell acmd-portal-bar-inner'>
                   <Link to={`/t/${config.slug}`} className='acmd-portal-name rp-focus'>
-                    Research portal
+                    {ui('Research portal')}
                   </Link>
-                  <nav aria-label='Primary' className='acmd-portal-nav'>
+                  <nav aria-label={ui('Primary')} className='acmd-portal-nav'>
                     {navigation.map((item) => (
                       <NavLink
                         key={item.label}
@@ -492,12 +496,13 @@ export function TenantLayout() {
                             setNavOpen(true)
                           }
                         }}
-                        aria-label={navOpen ? 'Close menu' : 'Open menu'}
+                        aria-label={navOpen ? ui('Close menu') : ui('Open menu')}
                         aria-expanded={navOpen}
                         aria-controls='mobile-nav-sheet'
                         className='acmd-portal-menu rp-focus'
                       >
-                        Explore <MenuBars />
+                        {ui('Explore ')}
+                        <MenuBars />
                       </button>
                     </span>
                   </div>
@@ -525,7 +530,8 @@ export function TenantLayout() {
                         {isCorpusKit
                           ? (
                             <span className='rp-corpuskit-wordmark'>
-                              CorpusKit<span
+                              {ui('CorpusKit')}
+                              <span
                                 style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}
                               >
                                 /
@@ -641,7 +647,7 @@ export function TenantLayout() {
                         access.can('portal.create', { kind: 'platform' }) && (
                         <span className='hidden shrink-0 lg:block'>
                           <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
-                            Not connected
+                            {ui('Not connected')}
                           </Link>
                         </span>
                       )}
@@ -716,7 +722,7 @@ export function TenantLayout() {
                 <div className='rp-navband relative hidden md:block'>
                   <div className='rp-shell'>
                     <nav
-                      aria-label='Primary'
+                      aria-label={ui('Primary')}
                       className='rp-no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'
                     >
                       {navigation.map((item) => (
@@ -748,7 +754,9 @@ export function TenantLayout() {
           {config.slug === 'acmd' && (
             <div className='border-b border-line bg-surface-2'>
               <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
-                Demo portal. Answers currently use the CorpusKit documentation knowledge base.
+                {ui(
+                  'Demo portal. Answers currently use the CorpusKit documentation knowledge base.',
+                )}
               </p>
             </div>
           )}
@@ -764,8 +772,8 @@ export function TenantLayout() {
               }}
             >
               <p className='rp-shell py-2 text-sm leading-relaxed'>
-                <strong>This portal is paused.</strong>{' '}
-                Visitors see a paused screen. Only platform administrators can open it.
+                <strong>{ui('This portal is paused.')}</strong>{' '}
+                {ui('Visitors see a paused screen. Only platform administrators can open it.')}
               </p>
             </div>
           )}
@@ -781,8 +789,9 @@ export function TenantLayout() {
               }}
             >
               <p className='rp-shell py-2 text-sm leading-relaxed'>
-                <strong>This portal is read-only.</strong>{' '}
-                You can browse, search and ask questions. Content and settings cannot be changed.
+                <strong>{ui('This portal is read-only.')}</strong> {ui(
+                  'You can browse, search and ask questions. Content and settings cannot be changed.',
+                )}
               </p>
             </div>
           )}
@@ -811,7 +820,7 @@ export function TenantLayout() {
             <nav
               id='mobile-nav-sheet'
               ref={navPanelRef}
-              aria-label='Primary'
+              aria-label={ui('Primary')}
               className={`fixed inset-x-0 z-50 overflow-y-auto overflow-x-hidden border-b border-[var(--rp-on-primary)]/20 px-4 pb-7 pt-2 ${
                 navOpen ? 'rp-navsheet-panel' : 'rp-navsheet-panel rp-navsheet-panel-exit'
               }`}
@@ -837,7 +846,7 @@ export function TenantLayout() {
                         aria-hidden='true'
                         className='transition-transform duration-200 group-hover:translate-x-1'
                       >
-                        &rarr;
+                        →
                       </span>
                       {locale.ui(item.label)}
                     </NavLink>
@@ -858,7 +867,7 @@ export function TenantLayout() {
                         aria-hidden='true'
                         className='transition-transform duration-200 group-hover:translate-x-1'
                       >
-                        &rarr;
+                        →
                       </span>
                       {link.label}
                     </LayoutAnchor>
@@ -897,7 +906,7 @@ export function TenantLayout() {
                     className='rp-navsheet-action rp-focus-inverse'
                   >
                     <HelpItemIcon item={item} className='h-5 w-5 shrink-0' />
-                    {item.label}
+                    {ui(item.label)}
                   </NavLink>
                 ))}
                 <AccountMenu
@@ -905,7 +914,7 @@ export function TenantLayout() {
                   portalRole={portalRole}
                   platformRole={platformRole}
                   portalName={config.branding.productName}
-                  label={accountLabel}
+                  label={accountName || ui(ACCOUNT_LABEL)}
                   variant='mobile'
                   onProfile={() => {
                     navRestoreFocus.current = false
@@ -936,13 +945,13 @@ export function TenantLayout() {
             : (
               <main data-route-unavailable className='rp-shell py-12'>
                 <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>
-                  This page is unavailable
+                  {ui('This page is unavailable')}
                 </h1>
                 <p className='mt-4 text-ink-2'>
-                  You cannot open this page with your current account.
+                  {ui('You cannot open this page with your current account.')}
                 </p>
                 <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-secondary mt-6'>
-                  Back to the library
+                  {ui('Back to the library')}
                 </Link>
               </main>
             )}

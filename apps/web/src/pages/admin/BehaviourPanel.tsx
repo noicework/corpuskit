@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -49,6 +50,8 @@ function validRouting(value: Routing): Routing {
  * librarian override it, and saves straight back through the admin API.
  */
 function AskPromptEditor({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
     { kind: 'portal', slug },
@@ -82,7 +85,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Load the current ask prompt',
+        ui('Load the current ask prompt'),
         async (access) => validPrompts(await getPrompts(slug, access)),
       )
       assertCurrent()
@@ -92,7 +95,10 @@ function AskPromptEditor({ slug }: { slug: string }) {
       setLoaded(true)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load the prompt.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not load the prompt.', localError),
+      })
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -102,17 +108,20 @@ function AskPromptEditor({ slug }: { slug: string }) {
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit('Save the ask prompt', async (access) => {
+      const result = await runExplicit(ui('Save the ask prompt'), async (access) => {
         const saved = await savePrompts(slug, access, { ask: value.trim() || undefined, images })
         if (saved?.ok !== true) throw new AdminAccessError()
         return true
       })
       assertCurrent()
       if (result === undefined) return
-      setMessage({ tone: 'ok', text: 'Saved - the new prompt applies to the next answer.' })
+      setMessage({ tone: 'ok', text: ui('Saved - the new prompt applies to the next answer.') })
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the prompt.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not save the prompt.', localError),
+      })
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -120,9 +129,11 @@ function AskPromptEditor({ slug }: { slug: string }) {
 
   return (
     <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>Ask system prompt</h3>
+      <h3 className='text-sm font-semibold text-ink'>{ui('Ask system prompt')}</h3>
       <p className='mt-1 text-xs text-ink-3'>
-        Used for every grounded answer on this portal. Leave empty for the default analyst prompt.
+        {ui(
+          'Used for every grounded answer on this portal. Leave empty for the default analyst prompt.',
+        )}
       </p>
       <button
         type='button'
@@ -131,24 +142,24 @@ function AskPromptEditor({ slug }: { slug: string }) {
         onClick={() => void onLoad()}
         className='rp-btn rp-btn-outline mt-3'
       >
-        {loaded ? 'Reload current prompt' : 'Load current prompt'}
+        {loaded ? ui('Reload current prompt') : ui('Load current prompt')}
       </button>
       {!loaded && (
         <p className='mt-3 text-sm text-ink-3'>
           {isError
-            ? 'Could not load the current prompt.'
-            : 'Load the current prompt before editing.'}
+            ? ui('Could not load the current prompt.')
+            : ui('Load the current prompt before editing.')}
         </p>
       )}
       <textarea
         data-behaviour-prompt
-        aria-label='Ask system prompt'
+        aria-label={ui('Ask system prompt')}
         disabled={busy || !loaded}
         className='rp-input mt-3'
         rows={8}
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder='Leave empty to use the default analyst prompt.'
+        placeholder={ui('Leave empty to use the default analyst prompt.')}
       />
       <label className='mt-3 flex items-center gap-2 text-sm text-ink-2'>
         <input
@@ -157,11 +168,12 @@ function AskPromptEditor({ slug }: { slug: string }) {
           checked={images}
           onChange={(e) => setImages(e.target.checked)}
         />
-        Ground answers on page and table images
+        {ui('Ground answers on page and table images')}
       </label>
       <p className='mt-1 text-xs text-ink-3'>
-        Uses visual content (page images, tables) as extra context when answering - useful for
-        PDF-heavy corpora.
+        {ui(
+          'Uses visual content (page images, tables) as extra context when answering - useful for PDF-heavy corpora.',
+        )}
       </p>
       <div className='mt-3 flex items-center gap-3'>
         <button
@@ -171,7 +183,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
           onClick={() => void onSave()}
           className='rp-btn rp-btn-primary'
         >
-          {busy ? 'Saving…' : 'Save prompt'}
+          {busy ? ui('Saving…') : ui('Save prompt')}
         </button>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
@@ -181,6 +193,8 @@ function AskPromptEditor({ slug }: { slug: string }) {
 
 /** Search configurations block: create the platform defaults and inspect what's there. */
 function SearchConfigsBlock({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
     { kind: 'portal', slug },
@@ -207,7 +221,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Load search configurations',
+        ui('Load search configurations'),
         async (access) => validConfigs(await getSearchConfigs(slug, access)),
       )
       assertCurrent()
@@ -218,7 +232,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
       if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
-        text: errorMessage(err, 'Could not load search configurations.'),
+        text: errorMessage(err, 'Could not load search configurations.', localError),
       })
     } finally {
       if (context === authority.controller.context) setBusy(false)
@@ -229,31 +243,37 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit('Create default search configurations', async (access) => {
-        const saved = await ensureSearchConfigs(slug, access)
-        if (
-          saved?.ok !== true || !Array.isArray(saved.created) ||
-          saved.created.some((name) => typeof name !== 'string')
-        ) throw new AdminAccessError()
-        return saved
-      })
+      const result = await runExplicit(
+        ui('Create default search configurations'),
+        async (access) => {
+          const saved = await ensureSearchConfigs(slug, access)
+          if (
+            saved?.ok !== true || !Array.isArray(saved.created) ||
+            saved.created.some((name) => typeof name !== 'string')
+          ) throw new AdminAccessError()
+          return saved
+        },
+      )
       assertCurrent()
       if (result === undefined) return
       setCreated(result.created)
       setMessage({
         tone: 'ok',
         text: result.created.length > 0
-          ? `Created ${result.created.length} ${
-            result.created.length === 1 ? 'configuration' : 'configurations'
-          }.`
-          : 'All default configurations already exist.',
+          ? ui(
+            result.created.length === 1
+              ? 'Created {count} configuration.'
+              : 'Created {count} configurations.',
+            { count: result.created.length },
+          )
+          : ui('All default configurations already exist.'),
       })
       if (sessionAllowed) await refetch()
     } catch (err) {
       if (context !== authority.controller.context) return
       setMessage({
         tone: 'error',
-        text: errorMessage(err, 'Could not create the default configurations.'),
+        text: errorMessage(err, 'Could not create the default configurations.', localError),
       })
     } finally {
       if (context === authority.controller.context) setBusy(false)
@@ -264,9 +284,9 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
     <div className='rp-card mt-4 p-5'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
-          <h3 className='text-sm font-semibold text-ink'>Search configurations</h3>
+          <h3 className='text-sm font-semibold text-ink'>{ui('Search configurations')}</h3>
           <p className='mt-1 text-xs text-ink-3'>
-            The named retrieval configurations this portal's search and ask calls draw on.
+            {ui("The named retrieval configurations this portal's search and ask calls draw on.")}
           </p>
         </div>
         <button
@@ -276,7 +296,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
           onClick={() => void onEnsure()}
           className='rp-btn rp-btn-outline h-auto whitespace-normal py-2'
         >
-          {busy ? 'Creating…' : 'Create default configurations'}
+          {busy ? ui('Creating…') : ui('Create default configurations')}
         </button>
       </div>
 
@@ -287,11 +307,11 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
         onClick={() => void onLoad()}
         className='rp-btn rp-btn-outline mt-3 h-auto whitespace-normal py-2'
       >
-        Refresh search configurations
+        {ui('Refresh search configurations')}
       </button>
       {!data && !isLoading && (
         <p className='mt-3 text-sm text-ink-3'>
-          Load search configurations to inspect the current settings.
+          {ui('Load search configurations to inspect the current settings.')}
         </p>
       )}
 
@@ -311,11 +331,13 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
 
       <details className='mt-4'>
         <summary className='cursor-pointer text-xs font-medium text-ink-2'>
-          View raw configuration JSON
+          {ui('View raw configuration JSON')}
         </summary>
         <div className='mt-2 max-h-80 overflow-auto rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>
-          {isLoading && <p className='text-xs text-ink-3'>Loading…</p>}
-          {isError && <p className='text-xs text-ink-3'>Could not load search configurations.</p>}
+          {isLoading && <p className='text-xs text-ink-3'>{ui('Loading…')}</p>}
+          {isError && (
+            <p className='text-xs text-ink-3'>{ui('Could not load search configurations.')}</p>
+          )}
           {data && (
             <pre className='whitespace-pre-wrap break-all text-xs text-ink-2'>
               {JSON.stringify(data, null, 2)}
@@ -354,6 +376,8 @@ function IntentsTable(
     error: boolean
   },
 ) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
     { kind: 'portal', slug },
@@ -382,7 +406,7 @@ function IntentsTable(
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Load routing activity',
+        ui('Load routing activity'),
         async (access) => validRouting(await getRouting(slug, access)),
       )
       assertCurrent()
@@ -391,7 +415,10 @@ function IntentsTable(
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load routing activity.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not load routing activity.', localError),
+      })
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -417,19 +444,20 @@ function IntentsTable(
   return (
     <div className='mt-5 border-t border-line pt-4'>
       <div className='flex flex-wrap items-baseline justify-between gap-2'>
-        <h4 className='text-sm font-semibold text-ink'>Intent routing</h4>
+        <h4 className='text-sm font-semibold text-ink'>{ui('Intent routing')}</h4>
         {summary && summary.total > 0
           ? (
             <p className='text-xs text-ink-3'>
-              {summary.total} decisions ·{' '}
+              {summary.total}
+              {ui(' decisions ·')}{' '}
               {Object.entries(summary.byStage).map(([k, v]) => `${v} ${k}`).join(', ')}
             </p>
           )
           : (
             <p className='text-xs text-ink-3'>
               {routing
-                ? 'No routing decisions logged yet.'
-                : 'Load routing activity to view decisions.'}
+                ? ui('No routing decisions logged yet.')
+                : ui('Load routing activity to view decisions.')}
             </p>
           )}
       </div>
@@ -440,18 +468,18 @@ function IntentsTable(
         onClick={() => void onLoad()}
         className='rp-btn rp-btn-outline my-3'
       >
-        Refresh routing activity
+        {ui('Refresh routing activity')}
       </button>
       {message && <MessagePanel message={message} className='mt-3' />}
       <div className='mt-2 overflow-x-auto'>
         <table className='w-full text-left text-xs'>
           <thead className='text-ink-3'>
             <tr>
-              <th className='py-1.5 pr-3 font-medium'>Intent</th>
-              <th className='py-1.5 pr-3 font-medium'>Configuration</th>
-              <th className='py-1.5 pr-3 font-medium'>Policy</th>
-              <th className='py-1.5 font-medium'>On the box</th>
-              <th className='py-1.5 pl-3 text-right font-medium'>Routed</th>
+              <th className='py-1.5 pr-3 font-medium'>{ui('Intent')}</th>
+              <th className='py-1.5 pr-3 font-medium'>{ui('Configuration')}</th>
+              <th className='py-1.5 pr-3 font-medium'>{ui('Policy')}</th>
+              <th className='py-1.5 font-medium'>{ui('On the box')}</th>
+              <th className='py-1.5 pl-3 text-right font-medium'>{ui('Routed')}</th>
             </tr>
           </thead>
           <tbody>

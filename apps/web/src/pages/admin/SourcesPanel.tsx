@@ -1,3 +1,5 @@
+import { relativeTime } from './shared.ts'
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { type FormEvent, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -13,20 +15,6 @@ import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 /** Pages one sync run may ingest. Small by default so a first sync is quick. */
 const PAGE_CAPS = [5, 10, 25, 50, 100] as const
 const DEFAULT_CAP = 25
-
-/** Same relative-time shape used across the admin panels, applied to ISO timestamps. */
-function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime()
-  const minutes = Math.round(diffMs / 60000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.round(hours / 24)
-  return `${days}d ago`
-}
-
-const pageWord = (n: number) => (n === 1 ? 'page' : 'pages')
 
 type SyncDone = Extract<SourceSyncEvent, { type: 'done' }>
 
@@ -65,6 +53,8 @@ function SourceRow({
   slug: string
   onChanged: () => Promise<unknown>
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -80,7 +70,7 @@ function SourceRow({
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Update website source',
+        ui('Update website source'),
         (access) => updateSource(slug, access, source.id, change),
       )
       assertCurrent()
@@ -89,7 +79,10 @@ function SourceRow({
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save that change.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not save that change.', localError),
+      })
     } finally {
       setSaving(false)
     }
@@ -103,7 +96,7 @@ function SourceRow({
     const job = new StreamedJob<SyncDone>(assertCurrent, 'Sync failed - please retry.')
     const events: SourceSyncEvent[] = []
     try {
-      const result = await runExplicit('Sync website source', async (access) => {
+      const result = await runExplicit(ui('Sync website source'), async (access) => {
         await syncSource(slug, access, source.id, followSync(job, events))
         return job.result()
       })
@@ -111,14 +104,18 @@ function SourceRow({
       if (result === undefined) return
       setMessage({
         tone: 'ok',
-        text: `Synced - ${result.added} ${pageWord(result.added)} added.` +
-          (result.deferred ? ` ${result.deferred} left for the next sync.` : ''),
+        text: ui(
+          result.added === 1 ? 'Synced - {count} page added.' : 'Synced - {count} pages added.',
+          { count: result.added },
+        ) + (result.deferred
+          ? ui(' {count} left for the next sync.', { count: result.deferred })
+          : ''),
       })
     } catch (err) {
       // A late answer after the identity or role changed is not this session's to show. While
       // access is being checked, the message says only that access changed.
       if (!sameContext()) return
-      setMessage(failedJobMessage(job, err, 'Sync failed - please retry.'))
+      setMessage(failedJobMessage(job, err, 'Sync failed - please retry.', localError))
     } finally {
       if (sameContext()) {
         setSyncing(false)
@@ -138,7 +135,7 @@ function SourceRow({
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Remove website source',
+        ui('Remove website source'),
         (access) => deleteSource(slug, access, source.id),
       )
       assertCurrent()
@@ -147,7 +144,10 @@ function SourceRow({
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not remove that source.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not remove that source.', localError),
+      })
     } finally {
       setDeleting(false)
     }
@@ -173,19 +173,25 @@ function SourceRow({
               {source.url}
             </p>
             {failed
-              ? <span className='rp-badge rp-badge-bad'>Last sync failed</span>
+              ? <span className='rp-badge rp-badge-bad'>{ui('Last sync failed')}</span>
               : source.lastSync === null
-              ? <span className='rp-badge rp-badge-quiet'>Not synced yet</span>
-              : <span className='rp-badge rp-badge-ok'>Synced</span>}
+              ? <span className='rp-badge rp-badge-quiet'>{ui('Not synced yet')}</span>
+              : <span className='rp-badge rp-badge-ok'>{ui('Synced')}</span>}
             <span className='rp-badge rp-badge-quiet'>
-              {source.auto ? 'Daily' : 'Manual only'}
+              {source.auto ? ui('Daily') : ui('Manual only')}
             </span>
           </div>
           <p className='mt-1 text-xs text-ink-3'>
-            {source.itemCount} {pageWord(source.itemCount)} in the library from this source
+            {ui(source.itemCount === 1 ? '{count} page' : '{count} pages', {
+              count: source.itemCount,
+            })}
+            {ui(' in the library from this source')}
             {source.lastSync
-              ? ` - last checked ${relativeTime(source.lastSync)}, ${source.lastAdded} added`
-              : ' - never checked'}
+              ? ui(' - last checked {value1}, {lastAdded} added', {
+                value1: relativeTime(source.lastSync, ui),
+                lastAdded: source.lastAdded,
+              })
+              : ui(' - never checked')}
           </p>
           {failed && source.lastError && (
             <p className='mt-1.5 text-xs' style={{ color: 'var(--rp-bad-ink)' }}>
@@ -200,7 +206,7 @@ function SourceRow({
             onClick={() => void onSync()}
             className='rp-btn rp-btn-outline'
           >
-            {syncing ? 'Sending request...' : 'Sync now'}
+            {syncing ? ui('Sending request...') : ui('Sync now')}
           </button>
           <button
             type='button'
@@ -209,7 +215,7 @@ function SourceRow({
             className='rp-btn rp-btn-ghost'
             style={{ color: 'var(--rp-bad-ink)' }}
           >
-            {deleting ? 'Removing…' : 'Remove'}
+            {deleting ? ui('Removing…') : ui('Remove')}
           </button>
         </div>
       </div>
@@ -223,12 +229,10 @@ function SourceRow({
             onChange={(e) => void patch({ auto: e.target.checked })}
             className='rp-focus h-4 w-4 rounded border-line'
           />
-          Sync automatically each day
+          {ui('Sync automatically each day')}
         </label>
         <div className='flex flex-wrap items-center gap-2'>
-          <label htmlFor={capId} className='text-xs text-ink-2'>
-            New pages per run
-          </label>
+          <label htmlFor={capId} className='text-xs text-ink-2'>{ui('New pages per run')}</label>
           <select
             id={capId}
             className='rp-input w-24 shrink-0'
@@ -254,7 +258,9 @@ function SourceRow({
               {event.type === 'item' && <span className='text-ink-2'>{event.label}</span>}
               {event.type === 'done' && (
                 <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>
-                  Finished - {event.added} added.
+                  {ui('Finished - ')}
+                  {event.added}
+                  {ui(' added.')}
                 </span>
               )}
               {event.type === 'error' && (
@@ -276,6 +282,8 @@ function SourceRow({
  * from the one-off "Add content" ingestion methods, which never re-check.
  */
 function SourcesPanelContent({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
     { kind: 'portal', slug },
@@ -303,13 +311,16 @@ function SourcesPanelContent({ slug }: { slug: string }) {
   const refresh = async () => {
     setMessage(null)
     try {
-      const result = await runExplicit('Read website sources', (access) => getSources(slug, access))
+      const result = await runExplicit(
+        ui('Read website sources'),
+        (access) => getSources(slug, access),
+      )
       assertCurrent()
       if (result === undefined) return
       if (sessionAllowed) queryClient.setQueryData(['admin-sources', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load sources.') })
+      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load sources.', localError) })
     }
   }
 
@@ -328,7 +339,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
       // it, and tells us what it found - report that rather than a bare
       // "added", so a site that cannot be crawled is obvious immediately.
       const added = await runExplicit(
-        'Add website source',
+        ui('Add website source'),
         (access) => addSource(slug, access, { url, auto, maxPages }),
       )
       assertCurrent()
@@ -338,15 +349,22 @@ function SourcesPanelContent({ slug }: { slug: string }) {
       setUrl('')
       setMessage({
         tone: 'ok',
-        text: `Source added. Found ${added.discovered} ${pageWord(added.discovered)} via ` +
-          `${added.discoveredVia === 'sitemap' ? 'its sitemap' : 'page links'}. ` +
-          `Press Sync now to ingest the first ${maxPages}` +
-          (auto ? ', or leave it for the next daily sync.' : '.'),
+        text: ui(
+          'Source added. Found {count} pages via {method}. Press Sync now to ingest the first {max}.',
+          {
+            count: added.discovered,
+            method: ui(added.discoveredVia === 'sitemap' ? 'its sitemap' : 'page links'),
+            max: maxPages,
+          },
+        ) + (auto ? ui(' Or leave it for the next daily sync.') : ''),
       })
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not add that source.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not add that source.', localError),
+      })
     } finally {
       setAdding(false)
     }
@@ -355,11 +373,11 @@ function SourcesPanelContent({ slug }: { slug: string }) {
   return (
     <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
       <div>
-        <p className='text-sm font-semibold text-ink'>Website sources</p>
+        <p className='text-sm font-semibold text-ink'>{ui('Website sources')}</p>
         <p className='mt-0.5 text-xs text-ink-3'>
-          Register a website or sitemap once. Each source is re-checked daily, and pages published
-          since the last check are ingested automatically. Pages already taken from a source are
-          never ingested twice.
+          {ui(
+            'Register a website or sitemap once. Each source is re-checked daily, and pages published since the last check are ingested automatically. Pages already taken from a source are never ingested twice.',
+          )}
         </p>
       </div>
 
@@ -369,7 +387,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
             htmlFor={`source-url-${slug}`}
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Site or sitemap URL
+            {ui('Site or sitemap URL')}
           </label>
           <input
             id={`source-url-${slug}`}
@@ -377,7 +395,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
             className='rp-input'
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder='https://example.com/sitemap.xml'
+            placeholder={ui('https://example.com/sitemap.xml')}
             autoComplete='off'
             required
           />
@@ -387,7 +405,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
             htmlFor={`source-cap-${slug}`}
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Pages per run
+            {ui('Pages per run')}
           </label>
           <select
             id={`source-cap-${slug}`}
@@ -399,7 +417,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
           </select>
         </div>
         <button type='submit' disabled={adding} className='rp-btn rp-btn-primary'>
-          {adding ? 'Checking site…' : 'Add source'}
+          {adding ? ui('Checking site…') : ui('Add source')}
         </button>
       </form>
 
@@ -410,7 +428,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
           onChange={(e) => setAuto(e.target.checked)}
           className='rp-focus h-4 w-4 rounded border-line'
         />
-        Sync this source automatically each day
+        {ui('Sync this source automatically each day')}
       </label>
 
       {message && <MessagePanel message={message} className='mt-3' />}
@@ -422,11 +440,11 @@ function SourcesPanelContent({ slug }: { slug: string }) {
           disabled={pending}
           onClick={() => void refresh()}
         >
-          Refresh sources
+          {ui('Refresh sources')}
         </button>
         {!sessionAllowed && (
           <p className='mb-3 text-xs text-ink-3'>
-            Sources are a snapshot. Refresh explicitly after changes.
+            {ui('Sources are a snapshot. Refresh explicitly after changes.')}
           </p>
         )}
         {isLoading && (
@@ -438,20 +456,22 @@ function SourcesPanelContent({ slug }: { slug: string }) {
 
         {isError && (
           <p className='text-sm text-ink-3'>
-            Could not load sources.{' '}
+            {ui('Could not load sources.')}{' '}
             <button
               type='button'
               onClick={() => void refresh()}
               className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
             >
-              Try again
+              {ui('Try again')}
             </button>
           </p>
         )}
 
         {data && data.length === 0 && (
           <p className='text-sm text-ink-3'>
-            No sources registered yet. Add a site above to keep the library current automatically.
+            {ui(
+              'No sources registered yet. Add a site above to keep the library current automatically.',
+            )}
           </p>
         )}
 

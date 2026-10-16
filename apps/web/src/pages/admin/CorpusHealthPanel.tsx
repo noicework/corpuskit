@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -29,6 +30,8 @@ function HealthRow({
   onChanged: (id: string, hidden: boolean) => Promise<unknown>
   onDeleted: (row: CorpusHealthRow, outcome: DeleteOutcome) => void
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -41,7 +44,7 @@ function HealthRow({
     setMessage(null)
     try {
       const result = await runExplicit(
-        row.hidden ? 'Publish resource' : 'Hide resource',
+        row.hidden ? ui('Publish resource') : ui('Hide resource'),
         (access) => setResourceHidden(slug, access, row.id, !row.hidden),
       )
       assertCurrent()
@@ -50,16 +53,19 @@ function HealthRow({
       assertCurrent()
       await onChanged(row.id, !row.hidden)
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not update that resource.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not update that resource.', localError),
+      })
     } finally {
       setBusy(false)
     }
   }
 
   const badge = row.status === 'challenge'
-    ? <span className='rp-badge rp-badge-bad'>Bot-challenge page</span>
+    ? <span className='rp-badge rp-badge-bad'>{ui('Bot-challenge page')}</span>
     : row.status === 'thin'
-    ? <span className='rp-badge rp-badge-warn'>Very little text</span>
+    ? <span className='rp-badge rp-badge-warn'>{ui('Very little text')}</span>
     : null
 
   return (
@@ -70,9 +76,10 @@ function HealthRow({
           <div className='mt-1 flex flex-wrap items-center gap-2'>
             {badge}
             <span className='text-xs text-ink-3'>
-              {row.words} {row.words === 1 ? 'word' : 'words'} extracted
+              {row.words} {row.words === 1 ? ui('word') : ui('words')}
+              {ui(' extracted')}
             </span>
-            {row.hidden ? <span className='rp-badge rp-badge-quiet'>Hidden</span> : null}
+            {row.hidden ? <span className='rp-badge rp-badge-quiet'>{ui('Hidden')}</span> : null}
           </div>
         </div>
         <span className='flex shrink-0 flex-wrap items-center gap-2'>
@@ -82,7 +89,7 @@ function HealthRow({
             onClick={() => void toggle()}
             className='rp-btn rp-btn-outline shrink-0'
           >
-            {busy ? 'Updating…' : row.hidden ? 'Publish' : 'Hide'}
+            {busy ? ui('Updating…') : row.hidden ? ui('Publish') : ui('Hide')}
           </button>
           <DeleteDocumentButton
             slug={slug}
@@ -105,6 +112,8 @@ function HealthRow({
  * slow on a large box, so the librarian triggers it deliberately.
  */
 function CorpusHealthPanelContent({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAllowed, pending } = usePermissionAdminAccess('content.write', {
     kind: 'portal',
     slug,
@@ -124,7 +133,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
     setScanning(true)
     setError(null)
     try {
-      const result = await runExplicit('Read corpus health', async (access) => {
+      const result = await runExplicit(ui('Read corpus health'), async (access) => {
         const health = await getCorpusHealth(slug, access)
         if (!Array.isArray(health)) throw new AdminAccessError()
         return health
@@ -133,7 +142,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
       if (result === undefined) return
       setRows(result)
     } catch (err) {
-      setError(errorMessage(err, 'The scan failed - please try again.'))
+      setError(errorMessage(err, 'The scan failed - please try again.', localError))
     } finally {
       setScanning(false)
     }
@@ -163,11 +172,12 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div>
           <p ref={heading} tabIndex={-1} className='text-sm font-semibold text-ink'>
-            Corpus health
+            {ui('Corpus health')}
           </p>
           <p className='mt-0.5 max-w-md text-xs text-ink-3'>
-            Pages that failed extraction (bot walls, empty pages) should be hidden or deleted so
-            they can never be cited.
+            {ui(
+              'Pages that failed extraction (bot walls, empty pages) should be hidden or deleted so they can never be cited.',
+            )}
           </p>
         </div>
         <button
@@ -176,21 +186,24 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
           onClick={() => void scan()}
           className='rp-btn rp-btn-primary shrink-0'
         >
-          {scanning ? 'Scanning…' : rows ? 'Rescan corpus' : 'Scan corpus'}
+          {scanning ? ui('Scanning…') : rows ? ui('Rescan corpus') : ui('Scan corpus')}
         </button>
       </div>
 
       {!sessionAllowed && (
         <p className='mt-3 text-xs text-ink-3'>
-          Health results are a snapshot. Each scan and visibility change needs its own confirmation.
+          {ui(
+            'Health results are a snapshot. Each scan and visibility change needs its own confirmation.',
+          )}
         </p>
       )}
 
       {scanning
         ? (
           <p className='mt-3 text-xs text-ink-3'>
-            Reading every resource's extracted text - this can take 10 to 20 seconds on a large
-            corpus.
+            {ui(
+              "Reading every resource's extracted text - this can take 10 to 20 seconds on a large corpus.",
+            )}
           </p>
         )
         : null}
@@ -199,7 +212,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
       <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-3'>{notice}</p>
 
       {rows && rows.length === 0
-        ? <p className='mt-4 text-sm text-ink-3'>This corpus has no resources yet.</p>
+        ? <p className='mt-4 text-sm text-ink-3'>{ui('This corpus has no resources yet.')}</p>
         : null}
 
       {rows && rows.length > 0
@@ -208,7 +221,10 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
             {needsAttention.length > 0
               ? (
                 <div>
-                  <p className='rp-eyebrow text-ink-3'>Needs attention ({needsAttention.length})</p>
+                  <p className='rp-eyebrow text-ink-3'>
+                    {ui('Needs attention (')}
+                    {needsAttention.length})
+                  </p>
                   <ul className='mt-2 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
                     {needsAttention.map((row) => (
                       <HealthRow
@@ -224,7 +240,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
               )
               : (
                 <p className='text-sm' style={{ color: 'var(--rp-ok-ink)' }}>
-                  No extraction problems found.
+                  {ui('No extraction problems found.')}
                 </p>
               )}
 
@@ -238,7 +254,9 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
                     className='rp-focus flex items-center gap-1.5 rounded-[var(--rp-radius-btn)] text-sm font-medium text-ink-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
                   >
                     <span aria-hidden='true'>{healthyOpen ? '▾' : '▸'}</span>
-                    {healthy.length} healthy {healthy.length === 1 ? 'resource' : 'resources'}
+                    {healthy.length}
+                    {ui(' healthy ')}
+                    {healthy.length === 1 ? ui('resource') : ui('resources')}
                   </button>
                   {healthyOpen
                     ? (
@@ -265,7 +283,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
       {!rows && !scanning && !error
         ? (
           <p className='mt-4 text-sm text-ink-3'>
-            Run a scan to check every resource for bot-challenge pages and thin extractions.
+            {ui('Run a scan to check every resource for bot-challenge pages and thin extractions.')}
           </p>
         )
         : null}

@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -22,20 +23,22 @@ export async function readRecent(slug: string, access: AdminRequestAccess, limit
 }
 
 function StatusChip({ status, stuck }: { status: RecentResource['status']; stuck?: boolean }) {
+  const { ui } = usePortalLocale()
+
   // Stuck: a link still unprocessed an hour after it was added, holding its storage space.
-  if (stuck) return <span className='rp-badge rp-badge-bad'>Stuck</span>
+  if (stuck) return <span className='rp-badge rp-badge-bad'>{ui('Stuck')}</span>
   if (status === 'pending') {
     return (
       <span className='rp-badge rp-badge-warn'>
         <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--rp-warn-ink)]' />
-        Processing
+        {ui('Processing')}
       </span>
     )
   }
   if (status === 'processed') {
-    return <span className='rp-badge rp-badge-ok'>Indexed</span>
+    return <span className='rp-badge rp-badge-ok'>{ui('Indexed')}</span>
   }
-  return <span className='rp-badge rp-badge-bad'>Error</span>
+  return <span className='rp-badge rp-badge-bad'>{ui('Error')}</span>
 }
 
 /** Visibility control for a single resource row: hide a published resource,
@@ -49,6 +52,8 @@ function VisibilityControl({
   resource: RecentResource
   onChanged: () => Promise<unknown>
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -61,7 +66,7 @@ function VisibilityControl({
     setError(null)
     try {
       const result = await runExplicit(
-        resource.hidden ? 'Publish resource' : 'Hide resource',
+        resource.hidden ? ui('Publish resource') : ui('Hide resource'),
         (access) => setResourceHidden(slug, access, resource.id, !resource.hidden),
       )
       assertCurrent()
@@ -70,7 +75,7 @@ function VisibilityControl({
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setError(errorMessage(err, 'Could not change visibility.'))
+      setError(errorMessage(err, 'Could not change visibility.', localError))
     } finally {
       setBusy(false)
     }
@@ -78,14 +83,14 @@ function VisibilityControl({
 
   return (
     <span className='flex flex-wrap items-center gap-2'>
-      {resource.hidden && <span className='rp-badge rp-badge-quiet'>Draft</span>}
+      {resource.hidden && <span className='rp-badge rp-badge-quiet'>{ui('Draft')}</span>}
       <button
         type='button'
         disabled={busy}
         onClick={() => void toggle()}
         className='rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
       >
-        {busy ? '…' : resource.hidden ? 'Publish' : 'Hide'}
+        {busy ? '…' : resource.hidden ? ui('Publish') : ui('Hide')}
       </button>
       {error && <span className='text-xs text-[var(--rp-bad-ink)]'>{error}</span>}
     </span>
@@ -99,6 +104,8 @@ function VisibilityControl({
  * the librarian can hide a resource (draft) or publish it again.
  */
 function RecentListContent({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
     { kind: 'portal', slug },
@@ -129,7 +136,7 @@ function RecentListContent({ slug }: { slug: string }) {
     setError(undefined)
     try {
       const result = await runExplicit(
-        'Read recent additions',
+        ui('Read recent additions'),
         (access) => readRecent(slug, access),
       )
       assertCurrent()
@@ -137,7 +144,7 @@ function RecentListContent({ slug }: { slug: string }) {
       if (sessionAllowed) queryClient.setQueryData(['admin-recent', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setError(errorMessage(err, 'Could not load recent additions.'))
+      setError(errorMessage(err, 'Could not load recent additions.', localError))
     }
   }
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
@@ -153,7 +160,7 @@ function RecentListContent({ slug }: { slug: string }) {
   return (
     <div>
       <h3 ref={heading} tabIndex={-1} className='text-sm font-medium text-ink'>
-        Recent additions
+        {ui('Recent additions')}
       </h3>
       <button
         type='button'
@@ -162,11 +169,11 @@ function RecentListContent({ slug }: { slug: string }) {
         disabled={pending}
         onClick={() => void refresh()}
       >
-        Refresh recent additions
+        {ui('Refresh recent additions')}
       </button>
       {!sessionAllowed && (
         <p className='mt-2 text-xs text-ink-3'>
-          This is a snapshot. Refresh explicitly to check processing or visibility changes.
+          {ui('This is a snapshot. Refresh explicitly to check processing or visibility changes.')}
         </p>
       )}
       {error && <p role='alert' className='mt-2 text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
@@ -179,9 +186,13 @@ function RecentListContent({ slug }: { slug: string }) {
         </div>
       )}
 
-      {isError && <p className='mt-2 text-sm text-ink-3'>Could not load recent additions.</p>}
+      {isError && (
+        <p className='mt-2 text-sm text-ink-3'>{ui('Could not load recent additions.')}</p>
+      )}
 
-      {data && data.length === 0 && <p className='mt-2 text-sm text-ink-3'>Nothing added yet.</p>}
+      {data && data.length === 0 && (
+        <p className='mt-2 text-sm text-ink-3'>{ui('Nothing added yet.')}</p>
+      )}
 
       {data && data.length > 0 && (
         <ul className='mt-2 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
@@ -213,8 +224,9 @@ function RecentListContent({ slug }: { slug: string }) {
       )}
       {data?.some((resource) => resource.stuck) && (
         <p className='mt-2 text-xs text-ink-3'>
-          A stuck link was never processed. Its space still counts against the storage limit until
-          you delete it.
+          {ui(
+            'A stuck link was never processed. Its space still counts against the storage limit until you delete it.',
+          )}
         </p>
       )}
     </div>

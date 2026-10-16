@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -53,6 +54,8 @@ function validLab(value: LabInfo): LabInfo {
 }
 
 function ExtractionPanelContent({ slug }: { slug: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAccess, sessionAllowed, breakGlassEnabled } =
     usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -72,7 +75,7 @@ function ExtractionPanelContent({ slug }: { slug: string }) {
     setMessage(null)
     try {
       const result = await runExplicit(
-        'Load extraction methods and routing rules',
+        ui('Load extraction methods and routing rules'),
         async (access) => validLab(await getExtractionMethods(slug, access)),
       )
       assertCurrent()
@@ -81,7 +84,10 @@ function ExtractionPanelContent({ slug }: { slug: string }) {
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load extraction methods.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not load extraction methods.', localError),
+      })
     }
   }
   return (
@@ -92,7 +98,7 @@ function ExtractionPanelContent({ slug }: { slug: string }) {
         className='rp-btn rp-btn-outline'
         onClick={() => void load()}
       >
-        Load extraction methods
+        {ui('Load extraction methods')}
       </button>
       {message && <MessagePanel message={message} />}
       <MethodsCard lab={lab} />
@@ -135,21 +141,25 @@ function kindLabel(kind: ExtractionMethod['kind']): string {
 type LabInfo = Awaited<ReturnType<typeof getExtractionMethods>>
 
 function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
+  const { ui } = usePortalLocale()
+
   return (
     <div className='rp-card p-5'>
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div>
-          <h3 className='text-sm font-semibold text-ink'>Extraction methods on the sandbox</h3>
+          <h3 className='text-sm font-semibold text-ink'>
+            {ui('Extraction methods on the sandbox')}
+          </h3>
           <p className='mt-1 text-xs text-ink-3'>
-            Custom methods are registered on a scratch knowledge box{lab ? ` (${lab.lab})` : ''}
-            {' '}
-            and applied per upload. The production box is never touched.
+            {ui('Custom methods are registered on a scratch knowledge box')}
+            {lab ? ` (${lab.lab})` : ''}{' '}
+            {ui('and applied per upload. The production box is never touched.')}
           </p>
         </div>
         {lab
           ? (
             <span className={`rp-badge ${lab.available ? 'rp-badge-ok' : 'rp-badge-warn'}`}>
-              {lab.available ? 'sandbox ready' : 'sandbox unavailable'}
+              {lab.available ? ui('sandbox ready') : ui('sandbox unavailable')}
             </span>
           )
           : null}
@@ -157,7 +167,7 @@ function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
       {lab && !lab.available
         ? (
           <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>
-            {lab.message ?? 'Bind a lab box (ARAG_KB_<SLUG>_LAB) to enable the lab.'}
+            {lab.message ?? ui('Bind a lab box (ARAG_KB_<SLUG>_LAB) to enable the lab.')}
           </p>
         )
         : null}
@@ -185,7 +195,9 @@ function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
       {lab && !lab.poppler
         ? (
           <p className='mt-3 text-xs text-ink-3'>
-            Poppler is not on this host: profiles fall back to the platform's extracted text.
+            {ui(
+              "Poppler is not on this host: profiles fall back to the platform's extracted text.",
+            )}
           </p>
         )
         : null}
@@ -207,6 +219,8 @@ function CompareCard(
     available: boolean
   },
 ) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -263,11 +277,14 @@ function CompareCard(
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit('Profile this document for extraction', async (access) => {
-        const result = await profileExtraction(slug, access, item.id)
-        if (typeof result?.filename !== 'string') throw new AdminAccessError()
-        return { ...result, profile: ExtractionProfileSchema.parse(result.profile) }
-      })
+      const result = await runExplicit(
+        ui('Profile this document for extraction'),
+        async (access) => {
+          const result = await profileExtraction(slug, access, item.id)
+          if (typeof result?.filename !== 'string') throw new AdminAccessError()
+          return { ...result, profile: ExtractionProfileSchema.parse(result.profile) }
+        },
+      )
       assertCurrent()
       if (result === undefined) return
       setPicked(item)
@@ -276,7 +293,10 @@ function CompareCard(
       setDone(null)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not profile the document.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not profile the document.', localError),
+      })
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -292,7 +312,7 @@ function CompareCard(
     setDone(null)
     setMessage(null)
     try {
-      await runExplicit('Compare extraction methods for this document', async (access) => {
+      await runExplicit(ui('Compare extraction methods for this document'), async (access) => {
         let completed = false
         let failed = false
         await compareExtraction(slug, access, {
@@ -347,7 +367,7 @@ function CompareCard(
     } catch (err) {
       if (context !== authority.controller.context) return
       if (!controller.signal.aborted) {
-        setMessage({ tone: 'error', text: errorMessage(err, 'The comparison failed.') })
+        setMessage({ tone: 'error', text: errorMessage(err, 'The comparison failed.', localError) })
       }
     } finally {
       if (context === authority.controller.context) {
@@ -362,19 +382,20 @@ function CompareCard(
   )
   return (
     <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>Profile and compare</h3>
+      <h3 className='text-sm font-semibold text-ink'>{ui('Profile and compare')}</h3>
       <p className='mt-1 text-xs text-ink-3'>
-        Pick a document from the library, profile it, then run it through the methods and compare
-        the text, tables, a judge's score and the same question asked of each extraction.
+        {ui(
+          "Pick a document from the library, profile it, then run it through the methods and compare the text, tables, a judge's score and the same question asked of each extraction.",
+        )}
       </p>
       <div className='mt-3 flex flex-col gap-2 sm:flex-row'>
         <input
           type='search'
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder='Find a document by title, or paste a resource id…'
+          placeholder={ui('Find a document by title, or paste a resource id…')}
           className='rp-input h-9 flex-1'
-          aria-label='Find a document'
+          aria-label={ui('Find a document')}
         />
       </div>
       {candidates.length > 0 && !picked
@@ -410,12 +431,12 @@ function CompareCard(
                 }}
                 className='text-xs text-ink-3 hover:text-ink'
               >
-                Change
+                {ui('Change')}
               </button>
             </div>
             {profile
               ? <ProfileCard profile={profile.profile} filename={profile.filename} />
-              : <p className='mt-2 text-xs text-ink-3'>Profiling…</p>}
+              : <p className='mt-2 text-xs text-ink-3'>{ui('Profiling…')}</p>}
           </div>
         )
         : null}
@@ -423,7 +444,7 @@ function CompareCard(
         ? (
           <div className='mt-3 space-y-3'>
             <fieldset className='flex flex-wrap gap-3'>
-              <legend className='rp-eyebrow text-ink-3'>Methods</legend>
+              <legend className='rp-eyebrow text-ink-3'>{ui('Methods')}</legend>
               {methods.map((m) => (
                 <label key={m.id} className='flex items-center gap-2 text-sm text-ink-2'>
                   <input
@@ -448,9 +469,11 @@ function CompareCard(
               type='text'
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder='Question to ask of each extraction (optional; defaults to the main result and its numbers)'
+              placeholder={ui(
+                'Question to ask of each extraction (optional; defaults to the main result and its numbers)',
+              )}
               className='rp-input h-9 w-full'
-              aria-label='Question for the before and after ask'
+              aria-label={ui('Question for the before and after ask')}
             />
             <div className='flex flex-wrap items-center gap-3'>
               <button
@@ -459,19 +482,25 @@ function CompareCard(
                 onClick={() => void onRun()}
                 className='rp-btn rp-btn-primary'
               >
-                {busy ? 'Running…' : 'Run comparison'}
+                {busy ? ui('Running…') : ui('Run comparison')}
               </button>
               {visionPages > 0
                 ? (
                   <span className='text-xs text-ink-3'>
-                    Vision will read {visionPages} page{visionPages === 1 ? '' : 's'}.
+                    {ui(
+                      visionPages === 1
+                        ? 'Vision will read {count} page.'
+                        : 'Vision will read {count} pages.',
+                      { count: visionPages },
+                    )}
                   </span>
                 )
                 : null}
               {busy && (
                 <p role='status' className='text-xs text-ink-3'>
-                  Waiting for the confirmed result. Progress may arrive together when the action
-                  finishes.
+                  {ui(
+                    'Waiting for the confirmed result. Progress may arrive together when the action finishes.',
+                  )}
                 </p>
               )}
               {stage ? <span className='text-xs text-ink-3' role='status'>{stage}…</span> : null}
@@ -501,12 +530,15 @@ function CompareCard(
               ? (
                 <>
                   <span className='font-medium text-ink-2'>
-                    Recommended for this document: {done.recommended}.
+                    {ui('Recommended for this document: ')}
+                    {done.recommended}.
                   </span>{' '}
                   {done.reason}
                 </>
               )
-              : done.reason} Sandbox copies purged: {done.purged}.
+              : done.reason}
+            {ui(' Sandbox copies purged: ')}
+            {done.purged}.
           </p>
         )
         : null}
@@ -515,6 +547,7 @@ function CompareCard(
 }
 
 function ProfileCard({ profile, filename }: { profile: ExtractionProfile; filename: string }) {
+  const { ui } = usePortalLocale()
   const cls = CLASSES.find((c) => c.id === profile.class)
   const cells: [string, string][] = [
     ['Pages', String(profile.pages)],
@@ -529,13 +562,13 @@ function ProfileCard({ profile, filename }: { profile: ExtractionProfile; filena
   return (
     <div className='mt-2'>
       <div className='flex flex-wrap items-center gap-2'>
-        <span className='rp-badge'>{cls?.label ?? profile.class}</span>
-        <span className='text-xs text-ink-3'>{cls?.hint}</span>
+        <span className='rp-badge'>{cls ? ui(cls.label) : profile.class}</span>
+        <span className='text-xs text-ink-3'>{cls && ui(cls.hint)}</span>
       </div>
       <dl className='mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4'>
         {cells.map(([k, v]) => (
           <div key={k}>
-            <dt className='text-ink-3'>{k}</dt>
+            <dt className='text-ink-3'>{ui(k)}</dt>
             <dd className='tabular-nums text-ink-2'>{v}</dd>
           </div>
         ))}
@@ -552,6 +585,8 @@ function ResultColumn(
     recommended: boolean
   },
 ) {
+  const { ui } = usePortalLocale()
+
   const m = result.metrics
   return (
     <div
@@ -564,34 +599,41 @@ function ResultColumn(
           <p className='text-sm font-medium text-ink'>{result.method.name}</p>
           <p className='text-xs text-ink-3'>{kindLabel(result.method.kind)}</p>
         </div>
-        {recommended ? <span className='rp-badge rp-badge-ok'>recommended</span> : null}
+        {recommended ? <span className='rp-badge rp-badge-ok'>{ui('recommended')}</span> : null}
       </div>
       <dl className='mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs'>
-        <dt className='text-ink-3'>Judge score</dt>
+        <dt className='text-ink-3'>{ui('Judge score')}</dt>
         <dd className='tabular-nums text-ink-2'>
-          {m.judgeScore === null ? 'n/a' : `${m.judgeScore} / 5`}
+          {m.judgeScore === null ? ui('n/a') : `${m.judgeScore} / 5`}
         </dd>
-        <dt className='text-ink-3'>Chars / page</dt>
+        <dt className='text-ink-3'>{ui('Chars / page')}</dt>
         <dd className='tabular-nums text-ink-2'>
           {m.charsPerPage}
-          {yieldVsDefault !== null && yieldVsDefault !== 1 ? ` (${yieldVsDefault}× default)` : ''}
+          {yieldVsDefault !== null && yieldVsDefault !== 1
+            ? ui(' ({yieldVsDefault}× default)', { yieldVsDefault: yieldVsDefault })
+            : ''}
         </dd>
-        <dt className='text-ink-3'>Table rows</dt>
+        <dt className='text-ink-3'>{ui('Table rows')}</dt>
         <dd className='tabular-nums text-ink-2'>{m.tableRows}</dd>
-        <dt className='text-ink-3'>Paragraphs</dt>
+        <dt className='text-ink-3'>{ui('Paragraphs')}</dt>
         <dd className='tabular-nums text-ink-2'>{m.paragraphs}</dd>
-        <dt className='text-ink-3'>Word plausibility</dt>
+        <dt className='text-ink-3'>{ui('Word plausibility')}</dt>
         <dd className='tabular-nums text-ink-2'>{Math.round(m.dictionaryHitRate * 100)}%</dd>
-        <dt className='text-ink-3'>Time</dt>
+        <dt className='text-ink-3'>{ui('Time')}</dt>
         <dd className='tabular-nums text-ink-2'>
-          {m.latencySec} s
-          {m.visionPages ? ` · ${m.visionPages} vision page${m.visionPages === 1 ? '' : 's'}` : ''}
+          {m.latencySec}
+          {ui(' s')}
+          {m.visionPages
+            ? ui(m.visionPages === 1 ? ' · {count} vision page' : ' · {count} vision pages', {
+              count: m.visionPages,
+            })
+            : ''}
         </dd>
       </dl>
       {m.judgeReason ? <p className='mt-2 text-[11px] italic text-ink-3'>{m.judgeReason}</p> : null}
       <details className='mt-2'>
         <summary className='cursor-pointer text-xs text-[var(--rp-accent-fg)]'>
-          Extracted text
+          {ui('Extracted text')}
         </summary>
         <pre className='rp-scroll mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-[var(--rp-radius)] bg-surface p-2 text-[11px] leading-snug text-ink-2'>
           {result.textPreview}
@@ -601,7 +643,12 @@ function ResultColumn(
         ? (
           <div className='mt-2 border-t border-line pt-2'>
             <p className='rp-eyebrow text-ink-3'>
-              Answer · {result.ask.citations} citation{result.ask.citations === 1 ? '' : 's'}
+              {ui(
+                result.ask.citations === 1
+                  ? 'Answer · {count} citation'
+                  : 'Answer · {count} citations',
+                { count: result.ask.citations },
+              )}
             </p>
             <p className='mt-1 line-clamp-6 text-xs leading-relaxed text-ink-2'>
               {result.ask.answer}
@@ -621,6 +668,8 @@ function RulesCard(
     onSaved: (rules: ExtractionRules) => void
   },
 ) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAllowed } = usePermissionAdminAccess('behaviour.write', {
     kind: 'portal',
     slug,
@@ -675,7 +724,7 @@ function RulesCard(
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit('Save extraction routing rules', async (access) => {
+      const result = await runExplicit(ui('Save extraction routing rules'), async (access) => {
         assertCurrent()
         if (sessionAllowed && !authority.can('content.write', { kind: 'portal', slug })) {
           throw new AdminAccessError()
@@ -690,41 +739,45 @@ function RulesCard(
       setDraft(result)
       setMessage({
         tone: 'ok',
-        text: 'Routing rules saved. New uploads through the portal and the loader follow them.',
+        text: ui('Routing rules saved. New uploads through the portal and the loader follow them.'),
       })
       onSaved(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not save the rules.') })
+      setMessage({
+        tone: 'error',
+        text: errorMessage(err, 'Could not save the rules.', localError),
+      })
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
   }
   return (
     <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>Routing rules</h3>
+      <h3 className='text-sm font-semibold text-ink'>{ui('Routing rules')}</h3>
       <p className='mt-1 text-xs text-ink-3'>
-        Which method each class of document gets. The visual page cap sends long scans to the
-        default method regardless.
+        {ui(
+          'Which method each class of document gets. The visual page cap sends long scans to the default method regardless.',
+        )}
       </p>
       <div className='overflow-x-auto'>
         <table className='mt-3 block w-full text-left text-xs sm:table'>
           <thead className='hidden text-ink-3 sm:table-header-group'>
             <tr>
-              <th className='py-1.5 pr-3 font-medium'>Profile class</th>
-              <th className='py-1.5 font-medium'>Method</th>
+              <th className='py-1.5 pr-3 font-medium'>{ui('Profile class')}</th>
+              <th className='py-1.5 font-medium'>{ui('Method')}</th>
             </tr>
           </thead>
           <tbody className='block sm:table-row-group'>
             {CLASSES.map((cls) => (
               <tr key={cls.id} className='block border-t border-line sm:table-row'>
                 <td className='block pt-3 pb-1 sm:table-cell sm:py-2 sm:pr-3'>
-                  <span className='font-medium text-ink'>{cls.label}</span>
-                  <span className='block text-ink-3'>{cls.hint}</span>
+                  <span className='font-medium text-ink'>{ui(cls.label)}</span>
+                  <span className='block text-ink-3'>{ui(cls.hint)}</span>
                 </td>
                 <td className='block pb-3 sm:table-cell sm:py-2'>
                   <select
-                    aria-label={`${cls.label} extraction method`}
+                    aria-label={ui('{label} extraction method', { label: ui(cls.label) })}
                     value={methodFor(cls.id)}
                     onChange={(e) =>
                       setFor(cls.id, e.target.value)}
@@ -740,7 +793,7 @@ function RulesCard(
       </div>
       <div className='mt-3 flex flex-wrap items-center gap-3'>
         <label className='flex items-center gap-2 text-xs text-ink-2'>
-          Visual page cap
+          {ui('Visual page cap')}
           <input
             type='number'
             min={1}
@@ -758,7 +811,7 @@ function RulesCard(
           onClick={() => void onSave()}
           className='rp-btn rp-btn-primary'
         >
-          {busy ? 'Saving…' : 'Save rules'}
+          {busy ? ui('Saving…') : ui('Save rules')}
         </button>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}

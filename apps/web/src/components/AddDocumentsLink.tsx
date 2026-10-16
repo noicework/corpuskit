@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 import { useAccess } from './AccessProvider.tsx'
 
@@ -16,6 +17,8 @@ export function AddDocumentsLink({ slug, variant = 'primary', className = '' }: 
   variant?: 'primary' | 'outline'
   className?: string
 }) {
+  const { ui } = usePortalLocale()
+
   const access = useAccess()
   if (!access.can('content.write', { kind: 'portal', slug })) return null
   return (
@@ -35,7 +38,7 @@ export function AddDocumentsLink({ slug, variant = 'primary', className = '' }: 
       >
         <path d='M12 5v14M5 12h14' />
       </svg>
-      Add documents
+      {ui('Add documents')}
     </Link>
   )
 }

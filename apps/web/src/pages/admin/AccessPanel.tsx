@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useId, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { type AccessMode, type Permission } from '@research-portal/core'
@@ -31,13 +32,18 @@ const modes: { value: AccessMode; label: string; help: string }[] = [
   },
 ]
 export function AccessPanel({ slug, name }: { slug: string; name: string }) {
+  const { ui } = usePortalLocale()
+
   const access = useAccess()
   const scope = { kind: 'portal' as const, slug }
   if (!ACCESS_SECTION_PERMISSIONS.some((permission) => access.can(permission, scope))) return null
   return (
     <section className='rp-card min-w-0 p-6' data-access-panel>
-      <h2 className='rp-display break-words text-xl [overflow-wrap:anywhere]'>Access to {name}</h2>
-      <p className='mt-2 text-sm text-ink-2 [overflow-wrap:anywhere]'>Portal: {slug}</p>
+      <h2 className='rp-display break-words text-xl [overflow-wrap:anywhere]'>
+        {ui('Access to ')}
+        {name}
+      </h2>
+      <p className='mt-2 text-sm text-ink-2 [overflow-wrap:anywhere]'>{ui('Portal: ')}{slug}</p>
       <AssignmentSection scope={scope} name={name} family='members' />
       <AssignmentSection scope={scope} name={name} family='groups' />
       {access.can('behaviour.write', scope) && (
@@ -48,6 +54,8 @@ export function AccessPanel({ slug, name }: { slug: string; name: string }) {
   )
 }
 function AccessModeSection({ slug, name }: { slug: string; name: string }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { config } = useOutletContext<TenantOutletContext>()
   const current = config.slug === slug
     ? modes.find((mode) => mode.value === config.accessMode)
@@ -83,21 +91,29 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
       data-access-mode
       aria-labelledby={id}
     >
-      <h3 id={id} className='rp-display text-xl'>Access mode</h3>
+      <h3 id={id} className='rp-display text-xl'>{ui('Access mode')}</h3>
       {notice && (
-        <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>{unconfirmedMessage}</p>
+        <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>
+          {localError(
+            unconfirmedMessage,
+            'The result could not be confirmed. Refresh this view before trying again.',
+          )}
+        </p>
       )}
       {!current
         ? (
           <p className='mt-4 text-base text-ink-2'>
-            The current access mode could not be checked. Refresh this view.
+            {ui('The current access mode could not be checked. Refresh this view.')}
           </p>
         )
         : (
           <>
-            <p className='mt-4 text-base' data-current-access-mode>Current mode: {current.label}</p>
+            <p className='mt-4 text-base' data-current-access-mode>
+              {ui('Current mode: ')}
+              {ui(current.label)}
+            </p>
             <fieldset className='mt-4 min-w-0 space-y-4' disabled={busy}>
-              <legend className='sr-only'>Access mode for {name}</legend>
+              <legend className='sr-only'>{ui('Access mode for ')}{name}</legend>
               {modes.map((mode) => (
                 <label
                   key={mode.value}
@@ -112,8 +128,8 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
                     onChange={() => setSelected(mode.value)}
                   />
                   <span className='min-w-0 text-base'>
-                    {mode.label}
-                    <span className='mt-1 block text-sm text-ink-2'>{mode.help}</span>
+                    {ui(mode.label)}
+                    <span className='mt-1 block text-sm text-ink-2'>{ui(mode.help)}</span>
                   </span>
                 </label>
               ))}
@@ -123,21 +139,23 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
                 disabled={!chosen || chosen === current}
                 onClick={() => setConfirm(true)}
               >
-                Save access mode
+                {ui('Save access mode')}
               </button>
             </fieldset>
           </>
         )}
       {confirm && chosen && (
         <ConfirmActionDialog
-          title='Change access mode'
-          description={`Change ${name} to ${chosen.label}? ${
-            chosen.value === 'public'
-              ? 'Portal content will be accessible without sign-in.'
-              : chosen.help
-          }`}
-          confirmLabel='Change access mode'
-          cancelLabel='Keep current mode'
+          title={ui('Change access mode')}
+          description={ui('Change {name} to {label}? {value3}', {
+            name: name,
+            label: ui(chosen.label),
+            value3: chosen.value === 'public'
+              ? ui('Portal content will be accessible without sign-in.')
+              : ui(chosen.help),
+          })}
+          confirmLabel={ui('Change access mode')}
+          cancelLabel={ui('Keep current mode')}
           busy={busy}
           error={error}
           onCancel={() => {

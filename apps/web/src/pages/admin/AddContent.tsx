@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
@@ -31,6 +32,8 @@ function CrawlTab({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit, sessionAllowed, sessionAccess } = usePermissionAdminAccess('content.write', {
     kind: 'portal',
     slug,
@@ -57,7 +60,7 @@ function CrawlTab({
     setProgress(null)
     try {
       const result = await runExplicit(
-        'Discover site links',
+        ui('Discover site links'),
         (access) => discoverCrawl(slug, access, url, limit),
       )
       assertCurrent()
@@ -68,12 +71,12 @@ function CrawlTab({
       setLinks(result.links)
       setChecked(Object.fromEntries(result.links.map((link) => [link, true])))
       if (result.links.length === 0) {
-        setMessage({ tone: 'error', text: 'No links were found at that address.' })
+        setMessage({ tone: 'error', text: ui('No links were found at that address.') })
       }
     } catch (err) {
       setMessage({
         tone: 'error',
-        text: errorMessage(err, 'Could not crawl that site - please try again.'),
+        text: errorMessage(err, 'Could not crawl that site - please try again.', localError),
       })
     } finally {
       setDiscovering(false)
@@ -111,6 +114,7 @@ function CrawlTab({
             text: errorMessage(
               err,
               'The result could not be confirmed. Check recent additions before trying again.',
+              localError,
             ),
           })
           return
@@ -133,23 +137,28 @@ function CrawlTab({
       busy
         ? {
           tone: 'ok',
-          text: `Added ${added} of ${selectedLinks.length} links - the knowledge box is busy ` +
-            `processing recent changes, so the remaining ${deferred} ${
-              deferred === 1 ? 'link was' : 'links were'
-            } not attempted. Try again in a few minutes.`,
+          text: ui(
+            'Added {added} of {total} links - the knowledge box is busy processing recent changes, so the remaining {deferred} links were not attempted. Try again in a few minutes.',
+            { added, total: selectedLinks.length, deferred },
+          ),
         }
         : failures === 0
         ? {
           tone: 'ok',
-          text: `Added ${selectedLinks.length} ${
-            selectedLinks.length === 1 ? 'link' : 'links'
-          } - they will appear below once processed.`,
+          text: ui(
+            selectedLinks.length === 1
+              ? 'Added {count} link - they will appear below once processed.'
+              : 'Added {count} links - they will appear below once processed.',
+            { count: selectedLinks.length },
+          ),
         }
         : {
           tone: 'error',
-          text: `Added ${
-            selectedLinks.length - failures
-          } of ${selectedLinks.length} links - ${failures} failed.`,
+          text: ui('Added {added} of {total} links - {failures} failed.', {
+            added: selectedLinks.length - failures,
+            total: selectedLinks.length,
+            failures,
+          }),
         },
     )
     setLinks(null)
@@ -162,8 +171,9 @@ function CrawlTab({
     <div className='space-y-4'>
       {!sessionAllowed && (
         <p className='text-sm text-ink-2'>
-          Discovery is one request. Sign in with an administrator account to ingest selected links
-          as a batch, or add each link separately.
+          {ui(
+            'Discovery is one request. Sign in with an administrator account to ingest selected links as a batch, or add each link separately.',
+          )}
         </p>
       )}
       <form onSubmit={onDiscover} className='space-y-3'>
@@ -172,7 +182,7 @@ function CrawlTab({
             htmlFor={`crawl-url-${slug}`}
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Site URL
+            {ui('Site URL')}
           </label>
           <input
             id={`crawl-url-${slug}`}
@@ -180,7 +190,7 @@ function CrawlTab({
             className='rp-input'
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder='https://example.com'
+            placeholder={ui('https://example.com')}
             autoComplete='off'
             required
           />
@@ -190,7 +200,7 @@ function CrawlTab({
             htmlFor={`crawl-limit-${slug}`}
             className='mb-1.5 block text-sm font-medium text-ink'
           >
-            Link limit
+            {ui('Link limit')}
           </label>
           <select
             id={`crawl-limit-${slug}`}
@@ -202,7 +212,7 @@ function CrawlTab({
           </select>
         </div>
         <button type='submit' disabled={discovering} className='rp-btn rp-btn-primary'>
-          {discovering ? 'Discovering…' : 'Discover'}
+          {discovering ? ui('Discovering…') : ui('Discover')}
         </button>
       </form>
 
@@ -210,7 +220,8 @@ function CrawlTab({
         <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-4'>
           <div className='flex flex-wrap items-center justify-between gap-3'>
             <p className='text-sm font-medium text-ink'>
-              {links.length} {links.length === 1 ? 'link' : 'links'} found
+              {links.length} {links.length === 1 ? ui('link') : ui('links')}
+              {ui(' found')}
             </p>
             <div className='flex flex-wrap items-center gap-3 text-sm font-medium text-ink-2'>
               <button
@@ -218,14 +229,14 @@ function CrawlTab({
                 onClick={() => toggleAll(true)}
                 className='transition-colors duration-150 hover:text-[var(--rp-ink)]'
               >
-                Select all
+                {ui('Select all')}
               </button>
               <button
                 type='button'
                 onClick={() => toggleAll(false)}
                 className='transition-colors duration-150 hover:text-[var(--rp-ink)]'
               >
-                Select none
+                {ui('Select none')}
               </button>
             </div>
           </div>
@@ -253,8 +264,11 @@ function CrawlTab({
             className='rp-btn rp-btn-primary mt-4'
           >
             {ingesting
-              ? `Ingesting ${progress?.done ?? 0} of ${progress?.total ?? selectedLinks.length}…`
-              : `Ingest ${selectedLinks.length} selected`}
+              ? ui('Ingesting {value1} of {value2}…', {
+                value1: progress?.done ?? 0,
+                value2: progress?.total ?? selectedLinks.length,
+              })
+              : ui('Ingest {length} selected', { length: selectedLinks.length })}
           </button>
         </div>
       )}
@@ -279,6 +293,8 @@ function AddContentContent({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
+  const { ui, error: localError } = usePortalLocale()
+
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
   const context = authority.controller.context
@@ -334,7 +350,7 @@ function AddContentContent({
     setBusy(true)
     setMessage(null)
     try {
-      const result = await runExplicit(label, action)
+      const result = await runExplicit(ui(label), action)
       assertCurrent()
       if (result === undefined) return false
       if (!result || typeof result.id !== 'string' || !result.id) {
@@ -342,14 +358,14 @@ function AddContentContent({
           'We could not confirm the result. Check whether the action completed before trying again.',
         )
       }
-      setMessage({ tone: 'ok', text: successText })
+      setMessage({ tone: 'ok', text: ui(successText) })
       assertCurrent()
       await onAdded()
       return true
     } catch (err) {
       setMessage({
         tone: 'error',
-        text: errorMessage(err, 'Could not add that content - please try again.'),
+        text: errorMessage(err, 'Could not add that content - please try again.', localError),
       })
       return false
     } finally {
@@ -400,15 +416,16 @@ function AddContentContent({
       className='scroll-mt-24 outline-none'
       data-add-documents-panel
     >
-      <h2 id={headingId} className='text-base font-semibold text-ink'>Add documents</h2>
+      <h2 id={headingId} className='text-base font-semibold text-ink'>{ui('Add documents')}</h2>
       <p className='mt-1 text-sm text-ink-2'>
-        Upload files, add a web page, paste text or crawl a site. New documents become searchable
-        once they are processed.
+        {ui(
+          'Upload files, add a web page, paste text or crawl a site. New documents become searchable once they are processed.',
+        )}
       </p>
 
       <div
         role='tablist'
-        aria-label='Ways to add documents'
+        aria-label={ui('Ways to add documents')}
         className='mt-4 flex flex-wrap gap-1 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-1'
       >
         {TABS.map((t) => (
@@ -432,7 +449,7 @@ function AddContentContent({
                 : 'text-ink-2 hover:bg-[var(--rp-surface)] hover:text-[var(--rp-ink)]'
             }`}
           >
-            {t.label}
+            {ui(t.label)}
           </button>
         ))}
       </div>
@@ -452,7 +469,7 @@ function AddContentContent({
                 htmlFor={`link-url-${slug}`}
                 className='mb-1.5 block text-sm font-medium text-ink'
               >
-                URL
+                {ui('URL')}
               </label>
               <input
                 id={`link-url-${slug}`}
@@ -460,7 +477,7 @@ function AddContentContent({
                 className='rp-input'
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder='https://example.com/report'
+                placeholder={ui('https://example.com/report')}
                 autoComplete='off'
                 required
               />
@@ -470,14 +487,14 @@ function AddContentContent({
                 htmlFor={`link-title-${slug}`}
                 className='mb-1.5 block text-sm font-medium text-ink'
               >
-                Title (optional)
+                {ui('Title (optional)')}
               </label>
               <input
                 id={`link-title-${slug}`}
                 className='rp-input'
                 value={linkTitle}
                 onChange={(e) => setLinkTitle(e.target.value)}
-                placeholder='Leave blank to use the page title'
+                placeholder={ui('Leave blank to use the page title')}
                 autoComplete='off'
               />
             </div>
@@ -487,10 +504,10 @@ function AddContentContent({
                 checked={linkDraft}
                 onChange={(e) => setLinkDraft(e.target.checked)}
               />
-              Ingest as draft (hidden until published)
+              {ui('Ingest as draft (hidden until published)')}
             </label>
             <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-              {busy ? 'Adding…' : 'Add link'}
+              {busy ? ui('Adding…') : ui('Add link')}
             </button>
           </form>
         )}
@@ -502,7 +519,7 @@ function AddContentContent({
                 htmlFor={`text-title-${slug}`}
                 className='mb-1.5 block text-sm font-medium text-ink'
               >
-                Title
+                {ui('Title')}
               </label>
               <input
                 id={`text-title-${slug}`}
@@ -518,7 +535,7 @@ function AddContentContent({
                 htmlFor={`text-body-${slug}`}
                 className='mb-1.5 block text-sm font-medium text-ink'
               >
-                Text
+                {ui('Text')}
               </label>
               <textarea
                 id={`text-body-${slug}`}
@@ -530,7 +547,7 @@ function AddContentContent({
               />
             </div>
             <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
-              {busy ? 'Adding…' : 'Add text'}
+              {busy ? ui('Adding…') : ui('Add text')}
             </button>
           </form>
         )}
