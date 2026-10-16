@@ -113,12 +113,14 @@ function tidyFootnotes(text: string, references: FootnoteReference[]) {
     const next = text[group.end]
     // Retain a word separator for mid-sentence citations, but not a floating
     // space before punctuation or at the end of a paragraph.
-    if (group.end > group.start && next && !/[\r\n.!?,;:…\])”’"']/.test(next)) out += ' '
+    if (group.end > group.start && next && !/[\r\n.!?。！？,;:…\])”’"'」』）】》〉〕]/.test(next)) {
+      out += ' '
+    }
     cursor = group.end
   }
   out += text.slice(cursor)
   for (const ref of shifted) {
-    const punctuation = /^[.!?,;:…\])”’"']+/.exec(out.slice(ref.pos))
+    const punctuation = /^[.!?。！？,;:…\])”’"'」』）】》〉〕]+/.exec(out.slice(ref.pos))
     if (punctuation) ref.pos += punctuation[0].length
   }
   return { text: out, references: shifted }
