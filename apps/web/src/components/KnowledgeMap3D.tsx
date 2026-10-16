@@ -99,8 +99,10 @@ export function KnowledgeMap3D({
   const engineRef = useRef<KnowledgeMapEngine | null>(null)
   const onSelectRef = useRef(onSelect)
   const onReadyRef = useRef(onReady)
+  const uiRef = useRef(ui)
   onSelectRef.current = onSelect
   onReadyRef.current = onReady
+  uiRef.current = ui
 
   const [size, setSize] = useState({ w: 0, h: 0 })
   useEffect(() => {
@@ -152,6 +154,7 @@ export function KnowledgeMap3D({
       labels,
       (id) => onSelectRef.current(id),
       () => setContextLost(true),
+      uiRef.current,
     )
     engineRef.current = engine
     return () => {
@@ -159,6 +162,10 @@ export function KnowledgeMap3D({
       engine.dispose()
     }
   }, [usable])
+
+  useEffect(() => {
+    engineRef.current?.setUi(ui)
+  }, [usable, ui])
 
   // Data - and the fit that frames it.
   useEffect(() => {

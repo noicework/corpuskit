@@ -220,3 +220,56 @@ Deno.test('research routes retain authored known-key evidence in Japanese and En
     await server.close()
   }
 })
+
+Deno.test('Tools retains neutral clipboard results through Japanese English switching without another copy', async () => {
+  const { server } = japaneseResearchFixture()
+  const browser = await launch(), page = await browser.newPage(`${server.url}/t/marine/tools`)
+  try {
+    await page.waitForSelector('[data-tools-page]')
+    await assertCurrentBuild(page)
+    for (const result of ['copied', 'failed'] as const) {
+      await page.evaluate((result) => {
+        const state = { calls: 0 }
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: () => {
+              state.calls++
+              document.body.dataset.clipboardCalls = String(state.calls)
+              return result === 'copied' ? Promise.resolve() : Promise.reject(new Error('fixture'))
+            },
+          },
+        })
+      }, { args: [result] })
+      await page.evaluate(() => {
+        const button = [...document.querySelectorAll<HTMLButtonElement>('main button')]
+          .find((element) => element.textContent?.trim() === '接続情報をコピー')!
+        button.click()
+      })
+      const message = result === 'copied'
+        ? 'Connection details copied.'
+        : 'Could not copy. Select the connection details and copy them manually.'
+      for (const language of ['ja', 'en', 'ja'] as const) {
+        await page.evaluate(
+          (language) =>
+            document.querySelector<HTMLButtonElement>(`button[lang="${language}"]`)!.click(),
+          {
+            args: [language],
+          },
+        )
+        await page.waitForFunction(
+          (expected) =>
+            document.querySelector('[data-tools-page] [role=status]')?.textContent?.trim() ===
+              expected,
+          { args: [createPortalLocale(language).ui(message)] },
+        )
+        expect(await page.evaluate(() => document.body.dataset.clipboardCalls)).toBe('1')
+      }
+    }
+    expect(server.requests.some((request) => request.path.includes('/mcp/keys'))).toBe(false)
+  } finally {
+    await page.close()
+    await browser.close()
+    await server.close()
+  }
+})

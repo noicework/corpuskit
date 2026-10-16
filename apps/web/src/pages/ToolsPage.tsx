@@ -35,7 +35,7 @@ export function ToolsPage() {
   const endpoint = `${globalThis.location?.origin ?? ''}/api/t/${encodeURIComponent(slug)}/mcp`
   const isPublic = config.accessMode === 'public'
   const snippet = mcpConfigSnippet(endpoint, slug, isPublic ? undefined : 'YOUR_KEY')
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState<'copied' | 'failed' | null>(null)
   const lifetime = useRef<object | null>(null)
   useEffect(() => {
     const token = {}
@@ -49,11 +49,11 @@ export function ToolsPage() {
     try {
       await navigator.clipboard.writeText(snippet)
       if (token && token === lifetime.current && access.controller.context === context) {
-        setStatus(ui('Connection details copied.'))
+        setStatus('copied')
       }
     } catch {
       if (token && token === lifetime.current && access.controller.context === context) {
-        setStatus(ui('Could not copy. Select the connection details and copy them manually.'))
+        setStatus('failed')
       }
     }
   }
@@ -103,7 +103,13 @@ export function ToolsPage() {
           >
             {ui('Copy connection details')}
           </button>
-          <p role='status' className='mt-3 text-sm'>{status}</p>
+          <p role='status' className='mt-3 text-sm'>
+            {status === 'copied'
+              ? ui('Connection details copied.')
+              : status === 'failed'
+              ? ui('Could not copy. Select the connection details and copy them manually.')
+              : null}
+          </p>
           <Link
             to={`/t/${encodeURIComponent(slug)}/help/generate`}
             className='mt-3 inline-block text-sm text-[var(--rp-accent-fg)] underline'

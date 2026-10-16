@@ -1075,4 +1075,11 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'Pros and cons of {topic}': '{topic}の長所と短所',
   'FAQ about {topic}': '{topic}に関するよくある質問',
   'Test my knowledge of {topic}': '{topic}の知識を確認する',
+  'Click to explore': 'クリックして詳しく見る',
+  'Click to open the category': 'クリックして分類を開く',
+  '1 entity': '1項目',
+  '1 link out': '接続1件',
+  '{count} links out': '接続{count}件',
+  '1 relation': '関連1件',
+  '1 mention': '言及1件',
 }

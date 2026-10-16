@@ -1,12 +1,63 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import { scheduleMapReadyAfterPaint } from './KnowledgeMap3D.tsx'
-import { clusterScreenPx, nextFold } from './map3d-engine.ts'
+import { clusterScreenPx, mapPopupCopy, nextFold } from './map3d-engine.ts'
+import { createPortalLocale } from '../lib/portal-locale.tsx'
 
 const [graphPage, mapSource] = await Promise.all([
   Deno.readTextFile(new URL('../pages/GraphPage.tsx', import.meta.url)),
   Deno.readTextFile(new URL('./KnowledgeMap.tsx', import.meta.url)),
 ])
+
+Deno.test('3D popup translates finite copy and keeps authored labels and groups verbatim', () => {
+  const ja = createPortalLocale('ja').ui
+  const node = {
+    kind: 'entity' as const,
+    label: 'Library',
+    group: 'Summary {count}',
+    relations: 1,
+    mentions: 2,
+  }
+  const original = structuredClone(node)
+  expect(mapPopupCopy(node)).toEqual({
+    name: 'Library',
+    category: 'Summary {count}',
+    counts: '1 relation · 2 mentions',
+    hint: 'Click to explore',
+  })
+  expect(mapPopupCopy(node, ja)).toEqual({
+    name: 'Library',
+    category: 'Summary {count}',
+    counts: '関連1件 · 言及2件',
+    hint: 'クリックして詳しく見る',
+  })
+  expect(mapPopupCopy({ ...node, group: '', relations: 2, mentions: 1 }, ja)).toEqual({
+    name: 'Library',
+    category: 'エンティティ',
+    counts: '関連2件 · 言及1件',
+    hint: 'クリックして詳しく見る',
+  })
+  expect(node).toEqual(original)
+  const category = { kind: 'category' as const, group: 'Library {name}', entities: 2, links: 1 }
+  expect(mapPopupCopy(category)).toEqual({
+    name: 'Library {name}',
+    category: 'category',
+    counts: '2 entities · 1 link out',
+    hint: 'Click to open the category',
+  })
+  expect(mapPopupCopy(category, ja)).toEqual({
+    name: 'Library {name}',
+    category: '分類',
+    counts: '2項目 · 接続1件',
+    hint: 'クリックして分類を開く',
+  })
+  expect(mapPopupCopy({ ...category, group: '', entities: 1, links: 2 }, ja)).toEqual({
+    name: 'エンティティ',
+    category: '分類',
+    counts: '1項目 · 接続2件',
+    hint: 'クリックして分類を開く',
+  })
+})
 
 function frameHarness() {
   let nextId = 1
