@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { Permission, TenantConfig } from '@research-portal/core'
@@ -29,6 +29,12 @@ import { AcmdSiteFooter, AcmdSiteHeader } from '../components/AcmdChrome.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
+import {
+  localisePortalConfig,
+  PortalLanguageSwitch,
+  PortalLocaleContext,
+  usePortalLocaleState,
+} from '../lib/portal-locale.tsx'
 
 export type TenantOutletContext = {
   config: TenantConfig
@@ -293,7 +299,7 @@ export function TenantLayout() {
     }
   }, [navMounted])
   const {
-    data: config,
+    data: sourceConfig,
     isLoading,
     isError,
     error,
@@ -303,6 +309,11 @@ export function TenantLayout() {
     enabled: !!slug && access.can('portal.read', scope),
     retry: retryTenantConfig,
   })
+  const locale = usePortalLocaleState(sourceConfig)
+  const config = useMemo(
+    () => sourceConfig ? localisePortalConfig(sourceConfig, locale.language) : undefined,
+    [sourceConfig, locale.language],
+  )
   // Routes whose page owns the full viewport height.
   const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
 
@@ -358,7 +369,7 @@ export function TenantLayout() {
   // A portal set to light stays light for every viewer, and offers no toggle.
   const lightOnly = config?.branding.colourScheme === 'light'
   const scheme = lightOnly ? 'light' : isCorpusKit || isAcmd ? demoScheme : viewerScheme
-  const schemeLabel = scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+  const schemeLabel = locale.ui(scheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode')
   const toggleScheme = () => {
     const next = scheme === 'dark' ? 'light' : 'dark'
     if (isCorpusKit || isAcmd) setDemoScheme(next)
@@ -407,6 +418,7 @@ export function TenantLayout() {
       }`}
       style={tenantThemeVars(config.branding, scheme)}
       data-colour-scheme={scheme}
+      lang={locale.language}
     >
       {
         /* Two-tier header: a white strip carrying the logo, over a solid
@@ -429,7 +441,7 @@ export function TenantLayout() {
                       end={item.end}
                       className={navLinkClass}
                     >
-                      {item.label}
+                      {locale.ui(item.label)}
                     </NavLink>
                   ))}
                   {customLinks.map((link, index) => (
@@ -521,7 +533,9 @@ export function TenantLayout() {
                         : config.branding.logoUrl && !logoFailed
                         ? (
                           <img
-                            src={config.branding.logoUrl}
+                            src={scheme === 'dark'
+                              ? config.branding.logoDarkUrl ?? config.branding.logoUrl
+                              : config.branding.logoUrl}
                             alt={config.branding.organisation}
                             onError={() => setLogoFailed(true)}
                             // Tenant logos vary wildly in aspect ratio (a wordmark
@@ -536,7 +550,7 @@ export function TenantLayout() {
                             // intrinsic width, so without it the logo refuses to
                             // shrink and simply paints over its neighbours. Desktop is
                             // untouched - `sm:` restores h-16 with the 20rem cap.
-                            className='h-auto max-h-10 w-auto min-w-0 max-w-[9rem] object-contain sm:h-16 sm:max-h-none sm:max-w-[20rem]'
+                            className='h-auto max-h-10 w-[8.5rem] shrink-0 object-contain sm:h-16 sm:max-h-none sm:w-auto sm:max-w-[20rem]'
                           />
                         )
                         : (
@@ -568,7 +582,7 @@ export function TenantLayout() {
                       className='flex w-full items-center'
                     >
                       <label htmlFor='header-search' className='sr-only'>
-                        Search {config.branding.productName}
+                        {locale.ui('Search')} {config.branding.productName}
                       </label>
                       <input
                         id='header-search'
@@ -580,7 +594,7 @@ export function TenantLayout() {
                       />
                       <button
                         type='submit'
-                        aria-label='Search'
+                        aria-label={locale.ui('Search')}
                         className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
                         style={{
                           borderColor: 'var(--rp-line)',
@@ -610,6 +624,7 @@ export function TenantLayout() {
               * search box optically centred. */
                   }
                   <div className='ml-auto flex flex-none items-center justify-end gap-2 sm:flex-1'>
+                    <PortalLanguageSwitch config={config} locale={locale} />
                     {kbStatus?.status === 'none' &&
                       access.can('portal.create', { kind: 'platform' }) && (
                       <span className='hidden shrink-0 lg:block'>
@@ -673,7 +688,7 @@ export function TenantLayout() {
                           setNavMounted(true)
                           setNavOpen(true)
                         }}
-                        aria-label={navOpen ? 'Close menu' : 'Open menu'}
+                        aria-label={locale.ui(navOpen ? 'Close menu' : 'Open menu')}
                         aria-expanded={navOpen}
                         aria-controls='mobile-nav-sheet'
                         className='rp-navtoggle rp-focus'
@@ -698,7 +713,7 @@ export function TenantLayout() {
                         end={item.end}
                         className={navLinkClass}
                       >
-                        {item.label}
+                        {locale.ui(item.label)}
                       </NavLink>
                     ))}
                     {customLinks.map((link, index) => (
@@ -811,7 +826,7 @@ export function TenantLayout() {
                     >
                       &rarr;
                     </span>
-                    {item.label}
+                    {locale.ui(item.label)}
                   </NavLink>
                 </li>
               ))}
@@ -859,7 +874,7 @@ export function TenantLayout() {
                   className='rp-navsheet-action rp-focus-inverse'
                 >
                   <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
-                  {scheme === 'dark' ? 'Light mode' : 'Dark mode'}
+                  {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}
                 </button>
               )}
               {helpMenuItems(config.slug).map((item) => (
@@ -904,7 +919,11 @@ export function TenantLayout() {
       {/* Keyed on the path so each route change replays the entrance. */}
       <div key={location.pathname} className='rp-page-enter'>
         {routeAllowed
-          ? <Outlet context={{ config } satisfies TenantOutletContext} />
+          ? (
+            <PortalLocaleContext.Provider value={locale}>
+              <Outlet context={{ config } satisfies TenantOutletContext} />
+            </PortalLocaleContext.Provider>
+          )
           : (
             <main data-route-unavailable className='rp-shell py-12'>
               <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>

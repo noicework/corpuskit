@@ -4068,7 +4068,8 @@ export class AragProvider implements RetrievalProvider {
               'is not enough data, and never refuse, when any relevant context is present. For any ' +
               "part of the question the context does not address, say plainly that the portal's " +
               'sources do not cover it rather than answering that part from general knowledge. Write ' +
-              'clear, well-structured prose with Markdown, in Australian English. ' +
+              'clear, well-structured prose with Markdown. ' +
+              (tenant.languagePolicy ? '' : 'Use Australian English. ') +
               (footnotes
                 ? 'Support factual claims with citations to the evidence. '
                 : 'Cite evidence at claim level after each factual claim. ') +
@@ -4080,6 +4081,15 @@ export class AragProvider implements RetrievalProvider {
               'material as "the cited sources", never as "the context"; a reader never sees the ' +
               'context, only the sources. Never write "Not enough data to answer this".')) +
           (opts.promptAddendum?.trim() ? `\n\n${opts.promptAddendum.trim()}` : '') +
+          (tenant.languagePolicy
+            ? '\n\nPortal language policy, including help answers and custom prompt wording: ' +
+              'Answer in the language of the user question: Japanese for a Japanese question ' +
+              'and English for an English question, unless the user explicitly asks for a different ' +
+              'language. Retrieve and synthesise relevant sources in both Japanese and English ' +
+              'regardless of the question language. Preserve material and experiment codes, units ' +
+              'and citation links. Where sources are marked synthetic demo data, treat their ' +
+              'observations as fictional and never as actual product evidence. '
+            : '') +
           (footnotes ? `\n\n${FOOTNOTE_PROMPT}` : ''),
       },
     }

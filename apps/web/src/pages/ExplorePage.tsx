@@ -14,6 +14,7 @@ import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { RegionMap, REGIONS } from '../components/RegionMap.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 
 /* -------------------------------------------------------------------------
  * Hero
@@ -75,6 +76,7 @@ export function Hero({
   /** Whether the recently added list sits beside the ask when there is no hero image. */
   showRecent?: boolean
 }) {
+  const { ui } = usePortalLocale()
   const [query, setQuery] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
   const isAcmd = config.branding.paletteId === 'acmd'
@@ -137,7 +139,7 @@ export function Hero({
 
           <form onSubmit={handleSubmit} className='rp-anim-rise rp-delay-1 mt-8' role='search'>
             <label htmlFor='explore-search' className='sr-only'>
-              Ask {config.branding.productName}
+              {ui('Ask')} {config.branding.productName}
             </label>
             <div className='relative max-w-2xl'>
               <div className='rp-shadow-xl flex items-center gap-2 rounded-[var(--rp-radius-input)] bg-surface p-1.5 pl-3.5 ring-1 ring-[var(--rp-on-hero)]/40 focus-within:ring-2 focus-within:ring-[var(--rp-on-hero)]'>
@@ -171,7 +173,7 @@ export function Hero({
                   className='min-w-0 flex-1 border-0 bg-transparent px-2 py-2 text-[0.95rem] text-ink focus:outline-none'
                 />
                 <button type='submit' className='rp-btn rp-btn-primary shrink-0 font-semibold'>
-                  Ask
+                  {ui('Ask')}
                 </button>
               </div>
             </div>

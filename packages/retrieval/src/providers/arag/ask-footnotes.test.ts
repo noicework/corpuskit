@@ -125,6 +125,29 @@ Deno.test('footnote instruction survives custom prompt and addendum', async () =
   expect(prompt.system).not.toContain('number itself does not matter')
 })
 
+Deno.test('bilingual answer policy survives custom prompts and help scope', async () => {
+  const config = TenantConfigSchema.parse({
+    ...tenant,
+    languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
+  })
+  for (const docScope of [false, true]) {
+    const f = fixture({ doc: docScope })
+    await collect(f.provider, {
+      docScope,
+      systemPrompt: 'Custom research instructions',
+      promptAddendum: 'Custom house style',
+    }, config)
+    const prompt = (f.bodies[0]?.prompt as { system: string }).system
+    expect(prompt).toContain('Custom research instructions')
+    expect(prompt).toContain('Answer in the language of the user question')
+    expect(prompt).toContain('both Japanese and English')
+    expect(prompt).toContain('treat their observations as fictional')
+    expect(prompt.indexOf('Portal language policy')).toBeGreaterThan(
+      prompt.indexOf('Custom house style'),
+    )
+  }
+})
+
 Deno.test('footnote grouping guidance is shared across prose surfaces and overrides', async () => {
   const config = TenantConfigSchema.parse({
     ...tenant,
