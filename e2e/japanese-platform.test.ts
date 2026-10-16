@@ -26,6 +26,8 @@ Deno.test('platform capture readiness activates a backgrounded page without wait
   const page = await browser.newPage('about:blank', { waitUntil: 'load' })
   const foreground = await browser.newPage('about:blank', { waitUntil: 'load' })
   try {
+    await foreground.bringToFront()
+    await page.waitForFunction(() => document.visibilityState === 'hidden')
     expect(await page.evaluate(() => document.visibilityState)).toBe('hidden')
     await prepareCapture(page)
     expect(
