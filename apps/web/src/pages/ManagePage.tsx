@@ -183,18 +183,36 @@ function ManageContent() {
           </div>
         </div>
         <section aria-label={ui('Portal status')} className='rp-card mt-6 min-w-0 p-5'>
-          <p className='text-sm text-ink-2' data-manage-status>
-            {status.data
-              ? status.data.status === 'connected'
-                ? ui('Knowledge box connected')
-                : status.data.status === 'demo'
-                ? ui('Demo knowledge box')
-                : status.data.status === 'unavailable'
-                ? ui('Knowledge box connection unavailable. Reconnect or disconnect it.')
-                : ui('Knowledge box not connected')
-              : status.isError
-              ? ui('Connection status is unavailable.')
-              : ui('Checking connection...')}
+          <p className='flex items-start gap-2 text-sm text-ink-2' data-manage-status>
+            {status.isSuccess && !status.isFetching && status.data.status === 'connected' && (
+              <svg
+                aria-hidden='true'
+                focusable='false'
+                viewBox='0 0 20 20'
+                fill='none'
+                stroke='currentColor'
+                strokeWidth='2'
+                strokeLinecap='round'
+                strokeLinejoin='round'
+                className='mt-0.5 h-4 w-4 shrink-0 text-[var(--rp-ok-ink)]'
+                data-manage-connected-check
+              >
+                <path d='m4 10 4 4 8-8' />
+              </svg>
+            )}
+            <span className='min-w-0'>
+              {status.data
+                ? status.data.status === 'connected'
+                  ? ui('Knowledge box connected')
+                  : status.data.status === 'demo'
+                  ? ui('Demo knowledge box')
+                  : status.data.status === 'unavailable'
+                  ? ui('Knowledge box connection unavailable. Reconnect or disconnect it.')
+                  : ui('Knowledge box not connected')
+                : status.isError
+                ? ui('Connection status is unavailable.')
+                : ui('Checking connection...')}
+            </span>
           </p>
           {can('content.write') && content.data && (
             <div className='mt-3 min-w-0 space-y-2 text-sm'>

@@ -643,7 +643,6 @@ export function DocsPage() {
   return (
     <main className='rp-shell py-6 sm:py-8 lg:py-10'>
       <div className='mb-6'>
-        <p className='rp-eyebrow text-ink-3'>{ui('Help')}</p>
         <h1 className='mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl'>
           {ui('{name} documentation', { name: config.branding.productName })}
         </h1>

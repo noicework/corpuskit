@@ -160,6 +160,7 @@ export function TenantLayout() {
   // scrim and the rows can animate away and the trigger can morph back from the
   // cross instead of the whole thing being ripped out of the DOM mid-gesture.
   const [navMounted, setNavMounted] = useState(false)
+  const [navTop, setNavTop] = useState<number | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [logoFailed, setLogoFailed] = useState(false)
   const [headerQuery, setHeaderQuery] = useState('')
@@ -333,10 +334,12 @@ export function TenantLayout() {
     const element = headerRef.current
     if (!element) return
     const apply = () => {
+      const bounds = element.getBoundingClientRect()
       document.documentElement.style.setProperty(
         '--rp-header-h',
-        `${Math.round(element.getBoundingClientRect().height)}px`,
+        `${Math.round(bounds.height)}px`,
       )
+      if (navMounted) setNavTop(Math.max(0, bounds.bottom))
     }
     apply()
     const observer = new ResizeObserver(apply)
@@ -345,7 +348,7 @@ export function TenantLayout() {
     // Keyed on config: the header does not exist on the first render (the
     // layout shows a spinner while the tenant loads), so a mount-only effect
     // would attach to nothing and never set the property.
-  }, [config])
+  }, [config, navMounted])
 
   // Every surface names itself in the tab, so two open portal tabs are told
   // apart by what they hold rather than by the product name alone (D6-14).
@@ -430,7 +433,10 @@ export function TenantLayout() {
           /* Two-tier header: a white strip carrying the logo, over a solid
         * brand-colour band carrying the navigation. */
         }
-        <header ref={headerRef} className='sticky top-0 z-40'>
+        <header
+          ref={headerRef}
+          className={section === 'graph' ? 'relative z-40 md:sticky md:top-0' : 'sticky top-0 z-40'}
+        >
           {isAcmd && <AcmdSiteHeader slug={config.slug} onSearch={() => setPaletteOpen(true)} />}
           {isAcmd
             ? (
@@ -492,6 +498,9 @@ export function TenantLayout() {
                             navRestoreFocus.current = true
                             setNavOpen(false)
                           } else {
+                            setNavTop(
+                              Math.max(0, headerRef.current?.getBoundingClientRect().bottom ?? 0),
+                            )
                             setNavMounted(true)
                             setNavOpen(true)
                           }
@@ -704,6 +713,12 @@ export function TenantLayout() {
                               setNavOpen(false)
                               return
                             }
+                            // On the mobile graph the header can be partially
+                            // scrolled away. The fixed sheet follows its visible
+                            // bottom without changing full-height page offsets.
+                            setNavTop(
+                              Math.max(0, headerRef.current?.getBoundingClientRect().bottom ?? 0),
+                            )
                             setNavMounted(true)
                             setNavOpen(true)
                           }}
@@ -815,7 +830,7 @@ export function TenantLayout() {
               className={`fixed inset-x-0 bottom-0 z-50 ${
                 navOpen ? 'rp-navsheet-scrim' : 'rp-navsheet-scrim rp-navsheet-scrim-exit'
               }`}
-              style={{ top: 'var(--rp-header-h, 4rem)' }}
+              style={{ top: navTop === null ? 'var(--rp-header-h, 4rem)' : `${navTop}px` }}
             />
             <nav
               id='mobile-nav-sheet'
@@ -825,8 +840,10 @@ export function TenantLayout() {
                 navOpen ? 'rp-navsheet-panel' : 'rp-navsheet-panel rp-navsheet-panel-exit'
               }`}
               style={{
-                top: 'var(--rp-header-h, 4rem)',
-                maxHeight: 'calc(100dvh - var(--rp-header-h, 4rem))',
+                top: navTop === null ? 'var(--rp-header-h, 4rem)' : `${navTop}px`,
+                maxHeight: `calc(100dvh - ${
+                  navTop === null ? 'var(--rp-header-h, 4rem)' : `${navTop}px`
+                })`,
                 backgroundColor: 'var(--rp-primary)',
               }}
             >
@@ -958,11 +975,9 @@ export function TenantLayout() {
         </div>
 
         {
-          /* Ask and Graph size themselves to the viewport and scroll
-        * internally, so there is no room beneath them for a footer. On iOS the
-        * dynamic viewport grows as the URL bar collapses, the panel grows with
-        * it, and it overruns anything stacked below - which is exactly the
-        * overlap this avoids. */
+          /* Ask and desktop Graph own the viewport. Mobile Graph gives the
+        * scene a full viewport below its scrolling chrome. None needs a footer
+        * stacked beneath the interactive canvas or panel. */
         }
         {isViewportHeightRoute
           ? null
