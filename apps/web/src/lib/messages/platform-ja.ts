@@ -285,4 +285,92 @@ export const PLATFORM_JA: Readonly<Record<string, string>> = {
   'eduroam at ACMD': 'ACMDのeduroam',
   'Terms of Use': '利用規約',
   'Privacy Policy': 'プライバシーポリシー',
+  'Ask the documentation': 'ガイドに質問',
+  'How do I…?': '使い方を質問',
+  'Answers drawn only from this documentation': 'このガイドだけを根拠に回答します',
+  'Ask a question about using the portal': 'ポータルの使い方について質問する',
+  'e.g. How do I ask a question and see its sources?':
+    '例：質問した回答の出典は、どうすれば見られますか？',
+  'Working': '処理中',
+  'Documentation': 'ドキュメント',
+  'See the illustrated page, with the flow diagram and live figures':
+    '処理の流れと現在の件数を図解で見る',
+  'No documentation is available.': '利用できるドキュメントはありません。',
+  'Everything you need to use the portal - and a help assistant that answers your questions from these pages only.':
+    'ポータルの使い方と、このガイドだけを対象に質問に答えるヘルプアシスタントです。',
+  'New here?': '初めてお使いですか？',
+  'Read how this works': '仕組みを読む',
+  '- where the content comes from, how a question is answered and what is checked before you see it.':
+    '資料の取得元、質問への回答方法、表示前の確認内容を説明します。',
+  'Browse the documentation': 'ガイドの目次を開く',
+  'The help assistant could not answer.': 'ヘルプアシスタントは回答できませんでした。',
+  'Answer in progress': '回答を作成中',
+  'Answer ready': '回答を表示しました',
+  'Reading your question…': '質問を確認中…',
+  'Searching the documentation…': 'ガイドを検索中…',
+  'Writing the answer…': '回答を作成中…',
+  'Checking it…': '確認中…',
+  'Getting started': 'はじめに',
+  'Finding answers': '回答を探す',
+  'Exploring the corpus': '資料群を調べる',
+  'Working with the portal': 'ポータルを活用する',
+  'Administration': '管理',
+  'Portal build {sha} - built {date}': 'ポータルのビルド {sha}・作成日時 {date}',
+  'Portal build {version}': 'ポータルのビルド {version}',
+  '{name} documentation': '{name}のガイド',
+  'The flow of one question, from the collection to the checked answer.':
+    'ひとつの質問が、資料群から確認済みの回答になるまでの流れです。',
+  'The collection today': '現在の資料群',
+  'Live from the knowledge index.': 'ナレッジインデックスの現在の件数です。',
+  'On this page': 'このページの内容',
+  'The collection': '資料群',
+  'Papers, supplementary files and video material': '論文、補足ファイル、動画',
+  'The index': 'インデックス',
+  'Text and tables extracted; summary, labels and relations written':
+    '本文と表を抽出し、要約・分類・関係を作成',
+  'Your question': '質問',
+  'Routed by intent to the retrieval configuration it suits': '質問の意図に合う検索設定を選択',
+  'The passages': '根拠の段落',
+  'The index returns the passages that match the question': '質問に対応する箇所を取得',
+  'The answer': '回答',
+  'Written from those passages only; every sentence cited':
+    '取得した箇所から回答し、各文に引用を付与',
+  'The check': '確認',
+  'Figures, cohorts and named studies verified; confidence labelled':
+    '数値・対象集団・研究名を照合し、信頼度を表示',
+  'The flow of one question through the portal. {description}':
+    'ポータルで質問に回答する流れ。{description}',
+  'Resources': '資料',
+  'Paragraphs': '段落',
+  'Sentences': '文',
+  'How {name} turns a collection of papers into cited answers, and what it checks before it shows you one.':
+    '{name}が資料群から出典付きの回答を作成し、表示前に確認する仕組みを説明します。',
+  'Finds documents fast, with a short cited answer over them or the results alone.':
+    '資料を探し、短い出典付きの回答や検索結果を表示します。',
+  'The full conversation: a grounded, cited answer, follow-ups that keep the context, saved sessions and deep research for broad questions.':
+    '出典付きの会話、追加の質問、セッションの保存、幅広い質問の詳しい調査を行えます。',
+  'Library and the reader': 'ライブラリと資料ビューアー',
+  'Browse the whole collection and open any paper at the cited passage.':
+    '資料群全体を閲覧し、引用された箇所を開けます。',
+  'Chat with a document': '資料とチャット',
+  "Ask questions of one paper alone, from its page in the reader. Its answers are checked against that document's own text and badged the same way.":
+    'ひとつの資料に質問し、その本文で回答を確認します。',
+  'Investigations': '調査',
+  'Gather evidence around a research question over time and synthesise it.':
+    '研究課題に沿って根拠を集め、統合します。',
+  'Generate': '生成',
+  'A briefing, comparison, timeline or set of questions and answers from the collection, with references.':
+    '資料群から、参考文献付きのブリーフィング、比較、時系列、FAQを作成します。',
+  'Assessment': '理解度確認',
+  'A knowledge check built on any area of the collection.':
+    '資料群の分野ごとに、理解度を確認できます。',
+  'The knowledge map': 'ナレッジマップ',
+  'The conditions, genes, medications, researchers and institutions in the collection, and how they connect.':
+    '資料中の疾患、遺伝子、薬剤、研究者、機関と、その関係を表示します。',
+  'Watches': 'ウォッチ',
+  'Re-run a search or a question daily and flag it when the collection has something new.':
+    '検索や質問を毎日再確認し、新しい資料があれば知らせます。',
+  'Exports': 'エクスポート',
+  'An answer trail, an investigation or a generated artefact as a Word document; a briefing as a print-ready copy for saving as a PDF (portable document format) file.':
+    '回答履歴、調査、生成物をWordに保存し、ブリーフィングは印刷用画面からPDFにも保存できます。',
 }
