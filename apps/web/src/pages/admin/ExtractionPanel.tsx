@@ -1,3 +1,6 @@
+import { extractionReason } from '../../lib/extraction-copy.ts'
+import { stageText } from './shared.ts'
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
@@ -54,7 +57,7 @@ function validLab(value: LabInfo): LabInfo {
 }
 
 function ExtractionPanelContent({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed, breakGlassEnabled } =
     usePermissionAdminAccess('content.write', { kind: 'portal', slug })
@@ -84,10 +87,13 @@ function ExtractionPanelContent({ slug }: { slug: string }) {
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not load extraction methods.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not load extraction methods.', localError),
+        ),
+      )
     }
   }
   return (
@@ -181,7 +187,7 @@ function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
               >
                 <p className='text-sm font-medium text-ink'>{m.name}</p>
                 <p className='text-xs text-ink-3'>
-                  {kindLabel(m.kind)}
+                  {ui(kindLabel(m.kind))}
                   {m.model ? ` · ${m.model}` : ''}
                 </p>
                 {m.rules?.length
@@ -219,7 +225,7 @@ function CompareCard(
     available: boolean
   },
 ) {
-  const { ui, error: localError } = usePortalLocale()
+  const { language, ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -293,10 +299,13 @@ function CompareCard(
       setDone(null)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not profile the document.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not profile the document.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -367,7 +376,12 @@ function CompareCard(
     } catch (err) {
       if (context !== authority.controller.context) return
       if (!controller.signal.aborted) {
-        setMessage({ tone: 'error', text: errorMessage(err, 'The comparison failed.', localError) })
+        setMessage(
+          messageFor(
+            'error',
+            ({ error: localError }) => errorMessage(err, 'The comparison failed.', localError),
+          ),
+        )
       }
     } finally {
       if (context === authority.controller.context) {
@@ -461,7 +475,7 @@ function CompareCard(
                     className='h-4 w-4 rounded-[var(--rp-radius-input)] border-line'
                     style={{ accentColor: 'var(--rp-accent)' }}
                   />
-                  {m.name} <span className='text-xs text-ink-3'>({kindLabel(m.kind)})</span>
+                  {m.name} <span className='text-xs text-ink-3'>({ui(kindLabel(m.kind))})</span>
                 </label>
               ))}
             </fieldset>
@@ -503,7 +517,13 @@ function CompareCard(
                   )}
                 </p>
               )}
-              {stage ? <span className='text-xs text-ink-3' role='status'>{stage}…</span> : null}
+              {stage
+                ? (
+                  <span className='text-xs text-ink-3' role='status'>
+                    {stageText(stage, { language, ui })}…
+                  </span>
+                )
+                : null}
             </div>
           </div>
         )
@@ -533,10 +553,10 @@ function CompareCard(
                     {ui('Recommended for this document: ')}
                     {done.recommended}.
                   </span>{' '}
-                  {done.reason}
+                  {extractionReason(done.reason, ui)}
                 </>
               )
-              : done.reason}
+              : extractionReason(done.reason, ui)}
             {ui(' Sandbox copies purged: ')}
             {done.purged}.
           </p>
@@ -597,7 +617,7 @@ function ResultColumn(
       <div className='flex items-start justify-between gap-2'>
         <div>
           <p className='text-sm font-medium text-ink'>{result.method.name}</p>
-          <p className='text-xs text-ink-3'>{kindLabel(result.method.kind)}</p>
+          <p className='text-xs text-ink-3'>{ui(kindLabel(result.method.kind))}</p>
         </div>
         {recommended ? <span className='rp-badge rp-badge-ok'>{ui('recommended')}</span> : null}
       </div>
@@ -668,7 +688,7 @@ function RulesCard(
     onSaved: (rules: ExtractionRules) => void
   },
 ) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAllowed } = usePermissionAdminAccess('behaviour.write', {
     kind: 'portal',
@@ -737,17 +757,22 @@ function RulesCard(
       if (result === undefined) return
       dirtyRef.current = false
       setDraft(result)
-      setMessage({
-        tone: 'ok',
-        text: ui('Routing rules saved. New uploads through the portal and the loader follow them.'),
-      })
+      setMessage(
+        messageFor(
+          'ok',
+          ({ ui }) =>
+            ui('Routing rules saved. New uploads through the portal and the loader follow them.'),
+        ),
+      )
       onSaved(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save the rules.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save the rules.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }

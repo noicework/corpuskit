@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import {
   type ChangeEvent,
@@ -130,7 +131,7 @@ export function UploadFiles({ slug, onAdded }: {
   const hintId = useId()
   const queueHeadingId = useId()
   const [dragActive, setDragActive] = useState(false)
-  const [announcement, setAnnouncement] = useState('')
+  const [announcement, setAnnouncement] = useState<{ row?: UploadRow; count?: number } | null>(null)
   const [notice, setNotice] = useState<Message | null>(null)
   // A signed-in queue outlives this panel: a re-check that confirms the same person redraws the
   // page, and the uploads it was running are still here, finished or going, when it returns.
@@ -163,20 +164,14 @@ export function UploadFiles({ slug, onAdded }: {
     if (files.length === 0 || !queue) return
     setNotice(null)
     if (files.length > 1 && !sessionAllowed) {
-      setNotice({
-        tone: 'error',
-        text: ui(
+      setNotice(messageFor('error', ({ ui }) =>
+        ui(
           'Choose one file for emergency access. Sign in with an administrator account to upload several files at once.',
-        ),
-      })
+        )))
       return
     }
     const added = queue.add(files, runner)
-    setAnnouncement(
-      added.length === 1
-        ? announce(added[0]!, ui, localError)
-        : ui('{count} files added to the uploads.', { count: added.length }),
-    )
+    setAnnouncement(added.length === 1 ? { row: added[0]! } : { count: added.length })
   }
 
   const onChoose = (event: ChangeEvent<HTMLInputElement>) => {
@@ -213,7 +208,7 @@ export function UploadFiles({ slug, onAdded }: {
       const state = row.stalled ? 'stalled' : row.status
       const before = previous.current.get(row.key)
       if (before !== undefined && before !== state && state !== 'uploading') {
-        setAnnouncement(announce(row, ui, localError))
+        setAnnouncement({ row })
         if (state === 'processing' || state === 'ready') changed = true
       }
       previous.current.set(row.key, state)
@@ -378,7 +373,13 @@ export function UploadFiles({ slug, onAdded }: {
           </ul>
         </section>
       )}
-      <LiveStatus message={announcement} />
+      <LiveStatus
+        message={announcement?.row
+          ? announce(announcement.row, ui, localError)
+          : announcement?.count
+          ? ui('{count} files added to the uploads.', { count: announcement.count })
+          : ''}
+      />
     </div>
   )
 }

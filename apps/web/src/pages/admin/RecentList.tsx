@@ -75,7 +75,7 @@ function VisibilityControl({
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setError(errorMessage(err, 'Could not change visibility.', localError))
+      setError(errorMessage(err, 'Could not change visibility.'))
     } finally {
       setBusy(false)
     }
@@ -92,7 +92,11 @@ function VisibilityControl({
       >
         {busy ? '…' : resource.hidden ? ui('Publish') : ui('Hide')}
       </button>
-      {error && <span className='text-xs text-[var(--rp-bad-ink)]'>{error}</span>}
+      {error && (
+        <span className='text-xs text-[var(--rp-bad-ink)]'>
+          {localError(error, 'The action failed. Please try again.')}
+        </span>
+      )}
     </span>
   )
 }
@@ -104,7 +108,7 @@ function VisibilityControl({
  * the librarian can hide a resource (draft) or publish it again.
  */
 function RecentListContent({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui, date, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
@@ -144,7 +148,7 @@ function RecentListContent({ slug }: { slug: string }) {
       if (sessionAllowed) queryClient.setQueryData(['admin-recent', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setError(errorMessage(err, 'Could not load recent additions.', localError))
+      setError(errorMessage(err, 'Could not load recent additions.'))
     }
   }
   const onChanged = () => queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
@@ -176,7 +180,11 @@ function RecentListContent({ slug }: { slug: string }) {
           {ui('This is a snapshot. Refresh explicitly to check processing or visibility changes.')}
         </p>
       )}
-      {error && <p role='alert' className='mt-2 text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
+      {error && (
+        <p role='alert' className='mt-2 text-sm text-[var(--rp-bad-ink)]'>
+          {localError(error, 'The action failed. Please try again.')}
+        </p>
+      )}
       <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-2'>{notice}</p>
 
       {isLoading && (
@@ -204,7 +212,7 @@ function RecentListContent({ slug }: { slug: string }) {
               <span className='min-w-0 truncate text-sm text-ink'>{resource.title}</span>
               <span className='flex min-w-0 flex-wrap items-center gap-3'>
                 {resource.created && (
-                  <span className='text-xs text-ink-3'>{resource.created.slice(0, 10)}</span>
+                  <span className='text-xs text-ink-3'>{date(resource.created)}</span>
                 )}
                 <StatusChip status={resource.status} stuck={resource.stuck} />
                 <VisibilityControl

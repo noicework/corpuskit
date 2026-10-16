@@ -1,3 +1,5 @@
+import { stageText } from './shared.ts'
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
@@ -71,7 +73,7 @@ function ChipGroup({
 function KgPanelContent(
   { slug, open }: { slug: string; open: boolean },
 ) {
-  const { ui, error: localError } = usePortalLocale()
+  const { language, ui, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess('graph.write', {
     kind: 'portal',
@@ -111,10 +113,13 @@ function KgPanelContent(
       setProposal(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not propose a strategy - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not propose a strategy - please try again.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setProposing(false)
     }
@@ -140,15 +145,13 @@ function KgPanelContent(
       })
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: ui(
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
           result.agents === 1
             ? 'Strategy implemented - {count} agent installed on the box.'
             : 'Strategy implemented - {count} agents installed on the box.',
           { count: result.agents },
-        ),
-      })
+        )))
       if (sessionAllowed) {
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] }),
@@ -157,7 +160,13 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage(failedJobMessage(job, err, 'Implementation failed - please retry.', localError))
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            failedJobMessage(job, err, 'Implementation failed - please retry.', localError).text,
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setImplementing(false)
     }
@@ -179,10 +188,12 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not remove the agent.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not remove the agent.', localError),
+        ),
+      )
     }
   }
 
@@ -199,7 +210,12 @@ function KgPanelContent(
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load agents.', localError) })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load agents.', localError),
+        ),
+      )
     }
   }
   const agents = (sessionAllowed ? agentsQuery.data : snapshot) ?? []
@@ -286,7 +302,9 @@ function KgPanelContent(
               {log.map((event, index) => (
                 <li key={index} className='flex gap-2'>
                   {event.type === 'stage' && (
-                    <span className='font-semibold text-ink'>{event.label}</span>
+                    <span className='font-semibold text-ink'>
+                      {stageText(event.label, { language, ui })}
+                    </span>
                   )}
                   {event.type === 'item' && (
                     <span className='text-ink-2' title={event.detail}>{event.label}</span>
@@ -297,7 +315,9 @@ function KgPanelContent(
                     </span>
                   )}
                   {event.type === 'error' && (
-                    <span style={{ color: 'var(--rp-bad-ink)' }}>{event.message}</span>
+                    <span style={{ color: 'var(--rp-bad-ink)' }}>
+                      {localError(event.message, 'The action failed. Please try again.')}
+                    </span>
                   )}
                 </li>
               ))}

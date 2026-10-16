@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -16,7 +17,7 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
   resourceCount: number | null
   onChanged: () => Promise<unknown>
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { sessionAllowed, breakGlassEnabled, runExplicit, pending } = usePermissionAdminAccess(
     'bindings.write',
@@ -61,22 +62,23 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
       if (outcome === undefined) return
       setUrl('')
       setToken('')
-      setMessage({
-        tone: 'ok',
-        text: ui(
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
           outcome.resourceCount === 1
             ? 'Connected - the knowledge box responded with {count} resource.'
             : 'Connected - the knowledge box responded with {count} resources.',
           { count: outcome.resourceCount },
-        ),
-      })
+        )))
       await onChanged()
     } catch (error) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(error, 'Connection failed - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(error, 'Connection failed - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }
@@ -95,14 +97,17 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({ tone: 'ok', text: ui('Reverted to the demo knowledge box.') })
+      setMessage(messageFor('ok', ({ ui }) => ui('Reverted to the demo knowledge box.')))
       await onChanged()
     } catch (error) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(error, 'Could not revert - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(error, 'Could not revert - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }

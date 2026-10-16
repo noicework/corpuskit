@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { relativeTime } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -79,10 +80,12 @@ function SourceRow({
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save that change.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save that change.', localError),
+        ),
+      )
     } finally {
       setSaving(false)
     }
@@ -102,20 +105,24 @@ function SourceRow({
       })
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: ui(
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
           result.added === 1 ? 'Synced - {count} page added.' : 'Synced - {count} pages added.',
           { count: result.added },
         ) + (result.deferred
           ? ui(' {count} left for the next sync.', { count: result.deferred })
-          : ''),
-      })
+          : '')))
     } catch (err) {
       // A late answer after the identity or role changed is not this session's to show. While
       // access is being checked, the message says only that access changed.
       if (!sameContext()) return
-      setMessage(failedJobMessage(job, err, 'Sync failed - please retry.', localError))
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            failedJobMessage(job, err, 'Sync failed - please retry.', localError).text,
+        ),
+      )
     } finally {
       if (sameContext()) {
         setSyncing(false)
@@ -144,10 +151,12 @@ function SourceRow({
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not remove that source.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not remove that source.', localError),
+        ),
+      )
     } finally {
       setDeleting(false)
     }
@@ -264,7 +273,9 @@ function SourceRow({
                 </span>
               )}
               {event.type === 'error' && (
-                <span style={{ color: 'var(--rp-bad-ink)' }}>{event.message}</span>
+                <span style={{ color: 'var(--rp-bad-ink)' }}>
+                  {localError(event.message, 'Sync failed - please retry.')}
+                </span>
               )}
             </li>
           ))}
@@ -282,7 +293,7 @@ function SourceRow({
  * from the one-off "Add content" ingestion methods, which never re-check.
  */
 function SourcesPanelContent({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
@@ -320,7 +331,12 @@ function SourcesPanelContent({ slug }: { slug: string }) {
       if (sessionAllowed) queryClient.setQueryData(['admin-sources', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setMessage({ tone: 'error', text: errorMessage(err, 'Could not load sources.', localError) })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load sources.', localError),
+        ),
+      )
     }
   }
 
@@ -347,24 +363,24 @@ function SourcesPanelContent({ slug }: { slug: string }) {
       if (!added.id || !Number.isFinite(added.discovered)) throw new AdminAccessError()
       if (!sessionAllowed) setSnapshot((previous) => [...(previous ?? []), added])
       setUrl('')
-      setMessage({
-        tone: 'ok',
-        text: ui(
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
           'Source added. Found {count} pages via {method}. Press Sync now to ingest the first {max}.',
           {
             count: added.discovered,
             method: ui(added.discoveredVia === 'sitemap' ? 'its sitemap' : 'page links'),
             max: maxPages,
           },
-        ) + (auto ? ui(' Or leave it for the next daily sync.') : ''),
-      })
+        ) + (auto ? ui(' Or leave it for the next daily sync.') : '')))
       assertCurrent()
       await onChanged()
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not add that source.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not add that source.', localError),
+        ),
+      )
     } finally {
       setAdding(false)
     }

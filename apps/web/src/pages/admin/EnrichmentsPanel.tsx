@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { enrichmentDisplay } from '../../lib/enrichment-display.ts'
 import { createPortalLocale, type Locale, usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -144,7 +145,7 @@ export function enrichmentDoneMessage(
 function AgentCard(
   { slug, status }: { slug: string; status: EnrichmentAgentStatus },
 ) {
-  const { ui, number, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAllowed } = usePermissionAdminAccess('enrichments.write', {
     kind: 'portal',
@@ -183,13 +184,24 @@ function AgentCard(
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage(enrichmentDoneMessage(result, { ui, number }))
+      setMessage(
+        messageFor(
+          result.errors > 0 ? 'error' : 'ok',
+          (locale) => enrichmentDoneMessage(result, locale).text,
+        ),
+      )
       if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['enrichment-agents', slug] })
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage(failedJobMessage(job, err, 'Enrichment run failed - please retry.', localError))
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            failedJobMessage(job, err, 'Enrichment run failed - please retry.', localError).text,
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setRunning(false)
     }
@@ -336,7 +348,7 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
   assertCurrent(): void
   onImported(): Promise<void>
 }) {
-  const { ui, number, error: localError } = usePortalLocale()
+  const { ui, number } = usePortalLocale()
 
   const id = useId()
   const fileInput = useRef<HTMLInputElement>(null)
@@ -365,10 +377,13 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
         return
       }
       if (sequence.current === attempt) {
-        setMessage({
-          tone: 'error',
-          text: errorMessage(error, 'Could not read this archive.', localError),
-        })
+        setMessage(
+          messageFor(
+            'error',
+            ({ error: localError }) =>
+              errorMessage(error, 'Could not read this archive.', localError),
+          ),
+        )
       }
     } finally {
       pending.current = false
@@ -387,27 +402,25 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
       assertCurrent()
       if (sequence.current !== attempt) return
       setReview(null)
-      setMessage({
-        tone: 'ok',
-        text: ui('Imported {records}. Kept {existing} unchanged.', {
-          records: recordLabel(result.imported, false, { ui, number }),
-          existing: recordLabel(result.skipped, true, { ui, number }),
-        }),
-      })
+      setMessage(
+        messageFor('ok', ({ ui, number }) =>
+          ui('Imported {records}. Kept {existing} unchanged.', {
+            records: recordLabel(result.imported, false, { ui, number }),
+            existing: recordLabel(result.skipped, true, { ui, number }),
+          })),
+      )
       try {
         await onImported()
       } catch {
         assertCurrent()
-        setMessage({
-          tone: 'error',
-          text: ui(
+        setMessage(messageFor('error', ({ ui, number }) =>
+          ui(
             'Imported {records} and kept {existing}. Reload this page to refresh coverage.',
             {
               records: recordLabel(result.imported, false, { ui, number }),
               existing: recordLabel(result.skipped, true, { ui, number }),
             },
-          ),
-        })
+          )))
       }
     } catch (error) {
       try {
@@ -416,14 +429,12 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
         return
       }
       if (sequence.current === attempt) {
-        setMessage({
-          tone: 'error',
-          text: errorMessage(
+        setMessage(messageFor('error', ({ error: localError }) =>
+          errorMessage(
             error,
             'Could not import this archive. Check the result before retrying.',
             localError,
-          ),
-        })
+          )))
       }
     } finally {
       pending.current = false
@@ -530,7 +541,7 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
 }
 
 function EnrichmentsPanelContent({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'enrichments.write',
@@ -565,10 +576,12 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not load enrichments.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load enrichments.', localError),
+        ),
+      )
     }
   }
 
@@ -599,10 +612,12 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not export enrichments.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not export enrichments.', localError),
+        ),
+      )
     }
   }
 

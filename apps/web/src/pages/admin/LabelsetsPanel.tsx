@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import type { Locale } from '../../lib/portal-locale.tsx'
 import { englishUi } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
@@ -383,7 +384,7 @@ function LabelsetEditor({
   onSaved: () => Promise<unknown>
   organisation: string
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -414,14 +415,17 @@ function LabelsetEditor({
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({ tone: 'ok', text: resultMessage(body.title, result, ui) })
+      setMessage(messageFor('ok', ({ ui }) => resultMessage(body.title, result, ui)))
       onDraft(null)
       await onSaved()
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save this label set.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not save this label set.', localError),
+        ),
+      )
       if (err instanceof LabelsetSaveError && err.previous) setPrevious(err.previous)
     } finally {
       setSaving(false)
@@ -515,7 +519,7 @@ function NewLabelsetForm({
   /** Absent for the first set, where there is nothing to go back to. */
   onCancel?: () => void
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('taxonomy.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -547,10 +551,13 @@ function NewLabelsetForm({
       if (created === undefined) return
       await onCreated(created.id, body.title)
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not create this label set.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not create this label set.', localError),
+        ),
+      )
     } finally {
       setBusy(false)
     }
@@ -658,7 +665,7 @@ function LabelsetsPanelContent({
   const onCreated = async (id: string, title: string) => {
     await refresh()
     authority.controller.assertCurrent(context)
-    setNotice({ tone: 'ok', text: createdMessage(title, ui) })
+    setNotice(messageFor('ok', ({ ui }) => createdMessage(title, ui)))
     setSelectedId(id)
     setCreating(false)
   }

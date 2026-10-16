@@ -1,3 +1,5 @@
+import { stageText } from './shared.ts'
+import { messageFor } from './shared.ts'
 import type { Locale } from '../../lib/portal-locale.tsx'
 import { englishUi } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
@@ -245,9 +247,9 @@ function EntityTypeRow({
   const { ui } = usePortalLocale()
 
   const disabled = usedIn.length > 0
-  const reason = `Used by example ${
-    usedIn.map((i) => i + 1).join(', ')
-  } - remove those references first.`
+  const reason = ui('Used by example {examples} - remove those references first.', {
+    examples: usedIn.map((i) => i + 1).join(', '),
+  })
 
   return (
     <div className='flex flex-wrap items-start gap-2'>
@@ -462,7 +464,7 @@ function ExampleCard({
  * is registered on the box.
  */
 function KgStrategyEditorContent({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { language, ui, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess('graph.write', {
     kind: 'portal',
@@ -525,10 +527,12 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not load the strategy.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load the strategy.', localError),
+        ),
+      )
     }
   }
   const readControl = (
@@ -600,15 +604,13 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             if (event.type === 'error') failed = true
             if (event.type === 'done') {
               completed = Number.isFinite(event.agents)
-              setMessage({
-                tone: 'ok',
-                text: ui(
+              setMessage(messageFor('ok', ({ ui }) =>
+                ui(
                   event.agents === 1
                     ? 'Strategy saved - {count} agent re-registered.'
                     : 'Strategy saved - {count} agents re-registered.',
                   { count: event.agents },
-                ),
-              })
+                )))
             }
             if (event.type === 'error') setMessage({ tone: 'error', text: event.message })
           },
@@ -626,10 +628,12 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
       }
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save the strategy.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save the strategy.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setSaving(false)
     }
@@ -739,7 +743,9 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
           {log.map((event, index) => (
             <li key={index} className='flex gap-2'>
               {event.type === 'stage' && (
-                <span className='font-semibold text-ink'>{event.label}</span>
+                <span className='font-semibold text-ink'>
+                  {stageText(event.label, { language, ui })}
+                </span>
               )}
               {event.type === 'item' && (
                 <span className='text-ink-2' title={event.detail}>{event.label}</span>
@@ -750,7 +756,9 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
                 </span>
               )}
               {event.type === 'error' && (
-                <span style={{ color: 'var(--rp-bad-ink)' }}>{event.message}</span>
+                <span style={{ color: 'var(--rp-bad-ink)' }}>
+                  {localError(event.message, 'The action failed. Please try again.')}
+                </span>
               )}
             </li>
           ))}

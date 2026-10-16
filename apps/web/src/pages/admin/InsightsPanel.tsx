@@ -1,3 +1,5 @@
+import type { Locale } from '../../lib/portal-locale.tsx'
+import { englishUi } from './shared.ts'
 import { relativeTime } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -14,8 +16,8 @@ function formatScore(value: number | null): string {
   return value === null ? '-' : `${value.toFixed(1)}/5`
 }
 
-function formatDuration(seconds: number | null): string {
-  return seconds === null ? '-' : `${seconds.toFixed(1)}s`
+function formatDuration(seconds: number | null, ui: Locale['ui'] = englishUi): string {
+  return seconds === null ? '-' : ui('{count}s', { count: seconds.toFixed(1) })
 }
 
 function StatTile({ label, value }: { label: string; value: string }) {
@@ -114,7 +116,7 @@ function validFeedback(value: unknown): boolean {
  * what content to add next.
  */
 function InsightsPanelContent({ slug }: { slug: string }) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
@@ -154,7 +156,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
       if (sessionAllowed) queryClient.setQueryData(['admin-insights', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : ui('Could not load insights.'))
+      setError(err instanceof Error ? err.message : 'Could not load insights.')
     }
   }
 
@@ -182,7 +184,11 @@ function InsightsPanelContent({ slug }: { slug: string }) {
           {ui('Insights are a snapshot. Refresh explicitly to read them again.')}
         </p>
       )}
-      {error && <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
+      {error && (
+        <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
+          {localError(error, 'Could not load insights.')}
+        </p>
+      )}
       {isLoading && (
         <div className='space-y-3'>
           <div className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
@@ -260,7 +266,11 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                           className='rp-badge rp-badge-warn shrink-0'
                           style={{ whiteSpace: 'normal' }}
                         >
-                          {gap.reason}
+                          {gap.reason === 'No answer found in the corpus'
+                            ? ui('No answer found in the corpus')
+                            : /^Weak grounding \(\d(?:\.\d+)?\/5\)$/.test(gap.reason)
+                            ? ui('Weak grounding ({score}/5)', { score: gap.reason.slice(16, -3) })
+                            : gap.reason}
                         </span>
                       </div>
                       <p className='mt-1 text-xs text-ink-3'>{relativeTime(gap.ts, ui)}</p>
@@ -308,7 +318,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                           </td>
                           <td className='py-2 pr-3 text-ink-2'>{formatScore(row.groundedness)}</td>
                           <td className='py-2 pr-3 text-ink-2'>
-                            {formatDuration(row.durationSec)}
+                            {formatDuration(row.durationSec, ui)}
                           </td>
                         </tr>
                       ))}

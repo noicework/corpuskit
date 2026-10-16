@@ -1,3 +1,5 @@
+import { stageText } from './shared.ts'
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
@@ -38,7 +40,7 @@ export function followAnalysis(
  * applies all of it - live progress below.
  */
 function AnalysePanelContent({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { language, ui, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAllowed } = usePermissionAdminAccess('behaviour.write', {
     kind: 'portal',
@@ -68,9 +70,8 @@ function AnalysePanelContent({ slug }: { slug: string }) {
       })
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: ui(
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
           'Analysis complete - {topics} topics, {kinds} kinds, {labelled} resources labelled, {questions} suggested questions. The portal now reflects what is in the box.',
           {
             topics: result.topics,
@@ -78,12 +79,17 @@ function AnalysePanelContent({ slug }: { slug: string }) {
             labelled: result.labelled,
             questions: result.questions,
           },
-        ),
-      })
+        )))
       if (sessionAllowed) await queryClient.invalidateQueries()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage(failedJobMessage(job, err, 'Analysis failed - please retry.', localError))
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            failedJobMessage(job, err, 'Analysis failed - please retry.', localError).text,
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setRunning(false)
     }
@@ -120,7 +126,9 @@ function AnalysePanelContent({ slug }: { slug: string }) {
           {log.map((event, index) => (
             <li key={index} className='flex gap-2'>
               {event.type === 'stage' && (
-                <span className='font-semibold text-ink'>{event.label}</span>
+                <span className='font-semibold text-ink'>
+                  {stageText(event.label, { language, ui })}
+                </span>
               )}
               {event.type === 'item' && (
                 <span className='text-ink-2' title={event.detail}>{event.label}</span>
@@ -131,7 +139,9 @@ function AnalysePanelContent({ slug }: { slug: string }) {
                 </span>
               )}
               {event.type === 'error' && (
-                <span style={{ color: 'var(--rp-bad-ink)' }}>{event.message}</span>
+                <span style={{ color: 'var(--rp-bad-ink)' }}>
+                  {localError(event.message, 'The action failed. Please try again.')}
+                </span>
               )}
             </li>
           ))}

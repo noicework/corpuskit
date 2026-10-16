@@ -40,7 +40,7 @@ function StatTilesContent({
   slug: string
   resourceCount: number
 }) {
-  const { ui } = usePortalLocale()
+  const { ui, number, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed, pending } = usePermissionAdminAccess(
     'content.write',
@@ -76,7 +76,7 @@ function StatTilesContent({
       if (sessionAllowed) client.setQueryData(['admin-counters', slug], result)
       else setSnapshot(result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : ui('Could not load metrics.'))
+      setError(err instanceof Error ? err.message : 'Could not load metrics.')
     }
   }
 
@@ -97,22 +97,26 @@ function StatTilesContent({
       )}
       {(error || query.isError) && (
         <p role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
-          {error ?? ui('Could not load metrics.')}
+          {localError(error ?? query.error, 'Could not load metrics.')}
         </p>
       )}
       <dl className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
-        <StatTile label={ui('Documents')} value={String(resourceCount)} />
+        <StatTile label={ui('Documents')} value={number(resourceCount)} />
         <StatTile
           label={ui('Paragraphs')}
-          value={data ? String(data.paragraphs) : query.isLoading ? null : '-'}
+          value={data ? number(data.paragraphs) : query.isLoading ? null : '-'}
         />
         <StatTile
           label={ui('Sentences')}
-          value={data ? String(data.sentences) : query.isLoading ? null : '-'}
+          value={data ? number(data.sentences) : query.isLoading ? null : '-'}
         />
         <StatTile
           label={ui('Index MB')}
-          value={data ? data.indexMb.toFixed(1) : query.isLoading ? null : '-'}
+          value={data
+            ? number(data.indexMb, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+            : query.isLoading
+            ? null
+            : '-'}
         />
       </dl>
     </div>

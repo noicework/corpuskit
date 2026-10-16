@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess, useScopeAccess } from '../../components/AccessProvider.tsx'
 import { useEffect, useRef, useState } from 'react'
@@ -34,7 +35,7 @@ const OUTCOME_BADGE: Record<ItemEvent['outcome'], string> = {
 function MigratePanelContent(
   { rows }: { rows: AdminTenantOverview[] },
 ) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
     'platform.settings.write',
@@ -143,10 +144,13 @@ function MigratePanelContent(
       ])
     } catch (err) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Migration failed - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Migration failed - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setRunning(false)
     }

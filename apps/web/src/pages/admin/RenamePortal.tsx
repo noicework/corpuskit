@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { type ComponentProps, type FormEvent, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -28,7 +29,7 @@ function RenamePortalContent({
   onCancel: () => void
   onSaved: () => void
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -69,10 +70,12 @@ function RenamePortalContent({
       onSaved()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not rename the portal.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not rename the portal.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }

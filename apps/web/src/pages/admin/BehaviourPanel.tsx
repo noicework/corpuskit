@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useEffect, useState } from 'react'
@@ -50,7 +51,7 @@ function validRouting(value: Routing): Routing {
  * librarian override it, and saves straight back through the admin API.
  */
 function AskPromptEditor({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
@@ -95,10 +96,12 @@ function AskPromptEditor({ slug }: { slug: string }) {
       setLoaded(true)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not load the prompt.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not load the prompt.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -115,13 +118,17 @@ function AskPromptEditor({ slug }: { slug: string }) {
       })
       assertCurrent()
       if (result === undefined) return
-      setMessage({ tone: 'ok', text: ui('Saved - the new prompt applies to the next answer.') })
+      setMessage(
+        messageFor('ok', ({ ui }) => ui('Saved - the new prompt applies to the next answer.')),
+      )
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save the prompt.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save the prompt.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -193,7 +200,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
 
 /** Search configurations block: create the platform defaults and inspect what's there. */
 function SearchConfigsBlock({ slug }: { slug: string }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
@@ -230,10 +237,13 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not load search configurations.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not load search configurations.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -257,24 +267,25 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
       assertCurrent()
       if (result === undefined) return
       setCreated(result.created)
-      setMessage({
-        tone: 'ok',
-        text: result.created.length > 0
+      setMessage(messageFor('ok', ({ ui }) =>
+        result.created.length > 0
           ? ui(
             result.created.length === 1
               ? 'Created {count} configuration.'
               : 'Created {count} configurations.',
             { count: result.created.length },
           )
-          : ui('All default configurations already exist.'),
-      })
+          : ui('All default configurations already exist.')))
       if (sessionAllowed) await refetch()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not create the default configurations.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not create the default configurations.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -376,7 +387,7 @@ function IntentsTable(
     error: boolean
   },
 ) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
@@ -415,10 +426,13 @@ function IntentsTable(
       else setSnapshot(result)
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not load routing activity.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not load routing activity.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -486,8 +500,8 @@ function IntentsTable(
             {intents.map((intent) => (
               <tr key={intent.id} className='border-t border-line align-top'>
                 <td className='py-2 pr-3'>
-                  <span className='font-medium text-ink'>{intent.label}</span>
-                  <span className='block text-ink-3'>{intent.description}</span>
+                  <span className='font-medium text-ink'>{ui(intent.label)}</span>
+                  <span className='block text-ink-3'>{ui(intent.description)}</span>
                 </td>
                 <td className='py-2 pr-3 font-mono text-[11px] text-ink-2'>
                   {names(intent.id, intent.answer.surfaces).map((n) => (
@@ -509,7 +523,7 @@ function IntentsTable(
                             : 'text-ink-3'
                         }`}
                       >
-                        {st}
+                        {ui(st)}
                       </span>
                     )
                   })}

@@ -144,7 +144,7 @@ function KeyManager({ slug }: { slug: string }) {
       void rows.refetch()
     } catch (failure) {
       if (current(signal)) {
-        setError(localError(failure, keyUnconfirmed))
+        setError(failure instanceof Error ? failure.message : keyUnconfirmed)
         setUncertain(!(failure instanceof KeyError && failure.correctable))
       }
     } finally {
@@ -164,13 +164,13 @@ function KeyManager({ slug }: { slug: string }) {
       await revokeKey(slug, revoke.id, { ...options, signal })
       if (current(signal)) {
         setRevoke(null)
-        setNotice(ui('Key revoked.'))
+        setNotice('Key revoked.')
         void rows.refetch().then(restoreSafeFocus)
       }
     } catch (failure) {
       if (current(signal)) {
         setRevoke(null)
-        setError(localError(failure, keyUnconfirmed))
+        setError(failure instanceof Error ? failure.message : keyUnconfirmed)
         setUncertain(true)
       }
     } finally {
@@ -258,10 +258,10 @@ function KeyManager({ slug }: { slug: string }) {
           role='alert'
           className='mt-4 text-sm text-[var(--rp-bad-ink)]'
         >
-          {error}
+          {localError(error, keyUnconfirmed)}
         </p>
       )}
-      {notice && <p role='status' className='mt-4 text-sm'>{notice}</p>}
+      {notice && <p role='status' className='mt-4 text-sm'>{ui(notice)}</p>}
       {rows.isPending
         ? <p role='status' className='mt-4'>{ui('Loading keys...')}</p>
         : rows.isError
@@ -398,10 +398,10 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
   async function copy() {
     try {
       await navigator.clipboard.writeText(value)
-      if (alive.current) setStatus(ui('Key copied'))
+      if (alive.current) setStatus('Key copied')
     } catch {
       if (alive.current) {
-        setStatus(ui('Could not copy the key. Select the key and copy it manually before closing.'))
+        setStatus('Could not copy the key. Select the key and copy it manually before closing.')
       }
     }
   }
@@ -441,7 +441,7 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
         className='rp-input mt-4 min-h-24 w-full break-all text-sm'
         value={value}
       />
-      <p role='status' className='mt-3 text-sm'>{status}</p>
+      <p role='status' className='mt-3 text-sm'>{ui(status)}</p>
       <div className='mt-6 flex flex-wrap gap-3'>
         <button
           type='button'

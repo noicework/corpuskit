@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
@@ -32,7 +33,7 @@ function CrawlTab({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit, sessionAllowed, sessionAccess } = usePermissionAdminAccess('content.write', {
     kind: 'portal',
@@ -71,13 +72,16 @@ function CrawlTab({
       setLinks(result.links)
       setChecked(Object.fromEntries(result.links.map((link) => [link, true])))
       if (result.links.length === 0) {
-        setMessage({ tone: 'error', text: ui('No links were found at that address.') })
+        setMessage(messageFor('error', ({ ui }) => ui('No links were found at that address.')))
       }
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not crawl that site - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not crawl that site - please try again.', localError),
+        ),
+      )
     } finally {
       setDiscovering(false)
     }
@@ -109,14 +113,12 @@ function CrawlTab({
         ) {
           setIngesting(false)
           setProgress(null)
-          setMessage({
-            tone: 'error',
-            text: errorMessage(
+          setMessage(messageFor('error', ({ error: localError }) =>
+            errorMessage(
               err,
               'The result could not be confirmed. Check recent additions before trying again.',
               localError,
-            ),
-          })
+            )))
           return
         }
         // The knowledge box's processing queue is full - stop the batch
@@ -135,31 +137,28 @@ function CrawlTab({
     setIngesting(false)
     setMessage(
       busy
-        ? {
-          tone: 'ok',
-          text: ui(
+        ? messageFor('ok', ({ ui }) =>
+          ui(
             'Added {added} of {total} links - the knowledge box is busy processing recent changes, so the remaining {deferred} links were not attempted. Try again in a few minutes.',
             { added, total: selectedLinks.length, deferred },
-          ),
-        }
+          ))
         : failures === 0
-        ? {
-          tone: 'ok',
-          text: ui(
+        ? messageFor('ok', ({ ui }) =>
+          ui(
             selectedLinks.length === 1
               ? 'Added {count} link - they will appear below once processed.'
               : 'Added {count} links - they will appear below once processed.',
             { count: selectedLinks.length },
-          ),
-        }
-        : {
-          tone: 'error',
-          text: ui('Added {added} of {total} links - {failures} failed.', {
-            added: selectedLinks.length - failures,
-            total: selectedLinks.length,
-            failures,
-          }),
-        },
+          ))
+        : messageFor(
+          'error',
+          ({ ui }) =>
+            ui('Added {added} of {total} links - {failures} failed.', {
+              added: selectedLinks.length - failures,
+              total: selectedLinks.length,
+              failures,
+            }),
+        ),
     )
     setLinks(null)
     setChecked({})
@@ -293,7 +292,7 @@ function AddContentContent({
   slug: string
   onAdded: () => Promise<unknown>
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -358,15 +357,18 @@ function AddContentContent({
           'We could not confirm the result. Check whether the action completed before trying again.',
         )
       }
-      setMessage({ tone: 'ok', text: ui(successText) })
+      setMessage(messageFor('ok', ({ ui }) => ui(successText)))
       assertCurrent()
       await onAdded()
       return true
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not add that content - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not add that content - please try again.', localError),
+        ),
+      )
       return false
     } finally {
       setBusy(false)

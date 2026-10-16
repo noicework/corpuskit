@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -15,7 +16,7 @@ import { errorMessage, type Message } from './shared.ts'
  * compete with the portal list for attention.
  */
 function AddPortalContent() {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('portal.create', { kind: 'platform' })
   const authority = useAccess()
@@ -58,23 +59,23 @@ function AddPortalContent() {
       setName('')
       setOrganisation('')
       setTagline('')
-      setMessage({
-        tone: 'ok',
-        text: ui(
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui(
           "Portal '{slug}' added - use its card below to create a fresh knowledge box on the platform or connect an existing endpoint.",
           { slug: result.slug },
-        ),
-      })
+        )))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-overview'] }),
         queryClient.invalidateQueries({ queryKey: ['tenants'] }),
       ])
     } catch (err) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not add the portal.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not add the portal.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }

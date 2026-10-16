@@ -5,7 +5,7 @@ import type { Message } from './shared.ts'
 export function MessagePanel(
   { message, className = '' }: { message: Message; className?: string },
 ) {
-  const { error } = usePortalLocale()
+  const locale = usePortalLocale()
   const tone = message.tone === 'ok'
     ? {
       background: 'var(--rp-ok-bg)',
@@ -24,8 +24,10 @@ export function MessagePanel(
       className={`rounded-[calc(var(--rp-radius)+4px)] border px-4 py-3 text-sm ${className}`}
       style={tone}
     >
-      {message.tone === 'error'
-        ? error(message.text, 'The action failed. Please try again.')
+      {message.render
+        ? message.render(locale)
+        : message.tone === 'error'
+        ? locale.error(message.text, 'The action failed. Please try again.')
         : message.text}
     </div>
   )

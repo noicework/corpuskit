@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { type ChangeEvent, type ComponentProps, type ReactNode, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -73,7 +74,7 @@ function UploadCard({
   guidance: string
   onUploaded: () => Promise<unknown>
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -89,7 +90,7 @@ function UploadCard({
     event.target.value = ''
     if (!file) return
     if (file.size > MAX_BYTES) {
-      setMessage({ tone: 'error', text: ui('That file is too large - the limit is 5 MB.') })
+      setMessage(messageFor('error', ({ ui }) => ui('That file is too large - the limit is 5 MB.')))
       return
     }
     setBusy(true)
@@ -110,13 +111,16 @@ function UploadCard({
       setMissing(false)
       await onUploaded()
       assertCurrent()
-      setMessage({ tone: 'ok', text: ui('Uploaded - the portal now uses it.') })
+      setMessage(messageFor('ok', ({ ui }) => ui('Uploaded - the portal now uses it.')))
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not upload that image - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not upload that image - please try again.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -301,7 +305,7 @@ function ColoursSection({
   slug: string
   branding: Branding
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
@@ -321,13 +325,15 @@ function ColoursSection({
       assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       assertCurrent()
-      setMessage({ tone: 'ok', text: ui('Saved - the portal colours are updated.') })
+      setMessage(messageFor('ok', ({ ui }) => ui('Saved - the portal colours are updated.')))
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save that choice.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save that choice.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -418,7 +424,7 @@ function TypographySection({
   slug: string
   branding: Branding
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   useAllPairingFonts()
   const queryClient = useQueryClient()
@@ -445,13 +451,15 @@ function TypographySection({
       assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       assertCurrent()
-      setMessage({ tone: 'ok', text: ui('Saved - the portal typography is updated.') })
+      setMessage(messageFor('ok', ({ ui }) => ui('Saved - the portal typography is updated.')))
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save that choice.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save that choice.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -652,7 +660,7 @@ function FontUploadCard({
   uploaded: boolean
   previewFamily: string
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const queryClient = useQueryClient()
   const { runExplicit } = usePermissionAdminAccess('appearance.write', { kind: 'portal', slug })
@@ -667,7 +675,7 @@ function FontUploadCard({
     event.target.value = ''
     if (!file) return
     if (file.size > MAX_BYTES) {
-      setMessage({ tone: 'error', text: ui('That file is too large - the limit is 5 MB.') })
+      setMessage(messageFor('error', ({ ui }) => ui('That file is too large - the limit is 5 MB.')))
       return
     }
     setBusy(true)
@@ -687,13 +695,16 @@ function FontUploadCard({
       assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       assertCurrent()
-      setMessage({ tone: 'ok', text: ui('Uploaded - the portal now uses it.') })
+      setMessage(messageFor('ok', ({ ui }) => ui('Uploaded - the portal now uses it.')))
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not upload that font - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not upload that font - please try again.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -743,7 +754,7 @@ function ShapeSection({
   slug: string
   branding: Branding
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
@@ -763,18 +774,18 @@ function ShapeSection({
       assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       assertCurrent()
-      setMessage({
-        tone: 'ok',
-        text: ui('Saved - this portal is now {selected}.', {
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui('Saved - this portal is now {selected}.', {
           selected: ui(SHAPE_OPTIONS.find((option) => option.id === selected)!.label),
-        }),
-      })
+        })))
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save that choice.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save that choice.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -855,7 +866,7 @@ function DensitySection({
   slug: string
   branding: Branding
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
@@ -875,18 +886,18 @@ function DensitySection({
       assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       assertCurrent()
-      setMessage({
-        tone: 'ok',
-        text: ui('Saved - density is now {selected}.', {
+      setMessage(messageFor('ok', ({ ui }) =>
+        ui('Saved - density is now {selected}.', {
           selected: ui(DENSITY_OPTIONS.find((option) => option.id === selected)!.label),
-        }),
-      })
+        })))
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save that choice.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save that choice.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }
@@ -971,7 +982,7 @@ function ColourSchemeSection({
   slug: string
   branding: Branding
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const queryClient = useQueryClient()
   const saveAppearance = useAppearanceSave(slug)
@@ -992,18 +1003,23 @@ function ColourSchemeSection({
       assertCurrent()
       await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
       assertCurrent()
-      setMessage({
-        tone: 'ok',
-        text: selected === 'light'
-          ? ui('Saved - the portal is now light for every viewer.')
-          : ui('Saved - viewers can now read the portal in light or dark.'),
-      })
+      setMessage(
+        messageFor(
+          'ok',
+          ({ ui }) =>
+            selected === 'light'
+              ? ui('Saved - the portal is now light for every viewer.')
+              : ui('Saved - viewers can now read the portal in light or dark.'),
+        ),
+      )
     } catch (err) {
       if (context !== authority.controller.context) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not save that choice.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) => errorMessage(err, 'Could not save that choice.', localError),
+        ),
+      )
     } finally {
       if (context === authority.controller.context) setBusy(false)
     }

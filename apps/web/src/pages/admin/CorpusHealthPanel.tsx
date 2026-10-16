@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useRef, useState } from 'react'
@@ -30,7 +31,7 @@ function HealthRow({
   onChanged: (id: string, hidden: boolean) => Promise<unknown>
   onDeleted: (row: CorpusHealthRow, outcome: DeleteOutcome) => void
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
   const authority = useAccess()
@@ -53,10 +54,13 @@ function HealthRow({
       assertCurrent()
       await onChanged(row.id, !row.hidden)
     } catch (err) {
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not update that resource.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not update that resource.', localError),
+        ),
+      )
     } finally {
       setBusy(false)
     }

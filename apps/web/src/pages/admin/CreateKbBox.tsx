@@ -1,3 +1,4 @@
+import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -21,7 +22,7 @@ function CreateKbBoxContent({
   row: AdminTenantOverview
   onCreated: () => Promise<unknown>
 }) {
-  const { ui, error: localError } = usePortalLocale()
+  const { ui } = usePortalLocale()
 
   const { runExplicit } = usePermissionAdminAccess('bindings.write', {
     kind: 'portal',
@@ -57,17 +58,22 @@ function CreateKbBoxContent({
       )
       assertCurrent()
       if (result === undefined) return
-      setMessage({
-        tone: 'ok',
-        text: ui('Created a new knowledge box and connected this portal to it.'),
-      })
+      setMessage(
+        messageFor(
+          'ok',
+          ({ ui }) => ui('Created a new knowledge box and connected this portal to it.'),
+        ),
+      )
       await onCreated()
     } catch (err) {
       if (!current()) return
-      setMessage({
-        tone: 'error',
-        text: errorMessage(err, 'Could not create a knowledge box - please try again.', localError),
-      })
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not create a knowledge box - please try again.', localError),
+        ),
+      )
     } finally {
       if (current()) setBusy(false)
     }

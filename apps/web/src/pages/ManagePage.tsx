@@ -79,7 +79,7 @@ export function ManagePage() {
 }
 
 function ManageContent() {
-  const { ui } = usePortalLocale()
+  const { ui, number } = usePortalLocale()
 
   const { config } = useOutletContext<TenantOutletContext>()
   const slug = config.slug
@@ -199,8 +199,8 @@ function ManageContent() {
           {can('content.write') && content.data && (
             <div className='mt-3 min-w-0 space-y-2 text-sm'>
               <p data-manage-counts>
-                <strong>{content.data.counters.resources}</strong>
-                {ui(' documents ·')} {content.data.counters.paragraphs}
+                <strong>{number(content.data.counters.resources)}</strong>
+                {ui(' documents ·')} {number(content.data.counters.paragraphs)}
                 {ui(' paragraphs')}
               </p>
               <p data-manage-recent className='break-words text-ink-2'>

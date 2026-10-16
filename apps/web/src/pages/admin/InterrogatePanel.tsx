@@ -96,7 +96,7 @@ function SuggestionCard({
   suggestion: SetupSuggestion
   onDecided: (status: SetupSuggestion['status']) => void
 }) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAllowed, breakGlassEnabled } = usePermissionAdminAccess(
     'behaviour.write',
@@ -149,7 +149,7 @@ function SuggestionCard({
       refresh()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setError(err instanceof Error ? err.message : ui('Could not implement this suggestion.'))
+      setError(err instanceof Error ? err.message : 'Could not implement this suggestion.')
     } finally {
       if (context === authority.controller.context) setBusy(null)
     }
@@ -170,7 +170,7 @@ function SuggestionCard({
       refresh()
     } catch (err) {
       if (context !== authority.controller.context) return
-      setError(err instanceof Error ? err.message : ui('Could not update the suggestion.'))
+      setError(err instanceof Error ? err.message : 'Could not update the suggestion.')
     } finally {
       if (context === authority.controller.context) setBusy(null)
     }
@@ -234,13 +234,19 @@ function SuggestionCard({
           : null}
       </div>
       {outcome ? <p className='mt-2 text-xs text-[var(--rp-ok-ink)]'>{outcome}</p> : null}
-      {error ? <p className='mt-2 text-xs text-[var(--rp-bad-ink)]'>{error}</p> : null}
+      {error
+        ? (
+          <p className='mt-2 text-xs text-[var(--rp-bad-ink)]'>
+            {localError(error, 'The action failed. Please try again.')}
+          </p>
+        )
+        : null}
     </div>
   )
 }
 
 function InterrogatePanelContent({ slug }: { slug: string }) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
@@ -355,7 +361,13 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
           </p>
         )
         : null}
-      {runError ? <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>{runError}</p> : null}
+      {runError
+        ? (
+          <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>
+            {localError(runError, 'The interrogation could not complete - try again.')}
+          </p>
+        )
+        : null}
 
       {isLoading ? <Skeleton className='mt-4 h-20' /> : null}
 

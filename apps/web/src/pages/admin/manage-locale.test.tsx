@@ -7,6 +7,8 @@ import { missingPortalMessages } from '../../lib/locale-messages.ts'
 import { preflightEnrichmentArchive } from '../../api/enrichment-import.ts'
 import { EnrichmentArchiveImport, enrichmentDoneMessage } from './EnrichmentsPanel.tsx'
 import { validate } from './LabelsetsPanel.tsx'
+import { messageFor } from './shared.ts'
+import { MessagePanel } from './MessagePanel.tsx'
 import { announce, summarise, type UploadRow } from './upload-queue.ts'
 
 const japanese = createPortalLocale('ja')
@@ -96,4 +98,45 @@ Deno.test('archive validation stays canonical while its presentation and chooser
   expect(markup).toContain('アーカイブを確認')
   expect(markup).toMatch(/type="file"[^>]*class="sr-only"/)
   expect(markup).not.toContain('Choose file')
+})
+
+Deno.test('a retained operation message changes language at render time with its authored values intact', () => {
+  const result = { imported: 2, skipped: 1, filename: 'Summary {name}.json' }
+  const message = messageFor(
+    'ok',
+    ({ ui, number }) =>
+      ui('Imported {records}. Kept {existing} unchanged.', {
+        records: ui('{count} records', { count: number(result.imported) }),
+        existing: ui('{count} existing record', { count: number(result.skipped) }),
+      }),
+  )
+  const render = (language: 'ja' | 'en') =>
+    renderToStaticMarkup(
+      <PortalLocaleContext.Provider value={createPortalLocale(language)}>
+        <MessagePanel message={message} />
+      </PortalLocaleContext.Provider>,
+    )
+  expect(message.text).toBe('Imported 2 records. Kept 1 existing record unchanged.')
+  expect(render('en')).toContain(message.text)
+  expect(render('ja')).toContain(
+    'レコード2件をインポートし、既存のレコード1件は変更せずに保持しました。',
+  )
+  expect(render('en')).toContain(message.text)
+  expect(result.filename).toBe('Summary {name}.json')
+  const failure = messageFor(
+    'error',
+    ({ error }) => error(new Error('untrusted {name}'), 'Could not read this archive.'),
+  )
+  expect(failure.render?.(japanese)).toBe('アーカイブを読み込めませんでした。')
+  expect(failure.render?.(createPortalLocale('en'))).toBe('untrusted {name}')
+})
+
+Deno.test('stage labels localise finite app status while authored record labels are never passed through it', async () => {
+  const { stageText } = await import('./shared.ts')
+  expect(stageText('Extracting with 2 methods', japanese)).toBe('2種類の方法で抽出中')
+  expect(stageText('Extracting with 2 methods', createPortalLocale('en'))).toBe(
+    'Extracting with 2 methods',
+  )
+  expect(stageText('Reading the document', japanese)).toBe('資料を読み込み中')
+  expect(stageText('An unknown service stage', japanese)).toBe('処理中…')
 })
