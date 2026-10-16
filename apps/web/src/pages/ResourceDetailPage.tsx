@@ -1306,7 +1306,7 @@ function DocumentChat(
   ]
   const starters = generated && generated.questions.length > 0
     ? generated.questions
-    : GENERIC_STARTERS.map(ui)
+    : GENERIC_STARTERS.map((starter) => ui(starter))
 
   if (!canAsk()) {
     return (

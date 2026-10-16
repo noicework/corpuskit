@@ -413,308 +413,29 @@ export function TenantLayout() {
   )
 
   return (
-    <div
-      className={`rp-tenant min-h-screen bg-app${
-        config.branding.paletteId === 'acmd' ? ' rp-acmd' : ''
-      }`}
-      style={tenantThemeVars(config.branding, scheme)}
-      data-colour-scheme={scheme}
-      lang={locale.language}
-    >
-      {
-        /* Two-tier header: a white strip carrying the logo, over a solid
+    <PortalLocaleContext.Provider value={locale}>
+      <div
+        className={`rp-tenant min-h-screen bg-app${
+          config.branding.paletteId === 'acmd' ? ' rp-acmd' : ''
+        }`}
+        style={tenantThemeVars(config.branding, scheme)}
+        data-colour-scheme={scheme}
+        lang={locale.language}
+      >
+        {
+          /* Two-tier header: a white strip carrying the logo, over a solid
         * brand-colour band carrying the navigation. */
-      }
-      <header ref={headerRef} className='sticky top-0 z-40'>
-        {isAcmd && <AcmdSiteHeader slug={config.slug} onSearch={() => setPaletteOpen(true)} />}
-        {isAcmd
-          ? (
-            <div className='acmd-portal-bar'>
-              <div className='rp-shell acmd-portal-bar-inner'>
-                <Link to={`/t/${config.slug}`} className='acmd-portal-name rp-focus'>
-                  Research portal
-                </Link>
-                <nav aria-label='Primary' className='acmd-portal-nav'>
-                  {navigation.map((item) => (
-                    <NavLink
-                      key={item.label}
-                      to={`/t/${config.slug}${item.path}`}
-                      end={item.end}
-                      className={navLinkClass}
-                    >
-                      {locale.ui(item.label)}
-                    </NavLink>
-                  ))}
-                  {customLinks.map((link, index) => (
-                    <LayoutAnchor
-                      key={`custom-${index}`}
-                      href={link.href}
-                      slug={config.slug}
-                      className='rp-navlink'
-                      nav
-                    >
-                      {link.label}
-                    </LayoutAnchor>
-                  ))}
-                </nav>
-                <div className='acmd-portal-tools'>
-                  {!lightOnly && (
-                    <span className='hidden sm:inline-flex'>
-                      <button
-                        type='button'
-                        onClick={toggleScheme}
-                        aria-label={schemeLabel}
-                        title={schemeLabel}
-                        aria-pressed={scheme === 'dark'}
-                        className='acmd-scheme rp-focus'
-                      >
-                        <SchemeIcon scheme={scheme} className='h-5 w-5' />
-                      </button>
-                    </span>
-                  )}
-                  <span className='hidden sm:inline-flex'>
-                    <HelpMenu slug={config.slug} />
-                  </span>
-                  <span className='hidden sm:inline-flex'>
-                    {accountControl}
-                  </span>
-                  <span className='md:hidden'>
-                    <button
-                      ref={navTriggerRef}
-                      type='button'
-                      onClick={() => {
-                        if (navOpen) {
-                          navRestoreFocus.current = true
-                          setNavOpen(false)
-                        } else {
-                          setNavMounted(true)
-                          setNavOpen(true)
-                        }
-                      }}
-                      aria-label={navOpen ? 'Close menu' : 'Open menu'}
-                      aria-expanded={navOpen}
-                      aria-controls='mobile-nav-sheet'
-                      className='acmd-portal-menu rp-focus'
-                    >
-                      Explore <MenuBars />
-                    </button>
-                  </span>
-                </div>
-              </div>
-            </div>
-          )
-          : (
-            <>
-              <div className='border-b border-line bg-surface'>
-                {
-                  /* Below `sm` the row may wrap, and the wordmark keeps a 10rem
-            * floor. A portal with no uploaded logo falls back to its product
-            * name here, and the floor is in rem so it grows with the reader's
-            * text size: at a 22px root font the three round controls alone eat
-            * most of a 390px row, and without the floor the name was squeezed
-            * into a 38px column and clipped to one letter a line. When the two
-            * no longer fit, the controls take their own line instead. */
-                }
-                <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-6'>
-                  <div className='flex min-w-[10rem] flex-1 items-center gap-2 sm:min-w-0'>
-                    <Link
-                      to={`/t/${config.slug}`}
-                      className='rp-focus flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]'
-                    >
-                      {isCorpusKit
-                        ? (
-                          <span className='rp-corpuskit-wordmark'>
-                            CorpusKit<span
-                              style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}
-                            >
-                              /
-                            </span>
-                          </span>
-                        )
-                        : config.branding.logoUrl && !logoFailed
-                        ? (
-                          <img
-                            src={scheme === 'dark'
-                              ? config.branding.logoDarkUrl ?? config.branding.logoUrl
-                              : config.branding.logoUrl}
-                            alt={config.branding.organisation}
-                            onError={() => setLogoFailed(true)}
-                            style={config.branding.logoMaxWidth === undefined ? undefined : {
-                              maxWidth:
-                                `min(${config.branding.logoMaxWidth}px, var(--rp-logo-width-cap), 100%)`,
-                            }}
-                            // Tenant logos vary wildly in aspect ratio (a wordmark
-                            // with a tagline under it can be 4:1 while a compact
-                            // wordmark is closer to 2:1), so a fixed height alone
-                            // decides nothing about how much of a phone row the logo
-                            // eats. Below `sm` it is boxed by BOTH a max
-                            // width and a max height and left free to pick its own
-                            // height, so every tenant fits the same slot without being
-                            // letterboxed. `min-w-0` is the real overlap guard: an
-                            // image is a flex item whose automatic minimum size is its
-                            // intrinsic width, so without it the logo refuses to
-                            // shrink and simply paints over its neighbours. Desktop is
-                            // untouched - `sm:` restores h-16 with the 20rem cap.
-                            className={`h-auto max-h-10 w-[8.5rem] shrink-0 object-contain sm:h-16 sm:max-h-none sm:w-auto sm:max-w-[20rem] ${
-                              config.branding.logoMaxWidth === undefined
-                                ? ''
-                                : '[--rp-logo-width-cap:170px] sm:[--rp-logo-width-cap:640px]'
-                            }`}
-                          />
-                        )
-                        : (
-                          <span className='rp-display truncate text-lg text-ink sm:text-xl'>
-                            {config.branding.productName}
-                          </span>
-                        )}
-                    </Link>
-                    {
-                      /* Portal switcher, beside the logo - each portal is its own
-                * knowledge box, content and branding. */
-                    }
-                    {config.branding.showPortalSwitcher !== false && <KbSwitcher config={config} />}
-                  </div>
-                  {
-                    /* Header search, centred and full-measure: it is the only search
-              * box in the product now, so it carries the weight. */
-                  }
-                  <div className='hidden w-[min(40rem,42vw)] shrink-0 items-center lg:flex'>
-                    <form
-                      role='search'
-                      onSubmit={(event) => {
-                        event.preventDefault()
-                        const trimmed = headerQuery.trim()
-                        if (!trimmed) return
-                        navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
-                        setHeaderQuery('')
-                      }}
-                      className='flex w-full items-center'
-                    >
-                      <label htmlFor='header-search' className='sr-only'>
-                        {locale.ui('Search')} {config.branding.productName}
-                      </label>
-                      <input
-                        id='header-search'
-                        type='search'
-                        value={headerQuery}
-                        onChange={(event) => setHeaderQuery(event.target.value)}
-                        placeholder={config.searchPlaceholder}
-                        className='rp-input rp-input-flush-end h-[calc(3rem*var(--rp-density-ctl,1))] min-w-0 flex-1 text-base'
-                      />
-                      <button
-                        type='submit'
-                        aria-label={locale.ui('Search')}
-                        className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
-                        style={{
-                          borderColor: 'var(--rp-line)',
-                          color: 'var(--rp-brand-fg)',
-                        }}
-                      >
-                        <svg
-                          viewBox='0 0 20 20'
-                          fill='none'
-                          stroke='currentColor'
-                          strokeWidth='1.8'
-                          strokeLinecap='round'
-                          className='h-5 w-5'
-                          aria-hidden='true'
-                        >
-                          <circle cx='9' cy='9' r='5.5' />
-                          <path d='M13.2 13.2 17 17' />
-                        </svg>
-                      </button>
-                    </form>
-                  </div>
-
-                  {
-                    /* Below `sm` this cluster takes exactly the width its buttons
-              * need, so the rest of the row belongs to the logo. `flex-1` from
-              * `sm` up restores the even three-way split that keeps the desktop
-              * search box optically centred. */
-                  }
-                  <div className='ml-auto flex flex-none items-center justify-end gap-2 sm:flex-1'>
-                    <PortalLanguageSwitch config={config} locale={locale} />
-                    {kbStatus?.status === 'none' &&
-                      access.can('portal.create', { kind: 'platform' }) && (
-                      <span className='hidden shrink-0 lg:block'>
-                        <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
-                          Not connected
-                        </Link>
-                      </span>
-                    )}
-                    {
-                      /* Below `sm` the help and account controls live in the phone
-                * menu only (the sheet carries both): three 44px circles plus
-                * the logo no longer fit a 390px header once the root font is
-                * scaled up for accessibility. Wrapped, for the same reason as
-                * the menu toggle below - component classes set their own
-                * display and would beat a utility on the element itself. */
-                    }
-                    {!lightOnly && (
-                      <span className='hidden sm:inline-flex'>
-                        <button
-                          type='button'
-                          onClick={toggleScheme}
-                          aria-label={schemeLabel}
-                          title={schemeLabel}
-                          aria-pressed={scheme === 'dark'}
-                          className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
-                          style={{
-                            borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-                            color: 'var(--rp-brand-fg)',
-                          }}
-                        >
-                          <SchemeIcon scheme={scheme} className='h-6 w-6' />
-                        </button>
-                      </span>
-                    )}
-                    <span className='hidden sm:inline-flex'>
-                      <HelpMenu slug={config.slug} />
-                    </span>
-                    <span className='hidden sm:inline-flex'>
-                      {accountControl}
-                    </span>
-                    {
-                      /* Wrapped, because .rp-navtoggle sets its own display and would
-                * beat a `md:hidden` utility on the button itself - component
-                * classes in styles.css are unlayered and win over Tailwind's
-                * utility layer no matter what the class list says. That is
-                * exactly why this control used to show next to the full desktop
-                * nav. The toggle is sized to match the help and account buttons
-                * beside it rather than being scaled up on its own, so the three
-                * read as one 44px cluster. */
-                    }
-                    <span className='md:hidden'>
-                      <button
-                        ref={navTriggerRef}
-                        type='button'
-                        onClick={() => {
-                          if (navOpen) {
-                            navRestoreFocus.current = true
-                            setNavOpen(false)
-                            return
-                          }
-                          setNavMounted(true)
-                          setNavOpen(true)
-                        }}
-                        aria-label={locale.ui(navOpen ? 'Close menu' : 'Open menu')}
-                        aria-expanded={navOpen}
-                        aria-controls='mobile-nav-sheet'
-                        className='rp-navtoggle rp-focus'
-                      >
-                        <MenuBars />
-                      </button>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className='rp-navband relative hidden md:block'>
-                <div className='rp-shell'>
-                  <nav
-                    aria-label='Primary'
-                    className='rp-no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'
-                  >
+        }
+        <header ref={headerRef} className='sticky top-0 z-40'>
+          {isAcmd && <AcmdSiteHeader slug={config.slug} onSearch={() => setPaletteOpen(true)} />}
+          {isAcmd
+            ? (
+              <div className='acmd-portal-bar'>
+                <div className='rp-shell acmd-portal-bar-inner'>
+                  <Link to={`/t/${config.slug}`} className='acmd-portal-name rp-focus'>
+                    Research portal
+                  </Link>
+                  <nav aria-label='Primary' className='acmd-portal-nav'>
                     {navigation.map((item) => (
                       <NavLink
                         key={item.label}
@@ -737,241 +458,523 @@ export function TenantLayout() {
                       </LayoutAnchor>
                     ))}
                   </nav>
+                  <div className='acmd-portal-tools'>
+                    {!lightOnly && (
+                      <span className='hidden sm:inline-flex'>
+                        <button
+                          type='button'
+                          onClick={toggleScheme}
+                          aria-label={schemeLabel}
+                          title={schemeLabel}
+                          aria-pressed={scheme === 'dark'}
+                          className='acmd-scheme rp-focus'
+                        >
+                          <SchemeIcon scheme={scheme} className='h-5 w-5' />
+                        </button>
+                      </span>
+                    )}
+                    <span className='hidden sm:inline-flex'>
+                      <HelpMenu slug={config.slug} />
+                    </span>
+                    <span className='hidden sm:inline-flex'>
+                      {accountControl}
+                    </span>
+                    <span className='md:hidden'>
+                      <button
+                        ref={navTriggerRef}
+                        type='button'
+                        onClick={() => {
+                          if (navOpen) {
+                            navRestoreFocus.current = true
+                            setNavOpen(false)
+                          } else {
+                            setNavMounted(true)
+                            setNavOpen(true)
+                          }
+                        }}
+                        aria-label={navOpen ? 'Close menu' : 'Open menu'}
+                        aria-expanded={navOpen}
+                        aria-controls='mobile-nav-sheet'
+                        className='acmd-portal-menu rp-focus'
+                      >
+                        Explore <MenuBars />
+                      </button>
+                    </span>
+                  </div>
                 </div>
               </div>
-            </>
-          )}
-        {config.slug === 'acmd' && (
-          <div className='border-b border-line bg-surface-2'>
-            <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
-              Demo portal. Answers currently use the CorpusKit documentation knowledge base.
-            </p>
-          </div>
-        )}
-        {config.status === 'suspended' && (
-          <div
-            role='status'
-            className='border-b'
-            data-portal-suspended
-            style={{
-              background: 'var(--rp-warn-bg)',
-              color: 'var(--rp-warn-ink)',
-              borderColor: 'var(--rp-warn-line)',
-            }}
-          >
-            <p className='rp-shell py-2 text-sm leading-relaxed'>
-              <strong>This portal is paused.</strong>{' '}
-              Visitors see a paused screen. Only platform administrators can open it.
-            </p>
-          </div>
-        )}
-        {config.status === 'read_only' && auth?.authenticated && (
-          <div
-            role='status'
-            className='border-b'
-            data-portal-read-only
-            style={{
-              background: 'var(--rp-warn-bg)',
-              color: 'var(--rp-warn-ink)',
-              borderColor: 'var(--rp-warn-line)',
-            }}
-          >
-            <p className='rp-shell py-2 text-sm leading-relaxed'>
-              <strong>This portal is read-only.</strong>{' '}
-              You can browse, search and ask questions. Content and settings cannot be changed.
-            </p>
-          </div>
-        )}
-      </header>
+            )
+            : (
+              <>
+                <div className='border-b border-line bg-surface'>
+                  {
+                    /* Below `sm` the row may wrap, and the wordmark keeps a 10rem
+            * floor. A portal with no uploaded logo falls back to its product
+            * name here, and the floor is in rem so it grows with the reader's
+            * text size: at a 22px root font the three round controls alone eat
+            * most of a 390px row, and without the floor the name was squeezed
+            * into a 38px column and clipped to one letter a line. When the two
+            * no longer fit, the controls take their own line instead. */
+                  }
+                  <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-6'>
+                    <div className='flex min-w-[10rem] flex-1 items-center gap-2 sm:min-w-0'>
+                      <Link
+                        to={`/t/${config.slug}`}
+                        className='rp-focus flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]'
+                      >
+                        {isCorpusKit
+                          ? (
+                            <span className='rp-corpuskit-wordmark'>
+                              CorpusKit<span
+                                style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}
+                              >
+                                /
+                              </span>
+                            </span>
+                          )
+                          : config.branding.logoUrl && !logoFailed
+                          ? (
+                            <img
+                              src={scheme === 'dark'
+                                ? config.branding.logoDarkUrl ?? config.branding.logoUrl
+                                : config.branding.logoUrl}
+                              alt={config.branding.organisation}
+                              onError={() => setLogoFailed(true)}
+                              style={config.branding.logoMaxWidth === undefined ? undefined : {
+                                maxWidth:
+                                  `min(${config.branding.logoMaxWidth}px, var(--rp-logo-width-cap), 100%)`,
+                              }}
+                              // Tenant logos vary wildly in aspect ratio (a wordmark
+                              // with a tagline under it can be 4:1 while a compact
+                              // wordmark is closer to 2:1), so a fixed height alone
+                              // decides nothing about how much of a phone row the logo
+                              // eats. Below `sm` it is boxed by BOTH a max
+                              // width and a max height and left free to pick its own
+                              // height, so every tenant fits the same slot without being
+                              // letterboxed. `min-w-0` is the real overlap guard: an
+                              // image is a flex item whose automatic minimum size is its
+                              // intrinsic width, so without it the logo refuses to
+                              // shrink and simply paints over its neighbours. Desktop is
+                              // untouched - `sm:` restores h-16 with the 20rem cap.
+                              className={`h-auto max-h-10 w-[8.5rem] shrink-0 object-contain sm:h-16 sm:max-h-none sm:w-auto sm:max-w-[20rem] ${
+                                config.branding.logoMaxWidth === undefined
+                                  ? ''
+                                  : '[--rp-logo-width-cap:170px] sm:[--rp-logo-width-cap:640px]'
+                              }`}
+                            />
+                          )
+                          : (
+                            <span className='rp-display truncate text-lg text-ink sm:text-xl'>
+                              {config.branding.productName}
+                            </span>
+                          )}
+                      </Link>
+                      {
+                        /* Portal switcher, beside the logo - each portal is its own
+                * knowledge box, content and branding. */
+                      }
+                      {config.branding.showPortalSwitcher !== false && (
+                        <KbSwitcher config={config} />
+                      )}
+                    </div>
+                    {
+                      /* Header search, centred and full-measure: it is the only search
+              * box in the product now, so it carries the weight. */
+                    }
+                    <div className='hidden w-[min(40rem,42vw)] shrink-0 items-center lg:flex'>
+                      <form
+                        role='search'
+                        onSubmit={(event) => {
+                          event.preventDefault()
+                          const trimmed = headerQuery.trim()
+                          if (!trimmed) return
+                          navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
+                          setHeaderQuery('')
+                        }}
+                        className='flex w-full items-center'
+                      >
+                        <label htmlFor='header-search' className='sr-only'>
+                          {locale.ui('Search')} {config.branding.productName}
+                        </label>
+                        <input
+                          id='header-search'
+                          type='search'
+                          value={headerQuery}
+                          onChange={(event) => setHeaderQuery(event.target.value)}
+                          placeholder={config.searchPlaceholder}
+                          className='rp-input rp-input-flush-end h-[calc(3rem*var(--rp-density-ctl,1))] min-w-0 flex-1 text-base'
+                        />
+                        <button
+                          type='submit'
+                          aria-label={locale.ui('Search')}
+                          className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
+                          style={{
+                            borderColor: 'var(--rp-line)',
+                            color: 'var(--rp-brand-fg)',
+                          }}
+                        >
+                          <svg
+                            viewBox='0 0 20 20'
+                            fill='none'
+                            stroke='currentColor'
+                            strokeWidth='1.8'
+                            strokeLinecap='round'
+                            className='h-5 w-5'
+                            aria-hidden='true'
+                          >
+                            <circle cx='9' cy='9' r='5.5' />
+                            <path d='M13.2 13.2 17 17' />
+                          </svg>
+                        </button>
+                      </form>
+                    </div>
 
-      {
-        /* The phone menu. It hangs from under the header rather than covering
+                    {
+                      /* Below `sm` this cluster takes exactly the width its buttons
+              * need, so the rest of the row belongs to the logo. `flex-1` from
+              * `sm` up restores the even three-way split that keeps the desktop
+              * search box optically centred. */
+                    }
+                    <div className='ml-auto flex flex-none items-center justify-end gap-2 sm:flex-1'>
+                      <PortalLanguageSwitch config={config} locale={locale} />
+                      {kbStatus?.status === 'none' &&
+                        access.can('portal.create', { kind: 'platform' }) && (
+                        <span className='hidden shrink-0 lg:block'>
+                          <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
+                            Not connected
+                          </Link>
+                        </span>
+                      )}
+                      {
+                        /* Below `sm` the help and account controls live in the phone
+                * menu only (the sheet carries both): three 44px circles plus
+                * the logo no longer fit a 390px header once the root font is
+                * scaled up for accessibility. Wrapped, for the same reason as
+                * the menu toggle below - component classes set their own
+                * display and would beat a utility on the element itself. */
+                      }
+                      {!lightOnly && (
+                        <span className='hidden sm:inline-flex'>
+                          <button
+                            type='button'
+                            onClick={toggleScheme}
+                            aria-label={schemeLabel}
+                            title={schemeLabel}
+                            aria-pressed={scheme === 'dark'}
+                            className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
+                            style={{
+                              borderColor:
+                                'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
+                              color: 'var(--rp-brand-fg)',
+                            }}
+                          >
+                            <SchemeIcon scheme={scheme} className='h-6 w-6' />
+                          </button>
+                        </span>
+                      )}
+                      <span className='hidden sm:inline-flex'>
+                        <HelpMenu slug={config.slug} />
+                      </span>
+                      <span className='hidden sm:inline-flex'>
+                        {accountControl}
+                      </span>
+                      {
+                        /* Wrapped, because .rp-navtoggle sets its own display and would
+                * beat a `md:hidden` utility on the button itself - component
+                * classes in styles.css are unlayered and win over Tailwind's
+                * utility layer no matter what the class list says. That is
+                * exactly why this control used to show next to the full desktop
+                * nav. The toggle is sized to match the help and account buttons
+                * beside it rather than being scaled up on its own, so the three
+                * read as one 44px cluster. */
+                      }
+                      <span className='md:hidden'>
+                        <button
+                          ref={navTriggerRef}
+                          type='button'
+                          onClick={() => {
+                            if (navOpen) {
+                              navRestoreFocus.current = true
+                              setNavOpen(false)
+                              return
+                            }
+                            setNavMounted(true)
+                            setNavOpen(true)
+                          }}
+                          aria-label={locale.ui(navOpen ? 'Close menu' : 'Open menu')}
+                          aria-expanded={navOpen}
+                          aria-controls='mobile-nav-sheet'
+                          className='rp-navtoggle rp-focus'
+                        >
+                          <MenuBars />
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className='rp-navband relative hidden md:block'>
+                  <div className='rp-shell'>
+                    <nav
+                      aria-label='Primary'
+                      className='rp-no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap'
+                    >
+                      {navigation.map((item) => (
+                        <NavLink
+                          key={item.label}
+                          to={`/t/${config.slug}${item.path}`}
+                          end={item.end}
+                          className={navLinkClass}
+                        >
+                          {locale.ui(item.label)}
+                        </NavLink>
+                      ))}
+                      {customLinks.map((link, index) => (
+                        <LayoutAnchor
+                          key={`custom-${index}`}
+                          href={link.href}
+                          slug={config.slug}
+                          className='rp-navlink'
+                          nav
+                        >
+                          {link.label}
+                        </LayoutAnchor>
+                      ))}
+                    </nav>
+                  </div>
+                </div>
+              </>
+            )}
+          {config.slug === 'acmd' && (
+            <div className='border-b border-line bg-surface-2'>
+              <p className='rp-shell py-2 text-xs leading-relaxed text-ink-2'>
+                Demo portal. Answers currently use the CorpusKit documentation knowledge base.
+              </p>
+            </div>
+          )}
+          {config.status === 'suspended' && (
+            <div
+              role='status'
+              className='border-b'
+              data-portal-suspended
+              style={{
+                background: 'var(--rp-warn-bg)',
+                color: 'var(--rp-warn-ink)',
+                borderColor: 'var(--rp-warn-line)',
+              }}
+            >
+              <p className='rp-shell py-2 text-sm leading-relaxed'>
+                <strong>This portal is paused.</strong>{' '}
+                Visitors see a paused screen. Only platform administrators can open it.
+              </p>
+            </div>
+          )}
+          {config.status === 'read_only' && auth?.authenticated && (
+            <div
+              role='status'
+              className='border-b'
+              data-portal-read-only
+              style={{
+                background: 'var(--rp-warn-bg)',
+                color: 'var(--rp-warn-ink)',
+                borderColor: 'var(--rp-warn-line)',
+              }}
+            >
+              <p className='rp-shell py-2 text-sm leading-relaxed'>
+                <strong>This portal is read-only.</strong>{' '}
+                You can browse, search and ask questions. Content and settings cannot be changed.
+              </p>
+            </div>
+          )}
+        </header>
+
+        {
+          /* The phone menu. It hangs from under the header rather than covering
         * it, which is what lets the trigger stay put and morph into the cross
         * in place, and leaves a real scrim over the page below. Both layers
         * carry `md:hidden` and neither animation class sets `display`, so the
         * utility is unopposed - verified on the computed style at 1440px. */
-      }
-      {navMounted && (
-        <div className='md:hidden'>
-          <div
-            aria-hidden='true'
-            onClick={() => {
-              navRestoreFocus.current = true
-              setNavOpen(false)
-            }}
-            className={`fixed inset-x-0 bottom-0 z-50 ${
-              navOpen ? 'rp-navsheet-scrim' : 'rp-navsheet-scrim rp-navsheet-scrim-exit'
-            }`}
-            style={{ top: 'var(--rp-header-h, 4rem)' }}
-          />
-          <nav
-            id='mobile-nav-sheet'
-            ref={navPanelRef}
-            aria-label='Primary'
-            className={`fixed inset-x-0 z-50 overflow-y-auto overflow-x-hidden border-b border-[var(--rp-on-primary)]/20 px-4 pb-7 pt-2 ${
-              navOpen ? 'rp-navsheet-panel' : 'rp-navsheet-panel rp-navsheet-panel-exit'
-            }`}
-            style={{
-              top: 'var(--rp-header-h, 4rem)',
-              maxHeight: 'calc(100dvh - var(--rp-header-h, 4rem))',
-              backgroundColor: 'var(--rp-primary)',
-            }}
-          >
-            <ul>
-              {navigation.map((item, index) => (
-                <li
-                  key={item.label}
-                  className={navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'}
-                  style={{ '--rp-stage-i': index } as CSSProperties}
-                >
-                  <NavLink
-                    to={`/t/${config.slug}${item.path}`}
-                    end={item.end}
-                    className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
+        }
+        {navMounted && (
+          <div className='md:hidden'>
+            <div
+              aria-hidden='true'
+              onClick={() => {
+                navRestoreFocus.current = true
+                setNavOpen(false)
+              }}
+              className={`fixed inset-x-0 bottom-0 z-50 ${
+                navOpen ? 'rp-navsheet-scrim' : 'rp-navsheet-scrim rp-navsheet-scrim-exit'
+              }`}
+              style={{ top: 'var(--rp-header-h, 4rem)' }}
+            />
+            <nav
+              id='mobile-nav-sheet'
+              ref={navPanelRef}
+              aria-label='Primary'
+              className={`fixed inset-x-0 z-50 overflow-y-auto overflow-x-hidden border-b border-[var(--rp-on-primary)]/20 px-4 pb-7 pt-2 ${
+                navOpen ? 'rp-navsheet-panel' : 'rp-navsheet-panel rp-navsheet-panel-exit'
+              }`}
+              style={{
+                top: 'var(--rp-header-h, 4rem)',
+                maxHeight: 'calc(100dvh - var(--rp-header-h, 4rem))',
+                backgroundColor: 'var(--rp-primary)',
+              }}
+            >
+              <ul>
+                {navigation.map((item, index) => (
+                  <li
+                    key={item.label}
+                    className={navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'}
+                    style={{ '--rp-stage-i': index } as CSSProperties}
                   >
-                    <span
-                      aria-hidden='true'
-                      className='transition-transform duration-200 group-hover:translate-x-1'
+                    <NavLink
+                      to={`/t/${config.slug}${item.path}`}
+                      end={item.end}
+                      className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
                     >
-                      &rarr;
-                    </span>
-                    {locale.ui(item.label)}
-                  </NavLink>
-                </li>
-              ))}
-              {customLinks.map((link, index) => (
-                <li
-                  key={`custom-${index}`}
-                  className={navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'}
-                  style={{ '--rp-stage-i': navigation.length + index } as CSSProperties}
-                >
-                  <LayoutAnchor
-                    href={link.href}
-                    slug={config.slug}
-                    className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
+                      <span
+                        aria-hidden='true'
+                        className='transition-transform duration-200 group-hover:translate-x-1'
+                      >
+                        &rarr;
+                      </span>
+                      {locale.ui(item.label)}
+                    </NavLink>
+                  </li>
+                ))}
+                {customLinks.map((link, index) => (
+                  <li
+                    key={`custom-${index}`}
+                    className={navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'}
+                    style={{ '--rp-stage-i': navigation.length + index } as CSSProperties}
                   >
-                    <span
-                      aria-hidden='true'
-                      className='transition-transform duration-200 group-hover:translate-x-1'
+                    <LayoutAnchor
+                      href={link.href}
+                      slug={config.slug}
+                      className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
                     >
-                      &rarr;
-                    </span>
-                    {link.label}
-                  </LayoutAnchor>
-                </li>
-              ))}
-            </ul>
+                      <span
+                        aria-hidden='true'
+                        className='transition-transform duration-200 group-hover:translate-x-1'
+                      >
+                        &rarr;
+                      </span>
+                      {link.label}
+                    </LayoutAnchor>
+                  </li>
+                ))}
+              </ul>
 
-            {
-              /* Support and account, under the navigation list. The same two
+              {
+                /* Support and account, under the navigation list. The same two
               * controls as the header, drawn from the same icons and named by
               * the same constants so the two surfaces cannot drift. They span
               * the full sheet width so both stay one comfortable tap target at
               * every root font size. */
-            }
-            <div
-              className={`mt-7 flex min-w-0 flex-col gap-2.5 ${
-                navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'
-              }`}
-              style={{ '--rp-stage-i': navigation.length + customLinks.length } as CSSProperties}
-            >
-              {!lightOnly && (
-                <button
-                  type='button'
-                  onClick={toggleScheme}
-                  aria-pressed={scheme === 'dark'}
-                  className='rp-navsheet-action rp-focus-inverse'
-                >
-                  <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
-                  {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}
-                </button>
-              )}
-              {helpMenuItems(config.slug).map((item) => (
-                <NavLink
-                  key={item.key}
-                  to={item.href}
-                  className='rp-navsheet-action rp-focus-inverse'
-                >
-                  <HelpItemIcon item={item} className='h-5 w-5 shrink-0' />
-                  {item.label}
-                </NavLink>
-              ))}
-              <AccountMenu
-                entries={menuEntries}
-                portalRole={portalRole}
-                platformRole={platformRole}
-                portalName={config.branding.productName}
-                label={accountLabel}
-                variant='mobile'
-                onProfile={() => {
-                  navRestoreFocus.current = false
-                  navTriggerRef.current?.focus()
-                  setNavOpen(false)
-                  setSignInOpen(true)
-                }}
-                onTabOut={(direction) => {
-                  if (direction === 'forward') {
+              }
+              <div
+                className={`mt-7 flex min-w-0 flex-col gap-2.5 ${
+                  navOpen ? 'rp-navsheet-item' : 'rp-navsheet-item-exit'
+                }`}
+                style={{ '--rp-stage-i': navigation.length + customLinks.length } as CSSProperties}
+              >
+                {!lightOnly && (
+                  <button
+                    type='button'
+                    onClick={toggleScheme}
+                    aria-pressed={scheme === 'dark'}
+                    className='rp-navsheet-action rp-focus-inverse'
+                  >
+                    <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
+                    {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}
+                  </button>
+                )}
+                {helpMenuItems(config.slug).map((item) => (
+                  <NavLink
+                    key={item.key}
+                    to={item.href}
+                    className='rp-navsheet-action rp-focus-inverse'
+                  >
+                    <HelpItemIcon item={item} className='h-5 w-5 shrink-0' />
+                    {item.label}
+                  </NavLink>
+                ))}
+                <AccountMenu
+                  entries={menuEntries}
+                  portalRole={portalRole}
+                  platformRole={platformRole}
+                  portalName={config.branding.productName}
+                  label={accountLabel}
+                  variant='mobile'
+                  onProfile={() => {
+                    navRestoreFocus.current = false
                     navTriggerRef.current?.focus()
-                    return
-                  }
-                  const stops = Array.from(
-                    navPanelRef.current?.querySelectorAll<HTMLElement>(NAV_FOCUSABLE) ?? [],
-                  )
-                  stops[stops.length - 2]?.focus()
-                }}
-              />
-            </div>
-          </nav>
+                    setNavOpen(false)
+                    setSignInOpen(true)
+                  }}
+                  onTabOut={(direction) => {
+                    if (direction === 'forward') {
+                      navTriggerRef.current?.focus()
+                      return
+                    }
+                    const stops = Array.from(
+                      navPanelRef.current?.querySelectorAll<HTMLElement>(NAV_FOCUSABLE) ?? [],
+                    )
+                    stops[stops.length - 2]?.focus()
+                  }}
+                />
+              </div>
+            </nav>
+          </div>
+        )}
+
+        {/* Keyed on the path so each route change replays the entrance. */}
+        <div key={location.pathname} className='rp-page-enter'>
+          {routeAllowed
+            ? <Outlet context={{ config } satisfies TenantOutletContext} />
+            : (
+              <main data-route-unavailable className='rp-shell py-12'>
+                <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>
+                  This page is unavailable
+                </h1>
+                <p className='mt-4 text-ink-2'>
+                  You cannot open this page with your current account.
+                </p>
+                <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-secondary mt-6'>
+                  Back to the library
+                </Link>
+              </main>
+            )}
         </div>
-      )}
 
-      {/* Keyed on the path so each route change replays the entrance. */}
-      <div key={location.pathname} className='rp-page-enter'>
-        {routeAllowed
-          ? (
-            <PortalLocaleContext.Provider value={locale}>
-              <Outlet context={{ config } satisfies TenantOutletContext} />
-            </PortalLocaleContext.Provider>
-          )
-          : (
-            <main data-route-unavailable className='rp-shell py-12'>
-              <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>
-                This page is unavailable
-              </h1>
-              <p className='mt-4 text-ink-2'>
-                You cannot open this page with your current account.
-              </p>
-              <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-secondary mt-6'>
-                Back to the library
-              </Link>
-            </main>
-          )}
-      </div>
-
-      {
-        /* Ask and Graph size themselves to the viewport and scroll
+        {
+          /* Ask and Graph size themselves to the viewport and scroll
         * internally, so there is no room beneath them for a footer. On iOS the
         * dynamic viewport grows as the URL bar collapses, the panel grows with
         * it, and it overruns anything stacked below - which is exactly the
         * overlap this avoids. */
-      }
-      {isViewportHeightRoute
-        ? null
-        : isAcmd
-        ? <AcmdSiteFooter />
-        : <PortalFooter branding={config.branding} slug={config.slug} />}
+        }
+        {isViewportHeightRoute
+          ? null
+          : isAcmd
+          ? <AcmdSiteFooter />
+          : <PortalFooter branding={config.branding} slug={config.slug} />}
 
-      {signInOpen ? <SignInDialog user={auth?.user} onClose={() => setSignInOpen(false)} /> : null}
+        {signInOpen
+          ? <SignInDialog user={auth?.user} onClose={() => setSignInOpen(false)} />
+          : null}
 
-      {paletteOpen
-        ? (
-          <CommandPalette
-            slug={config.slug}
-            suggestedQuestions={config.suggestedQuestions}
-            onClose={() => setPaletteOpen(false)}
-          />
-        )
-        : null}
-    </div>
+        {paletteOpen
+          ? (
+            <CommandPalette
+              slug={config.slug}
+              suggestedQuestions={config.suggestedQuestions}
+              onClose={() => setPaletteOpen(false)}
+            />
+          )
+          : null}
+      </div>
+    </PortalLocaleContext.Provider>
   )
 }
