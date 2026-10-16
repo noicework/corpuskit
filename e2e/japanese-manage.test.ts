@@ -98,7 +98,7 @@ async function assertButtonDensity(page: Page) {
     fixture.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;width:180px'
     document.body.append(fixture)
     try {
-      return [0.93, 1, 1.06].map((density) => {
+      return [0.93, 1, 1.06, 1.12].map((density) => {
         fixture.style.setProperty('--rp-density-ctl', String(density))
         fixture.replaceChildren()
         const controls = ['Save', '+', 'レビュー済みの付加情報アーカイブをインポート'].map(
