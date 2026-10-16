@@ -340,20 +340,13 @@ export function merchandiseContent(
 }
 
 // ---------------------------------------------------------------------------
-// Generation: app-side, one resource at a time. Earlier this scoped the
-// query-time answer_json_schema call to the resource with `resource_filters`,
-// which depends on that resource being fully settled server-side (status
-// PROCESSED) and turned out to be unreliable in combination with
-// answer_json_schema - verified live on a production box: every resource
-// returned "no structured answer" while a corpus reprocess left resources
-// "pending", and a plain per-document /ask (no schema) worked the whole time.
-// So generation now embeds the resource's OWN already-fetched text directly
-// in the query and calls askStructured with NO resourceId/resource_filters -
-// the embedded text is the grounding, not a second scoped retrieval, so it
-// has no dependency on ingest status. The platform DA page-summary is reused
-// as the summary source when present (work already paid for at ingest), and
-// also preferred as the embedded grounding text when present (short, clean,
-// already paid for) - the fuller extracted body text is the fallback.
+// Generation: app-side, one resource at a time. Embed the resource's own
+// already-fetched text and scope the platform's retrieval to that same resource.
+// Embedding alone is insufficient: unscoped retrieval can add another paper's
+// measurements to a single-document catalogue entry. A resource mid-reprocess
+// may produce no structured answer; retain the own-source fallback below rather
+// than retrying against the whole corpus. Ordinary tenants deliberately reuse
+// their existing DA page summary; bilingual tenants use the native source body.
 // ---------------------------------------------------------------------------
 
 /** Cap on embedded document text - a sane generation budget, not a full-document dump. */
@@ -499,6 +492,7 @@ export async function generateEnrichment(
         config,
         schema,
         buildEnrichmentQuery(agent, documentText, outputLanguage),
+        { resourceId },
       )
       data = result.object != null ? parseEnrichmentData(agent, result.object) : null
     } catch (err) {
