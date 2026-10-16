@@ -240,9 +240,9 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
             expect(gesture.actions.every((action) => action === 'auto')).toBe(true)
             // Use the supported direct-touch driver. Chrome 125's experimental
             // synthesized scroll follows different Aura/Mac gesture paths.
-            // Keep the physical finger inside the viewport: a 600px/s flick
-            // ending at 20px, then let Chromium's native fling settle.
-            const endY = 20, speed = 600
+            // Keep the physical finger inside the viewport: a deliberate fast
+            // 1,000px/s flick ending at 20px, then let Chromium's native fling settle.
+            const endY = 20, speed = 1000
             const distance = endY - gesture.y
             const duration = Math.abs(distance) / speed * 1000
             const steps = Math.ceil(duration / (1000 / 60))
