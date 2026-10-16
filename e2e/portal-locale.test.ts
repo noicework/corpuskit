@@ -40,7 +40,19 @@ Deno.test('app locale retains explicit language across portal and platform witho
     await page.waitForFunction(() => document.title === 'ライブラリ | Summary {name}')
     await page.goto(`${server.url}/admin`)
     await page.waitForFunction(() => document.documentElement.lang === 'ja')
+    await page.waitForFunction(() => document.title === 'ナレッジボックス | CorpusKit')
     expect(await page.evaluate(() => localStorage.getItem('corpuskit-ui-language-v1'))).toBe('ja')
+    // Fresh standalone documents must not retain the English index title with persisted JA.
+    await page.goto(`${server.url}/not-a-real-route`)
+    await page.waitForFunction(() => document.title === 'ページが見つかりません | CorpusKit')
+    server.setResponseStatus('/api/t/marine/config', 503)
+    await page.goto(`${server.url}/t/marine/library`)
+    await page.waitForSelector('[data-access-state=failed]')
+    await page.waitForFunction(() =>
+      document.title === `${document.querySelector('h1')?.textContent} | CorpusKit`
+    )
+    expect(await page.evaluate(() => document.title)).toMatch(/[ぁ-んァ-ン一-龯]/u)
+    server.setResponseStatus('/api/t/marine/config', null)
 
     for (const language of ['ja', 'en'] as const) {
       for (const scheme of ['light', 'dark']) {

@@ -139,6 +139,10 @@ export function PlatformAdminShell(
   { title, description, children }: { title: string; description: string; children: ReactNode },
 ) {
   const { ui } = usePortalLocale()
+  // Callers supply the already-localised application heading, never a tenant/source title.
+  useEffect(() => {
+    document.title = `${title} | CorpusKit`
+  }, [title])
   const { scheme } = useViewerScheme()
   useBodyTheme(platformBranding, scheme)
   const access = useAccess()

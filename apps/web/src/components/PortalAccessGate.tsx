@@ -82,6 +82,9 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
     : slug
     ? ui('{name} is unavailable', { name })
     : ui('This administration page is unavailable.')
+  useEffect(() => {
+    document.title = `${title} | CorpusKit`
+  }, [title])
   return (
     <div
       className='rp-tenant min-h-screen bg-app text-ink'

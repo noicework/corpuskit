@@ -2,6 +2,7 @@ import { platformBranding } from '../components/PortalAccessGate.tsx'
 import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 import { Link, useParams } from 'react-router-dom'
 import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
+import { useEffect } from 'react'
 
 // ---------------------------------------------------------------------------
 // Not-found pages - the catch-all for any route the app does not recognise.
@@ -60,6 +61,9 @@ export function NotFoundPage() {
 /** Root-level 404 - a standalone full-screen fallback for paths outside any portal. */
 export function RootNotFound() {
   const { ui } = usePortalLocale()
+  useEffect(() => {
+    document.title = `${ui('Page not found')} | CorpusKit`
+  }, [ui])
   const { scheme } = useViewerScheme()
   useBodyTheme(platformBranding, scheme)
   return (
