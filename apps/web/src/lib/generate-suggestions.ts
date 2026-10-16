@@ -1,4 +1,5 @@
 import type { GenerateKind, Topic } from '@research-portal/core'
+import { englishResearchUi, type ResearchUi } from './research-copy.ts'
 
 /** A single suggested-topic chip: a stable React key and the exact prompt text it fills in. */
 export interface SuggestionChip {
@@ -52,11 +53,15 @@ function comparisonPairs(topics: Topic[]): [Topic, Topic][] {
  * pair) - the caller hides the chip row in that case rather than rendering
  * nothing useful.
  */
-export function suggestedTopicChips(kind: GenerateKind, topics: Topic[]): SuggestionChip[] {
+export function suggestedTopicChips(
+  kind: GenerateKind,
+  topics: Topic[],
+  ui: ResearchUi = englishResearchUi,
+): SuggestionChip[] {
   if (kind === 'comparison') {
     return comparisonPairs(topics).map(([a, b]) => ({
       key: `${a.id}::${b.id}`,
-      text: `Compare ${a.label} and ${b.label}`,
+      text: ui('Compare {first} and {second}', { first: a.label, second: b.label }),
     }))
   }
 
@@ -64,15 +69,21 @@ export function suggestedTopicChips(kind: GenerateKind, topics: Topic[]): Sugges
 
   switch (kind) {
     case 'briefing':
-      return picked.map((t) => ({ key: t.id, text: `Brief me on ${t.label}` }))
+      return picked.map((t) => ({ key: t.id, text: ui('Brief me on {topic}', { topic: t.label }) }))
     case 'timeline':
-      return picked.map((t) => ({ key: t.id, text: `Timeline of ${t.label}` }))
+      return picked.map((t) => ({ key: t.id, text: ui('Timeline of {topic}', { topic: t.label }) }))
     case 'proscons':
-      return picked.map((t) => ({ key: t.id, text: `Pros and cons of ${t.label}` }))
+      return picked.map((t) => ({
+        key: t.id,
+        text: ui('Pros and cons of {topic}', { topic: t.label }),
+      }))
     case 'faq':
-      return picked.map((t) => ({ key: t.id, text: `FAQ about ${t.label}` }))
+      return picked.map((t) => ({ key: t.id, text: ui('FAQ about {topic}', { topic: t.label }) }))
     case 'assessment':
-      return picked.map((t) => ({ key: t.id, text: `Test my knowledge of ${t.label}` }))
+      return picked.map((t) => ({
+        key: t.id,
+        text: ui('Test my knowledge of {topic}', { topic: t.label }),
+      }))
     default:
       return []
   }

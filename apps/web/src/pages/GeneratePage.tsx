@@ -1161,7 +1161,7 @@ function SuggestedTopicChips({
   onPick: (text: string) => void
 }) {
   const { ui } = usePortalLocale()
-  const chips = useMemo(() => suggestedTopicChips(kind, topics), [kind, topics])
+  const chips = useMemo(() => suggestedTopicChips(kind, topics, ui), [kind, topics, ui])
   if (chips.length === 0) return null
 
   return (
@@ -1222,7 +1222,7 @@ function GenerateWorkspace() {
     if (lifetime.current.signal.aborted) lifetime.current = new AbortController()
     return () => lifetime.current.abort()
   }, [])
-  const copy = tenantCopy(config)
+  const copy = tenantCopy(config, { language, ui })
   // Direct links can select a kind (?kind=briefing).
   const [searchParams] = useSearchParams()
   const requestedKind = searchParams.get('kind')
@@ -1375,7 +1375,11 @@ function GenerateWorkspace() {
             description={(language === 'en' ? mutation.data.message : undefined) ??
               ui(
                 'There is not enough source material in this portal to generate a grounded {value1} on this topic. Try a broader topic or check the Library for coverage.',
-                { value1: activeMeta ? ui(activeMeta.label) : ''.toLowerCase() },
+                {
+                  value1: activeMeta
+                    ? language === 'en' ? activeMeta.label.toLowerCase() : ui(activeMeta.label)
+                    : '',
+                },
               )}
           />
         </div>

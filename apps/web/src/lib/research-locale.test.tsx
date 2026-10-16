@@ -11,6 +11,10 @@ import { evidenceSummary, openLabel } from '../components/EvidenceTable.tsx'
 import { auditSummary } from '../components/QualityGauge.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { cardinalityLabel } from '../pages/TaxonomyPage.tsx'
+import { sessionToWordHtml } from '../pages/AskPage.tsx'
+import { tenantCopy } from './tenant-copy.ts'
+import { suggestedTopicChips } from './generate-suggestions.ts'
+import { SectionHeading } from '../pages/ExplorePage.tsx'
 import type { ReactNode } from 'react'
 
 function render(language: 'ja' | 'en', content: ReactNode): string {
@@ -20,6 +24,50 @@ function render(language: 'ja' | 'en', content: ReactNode): string {
     </PortalLocaleContext.Provider>,
   )
 }
+
+Deno.test('research prompt scaffolding translates while authored topics, questions and overrides stay exact', () => {
+  const locale = createPortalLocale('ja')
+  const topics = [{ id: 'Library', label: 'Summary {count}' }, { id: 'Summary', label: 'Library' }]
+  const config = { topics, suggestedQuestions: [{ id: 'original', text: 'Library {name}' }] }
+  const copy = tenantCopy(config, locale)
+  expect(copy.investigationExample).toBe('例: Library {name}')
+  expect(copy.generateExample('comparison')).toBe('例: Summary {count}とLibraryを比較する')
+  expect(copy.generateExample('briefing')).toBe('例: Summary {count}の現状をまとめる')
+  expect(copy.generateExample('timeline')).toBe('例: Libraryに関する研究の年表')
+  expect(copy.generateExample('proscons')).toBe('例: Summary {count}の主な手法の長所と短所')
+  expect(copy.generateExample('faq')).toBe('例: Libraryに関するよくある質問')
+  expect(copy.generateExample('assessment')).toBe('例: Summary {count}の基礎知識を確認する')
+  expect(suggestedTopicChips('comparison', topics, locale.ui)).toEqual([{
+    key: 'Library::Summary',
+    text: 'Summary {count}とLibraryを比較する',
+  }])
+  for (
+    const [kind, expected] of [
+      ['briefing', 'Summary {count}についてまとめる'],
+      ['timeline', 'Summary {count}の年表'],
+      ['proscons', 'Summary {count}の長所と短所'],
+      ['faq', 'Summary {count}に関するよくある質問'],
+      ['assessment', 'Summary {count}の知識を確認する'],
+    ] as const
+  ) {
+    expect(suggestedTopicChips(kind, topics, locale.ui)[0]).toEqual({
+      key: 'Library',
+      text: expected,
+    })
+  }
+  const overrides = tenantCopy({
+    ...config,
+    copy: { investigationExample: 'Summary', generateExamples: { comparison: 'Library' } },
+  }, locale)
+  expect(overrides.investigationExample).toBe('Summary')
+  expect(overrides.generateExample('comparison')).toBe('Library')
+  const empty = tenantCopy({ topics: [], suggestedQuestions: [] }, locale)
+  expect(empty.generateExample('comparison')).toBe('例: 研究資料にある2つの手法を比較する')
+  expect(empty.generateExample('briefing')).toBe('例: 研究資料のトピックの現状をまとめる')
+  expect(tenantCopy(config).generateExample('comparison')).toBe(
+    'e.g. Compare summary {count} with library',
+  )
+})
 
 Deno.test('research display helpers translate application labels and retain exact English defaults', () => {
   const { ui } = createPortalLocale('ja')
@@ -80,6 +128,18 @@ Deno.test('Japanese reader placeholder labels never translate an authored overri
   expect(html).not.toContain('>要約</span>')
 })
 
+Deno.test('Explore topic headings preserve exact authored catalog keys and braces', () => {
+  for (const label of ['Library', 'Summary', 'Summary {count}']) {
+    const html = render(
+      'ja',
+      <SectionHeading slug='portal' topicId='Library' label={label} count={2} />,
+    )
+    expect(html).toContain(`>${label}</h2>`)
+    expect(html).toContain('すべて見る')
+    expect(html).toContain('/t/portal/library?topic=Library')
+  }
+})
+
 Deno.test('quiz interface localises complete warnings while generated research stays verbatim', () => {
   const data = {
     requested: 3,
@@ -123,4 +183,44 @@ Deno.test('research confidence and source dates preserve numeric meaning across 
   const html = render('ja', <CurrencyNote sources={[{ published: '1998', title: 'Summary' }]} />)
   expect(html).toContain('引用資料の最新年：1998')
   expect(html).toContain('この回答は1998年までの資料に基づいており')
+})
+
+Deno.test('retained Ask export errors follow the current locale without translating research text', () => {
+  const messages = [
+    { id: 'q', author: 'USER' as const, text: 'Library {name}', citations: [], sources: [] },
+    { id: 'a', author: 'AGENT' as const, text: 'Summary', citations: [], sources: [] },
+    {
+      id: 'e',
+      author: 'AGENT' as const,
+      text: '',
+      error: 'Upstream English diagnostic',
+      citations: [],
+      sources: [],
+    },
+    {
+      id: 'known',
+      author: 'AGENT' as const,
+      text: '',
+      error: 'Stopped before an answer arrived.',
+      citations: [],
+      sources: [],
+    },
+  ]
+  const ja = sessionToWordHtml(
+    'Library',
+    'Summary',
+    messages,
+    (id) => `/source/${id}`,
+    createPortalLocale('ja').ui,
+    'ja',
+  )
+  expect(ja).toContain('<h1>Library</h1>')
+  expect(ja).toContain('<h2>Library {name}</h2>')
+  expect(ja).toContain('Summary')
+  expect(ja).toContain('回答サービスを利用できません。')
+  expect(ja).toContain('回答が届く前に停止しました。')
+  expect(ja).not.toContain('Upstream English diagnostic')
+  const en = sessionToWordHtml('Library', 'Summary', messages, (id) => `/source/${id}`)
+  expect(en).toContain('Upstream English diagnostic')
+  expect(en).toContain('Stopped before an answer arrived.')
 })

@@ -86,9 +86,9 @@ function InvestigationCard(
 }
 
 function CreateInvestigationForm({ slug }: { slug: string }) {
-  const { ui } = usePortalLocale()
+  const { ui, language } = usePortalLocale()
   const { config } = useOutletContext<TenantOutletContext>()
-  const copy = tenantCopy(config)
+  const copy = tenantCopy(config, { language, ui })
   const access = useAccess()
   const context = access.controller.context
   const canWrite = () =>

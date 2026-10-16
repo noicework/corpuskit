@@ -484,7 +484,7 @@ function ResourceCard({ slug, resource }: { slug: string; resource: ResourceSumm
   )
 }
 
-function SectionHeading(
+export function SectionHeading(
   { slug, topicId, label, count }: { slug: string; topicId: string; label: string; count: number },
 ) {
   const { ui } = usePortalLocale()
@@ -500,7 +500,7 @@ function SectionHeading(
          * column it is left with. */
       }
       <h2 className='rp-display min-w-0 break-words text-xl text-ink sm:text-[1.375rem]'>
-        {ui(label)}
+        {label}
       </h2>
       <span className='rp-badge rp-badge-quiet shrink-0 tabular-nums'>{count}</span>
       <span className='h-px flex-1 bg-[var(--rp-line)]' aria-hidden='true' />

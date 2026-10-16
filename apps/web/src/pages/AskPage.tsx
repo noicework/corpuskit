@@ -1,3 +1,4 @@
+import { portalError } from '../lib/locale-messages.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
@@ -967,7 +968,7 @@ function AnswerCard({
   canAsk: boolean
   lifetime: AbortSignal
 }) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
   const access = useAccess()
   const authority = access.controller.context
   const current = () => !lifetime.aborted && access.controller.context === authority
@@ -1239,7 +1240,8 @@ function AnswerCard({
             }}
           >
             <p className='text-xs text-[var(--rp-bad-ink)]'>
-              {ui('The answer was cut short -')} {message.error}
+              {ui('The answer was cut short -')}{' '}
+              {localError(message.error, 'The answer service is unavailable.')}
             </p>
             <button
               type='button'
@@ -1561,7 +1563,7 @@ function formatScore(score: number | null | undefined): string {
  * platform scored the answer. `resourceUrl` makes the portal links absolute
  * so they resolve from the saved document.
  */
-function sessionToWordHtml(
+export function sessionToWordHtml(
   portalName: string,
   title: string,
   messages: ChatMessage[],
@@ -1582,7 +1584,13 @@ function sessionToWordHtml(
       }
       if (message.error) {
         return `<p><em>${escapeHtml(ui('Answer unavailable'))} - ${
-          escapeHtml(message.error)
+          escapeHtml(
+            portalError(
+              language === 'ja' ? 'ja' : 'en',
+              message.error,
+              'The answer service is unavailable.',
+            ),
+          )
         }</em></p>`
       }
       const bodyHtml = answerHtml(message.text, message.citations)

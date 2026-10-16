@@ -41,7 +41,7 @@ function RateLimitedColumn(
     onRetry: () => void
   },
 ) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
   const wait = Math.max(1, retryAfterSec ?? RETRY_FALLBACK_SEC)
   const [left, setLeft] = useState(wait)
   const onRetryRef = useRef(onRetry)
@@ -69,7 +69,9 @@ function RateLimitedColumn(
       <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
         {ui('The portal is busy')}
       </p>
-      <p className='mt-1 text-sm' style={{ color: 'var(--rp-warn-ink)' }}>{message}</p>
+      <p className='mt-1 text-sm' style={{ color: 'var(--rp-warn-ink)' }}>
+        {localError(message, 'The answer service is unavailable.')}
+      </p>
       <div className='mt-3 flex flex-wrap items-center gap-3'>
         <button
           type='button'
@@ -104,7 +106,7 @@ export function CompareConfigurations(
     onClose: () => void
   },
 ) {
-  const { ui } = usePortalLocale()
+  const { ui, error: localError } = usePortalLocale()
   const [columns, setColumns] = useState<Column[]>(
     initial.map((intent) => ({ intent, text: '', sources: [], pending: false })),
   )
@@ -223,7 +225,9 @@ export function CompareConfigurations(
                   : col.error
                   ? (
                     <div className='flex flex-wrap items-center gap-3'>
-                      <p className='text-[var(--rp-bad-ink)]'>{col.error}</p>
+                      <p className='text-[var(--rp-bad-ink)]'>
+                        {localError(col.error, 'The answer service is unavailable.')}
+                      </p>
                       <button
                         type='button'
                         onClick={() => run(index, col.intent)}

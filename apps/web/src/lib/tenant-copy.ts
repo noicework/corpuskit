@@ -1,4 +1,6 @@
 import type { GenerateKind, TenantConfig } from '@research-portal/core'
+import type { PortalLanguage } from './locale-messages.ts'
+import { englishResearchUi, type ResearchUi } from './research-copy.ts'
 
 /**
  * Example copy for the portal's forms and headings. Every string has a
@@ -34,25 +36,33 @@ function midSentence(label: string): string {
 
 const GENERIC_TOPIC = 'a topic from the research'
 
-export function tenantCopy(config: CopySource): TenantCopy {
+export function tenantCopy(
+  config: CopySource,
+  locale?: { language: PortalLanguage; ui: ResearchUi },
+): TenantCopy {
+  const ui = locale?.ui ?? englishResearchUi
   const custom = config.copy ?? {}
-  const topics = config.topics.map((t) => midSentence(t.label))
+  const topics = config.topics.map((t) =>
+    locale?.language === 'ja' ? t.label : midSentence(t.label)
+  )
   const topic = (index: number): string =>
-    topics[index % Math.max(1, topics.length)] ?? GENERIC_TOPIC
+    topics[index % Math.max(1, topics.length)] ?? ui(GENERIC_TOPIC)
   const question = config.suggestedQuestions[0]?.text
   const generateDefaults: Record<GenerateKind, string> = {
     comparison: topics.length >= 2
-      ? `e.g. Compare ${topic(0)} with ${topic(1)}`
-      : 'e.g. Compare two approaches from the research',
-    briefing: `e.g. Brief me on the current state of ${topic(0)}`,
-    timeline: `e.g. Timeline of ${topic(1)} research`,
-    proscons: `e.g. Pros and cons of the main approaches to ${topic(2)}`,
-    faq: `e.g. Common questions about ${topic(3)}`,
-    assessment: `e.g. Quiz me on the basics of ${topic(0)}`,
+      ? ui('e.g. Compare {first} with {second}', { first: topic(0), second: topic(1) })
+      : ui('e.g. Compare two approaches from the research'),
+    briefing: ui('e.g. Brief me on the current state of {topic}', { topic: topic(0) }),
+    timeline: ui('e.g. Timeline of {topic} research', { topic: topic(1) }),
+    proscons: ui('e.g. Pros and cons of the main approaches to {topic}', { topic: topic(2) }),
+    faq: ui('e.g. Common questions about {topic}', { topic: topic(3) }),
+    assessment: ui('e.g. Quiz me on the basics of {topic}', { topic: topic(0) }),
   }
   return {
     investigationExample: custom.investigationExample ??
-      (question ? `e.g. ${question}` : 'e.g. What does the evidence say about ...?'),
+      (question
+        ? ui('e.g. {question}', { question })
+        : ui('e.g. What does the evidence say about ...?')),
     generateExample: (kind) => custom.generateExamples?.[kind] ?? generateDefaults[kind],
   }
 }

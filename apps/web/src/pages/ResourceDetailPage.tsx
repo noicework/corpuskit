@@ -983,26 +983,20 @@ function ResourceViewer(
  * text so it is a comfortable thumb target, and pulled left by its own padding
  * so its label still aligns optically with the title beneath it.
  *
- * The label shortens to "Library" on a phone, where this link shares its row
- * with the Save action and that action grows once a current investigation is
- * pinned to it. The arrow carries the "back" sense either way, and the
- * accessible name stays "Back to library" at every width.
+ * The phone label is compact ("Library" in English, "戻る" in Japanese),
+ * retaining its full accessible name. The utility row wraps when actions
+ * need more space, so enlarged text never reduces navigation to an arrow.
  */
 function BackToLibrary({ slug }: { slug: string }) {
-  const { ui } = usePortalLocale()
+  const { ui, language } = usePortalLocale()
   return (
     <Link
       to={`/t/${slug}/library`}
       aria-label={ui('Back to library')}
-      className='rp-focus -ml-2 inline-flex h-9 min-w-9 items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-2 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-ink'
+      className='rp-focus -ml-2 inline-flex h-9 min-w-9 shrink-0 items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-2 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-ink'
     >
-      {
-        /* The arrow never shrinks, so on a very narrow phone - where the Save
-        * control beside it is at its widest - the label gives up its width
-        * first and the affordance survives as the arrow alone. */
-      }
       <span aria-hidden='true' className='shrink-0'>&larr;</span>
-      <span className='truncate sm:hidden'>{ui('Library')}</span>
+      <span className='sm:hidden'>{language === 'ja' ? ui('Back') : ui('Library')}</span>
       <span className='hidden truncate sm:inline'>{ui('Back to library')}</span>
     </Link>
   )
@@ -1092,7 +1086,7 @@ function ResourceHeader(
 
   return (
     <header>
-      <div className='flex items-center justify-between gap-3'>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
         <BackToLibrary slug={slug} />
         <div className='flex shrink-0 items-center gap-2'>
           <ManagerDelete slug={slug} resource={resource} />
