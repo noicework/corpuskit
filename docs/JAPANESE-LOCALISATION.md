@@ -79,6 +79,9 @@ configuration save messages and recent/health deletion notices can update withou
 operation. The browser test switches an invalid archive error and one successful ordinary-owner
 import JA → EN → JA, checks the authored filename, and asserts exactly one request to the fixed
 `collision=skip` route. Pure retained-message/upload tests cover uploaded rows and completion counts.
+Tools clipboard success/failure notices also switch JA → EN → JA with one copy attempt per result;
+the 3D-map popup refreshes its finite labels/counts in place without rebuilding the scene or
+translating graph names.
 
 The one-shot ResourceDetail deletion notice passed through router navigation is rendered in the
 language of the deletion action; it is consumed as a single navigation announcement. It does not
@@ -98,6 +101,7 @@ The committed suites provide reproducible local checks with synthetic fixtures a
 | `e2e/portal-locale.test.ts` | Global/per-portal language persistence, ordinary English default and original known-key/braces titles |
 | `e2e/japanese-manage.test.ts` | All 13 Japanese Manage tabs, classified visible English audit, import review/result switching, 40 theme/viewport scenes, real button/text bounds and density sizing |
 | `e2e/japanese-research.test.ts` | 80 research route/theme/language/viewport scenes with source preservation and no provider generation |
+| `e2e/japanese-map-copy.test.ts` | Real WebGL popup locale switching with authored known-key/braces graph labels preserved |
 | `e2e/japanese-platform.test.ts` | 72 platform/access/help scenes plus all 17 help pages, dialogs, keyboard flow and actual computed theme |
 
 The browser matrices use English/Japanese, light/dark, 1440px desktop and measured 390px layout
@@ -111,7 +115,7 @@ Reproduce after `deno task build:web`:
 deno task check
 deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys \
   e2e/portal-locale.test.ts e2e/japanese-manage.test.ts \
-  e2e/japanese-research.test.ts e2e/japanese-platform.test.ts
+  e2e/japanese-research.test.ts e2e/japanese-map-copy.test.ts e2e/japanese-platform.test.ts
 ```
 
 Screenshots, measured metrics and the classified Manage English-candidate list are written under
