@@ -40,6 +40,7 @@ export const AUDIT_ACTIONS = [
   'resource.questions.cache',
   'tenant.appearance.update',
   'tenant.behaviour.update',
+  'tenant.configuration.update',
   'tenant.access.update',
   'tenant.domain.attach',
   'tenant.domain.detach',

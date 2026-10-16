@@ -110,16 +110,36 @@ export function localisePortalConfig<T extends TenantConfig>(
 ): T {
   const dictionary = config.languagePolicy?.translations?.[language]
   if (!dictionary) return config
-  const visit = (value: unknown): unknown => {
-    if (typeof value === 'string') return dictionary[value] ?? value
-    if (Array.isArray(value)) return value.map(visit)
+  const visibleCopy = (path: string[]): boolean => {
+    const [root, field] = path
+    const leaf = path[path.length - 1]
+    if (root === 'searchPlaceholder' || root === 'assessmentHeading') return true
+    if (root === 'copy') return true
+    if (root === 'topics') return leaf === 'label' || leaf === 'description'
+    if (root === 'suggestedQuestions') return leaf === 'text'
+    if (root !== 'branding') return false
+    if (['productName', 'organisation', 'tagline'].includes(field!)) return true
+    return field === 'layout' && (
+      ['heading', 'body', 'intro', 'label', 'title', 'note', 'alt'].includes(leaf!) ||
+      path.includes('questions')
+    )
+  }
+  const visit = (value: unknown, path: string[] = []): unknown => {
+    if (typeof value === 'string') return visibleCopy(path) ? dictionary[value] ?? value : value
+    if (Array.isArray(value)) {
+      return value.map((child, index) => visit(child, [...path, String(index)]))
+    }
     if (value && typeof value === 'object') {
-      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, visit(child)]))
+      return Object.fromEntries(
+        Object.entries(value).map(([key, child]) => [
+          key,
+          key === 'languagePolicy' && path.length === 0 ? child : visit(child, [...path, key]),
+        ]),
+      )
     }
     return value
   }
-  const { languagePolicy, ...copy } = config
-  return { ...visit(copy) as Omit<T, 'languagePolicy'>, languagePolicy } as T
+  return visit(config) as T
 }
 
 type Locale = {

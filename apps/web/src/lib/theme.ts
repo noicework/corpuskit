@@ -433,9 +433,14 @@ const DARK_QUERY = '(prefers-color-scheme: dark)'
 /** What the viewer stored: an explicit choice, or nothing (follow the system). */
 export type SchemeChoice = ViewerScheme | 'system'
 
-/** The scheme to render: an explicit choice wins; otherwise the system preference. */
-export function resolveScheme(choice: SchemeChoice, prefersDark: boolean): ViewerScheme {
+/** Explicit viewer choice, then a configured tenant default, then the system preference. */
+export function resolveScheme(
+  choice: SchemeChoice,
+  prefersDark: boolean,
+  defaultScheme?: ViewerScheme,
+): ViewerScheme {
   if (choice === 'dark' || choice === 'light') return choice
+  if (defaultScheme) return defaultScheme
   return prefersDark ? 'dark' : 'light'
 }
 
@@ -453,10 +458,10 @@ function systemPrefersDark(): boolean {
 }
 
 /**
- * The viewer's colour scheme: defaults to the system preference (and follows
- * it while no choice is stored), persisted in localStorage once they toggle.
+ * The viewer's colour scheme: a tenant may supply the default before a viewer chooses.
+ * Otherwise follows the system; explicit toggles are persisted in localStorage.
  */
-export function useViewerScheme(): {
+export function useViewerScheme(defaultScheme?: ViewerScheme): {
   scheme: ViewerScheme
   choice: SchemeChoice
   setChoice: (choice: SchemeChoice) => void
@@ -479,7 +484,7 @@ export function useViewerScheme(): {
       // Storage can be unavailable (private mode); the choice still applies for this visit.
     }
   }
-  return { scheme: resolveScheme(choice, prefersDark), choice, setChoice }
+  return { scheme: resolveScheme(choice, prefersDark, defaultScheme), choice, setChoice }
 }
 
 /**

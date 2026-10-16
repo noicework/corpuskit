@@ -372,6 +372,7 @@ const actionFields = {
     'sessionOid',
     'sessionTenantId',
   ],
+  'tenant.configuration.update': ['code', 'permission', 'changedFields'],
   'tenant.behaviour.update': [
     'code',
     'permission',

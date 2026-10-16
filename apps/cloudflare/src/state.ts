@@ -237,7 +237,10 @@ export class DurableState {
           }),
         )
         if (
-          (operation === 'tenants.patch' && context.input.action === 'tenant.access.update') ||
+          (operation === 'tenants.patch' &&
+            ['tenant.access.update', 'tenant.configuration.update'].includes(
+              context.input.action,
+            )) ||
           (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update') ||
           (operation === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
           (operation === 'tenants.removeAlias' && context.input.action === 'portal.alias.remove')

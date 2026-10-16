@@ -1,0 +1,86 @@
+import { expect } from '@std/expect'
+import {
+  portalConfigurationExport,
+  PortalConfigurationImportSchema,
+  TenantConfigSchema,
+} from './index.ts'
+
+const config = TenantConfigSchema.parse({
+  slug: 'synthetic',
+  accessMode: 'restricted',
+  hostname: 'synthetic.example.org',
+  branding: {
+    productName: '研究ポータル',
+    organisation: 'Synthetic research',
+    tagline: 'Synthetic demo data',
+    colours: { primary: '#004466', accent: '#66aabb', heroFrom: '#003355', heroTo: '#005577' },
+    colourScheme: 'viewer',
+    defaultColourScheme: 'light',
+    layout: {
+      home: {
+        hero: { heading: '研究', questions: ['What changed?'] },
+        sections: [{ kind: 'topics' }],
+      },
+    },
+  },
+  languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
+  searchPlaceholder: '研究を検索',
+  topics: [{ id: 'topic-1', label: '研究', description: 'Synthetic research' }],
+  suggestedQuestions: [{ id: 'question-1', text: 'What changed?' }],
+  entityTypes: [],
+  relationTypes: [],
+  timezone: 'Asia/Tokyo',
+  extraction: { default: 'default', rules: [] },
+})
+
+Deno.test('configuration export is a complete importable presentation without access or hosting policy', () => {
+  const exported = portalConfigurationExport(config)
+  expect(PortalConfigurationImportSchema.parse(exported)).toEqual(exported)
+  expect(exported.branding.defaultColourScheme).toBe('light')
+  expect(exported.languagePolicy?.defaultLanguage).toBe('ja')
+  expect(exported).not.toHaveProperty('accessMode')
+  expect(exported).not.toHaveProperty('hostname')
+  expect(exported).not.toHaveProperty('extraction')
+})
+
+Deno.test('configuration import rejects protected or unknown fields at every nested level', () => {
+  const valid = portalConfigurationExport(config)
+  for (
+    const key of [
+      'accessMode',
+      'hostname',
+      'binding',
+      'kbId',
+      'baseUrl',
+      'token',
+      'inferenceModel',
+      'prompts',
+      'intents',
+      'searchExclude',
+      'extraction',
+      'disabled',
+      'lifecycle',
+      'roles',
+    ]
+  ) {
+    expect(PortalConfigurationImportSchema.safeParse({ ...valid, [key]: 'refused' }).success, key)
+      .toBe(false)
+  }
+  for (
+    const invalid of [
+      { ...valid, branding: { ...valid.branding, token: 'refused' } },
+      {
+        ...valid,
+        branding: { ...valid.branding, fonts: { sans: 'Arial', display: 'Arial', key: 'x' } },
+      },
+      { ...valid, topics: [{ id: 'topic-1', label: 'Research', slug: 'other' }] },
+      { ...valid, suggestedQuestions: [{ id: 'q', text: 'Question', resourceId: 'other' }] },
+      { ...valid, languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['en'] } },
+      { ...valid, branding: { ...valid.branding, defaultColourScheme: 'system' } },
+      { ...valid, timezone: 'not/a-timezone' },
+      { ...valid, topics: 'invalid' },
+      { ...valid, branding: {} },
+      null,
+    ]
+  ) expect(PortalConfigurationImportSchema.safeParse(invalid).success).toBe(false)
+})

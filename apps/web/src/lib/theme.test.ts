@@ -350,6 +350,15 @@ describe('viewer dark scheme', () => {
     expect(resolveScheme('dark', false)).toBe('dark')
   })
 
+  it('uses the tenant default before the system and keeps explicit viewer choices', async () => {
+    const { resolveScheme } = await import('./theme.ts')
+    expect(resolveScheme('system', true, 'light')).toBe('light')
+    expect(resolveScheme('system', false, 'dark')).toBe('dark')
+    expect(resolveScheme('dark', false, 'light')).toBe('dark')
+    expect(resolveScheme('light', true, 'dark')).toBe('light')
+    expect(resolveScheme('system', true)).toBe('dark')
+  })
+
   it('maps a light portal onto the dark grey suite with AA brand inks', async () => {
     const { DARK_GREY_SUITE } = await import('./theme.ts')
     const { contrastRatio } = await import('@research-portal/core')

@@ -12,6 +12,7 @@ const safeMetadataSchema = z.object({
     colours: true,
     paletteId: true,
     colourScheme: true,
+    defaultColourScheme: true,
   }).extend({
     logoUrl: z.string().nullable().optional().transform((value) => value ?? undefined),
     paletteId: BrandingSchema.shape.paletteId.nullable().transform((value) => value ?? undefined),

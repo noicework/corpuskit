@@ -21,6 +21,8 @@ export interface Declaration {
   readonly safeMetadata?: true
   readonly owned?: 'research'
   readonly operator?: true
+  /** This administrative operation accepts only the distinct hosting operator credential. */
+  readonly operatorOnly?: true
   readonly action: 'request.privileged' | 'local.mutation'
   readonly target: { readonly kind: 'request' | 'tool'; readonly param?: string }
   readonly subActions?: readonly SubAction[]
@@ -35,7 +37,14 @@ function entry(
   extra: Partial<
     Pick<
       Declaration,
-      'reason' | 'subActions' | 'detailFields' | 'aggregate' | 'safeMetadata' | 'owned' | 'operator'
+      | 'reason'
+      | 'subActions'
+      | 'detailFields'
+      | 'aggregate'
+      | 'safeMetadata'
+      | 'owned'
+      | 'operator'
+      | 'operatorOnly'
     >
   > = {},
 ): Declaration {
@@ -398,6 +407,28 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       },
     ],
   }),
+  entry('http', 'PUT', '/api/admin/t/:slug/configuration', 'behaviour.write', 'portal', {
+    operator: true,
+    operatorOnly: true,
+    subActions: [{
+      action: 'tenant.configuration.update',
+      permission: 'behaviour.write',
+      scope: 'portal',
+      fields: [
+        'branding',
+        'languagePolicy',
+        'searchPlaceholder',
+        'assessmentHeading',
+        'topics',
+        'suggestedQuestions',
+        'entityTypes',
+        'relationTypes',
+        'regionalDiscovery',
+        'timezone',
+        'copy',
+      ],
+    }],
+  }),
   entry('http', 'POST', '/api/admin/t/:slug/kg/propose', 'graph.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/kg/implement', 'graph.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/suggestions', 'behaviour.write', 'portal'),
@@ -649,6 +680,7 @@ export function assertDeclarationInventory(
   const keys = declarations.map((item) => `${item.kind} ${item.method} ${item.path}`)
   if (new Set(keys).size !== keys.length) throw new Error('Duplicate permission declaration')
   for (const item of declarations) {
+    if (item.operatorOnly && !item.operator) throw new Error('Operator-only route must opt in')
     if (
       item.operator !== undefined && (
         item.operator !== true || item.kind !== 'http' || !item.path.startsWith('/api/admin/') ||

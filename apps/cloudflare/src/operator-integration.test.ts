@@ -2,6 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
+import { portalConfigurationExport } from '@research-portal/core'
 import { KbClient } from '@research-portal/retrieval'
 import { DurableState, type DurableStores } from './state.ts'
 import {
@@ -153,6 +154,122 @@ async function fixture(overrides: Record<string, string | undefined> = {}) {
 function jsonRequest(method: string, value: unknown): RequestInit {
   return { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }
 }
+
+Deno.test('Worker imports presentation atomically without replacing binding, inference or access state', async () => {
+  const f = await fixture()
+  try {
+    const slug = 'marine'
+    await f.stores.bindings.set(slug, {
+      baseUrl: 'https://example.test/api/v1/kb/original',
+      kbId: 'original',
+      token: 'credential-sentinel',
+      inferenceModel: 'model-fixture',
+    })
+    f.stores.tenants.patch(slug, { accessMode: 'restricted' })
+    const before = f.stores.tenants.get(slug)!
+    const binding = f.stores.bindings.get(slug)
+    const lifecycle = f.stores.lifecycle.get(slug)
+    const imported = {
+      ...portalConfigurationExport(before),
+      branding: {
+        ...before.branding,
+        productName: 'Synthetic import',
+        defaultColourScheme: 'light',
+      },
+      languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
+      topics: [{ id: 'synthetic-topic', label: '研究' }],
+      suggestedQuestions: [{ id: 'synthetic-question', text: 'What changed?' }],
+      entityTypes: [{ id: 'material', label: 'Material', colour: '#123456' }],
+      relationTypes: ['compares'],
+      timezone: 'Asia/Tokyo',
+    }
+    const path = '/api/admin/t/marine/configuration'
+    for (
+      const invalid of [
+        { ...imported, slug: 'grains' },
+        { ...imported, accessMode: 'public' },
+        { ...imported, hostname: 'other.example.org' },
+        { ...imported, inferenceModel: 'other-model' },
+        { ...imported, binding: { token: 'replacement-sentinel' } },
+        { ...imported, branding: { ...imported.branding, token: 'replacement-sentinel' } },
+        { ...imported, suggestedQuestions: 'invalid' },
+      ]
+    ) {
+      expect((await f.invoke(path, jsonRequest('PUT', invalid))).status).toBe(400)
+      expect(f.stores.tenants.get(slug)).toEqual(before)
+      expect(f.stores.bindings.get(slug)).toEqual(binding)
+    }
+    const response = await f.invoke(path, jsonRequest('PUT', imported))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, slug })
+    const after = f.stores.tenants.get(slug)!
+    expect(after.slug).toBe(slug)
+    expect(after.hostname).toBe(before.hostname)
+    expect(after.accessMode).toBe('restricted')
+    expect(after.branding.defaultColourScheme).toBe('light')
+    expect(after.topics).toEqual(imported.topics)
+    expect(after.languagePolicy).toEqual(imported.languagePolicy)
+    expect(f.stores.bindings.get(slug)).toEqual(binding)
+    expect(f.stores.bindings.inferenceModel(slug)).toBe('model-fixture')
+    expect(f.stores.lifecycle.get(slug)).toEqual(lifecycle)
+    const updates = f.events().filter((event) => event.action === 'tenant.configuration.update')
+    expect(updates.some((event) => event.outcome === 'success')).toBe(true)
+    expect(updates.every((event) => event.actor_id === 'operator:hosting-automation')).toBe(true)
+    expect(JSON.stringify(f.events())).not.toContain('Synthetic import')
+    expect(JSON.stringify(f.events())).not.toContain('credential-sentinel')
+    // Import authority never opens the operator's data-plane or generation access.
+    for (
+      const [method, target] of [
+        ['GET', '/api/t/marine/config'],
+        ['GET', '/api/t/marine/resources'],
+        ['POST', '/api/t/marine/ask'],
+        ['POST', '/api/admin/t/marine/analyse'],
+      ]
+    ) expect((await f.invoke(target!, { method })).status).toBe(403)
+    expect((await f.invoke(path, { method: 'PUT', body: '{' })).status).toBe(400)
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('Worker configuration import requires the operator and rolls back on success-audit failure', async () => {
+  const f = await fixture()
+  const error = console.error
+  console.error = () => {}
+  try {
+    const before = f.stores.tenants.get('marine')!
+    const imported = {
+      ...portalConfigurationExport(before),
+      branding: { ...before.branding, productName: 'Must roll back' },
+    }
+    for (const authorization of ['', `Operator ${'B'.repeat(43)}`, `Bearer ${operatorKey}`]) {
+      expect([401, 403]).toContain(
+        (await f.invoke(
+          '/api/admin/t/marine/configuration',
+          jsonRequest('PUT', imported),
+          authorization,
+        )).status,
+      )
+    }
+    f.database.exec(`CREATE TRIGGER reject_configuration_audit BEFORE INSERT ON audit_events
+      WHEN NEW.action = 'tenant.configuration.update' AND NEW.outcome = 'success'
+      BEGIN SELECT RAISE(FAIL, 'fixture'); END`)
+    const response = await f.invoke(
+      '/api/admin/t/marine/configuration',
+      jsonRequest('PUT', imported),
+    )
+    expect(response.status).toBe(500)
+    expect(f.stores.tenants.get('marine')).toEqual(before)
+    expect(
+      f.events().some((event) =>
+        event.action === 'tenant.configuration.update' && event.outcome === 'success'
+      ),
+    ).toBe(false)
+  } finally {
+    console.error = error
+    f.close()
+  }
+})
 
 const ownerFacts = (): TrustedSessionFacts => ({
   verified: true,

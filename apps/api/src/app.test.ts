@@ -380,6 +380,7 @@ describe('independent admin route permission matrix', () => {
     ['POST', 'enable', 'behaviour.write'],
     ['POST', 'analyse', 'behaviour.write', {}],
     ['PATCH', '/api/admin/tenants/:slug', 'appearance.write', { name: 'Renamed portal' }],
+    ['PUT', 'configuration', 'behaviour.write', {}],
     ['POST', 'kg/propose', 'graph.write', {}],
     ['POST', 'kg/implement', 'graph.write', { applyExisting: false }],
     ['GET', 'suggestions', 'behaviour.write'],
@@ -754,13 +755,13 @@ describe('independent admin route permission matrix', () => {
             role === 'wrong-portal' ? 'portal-admin' : role as Role,
             role === 'wrong-portal' ? 'b' : 'a',
           )
-          const allowed = role === 'owner' ||
+          const allowed = suffix !== 'configuration' && (role === 'owner' ||
             (role === 'platform-admin' && permission !== 'portal.delete' &&
               permission !== 'platform.settings.write') ||
             (!platform &&
               (role === 'portal-admin' ||
                 role === 'curator' && curatorPermissions.has(permission) ||
-                role === 'analyst' && permission === 'portal.export'))
+                role === 'analyst' && permission === 'portal.export')))
           const response = await fixture.requestAs(session, path, {
             method,
             ...(body === undefined ? {} : {
