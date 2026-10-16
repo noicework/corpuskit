@@ -92,4 +92,110 @@ export const PLATFORM_JA: Readonly<Record<string, string>> = {
     'この管理ページへのアクセス権がありません。',
   'Refresh overview': '概要を更新',
   'Use emergency access': '緊急アクセスを使用',
+  'Switch portal': 'ポータルを切り替え',
+  'Add a portal': 'ポータルを追加',
+  'Manage portals': 'ポータルを管理',
+  'Connected': '接続済み',
+  'Demo content': 'デモ資料',
+  'Unavailable': '利用不可',
+  'Not connected': '未接続',
+  'Switch portal - currently {name}': 'ポータルを切り替え（現在：{name}）',
+  'This cannot be undone.': 'この操作は取り消せません。',
+  'It is removed from the Library, from search and from answers.':
+    'ライブラリ、検索結果、回答から削除されます。',
+  'Investigations that cite it keep the passages people saved, shown as no longer in the Library.':
+    'この資料を引用する調査には、保存された引用箇所が残り、ライブラリから削除済みと表示されます。',
+  'Keep document': '資料を残す',
+  'Deleting document...': '資料を削除中…',
+  'Deleted “{title}”.': '「{title}」を削除しました。',
+  '“{title}” had already been deleted.': '「{title}」はすでに削除されています。',
+  'Delete document': '資料を削除',
+  'The document could not be deleted. Try again.':
+    '資料を削除できませんでした。再試行してください。',
+  '{action} “{title}”': '{action}「{title}」',
+  'Group mappings are unavailable. Use individual assignments until group support is confirmed.':
+    'グループの権限設定は利用できません。グループ対応が確認されるまで、個別の権限設定を使用してください。',
+  'Group mappings': 'グループの権限設定',
+  'Members': 'メンバー',
+  'group mappings': 'グループの権限設定',
+  'members': 'メンバー',
+  'Loading {items}...': '{items}を読み込み中…',
+  'Could not load {items}. Try again.': '{items}を読み込めませんでした。再試行してください。',
+  'The change could not be confirmed. Refresh this view before trying again.':
+    '変更の完了を確認できませんでした。この画面を更新してから再試行してください。',
+  'Edit role': '権限を編集',
+  'Assign by': '指定方法',
+  'Email': 'メールアドレス',
+  'Object ID': 'オブジェクトID',
+  'Identity source': 'IDの取得元',
+  'External account': '外部アカウント',
+  'Choose how this person signs in. Access stays bound to this identity source.':
+    'このメンバーのサインイン方法を選択してください。アクセス権は、このIDの取得元にひも付けられます。',
+  'Role': '権限',
+  'Add group mapping': 'グループの権限設定を追加',
+  'Add platform member': 'プラットフォームのメンバーを追加',
+  'Add member': 'メンバーを追加',
+  'Local assignments for {name}. Other Entra or local assignments may still provide access.':
+    '{name}のローカル権限設定です。Entraや別のローカル権限により、引き続きアクセスできる場合があります。',
+  'No group mappings': 'グループの権限設定はありません',
+  'No local members': 'ローカルのメンバーはありません',
+  'Map a supported Entra group to a role for this scope.':
+    '対応するEntraグループに、この範囲の権限を設定します。',
+  'Individual assignments remain available.': '個別の権限設定は引き続き利用できます。',
+  'Add a person by object ID or email. Entra access may still apply.':
+    'オブジェクトIDまたはメールアドレスでメンバーを追加します。Entraのアクセス権が適用される場合もあります。',
+  'Local group mapping': 'ローカルのグループ権限',
+  'Pending sign-in': 'サインイン待ち',
+  'Group object ID': 'グループのオブジェクトID',
+  'Inactive group mapping': '無効なグループ権限',
+  'Active object ID': '有効なオブジェクトID',
+  'This assignment activates when the matching {source} account signs in.':
+    '一致する{source}アカウントでサインインすると、この権限が有効になります。',
+  'organisation': '組織の',
+  'external': '外部の',
+  'Activated from {email}': '{email}から有効化',
+  'Edit role for {identity}': '{identity}の権限を編集',
+  'Remove mapping {identity}': '{identity}のグループ権限を削除',
+  'Remove member {identity}': 'メンバー{identity}を削除',
+  'Remove mapping': 'グループ権限を削除',
+  'Remove member': 'メンバーを削除',
+  'Assignment for {name}': '{name}の権限設定',
+  '{role} access applies to all present and future portals.':
+    '{role}のアクセス権は、現在および今後作成されるすべてのポータルに適用されます。',
+  'Save role': '権限を保存',
+  'Keep mapping': 'グループ権限を残す',
+  'Close member form': 'メンバーの入力を閉じる',
+  'Keep current role': '現在の権限を維持',
+  'Grant Owner': '所有者の権限を付与',
+  'Keep member': 'メンバーを残す',
+  'Grant Owner to {identity}? This includes managing platform access and settings, and deleting portals.':
+    '{identity}に所有者の権限を付与しますか？プラットフォームのアクセス権と設定の管理、およびポータルの削除が可能になります。',
+  'Remove {identity}’s local assignment for {name}? Other sources may still provide access.':
+    '{name}に対する{identity}のローカル権限を削除しますか？他の取得元によるアクセス権が残る場合があります。',
+  'Check the identity and role, then try again.': 'IDと権限を確認してから再試行してください。',
+  'This email is already linked to another assignment. Check the existing member.':
+    'このメールアドレスは別の権限設定に関連付けられています。既存のメンバーを確認してください。',
+  'This person already has a local assignment. Edit their existing role.':
+    'このメンバーにはすでにローカル権限があります。既存の権限を編集してください。',
+  'This change would remove the final active owner. Keep an owner with active access before trying again.':
+    'この変更により、最後の有効な所有者が削除されます。アクセス可能な所有者を残してから再試行してください。',
+  'Emergency access': '緊急アクセス',
+  'Enter the passcode for this action. You will need to enter it again for another action.':
+    'この操作のパスコードを入力してください。別の操作を行う際は、もう一度入力が必要です。',
+  'Passcode': 'パスコード',
+  'Sending request...': 'リクエストを送信中…',
+  'Continue with this action': 'この操作を続ける',
+  'Emergency access is temporarily locked. Try again in {minutes} minutes.':
+    '緊急アクセスは一時的にロックされています。{minutes}分後に再試行してください。',
+  'Emergency access could not be confirmed.': '緊急アクセスを確認できませんでした。',
+  'Your account does not have permission to make this change. Ask an administrator for access.':
+    'このアカウントには変更する権限がありません。管理者にアクセス権を依頼してください。',
+  'Emergency access is unavailable.': '緊急アクセスは利用できません。',
+  'An action is already pending or unnamed.': '名前が指定されていないか、別の操作が進行中です。',
+  'Delete {title}?': '「{title}」を削除しますか？',
+  'Emergency access was not accepted. Check the passcode before trying again.':
+    '緊急アクセスが承認されませんでした。パスコードを確認してから再試行してください。',
+  'Emergency access is temporarily locked.': '緊急アクセスは一時的にロックされています。',
+  'We could not confirm the result. Check whether the action completed before trying again.':
+    '結果を確認できませんでした。操作が完了したか確認してから再試行してください。',
 }

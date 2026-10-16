@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import type { KnowledgeBoxStatus, TenantConfig, TenantSummary } from '@research-portal/core'
@@ -7,6 +8,7 @@ import { portalHref } from '../lib/portal-url.ts'
 import { useAccess } from './AccessProvider.tsx'
 
 function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
+  const { ui } = usePortalLocale()
   const colour = status === 'connected'
     ? 'var(--rp-ok-ink)'
     : status === 'demo'
@@ -28,7 +30,7 @@ function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
         style={{ backgroundColor: colour }}
         aria-hidden='true'
       />
-      <span className='sr-only'>{label}</span>
+      <span className='sr-only'>{ui(label)}</span>
     </span>
   )
 }
@@ -39,6 +41,7 @@ function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
  * each backed by its own knowledge box - and links to the management screen.
  */
 export function KbSwitcher({ config }: { config: TenantConfig }) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -142,8 +145,8 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
         onClick={() => setOpen((prev) => !prev)}
         aria-haspopup='menu'
         aria-expanded={open}
-        aria-label={`Switch portal - currently ${config.branding.productName}`}
-        title='Switch portal'
+        aria-label={ui('Switch portal - currently {name}', { name: config.branding.productName })}
+        title={ui('Switch portal')}
         className='rp-focus ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink'
       >
         {
@@ -175,7 +178,7 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
           className='rp-shadow-lg rp-anim-fade fixed left-4 right-4 top-[var(--rp-header-h)] z-50 mt-2 rounded-[var(--rp-radius)] border border-line bg-surface p-1.5 sm:absolute sm:left-0 sm:right-auto sm:top-full sm:w-[18.5rem]'
         >
           <p className='rp-eyebrow px-2.5 pb-1.5 pt-2 text-ink-3'>
-            Knowledge boxes
+            {ui('Knowledge boxes')}
           </p>
           <div className='rp-no-scrollbar max-h-[60vh] overflow-y-auto'>
             {(tenants ?? []).map((t) => {
@@ -237,7 +240,7 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
                 >
                   <path d='M10 4a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 0110 4z' />
                 </svg>
-                Add a portal
+                {ui('Add a portal')}
               </Link>
               <Link
                 to='/admin'
@@ -258,7 +261,7 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
                     clipRule='evenodd'
                   />
                 </svg>
-                Manage portals
+                {ui('Manage portals')}
               </Link>
             </>
           )}

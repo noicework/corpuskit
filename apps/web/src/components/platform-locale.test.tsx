@@ -108,3 +108,15 @@ Deno.test('account launcher keeps supplied identity label literal in Japanese', 
     'Sign in to Original Portal',
   )
 })
+
+Deno.test('localized delete feedback keeps an authored title literal and preserves English defaults', async () => {
+  const { deletedNotice, DeleteDocumentDescription } = await import('./DeleteDocument.tsx')
+  expect(deletedNotice('Original 研究 [12]', 'deleted')).toBe('Deleted “Original 研究 [12]”.')
+  expect(deletedNotice('Original 研究 [12]', 'already-deleted', createPortalLocale('ja').ui)).toBe(
+    '「Original 研究 [12]」はすでに削除されています。',
+  )
+  const html = render('ja', <DeleteDocumentDescription title='Original 研究 [12]' />)
+  expect(html).toContain('「Original 研究 [12]」を削除しますか？')
+  expect(html).toContain('この操作は取り消せません。')
+  expect(html).not.toContain('This cannot be undone.')
+})

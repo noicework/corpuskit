@@ -79,14 +79,13 @@ Deno.test('the delete announcement names the document and whether it was already
 })
 
 Deno.test('the delete confirmation names the document, says it is permanent and what it takes with it', () => {
-  expect(component).toContain("title='Delete document'")
-  expect(component).toContain('Delete <strong')
-  expect(component).toContain('{title}</strong>?')
+  expect(component).toContain("title={ui('Delete document')}")
+  expect(component).toContain("ui('Delete {title}?', { title })")
   expect(component).toContain('This cannot be undone.')
   expect(component).toContain('It is removed from the Library, from search and from answers.')
   expect(component).toContain('Investigations that cite it keep the passages people saved')
-  expect(component).toContain("cancelLabel='Keep document'")
-  expect(component).toContain("busyLabel='Deleting document...'")
+  expect(component).toContain("cancelLabel={ui('Keep document')}")
+  expect(component).toContain("busyLabel={ui('Deleting document...')}")
 })
 
 Deno.test('a delete answer is published only while the authority that sent it is current', () => {
