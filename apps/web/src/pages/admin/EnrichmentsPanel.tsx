@@ -1,8 +1,8 @@
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { AdminAccessError, adminFetch } from '../../api/break-glass.ts'
+import { AdminAccessError, adminFetch, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { EnrichmentAgentStatusSchema } from '@research-portal/core'
-import { useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   EnrichmentAgent,
@@ -10,6 +10,11 @@ import type {
   EnrichmentRunEvent,
 } from '@research-portal/core'
 import { getEnrichmentAgents, runEnrichment } from '../../api/client.ts'
+import {
+  type EnrichmentArchiveReview,
+  importEnrichmentArchive,
+  readEnrichmentArchive,
+} from '../../api/enrichment-import.ts'
 import { ErrorCard, Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -291,6 +296,181 @@ function AgentCard(
   )
 }
 
+const recordLabel = (count: number, existing = false) =>
+  `${count.toLocaleString()} ${existing ? 'existing ' : ''}record${count === 1 ? '' : 's'}`
+
+/** A reviewed archive is submitted only through the current ordinary owner/curator session. */
+export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImported }: {
+  slug: string
+  access: AdminRequestAccess
+  assertCurrent(): void
+  onImported(): Promise<void>
+}) {
+  const id = useId()
+  const [file, setFile] = useState<File | null>(null)
+  const [review, setReview] = useState<EnrichmentArchiveReview | null>(null)
+  const [message, setMessage] = useState<Message | null>(null)
+  const [busy, setBusy] = useState<'review' | 'import' | null>(null)
+  const sequence = useRef(0)
+  const pending = useRef(false)
+  const reviewFile = async () => {
+    if (!file || pending.current) return
+    const attempt = sequence.current
+    pending.current = true
+    setBusy('review')
+    setReview(null)
+    setMessage(null)
+    try {
+      assertCurrent()
+      const result = await readEnrichmentArchive(file)
+      assertCurrent()
+      if (sequence.current === attempt) setReview(result)
+    } catch (error) {
+      try {
+        assertCurrent()
+      } catch {
+        return
+      }
+      if (sequence.current === attempt) {
+        setMessage({ tone: 'error', text: errorMessage(error, 'Could not read this archive.') })
+      }
+    } finally {
+      pending.current = false
+      if (sequence.current === attempt) setBusy(null)
+    }
+  }
+  const confirmImport = async () => {
+    if (!review || pending.current) return
+    const attempt = sequence.current
+    pending.current = true
+    setBusy('import')
+    setMessage(null)
+    try {
+      assertCurrent()
+      const result = await importEnrichmentArchive(slug, review.archive, access)
+      assertCurrent()
+      if (sequence.current !== attempt) return
+      setReview(null)
+      setMessage({
+        tone: 'ok',
+        text: `Imported ${recordLabel(result.imported)}. Kept ${
+          recordLabel(result.skipped, true)
+        } unchanged.`,
+      })
+      try {
+        await onImported()
+      } catch {
+        assertCurrent()
+        setMessage({
+          tone: 'error',
+          text: `Imported ${recordLabel(result.imported)} and kept ${
+            recordLabel(result.skipped, true)
+          }. Reload this page to refresh coverage.`,
+        })
+      }
+    } catch (error) {
+      try {
+        assertCurrent()
+      } catch {
+        return
+      }
+      if (sequence.current === attempt) {
+        setMessage({
+          tone: 'error',
+          text: errorMessage(
+            error,
+            'Could not import this archive. Check the result before retrying.',
+          ),
+        })
+      }
+    } finally {
+      pending.current = false
+      if (sequence.current === attempt) setBusy(null)
+    }
+  }
+  return (
+    <section
+      className='rp-card space-y-4 p-5'
+      aria-labelledby={`${id}-heading`}
+      data-enrichments-import
+    >
+      <div>
+        <h2 id={`${id}-heading`} className='rp-display text-xl text-ink'>
+          Import enrichment archive
+        </h2>
+        <p id={`${id}-help`} className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
+          Restore reviewed titles, summaries and other enrichments from an exported JSON archive.
+          Existing records stay unchanged. Maximum file size: 8 MB.
+        </p>
+      </div>
+      <div className='space-y-2'>
+        <label htmlFor={`${id}-file`} className='block text-sm font-medium text-ink'>
+          Archive file
+        </label>
+        <input
+          id={`${id}-file`}
+          type='file'
+          accept='.json,application/json'
+          className='rp-input w-full min-w-0'
+          aria-describedby={`${id}-help`}
+          disabled={busy !== null}
+          data-enrichments-import-file
+          onChange={(event) => {
+            sequence.current++
+            setFile(event.currentTarget.files?.[0] ?? null)
+            setReview(null)
+            setMessage(null)
+          }}
+        />
+      </div>
+      <button
+        type='button'
+        className='rp-btn rp-btn-outline'
+        disabled={!file || busy !== null}
+        data-enrichments-import-review
+        onClick={() => void reviewFile()}
+      >
+        {busy === 'review' ? 'Reviewing…' : 'Review archive'}
+      </button>
+      {review
+        ? (
+          <div
+            className='space-y-3 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'
+            data-enrichments-import-preview
+          >
+            <p className='break-words text-sm font-medium text-ink'>{file?.name}</p>
+            <p role='status' className='text-sm text-ink-2'>
+              Ready to import {recordLabel(review.recordCount)} from{' '}
+              {review.agentCount.toLocaleString()} schema{review.agentCount === 1 ? '' : 's'} into
+              {' '}
+              <span className='break-all font-medium'>{slug}</span>.
+            </p>
+            <button
+              type='button'
+              className='rp-btn rp-btn-primary'
+              disabled={busy !== null}
+              data-enrichments-import-confirm
+              onClick={() => void confirmImport()}
+            >
+              {busy === 'import' ? 'Importing…' : 'Import reviewed archive'}
+            </button>
+          </div>
+        )
+        : null}
+      {busy
+        ? (
+          <p role='status' className='text-sm text-ink-3'>
+            {busy === 'review'
+              ? 'Checking the archive before import.'
+              : 'Waiting for the confirmed import result.'}
+          </p>
+        )
+        : null}
+      {message ? <MessagePanel message={message} /> : null}
+    </section>
+  )
+}
+
 function EnrichmentsPanelContent({ slug }: { slug: string }) {
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'enrichments.write',
@@ -379,6 +559,21 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
       >
         Export enrichment archive
       </button>
+      {sessionAllowed
+        ? (
+          <EnrichmentArchiveImport
+            slug={slug}
+            access={sessionAccess}
+            assertCurrent={assertCurrent}
+            onImported={async () => {
+              assertCurrent()
+              await queryClient.invalidateQueries({
+                predicate: (query) => query.queryKey[1] === slug,
+              })
+            }}
+          />
+        )
+        : null}
       <div className='rp-card p-5'>
         <h2 className='rp-display text-xl text-ink'>Enrichments</h2>
         <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
