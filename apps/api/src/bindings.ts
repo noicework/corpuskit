@@ -59,6 +59,11 @@ function storedBinding(value: unknown, zone?: string): StoredBinding | undefined
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const entry = value as Record<string, unknown>
   if (typeof entry.token !== 'string') return undefined
+  if (
+    entry.inferenceModel !== undefined &&
+    (typeof entry.inferenceModel !== 'string' ||
+      !/^[A-Za-z0-9_./:-]{1,200}$/.test(entry.inferenceModel))
+  ) return undefined
   const baseUrl = typeof entry.baseUrl === 'string'
     ? entry.baseUrl
     : typeof entry.kbId === 'string' && zone
@@ -237,6 +242,13 @@ export class SealedBindingStore {
     if (this.unavailable.has(slug)) throw new BindingCryptoError('binding_unavailable')
     const binding = this.connected.get(slug) ?? ownBinding(this.demo, slug)
     return binding ? { ...binding } : undefined
+  }
+
+  /** Model policy remains readable when the sealed credential needs operator recovery. */
+  inferenceModel(slug: string): string | undefined {
+    this.assertInitialized()
+    if (this.storageInvalid) throw new BindingCryptoError('binding_storage_invalid')
+    return storedBinding(this.stored[slug])?.inferenceModel
   }
 
   isDemo(slug: string): boolean {

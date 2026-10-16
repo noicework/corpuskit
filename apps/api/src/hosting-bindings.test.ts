@@ -231,3 +231,72 @@ Deno.test('a binding sealed under another key is withheld per portal and recover
     f.close()
   }
 })
+
+Deno.test('operator inference policy blocks owner rebind, delete and create while unrelated tenants stay unchanged', async () => {
+  const f = createEnforcementFixture()
+  try {
+    await f.stores.bindings.set('a', {
+      baseUrl: 'https://zone.rag.progress.cloud/api/v1/kb/research',
+      token,
+      inferenceModel: 'openai-compatible',
+    })
+    const admin = f.sessionFor('portal-admin')
+    for (
+      const [path, init] of [
+        ['/api/admin/t/a/knowledge-box', connect],
+        ['/api/admin/t/a/knowledge-box', { method: 'DELETE' }],
+        ['/api/admin/t/a/knowledge-box/create', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        }],
+      ] as [string, RequestInit][]
+    ) {
+      const response = await f.requestAs(admin, path, init)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'operator_managed_inference' })
+    }
+    expect(f.stores.bindings.get('a')?.inferenceModel).toBe('openai-compatible')
+    expect(f.stores.bindings.inferenceModel('b')).toBeUndefined()
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('missing encryption key cannot let an owner clear a stored operator model policy', async () => {
+  const sealed = await new BindingCipher(btoa('o'.repeat(32))).seal('a', token)
+  const f = createEnforcementFixture({
+    bindingKey: '',
+    storedBindings: {
+      a: {
+        baseUrl: 'https://zone.rag.progress.cloud/api/v1/kb/research',
+        token: sealed,
+        inferenceModel: 'openai-compatible',
+      },
+    },
+  })
+  try {
+    const response = await f.requestAs(
+      f.sessionFor('portal-admin'),
+      '/api/admin/t/a/knowledge-box',
+      {
+        ...connect,
+        body: JSON.stringify({
+          endpoint: 'https://zone.rag.progress.cloud/api/v1/kb/research',
+          token,
+          inferenceModel: null,
+        }),
+      },
+    )
+    expect(response.status).toBe(503)
+    expect(f.stores.bindings.inferenceModel('a')).toBe('openai-compatible')
+    const stored = f.state.get<Record<string, { inferenceModel: string; token: string }>>(
+      'bindings',
+      {},
+    )
+    expect(stored.a?.inferenceModel).toBe('openai-compatible')
+    expect(stored.a?.token).toBe(sealed)
+  } finally {
+    f.close()
+  }
+})
