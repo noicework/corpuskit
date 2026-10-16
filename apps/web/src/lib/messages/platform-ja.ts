@@ -1,2 +1,95 @@
 /** Platform, account, access and help interface copy. */
-export const PLATFORM_JA: Readonly<Record<string, string>> = {}
+export const PLATFORM_JA: Readonly<Record<string, string>> = {
+  'Open the CorpusKit homepage': 'CorpusKitのホームページを開く',
+  'Error 404': 'エラー404',
+  'Page not found': 'ページが見つかりません',
+  'We could not find that page in this portal. It may have moved, or the link you followed may be out of date.':
+    'このポータルに該当するページが見つかりません。移動したか、リンクが古くなっている可能性があります。',
+  'Back to Explore': '探索に戻る',
+  'Or jump to': '次のページを開く',
+  'We could not find that page. It may have moved, or the link may be out of date.':
+    'ページが見つかりません。移動したか、リンクが古くなっている可能性があります。',
+  'Back to portals': 'ポータル一覧に戻る',
+  'People': 'メンバー',
+  'Manage platform access across all portals.': 'すべてのポータルへのアクセスを管理します。',
+  'Owner and Platform administrator roles apply to all present and future portals.':
+    '所有者とプラットフォーム管理者の権限は、現在および今後作成されるすべてのポータルに適用されます。',
+  'These are stored local assignments, not a complete list of people with Entra access.':
+    'ここには保存済みのローカル権限を表示します。Entra経由でアクセスできるすべてのメンバーの一覧ではありません。',
+  'the platform': 'プラットフォーム',
+  'This administration page is unavailable.': 'この管理ページは利用できません。',
+  'Audit': '操作ログ',
+  'Review activity across all portals and the platform.':
+    'すべてのポータルとプラットフォームの操作履歴を確認します。',
+  'Profile': 'プロフィール',
+  'Sign out': 'サインアウト',
+  'Your organisation account': '組織のアカウント',
+  'Sign in with Microsoft': 'Microsoftでサインイン',
+  'This portal': 'このポータル',
+  'Checking access...': 'アクセス権を確認中…',
+  'Access could not be checked. Try again.':
+    'アクセス権を確認できませんでした。再試行してください。',
+  '{name} is paused': '{name}は一時停止中です',
+  'Sign in to {name}': '{name}にサインイン',
+  '{name} is unavailable': '{name}は利用できません',
+  'Please wait while we check this page.':
+    'ページへのアクセス権を確認しています。しばらくお待ちください。',
+  'Try again to check your current access.': '再試行して現在のアクセス権を確認してください。',
+  'This portal is temporarily paused. Contact your portal administrator for help.':
+    'このポータルは一時停止中です。ポータル管理者にお問い合わせください。',
+  'Use your organisation account to continue.': '組織のアカウントで続けてください。',
+  'You cannot open this portal with your current account.':
+    '現在のアカウントではこのポータルを開けません。',
+  'Current access': '現在のアクセス権',
+  'Signed in through the external identity provider.':
+    '外部のIDプロバイダー経由でサインインしています。',
+  'Sign in again': 'もう一度サインイン',
+  'Sign in': 'サインイン',
+  'Your organisation account.': '組織のアカウントです。',
+  'Use your organisation account.': '組織のアカウントでサインインしてください。',
+  'Platform': 'プラットフォーム',
+  'Access source: {sources}': '権限の取得元：{sources}',
+  'Entra app role': 'Entraのアプリロール',
+  'Entra group': 'Entraグループ',
+  'Local assignment': 'ローカル権限',
+  'Entra claim age unavailable': 'Entraの権限確認時刻を取得できません',
+  'Entra claims checked {age} ago.': 'Entraの権限は{age}前に確認されました。',
+  'less than a minute': '1分未満',
+  '{count} minutes': '{count}分',
+  '{count} hours': '{count}時間',
+  'Entra access updates when you sign in again.': 'Entraの権限は再サインイン時に更新されます。',
+  'Local assignments are checked on each request.': 'ローカル権限はリクエストごとに確認されます。',
+  'Access could not be checked.': 'アクセス権を確認できませんでした。',
+  'You will be redirected to your organisation’s sign-in page.':
+    '組織のサインインページに移動します。',
+  'Viewer': '閲覧者',
+  'Analyst': '分析担当者',
+  'Curator': '資料管理者',
+  'Portal administrator': 'ポータル管理者',
+  'Platform administrator': 'プラットフォーム管理者',
+  'Owner': '所有者',
+  'Help': 'ヘルプ',
+  'Explore': '探索',
+  'Footer': 'フッター',
+  'Powered by CorpusKit': 'CorpusKitを使用',
+  'Connections': '接続',
+  'Platform audit': 'プラットフォームの操作ログ',
+  'Help and documentation': 'ヘルプとドキュメント',
+  'How this works': '仕組み',
+  '(opens external site)': '（外部サイトを開く）',
+  'Saving change...': '変更を保存中…',
+  'Could not save the change.': '変更を保存できませんでした。',
+  'Research portal': '研究ポータル',
+  'Platform administration': 'プラットフォーム管理',
+  'Knowledge boxes': 'ナレッジボックス',
+  "Connect, replace or revert each portal's knowledge box. For content, appearance and behaviour, open a portal's own management workspace.":
+    '各ポータルのナレッジボックスを接続・置換・復元します。資料、外観、動作の設定は、各ポータルの管理画面で行います。',
+  'Read the knowledge box overview': 'ナレッジボックスの概要を表示',
+  'Could not load the overview.': '概要を読み込めませんでした。',
+  'This overview is a snapshot. Each emergency action needs its own confirmation.':
+    'この概要は取得時点の情報です。緊急操作を行う際は、その都度確認が必要です。',
+  'You do not have access to this administration page.':
+    'この管理ページへのアクセス権がありません。',
+  'Refresh overview': '概要を更新',
+  'Use emergency access': '緊急アクセスを使用',
+}

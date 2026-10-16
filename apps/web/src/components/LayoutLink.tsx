@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { layoutHrefTarget } from '@research-portal/core'
@@ -11,6 +12,7 @@ export const EXTERNAL_LINK_NOTE = '(opens external site)'
  * note says where the link goes rather than warning of a new window.
  */
 export function ExternalMark({ className = '' }: { className?: string }) {
+  const { ui } = usePortalLocale()
   return (
     <>
       <svg
@@ -25,7 +27,7 @@ export function ExternalMark({ className = '' }: { className?: string }) {
       >
         <path d='M4 2.75h5.25V8M9 3L3 9' />
       </svg>
-      <span className='sr-only'>{EXTERNAL_LINK_NOTE}</span>
+      <span className='sr-only'>{ui(EXTERNAL_LINK_NOTE)}</span>
     </>
   )
 }

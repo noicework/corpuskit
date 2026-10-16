@@ -1,3 +1,4 @@
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { Branding, PortalLayout } from '@research-portal/core'
 import { ExternalMark, LayoutAnchor } from './LayoutLink.tsx'
 
@@ -53,6 +54,7 @@ function SlimFooter({ branding }: { branding: Branding }) {
 function LayoutFooter(
   { branding, slug, footer }: { branding: Branding; slug: string; footer: LayoutFooterContent },
 ) {
+  const { ui } = usePortalLocale()
   const year = new Date().getFullYear()
   const columns = footer.columns ?? []
   return (
@@ -72,7 +74,7 @@ function LayoutFooter(
           {columns.length
             ? (
               <nav
-                aria-label='Footer'
+                aria-label={ui('Footer')}
                 className='grid min-w-0 grid-cols-1 gap-x-8 gap-y-10 min-[420px]:grid-cols-2 md:grid-cols-[repeat(auto-fit,minmax(11rem,1fr))]'
               >
                 {columns.map((column, index) => (
@@ -108,7 +110,7 @@ function LayoutFooter(
                   rel='noopener'
                   className='rp-layout-footer-link rp-focus-inverse'
                 >
-                  Powered by CorpusKit
+                  {ui('Powered by CorpusKit')}
                   <ExternalMark />
                 </a>
               </p>

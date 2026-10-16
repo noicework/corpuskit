@@ -1,4 +1,5 @@
 import { type ReactNode, useId, useLayoutEffect, useRef } from 'react'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { createPortal } from 'react-dom'
 
 /** Native modality makes the background inert; explicit containment includes browser Tab edges. */
@@ -26,6 +27,7 @@ export function ConfirmActionDialog(
     onCancel(): void
   },
 ) {
+  const locale = usePortalLocale()
   const id = useId()
   const dialog = useRef<HTMLDialogElement>(null)
   const safe = useRef<HTMLButtonElement>(null)
@@ -83,8 +85,12 @@ export function ConfirmActionDialog(
       <div id={`${id}-description`} className='mt-4 break-words text-base [overflow-wrap:anywhere]'>
         {description}
       </div>
-      {error && <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>{error}</p>}
-      {busy && <p role='status' className='mt-4 text-sm'>{busyLabel}</p>}
+      {error && (
+        <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>
+          {locale.error(error, 'Could not save the change.')}
+        </p>
+      )}
+      {busy && <p role='status' className='mt-4 text-sm'>{locale.ui(busyLabel)}</p>}
       <div className='mt-6 flex flex-wrap gap-3'>
         <button
           ref={safe}
@@ -93,7 +99,7 @@ export function ConfirmActionDialog(
           disabled={busy}
           onClick={onCancel}
         >
-          {cancelLabel}
+          {locale.ui(cancelLabel)}
         </button>
         <button
           type='button'
@@ -101,7 +107,7 @@ export function ConfirmActionDialog(
           disabled={busy}
           onClick={onConfirm}
         >
-          {confirmLabel}
+          {locale.ui(confirmLabel)}
         </button>
       </div>
     </dialog>,

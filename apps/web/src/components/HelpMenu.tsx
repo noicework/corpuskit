@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 import { nextAccountMenuIndex } from './account-menu-behaviour.ts'
 import { HELP_MENU_LABEL, type HelpMenuItem, helpMenuItems } from './help-menu-items.ts'
@@ -68,6 +69,7 @@ function visibleTabStops(): HTMLElement[] {
  * account menu beside it. It does not close on pointer leave.
  */
 export function HelpMenu({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const generatedId = useId()
   const triggerId = `help-trigger-${generatedId}`
@@ -191,8 +193,8 @@ export function HelpMenu({ slug }: { slug: string }) {
         type='button'
         onClick={() => open ? setOpen(false) : openAndFocus('first')}
         onKeyDown={onTriggerKeyDown}
-        aria-label={HELP_MENU_LABEL}
-        title={HELP_MENU_LABEL}
+        aria-label={ui(HELP_MENU_LABEL)}
+        title={ui(HELP_MENU_LABEL)}
         aria-haspopup='menu'
         aria-expanded={open}
         aria-controls={menuId}
@@ -225,7 +227,7 @@ export function HelpMenu({ slug }: { slug: string }) {
                   className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
                 >
                   <HelpItemIcon item={item} className='h-4.5 w-4.5 shrink-0 text-ink-2' />
-                  {item.label}
+                  {ui(item.label)}
                 </Link>
               ))}
             </div>

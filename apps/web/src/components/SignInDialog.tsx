@@ -4,9 +4,11 @@ import type { TenantConfig } from '@research-portal/core'
 import type { AuthUser } from '../api/auth.ts'
 import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { useAccess } from './AccessProvider.tsx'
+import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { roleLabel } from './account-menu-behaviour.ts'
 
 export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser | null }) {
+  const { ui, number } = usePortalLocale()
   const access = useAccess()
   const portalName =
     useQueryClient().getQueryData<TenantConfig>(['tenant-config', access.slug])?.branding
@@ -39,8 +41,8 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
   closeCallback.current = onClose
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const closeRef = useRef<HTMLButtonElement | null>(null)
-  const title = user ? 'Profile' : 'Sign in'
-  const summary = user ? 'Your organisation account.' : 'Use your organisation account.'
+  const title = user ? ui('Profile') : ui('Sign in')
+  const summary = user ? ui('Your organisation account.') : ui('Use your organisation account.')
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null
@@ -99,7 +101,7 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
             ref={closeRef}
             type='button'
             onClick={onClose}
-            aria-label='Close'
+            aria-label={ui('Close')}
             className='rp-btn rp-btn-ghost min-h-11 min-w-11 shrink-0 !px-0'
           >
             <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
@@ -114,42 +116,51 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
               <div className='break-words'>
                 <p className='font-semibold text-ink'>{user.name}</p>
                 <p className='mt-1 text-sm text-ink-2'>{user.email}</p>
-                <section aria-label='Current access' className='mt-4 space-y-2 text-sm text-ink-2'>
+                <section
+                  aria-label={ui('Current access')}
+                  className='mt-4 space-y-2 text-sm text-ink-2'
+                >
                   {portalRole && (
                     <p>
-                      {portalName}: <span className='text-ink'>{portalRole}</span>
+                      {portalName}: <span className='text-ink'>{ui(portalRole)}</span>
                     </p>
                   )}
                   {platformRole && (
                     <p>
-                      Platform: <span className='text-ink'>{platformRole}</span>
+                      {ui('Platform')}: <span className='text-ink'>{ui(platformRole)}</span>
                     </p>
                   )}
-                  {sources.length > 0 && <p>Access source: {sources.join(', ')}</p>}
-                  {external && <p>Signed in through the external identity provider.</p>}
+                  {sources.length > 0 && (
+                    <p>
+                      {ui('Access source: {sources}', {
+                        sources: sources.map((source) => ui(source)).join(', '),
+                      })}
+                    </p>
+                  )}
+                  {external && <p>{ui('Signed in through the external identity provider.')}</p>}
                   {!external && (
                     <p>
                       {claimAge == null
-                        ? 'Entra claim age unavailable'
-                        : `Entra claims checked ${
-                          claimAge < 60
-                            ? 'less than a minute'
+                        ? ui('Entra claim age unavailable')
+                        : ui('Entra claims checked {age} ago.', {
+                          age: claimAge < 60
+                            ? ui('less than a minute')
                             : claimAge < 3600
-                            ? `${Math.floor(claimAge / 60)} minutes`
-                            : `${Math.floor(claimAge / 3600)} hours`
-                        } ago.`}
+                            ? ui('{count} minutes', { count: number(Math.floor(claimAge / 60)) })
+                            : ui('{count} hours', { count: number(Math.floor(claimAge / 3600)) }),
+                        })}
                     </p>
                   )}
                   <p>
-                    {!external && 'Entra access updates when you sign in again. '}
-                    Local assignments are checked on each request.
+                    {!external && <>{ui('Entra access updates when you sign in again.')}</>}
+                    {ui('Local assignments are checked on each request.')}
                   </p>
                   {signInAgain && (
                     <a
                       href={signInAgain}
                       className='rp-focus text-[var(--rp-accent-fg)] underline'
                     >
-                      Sign in again
+                      {ui('Sign in again')}
                     </a>
                   )}
                 </section>
@@ -158,7 +169,7 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
                   onClick={() => access.controller.invalidate('sign out')}
                   className='rp-btn rp-btn-secondary mt-6 w-full'
                 >
-                  Sign out
+                  {ui('Sign out')}
                 </a>
               </div>
             )
@@ -176,7 +187,7 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
                       <rect x='0' y='11.5' width='9.5' height='9.5' fill='#00a4ef' />
                       <rect x='11.5' y='11.5' width='9.5' height='9.5' fill='#ffb900' />
                     </svg>
-                    Sign in with Microsoft
+                    {ui('Sign in with Microsoft')}
                   </a>
                 )}
                 {session?.externalLogin && (
@@ -191,8 +202,8 @@ export function SignInDialog({ onClose }: { onClose: () => void; user?: AuthUser
 
                 <p className='mt-4 text-sm leading-relaxed text-ink-2'>
                   {access.state.status === 'unavailable'
-                    ? 'Access could not be checked.'
-                    : 'You will be redirected to your organisation’s sign-in page.'}
+                    ? ui('Access could not be checked.')
+                    : ui('You will be redirected to your organisation’s sign-in page.')}
                 </p>
               </>
             )}
