@@ -222,7 +222,7 @@ app.get(
 )
 
 const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
-Deno.serve({ port }, async (request, info) => {
+Deno.serve({ port, hostname: process.env.HOST ?? '0.0.0.0' }, async (request, info) => {
   const url = new URL(request.url)
   const response = platformShellResponse(
     await ingress.handle(request, (clean) => app.fetch(clean), info),
