@@ -173,8 +173,17 @@ Deno.test('research routes retain authored known-key evidence in Japanese and En
               ['tools', 'main h1', 'How to connect an MCP client'],
             ] as const
           ) {
-            await page.goto(`${server.url}/t/marine/${route}`)
-            await page.waitForSelector(selector)
+            const scene = `${language}/${dark ? 'dark' : 'light'}/${width}/${route}`
+            console.log(`[research-ja] visit ${scene} selector=${selector}`)
+            try {
+              await page.goto(`${server.url}/t/marine/${route}`)
+              await page.waitForSelector(selector)
+            } catch (cause) {
+              throw new Error(`Research scene ${scene}: navigation/readiness for ${selector}`, {
+                cause,
+              })
+            }
+            console.log(`[research-ja] ready ${scene}`)
             if (route === 'library' || route.startsWith('search')) {
               await page.waitForSelector('a[href^="/t/marine/library/Library"]')
             }
