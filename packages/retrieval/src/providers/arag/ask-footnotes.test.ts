@@ -26,6 +26,8 @@ function fixture(opts: {
   mode?: CitationMode
   broken?: boolean
   retry?: boolean
+  failures?: { status: number; detail: string }[]
+  inferenceModel?: string
   answer?: string
 } = {}) {
   const bodies: Record<string, unknown>[] = []
@@ -46,6 +48,7 @@ function fixture(opts: {
     resolveBinding: () => ({
       baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
       token: 'test',
+      ...(opts.inferenceModel ? { inferenceModel: opts.inferenceModel } : {}),
     }),
     fetchImpl: (input, init) => {
       const url = String(input)
@@ -55,6 +58,12 @@ function fixture(opts: {
       if (url.includes('/predict/remi')) return Promise.resolve(Response.json({}))
       if (!url.endsWith('/ask')) throw new Error('Unexpected endpoint')
       bodies.push(JSON.parse(String(init?.body)))
+      const failure = opts.failures?.[bodies.length - 1]
+      if (failure) {
+        return Promise.resolve(
+          Response.json({ detail: failure.detail }, { status: failure.status }),
+        )
+      }
       if (opts.retry && bodies.length === 1) {
         return Promise.resolve(Response.json({ detail: 'Unsupported strategy' }, { status: 400 }))
       }
@@ -515,4 +524,69 @@ Deno.test('footnotes reserve a full default generation budget but respect explic
   )
   // Structured generation already requests 4096, independently of citations.
   expect(structured.bodies[0]?.max_tokens).toBe(4096)
+})
+
+Deno.test('stored-filter incompatibility removes only configuration and preserves pinned whole-source reading', async () => {
+  const f = fixture({
+    inferenceModel: 'openai-compatible',
+    failures: [{
+      status: 412,
+      detail:
+        'Invalid query. Error in filter_expression: Cannot mix old filters with filter_expression',
+    }],
+  })
+  const events = await collect(f.provider, {
+    resourceIds: ['report', 'paired'],
+    depth: 'deep',
+    prequeries: ['Earlier notebook hypothesis'],
+    images: true,
+    sourceContext: [{ resourceId: 'report', text: 'Stocks recovered.' }],
+    maxTokens: 1200,
+  })
+  expect(f.bodies.length).toBe(2)
+  expect(f.bodies[0]!.resource_filters).toEqual(['report', 'paired'])
+  expect(f.bodies[0]!.generative_model).toBe('openai-compatible')
+  expect(f.bodies[0]!.rag_strategies).toEqual([
+    { name: 'full_resource' },
+    {
+      name: 'prequeries',
+      queries: [{
+        request: { query: 'Earlier notebook hypothesis', features: ['keyword', 'semantic'] },
+        weight: 1,
+      }],
+    },
+  ])
+  const expected = { ...f.bodies[0] }
+  delete expected.search_configuration
+  expect(f.bodies[1]).toEqual(expected)
+  expect(events.some((e) => e.type === 'done' && !e.refused)).toBe(true)
+})
+
+Deno.test('a later capability fallback keeps resource scope, answer settings and the binding model', async () => {
+  const f = fixture({
+    inferenceModel: 'openai-compatible',
+    failures: [
+      { status: 412, detail: 'Cannot mix old filters with filter_expression' },
+      { status: 400, detail: 'Unsupported strategy' },
+    ],
+  })
+  const events = await collect(f.provider, {
+    resourceIds: ['report', 'paired'],
+    depth: 'deep',
+    sourceContext: [{ resourceId: 'report', text: 'Stocks recovered.' }],
+    maxTokens: 1200,
+  })
+  expect(f.bodies.length).toBe(3)
+  const expected = { ...f.bodies[0] }
+  for (
+    const key of ['search_configuration', 'rag_strategies', 'rag_images_strategies', 'reranker']
+  ) delete expected[key]
+  expect(f.bodies[2]).toEqual(expected)
+  expect(f.bodies.every((b) => b.generative_model === 'openai-compatible')).toBe(true)
+  expect(
+    f.bodies.every((b) =>
+      JSON.stringify(b.resource_filters) === JSON.stringify(['report', 'paired'])
+    ),
+  ).toBe(true)
+  expect(events.some((e) => e.type === 'done' && !e.refused)).toBe(true)
 })
