@@ -468,7 +468,9 @@ export function TenantLayout() {
                       {accountControl}
                     </span>
                     <span className='md:hidden'>
-                      <button
+                      <Button
+                        variant='ghost'
+                        size='sm'
                         ref={navTriggerRef}
                         type='button'
                         onClick={() => {
@@ -486,11 +488,11 @@ export function TenantLayout() {
                         aria-label={navOpen ? ui('Close menu') : ui('Open menu')}
                         aria-expanded={navOpen}
                         aria-controls='mobile-nav-sheet'
-                        className='acmd-portal-menu rp-focus min-h-11'
+                        className='rp-focus'
                       >
                         {ui('Explore ')}
-                        {navOpen ? <X /> : <Menu />}
-                      </button>
+                        {navOpen ? <X size='sm' /> : <Menu size='sm' />}
+                      </Button>
                     </span>
                   </div>
                 </div>
@@ -579,7 +581,7 @@ export function TenantLayout() {
                           value={headerQuery}
                           onChange={(event) => setHeaderQuery(event.target.value)}
                           placeholder={config.searchPlaceholder}
-                          className='min-h-[calc(2.75rem*var(--rp-density-ctl,1))] min-w-0 flex-1 bg-transparent px-3 text-base text-ink outline-none'
+                          className='min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] min-w-0 flex-1 bg-transparent px-3 text-base text-ink outline-none'
                         />
                         <IconButton
                           type='submit'
@@ -601,7 +603,10 @@ export function TenantLayout() {
                       {kbStatus?.status === 'none' &&
                         access.can('portal.create', { kind: 'platform' }) && (
                         <span className='hidden shrink-0 lg:block'>
-                          <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
+                          <Link
+                            to='/admin'
+                            className='rp-chrome-status-link rp-badge rp-badge-quiet rp-focus'
+                          >
                             {ui('Not connected')}
                           </Link>
                         </span>
@@ -839,7 +844,7 @@ export function TenantLayout() {
                     variant='ghost'
                     onClick={toggleScheme}
                     aria-pressed={scheme === 'dark'}
-                    className='rp-navsheet-action rp-focus-inverse'
+                    className='rp-navsheet-action rp-chrome-sheet-action rp-focus-inverse'
                   >
                     <SchemeIcon className='shrink-0' />
                     {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}

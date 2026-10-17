@@ -67,7 +67,8 @@
 
 @media (max-width: 1023.98px), (pointer: coarse) {
   .rp-chrome-menu-item,
-  .rp-chrome-nav-link {
+  .rp-chrome-nav-link,
+  .rp-chrome-status-link {
     min-height: 2.75rem;
   }
 }
@@ -89,4 +90,8 @@
 
 .rp-chrome-palette.rp-card {
   box-shadow: var(--rp-shadow-xl);
+}
+
+.rp-chrome-sheet-action.rp-btn {
+  justify-content: flex-start;
 }
