@@ -1,1 +1,54 @@
 /* Manage component styles. */
+.rp-manage-section-head {
+  flex-direction: row;
+}
+
+.rp-manage-nav-wrap {
+  position: relative;
+  align-self: start;
+}
+
+.rp-manage-shell .rp-manage-tab {
+  justify-content: flex-start;
+  min-width: 2.75rem;
+  min-height: max(2.75rem, calc(2.25rem * var(--rp-density-ctl, 1)));
+  text-align: start;
+}
+
+.rp-manage-shell .rp-manage-tab[aria-current='true'] {
+  background: var(--rp-control);
+  color: var(--rp-on-control);
+  font-weight: 600;
+}
+
+@media (max-width: 1023.98px) {
+  .rp-manage-nav-wrap::before,
+  .rp-manage-nav-wrap::after {
+    position: absolute;
+    inset-block: 0;
+    z-index: 1;
+    width: 1.5rem;
+    pointer-events: none;
+    content: '';
+    opacity: 0;
+  }
+
+  .rp-manage-nav-wrap::before {
+    inset-inline-start: 0;
+    background: linear-gradient(to right, var(--rp-app), transparent);
+  }
+
+  .rp-manage-nav-wrap::after {
+    inset-inline-end: 0;
+    background: linear-gradient(to left, var(--rp-app), transparent);
+  }
+
+  .rp-manage-nav-wrap[data-scroll-start]::before,
+  .rp-manage-nav-wrap[data-scroll-end]::after {
+    opacity: 1;
+  }
+}
+
+.rp-manage-disclosure.rp-btn {
+  justify-content: flex-start;
+}

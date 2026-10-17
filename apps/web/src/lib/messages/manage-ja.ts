@@ -1182,4 +1182,10 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
   'failure': '失敗',
   'uncertain': '結果不明',
   'Platform': 'プラットフォーム',
+  'Back to the portal': 'ポータルに戻る',
+  'Platform connections': 'プラットフォームの接続設定',
+  'Corpus metrics': '資料群の統計',
+  'Entity type': 'エンティティの種類',
+  'Relation source': '関係の始点',
+  'Relation target': '関係の終点',
 }
