@@ -1090,4 +1090,9 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   '{count} links out': '接続{count}件',
   '1 relation': '関連1件',
   '1 mention': '言及1件',
+  'PDF controls': 'PDFの操作',
+  'More PDF actions': 'PDFのその他の操作',
+  'Full screen': '全画面表示',
+  'Exit full screen': '全画面表示を終了',
+  'Full screen is unavailable.': '全画面表示を利用できません。',
 }
