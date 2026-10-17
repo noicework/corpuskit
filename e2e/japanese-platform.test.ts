@@ -259,6 +259,12 @@ Deno.test('Japanese platform help and access preserve source identities across d
           await capture('not-found')
           server.setResponseStatus('/api/t/marine/config', 503)
           await visit('/t/marine/library')
+          // Document load can precede app startup and its access check. Wait
+          // for the first config response before timing the transient retries.
+          await page.waitForFunction(() =>
+            performance.getEntriesByName(`${location.origin}/api/t/marine/config`, 'resource')
+              .length > 0
+          )
           await page.waitForSelector('[data-access-state=failed]')
           await capture('failed-gate')
           server.setResponseStatus('/api/t/marine/config', null)
