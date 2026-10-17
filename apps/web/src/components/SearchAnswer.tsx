@@ -3,14 +3,15 @@ import { useAccess } from './AccessProvider.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AskEvent, AskStage, Citation, ScoredResource } from '@research-portal/core'
-import { ApiError, RATE_LIMIT_MESSAGE, streamAsk } from '../api/client.ts'
+import { ApiError, RATE_LIMIT_MESSAGE, sendAnswerFeedback, streamAsk } from '../api/client.ts'
 import { secondsUntilRetry, shouldDeferAutomaticAsk } from '../lib/ask-budget.ts'
 import { applyAnswerEvent, EMPTY_ANSWER, type StreamedAnswer } from '../lib/answer-trust.ts'
 import { AnswerText, AuditBadge, TruncatedNotice } from './AnswerInline.tsx'
 import { CurrencyNote } from './CurrencyNote.tsx'
 import { ConfidenceIndicator } from './QualityGauge.tsx'
-import { ErrorCard, LiveStatus } from './ui.tsx'
+import { Button, ErrorCard, IconButton, LiveStatus } from './ui.tsx'
 import { StageTimeline, statusesFor, useAnswerPhase } from './StageTimeline.tsx'
+import { ArrowRight, Check, Copy, Eye, EyeOff, RotateCw, ThumbsDown, ThumbsUp } from './icons.tsx'
 
 /** Matches AskPage's own stage copy, duplicated here (not exported there). */
 const STAGE_LABELS: Record<string, string> = {
@@ -87,14 +88,15 @@ function DeferredNotice({ onRun }: { onRun: () => void }) {
         {ui(RATE_LIMIT_MESSAGE)}
         {wait > 0 ? ui(' The portal will take another question in {wait} s.', { wait: wait }) : ''}
       </p>
-      <button
-        type='button'
+      <Button
+        variant='outline'
+        leadingIcon={RotateCw}
         onClick={onRun}
         disabled={wait > 0}
-        className='rp-btn rp-btn-outline mt-3'
+        className='mt-3'
       >
         {wait > 0 ? ui('Answer in {wait} s', { wait: wait }) : ui('Answer this search')}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -125,7 +127,17 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   const [seenStages, setSeenStages] = useState<Set<AskStage>>(() => new Set())
   const [collapsed, setCollapsed] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
+  const [learningId, setLearningId] = useState<string | null>(null)
+  const [rating, setRating] = useState<boolean | null>(null)
+  const [ratingBusy, setRatingBusy] = useState(false)
+  const [ratingError, setRatingError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
+  }, [])
 
   const trimmed = query.trim()
   const key = `${slug}|${trimmed}|${retryToken}`
@@ -150,6 +162,12 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     setStageLabel(null)
     setActiveStage(null)
     setSeenStages(new Set())
+    setLearningId(null)
+    setRating(null)
+    setRatingBusy(false)
+    setRatingError(null)
+    setCopied(false)
+    if (copiedTimer.current) clearTimeout(copiedTimer.current)
 
     // This summary runs by itself on every search and shares the reader's
     // ask budget. Near the limit, or while the server has asked us to wait,
@@ -168,6 +186,9 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
       if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       setAnswer((prev) => applyAnswerEvent(prev, event))
       switch (event.type) {
+        case 'learning':
+          setLearningId(event.id)
+          break
         case 'stage':
           setStageLabel(event.status === 'started' ? STAGE_LABELS[event.stage] ?? null : null)
           if (event.status === 'started') {
@@ -223,6 +244,38 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     setRetryToken((prev) => prev + 1)
   }
 
+  async function rate(good: boolean) {
+    const controller = abortRef.current
+    if (!learningId || !controller || controller.signal.aborted || !canAsk()) return
+    setRatingBusy(true)
+    setRatingError(null)
+    try {
+      await sendAnswerFeedback(slug, { learningId, good }, controller.signal)
+      if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
+      setRating(good)
+    } catch {
+      if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
+      setRatingError(ui('Could not send feedback - try again.'))
+    } finally {
+      if (!controller.signal.aborted && abortRef.current === controller && canAsk()) {
+        setRatingBusy(false)
+      }
+    }
+  }
+
+  async function copyAnswer() {
+    const controller = abortRef.current
+    try {
+      await navigator.clipboard.writeText(text)
+      if (!controller || controller.signal.aborted || abortRef.current !== controller) return
+      setCopied(true)
+      if (copiedTimer.current) clearTimeout(copiedTimer.current)
+      copiedTimer.current = setTimeout(() => setCopied(false), 1600)
+    } catch {
+      // The answer remains available to select when clipboard access is refused.
+    }
+  }
+
   const liveMessage = status === 'streaming'
     ? (stageLabel ? ui(stageLabel) : ui('Answer in progress'))
     : status === 'done'
@@ -248,8 +301,15 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   const askHref = `/t/${slug}/ask?ask=${encodeURIComponent(trimmed)}`
 
   return (
-    <section className='rp-card p-5' aria-label={ui('AI answer')}>
+    <section className='rp-card min-w-0 p-5 lg:p-6' aria-label={ui('AI answer')}>
       <LiveStatus message={liveMessage} />
+      <LiveStatus
+        message={copied
+          ? ui('Answer copied')
+          : rating !== null
+          ? ui('Thanks - your feedback was sent.')
+          : ''}
+      />
       <div className='flex items-center justify-between gap-3'>
         <div className='flex min-w-0 items-center gap-2'>
           <span
@@ -275,15 +335,17 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
             )
             : null}
         </div>
-        <button
-          type='button'
+        <Button
+          variant='ghost'
+          size='sm'
+          leadingIcon={collapsed ? Eye : EyeOff}
           onClick={() => setCollapsed((prev) => !prev)}
           aria-expanded={!collapsed}
           aria-controls='search-answer-body'
-          className='rp-focus inline-flex min-h-6 shrink-0 items-center rounded-[var(--rp-radius)] px-1.5 text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+          className='shrink-0'
         >
           {collapsed ? ui('Show') : ui('Hide')}
-        </button>
+        </Button>
       </div>
 
       {!collapsed
@@ -317,7 +379,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
 
                   {text.length > 0
                     ? (
-                      <div className='rp-answer-in rp-prose text-sm text-ink'>
+                      <div className='rp-measure rp-answer-in rp-prose text-base text-ink sm:text-sm'>
                         <AnswerText
                           text={text}
                           citations={citations}
@@ -325,7 +387,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                           slug={slug}
                           audit={audit}
                           streaming={status === 'streaming'}
-                          bodyClassName='text-sm leading-relaxed text-ink'
+                          bodyClassName='text-base leading-relaxed text-ink sm:text-sm'
                         />
                       </div>
                     )
@@ -335,17 +397,9 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                     ? <TruncatedNotice onAskAgain={retry} className='rp-answer-in mt-3' />
                     : null}
 
-                  {
-                    /* Confidence, what the audit checked, citation count and
-                    * source range read as one fact about the answer, so they
-                    * sit on one line and arrive together rather than stacking
-                    * up as separate rows. Confidence reads the audit exactly as
-                    * Ask's does, so the same answer is rated the same here. */
-                  }
                   {status === 'done' && !refused
                     ? (
                       <div className='rp-answer-in mt-3 flex flex-wrap items-center gap-x-4 gap-y-2'>
-                        <ConfidenceIndicator quality={quality} audit={audit} />
                         <AuditBadge audit={audit} />
                         <p className='text-xs text-ink-3'>{citations.length} {ui('cited')}</p>
                         <CurrencyNote
@@ -356,16 +410,70 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                       </div>
                     )
                     : null}
+
+                  {status === 'done'
+                    ? (
+                      <>
+                        <div
+                          role='group'
+                          aria-label={ui('AI answer')}
+                          className='rp-library-answer-toolbar mt-4 flex min-w-0 items-center justify-between gap-1 border-t border-line pt-3'
+                        >
+                          <div className='rp-library-answer-confidence min-w-0 flex-1'>
+                            <ConfidenceIndicator quality={quality} audit={audit} />
+                          </div>
+                          <div className='flex shrink-0 items-center'>
+                            <IconButton
+                              label={ui('Helpful answer')}
+                              icon={ThumbsUp}
+                              size='sm'
+                              onClick={() => void rate(true)}
+                              disabled={!learningId || ratingBusy || rating !== null}
+                              aria-pressed={rating === true}
+                            />
+                            <IconButton
+                              label={ui('Not a helpful answer')}
+                              icon={ThumbsDown}
+                              size='sm'
+                              onClick={() => void rate(false)}
+                              disabled={!learningId || ratingBusy || rating !== null}
+                              aria-pressed={rating === false}
+                            />
+                            <IconButton
+                              label={copied ? ui('Answer copied') : ui('Copy the answer')}
+                              icon={copied ? Check : Copy}
+                              size='sm'
+                              onClick={() => void copyAnswer()}
+                              disabled={text.trim().length === 0}
+                            />
+                            <IconButton
+                              label={ui('Ask this again')}
+                              icon={RotateCw}
+                              size='sm'
+                              onClick={retry}
+                            />
+                          </div>
+                        </div>
+                        {ratingError
+                          ? (
+                            <p role='alert' className='mt-2 text-xs text-[var(--rp-bad-ink)]'>
+                              {ratingError}
+                            </p>
+                          )
+                          : null}
+                      </>
+                    )
+                    : null}
                 </>
               )}
 
-            <div className='mt-4 flex justify-end border-t border-line pt-3'>
+            <div className='mt-3 flex justify-end'>
               <Link
                 to={askHref}
-                className='rp-chip inline-flex h-9 items-center gap-1.5 font-semibold sm:h-7'
+                className='rp-link-standalone text-sm font-semibold'
               >
                 {ui('Continue in Ask')}
-                <span aria-hidden='true'>&rarr;</span>
+                <ArrowRight size='sm' />
               </Link>
             </div>
           </div>
