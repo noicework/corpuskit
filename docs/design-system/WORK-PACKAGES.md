@@ -2,6 +2,25 @@
 
 Implements `DESIGN-SYSTEM.md`; the findings (F1 to F22) are in `REVIEW.md`.
 
+## Outcome
+
+| Package | Review rounds | What changed in review |
+| --- | --- | --- |
+| P0a tokens | 2 | Secondary text tier dimmed strong brands to exactly 4.5:1; now starts at the old 75% tier |
+| P0b icons | 1 | Accepted as delivered |
+| P1 chrome | 2 | Desktop logo had shrunk; menu morph restored; palette field ring moved to the row |
+| P2 graph | 1 | Accepted as delivered |
+| P3 Ask | 3 | Confidence label kept on phones; independent review: Deep research on-state, Watch and Compare visible again, feedback announcements, phone header height |
+| P4 library | 2 | Removed `100vw` breakouts; PDF toolbar folds zoom into its menu when narrow |
+| P5 Manage | 3 | Scan stays a visible main action; independent review: 22 px stat tiles, progress contrast, focus target, tab strip |
+| P6 settings | 2 | No bookmark icon on settings saves |
+| P7 pages | 2 | Restored the hero headline scale |
+| P8 footer | 2 | Credits stack on phones so no separator ends a line |
+
+After merging, five e2e-repair branches (E1 to E5, one per area) brought the browser suite back
+to green: tests coupled to replaced markup were updated with their assertions intact, and the
+regressions they caught were fixed in the components.
+
 ## Order and branches
 
 ```

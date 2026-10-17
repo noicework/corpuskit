@@ -1,6 +1,7 @@
 # CorpusKit design system review (October 2026)
 
-Status: review complete 17 October 2026, against `noicework/main` at `cae8238`. Companion documents:
+Status: review complete 17 October 2026, against `noicework/main` at `cae8238`; implemented the same
+day on `design-system/2026-10` (see "Outcome" at the end). Companion documents:
 `DESIGN-SYSTEM.md` (the target spec) and `WORK-PACKAGES.md` (the implementation plan).
 
 ## How this review was done
@@ -311,3 +312,43 @@ Fix: a slight dim and a hairline edge in the dark scheme. P0a.
 | Controls under 24 px | resize rail, checkboxes, range | text links, 13 px checkboxes, toggles |
 | Controls under 44 px at 390 px | 4 to 20 per page | up to 20 per Manage tab |
 | Console errors | only the blocked requests | 0 |
+
+- **D3. The CorpusKit palette ignores the reader's dark preference.** Portals on the CorpusKit
+  palette (the default for new portals) always open light and forget the toggle on reload
+  (`legacyDemoScheme` in `TenantLayout.tsx`). That suits the public demo but not new portals.
+
+## Outcome (17 October 2026)
+
+Every finding above, F1 to F22, is addressed on `design-system/2026-10`. The work was done in ten
+packages (see `WORK-PACKAGES.md`), each implemented by a Codex worker in its own worktree,
+reviewed against screenshots by the design lead, and in two cases checked again by an
+independent design and accessibility reviewer. Before and after captures for every profile,
+scheme and width are in `GALLERY.html`.
+
+Measured with the harness on the four profiles, against `main` at `8e332ec` with the same
+fixture, on 460 matched captures (and 234 at a 22 px root font, 390 px):
+
+| Check | Before | After |
+| --- | --- | --- |
+| axe violations (WCAG 2.0 to 2.2 A and AA) | 37 (17 at 22 px) | 0 (0 at 22 px) |
+| Interactive targets under 24 px, raw count | 2,784 | 408 |
+| Targets under 44 px at 390 px, raw count | 5,326 (2,144 at 22 px) | 120 (80 at 22 px) |
+| Horizontal overflow | 0 | 0 |
+| Console errors | 0 | 0 |
+
+The remaining phone readings are the visual boxes of native checkboxes whose labels are the
+44 px target, the inline citation markers inside answer prose and tables (exempt as inline
+targets, and rendered by the footnote code this rollout did not touch), and the Not found page's
+suggestion chips, which follow the chip rule (36 px with 8 px spacing). No other control in the
+captured screens is under 44 px on a phone.
+
+Not covered by the harness (unit and e2e coverage only): Insights, the standalone Taxonomy page,
+Generate, Assessment, the investigation detail page and the platform tenant picker. Full-page
+captures taller than 8,192 px repeat their content, so the lowest part of a few very long pages
+was checked at viewport height only.
+
+Follow-ups worth considering:
+- Observatory's filled controls in the dark scheme are its indigo lifted to a muted lavender; its
+  gold accent would read better there. A dark palette could prefer its accent for
+  `--rp-control` when the accent and its ink qualify.
+- The decisions D1 to D3 above.

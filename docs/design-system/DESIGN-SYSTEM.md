@@ -1,6 +1,6 @@
 # CorpusKit design system
 
-Status: target specification, 17 October 2026. It extends the appearance-system rules in
+Status: target specification, 17 October 2026; implemented on `design-system/2026-10`. It extends the appearance-system rules in
 `apps/web/CLAUDE.md` (which still apply in full) and is what the work packages in
 `WORK-PACKAGES.md` implement. `REVIEW.md` explains why each change is here.
 
