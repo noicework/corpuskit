@@ -8,11 +8,14 @@ import {
   FONT_PAIRINGS,
   type FontPairingId,
   FontPairingIdSchema,
+  HOUSE_LIGHT_SUITE,
   mixHex,
+  normaliseHex,
   type Palette,
   paletteFromColours,
   type ShapeId,
   type TenantConfig,
+  textOn,
   type TextScaleId,
 } from '@research-portal/core'
 
@@ -182,6 +185,12 @@ const DARK_STATUS_VARS: Record<string, string> = {
   '--rp-bad-line': '#771f31',
 }
 
+/** Marks keep their category identity while the dark set lifts their lightness. */
+const CATEGORICAL_COLOURS = {
+  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#4a3aa7'],
+  dark: ['#6da4eb', '#ef946d', '#4bc495', '#efbb55', '#eb9cba', '#9d91e2'],
+} as const
+
 /** The library palette a portal has chosen, or null for its seeded identity. */
 export function resolvePalette(branding: Branding): Palette | null {
   const choice = branding.paletteId
@@ -304,6 +313,81 @@ function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
 }
 
 /**
+ * Secondary ink steps toward its ground until the next 1% would fall below AA.
+ * Hero ink checks both endpoints while stepping toward the first one. An
+ * unmeasurable CSS colour keeps the full-strength foreground rather than dimming
+ * text without evidence that the result remains readable.
+ */
+function secondaryInk(foreground: string, grounds: readonly string[]): string {
+  const text = normaliseHex(foreground)
+  const measuredGrounds = grounds.map(normaliseHex)
+  if (!text || measuredGrounds.some((ground) => ground === null)) return foreground
+  const hexGrounds = measuredGrounds as string[]
+  const start = hexGrounds.every((ground) => contrastRatio(text, ground) >= 4.5)
+    ? text
+    : textOn(hexGrounds, 4.5)
+  let result = start
+  for (let step = 1; step <= 100; step++) {
+    const candidate = mixHex(hexGrounds[0]!, start, step / 100)
+    if (!hexGrounds.every((ground) => contrastRatio(candidate, ground) >= 4.5)) break
+    result = candidate
+  }
+  return result
+}
+
+/** Derived roles run after the scheme swap, so they measure the actual grounds. */
+function foundationRoleVars(
+  branding: Branding,
+  roles: Record<string, string>,
+  scheme: ViewerScheme,
+): Record<string, string> {
+  const mode = paletteMode(branding, scheme)
+  const surface = roles['--rp-surface'] ?? HOUSE_LIGHT_SUITE.surface
+  const paper = roles['--rp-paper'] ?? HOUSE_LIGHT_SUITE.paper
+  const primary = roles['--rp-primary']!
+  const accent = roles['--rp-accent']!
+  const grounds = [surface, paper]
+  const qualifies = (colour: string) => {
+    const hex = normaliseHex(colour)
+    return hex !== null && grounds.every((ground) => contrastRatio(hex, ground) >= 3)
+  }
+  let control: string
+  if (mode === 'dark') {
+    // CSS colours outside the hex contract cannot be measured here. Keep the
+    // identity intact and give its controls a known, contrasting house fill.
+    control = ensureContrastOn(normaliseHex(primary) ?? '#27364b', grounds, 3)
+  } else if (qualifies(primary)) {
+    control = normaliseHex(primary)!
+  } else if (
+    qualifies(accent) && normaliseHex(roles['--rp-on-accent']!) &&
+    contrastRatio(normaliseHex(roles['--rp-on-accent']!)!, normaliseHex(accent)!) >= 4.5
+  ) {
+    control = normaliseHex(accent)!
+  } else {
+    control = qualifies(roles['--rp-brand-fg']!)
+      ? normaliseHex(roles['--rp-brand-fg']!)!
+      : '#27364b'
+  }
+  const palette = resolvePalette(branding)
+  return {
+    '--rp-on-primary-2': secondaryInk(roles['--rp-on-primary']!, [primary]),
+    '--rp-on-hero-2': secondaryInk(roles['--rp-on-hero']!, [
+      roles['--rp-hero-from']!,
+      roles['--rp-hero-to']!,
+    ]),
+    '--rp-control': control,
+    '--rp-on-control': textOn([control], 4.5),
+    '--rp-logo-plate': palette?.mode === 'light' ? palette.paper : HOUSE_LIGHT_SUITE.paper,
+    '--rp-scrim': mode === 'dark' ? 'rgba(0, 0, 0, 0.62)' : 'rgba(10, 10, 12, 0.5)',
+    '--rp-thumb-brightness': mode === 'dark' ? '0.92' : '1',
+    '--rp-thumb-edge': mode === 'dark' ? 'var(--rp-line)' : 'transparent',
+    ...Object.fromEntries(
+      CATEGORICAL_COLOURS[mode].map((colour, i) => [`--rp-cat-${i + 1}`, colour]),
+    ),
+  }
+}
+
+/**
  * The colour tokens, twelve roles plus the grey suite. With no library
  * palette chosen this derives the role tokens from the portal's seeded
  * four-colour identity (`paletteFromColours`): the four colours themselves
@@ -317,6 +401,7 @@ export function paletteVars(
   scheme: ViewerScheme = 'light',
 ): Record<string, string> {
   const roles = paletteRoleVars(branding)
+  let resolved = roles
   // A dark library palette is already dark; the viewer's toggle only has
   // work to do on a light suite.
   if (scheme === 'dark' && paletteMode(branding) === 'light') {
@@ -324,7 +409,7 @@ export function paletteVars(
     // themselves, not from the light inks deepened for a white surface.
     const own = resolvePalette(branding) === null
     const { primary, accent } = branding.colours
-    return {
+    resolved = {
       ...roles,
       ...viewerDarkVars(
         own
@@ -339,7 +424,7 @@ export function paletteVars(
         : {}),
     }
   }
-  return roles
+  return { ...resolved, ...foundationRoleVars(branding, resolved, scheme) }
 }
 
 function paletteRoleVars(branding: Branding): Record<string, string> {
