@@ -194,8 +194,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
         )}
         actions={
           <Button
-            variant='ghost'
-            size='sm'
+            variant='outline'
             leadingIcon={rows ? RotateCw : Search}
             disabled={pending || scanning}
             onClick={() => void scan()}
