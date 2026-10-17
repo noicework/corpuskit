@@ -7,6 +7,8 @@ import { assessCurrency } from '../lib/currency.ts'
 import { citationHref, EvidenceDisclosure } from './AnswerStream.tsx'
 import type { ResourceType } from '@research-portal/core'
 import { SaveEvidenceButton } from './SaveEvidence.tsx'
+import { ArrowRight, ChevronDown, FileText, Globe } from './icons.tsx'
+import { Button } from './ui.tsx'
 
 // ---------------------------------------------------------------------------
 // Evidence table - the persistent, scannable record of "what did we actually
@@ -62,41 +64,11 @@ export interface EvidenceSource {
   matchedField?: 'body' | 'summary' | 'metadata'
 }
 
-/** A small document glyph so a PDF reads as something you can open, not just a title. */
+/** The shared document cue also covers videos stored as research resources. */
 function SourceGlyph({ type }: { type: ResourceType | undefined }) {
   if (!type) return null
-  const props = {
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.6,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    className: 'mt-[3px] h-3.5 w-3.5 shrink-0 text-ink-3',
-    'aria-hidden': true,
-  }
-  if (type === 'video') {
-    return (
-      <svg {...props}>
-        <rect x='3' y='5' width='18' height='14' rx='2' />
-        <path d='M10 9l5 3-5 3z' />
-      </svg>
-    )
-  }
-  if (type === 'web') {
-    return (
-      <svg {...props}>
-        <circle cx='12' cy='12' r='9' />
-        <path d='M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18' />
-      </svg>
-    )
-  }
-  return (
-    <svg {...props}>
-      <path d='M14 3H7a1 1 0 00-1 1v16a1 1 0 001 1h10a1 1 0 001-1V8z' />
-      <path d='M14 3v5h5M9 13h6M9 17h6' />
-    </svg>
-  )
+  const Icon = type === 'web' ? Globe : FileText
+  return <Icon size='sm' className='mt-0.5 shrink-0 text-ink-3' />
 }
 
 /**
@@ -274,7 +246,7 @@ function EvidenceRow({
                 {citationIndices.map((n) => (
                   <span
                     key={n}
-                    className='inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold text-[var(--rp-on-accent)]'
+                    className='inline-flex min-h-[1.25rem] min-w-[1.25rem] items-center justify-center rounded-full px-1 text-2xs font-semibold text-[var(--rp-on-accent)]'
                     style={{ backgroundColor: 'var(--rp-accent)' }}
                   >
                     {n}
@@ -286,9 +258,9 @@ function EvidenceRow({
           <SourceGlyph type={source.type} />
           <Link
             to={href}
-            className='rp-clamp-2 min-w-0 flex-1 text-sm font-medium text-ink underline-offset-2 hover:underline'
+            className='rp-answer-source-title rp-link-standalone min-w-0 flex-1 text-sm font-medium text-ink underline-offset-2 hover:underline'
           >
-            {source.title}
+            <span className='rp-clamp-2'>{source.title}</span>
           </Link>
         </div>
         <div className='flex shrink-0 flex-wrap items-center gap-1.5'>
@@ -296,12 +268,12 @@ function EvidenceRow({
             ? <span className='text-xs tabular-nums text-ink-3'>{scorePct}%</span>
             : null}
           {source.referenceChunk
-            ? <span className='text-[11px] text-ink-3'>{ui('reference list')}</span>
+            ? <span className='text-2xs text-ink-3'>{ui('reference list')}</span>
             : null}
           {summaryMatch
             ? (
               <span
-                className='text-[11px] text-ink-3'
+                className='text-2xs text-ink-3'
                 title={ui('The match came from the generated summary, not the document text')}
               >
                 {ui('matched the summary')}
@@ -380,43 +352,34 @@ function EvidenceRow({
         * whole line of the screen, and a twelve-source list was spending one
         * per card on a control that sits happily beside the Save button. */
       }
-      <div className='mt-2 flex items-center justify-between gap-2'>
-        <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+      <div className='mt-2 flex flex-wrap items-center justify-between gap-2'>
+        <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
           <Link
             to={href}
             aria-label={`${
               openLabel(source.type, source.matchedPage, summaryMatch, ui)
             }: ${source.title}`}
-            className='rp-focus inline-flex min-h-6 items-center gap-1 rounded-[var(--rp-radius)] text-xs font-medium text-[var(--rp-accent-fg)] hover:underline'
+            className='rp-answer-source-link rp-link-standalone min-w-0 gap-1 text-xs font-medium hover:underline'
           >
             {openLabel(source.type, source.matchedPage, summaryMatch, ui)}
-            <svg
-              viewBox='0 0 24 24'
-              fill='none'
-              stroke='currentColor'
-              strokeWidth='2'
-              strokeLinecap='round'
-              strokeLinejoin='round'
-              className='h-3 w-3'
-              aria-hidden='true'
-            >
-              <path d='M5 12h14M13 6l6 6-6 6' />
-            </svg>
+            <ArrowRight size='sm' className='shrink-0' />
           </Link>
           {isClamped
             ? (
-              <button
-                type='button'
+              <Button
+                variant='ghost'
+                size='sm'
                 onClick={() => setExpanded((prev) => !prev)}
                 aria-expanded={expanded}
                 aria-controls={passageId}
                 aria-label={expanded
                   ? ui('Show less of the passage from {value1}', { value1: source.title })
                   : ui('Show more of the passage from {value1}', { value1: source.title })}
-                className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius)] text-xs font-medium text-[var(--rp-accent-fg)] hover:underline'
+                className='text-[var(--rp-accent-fg)]'
               >
                 {expanded ? ui('Show less') : ui('Show more')}
-              </button>
+                <ChevronDown size='sm' className={expanded ? 'rotate-180' : ''} />
+              </Button>
             )
             : null}
         </div>
@@ -553,7 +516,7 @@ export function EvidenceTable({
 
   const advisoryNote = verdictsKnown || judging
     ? (
-      <p className='text-[11px] text-ink-3'>
+      <p className='text-2xs text-ink-3'>
         {ui('AI verdicts are advisory - open a source to judge for yourself.')}
       </p>
     )
@@ -568,7 +531,7 @@ export function EvidenceTable({
           <>
             <div className='flex items-center gap-2 pt-1' role='separator'>
               <span className='h-px flex-1' style={{ backgroundColor: 'var(--rp-line)' }} />
-              <span className='shrink-0 text-[11px] font-medium uppercase tracking-wide text-ink-3'>
+              <span className='min-w-0 text-center text-2xs font-semibold uppercase tracking-wide text-ink-3'>
                 {unlinked ? ui('Sources consulted') : ui('Retrieved, but not cited in the answer')}
               </span>
               <span className='h-px flex-1' style={{ backgroundColor: 'var(--rp-line)' }} />

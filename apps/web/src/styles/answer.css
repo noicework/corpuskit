@@ -1,1 +1,85 @@
-/* Answer component styles. */
+/* Preserve the verdict; move the actions together when the row needs more room. */
+.rp-answer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.rp-answer-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 0;
+  margin-inline-start: auto;
+}
+
+.rp-answer-confidence-wrap {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rp-answer-confidence.rp-btn {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: 0.625rem;
+  white-space: normal;
+}
+
+.rp-answer-confidence-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.rp-answer-question {
+  overflow-wrap: anywhere;
+}
+
+.rp-answer-question-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
+.rp-answer-chip.rp-chip {
+  min-width: 1.5rem;
+}
+
+@media (max-width: 1023.98px), (pointer: coarse) {
+  .rp-answer-chip.rp-chip {
+    min-height: max(2.75rem, calc(2rem * var(--rp-density-ctl, 1)));
+    min-width: 2.75rem;
+  }
+}
+
+.rp-answer-composer {
+  min-height: 2.75rem;
+}
+
+.rp-answer-followup {
+  min-height: 2.75rem;
+}
+
+/* Source cards use an inset ground, so their links use the matching ink roles. */
+.rp-answer-source-title.rp-link-standalone {
+  color: var(--rp-ink);
+}
+
+.rp-answer-source-link.rp-link-standalone {
+  color: var(--rp-ink-2);
+}
+
+.rp-answer-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 2.75rem;
+}

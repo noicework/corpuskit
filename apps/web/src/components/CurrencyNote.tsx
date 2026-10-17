@@ -1,5 +1,6 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { assessCurrency, type CurrencySource } from '../lib/currency.ts'
+import { Calendar } from './icons.tsx'
 
 export interface CurrencyNoteProps {
   /**
@@ -10,25 +11,6 @@ export interface CurrencyNoteProps {
   sources: readonly CurrencySource[]
   /** Optional wrapper classes for spacing within each surface. */
   className?: string
-}
-
-/** A small, muted calendar glyph for the always-shown recency line. */
-function CalendarGlyph() {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.6'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className='h-3.5 w-3.5 shrink-0'
-    >
-      <rect x='3' y='4.5' width='18' height='16' rx='2' />
-      <path d='M3 9h18M8 3v3M16 3v3' />
-    </svg>
-  )
 }
 
 /**
@@ -52,7 +34,7 @@ export function CurrencyNote({ sources, className }: CurrencyNoteProps) {
   return (
     <div className={className}>
       <p className='flex items-center gap-1.5 text-xs text-ink-3'>
-        <CalendarGlyph />
+        <Calendar size='sm' className='shrink-0' />
         <span className='tabular-nums'>
           {span
             ? ui(

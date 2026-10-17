@@ -1,6 +1,7 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useState } from 'react'
 import type { AskStage } from '@research-portal/core'
+import { Check } from './icons.tsx'
 
 export type StageStatus = 'pending' | 'active' | 'complete'
 export type StageStatuses = Partial<Record<AskStage, StageStatus>>
@@ -26,42 +27,6 @@ export function statusesFor(active: AskStage | null, seen: Set<AskStage>): Stage
       : 'pending'
   })
   return out
-}
-
-function Tick() {
-  return (
-    <svg viewBox='0 0 20 20' fill='none' aria-hidden='true' className='h-4 w-4'>
-      <path
-        d='M5 10.5l3.2 3.2L15 7'
-        stroke='currentColor'
-        strokeWidth='2'
-        strokeLinecap='round'
-        strokeLinejoin='round'
-      />
-    </svg>
-  )
-}
-
-function Spinner() {
-  return (
-    <svg viewBox='0 0 20 20' fill='none' aria-hidden='true' className='rp-stage-spin h-4 w-4'>
-      <circle cx='10' cy='10' r='7' stroke='currentColor' strokeWidth='2' opacity='0.25' />
-      <path
-        d='M17 10a7 7 0 00-7-7'
-        stroke='currentColor'
-        strokeWidth='2'
-        strokeLinecap='round'
-      />
-    </svg>
-  )
-}
-
-function Dot() {
-  return (
-    <svg viewBox='0 0 20 20' fill='none' aria-hidden='true' className='h-4 w-4'>
-      <circle cx='10' cy='10' r='6' stroke='currentColor' strokeWidth='1.6' opacity='0.5' />
-    </svg>
-  )
 }
 
 /**
@@ -148,7 +113,19 @@ export function StageTimeline(
                     state === 'complete' ? 'rp-stage-mark-done' : ''
                   }`}
                 >
-                  {state === 'complete' ? <Tick /> : state === 'active' ? <Spinner /> : <Dot />}
+                  {state === 'complete' ? <Check size='sm' /> : state === 'active'
+                    ? (
+                      <span
+                        aria-hidden='true'
+                        className='rp-stage-spin h-4 w-4 rounded-full border-2 border-current border-t-transparent'
+                      />
+                    )
+                    : (
+                      <span
+                        aria-hidden='true'
+                        className='h-3 w-3 rounded-full border-2 border-current'
+                      />
+                    )}
                 </span>
                 {last ? null : (
                   <span

@@ -1,6 +1,7 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { AskStage, ScoredResource } from '@research-portal/core'
 import { type QualityScores, TrustSignals } from './QualityGauge.tsx'
+import { Check } from './icons.tsx'
 
 // ---------------------------------------------------------------------------
 // Pipeline panel - the retrieval/generation visualisation ported out of the
@@ -34,20 +35,20 @@ function StageDot({ status }: { status: PipelineStageStatus }) {
   if (status === 'complete') {
     return (
       <span
-        className='flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--rp-ok-ink)] text-[10px] font-bold text-[var(--rp-ok-bg)]'
+        className='flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--rp-accent)] text-[var(--rp-on-accent)]'
         aria-hidden='true'
       >
-        ✓
+        <Check size='sm' />
       </span>
     )
   }
   if (status === 'active') {
     return (
-      <span className='flex h-5 w-5 shrink-0 items-center justify-center' aria-hidden='true'>
-        <span
-          className='h-3 w-3 animate-pulse rounded-full'
-          style={{ backgroundColor: 'var(--rp-accent)' }}
-        />
+      <span
+        className='flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--rp-wash)] text-[var(--rp-accent-fg)]'
+        aria-hidden='true'
+      >
+        <span className='h-2 w-2 animate-pulse rounded-full bg-current' />
       </span>
     )
   }
@@ -165,7 +166,7 @@ export function PipelinePanel({ sources, usage, quality, statuses }: PipelinePan
                   )
                   : null}
               </div>
-              <div className='pb-5'>
+              <div className='min-w-0 flex-1 pb-5'>
                 <p
                   className={`text-sm font-medium ${
                     status === 'pending' ? 'text-ink-3' : 'text-ink'

@@ -1099,4 +1099,7 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'infects': '感染する',
   'located in': '所在する',
   'assesses': '評価する',
+  'Show full question': '質問の全文を表示',
+  'Collapse question': '質問を折りたたむ',
+  'opens in a new tab': '新しいタブで開きます',
 }

@@ -54,7 +54,31 @@ import {
 } from '../components/EvidenceTable.tsx'
 import { PipelinePanel } from '../components/PipelinePanel.tsx'
 import { AnswerQualityDisclosure, type QualityScores } from '../components/QualityGauge.tsx'
-import { ExportNotice, LiveStatus, savedFileNotice, useExportNotice } from '../components/ui.tsx'
+import {
+  Button,
+  ExportNotice,
+  IconButton,
+  LiveStatus,
+  savedFileNotice,
+  useExportNotice,
+} from '../components/ui.tsx'
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  Copy,
+  Download,
+  Eye,
+  History,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Search,
+  Send,
+  ThumbsDown,
+  ThumbsUp,
+  Trash,
+} from '../components/icons.tsx'
 import { useCompactViewport } from '../components/useViewMode.ts'
 import { isThinlyGrounded } from '../lib/confidence.ts'
 import type { AnswerAudit } from '../lib/answer-marks.ts'
@@ -322,6 +346,7 @@ const CITATION_HINT = 'click to open, or find it in the Evidence table below'
 function renderMarkdown(message: ChatMessage, slug: string): ReactNode {
   return (
     <AnswerText
+      bodyClassName='rp-prose rp-measure text-base text-ink-2'
       text={message.text}
       citations={message.citations}
       sources={message.sources}
@@ -369,13 +394,9 @@ function SessionList({
 
   return (
     <div className='flex h-full flex-col'>
-      <button
-        type='button'
-        onClick={onNew}
-        className='rp-btn rp-btn-primary w-full'
-      >
-        {ui('+ New session')}
-      </button>
+      <Button onClick={onNew} leadingIcon={Plus} className='w-full'>
+        {ui('New session')}
+      </Button>
 
       <nav
         aria-label={ui('Chat sessions')}
@@ -406,7 +427,7 @@ function SessionList({
                     }}
                     aria-label={ui('Session name')}
                     autoFocus
-                    className='rp-input h-9 text-sm'
+                    className='rp-input text-sm'
                   />
                 </form>
               )
@@ -417,12 +438,11 @@ function SessionList({
                   type='button'
                   onClick={() => onSelect(session.id)}
                   aria-current={isActive ? 'true' : undefined}
-                  className={`w-full rounded-[var(--rp-radius)] px-3 py-2.5 ${
-                    isActive ? 'pr-14' : 'pr-8'
-                  } text-left transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${
+                  className={`rp-focus w-full rounded-[var(--rp-radius)] px-3 py-2.5 pr-14 ${
+                    isActive ? 'pr-24' : ''
+                  } text-left transition-colors duration-150 ${
                     isActive ? 'bg-surface shadow-sm' : 'hover:bg-[var(--rp-surface-2)]'
                   }`}
-                  style={{ outlineColor: 'var(--rp-accent)' }}
                 >
                   <p className='rp-clamp-2 text-sm font-medium text-ink'>
                     {sessionTitle(session, ui)}
@@ -434,44 +454,31 @@ function SessionList({
                     {relativeAge(session.updatedAt, ui)}
                   </p>
                 </button>
-                {isActive
-                  ? (
-                    <button
-                      type='button'
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        startEdit(session)
-                      }}
-                      aria-label={ui('Rename "{value1}"', { value1: sessionTitle(session, ui) })}
-                      title={ui('Rename session')}
-                      className='rp-focus absolute right-8 top-1.5 flex h-6 w-6 items-center justify-center rounded-none text-ink-3 opacity-0 transition-opacity duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink group-hover:opacity-100 focus-visible:opacity-100'
-                    >
-                      ✎
-                    </button>
-                  )
-                  : null}
-                <button
-                  type='button'
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onDelete(session.id)
-                  }}
-                  aria-label={ui('Delete "{value1}"', { value1: sessionTitle(session, ui) })}
-                  title={ui('Delete session')}
-                  className='rp-focus absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 opacity-0 transition-opacity duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-bad-ink)] group-hover:opacity-100 focus-visible:opacity-100'
-                >
-                  <svg
-                    viewBox='0 0 20 20'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeWidth='1.7'
-                    strokeLinecap='round'
-                    aria-hidden='true'
-                    className='h-4 w-4'
-                  >
-                    <path d='M5.5 5.5l9 9M14.5 5.5l-9 9' />
-                  </svg>
-                </button>
+                <div className='absolute right-0 top-1 flex'>
+                  {isActive
+                    ? (
+                      <IconButton
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          startEdit(session)
+                        }}
+                        label={ui('Rename "{value1}"', { value1: sessionTitle(session, ui) })}
+                        icon={Pencil}
+                        size='sm'
+                      />
+                    )
+                    : null}
+                  <IconButton
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onDelete(session.id)
+                    }}
+                    label={ui('Delete "{value1}"', { value1: sessionTitle(session, ui) })}
+                    icon={Trash}
+                    variant='danger'
+                    size='sm'
+                  />
+                </div>
               </div>
             )
           })}
@@ -480,16 +487,81 @@ function SessionList({
   )
 }
 
+/** A whole question is the reading title; its collapsed height follows the actual type. */
+export function QuestionHeading({ question }: { question: string }) {
+  const { ui } = usePortalLocale()
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [question])
+
+  useEffect(() => {
+    const heading = headingRef.current
+    if (!heading) return
+    const measure = () => {
+      const style = getComputedStyle(heading)
+      const lineHeight = Number.parseFloat(style.lineHeight) ||
+        Number.parseFloat(style.fontSize) * 1.2
+      setOverflows(heading.scrollHeight > lineHeight * 4 + 1)
+    }
+    let active = true
+    measure()
+    void document.fonts?.ready.then(() => {
+      if (active) measure()
+    })
+    const observer = new ResizeObserver(measure)
+    observer.observe(heading)
+    return () => {
+      active = false
+      observer.disconnect()
+    }
+  }, [question])
+
+  return (
+    <div className='min-w-0 basis-full'>
+      <h1
+        id='ask-question-heading'
+        ref={headingRef}
+        className={`rp-answer-question rp-display text-2xl text-ink sm:text-3xl ${
+          expanded ? '' : 'rp-answer-question-clamped'
+        }`}
+      >
+        {question}
+      </h1>
+      {overflows
+        ? (
+          <Button
+            variant='ghost'
+            size='sm'
+            aria-expanded={expanded}
+            aria-controls='ask-question-heading'
+            onClick={() => setExpanded((previous) => !previous)}
+            trailingIcon={ChevronDown}
+            className='mt-1'
+          >
+            {expanded ? ui('Collapse question') : ui('Show full question')}
+          </Button>
+        )
+        : null}
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Message bubbles
 // ---------------------------------------------------------------------------
 
-function UserBubble({
+export function UserBubble({
   message,
   onAskSubquery,
+  showQuestion = true,
 }: {
   message: ChatMessage
   onAskSubquery: (subquery: string) => void
+  showQuestion?: boolean
 }) {
   const { ui } = usePortalLocale()
   const subqueries = message.subqueries ?? []
@@ -500,23 +572,28 @@ function UserBubble({
           key={index}
           type='button'
           onClick={() => onAskSubquery(subquery)}
-          className='rp-chip text-[11px]'
+          className='rp-chip rp-answer-chip text-2xs'
         >
           {subquery}
         </button>
       ))}
     </div>
   )
+  if (!showQuestion && subqueries.length === 0) return null
   return (
     /* scroll-mt: below `lg` the title bar is sticky over the thread, so a
      * bubble scrolled to the top would otherwise slide under it. */
     <div className='flex scroll-mt-16 flex-col items-end gap-1.5 lg:scroll-mt-0'>
-      <div
-        className='max-w-[85%] rounded-[calc(var(--rp-radius)+4px)] rounded-tr-sm px-4 py-3 text-sm leading-relaxed text-ink sm:max-w-[70%]'
-        style={{ backgroundColor: 'var(--rp-wash)' }}
-      >
-        {message.text}
-      </div>
+      {showQuestion
+        ? (
+          <div
+            className='max-w-[85%] rounded-[calc(var(--rp-radius)+4px)] rounded-tr-sm px-4 py-3 text-sm leading-relaxed text-ink sm:max-w-[70%]'
+            style={{ backgroundColor: 'var(--rp-wash)' }}
+          >
+            {message.text}
+          </div>
+        )
+        : null}
       {subqueries.length > 0
         ? (
           <div className='flex max-w-[85%] flex-col items-end gap-1 sm:max-w-[70%]'>
@@ -526,13 +603,14 @@ function UserBubble({
               * behind a one-line disclosure; from `sm` up the chips show. */
             }
             <details className='w-full sm:hidden'>
-              <summary className='cursor-pointer text-right text-[11px] font-medium uppercase tracking-wide text-ink-3'>
+              <summary className='rp-answer-disclosure cursor-pointer gap-2 text-right text-2xs font-medium uppercase tracking-wide text-ink-3'>
                 {ui('Searched for {count} sub-questions', { count: subqueries.length })}
+                <ChevronDown size='sm' className='shrink-0' />
               </summary>
               <div className='mt-1.5'>{chips}</div>
             </details>
             <div className='hidden flex-col items-end gap-1 sm:flex'>
-              <p className='text-[11px] font-medium uppercase tracking-wide text-ink-3'>
+              <p className='text-2xs font-medium uppercase tracking-wide text-ink-3'>
                 {ui('Searched for')}
               </p>
               {chips}
@@ -544,18 +622,45 @@ function UserBubble({
   )
 }
 
-/**
- * Small ghost thumbs-up/thumbs-down pair for the platform's learning loop, also kept for the
- * portal's curators (Manage > Insights, "Answers marked unhelpful").
- * Hidden entirely when the message has no `learningId` (nothing to attach
- * feedback to). Once either button is used the row collapses to a quiet
- * "thanks" line; a negative rating additionally offers a one-line detail
- * field that re-posts the same feedback with free text attached.
- */
-function FeedbackControl({
-  message,
-  onFeedback,
-}: {
+/** Rating stays in the toolbar; any follow-up detail sits below it. */
+function FeedbackControl({ message, onFeedback, onError }: {
+  message: ChatMessage
+  onFeedback: (good: boolean, text?: string) => Promise<boolean>
+  onError: (error: string | null) => void
+}) {
+  const { ui } = usePortalLocale()
+  const [busy, setBusy] = useState(false)
+  if (!message.learningId) return null
+
+  async function handleRate(good: boolean) {
+    onError(null)
+    setBusy(true)
+    const ok = await onFeedback(good)
+    setBusy(false)
+    if (!ok) onError(ui('Could not send feedback - try again.'))
+  }
+
+  return (
+    <>
+      <IconButton
+        label={ui('Helpful answer')}
+        icon={ThumbsUp}
+        onClick={() => void handleRate(true)}
+        disabled={busy || message.feedbackSubmitted}
+        aria-pressed={message.feedbackSubmitted && message.feedbackGood === true}
+      />
+      <IconButton
+        label={ui('Not a helpful answer')}
+        icon={ThumbsDown}
+        onClick={() => void handleRate(false)}
+        disabled={busy || message.feedbackSubmitted}
+        aria-pressed={message.feedbackSubmitted && message.feedbackGood === false}
+      />
+    </>
+  )
+}
+
+function FeedbackDetail({ message, onFeedback }: {
   message: ChatMessage
   onFeedback: (good: boolean, text?: string) => Promise<boolean>
 }) {
@@ -564,140 +669,52 @@ function FeedbackControl({
   const [error, setError] = useState<string | null>(null)
   const [detail, setDetail] = useState('')
   const [detailSent, setDetailSent] = useState(false)
+  if (!message.feedbackSubmitted) return null
 
-  if (!message.learningId) return null
-
-  async function handleRate(good: boolean) {
-    setError(null)
+  async function sendDetail() {
+    if (!detail.trim()) return
     setBusy(true)
-    const ok = await onFeedback(good)
-    setBusy(false)
-    if (!ok) setError(ui('Could not send feedback - try again.'))
-  }
-
-  async function handleDetailSend() {
-    if (detail.trim().length === 0) return
     setError(null)
-    setBusy(true)
     const ok = await onFeedback(false, detail.trim())
     setBusy(false)
     if (ok) setDetailSent(true)
     else setError(ui('Could not send feedback - try again.'))
   }
 
-  if (message.feedbackSubmitted) {
-    return (
-      <div className='flex flex-col items-start gap-1.5'>
-        <p className='text-xs text-ink-3'>{ui('Thanks - your feedback was sent.')}</p>
-        {message.feedbackGood === false && !detailSent
-          ? (
-            <>
-              <div className='flex items-center gap-1.5'>
-                <input
-                  type='text'
-                  value={detail}
-                  onChange={(event) => setDetail(event.target.value)}
-                  placeholder={ui('What was wrong? (optional)')}
-                  aria-label={ui('What was wrong with this answer? (optional)')}
-                  disabled={busy}
-                  className='rp-input h-7 w-48 text-xs'
-                />
-                <button
-                  type='button'
-                  onClick={handleDetailSend}
-                  disabled={busy || detail.trim().length === 0}
-                  className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
-                >
-                  {ui('Send')}
-                </button>
-              </div>
-              {
-                /* A comment is kept for the portal's curators as well as sent to the
-                 * platform, so the reader is told who can read it before writing one. */
-              }
-              <p className='text-xs text-ink-3'>
-                {ui("This portal's curators can read what you write.")}
-              </p>
-            </>
-          )
-          : null}
-        {error ? <p className='text-xs text-[var(--rp-bad-ink)]'>{error}</p> : null}
-      </div>
-    )
-  }
-
   return (
-    <div className='flex items-center gap-0.5'>
-      <ActionIcon
-        label={ui('Helpful answer')}
-        onClick={() => handleRate(true)}
-        disabled={busy}
-        path={ICON_THUMB_UP}
-      />
-      <ActionIcon
-        label={ui('Not a helpful answer')}
-        onClick={() => handleRate(false)}
-        disabled={busy}
-        path={ICON_THUMB_DOWN}
-      />
-      {error ? <p className='text-xs text-[var(--rp-bad-ink)]'>{error}</p> : null}
+    <div className='mt-2 space-y-2 text-xs text-ink-3' role='status'>
+      <p>{ui('Thanks - your feedback was sent.')}</p>
+      {message.feedbackGood === false && !detailSent
+        ? (
+          <>
+            <div className='flex min-w-0 items-center gap-2'>
+              <input
+                type='text'
+                value={detail}
+                onChange={(event) => setDetail(event.target.value)}
+                placeholder={ui('What was wrong? (optional)')}
+                aria-label={ui('What was wrong with this answer? (optional)')}
+                disabled={busy}
+                className='rp-input min-w-0 flex-1 text-xs'
+              />
+              <Button
+                variant='ghost'
+                size='sm'
+                leadingIcon={Send}
+                onClick={() => void sendDetail()}
+                disabled={busy || !detail.trim()}
+              >
+                {ui('Send')}
+              </Button>
+            </div>
+            <p>{ui("This portal's curators can read what you write.")}</p>
+          </>
+        )
+        : null}
+      {error ? <p className='text-[var(--rp-bad-ink)]'>{error}</p> : null}
     </div>
   )
 }
-
-/**
- * Icon-only action used across the answer footer row. Colour lives in classes
- * rather than an inline style: an inline colour beats any hover rule, which is
- * why these buttons previously had no hover state at all.
- */
-function ActionIcon(
-  { label, onClick, disabled, active, path, filled }: {
-    label: string
-    onClick: () => void
-    disabled?: boolean
-    active?: boolean
-    path: string
-    filled?: boolean
-  },
-) {
-  return (
-    <button
-      type='button'
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      aria-pressed={active}
-      title={label}
-      className={`rp-focus flex h-9 w-9 items-center justify-center rounded-none transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40 ${
-        active
-          ? 'text-[var(--rp-accent)] bg-[color-mix(in_srgb,var(--rp-accent)_12%,transparent)]'
-          : 'text-ink-3 hover:bg-surface-2 hover:text-ink'
-      }`}
-    >
-      <svg
-        viewBox='0 0 24 24'
-        fill={filled ? 'currentColor' : 'none'}
-        stroke='currentColor'
-        strokeWidth='1.7'
-        strokeLinecap='round'
-        strokeLinejoin='round'
-        className='h-[1.15rem] w-[1.15rem]'
-        aria-hidden='true'
-      >
-        <path d={path} />
-      </svg>
-    </button>
-  )
-}
-
-const ICON_THUMB_UP =
-  'M7 10.5v9H4.5a1 1 0 01-1-1v-7a1 1 0 011-1H7zm0 0l4-7a2 2 0 012 2v3h4.6a2 2 0 011.96 2.44l-1.3 6A2 2 0 0116.3 19.5H7'
-const ICON_THUMB_DOWN =
-  'M17 13.5v-9h2.5a1 1 0 011 1v7a1 1 0 01-1 1H17zm0 0l-4 7a2 2 0 01-2-2v-3H6.4a2 2 0 01-1.96-2.44l1.3-6A2 2 0 017.7 4.5H17'
-const ICON_RETRY = 'M4.5 9.5a8 8 0 1113 8M4.5 4.5v5h5'
-const ICON_COPY = 'M9 9h9.5v9.5H9zM6 15H4.5V4.5H15V6'
-const ICON_WATCH =
-  'M12 5c-5 0-8 4.6-8.6 6.4a1.8 1.8 0 000 1.2C4 14.4 7 19 12 19s8-4.6 8.6-6.4a1.8 1.8 0 000-1.2C20 9.6 17 5 12 5z M12 14.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z'
 
 /** Copies the answer text, confirming in place rather than with a toast. */
 /**
@@ -750,11 +767,11 @@ function CopyAnswer({ text }: { text: string }) {
 
   if (text.trim().length === 0) return null
   return (
-    <ActionIcon
+    <IconButton
       label={copied ? ui('Answer copied') : ui('Copy the answer')}
       onClick={() => void copy()}
-      active={copied}
-      path={copied ? 'M5 12.5l4.5 4.5L19 7.5' : ICON_COPY}
+      aria-pressed={copied}
+      icon={copied ? Check : Copy}
     />
   )
 }
@@ -798,12 +815,15 @@ function WatchControl(
 
   return (
     <div className='flex items-center gap-1.5'>
-      <ActionIcon
-        label={status === 'busy' ? ui('Adding to Watches') : ui('Add to Watches')}
+      <Button
+        variant='ghost'
+        size='sm'
+        leadingIcon={Eye}
         onClick={handleWatch}
         disabled={status === 'busy'}
-        path={ICON_WATCH}
-      />
+      >
+        {status === 'busy' ? ui('Adding to Watches') : ui('Add to Watches')}
+      </Button>
       {status === 'error'
         ? (
           <p className='text-xs text-[var(--rp-bad-ink)]'>
@@ -911,6 +931,7 @@ function AnswerErrorCard({ message, rateLimited, retryAfterSec, onRetry }: {
           onClick={onRetry}
           className={rateLimited ? 'rp-btn rp-btn-outline' : 'rp-btn rp-btn-danger'}
         >
+          <RotateCcw size='sm' />
           {rateLimited ? ui('Retry now') : ui('Retry')}
         </button>
         {rateLimited && left > 0
@@ -977,6 +998,7 @@ function AnswerCard({
   const verdictAbort = useRef<AbortController | null>(null)
   useEffect(() => () => verdictAbort.current?.abort(), [lifetime])
   const [showPipeline, setShowPipeline] = useState(false)
+  const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [compare, setCompare] = useState<[string, string] | null>(null)
   // The sources/evidence block is collapsed by default and this state is
   // per-message (it lives in the card, not the page), so opening one answer's
@@ -1074,6 +1096,37 @@ function AnswerCard({
   // actually points at, whether or not retrieval listed them.
   const citedSourceCount = new Set(message.citations.map((citation) => citation.resourceId)).size
 
+  const secondaryTools = (
+    <div className='flex flex-wrap items-center gap-2'>
+      <AuditBadge audit={message.audit} />
+      <WatchControl question={question} slug={slug} lifetime={lifetime} />
+      {canAsk && canInspectDiagnostics &&
+          intents.filter((intent) => intent.answer.surfaces.includes('ask')).length >
+            1 &&
+          question.trim().length > 0
+        ? (
+          <Button
+            variant='ghost'
+            size='sm'
+            onClick={() => {
+              const askable = intents.filter((intent) => intent.answer.surfaces.includes('ask'))
+              const current = message.route?.intent ?? askable[0]!.id
+              const other = askable.find((intent) => intent.id !== current)?.id ??
+                current
+              setCompare((prev) => prev ? null : [current, other])
+            }}
+            aria-pressed={compare !== null}
+            title={ui(
+              'Run this question through two retrieval configurations side by side',
+            )}
+          >
+            {ui('Compare configurations')}
+          </Button>
+        )
+        : null}
+    </div>
+  )
+
   // A refusal gets its own structured "no evidence" state instead of the
   // normal answer body - the guidance sentence the platform generated, what
   // WAS retrieved (unjudged, so the user sees raw scores rather than another
@@ -1119,7 +1172,7 @@ function AnswerCard({
                   key={index}
                   type='button'
                   onClick={() => onAskSubquery(subquery)}
-                  className='rp-chip text-[11px]'
+                  className='rp-chip rp-answer-chip text-2xs'
                 >
                   {subquery}
                 </button>
@@ -1248,76 +1301,58 @@ function AnswerCard({
             <button
               type='button'
               onClick={onRetry}
-              className='rp-btn rp-btn-outline h-7 shrink-0 px-2 text-xs'
+              className='rp-btn rp-btn-outline rp-btn-sm shrink-0'
             >
+              <RotateCcw size='sm' />
               {ui('Retry')}
             </button>
           </div>
         )
         : null}
 
-      {
-        /* Answer-level actions. The quality control leads the right-hand group:
-          it is the one thing here that describes the answer rather than acting
-          on it, and on the loud states it grows a label leftwards into the row's
-          own empty middle, which is exactly where there is room for it. */
-      }
-      {
-        /* Gated on `!message.pending` alone now, where it used to also require a
-          learningId or a question. The quality control lives on this row, and it
-          has to appear on every finished answer - an answer with neither of
-          those would otherwise lose its confidence signal altogether. The
-          controls that need a question or a learningId hide themselves. */
-      }
       {!message.pending
         ? (
-          <div
-            className='rp-answer-tail mt-3 flex flex-wrap items-center justify-between gap-3'
-            style={tailStyle(TAIL_ACTIONS)}
-          >
-            {canAsk ? <FeedbackControl message={message} onFeedback={onFeedback} /> : null}
-            <div className='ml-auto flex flex-wrap items-center justify-end gap-0.5'>
-              {canAsk && canInspectDiagnostics &&
-                  intents.filter((i) => i.answer.surfaces.includes('ask')).length > 1 &&
-                  question.trim().length > 0
-                ? (
-                  <button
-                    type='button'
-                    onClick={() => {
-                      const askable = intents.filter((i) => i.answer.surfaces.includes('ask'))
-                      const current = message.route?.intent ?? askable[0]!.id
-                      const other = askable.find((i) => i.id !== current)?.id ?? current
-                      setCompare((prev) => prev ? null : [current, other])
-                    }}
-                    aria-pressed={compare !== null}
-                    title={ui(
-                      'Run this question through two retrieval configurations side by side',
-                    )}
-                    className='rp-btn rp-btn-ghost h-8 px-2 text-xs'
-                  >
-                    {ui('Compare configurations')}
-                  </button>
-                )
-                : null}
-              <AuditBadge audit={message.audit} className='mr-1' />
+          <div className='rp-answer-tail mt-3' style={tailStyle(TAIL_ACTIONS)}>
+            <div className='rp-answer-toolbar flex items-center justify-between gap-2'>
               <AnswerQualityDisclosure
                 quality={message.quality}
                 audit={message.audit}
                 {...(offerDeepReanswer ? { onReanswerDeeply } : {})}
                 sparselyGrounded={isSparselyGrounded && evidenceSources.length > 0}
               />
-              <CopyAnswer text={message.text} />
-              {question.trim().length > 0
-                ? (
-                  <ActionIcon
-                    label={ui('Ask this again')}
-                    onClick={() => onAskSubquery?.(question)}
-                    path={ICON_RETRY}
-                  />
-                )
-                : null}
-              <WatchControl question={question} slug={slug} lifetime={lifetime} />
+              <div className='rp-answer-actions ml-auto flex shrink-0 items-center'>
+                {canAsk
+                  ? (
+                    <FeedbackControl
+                      message={message}
+                      onFeedback={onFeedback}
+                      onError={setFeedbackError}
+                    />
+                  )
+                  : null}
+                <CopyAnswer text={message.text} />
+                {canAsk && question.trim().length > 0
+                  ? (
+                    <IconButton
+                      label={ui('Ask this again')}
+                      icon={RotateCcw}
+                      onClick={() => onAskSubquery(question)}
+                    />
+                  )
+                  : null}
+              </div>
             </div>
+            {message.sources.length === 0 && message.citations.length === 0
+              ? <div className='mt-2'>{secondaryTools}</div>
+              : null}
+            {feedbackError
+              ? (
+                <p role='status' className='mt-2 text-xs text-[var(--rp-bad-ink)]'>
+                  {feedbackError}
+                </p>
+              )
+              : null}
+            {canAsk ? <FeedbackDetail message={message} onFeedback={onFeedback} /> : null}
           </div>
         )
         : null}
@@ -1384,6 +1419,7 @@ function AnswerCard({
               summary={evidenceSummary(evidenceSources, citedSourceCount, ui)}
             >
               <div className='space-y-5'>
+                {secondaryTools}
                 {message.citations.length > 0
                   ? (
                     <div>
@@ -1412,10 +1448,10 @@ function AnswerCard({
                               title={citation.headline
                                 ? `${citation.title} - ${citation.headline}`
                                 : citation.title}
-                              className='rp-chip h-auto py-1'
+                              className='rp-chip rp-answer-chip h-auto py-1'
                             >
                               <span
-                                className='inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold'
+                                className='inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-2xs font-semibold'
                                 style={{
                                   backgroundColor: 'var(--rp-accent)',
                                   color: 'var(--rp-on-accent)',
@@ -1427,7 +1463,7 @@ function AnswerCard({
                                 <span className='truncate'>{citation.title}</span>
                                 {citation.headline
                                   ? (
-                                    <span className='truncate text-[11px] font-normal text-ink-3'>
+                                    <span className='truncate text-2xs font-normal text-ink-3'>
                                       {citation.headline}
                                     </span>
                                   )
@@ -1483,22 +1519,9 @@ function AnswerCard({
                             onClick={() => setShowPipeline((prev) => !prev)}
                             aria-expanded={showPipeline}
                             aria-controls={`${message.id}-pipeline`}
-                            className='rp-focus flex items-center gap-1.5 rounded-none text-xs font-medium text-ink-3 hover:text-ink'
+                            className='rp-btn rp-btn-ghost rp-btn-sm'
                           >
-                            <svg
-                              viewBox='0 0 20 20'
-                              fill='none'
-                              stroke='currentColor'
-                              strokeWidth='1.7'
-                              strokeLinecap='round'
-                              strokeLinejoin='round'
-                              aria-hidden='true'
-                              className={`h-3 w-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${
-                                showPipeline ? 'rotate-90' : ''
-                              }`}
-                            >
-                              <path d='M7 4l6 6-6 6' />
-                            </svg>
+                            <ChevronDown size='sm' className={showPipeline ? 'rotate-180' : ''} />
                             {showPipeline ? ui('Hide the pipeline') : ui('Show the pipeline')}
                           </button>
                         )
@@ -1721,6 +1744,7 @@ export function AskPage() {
   }, [])
   const threadEndRef = useRef<HTMLDivElement | null>(null)
   const sidebarDrawerRef = useRef<HTMLDivElement | null>(null)
+  const sessionButtonRef = useRef<HTMLButtonElement | null>(null)
   // Guards the `?ask=` handoff from Explore against a double-send (React 18
   // Strict Mode replays effects) and resets whenever the tenant changes.
   const askHandledRef = useRef(false)
@@ -1755,7 +1779,7 @@ export function AskPage() {
    * Below `lg` the composer is a pinned bar and the layout is a single column;
    * from `lg` up the sessions rail is beside the thread and the composer is an
    * ordinary block. A media query rather than a resize listener, because the
-   * three things it drives (the pinned bar, the dropped placeholder, the hidden
+   * three things it drives (the pinned bar, the shorter placeholder, the hidden
    * keyboard hint) all switch at exactly the breakpoint the CSS uses.
    */
   const [isCompact, setIsCompact] = useState(() =>
@@ -1923,17 +1947,37 @@ export function AskPage() {
     timers.set(session.id, timer)
   }
 
-  // The mobile sessions drawer is a dialog: Escape closes it, and focus
-  // moves into it on open so keyboard users land in the right place.
   useEffect(() => {
-    if (!showSidebar) return
-    sidebarDrawerRef.current?.focus()
+    if (!isCompact) setShowSidebar(false)
+  }, [isCompact])
+
+  // The sessions dialog traps keyboard focus and returns it to its opener.
+  useEffect(() => {
+    if (!showSidebar || !isCompact) return
+    const drawer = sidebarDrawerRef.current
+    drawer?.querySelector<HTMLButtonElement>('button')?.focus()
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') setShowSidebar(false)
+      if (event.key !== 'Tab' || !drawer) return
+      const controls = Array.from(drawer.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), a[href], [tabindex="0"]',
+      ))
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
     }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [showSidebar])
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      sessionButtonRef.current?.focus()
+    }
+  }, [showSidebar, isCompact])
 
   // Re-load sessions if the tenant slug changes, then merge in any
   // server-side sessions this browser doesn't have locally yet (or that are
@@ -2658,6 +2702,7 @@ export function AskPage() {
     }
   }
 
+  const firstQuestion = messages.find((message) => message.author === 'USER')
   const isEmpty = messages.length === 0
   const lastMessage = messages[messages.length - 1]
   // The latest settled answer and the question it answered, for the wide
@@ -2713,19 +2758,19 @@ export function AskPage() {
         />
       </aside>
 
-      {showSidebar
+      {showSidebar && isCompact
         ? (
           <div
             role='dialog'
             aria-modal='true'
             aria-label={ui('Sessions')}
-            className='fixed inset-0 z-40 flex lg:hidden'
+            className='fixed inset-0 z-[60] flex lg:hidden'
           >
             <button
               type='button'
               aria-label={ui('Close sessions')}
               onClick={() => setShowSidebar(false)}
-              className='flex-1 bg-black/30'
+              className='rp-scrim flex-1'
             />
             <div
               ref={sidebarDrawerRef}
@@ -2792,9 +2837,7 @@ export function AskPage() {
                   : undefined}
                 className='sticky top-0 z-20 mb-6 flex shrink-0 flex-wrap items-center gap-3 bg-[var(--rp-app)] pb-2 transition-transform duration-300 ease-out motion-reduce:transition-none lg:static lg:bg-transparent lg:pb-0'
               >
-                <h1 className='rp-display min-w-0 basis-full break-words text-xl text-ink sm:text-2xl'>
-                  {currentSessionTitle()}
-                </h1>
+                <QuestionHeading question={firstQuestion?.text ?? currentSessionTitle()} />
                 {canExport
                   ? (
                     <button
@@ -2806,20 +2849,9 @@ export function AskPage() {
                         : ui(
                           'Save this research trail as a Word document with a numbered reference list',
                         )}
-                      className='rp-btn rp-btn-outline shrink-0 gap-2 disabled:cursor-not-allowed'
+                      className='rp-btn rp-btn-ghost rp-btn-sm shrink-0 disabled:cursor-not-allowed'
                     >
-                      <svg
-                        viewBox='0 0 24 24'
-                        fill='none'
-                        stroke='currentColor'
-                        strokeWidth='1.7'
-                        strokeLinecap='round'
-                        strokeLinejoin='round'
-                        className='h-4 w-4'
-                        aria-hidden='true'
-                      >
-                        <path d='M12 4v11m0 0l-4-4m4 4l4-4M5 19h14' />
-                      </svg>
+                      <Download size='sm' />
                       {ui('Export')}
                     </button>
                   )
@@ -2840,16 +2872,16 @@ export function AskPage() {
           >
             {isEmpty
               ? (
-                <div className='space-y-4 pt-6 sm:pt-10'>
-                  <div className='mx-auto max-w-2xl text-center'>
-                    <h1 className='rp-display text-3xl text-ink sm:text-4xl'>{ui('Ask')}</h1>
+                <div className='space-y-6 py-4 sm:py-8'>
+                  <div className='max-w-2xl'>
+                    <h1 className='rp-display text-2xl text-ink sm:text-3xl'>{ui('Ask')}</h1>
                     <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
                       {ui("Ask a question and get an answer grounded in this portal's research.")}
                     </p>
                   </div>
                   {suggestions && suggestions.length > 0
                     ? (
-                      <div className='pt-3'>
+                      <div>
                         {
                           /* Chips on a phone, where a grid of cards would stack into
                           * a wall; proper cards from sm up. */
@@ -2877,7 +2909,7 @@ export function AskPage() {
                               className='rp-suggest-card'
                             >
                               <span className='rp-suggest-text'>{question.text}</span>
-                              <span aria-hidden='true' className='rp-suggest-arrow'>&rarr;</span>
+                              <ArrowRight size='sm' className='rp-suggest-arrow' />
                             </button>
                           ))}
                         </div>
@@ -2890,13 +2922,14 @@ export function AskPage() {
                 /* Answers hold a readable measure however wide the pane is -
                  * full-width prose on a large display is what the house rules
                  * call the anti-pattern. */
-                <div className='max-w-[75ch] space-y-4'>
+                <div className='space-y-4'>
                   {messages.map((message, index) =>
                     message.author === 'USER'
                       ? (
                         <UserBubble
                           key={message.id}
                           message={message}
+                          showQuestion={message.id !== firstQuestion?.id}
                           onAskSubquery={(subquery) => void send(subquery)}
                         />
                       )
@@ -2974,12 +3007,10 @@ export function AskPage() {
                               type='button'
                               onClick={() => void send(question)}
                               style={tailStyle(index + 1)}
-                              className='rp-answer-tail rp-focus flex items-center gap-2 rounded-[var(--rp-radius-btn)] border border-line bg-surface px-3 py-2 text-left text-[0.8125rem] leading-snug font-medium text-[var(--rp-ink-2)] transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)] sm:max-w-[24rem]'
+                              className='rp-answer-tail rp-answer-followup rp-focus flex items-center gap-2 rounded-[var(--rp-radius-btn)] border border-line bg-surface px-3 py-2 text-left text-[0.8125rem] leading-snug font-medium text-[var(--rp-ink-2)] transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)] sm:max-w-[24rem]'
                             >
                               <span className='min-w-0'>{question}</span>
-                              <span aria-hidden='true' className='ml-auto shrink-0 text-ink-3'>
-                                &rarr;
-                              </span>
+                              <ArrowRight size='sm' className='ml-auto shrink-0 text-ink-3' />
                             </button>
                           ))}
                         </div>
@@ -3033,23 +3064,11 @@ export function AskPage() {
                 ? (
                   <button
                     type='button'
+                    ref={sessionButtonRef}
                     onClick={() => setShowSidebar(true)}
-                    className='rp-chip h-9 sm:h-7'
+                    className='rp-btn rp-btn-outline rp-btn-sm'
                   >
-                    <svg
-                      viewBox='0 0 24 24'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth={1.8}
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      className='h-4 w-4'
-                      aria-hidden='true'
-                    >
-                      <path d='M3 12a9 9 0 1 0 2.6-6.4L3 8' />
-                      <path d='M3 3v5h5' />
-                      <path d='M12 7.5V12l3.2 1.9' />
-                    </svg>
+                    <History size='sm' />
                     {ui('Sessions')}
                   </button>
                 )
@@ -3063,22 +3082,9 @@ export function AskPage() {
                     }}
                     disabled={isStreaming}
                     aria-pressed={deepResearch}
-                    className={`rp-chip h-9 sm:h-7 ${deepResearch ? 'rp-chip-active' : ''}`}
+                    className={`rp-btn rp-btn-outline rp-btn-sm ${deepResearch ? 'bg-wash' : ''}`}
                   >
-                    <svg
-                      viewBox='0 0 24 24'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth={1.8}
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      className='h-4 w-4'
-                      aria-hidden='true'
-                    >
-                      <circle cx='10.5' cy='11' r='5.8' />
-                      <path d='M14.8 15.2L20 20.4' />
-                      <path d='M18.6 2.6v3.6M16.8 4.4h3.6' />
-                    </svg>
+                    <Search size='sm' />
                     {ui('Deep research')}
                   </button>
                 )
@@ -3101,26 +3107,6 @@ export function AskPage() {
               <label htmlFor='ask-composer' className='sr-only'>
                 {ui('Ask a question')}
               </label>
-              {
-                /* The placeholder is dropped on a phone (it clipped mid-word
-                * across two lines), so the field carries a pencil instead to
-                * keep it reading as somewhere to type. The sr-only label above
-                * is still what screen readers announce. */
-              }
-              <span aria-hidden='true' className='shrink-0 pb-2 pl-1 text-ink-3 lg:hidden'>
-                <svg
-                  viewBox='0 0 24 24'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth={1.8}
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  className='h-[18px] w-[18px]'
-                >
-                  <path d='M12 20h8' />
-                  <path d='M16.5 3.5a2.1 2.1 0 0 1 3 3L7.5 18.5l-4 1 1-4z' />
-                </svg>
-              </span>
               <textarea
                 id='ask-composer'
                 value={draft}
@@ -3128,8 +3114,10 @@ export function AskPage() {
                 onKeyDown={handleKeyDown}
                 disabled={!canAsk || isStreaming}
                 rows={1}
-                placeholder={isCompact ? undefined : ui('Ask a question about this research')}
-                className='max-h-40 min-w-0 flex-1 resize-none rounded-[var(--rp-radius)] border-0 bg-transparent px-2 py-2 text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none disabled:opacity-60 lg:px-3'
+                placeholder={isCompact
+                  ? ui('Ask a question')
+                  : ui('Ask a question about this research')}
+                className='rp-answer-composer max-h-40 min-w-0 flex-1 resize-none rounded-[var(--rp-radius)] border-0 bg-transparent px-2 py-2 text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none disabled:opacity-60 lg:px-3'
               />
               {isStreaming
                 ? (
