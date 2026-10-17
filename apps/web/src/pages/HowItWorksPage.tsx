@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { KbCounters } from '@research-portal/core'
 import { getCounters } from '../api/client.ts'
 import { Skeleton } from '../components/ui.tsx'
+import { ArrowRight } from '../components/icons.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 // ---------------------------------------------------------------------------
@@ -36,10 +37,9 @@ function headingFor(id: SectionId): string {
 }
 
 // ---------------------------------------------------------------------------
-// The flow diagram. One inline SVG in two orientations: a row of six steps
-// from `lg` up and a stacked column below it, so the labels stay legible at a
-// 390px viewport. Every fill, stroke and face is a token, so the diagram
-// follows the palette, the viewer's dark scheme and the shape dial.
+// The flow diagram uses normal document text so each step grows with the
+// reader's text size. It is a row from `lg` and a stacked column below it.
+// Every ground and edge follows the palette and shape dials.
 // ---------------------------------------------------------------------------
 
 type FlowStep = { title: string; detail: string }
@@ -94,206 +94,49 @@ export function wrapWords(text: string, max: number): string[] {
   return lines
 }
 
-const ROW = { width: 168, height: 150, gap: 38.4, top: 20 }
-// Narrow enough that a 390px phone renders it at roughly 1:1, so 14-unit text is 14px.
-const COLUMN = { width: 300, wrap: 34, titleRow: 48, lineHeight: 19, gap: 32 }
-
-function ArrowMarker({ id }: { id: string }) {
+function FlowSteps({ orientation }: { orientation: 'row' | 'column' }) {
+  const { ui, number } = usePortalLocale()
+  const row = orientation === 'row'
   return (
-    <defs>
-      <marker
-        id={id}
-        viewBox='0 0 10 10'
-        refX='9'
-        refY='5'
-        markerWidth='7'
-        markerHeight='7'
-        orient='auto-start-reverse'
-      >
-        <path
-          d='M1 1l7 4-7 4'
-          fill='none'
-          strokeWidth='1.6'
-          style={{ stroke: 'var(--rp-ink-3)' }}
-        />
-      </marker>
-    </defs>
-  )
-}
-
-function StepBox({
-  x,
-  y,
-  width,
-  height,
-  index,
-  last,
-  children,
-}: {
-  x: number
-  y: number
-  width: number
-  height: number
-  index: number
-  last: boolean
-  children: ReactNode
-}) {
-  return (
-    <g transform={`translate(${x} ${y})`}>
-      <rect
-        className='rp-flow-node'
-        width={width}
-        height={height}
-        strokeWidth='1'
-        style={{
-          fill: last ? 'var(--rp-wash)' : 'var(--rp-surface-2)',
-          stroke: 'var(--rp-line)',
-        }}
-      />
-      <circle cx='22' cy='24' r='12' style={{ fill: 'var(--rp-accent)' }} />
-      <text
-        x='22'
-        y='24'
-        textAnchor='middle'
-        dominantBaseline='central'
-        fontSize='12'
-        fontWeight='700'
-        style={{ fill: 'var(--rp-on-accent)' }}
-      >
-        {index + 1}
-      </text>
-      {children}
-    </g>
-  )
-}
-
-function FlowRow() {
-  const { ui } = usePortalLocale()
-  const width = FLOW_STEPS.length * ROW.width + (FLOW_STEPS.length - 1) * ROW.gap
-  const height = ROW.height + ROW.top * 2
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className='hidden w-full lg:block'
-      data-orientation='row'
-      style={{ fontFamily: 'var(--rp-font-body)' }}
+    <ol
+      className={row ? 'hidden grid-cols-6 gap-8 lg:grid' : 'space-y-8 lg:hidden'}
+      data-orientation={orientation}
       aria-hidden='true'
     >
-      <ArrowMarker id='how-flow-arrow-row' />
-      {FLOW_STEPS.map((step, index) => {
-        const x = index * (ROW.width + ROW.gap)
-        const lines = wrapWords(ui(step.detail), 22)
-        return (
-          <g key={step.title}>
-            <StepBox
-              x={x}
-              y={ROW.top}
-              width={ROW.width}
-              height={ROW.height}
-              index={index}
-              last={index === FLOW_STEPS.length - 1}
+      {FLOW_STEPS.map((step, index) => (
+        <li key={step.title} className='relative flex min-w-0'>
+          <div
+            className='flex w-full min-w-0 flex-col gap-2 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border p-4'
+            style={{
+              backgroundColor: index === FLOW_STEPS.length - 1
+                ? 'var(--rp-wash)'
+                : 'var(--rp-surface-2)',
+              borderColor: 'var(--rp-line)',
+            }}
+          >
+            <span
+              className='inline-flex min-h-6 min-w-6 self-start items-center justify-center rounded-full px-1 text-xs font-semibold'
+              style={{ backgroundColor: 'var(--rp-accent)', color: 'var(--rp-on-accent)' }}
             >
-              <text x='14' y='62' fontSize='15' fontWeight='600' style={{ fill: 'var(--rp-ink)' }}>
-                {ui(step.title)}
-              </text>
-              {lines.map((line, lineIndex) => (
-                <text
-                  key={line}
-                  x='14'
-                  y={84 + lineIndex * 16}
-                  fontSize='12'
-                  style={{ fill: 'var(--rp-ink-2)' }}
-                >
-                  {line}
-                </text>
-              ))}
-            </StepBox>
-            {index < FLOW_STEPS.length - 1
-              ? (
-                <line
-                  x1={x + ROW.width + 5}
-                  y1={ROW.top + ROW.height / 2}
-                  x2={x + ROW.width + ROW.gap - 5}
-                  y2={ROW.top + ROW.height / 2}
-                  strokeWidth='1.6'
-                  markerEnd='url(#how-flow-arrow-row)'
-                  style={{ stroke: 'var(--rp-ink-3)' }}
-                />
-              )
-              : null}
-          </g>
-        )
-      })}
-    </svg>
-  )
-}
-
-function FlowColumn() {
-  const { ui } = usePortalLocale()
-  // Per-step heights: a title row, then one line per wrapped detail line.
-  const layout = FLOW_STEPS.map((step) => ({
-    step,
-    lines: wrapWords(ui(step.detail), COLUMN.wrap),
-  }))
-  const heights = layout.map(({ lines }) => COLUMN.titleRow + lines.length * COLUMN.lineHeight)
-  const tops = heights.map((_, index) =>
-    heights.slice(0, index).reduce((sum, h) => sum + h + COLUMN.gap, 0)
-  )
-  const height = heights.reduce((sum, h) => sum + h, 0) + (FLOW_STEPS.length - 1) * COLUMN.gap
-  return (
-    <svg
-      viewBox={`0 0 ${COLUMN.width} ${height}`}
-      className='mx-auto w-full max-w-[24rem] lg:hidden'
-      data-orientation='column'
-      style={{ fontFamily: 'var(--rp-font-body)' }}
-      aria-hidden='true'
-    >
-      <ArrowMarker id='how-flow-arrow-column' />
-      {layout.map(({ step, lines }, index) => {
-        const y = tops[index] ?? 0
-        const nodeHeight = heights[index] ?? 0
-        return (
-          <g key={step.title}>
-            <StepBox
-              x={0}
-              y={y}
-              width={COLUMN.width}
-              height={nodeHeight}
-              index={index}
-              last={index === FLOW_STEPS.length - 1}
+              {number(index + 1)}
+            </span>
+            <p className='text-sm font-semibold' style={{ color: 'var(--rp-ink)' }}>
+              {ui(step.title)}
+            </p>
+            <p className='text-sm leading-relaxed text-ink-2'>{ui(step.detail)}</p>
+          </div>
+          {index < FLOW_STEPS.length - 1 && (
+            <span
+              className={row
+                ? 'absolute top-1/2 -right-4 translate-x-1/2 -translate-y-1/2 text-ink-3'
+                : 'absolute -bottom-4 left-1/2 -translate-x-1/2 translate-y-1/2 text-ink-3'}
             >
-              <text x='44' y='29' fontSize='16' fontWeight='600' style={{ fill: 'var(--rp-ink)' }}>
-                {ui(step.title)}
-              </text>
-              {lines.map((line, lineIndex) => (
-                <text
-                  key={line}
-                  x='16'
-                  y={COLUMN.titleRow + 4 + lineIndex * COLUMN.lineHeight}
-                  fontSize='14'
-                  style={{ fill: 'var(--rp-ink-2)' }}
-                >
-                  {line}
-                </text>
-              ))}
-            </StepBox>
-            {index < FLOW_STEPS.length - 1
-              ? (
-                <line
-                  x1={COLUMN.width / 2}
-                  y1={y + nodeHeight + 5}
-                  x2={COLUMN.width / 2}
-                  y2={y + nodeHeight + COLUMN.gap - 5}
-                  strokeWidth='1.6'
-                  markerEnd='url(#how-flow-arrow-column)'
-                  style={{ stroke: 'var(--rp-ink-3)' }}
-                />
-              )
-              : null}
-          </g>
-        )
-      })}
-    </svg>
+              <ArrowRight size='md' className={row ? '' : 'rotate-90'} />
+            </span>
+          )}
+        </li>
+      ))}
+    </ol>
   )
 }
 
@@ -304,13 +147,13 @@ export function FlowDiagram() {
   ).join(' ')
   return (
     <figure
-      className='rp-card p-3 sm:p-6'
+      className='rp-card p-5 lg:p-6'
       data-testid='how-it-works-flow'
       role='img'
       aria-label={ui('The flow of one question through the portal. {description}', { description })}
     >
-      <FlowRow />
-      <FlowColumn />
+      <FlowSteps orientation='row' />
+      <FlowSteps orientation='column' />
       <figcaption className='mt-4 text-xs text-ink-3'>
         {ui('The flow of one question, from the collection to the checked answer.')}
       </figcaption>
@@ -327,12 +170,12 @@ export function FlowDiagram() {
 function Figure({ label, value }: { label: string; value: number | null }) {
   const { ui, number } = usePortalLocale()
   return (
-    <div className='flex items-baseline justify-between gap-3 rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3 sm:block'>
+    <div className='rp-card flex items-baseline justify-between gap-3 p-5 sm:block lg:p-6'>
       <dt className='rp-eyebrow text-ink-3'>{ui(label)}</dt>
       {value === null
         ? <Skeleton className='h-6 w-16 sm:mt-1.5' />
         : (
-          <dd className='font-display text-xl font-semibold text-ink sm:mt-1'>
+          <dd className='rp-display text-2xl tabular-nums text-ink sm:mt-1'>
             {number(value)}
           </dd>
         )}
@@ -361,7 +204,7 @@ function LiveFigures({ counters, pending }: { counters?: KbCounters; pending: bo
 
 function Bullet({ children }: { children: ReactNode }) {
   return (
-    <li className='flex gap-2.5 text-[0.9375rem] leading-relaxed text-ink-2'>
+    <li className='flex gap-2.5 text-base leading-relaxed text-ink-2'>
       <span
         aria-hidden='true'
         className='mt-2 h-1.5 w-1.5 shrink-0 rounded-full'
@@ -374,7 +217,7 @@ function Bullet({ children }: { children: ReactNode }) {
 
 function Steps({ children }: { children: ReactNode }) {
   return (
-    <ol className='space-y-3 pl-5 text-[0.9375rem] leading-relaxed text-ink-2 marker:font-semibold marker:text-ink-3'>
+    <ol className='space-y-3 pl-5 text-base leading-relaxed text-ink-2 marker:font-semibold marker:text-ink-3'>
       {children}
     </ol>
   )
@@ -395,10 +238,10 @@ function Section(
     : undefined
   return (
     <section id={id} className='scroll-mt-24'>
-      <h2 className='font-display text-xl font-semibold text-ink'>
+      <h2 className='rp-display text-xl text-ink'>
         {translated?.heading ?? headingFor(id)}
       </h2>
-      <div className={`mt-3 space-y-3.5 ${wide ? '' : 'rp-measure'}`}>
+      <div className={`mt-3 space-y-3.5 ${wide ? '' : 'rp-measure rp-prose'}`}>
         {translated && id !== 'tools' ? <HelpMarkdown text={translated.body} /> : children}
         {after}
       </div>
@@ -407,7 +250,7 @@ function Section(
 }
 
 function P({ children }: { children: ReactNode }) {
-  return <p className='text-[0.9375rem] leading-relaxed text-ink-2'>{children}</p>
+  return <p className='text-base leading-relaxed text-ink-2'>{children}</p>
 }
 
 /** A link inside running prose: accent ink and an underline, so it reads as a link. */
@@ -433,7 +276,7 @@ function OnThisPage() {
           <li key={section.id}>
             <a
               href={`#${section.id}`}
-              className='rp-focus block rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-sm text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink'
+              className='rp-link-standalone rp-focus flex w-full justify-start rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-sm text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink'
             >
               {language === 'ja'
                 ? HELP_PAGES_JA['how-this-works']!.sections[index]!.heading
@@ -515,22 +358,11 @@ function ToolCard({ tool }: { tool: Tool }) {
   return (
     <Link
       to={tool.path}
-      className='rp-card rp-focus group flex h-full flex-col gap-1.5 p-4 no-underline transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+      className='rp-card rp-focus group flex min-h-full flex-col gap-2 p-5 no-underline transition-colors duration-150 hover:bg-[var(--rp-surface-2)] lg:p-6'
     >
       <span className='flex items-center justify-between gap-2'>
-        <span className='font-display text-base font-semibold text-ink'>{ui(tool.title)}</span>
-        <svg
-          viewBox='0 0 20 20'
-          fill='none'
-          stroke='currentColor'
-          strokeWidth='1.7'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-          aria-hidden='true'
-          className='h-4 w-4 shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5'
-        >
-          <path d='M7.5 5l5 5-5 5' />
-        </svg>
+        <span className='text-base font-semibold text-ink'>{ui(tool.title)}</span>
+        <ArrowRight size='sm' className='text-ink-3' />
       </span>
       <span className='text-sm leading-relaxed text-ink-2'>{ui(tool.detail)}</span>
     </Link>
@@ -554,13 +386,13 @@ export function HowItWorksPage() {
   const intents = config.intents ?? []
 
   return (
-    <main className='rp-shell py-6 sm:py-8 lg:py-10'>
+    <main className='rp-shell py-8 lg:py-10'>
       <div className='mb-6'>
         <p className='rp-eyebrow text-ink-3'>{ui('Help')}</p>
-        <h1 className='mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl'>
+        <h1 className='rp-display mt-1 text-2xl text-ink sm:text-3xl'>
           {ui('How this works')}
         </h1>
-        <p className='mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-2'>
+        <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>
           {ui(
             'How {name} turns a collection of papers into cited answers, and what it checks before it shows you one.',
             { name: config.branding.productName },
@@ -568,19 +400,19 @@ export function HowItWorksPage() {
         </p>
       </div>
 
-      <div className='space-y-6'>
+      <div className='mt-6 space-y-6 lg:space-y-8'>
         <LiveFigures counters={counters.data} pending={counters.isPending} />
         <FlowDiagram />
       </div>
 
-      <div className='mt-10 grid grid-cols-1 gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10 2xl:grid-cols-[16rem_minmax(0,1fr)]'>
+      <div className='mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-10 2xl:grid-cols-[16rem_minmax(0,1fr)]'>
         <aside className='hidden lg:block'>
           <div className='lg:sticky lg:top-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_4)]'>
             <OnThisPage />
           </div>
         </aside>
 
-        <div className='min-w-0 space-y-10'>
+        <div className='min-w-0 space-y-6 lg:space-y-8'>
           <Section
             id='content'
             after={
