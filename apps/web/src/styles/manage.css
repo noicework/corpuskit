@@ -69,7 +69,3 @@
 .rp-manage-disclosure.rp-btn {
   justify-content: flex-start;
 }
-
-.rp-manage-delete-action.rp-btn {
-  padding-inline-start: 2.25rem;
-}

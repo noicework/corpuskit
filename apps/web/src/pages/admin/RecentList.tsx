@@ -7,7 +7,7 @@ import { getAdminRecent, setResourceHidden } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
-import { EyeOff, RotateCw, Trash, Upload } from '../../components/icons.tsx'
+import { EyeOff, RotateCw, Upload } from '../../components/icons.tsx'
 import { deletedNotice, DeleteDocumentButton } from '../../components/DeleteDocument.tsx'
 import { errorMessage } from './shared.ts'
 
@@ -240,17 +240,13 @@ function RecentListContent({ slug }: { slug: string }) {
                   resource={resource}
                   onChanged={onChanged}
                 />
-                <span className='relative inline-flex'>
-                  <span className='pointer-events-none absolute left-[0.625rem] top-1/2 -translate-y-1/2 text-[var(--rp-bad-ink)]'>
-                    <Trash size='sm' />
-                  </span>
-                  <DeleteDocumentButton
-                    slug={slug}
-                    document={resource}
-                    onDeleted={onDeleted(resource)}
-                    className='rp-manage-delete-action rp-btn rp-btn-sm rp-btn-danger'
-                  />
-                </span>
+                <DeleteDocumentButton
+                  slug={slug}
+                  document={resource}
+                  onDeleted={onDeleted(resource)}
+                  icon
+                  className='rp-btn rp-btn-sm rp-btn-danger'
+                />
               </div>
             </li>
           ))}

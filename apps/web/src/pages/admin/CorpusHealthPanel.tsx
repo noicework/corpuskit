@@ -10,7 +10,7 @@ import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { Button, SectionHeader } from '../../components/ui.tsx'
-import { ChevronDown, EyeOff, RotateCw, Search, Trash, Upload } from '../../components/icons.tsx'
+import { ChevronDown, EyeOff, RotateCw, Search, Upload } from '../../components/icons.tsx'
 import {
   deletedNotice,
   DeleteDocumentButton,
@@ -98,18 +98,13 @@ function HealthRow({
           >
             {busy ? ui('Updating…') : row.hidden ? ui('Publish') : ui('Hide')}
           </Button>
-          <span className='relative inline-flex text-[var(--rp-bad-ink)]'>
-            <Trash
-              size='sm'
-              className='pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2'
-            />
-            <DeleteDocumentButton
-              slug={slug}
-              document={row}
-              onDeleted={(outcome) => onDeleted(row, outcome)}
-              className='rp-manage-delete-action rp-btn rp-btn-danger rp-btn-sm shrink-0'
-            />
-          </span>
+          <DeleteDocumentButton
+            slug={slug}
+            document={row}
+            onDeleted={(outcome) => onDeleted(row, outcome)}
+            icon
+            className='rp-btn rp-btn-danger rp-btn-sm shrink-0'
+          />
         </span>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
