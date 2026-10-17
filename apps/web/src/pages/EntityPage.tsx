@@ -5,6 +5,7 @@ import { Link, useOutletContext, useParams } from 'react-router-dom'
 import type { ScoredResource } from '@research-portal/core'
 import { ApiError, type EntityDossier, getEntityDossier } from '../api/client.ts'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
+import { ArrowLeft, ArrowRight, MessageSquare, Search } from '../components/icons.tsx'
 import { EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
 import { passageIsQuotable } from '../lib/passage.ts'
 import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
@@ -26,12 +27,12 @@ function RelationChip({ edge, slug, name }: { edge: RelationEdge; slug: string; 
   const { ui } = usePortalLocale()
   const renderSide = (value: string) => {
     if (sameEntity(value, name)) {
-      return <span className='font-semibold text-ink'>{value}</span>
+      return <span className='min-w-0 break-words font-semibold text-ink'>{value}</span>
     }
     return (
       <Link
         to={`/t/${slug}/entity/${encodeURIComponent(value)}`}
-        className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        className='rp-focus inline-flex min-h-[2.75rem] min-w-0 max-w-full items-center break-words rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-[var(--rp-ink)] lg:min-h-[1.5rem] pointer-coarse:min-h-[2.75rem]'
         style={{ color: 'var(--rp-accent-fg)' }}
       >
         {value}
@@ -40,9 +41,11 @@ function RelationChip({ edge, slug, name }: { edge: RelationEdge; slug: string; 
   }
 
   return (
-    <div className='flex flex-wrap items-center gap-1.5 rounded-[var(--rp-radius)] border border-line bg-surface px-3.5 py-2.5 text-sm text-ink-2'>
+    <div className='rp-card flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 p-4 text-sm text-ink-2'>
       {renderSide(edge.source)}
-      <span className='text-ink-3'>- {graphRelationLabel(edge.label, ui)} &rarr;</span>
+      <span className='inline-flex items-center gap-1.5 text-ink-3'>
+        {graphRelationLabel(edge.label, ui)} <ArrowRight size='sm' />
+      </span>
       {renderSide(edge.target)}
     </div>
   )
@@ -78,13 +81,13 @@ function MentionCard({ resource, slug }: { resource: ScoredResource; slug: strin
         }
         {resource.matchedPassage && passageIsQuotable(resource)
           ? (
-            <p className='rp-clamp-2 mt-1.5 text-sm italic leading-relaxed text-ink-2'>
+            <p className='rp-prose rp-measure rp-clamp-2 mt-1.5 text-sm italic text-ink-2'>
               &ldquo;{resource.matchedPassage}&rdquo;
             </p>
           )
           : resource.summary
           ? (
-            <p className='rp-clamp-2 mt-1.5 text-sm leading-relaxed text-ink-2'>
+            <p className='rp-prose rp-measure rp-clamp-2 mt-1.5 text-sm text-ink-2'>
               {resource.summary}
             </p>
           )
@@ -141,12 +144,13 @@ export function EntityPage() {
   }`
 
   return (
-    <main className='mx-auto max-w-4xl px-6 py-8'>
+    <main className='rp-shell py-8 lg:py-10'>
       <Link
         to={`/t/${config.slug}/graph`}
-        className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-sm font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        className='rp-link-standalone rp-focus text-sm font-medium'
       >
-        {ui('← Back to graph')}
+        <ArrowLeft size='sm' />
+        {ui('Back to graph')}
       </Link>
 
       {isLoading
@@ -155,18 +159,30 @@ export function EntityPage() {
             <div className='mt-4 flex flex-wrap items-start justify-between gap-4'>
               <div className='min-w-0'>
                 <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
-                <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{name}</h1>
+                <h1 className='rp-display mt-1.5 break-words text-2xl text-ink sm:text-3xl'>
+                  {name}
+                </h1>
               </div>
               <Link to={askHref} className='rp-btn rp-btn-primary shrink-0'>
+                <MessageSquare size='sm' />
                 {ui('Ask about this')}
               </Link>
             </div>
-            <section className='mt-8'>
-              <h2 className='rp-eyebrow text-ink-3'>{ui('Entity connections')}</h2>
-              <div className='mt-3'>
-                <RelationsSkeleton />
-              </div>
-            </section>
+            <div className='mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)] lg:gap-8'>
+              <section className='min-w-0 lg:col-start-2'>
+                <h2 className='rp-display text-xl text-ink'>{ui('Entity connections')}</h2>
+                <div className='mt-4'>
+                  <RelationsSkeleton />
+                </div>
+              </section>
+              <section className='min-w-0 lg:col-start-1 lg:row-start-1'>
+                <h2 className='rp-display text-xl text-ink'>{ui('Mentioned in')}</h2>
+                <div className='mt-4 space-y-3' aria-busy='true'>
+                  <Skeleton className='h-36 w-full' />
+                  <Skeleton className='h-36 w-full' />
+                </div>
+              </section>
+            </div>
           </>
         )
         : null}
@@ -175,7 +191,7 @@ export function EntityPage() {
         ? (
           <div className='mt-4'>
             <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
-            <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{name}</h1>
+            <h1 className='rp-display mt-1.5 break-words text-2xl text-ink sm:text-3xl'>{name}</h1>
             <div className='mt-6'>
               <EmptyState
                 title={ui('Nothing on this yet')}
@@ -187,6 +203,7 @@ export function EntityPage() {
                   to={`/t/${config.slug}/search?q=${encodeURIComponent(name)}`}
                   className='rp-btn rp-btn-outline'
                 >
+                  <Search size='sm' />
                   {ui('Search the library')}
                 </Link>
               </EmptyState>
@@ -210,14 +227,16 @@ export function EntityPage() {
             <div className='mt-4 flex flex-wrap items-start justify-between gap-4'>
               <div className='min-w-0'>
                 <p className='rp-eyebrow text-ink-3'>{ui('Entity')}</p>
-                <h1 className='rp-display mt-1.5 text-3xl text-ink sm:text-4xl'>{data.name}</h1>
+                <h1 className='rp-display mt-1.5 break-words text-2xl text-ink sm:text-3xl'>
+                  {data.name}
+                </h1>
                 {groups.length > 0
                   ? (
                     <div className='mt-2.5 flex flex-wrap gap-1.5'>
                       {groups.map((group) => (
                         <span
                           key={group}
-                          className='rp-badge rp-badge-quiet uppercase tracking-[0.06em]'
+                          className='rp-tag'
                         >
                           {graphGroupLabel(group, ui)}
                         </span>
@@ -227,58 +246,61 @@ export function EntityPage() {
                   : null}
               </div>
               <Link to={askHref} className='rp-btn rp-btn-primary shrink-0'>
+                <MessageSquare size='sm' />
                 {ui('Ask about this')}
               </Link>
             </div>
 
-            <section className='mt-8'>
-              <h2 className='rp-eyebrow text-ink-3'>{ui('Entity connections')}</h2>
-              {relatedEdges.length === 0
-                ? (
-                  <div className='mt-3'>
-                    <EmptyState
-                      title={ui('No connections recorded yet')}
-                      description={ui(
-                        'The knowledge graph has no relations for this entity so far. The papers below still mention it.',
-                      )}
-                    />
-                  </div>
-                )
-                : (
-                  <div className='mt-3 flex flex-col gap-2'>
-                    {relatedEdges.map((edge, index) => (
-                      <RelationChip
-                        key={`${edge.source}-${edge.label}-${edge.target}-${index}`}
-                        edge={edge}
-                        slug={config.slug}
-                        name={name}
+            <div className='mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)] lg:gap-8'>
+              <section className='min-w-0 lg:col-start-2'>
+                <h2 className='rp-display text-xl text-ink'>{ui('Entity connections')}</h2>
+                {relatedEdges.length === 0
+                  ? (
+                    <div className='mt-4'>
+                      <EmptyState
+                        title={ui('No connections recorded yet')}
+                        description={ui(
+                          'The knowledge graph has no relations for this entity so far. The papers below still mention it.',
+                        )}
                       />
-                    ))}
-                  </div>
-                )}
-            </section>
+                    </div>
+                  )
+                  : (
+                    <div className='mt-4 flex flex-col gap-2'>
+                      {relatedEdges.map((edge, index) => (
+                        <RelationChip
+                          key={`${edge.source}-${edge.label}-${edge.target}-${index}`}
+                          edge={edge}
+                          slug={config.slug}
+                          name={name}
+                        />
+                      ))}
+                    </div>
+                  )}
+              </section>
 
-            <section className='mt-8'>
-              <h2 className='rp-eyebrow text-ink-3'>{ui('Mentioned in')}</h2>
-              {data.resources.length === 0
-                ? (
-                  <div className='mt-3'>
-                    <EmptyState
-                      title={ui('No resources reference this entity yet')}
-                      description={ui(
-                        'It may only appear in the knowledge graph so far, without an indexed passage.',
-                      )}
-                    />
-                  </div>
-                )
-                : (
-                  <div className='mt-3 space-y-3'>
-                    {data.resources.map((resource) => (
-                      <MentionCard key={resource.id} resource={resource} slug={config.slug} />
-                    ))}
-                  </div>
-                )}
-            </section>
+              <section className='min-w-0 lg:col-start-1 lg:row-start-1'>
+                <h2 className='rp-display text-xl text-ink'>{ui('Mentioned in')}</h2>
+                {data.resources.length === 0
+                  ? (
+                    <div className='mt-4'>
+                      <EmptyState
+                        title={ui('No resources reference this entity yet')}
+                        description={ui(
+                          'It may only appear in the knowledge graph so far, without an indexed passage.',
+                        )}
+                      />
+                    </div>
+                  )
+                  : (
+                    <div className='mt-4 space-y-3'>
+                      {data.resources.map((resource) => (
+                        <MentionCard key={resource.id} resource={resource} slug={config.slug} />
+                      ))}
+                    </div>
+                  )}
+              </section>
+            </div>
           </>
         )
         : null}

@@ -1,5 +1,7 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
+import { Maximize, ZoomIn, ZoomOut } from './icons.tsx'
+import { IconButton } from './ui.tsx'
 import {
   Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -484,8 +486,201 @@ function useElementSize() {
   return { ref, size }
 }
 
-/** Frame the whole graph inside the part of the viewport the panels leave free. */
-function computeFit(nodes: SimNode[], w: number, h: number, insets: Insets): Transform | null {
+export type MapCaption = {
+  id: string
+  text: string
+  x: number
+  y: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+type PositionedMark = { id: string; x: number; y: number; r: number }
+type Territory = { group: string; style: GroupStyle; x: number; y: number; r: number }
+
+function boxesOverlap(a: MapCaption, b: MapCaption): boolean {
+  return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1
+}
+
+/** Conservative glyph bounds include the surface stroke and tracked category type. */
+function captionAt(id: string, text: string, x: number, y: number, category: boolean): MapCaption {
+  const font = category ? 11 : 12
+  const width = [...text].reduce(
+    (sum, char) => sum + font * ('MW@%'.includes(char) ? 1.15 : 1) + (category ? font * 0.16 : 0),
+    0,
+  )
+  return {
+    id,
+    text,
+    x,
+    y,
+    x1: x - width / 2 - 4,
+    x2: x + width / 2 + 4,
+    y1: y - font - 4,
+    y2: y + 5,
+  }
+}
+
+function captionIsClear(box: MapCaption, placed: MapCaption[], marks: PositionedMark[]): boolean {
+  return !placed.some((other) => boxesOverlap(box, other)) && !marks.some((mark) => {
+    const x = Math.max(box.x1, Math.min(mark.x, box.x2))
+    const y = Math.max(box.y1, Math.min(mark.y, box.y2))
+    return Math.hypot(mark.x - x, mark.y - y) < mark.r + 4
+  })
+}
+
+function abbreviateCaption(text: string, limit: number): string {
+  const chars = [...text]
+  return chars.length > limit ? `${chars.slice(0, limit - 1).join('').trimEnd()}…` : text
+}
+
+/** Place category captions outside their territory without crossing marks or other captions. */
+export function placeTerritoryCaptions(
+  territories: (Territory & { text: string })[],
+  marks: PositionedMark[],
+): MapCaption[] {
+  const placed: MapCaption[] = []
+  const top = marks.length ? Math.min(...marks.map((mark) => mark.y - mark.r)) : 0
+  for (const territory of territories) {
+    let chosen: MapCaption | undefined
+    for (const limit of [40, 28, 20, 14]) {
+      const text = abbreviateCaption(territory.text, limit)
+      const prototype = captionAt(territory.group, text, 0, 0, true)
+      const half = (prototype.x2 - prototype.x1) / 2
+      const candidates = [
+        [territory.x, territory.y - territory.r - 8],
+        [territory.x, territory.y + territory.r + 20],
+        [territory.x - territory.r - half - 8, territory.y + 4],
+        [territory.x + territory.r + half + 8, territory.y + 4],
+        [territory.x - half / 2, territory.y - territory.r - 28],
+        [territory.x + half / 2, territory.y + territory.r + 40],
+      ]
+      for (const [x, y] of candidates) {
+        const box = captionAt(territory.group, text, x ?? 0, y ?? 0, true)
+        if (captionIsClear(box, placed, marks)) {
+          chosen = box
+          break
+        }
+      }
+      if (chosen) break
+    }
+    // A dense or dragged layout may leave no gap beside the territory. The
+    // reserved rows above the marks always provide a collision-free fallback.
+    if (!chosen) {
+      for (let row = 0; !chosen; row++) {
+        const box = captionAt(
+          territory.group,
+          abbreviateCaption(territory.text, 20),
+          territory.x,
+          top - 12 - row * 24,
+          true,
+        )
+        if (captionIsClear(box, placed, marks)) chosen = box
+      }
+    }
+    placed.push(chosen)
+  }
+  return placed
+}
+
+function mapTerritories(
+  nodes: SimNode[],
+  styles: Map<string, GroupStyle>,
+  radiusOf: (node: MapNode) => number,
+): Territory[] {
+  const groups = new Map<string, SimNode[]>()
+  for (const node of nodes) {
+    if (node.x === undefined || node.y === undefined) continue
+    const group = groups.get(node.group)
+    if (group) group.push(node)
+    else groups.set(node.group, [node])
+  }
+  const out: Territory[] = []
+  for (const [group, marks] of groups) {
+    const style = styles.get(group)
+    if (!style) continue
+    const x = marks.reduce((sum, mark) => sum + (mark.x ?? 0), 0) / marks.length
+    const y = marks.reduce((sum, mark) => sum + (mark.y ?? 0), 0) / marks.length
+    const r = Math.max(...marks.map((mark) =>
+      Math.hypot((mark.x ?? 0) - x, (mark.y ?? 0) - y) + radiusOf(mark)
+    )) + 24
+    out.push({ group, style, x, y, r })
+  }
+  return out
+}
+
+export function mapCaptionLayout(
+  nodes: SimNode[],
+  styles: Map<string, GroupStyle>,
+  radiusOf: (node: MapNode) => number,
+  layout: MapLayout,
+  groupLabel: (group: string) => string,
+  budget: number,
+  priorityIds: Set<string> = new Set(),
+) {
+  const marks = nodes.flatMap((node) =>
+    node.x === undefined || node.y === undefined
+      ? []
+      : [{ id: node.id, x: node.x, y: node.y, r: radiusOf(node) }]
+  )
+  const territories = layout === 'grouped' && styles.size > 1
+    ? mapTerritories(nodes, styles, radiusOf)
+    : []
+  const categories = placeTerritoryCaptions(
+    territories.map((territory) => ({
+      ...territory,
+      text: `${groupLabel(territory.group)} · ${territory.style.count}`,
+    })),
+    marks,
+  )
+  const placed = [...categories]
+  const labels = new Map<string, MapCaption>()
+  const ordered = [...nodes].sort((a, b) =>
+    Number(priorityIds.has(b.id)) - Number(priorityIds.has(a.id)) || radiusOf(b) - radiusOf(a)
+  )
+  for (const node of ordered) {
+    if (labels.size >= budget && !priorityIds.has(node.id)) break
+    if (node.x === undefined || node.y === undefined) continue
+    const r = radiusOf(node)
+    let chosen: MapCaption | undefined
+    for (const limit of [34, 24, 18]) {
+      const text = abbreviateCaption(node.label, limit)
+      const prototype = captionAt(node.id, text, 0, 0, false)
+      const half = (prototype.x2 - prototype.x1) / 2
+      for (
+        const [x, y] of [
+          [node.x, node.y - r - 9],
+          [node.x, node.y + r + 18],
+          [node.x + r + half + 6, node.y + 4],
+          [node.x - r - half - 6, node.y + 4],
+        ]
+      ) {
+        const box = captionAt(node.id, text, x ?? 0, y ?? 0, false)
+        if (captionIsClear(box, placed, marks)) {
+          chosen = box
+          break
+        }
+      }
+      if (chosen) break
+    }
+    if (!chosen) continue
+    labels.set(node.id, chosen)
+    placed.push(chosen)
+  }
+  return { territories, categories, labels, captions: placed }
+}
+
+/** Frame marks and their captions inside the measured, unobscured viewport. */
+export function computeFit(
+  nodes: SimNode[],
+  w: number,
+  h: number,
+  insets: Insets,
+  captions: MapCaption[] = [],
+  radiusOf: (node: MapNode) => number = () => 14,
+): Transform | null {
   const points = nodes.filter((n) => n.x !== undefined && n.y !== undefined)
   if (points.length === 0) return null
   let minX = Infinity
@@ -495,38 +690,35 @@ function computeFit(nodes: SimNode[], w: number, h: number, insets: Insets): Tra
   for (const node of points) {
     const x = node.x as number
     const y = node.y as number
-    if (x < minX) minX = x
-    if (x > maxX) maxX = x
-    if (y < minY) minY = y
-    if (y > maxY) maxY = y
+    const r = radiusOf(node)
+    minX = Math.min(minX, x - r)
+    maxX = Math.max(maxX, x + r)
+    minY = Math.min(minY, y - r)
+    maxY = Math.max(maxY, y + r)
   }
-  // Territory captions and node labels sit above the marks, so the framed box
-  // has to be a little taller than the points themselves.
-  minY -= 46
-  maxY += 14
-  const boxW = Math.max(160, w - insets.left - insets.right)
-  const boxH = Math.max(160, h - insets.bottom)
-  const pad = Math.min(96, Math.max(40, Math.min(boxW, boxH) * 0.1))
+  for (const caption of captions) {
+    minX = Math.min(minX, caption.x1)
+    maxX = Math.max(maxX, caption.x2)
+    minY = Math.min(minY, caption.y1)
+    maxY = Math.max(maxY, caption.y2)
+  }
+  const boxW = Math.max(1, w - insets.left - insets.right)
+  const boxH = Math.max(1, h - insets.top - insets.bottom)
+  const pad = Math.min(32, Math.max(10, Math.min(boxW, boxH) * 0.045))
   const spanX = Math.max(1, maxX - minX)
   const spanY = Math.max(1, maxY - minY)
-  // How far a fit may magnify. Node labels are drawn in the simulation's own
-  // coordinates, so they grow with the zoom: a small graph in a tall, narrow
-  // canvas fits on height long before its labels fit on width, and the concept
-  // lens on a phone - eleven nodes carrying names like "International
-  // Connections" - runs its labels straight off both edges at the old ceiling.
-  // A canvas narrower than the simulation's own frame therefore stops framing
-  // at 1:1, where the labels are the size they were designed at. Nothing wide
-  // enough for the map's full layout is affected.
   const maxK = w >= 768 ? 1.75 : Math.max(1, (w / SIM_W) * 1.75)
   const k = Math.max(
-    MIN_K,
-    Math.min(maxK, Math.min((boxW - pad * 2) / spanX, (boxH - pad * 2) / spanY)),
+    0.01,
+    Math.min(
+      maxK,
+      Math.max(1, boxW - pad * 2) / spanX,
+      Math.max(1, boxH - pad * 2) / spanY,
+    ),
   )
-  const cx = (minX + maxX) / 2
-  const cy = (minY + maxY) / 2
   return {
-    x: insets.left + boxW / 2 - cx * k,
-    y: boxH / 2 - cy * k,
+    x: insets.left + boxW / 2 - ((minX + maxX) / 2) * k,
+    y: insets.top + boxH / 2 - ((minY + maxY) / 2) * k,
     k,
   }
 }
@@ -645,11 +837,7 @@ export function KnowledgeMap({
   // it must not re-run the layout on every pixel of a window drag.
   const aspectBucket = !size.ready || size.h < 1
     ? 1.5
-    : size.w / size.h < 1
-    ? 0.8
-    : size.w / size.h < 1.45
-    ? 1.2
-    : 1.9
+    : Math.max(0.5, Math.min(3, Math.round((size.w / size.h) * 10) / 10))
   const visibleStyles = useMemo(() => {
     const styles = new Map<string, GroupStyle>()
     const counts = new Map<string, number>()
@@ -787,13 +975,35 @@ export function KnowledgeMap({
     focusOwnsViewRef.current = false
   }, [stopAnimation])
 
+  const fitCurrentMap = useCallback(() => {
+    const settled = nodesRef.current
+    let budget = 8
+    let fitted: Transform | null = null
+    for (let pass = 0; pass < 3; pass++) {
+      const captions = mapCaptionLayout(
+        settled,
+        visibleStyles,
+        radiusOf,
+        layout,
+        (group) => graphGroupLabel(group, ui),
+        budget,
+      ).captions
+      fitted = computeFit(settled, size.w, size.h, insetsRef.current, captions, radiusOf)
+      if (!fitted) break
+      const nextBudget = Math.max(8, Math.round(24 * (Math.round(fitted.k * 4) / 4)))
+      if (nextBudget === budget) break
+      budget = nextBudget
+    }
+    return fitted
+  }, [nodesRef, visibleStyles, radiusOf, layout, ui, size.w, size.h])
+
   const fitView = useCallback(() => {
     stopAnimation()
     focusOwnsViewRef.current = false
-    const t = computeFit(nodesRef.current, size.w, size.h, insetsRef.current)
+    const t = fitCurrentMap()
     if (t) setTransform(t)
     viewMovedRef.current = false
-  }, [nodesRef, size.w, size.h, stopAnimation])
+  }, [fitCurrentMap, stopAnimation])
 
   // Frame the graph whenever the visible set or the layout changes shape (first
   // load, mode switch, group toggle, expand), and keep it framed when the
@@ -811,7 +1021,7 @@ export function KnowledgeMap({
     lastSizeRef.current = { w: size.w, h: size.h }
     const sig = `${layout}|${aspectBucket}|${visibleNodes.map((n) => n.id).join('|')}`
     if (sig !== fitSigRef.current) {
-      const t = computeFit(nodesRef.current, size.w, size.h, insetsRef.current)
+      const t = fitCurrentMap()
       if (t) {
         setTransform(t)
         fitSigRef.current = sig
@@ -824,7 +1034,7 @@ export function KnowledgeMap({
     // it computed from the new box; a half-delta shift on top would fight it.
     if (animRef.current !== null) return
     if (!viewMovedRef.current) {
-      const t = computeFit(nodesRef.current, size.w, size.h, insetsRef.current)
+      const t = fitCurrentMap()
       if (t) setTransform(t)
       return
     }
@@ -834,7 +1044,7 @@ export function KnowledgeMap({
     // nodesRef is a stable ref; positions are settled by useLiveSimulation's
     // effect, which runs before this one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleNodes, layout, aspectBucket, size.ready, size.w, size.h])
+  }, [visibleNodes, layout, aspectBucket, size.ready, size.w, size.h, fitCurrentMap])
 
   const focus = selectedId ?? hoveredId
   const neighbourIds = useMemo(() => {
@@ -879,9 +1089,9 @@ export function KnowledgeMap({
     if (!node || node.x === undefined || node.y === undefined) return null
     const box = insetsRef.current
     const boxW = Math.max(1, size.w - box.left - box.right)
-    const boxH = Math.max(1, size.h - box.bottom)
+    const boxH = Math.max(1, size.h - box.top - box.bottom)
     const cx = box.left + boxW / 2
-    const cy = boxH / 2
+    const cy = box.top + boxH / 2
     const current = transformRef.current
 
     // Is it already where a reader would want it? A node in the middle of the
@@ -894,7 +1104,7 @@ export function KnowledgeMap({
     const screenX = current.x + node.x * current.k
     const screenY = current.y + node.y * current.k
     const settled = screenX > box.left + marginX && screenX < box.left + boxW - marginX &&
-      screenY > marginY && screenY < boxH - marginY
+      screenY > box.top + marginY && screenY < box.top + boxH - marginY
     if (settled && box.bottom <= 0) return null
 
     let k = keep
@@ -958,7 +1168,7 @@ export function KnowledgeMap({
       const following = done !== null && done.id === id && done.pulse === focusPulse
       if (
         following && done.box.left === insets.left && done.box.right === insets.right &&
-        done.box.bottom === insets.bottom
+        done.box.bottom === insets.bottom && done.box.top === insets.top
       ) return
       const k = focusOn(id, following ? done.k : null)
       focusServicedRef.current = { id, pulse: focusPulse, box: insets, k }
@@ -974,7 +1184,7 @@ export function KnowledgeMap({
     // for a reader who wants the whole map back.
     if (!previous || !focusOwnsViewRef.current) return
     const dx = ((insets.left - previous.left) - (insets.right - previous.right)) / 2
-    const dy = -(insets.bottom - previous.bottom) / 2
+    const dy = ((insets.top - previous.top) - (insets.bottom - previous.bottom)) / 2
     if (dx === 0 && dy === 0) return
     const t = transformRef.current
     animateTo({ ...t, x: t.x + dx, y: t.y + dy }, FOCUS_MS, { x: size.w / 2, y: size.h / 2 })
@@ -1017,7 +1227,7 @@ export function KnowledgeMap({
     const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
     const point = toCanvasPoint(event.clientX, event.clientY)
     setTransform((t) => {
-      const k = Math.min(MAX_K, Math.max(MIN_K, t.k * factor))
+      const k = Math.min(MAX_K, Math.max(Math.min(MIN_K, t.k), t.k * factor))
       if (k === t.k) return t
       // Zoom towards the cursor: keep the point under it stationary.
       return {
@@ -1090,7 +1300,7 @@ export function KnowledgeMap({
       event.preventDefault()
       const gap = Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY)
       if (gap <= 0 || pinch.gap <= 0) return
-      const k = Math.min(MAX_K, Math.max(MIN_K, pinch.k * (gap / pinch.gap)))
+      const k = Math.min(MAX_K, Math.max(Math.min(MIN_K, pinch.k), pinch.k * (gap / pinch.gap)))
       const mid = toCanvasPoint(
         (first.clientX + second.clientX) / 2,
         (first.clientY + second.clientY) / 2,
@@ -1180,89 +1390,46 @@ export function KnowledgeMap({
     [visibleNodes, radiusOf],
   )
 
-  // Bucketed so a smooth zoom does not recompute the label layout on every
-  // frame; a drag holds the previous result entirely.
+  // Quantise only the number of labels; all bounds remain in the same SVG
+  // coordinate space as the marks and are refreshed while a node moves.
   const zoomBucket = Math.round(Math.max(transform.k, 0.35) * 4) / 4
-  const labelledIds = useMemo(() => {
-    // Labels are placed greedily, most-connected first, and any label whose box
-    // would collide with one already placed is dropped. Boxes are measured in
-    // simulation units divided by the zoom, so a label occupies less of the
-    // model the further you zoom in - which is what makes zooming reveal more
-    // labels rather than piling them on top of each other.
-    const k = zoomBucket
-    const placed: { x1: number; y1: number; x2: number; y2: number }[] = []
-    const kept = new Set<string>()
-    const budget = Math.min(paintOrder.length, Math.round(24 * k))
-    for (const node of paintOrder) {
-      if (kept.size >= budget) break
-      const sim = positions.get(node.id)
-      if (sim?.x === undefined || sim.y === undefined) continue
-      const text = shortLabel(node.label)
-      const halfW = (text.length * 12 * 0.5) / 2 / k
-      const h = 15 / k
-      const r = radiusOf(node)
-      const box = {
-        x1: sim.x - halfW,
-        x2: sim.x + halfW,
-        y1: sim.y - r - 6 - h,
-        y2: sim.y - r - 6,
-      }
-      const hits = placed.some((p) =>
-        box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1
-      )
-      if (hits) continue
-      placed.push(box)
-      kept.add(node.id)
-    }
-    return kept
-    // positions is rebuilt every frame; the label layout deliberately holds
-    // its previous result through a drag rather than re-solving per frame.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paintOrder, zoomBucket, radiusOf])
-
-  // Territory extents: one O(n) pass over the visible nodes, not a hull per
-  // frame. Only the grouped layout draws them - in the free layout a category
-  // has no territory to name.
-  const territories = useMemo(() => {
+  const captionLayout = useMemo(() => {
     void frame
-    if (layout !== 'grouped' || visibleStyles.size < 2) return []
-    const acc = new Map<string, { x: number; y: number; n: number }>()
-    for (const node of visibleNodes) {
-      const sim = positions.get(node.id)
-      if (sim?.x === undefined || sim.y === undefined) continue
-      const bucket = acc.get(node.group)
-      if (bucket) {
-        bucket.x += sim.x
-        bucket.y += sim.y
-        bucket.n += 1
-      } else acc.set(node.group, { x: sim.x, y: sim.y, n: 1 })
-    }
-    const out: { group: string; style: GroupStyle; x: number; y: number; r: number }[] = []
-    for (const [group, bucket] of acc) {
-      const style = visibleStyles.get(group)
-      if (!style || bucket.n === 0) continue
-      const cx = bucket.x / bucket.n
-      const cy = bucket.y / bucket.n
-      let spread = 0
-      for (const node of visibleNodes) {
-        if (node.group !== group) continue
-        const sim = positions.get(node.id)
-        if (sim?.x === undefined || sim.y === undefined) continue
-        spread = Math.max(spread, Math.hypot(sim.x - cx, sim.y - cy) + radiusOf(node))
-      }
-      out.push({ group, style, x: cx, y: cy, r: spread + 24 })
-    }
-    return out
-  }, [layout, visibleStyles, visibleNodes, positions, radiusOf, frame])
+    const priority = new Set<string>()
+    if (focus) priority.add(focus)
+    if (pathFrom) priority.add(pathFrom)
+    for (const id of pathNodeIds ?? []) priority.add(id)
+    return mapCaptionLayout(
+      nodesRef.current,
+      visibleStyles,
+      radiusOf,
+      layout,
+      (group) => graphGroupLabel(group, ui),
+      Math.max(8, Math.round(24 * zoomBucket)),
+      priority,
+    )
+  }, [
+    nodesRef,
+    frame,
+    visibleStyles,
+    radiusOf,
+    layout,
+    ui,
+    zoomBucket,
+    focus,
+    pathFrom,
+    pathNodeIds,
+  ])
+  const { territories } = captionLayout
 
   const zoomBy = (factor: number) => {
     claimView()
     setTransform((t) => {
-      const k = Math.min(MAX_K, Math.max(MIN_K, t.k * factor))
+      const k = Math.min(MAX_K, Math.max(Math.min(MIN_K, t.k), t.k * factor))
       // About the middle of the space the panels leave free, so pressing + with
       // the detail sheet up magnifies what the reader can actually see.
       const cx = insets.left + (size.w - insets.left - insets.right) / 2
-      const cy = (size.h - insets.bottom) / 2
+      const cy = insets.top + (size.h - insets.top - insets.bottom) / 2
       return { x: cx - ((cx - t.x) / t.k) * k, y: cy - ((cy - t.y) / t.k) * k, k }
     })
   }
@@ -1413,20 +1580,19 @@ export function KnowledgeMap({
           {territories.length > 0
             ? (
               <g style={{ pointerEvents: 'none' }} aria-hidden='true'>
-                {territories.map((t) => (
+                {captionLayout.categories.map((caption) => (
                   <text
-                    key={t.group}
-                    x={t.x}
-                    y={t.y - t.r - 6}
+                    key={caption.id}
+                    x={caption.x}
+                    y={caption.y}
                     textAnchor='middle'
                     className='rp-map-territory'
-                    fill={t.style.ink}
+                    fill={visibleStyles.get(caption.id)?.ink}
                     stroke='var(--rp-surface)'
                     strokeWidth={5}
                     paintOrder='stroke'
-                    opacity={focus ? 0.35 : 1}
                   >
-                    {graphGroupLabel(t.group, ui)} · {t.style.count}
+                    {caption.text}
                   </text>
                 ))}
               </g>
@@ -1452,8 +1618,7 @@ export function KnowledgeMap({
               // hubs for the reader's eye.
               const unlinked = measure === 'links' && degree === 0
               const emphasised = isSelected || isHovered || isPathStart || onPath
-              const showLabel = labelledIds.has(node.id) || emphasised ||
-                (neighbourIds?.has(node.id) ?? false)
+              const caption = captionLayout.labels.get(node.id)
               return (
                 <g
                   key={node.id}
@@ -1536,21 +1701,21 @@ export function KnowledgeMap({
                       : 'var(--rp-surface)'}
                     strokeWidth={style?.hollow ? 3 : isSelected || isPathStart ? 2.5 : 1.5}
                   />
-                  {showLabel
+                  {caption
                     ? (
                       <text
                         className='rp-map-label'
-                        x={sim.x}
-                        y={sim.y - r - 7}
+                        x={caption.x}
+                        y={caption.y}
                         textAnchor='middle'
                         fontWeight={emphasised ? 650 : 500}
-                        fill={emphasised ? 'var(--rp-ink)' : 'var(--rp-ink-2)'}
+                        fill={style?.ink ?? 'var(--rp-ink-2)'}
                         stroke='var(--rp-surface)'
                         strokeWidth={4}
                         paintOrder='stroke'
                         style={{ pointerEvents: 'none' }}
                       >
-                        {shortLabel(node.label)}
+                        {caption.text}
                       </text>
                     )
                     : null}
@@ -1577,31 +1742,27 @@ export function KnowledgeMap({
         }`}
         style={{ bottom: insets.bottom + 16 }}
       >
-        <button
-          type='button'
-          aria-label={ui('Zoom in')}
+        <IconButton
+          label={ui('Zoom in')}
+          icon={ZoomIn}
+          variant='outline'
           onClick={() => zoomBy(1.3)}
-          className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
-        >
-          +
-        </button>
-        <button
-          type='button'
-          aria-label={ui('Zoom out')}
+          className='rp-shadow-sm'
+        />
+        <IconButton
+          label={ui('Zoom out')}
+          icon={ZoomOut}
+          variant='outline'
           onClick={() => zoomBy(1 / 1.3)}
-          className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
-        >
-          −
-        </button>
-        <button
-          type='button'
-          aria-label={ui('Fit the whole map to view')}
-          title={ui('Fit to view')}
+          className='rp-shadow-sm'
+        />
+        <IconButton
+          label={ui('Fit the whole map to view')}
+          icon={Maximize}
+          variant='outline'
           onClick={fitView}
-          className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-sm'
-        >
-          ⤢
-        </button>
+          className='rp-shadow-sm'
+        />
       </div>
     </div>
   )
