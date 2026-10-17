@@ -43,6 +43,43 @@ async function captureEmergencyNormalText(
   }
 }
 
+async function applyEmergencyAppearance(page: Page, dark: boolean) {
+  const vars = tenantThemeVars(BrandingSchema.parse({
+    productName: 'CorpusKit',
+    organisation: 'Research administration',
+    tagline: 'Research',
+    colours: {
+      primary: '#17372d',
+      accent: '#e0ba63',
+      heroFrom: '#17372d',
+      heroTo: '#234f45',
+    },
+    paletteId: dark ? 'observatory' : 'default',
+    shape: 'soft',
+    density: 'spacious',
+    typography: 'lexend-zilla',
+  }))
+  await page.evaluate((vars) => {
+    const { colorScheme = 'light', ...theme } = vars
+    const paper = Object.entries(theme).find(([name]) => name === '--rp-paper')?.[1]
+    if (paper) document.documentElement.style.setProperty('--rp-paper', String(paper))
+    else document.documentElement.style.removeProperty('--rp-paper')
+    document.documentElement.style.colorScheme = String(colorScheme)
+    for (const root of [document.body, document.querySelector<HTMLElement>('main.rp-tenant')]) {
+      if (!root) continue
+      root.classList.add('rp-tenant')
+      // Default light greys inherit from CSS after removing the viewer's dark tokens.
+      for (const name of [...root.style]) {
+        if (name.startsWith('--rp-')) root.style.removeProperty(name)
+      }
+      root.style.colorScheme = String(colorScheme)
+      for (const [name, value] of Object.entries(theme)) {
+        root.style.setProperty(name, String(value))
+      }
+    }
+  }, { args: [vars] })
+}
+
 Deno.test('signed administration overview requires platform portal.create and clears on access loss', async () => {
   const browser = await launch()
   const directory = '.planning/logs/04-05-01-signed'
@@ -63,27 +100,7 @@ Deno.test('signed administration overview requires platform portal.create and cl
             server.requests.filter((request) => request.status === 401 || request.status === 403),
           ).toEqual([])
           for (const dark of [false, true]) {
-            const vars = tenantThemeVars(BrandingSchema.parse({
-              productName: 'CorpusKit',
-              organisation: 'Research administration',
-              tagline: 'Research',
-              colours: {
-                primary: '#17372d',
-                accent: '#e0ba63',
-                heroFrom: '#17372d',
-                heroTo: '#234f45',
-              },
-              paletteId: dark ? 'observatory' : 'default',
-              shape: 'soft',
-              density: 'spacious',
-              typography: 'lexend-zilla',
-            }))
-            await page.evaluate((vars) => {
-              document.body.classList.add('rp-tenant')
-              for (const [name, value] of Object.entries(vars)) {
-                document.body.style.setProperty(name, String(value))
-              }
-            }, { args: [vars] })
+            await applyEmergencyAppearance(page, dark)
             for (const width of [1440, 390]) {
               await captureBoundary(
                 page,
@@ -114,6 +131,133 @@ Deno.test('signed administration overview requires platform portal.create and cl
   }
 })
 
+Deno.test('emergency passcode stays above a native confirmation and cancellation restores its focus', async () => {
+  const server = startTestServer({ breakGlass: true, identity: { role: 'portal-admin' } })
+  const browser = await launch()
+  try {
+    for (const dark of [false, true]) {
+      for (const width of [1440, 390]) {
+        const page = await browser.newPage(`${server.url}/admin`)
+        try {
+          await assertCurrentBuild(page)
+          await page.setViewportSize({ width, height: 960 })
+          await page.waitForFunction(() =>
+            [...document.querySelectorAll('button')].some((button) =>
+              button.textContent?.trim() === 'Use emergency access'
+            )
+          )
+          await applyEmergencyAppearance(page, dark)
+          await page.evaluate(async () => {
+            document.documentElement.style.fontSize = '22px'
+            await document.fonts.ready
+            const entry = [...document.querySelectorAll<HTMLButtonElement>('button')].find((
+              button,
+            ) => button.textContent?.trim() === 'Use emergency access')!
+            const confirmation = document.createElement('dialog')
+            confirmation.id = 'native-confirmation'
+            confirmation.className = 'rp-dialog rp-card rp-tenant p-6'
+            confirmation.setAttribute('aria-labelledby', 'native-confirmation-title')
+            const heading = document.createElement('h2')
+            heading.id = 'native-confirmation-title'
+            heading.textContent = 'Confirm the administration action'
+            const button = document.createElement('button')
+            button.id = 'native-confirmation-continue'
+            button.type = 'button'
+            button.className = 'rp-btn rp-btn-primary mt-4'
+            button.textContent = 'Continue to emergency access'
+            button.addEventListener('click', () => entry.click())
+            confirmation.append(heading, button)
+            document.body.append(confirmation)
+            document.body.style.overflow = 'hidden'
+            confirmation.showModal()
+            button.focus()
+          })
+          expect(server.requests.filter((request) => request.path === '/api/admin/overview'))
+            .toEqual([])
+          await page.keyboard.press('Enter')
+          await page.waitForSelector('[role=dialog] input')
+          expect(
+            await page.evaluate(() => {
+              const prompt = document.querySelector<HTMLDialogElement>('[role=dialog]')!
+              return {
+                modal: prompt.matches(':modal'),
+                focused: document.activeElement === prompt.querySelector('input'),
+                confirmationOpen: document.querySelector('#native-confirmation')!.matches(':modal'),
+              }
+            }),
+          ).toEqual({ modal: true, focused: true, confirmationOpen: true })
+          await page.keyboard.press('Tab')
+          expect(
+            await page.evaluate(() =>
+              document.activeElement?.hasAttribute('data-emergency-cancel')
+            ),
+          )
+            .toBe(true)
+          await page.keyboard.down('Shift')
+          await page.keyboard.press('Tab')
+          await page.keyboard.up('Shift')
+          expect(await page.evaluate(() => document.activeElement?.tagName)).toBe('INPUT')
+          await captureBoundary(
+            page,
+            '.planning/logs/04-05-01-native',
+            `${dark ? 'dark' : 'light'}-${width}-prompt`,
+            width,
+          )
+          await page.keyboard.press('Escape')
+          await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
+          expect(
+            await page.evaluate(() => ({
+              focused: document.activeElement?.id,
+              confirmationOpen: document.querySelector('#native-confirmation')!.matches(':modal'),
+              overflow: document.body.style.overflow,
+            })),
+          ).toEqual({
+            focused: 'native-confirmation-continue',
+            confirmationOpen: true,
+            overflow: 'hidden',
+          })
+          expect(server.requests.filter((request) => request.path === '/api/admin/overview'))
+            .toEqual([])
+          // A successful action can retire the underlying confirmation before this prompt's
+          // cleanup runs. Reopening from its focused control reproduces that cleanup order.
+          await page.keyboard.press('Enter')
+          await page.waitForSelector('[role=dialog] input')
+          expect(
+            await page.evaluate(() => {
+              const prompt = document.querySelector<HTMLDialogElement>('[role=dialog]')!
+              return {
+                modal: prompt.matches(':modal'),
+                focused: document.activeElement === prompt.querySelector('input'),
+              }
+            }),
+          ).toEqual({ modal: true, focused: true })
+          await page.evaluate(() => {
+            const confirmation = document.querySelector<HTMLDialogElement>('#native-confirmation')!
+            confirmation.close()
+            confirmation.remove()
+            document.body.style.overflow = ''
+          })
+          await page.keyboard.press('Escape')
+          await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
+          expect(
+            await page.evaluate(() => ({
+              modal: document.querySelector('dialog[open]'),
+              overflow: document.body.style.overflow,
+            })),
+          ).toEqual({ modal: null, overflow: '' })
+          expect(server.requests.filter((request) => request.path === '/api/admin/overview'))
+            .toEqual([])
+        } finally {
+          await page.close()
+        }
+      }
+    }
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+})
+
 async function digest(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer))]
     .map((value) => value.toString(16).padStart(2, '0')).join('')
@@ -130,15 +274,21 @@ async function settle(page: Page) {
   await page.evaluate(() => document.readyState)
 }
 
-async function clickText(page: Page, text: string) {
-  await page.evaluate((label) => {
-    const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) =>
-      item.textContent?.trim().includes(label)
-    )
+async function clickText(page: Page, text: string, scope = 'body') {
+  await page.evaluate((label, scope) => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>(`${scope} button`)].find((
+      item,
+    ) => (item.getAttribute('aria-label') ?? item.textContent)?.trim().includes(label))
     if (!button) throw new Error(`Missing button: ${label}`)
     button.click()
-  }, { args: [text] })
+  }, { args: [text, scope] })
   await settle(page)
+}
+
+async function removeWithConfirmation(page: Page, scope = 'body') {
+  await clickText(page, 'Remove', scope)
+  await page.waitForSelector('dialog[open]')
+  await clickText(page, 'Remove', 'dialog[open]')
 }
 
 async function fill(page: Page, selector: string, value: string) {
@@ -185,7 +335,7 @@ const font = document.createElement('link')
 font.rel = 'stylesheet'
 font.href = googleFontsUrl('lexend-zilla')
 font.onload = async () => {
-  await Promise.all([document.fonts.load('600 16px Lexend'), document.fonts.load('16px "Zilla Slab"')])
+  await Promise.all([document.fonts.load('16px Lexend'), document.fonts.load('600 16px Lexend'), document.fonts.load('16px "Zilla Slab"')])
   document.body.dataset.fixtureFonts = 'ready'
 }
 document.head.append(font)
@@ -755,6 +905,15 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     async function confirm() {
       await page!.waitForSelector('[role=dialog] input')
+      expect(
+        await page!.evaluate(() => {
+          const input = document.querySelector('[role=dialog] input')!
+          return {
+            focused: document.activeElement === input,
+            modal: input.closest('dialog')?.matches(':modal') ?? false,
+          }
+        }),
+      ).toEqual({ focused: true, modal: true })
       await fill(page!, '[role=dialog] input', 'one-request-test-value')
       await click(page!, '[role=dialog] [type=submit]')
       await settle(page!)
@@ -773,6 +932,12 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       expect(requests.length).toBe(before + 1)
       expect(requests.at(-1)?.emergency).toBe(true)
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+      expect(
+        await page!.evaluate(() => ({
+          modal: document.querySelector('dialog[open]'),
+          overflow: document.body.style.overflow,
+        })),
+      ).toEqual({ modal: null, overflow: '' })
       await page!.evaluate(() => {
         dispatchEvent(new Event('fixture-invalidate'))
         dispatchEvent(new Event('fixture-inspect'))
@@ -946,7 +1111,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
           await explicitAction(() => clickText(page!, 'Propose strategy'), 'graph-propose')
           await explicitAction(() => clickText(page!, 'Implement strategy'), 'graph-implement')
           await explicitAction(() => click(page!, '[data-graph-read=agents]'), 'graph-agents')
-          await explicitAction(() => clickText(page!, 'Remove'), 'graph-remove-agent')
+          await explicitAction(() => removeWithConfirmation(page!), 'graph-remove-agent')
           await explicitAction(() => click(page!, '[data-graph-read=strategy]'), 'graph-strategy')
           await fill(page!, 'input[placeholder="Description (optional)"]', 'Research people')
           await explicitAction(() => clickText(page!, 'Save and re-register agent'), 'graph-save')
@@ -1298,8 +1463,8 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             await capture(`reads-${section!.toLowerCase()}-${palette}-${width}`)
             if (section === 'Insights') {
               await page!.evaluate(() =>
-                [...document.querySelectorAll('h4')].find((h) =>
-                  h.textContent === 'Knowledge gaps'
+                [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role=heading]')].find((h) =>
+                  h.textContent?.trim() === 'Knowledge gaps'
                 )!.scrollIntoView({ block: 'center' })
               )
               await capture(`reads-insights-detail-${palette}-${width}`)
@@ -1392,12 +1557,27 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             expect(requests.length).toBe(before)
             await click(page!, '[data-emergency-cancel]')
             expect(requests.length).toBe(before)
+            if (name === 'delete-source') {
+              await settle(page!)
+              expect(
+                await page!.evaluate(() => ({
+                  modal: document.querySelector('dialog[open]')?.matches(':modal') ?? false,
+                  overflow: document.body.style.overflow,
+                })),
+              ).toEqual({ modal: true, overflow: 'hidden' })
+            }
             await action()
             await confirm()
             await settle(page!)
             expect(requests.length).toBe(before + 1)
             expect(requests.at(-1)?.emergency).toBe(true)
             expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+            expect(
+              await page!.evaluate(() => ({
+                modal: document.querySelector('dialog[open]'),
+                overflow: document.body.style.overflow,
+              })),
+            ).toEqual({ modal: null, overflow: '' })
             await page!.evaluate(() => {
               dispatchEvent(new Event('fixture-invalidate'))
             })
@@ -1507,7 +1687,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             document.querySelector('#source-cap-source-one')!.scrollIntoView({ block: 'center' })
           )
           await capture(`content-sources-${palette}-${width}`)
-          await oneAction(() => clickText(page!, 'Remove'), 'delete-source')
+          await oneAction(() => removeWithConfirmation(page!), 'delete-source')
           await oneAction(() => clickText(page!, 'Refresh recent additions'), 'read-recent')
           await oneAction(() => clickText(page!, 'Hide'), 'hide-resource')
           recent[0]!.hidden = true
@@ -1528,7 +1708,9 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             ),
           ).toBe(false)
           await page!.evaluate(() =>
-            [...document.querySelectorAll('h3')].find((h) => h.textContent === 'Recent additions')!
+            [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role=heading]')].find((h) =>
+              h.textContent?.trim() === 'Recent additions'
+            )!
               .scrollIntoView({ block: 'center' })
           )
           await capture(`content-recent-${palette}-${width}`)
@@ -1692,10 +1874,10 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await clickText(page!, 'Use emergency access')
       await confirm()
       await page!.waitForSelector('[data-admin-overview]')
-      await clickText(page!, 'Add a knowledge box')
+      await clickText(page!, 'Add portal', '[data-add-portal]')
       await fill(page!, '#portal-name', 'Example portal')
       let before = requests.length
-      await clickText(page!, 'Add portal')
+      await clickText(page!, 'Add portal', '[data-add-portal] form')
       await page!.waitForSelector('[role=dialog]')
       await click(page!, '[data-emergency-cancel]')
       expect(requests.length).toBe(before)
@@ -1703,7 +1885,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
         await page!.evaluate(() => document.querySelector<HTMLInputElement>('#portal-name')?.value),
       ).toBe('Example portal')
       state.status = 500
-      await clickText(page!, 'Add portal')
+      await clickText(page!, 'Add portal', '[data-add-portal] form')
       await confirm()
       await page!.waitForSelector('[role=dialog] [role=alert]')
       expect(await page!.evaluate(() => Boolean(document.querySelector('[data-admin-overview]'))))
@@ -1712,7 +1894,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       state.status = 200
       for (const malformed of [null, {}, { ok: false }]) {
         malformedResponse = malformed
-        await clickText(page!, 'Add portal')
+        await clickText(page!, 'Add portal', '[data-add-portal] form')
         await confirm()
         await page!.waitForSelector('[role=dialog] [role=alert]')
         expect(
@@ -1724,7 +1906,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       }
       malformedResponse = undefined
       before = requests.length
-      await clickText(page!, 'Add portal')
+      await clickText(page!, 'Add portal', '[data-add-portal] form')
       await confirm()
       await settle(page!)
       expect(requests.length).toBe(before + 1)
@@ -1747,10 +1929,10 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
       await open('admin')
       await page!.waitForSelector('[data-admin-overview]')
       expect(requests.at(-1)?.emergency).toBe(false)
-      await clickText(page!, 'Add a knowledge box')
+      await clickText(page!, 'Add portal', '[data-add-portal]')
       await fill(page!, '#portal-name', 'Example portal')
       before = requests.length
-      await clickText(page!, 'Add portal')
+      await clickText(page!, 'Add portal', '[data-add-portal] form')
       await settle(page!)
       expect(requests.slice(before).some((r) => r.method === 'POST' && !r.emergency)).toBe(true)
       expect(await page!.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
@@ -1792,13 +1974,14 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
                 await fill(page!, '#kb-token-alpha', 'fixture-service-key')
               }
             }
-            await page!.evaluate(() => {
-              globalThis.confirm = () => true
-            })
+            const startAction = () =>
+              action === 'Remove'
+                ? removeWithConfirmation(page!, '[data-portal-row="alpha"]')
+                : clickText(page!, action)
             malformedResponse = action === 'Run migration' ? undefined : {}
             migrationMalformed = action === 'Run migration'
             const failedBefore = requests.length
-            await clickText(page!, action)
+            await startAction()
             await confirm()
             await page!.waitForSelector('[role=dialog] [role=alert]')
             expect(requests.length).toBe(failedBefore + 1)
@@ -1816,7 +1999,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             malformedResponse = undefined
             migrationMalformed = false
             const before = requests.length
-            await clickText(page!, action)
+            await startAction()
             // Before migration, these controls send session requests instead of opening a prompt.
             expect(requests.length).toBe(before)
             await page!.waitForSelector('[role=dialog]')
@@ -1824,7 +2007,7 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
             await capture(`${name}-prompt`)
             await click(page!, '[data-emergency-cancel]')
             expect(requests.length).toBe(before)
-            await clickText(page!, action)
+            await startAction()
             await confirm()
             await settle(page!)
             expect(requests.length).toBe(before + 1)
@@ -2153,7 +2336,10 @@ Deno.test({
           await page.keyboard.down('Shift')
           await page.keyboard.press('Tab')
           await page.keyboard.up('Shift')
-          expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('Cancel')
+          // The shared dialog layout puts the safe action first and confirmation last.
+          expect(await page.evaluate(() => document.activeElement?.textContent)).toBe(
+            'Continue with this action',
+          )
           await page.keyboard.press('Tab')
           expect(await page.evaluate(() => document.activeElement?.tagName)).toBe('INPUT')
           for (let i = 0; i < 5; i++) await page.keyboard.press('Tab')

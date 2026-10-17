@@ -24,19 +24,34 @@ async function input(page: Page, selector: string, value: string) {
     el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }))
   }, { args: [selector, value] })
 }
-async function capture(page: Page, name: string, width: number, selector: string) {
+async function capture(
+  page: Page,
+  name: string,
+  width: number,
+  selector: string,
+  headingName?: string,
+) {
   await page.setViewportSize({ width, height: 960 })
-  await page.evaluate(async (selector) => {
+  await page.evaluate(async (selector, headingName) => {
     document.documentElement.style.fontSize = '22px'
     await document.fonts.ready
-    document.querySelector(selector)!.scrollIntoView({ block: 'center' })
-  }, { args: [selector] })
+    const scope = document.querySelector(selector)!
+    const target = headingName
+      ? [...scope.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6,[role=heading]')].find((el) =>
+        (el.getAttribute('aria-label') ?? el.textContent)?.trim() === headingName
+      )!
+      : scope
+    target.setAttribute('data-capture-target', '')
+    target.scrollIntoView({ block: 'center' })
+  }, { args: [selector, headingName] })
   await captureBoundary(page, directory, name, width)
   expect(
-    await page.evaluate((selector) => {
-      const rect = document.querySelector(selector)!.getBoundingClientRect()
+    await page.evaluate(() => {
+      const target = document.querySelector('[data-capture-target]')!
+      const rect = target.getBoundingClientRect()
+      target.removeAttribute('data-capture-target')
       return rect.top >= 0 && rect.top < innerHeight
-    }, { args: [selector] }),
+    }),
   ).toBe(true)
 }
 async function selectMode(page: Page, mode: string) {
@@ -99,7 +114,8 @@ Deno.test('portal groups use actual capability, scoped CRUD and disabled mapping
           page,
           `groups-${scheme}-${width}`,
           width,
-          '[data-assignment-section=groups] h3',
+          '[data-assignment-section=groups]',
+          'Group mappings',
         )
       }
       await click(page, 'Add group mapping')
@@ -108,12 +124,13 @@ Deno.test('portal groups use actual capability, scoped CRUD and disabled mapping
           page,
           `group-form-${scheme}-${width}`,
           width,
-          '[data-assignment-section=groups] form h3',
+          '[data-assignment-section=groups] form',
+          'Add group mapping',
         )
       }
       await click(page, 'Keep mapping')
       for (const width of [1440, 390]) {
-        await capture(page, `mode-${scheme}-${width}`, width, '[data-access-mode] h3')
+        await capture(page, `mode-${scheme}-${width}`, width, '[data-access-mode]', 'Access mode')
         await capture(page, `mode-controls-${scheme}-${width}`, width, '[data-access-mode] button')
       }
       await selectMode(page, 'restricted')
@@ -121,7 +138,13 @@ Deno.test('portal groups use actual capability, scoped CRUD and disabled mapping
         'Keep current mode',
       )
       for (const width of [1440, 390]) {
-        await capture(page, `mode-confirm-${scheme}-${width}`, width, 'dialog h2')
+        await capture(
+          page,
+          `mode-confirm-${scheme}-${width}`,
+          width,
+          'dialog',
+          'Change access mode',
+        )
       }
       await page.keyboard.press('Escape')
       expect(await page.evaluate(() => document.activeElement?.textContent)).toBe(
@@ -146,7 +169,8 @@ Deno.test('portal groups use actual capability, scoped CRUD and disabled mapping
           page,
           `disabled-groups-${scheme}-${width}`,
           width,
-          '[data-assignment-section=groups] h3',
+          '[data-assignment-section=groups]',
+          'Group mappings',
         )
         await capture(
           page,

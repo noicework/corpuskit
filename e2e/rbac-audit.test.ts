@@ -101,8 +101,13 @@ async function capture(page: Page, name: string, width: number, target = '[data-
     const css = getComputedStyle(el)
     const surface = document.querySelector('.rp-tenant') ?? document.body
     const probe = document.createElement('div')
+    // The density dial still sets the desktop size; phone and coarse-pointer
+    // controls share the design system's 2.75rem minimum target.
+    const controlHeightRule = matchMedia('(max-width: 1023.98px), (pointer: coarse)').matches
+      ? 'max(2.75rem, calc(2.25rem * var(--rp-density-ctl,1)))'
+      : 'calc(2.25rem * var(--rp-density-ctl,1))'
     probe.style.cssText =
-      'position:absolute;visibility:hidden;border-radius:var(--rp-radius-input);color:var(--rp-ink);height:calc(2.25rem * var(--rp-density-ctl,1))'
+      `position:absolute;visibility:hidden;border-radius:var(--rp-radius-input);color:var(--rp-ink);height:${controlHeightRule}`
     surface.append(probe)
     const expected = getComputedStyle(probe)
     const colour = expected.color, radius = expected.borderRadius, controlHeight = expected.height
@@ -549,9 +554,23 @@ async function platformTheme(page: Page, dark: boolean) {
   })
   // Apply the existing appearance contract as fixture configuration to the neutral platform shell.
   await page.evaluate((vars, url) => {
-    document.body.classList.add('rp-tenant')
-    for (const [key, value] of Object.entries(vars)) {
-      document.body.style.setProperty(key === 'colorScheme' ? 'color-scheme' : key, String(value))
+    const { colorScheme = 'light', ...theme } = vars
+    if ('--rp-paper' in theme) {
+      document.documentElement.style.setProperty('--rp-paper', String(theme['--rp-paper']))
+    } else document.documentElement.style.removeProperty('--rp-paper')
+    document.documentElement.style.colorScheme = String(colorScheme)
+    for (const root of [document.body, document.querySelector<HTMLElement>('main.rp-tenant')]) {
+      if (!root) continue
+      root.classList.add('rp-tenant')
+      // The redesigned shell owns a theme, including any viewer dark overrides.
+      // Clear those before applying the fixture's inherited light or dark suite.
+      for (const key of [...root.style]) {
+        if (key.startsWith('--rp-')) root.style.removeProperty(key)
+      }
+      root.style.colorScheme = String(colorScheme)
+      for (const [key, value] of Object.entries(theme)) {
+        root.style.setProperty(key, String(value))
+      }
     }
     const link = document.createElement('link')
     link.rel = 'stylesheet'
