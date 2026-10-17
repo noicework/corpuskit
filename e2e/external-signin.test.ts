@@ -169,9 +169,9 @@ Deno.test('external sign-in gate follows runtime configuration and fits desktop 
           )
         }
         await page.goto(`${server.url}/__test/rbac-component?view=dialog`)
-        await page.waitForSelector('[role=dialog]')
+        await page.waitForSelector('dialog[open]')
         await page.waitForFunction(() =>
-          document.querySelector('[role=dialog]')?.textContent?.includes('organisation')
+          document.querySelector('dialog[open]')?.textContent?.includes('organisation')
         )
         // Wait for the shared access snapshot before inspecting the dialog links.
         await page.waitForFunction(() =>
@@ -373,13 +373,13 @@ Deno.test('external local assignment opens the portal and preserves profile sign
     )
     await page.goto(`${server.url}/__test/rbac-component?view=dialog`)
     await page.waitForFunction(() =>
-      document.querySelector('[role=dialog]')?.textContent?.includes(
+      document.querySelector('dialog[open]')?.textContent?.includes(
         'Signed in through the external identity provider.',
       )
     )
     const profile = await page.evaluate(() => ({
-      text: document.querySelector('[role=dialog]')?.textContent,
-      links: [...document.querySelectorAll('[role=dialog] a')].map((item) => ({
+      text: document.querySelector('dialog[open]')?.textContent,
+      links: [...document.querySelectorAll('dialog[open] a')].map((item) => ({
         text: item.textContent?.trim(),
         href: item.getAttribute('href'),
       })),

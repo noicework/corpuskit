@@ -13,15 +13,15 @@ Deno.test('Profile Escape restores the visible account or mobile menu launcher',
         await (await page.waitForSelector('button[aria-label="Open menu"]')).click()
       }
       const selector = width === 390
-        ? '#mobile-nav-sheet button[title="My account"]'
-        : 'header button[title="My account"]'
+        ? '#mobile-nav-sheet button[aria-label="My account"]'
+        : 'header button[aria-label="My account"]'
       await (await page.waitForSelector(selector)).click()
       await page.waitForSelector('[role=menu]')
       await page.keyboard.press('End')
       await page.keyboard.press('Enter')
-      await page.waitForSelector('[role=dialog]')
+      await page.waitForSelector('dialog[open]')
       await page.keyboard.press('Escape')
-      await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
+      await page.waitForFunction(() => !document.querySelector('dialog'))
       const focused = await page.evaluate(() => ({
         title: document.activeElement?.getAttribute('title'),
         label: document.activeElement?.getAttribute('aria-label'),
