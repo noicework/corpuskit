@@ -977,6 +977,8 @@ export class DesignProvider extends DoubleProvider {
       ...extra.map((id, i) => scored(byId.get(id)!, [0.52, 0.47][i] ?? 0.4, wanted)),
     ]
     yield { type: 'sources', resources: sources }
+    // The platform's learning id is what lets a reader rate the answer.
+    yield { type: 'learning', id: 'design-fixture-learning-1' }
     yield { type: 'stage', stage: 'retrieval', status: 'completed' }
     yield { type: 'stage', stage: 'generating', status: 'started' }
     const text = scope ? documentAnswer(scope).text : ANSWER_TEXT
