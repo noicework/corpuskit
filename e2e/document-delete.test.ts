@@ -195,6 +195,22 @@ Deno.test('a manager deletes from a document page and lands back in the Library,
       (title: string) => document.querySelector('h1')?.textContent?.includes(title),
       { args: [RESOURCE_ONE.title] },
     )
+    // Delete pairs with Save in the header: a trash glyph as Save has its bookmark, the same
+    // height, and the accessible name still says which document goes.
+    const pair = await page.evaluate((id: string) => {
+      const remove = document.querySelector<HTMLElement>(`[data-delete-document="${id}"]`)!
+      const save = [...document.querySelectorAll<HTMLElement>('header button')].find((button) =>
+        button.textContent?.includes('Save')
+      )!
+      return {
+        glyph: !!remove.querySelector('svg[aria-hidden="true"]'),
+        heights: [remove.getBoundingClientRect().height, save.getBoundingClientRect().height],
+        name: remove.getAttribute('aria-label'),
+      }
+    }, { args: [RESOURCE_ONE.id] })
+    expect(pair.glyph).toBe(true)
+    expect(pair.heights[0]).toBe(pair.heights[1])
+    expect(pair.name).toBe(`Delete “${RESOURCE_ONE.title}”`)
     await openDelete(page, RESOURCE_ONE.id)
     await clickDialogButton(page, 'Delete document')
     await page.waitForFunction(() => location.pathname === '/t/marine/library')
