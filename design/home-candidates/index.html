@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CorpusKit candidates</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Spline+Sans+Mono:wght@500;600&display=swap">
+<style>
+  :root { --paper:#f4f7f4; --ink:#11221b; --green:#0b6d5a; --orange:#f26a3d; --rule:#d9ded8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:'Instrument Sans',system-ui,sans-serif;
+         min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem; }
+  main { max-width: 46rem; width:100%; }
+  .kicker { font-family:'Spline Sans Mono',monospace; font-size:.72rem; letter-spacing:.14em;
+            text-transform:uppercase; color:var(--orange); font-weight:600; margin:0 0 .6rem; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height:1.05; margin:0 0 .5rem; letter-spacing:-0.02em; }
+  p.sub { color:#4c5a52; margin:0 0 2rem; }
+  ol { list-style:none; margin:0; padding:0; counter-reset:c; }
+  li { counter-increment:c; }
+  a.card { display:grid; grid-template-columns:3rem 1fr auto; gap:1rem; align-items:baseline;
+           padding:1.1rem 1.25rem; border:1px solid var(--rule); background:#fff; text-decoration:none;
+           color:inherit; margin-bottom:.7rem; transition:transform .15s ease, box-shadow .15s ease; }
+  a.card:hover { transform:translateY(-2px); box-shadow:0 10px 30px -18px rgba(17,34,27,.5); }
+  a.card::before { content: counter(c, decimal-leading-zero); font-family:'Spline Sans Mono',monospace;
+                   font-weight:600; color:var(--orange); font-size:.9rem; }
+  .name { font-weight:600; font-size:1.05rem; }
+  .meta { font-family:'Spline Sans Mono',monospace; font-size:.7rem; color:#6b776f; letter-spacing:.05em; }
+  .who { font-family:'Spline Sans Mono',monospace; font-size:.72rem; color:var(--green); font-weight:600; white-space:nowrap; }
+  footer { margin-top:2rem; font-family:'Spline Sans Mono',monospace; font-size:.7rem; color:#6b776f; }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">Design bake-off · 1 September 2026</p>
+  <h1>CorpusKit home page candidates</h1>
+  <p class="sub">Two briefs, two builders, four pages. Open each full screen; check desktop and 390 px.</p>
+  <ol>
+    <li><a class="card" href="claudebrief-claudebuild.html">
+      <span><span class="name">Candidate A</span><br><span class="meta">Claude brief · Claude build</span></span>
+      <span class="who">CB × CB</span></a></li>
+    <li><a class="card" href="claudebrief-codexbuild.html">
+      <span><span class="name">Candidate B</span><br><span class="meta">Claude brief · Codex build</span></span>
+      <span class="who">CB × CX</span></a></li>
+    <li><a class="card" href="codexbrief-claudebuild.html">
+      <span><span class="name">Candidate C</span><br><span class="meta">Codex brief · Claude build</span></span>
+      <span class="who">CX × CB</span></a></li>
+    <li><a class="card" href="codexbrief-codexbuild.html">
+      <span><span class="name">Candidate D</span><br><span class="meta">Codex brief · Codex build</span></span>
+      <span class="who">CX × CX</span></a></li>
+    <li><a class="card" href="b-sans.html">
+      <span><span class="name">B2 · sans heading options</span><br><span class="meta">Candidate B with a heading-font switcher and the evidence section ported from C</span></span>
+      <span class="who">B+</span></a></li>
+  </ol>
+  <footer>Served from the session scratchpad · candidates are standalone prototypes, not the deployed app</footer>
+</main>
+</body>
+</html>
