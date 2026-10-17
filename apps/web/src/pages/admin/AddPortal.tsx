@@ -8,6 +8,8 @@ import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { addPortal } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { ChevronDown, Plus } from '../../components/icons.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
 
 /**
  * Add a brand-new knowledge box portal: names the portal, then its row
@@ -82,27 +84,33 @@ function AddPortalContent() {
   }
 
   return (
-    <section data-add-portal className='rp-card overflow-hidden' style={{ borderStyle: 'dashed' }}>
-      <button
-        type='button'
-        onClick={() =>
-          setOpen((prev) =>
-            !prev
-          )}
-        aria-expanded={open}
-        className='flex w-full items-center justify-between gap-3 px-6 py-4 text-left'
-      >
-        <span className='flex items-center gap-2'>
-          <span aria-hidden='true' className='text-ink-3'>{open ? '▾' : '▸'}</span>
-          <span className='text-sm font-semibold text-ink'>{ui('Add a knowledge box')}</span>
-        </span>
-        {!open && (
-          <span className='hidden text-xs text-ink-3 sm:inline'>{ui('Creates a new portal')}</span>
-        )}
-      </button>
+    <section data-add-portal className='rp-card overflow-hidden'>
+      <SectionHeader
+        className='rp-admin-section-head p-5 lg:p-6'
+        title={ui('Add a knowledge box')}
+        description={ui('Creates a new portal')}
+        actions={
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={Plus}
+            onClick={() => setOpen((prev) => !prev)}
+            aria-expanded={open}
+            aria-controls='add-portal-form'
+          >
+            {ui('Add portal')}
+            <ChevronDown
+              size='sm'
+              className={`transition-transform duration-150 motion-reduce:transition-none ${
+                open ? 'rotate-180' : ''
+              }`}
+            />
+          </Button>
+        }
+      />
 
       {open && (
-        <div className='border-t border-line px-6 py-5'>
+        <div id='add-portal-form' className='border-t border-line p-5 lg:p-6'>
           <p className='text-sm text-ink-3'>
             {ui(
               'Creates a new portal. You then either deploy a fresh knowledge box on the platform or connect an existing one from its card.',
@@ -151,9 +159,9 @@ function AddPortalContent() {
               />
             </div>
             <div className='sm:col-span-3'>
-              <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
+              <Button type='submit' disabled={busy} leadingIcon={Plus}>
                 {busy ? ui('Adding…') : ui('Add portal')}
-              </button>
+              </Button>
             </div>
           </form>
           {message && <MessagePanel message={message} className='mt-4' />}

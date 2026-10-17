@@ -13,6 +13,9 @@ import { CreateKbBox } from './CreateKbBox.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { RenamePortal } from './RenamePortal.tsx'
 import { type Message } from './shared.ts'
+import { ArrowRight, ChevronDown, Eye, EyeOff, Pencil, Trash } from '../../components/icons.tsx'
+import { Button, IconButton, SectionHeader } from '../../components/ui.tsx'
+import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 
 type Status = AdminTenantOverview['knowledgeBox']['status']
 
@@ -114,6 +117,7 @@ function PortalRowContent({
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [renaming, setRenaming] = useState(false)
+  const [removeConfirm, setRemoveConfirm] = useState(false)
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['admin-overview'] })
 
@@ -154,11 +158,8 @@ function PortalRowContent({
   }
 
   const onRemove = async () => {
-    if (
-      !globalThis.confirm(
-        ui("Remove the '{name}' portal from the app?", { name: row.tenant.productName }),
-      )
-    ) return
+    // Native modality must end before the emergency passcode overlay takes focus.
+    if (emergencyOnly) setRemoveConfirm(false)
     setBusy(true)
     setMessage(null)
     try {
@@ -171,6 +172,7 @@ function PortalRowContent({
       )
       assertCurrent()
       if (result === undefined) return
+      setRemoveConfirm(false)
       setMessage(
         messageFor(
           'ok',
@@ -196,46 +198,52 @@ function PortalRowContent({
 
   return (
     <section data-portal-row={row.tenant.slug} className='rp-card overflow-hidden'>
-      <button
-        type='button'
-        onClick={onToggleExpanded}
-        aria-expanded={expanded}
-        className='flex w-full flex-wrap items-center gap-x-4 gap-y-1.5 px-6 py-4 text-left transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
-      >
-        <span className='flex min-w-0 basis-full items-center gap-3 sm:basis-auto sm:flex-1'>
-          <StatusDot status={row.knowledgeBox.status} />
-          <span className='min-w-0 break-words'>
-            <span className='font-semibold text-ink'>{row.tenant.productName}</span>
-            <span className='ml-2 text-sm text-ink-3'>{row.tenant.organisation}</span>
+      <SectionHeader
+        className='rp-admin-section-head p-5 lg:p-6'
+        title={
+          <span className='flex min-w-0 items-center gap-3'>
+            <StatusDot status={row.knowledgeBox.status} />
+            <span className='min-w-0 break-words'>{row.tenant.productName}</span>
           </span>
-        </span>
-        <span className='flex shrink-0 items-center gap-2'>
-          <StatusBadge status={row.knowledgeBox.status} />
-          {row.disabled && <span className='rp-badge rp-badge-quiet'>{ui('Hidden')}</span>}
-        </span>
-        <span className='flex shrink-0 items-center gap-2'>
-          <span className='text-sm text-ink-3'>
-            {row.resourceCount === null
-              ? ui('unreachable')
-              : `${row.resourceCount} ${row.resourceCount === 1 ? 'document' : 'documents'}`}
-          </span>
-          <span
-            aria-hidden='true'
-            className={`text-ink-3 transition-transform duration-150 ${
-              expanded ? 'rotate-180' : ''
-            }`}
-          >
-            &#9662;
-          </span>
-        </span>
-      </button>
+        }
+        description={row.tenant.organisation}
+        actions={
+          <>
+            <StatusBadge status={row.knowledgeBox.status} />
+            {row.disabled && <span className='rp-badge rp-badge-quiet'>{ui('Hidden')}</span>}
+            <span className='text-sm tabular-nums text-ink-3'>
+              {row.resourceCount === null
+                ? ui('unreachable')
+                : ui(row.resourceCount === 1 ? '{count} document' : '{count} documents', {
+                  count: row.resourceCount,
+                })}
+            </span>
+            <IconButton
+              label={row.tenant.productName}
+              icon={ChevronDown}
+              size='sm'
+              onClick={onToggleExpanded}
+              aria-expanded={expanded}
+              aria-controls={`portal-actions-${row.tenant.slug}`}
+              className={`transition-transform duration-150 motion-reduce:transition-none ${
+                expanded ? 'rotate-180' : ''
+              }`}
+            />
+          </>
+        }
+      />
 
       {expanded && (
-        <div data-portal-actions={row.tenant.slug} className='border-t border-line'>
-          <div className='flex flex-wrap items-start justify-between gap-4 px-6 py-5'>
+        <div
+          id={`portal-actions-${row.tenant.slug}`}
+          data-portal-actions={row.tenant.slug}
+          className='border-t border-line'
+        >
+          <div className='flex flex-wrap items-start justify-between gap-4 p-5 lg:p-6'>
             {renaming
               ? (
                 <RenamePortal
+                  headingLevel={3}
                   slug={row.tenant.slug}
                   initialName={row.tenant.productName}
                   initialOrganisation={row.tenant.organisation}
@@ -251,13 +259,14 @@ function PortalRowContent({
                       {row.tenant.productName}
                     </h3>
                     {(canRename || (emergencyOnly && !row.disabled)) && (
-                      <button
-                        type='button'
+                      <Button
+                        variant='ghost'
+                        size='sm'
+                        leadingIcon={Pencil}
                         onClick={() => setRenaming(true)}
-                        className='text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
                       >
                         {ui('Rename')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                   <p className='mt-0.5 text-sm text-ink-3'>{row.tenant.organisation}</p>
@@ -269,28 +278,25 @@ function PortalRowContent({
               {(canBind || canRename || canDisable) && (
                 <Link
                   to={`/t/${row.tenant.slug}/manage`}
-                  className='rp-btn rp-btn-primary max-w-full whitespace-normal text-center'
-                  style={{
-                    height: 'auto',
-                    minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-                    paddingBlock: '0.5rem',
-                  }}
+                  className='rp-btn rp-btn-primary max-w-full whitespace-normal py-2 text-center'
                 >
-                  {ui('Open portal management →')}
+                  {ui('Open portal management')}
+                  <ArrowRight size='sm' />
                 </Link>
               )}
               {canRead && (
                 <Link
                   to={`/t/${row.tenant.slug}`}
-                  className='text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                  className='rp-btn rp-btn-ghost rp-btn-sm'
                 >
+                  <Eye size='sm' />
                   {ui('View portal')}
                 </Link>
               )}
             </div>
           </div>
 
-          <div className='px-6 pb-6'>
+          <div className='px-5 pb-5 lg:px-6 lg:pb-6'>
             {(canBind || (emergencyOnly && !row.disabled)) && (
               <>
                 <CreateKbBox row={row} onCreated={refresh} />
@@ -304,41 +310,61 @@ function PortalRowContent({
               </>
             )}
 
-            <div className='mt-4 flex flex-wrap items-center gap-4 border-t border-line pt-3'>
+            <div className='mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4'>
               {(canEnable || canDisable || emergencyOnly) && (
-                <button
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  leadingIcon={row.disabled ? Eye : EyeOff}
                   data-portal-enable={row.disabled ? true : undefined}
                   data-portal-disable={!row.disabled ? true : undefined}
-                  type='button'
                   disabled={busy}
                   onClick={() => void onToggleDisabled()}
-                  className='min-h-11 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)] disabled:opacity-60'
                   title={row.disabled
                     ? ui('Show this portal in the switcher and portal list again')
                     : ui('Hide this portal from the switcher and portal list')}
                 >
                   {row.disabled ? ui('Enable') : ui('Disable')}
-                </button>
+                </Button>
               )}
               {row.custom && (canRemove || (emergencyOnly && !row.disabled)) && (
-                <button
+                <Button
+                  variant='danger'
+                  size='sm'
+                  leadingIcon={Trash}
                   data-portal-remove
-                  type='button'
                   disabled={busy}
-                  onClick={() => void onRemove()}
-                  className='rp-btn rp-btn-danger'
+                  onClick={() => {
+                    setMessage(null)
+                    setRemoveConfirm(true)
+                  }}
                   title={ui(
                     'Removes this portal from the app - the knowledge box itself is untouched',
                   )}
                 >
                   {ui('Remove')}
-                </button>
+                </Button>
               )}
             </div>
 
             {message && <MessagePanel message={message} className='mt-4' />}
           </div>
         </div>
+      )}
+      {removeConfirm && (
+        <ConfirmActionDialog
+          title={ui("Remove the '{name}' portal from the app?", { name: row.tenant.productName })}
+          description={ui(
+            'Removes this portal from the app - the knowledge box itself is untouched',
+          )}
+          confirmLabel={ui('Remove')}
+          cancelLabel={ui('Cancel')}
+          busy={busy}
+          busyLabel={ui('Removing…')}
+          error={message?.tone === 'error' ? message.text : null}
+          onConfirm={() => void onRemove()}
+          onCancel={() => setRemoveConfirm(false)}
+        />
       )}
     </section>
   )
