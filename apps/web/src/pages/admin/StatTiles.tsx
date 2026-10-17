@@ -108,7 +108,7 @@ function StatTilesContent({
           {localError(error ?? query.error, 'Could not load metrics.')}
         </p>
       )}
-      <dl className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+      <dl className='grid grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))] gap-3'>
         <StatTile label={ui('Documents')} value={number(resourceCount)} />
         <StatTile
           label={ui('Paragraphs')}

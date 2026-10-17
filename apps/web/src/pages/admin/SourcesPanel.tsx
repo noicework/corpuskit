@@ -418,7 +418,9 @@ function SourcesPanelContent({ slug }: { slug: string }) {
     <section className='rp-card p-5 lg:p-6'>
       <SectionHeader
         className='rp-manage-section-head'
-        title={<span ref={heading} tabIndex={-1}>{ui('Website sources')}</span>}
+        title={
+          <span ref={heading} className='rp-focus' tabIndex={-1}>{ui('Website sources')}</span>
+        }
         description={ui(
           'Register a website or sitemap once. Each source is re-checked daily, and pages published since the last check are ingested automatically. Pages already taken from a source are never ingested twice.',
         )}

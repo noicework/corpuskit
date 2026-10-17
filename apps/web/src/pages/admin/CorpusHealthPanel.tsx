@@ -142,7 +142,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   const [notice, setNotice] = useState<
     { title: string; outcome: Parameters<typeof deletedNotice>[1] } | null
   >(null)
-  const heading = useRef<HTMLDivElement>(null)
+  const heading = useRef<HTMLSpanElement>(null)
 
   const scan = async () => {
     setScanning(true)
@@ -170,7 +170,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   const onDeleted = (deleted: CorpusHealthRow, outcome: DeleteOutcome) => {
     setRows((previous) => previous?.filter((row) => row.id !== deleted.id) ?? null)
     setNotice({ title: deleted.title, outcome })
-    // The row, and the control that had focus, go: focus the panel instead of the page body.
+    // The row, and the control that had focus, go: focus the heading instead of the page body.
     heading.current?.focus()
   }
 
@@ -180,15 +180,10 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   const healthy = (rows ?? []).filter((r) => r.status === 'ok')
 
   return (
-    <div
-      ref={heading}
-      tabIndex={-1}
-      className='rp-card p-5 lg:p-6'
-      data-admin-health
-    >
+    <div className='rp-card p-5 lg:p-6' data-admin-health>
       <SectionHeader
         className='rp-manage-section-head'
-        title={ui('Corpus health')}
+        title={<span ref={heading} className='rp-focus' tabIndex={-1}>{ui('Corpus health')}</span>}
         description={ui(
           'Pages that failed extraction (bot walls, empty pages) should be hidden or deleted so they can never be cited.',
         )}

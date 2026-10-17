@@ -161,7 +161,7 @@ function RecentListContent({ slug }: { slug: string }) {
       setNotice({ title: resource.title, outcome })
       // A snapshot taken with emergency access is not refetched: drop the row from it here.
       setSnapshot((rows) => rows?.filter((row) => row.id !== resource.id))
-      // The row, and the control that had focus, go: focus the list instead of the page body.
+      // The row, and the control that had focus, go: focus the heading instead of the page body.
       heading.current?.focus()
     }
 
@@ -169,7 +169,9 @@ function RecentListContent({ slug }: { slug: string }) {
     <div>
       <SectionHeader
         className='rp-manage-section-head'
-        title={<span ref={heading} tabIndex={-1}>{ui('Recent additions')}</span>}
+        title={
+          <span ref={heading} className='rp-focus' tabIndex={-1}>{ui('Recent additions')}</span>
+        }
         actions={
           <Button
             variant='ghost'

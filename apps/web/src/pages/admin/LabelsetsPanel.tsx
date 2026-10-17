@@ -15,7 +15,7 @@ import {
   updateAdminLabelset,
 } from '../../api/client.ts'
 import { Button, ErrorCard, prettyLabel, SectionHeader, Skeleton } from '../../components/ui.tsx'
-import { Bookmark, ChevronDown, Plus, Trash, X } from '../../components/icons.tsx'
+import { ChevronDown, Plus, Trash, X } from '../../components/icons.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
@@ -505,7 +505,6 @@ function LabelsetEditor({
               </Button>
               <Button
                 variant='primary'
-                leadingIcon={Bookmark}
                 type='button'
                 disabled={!canSave}
                 onClick={() => void onSave()}

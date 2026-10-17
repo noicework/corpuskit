@@ -20,6 +20,10 @@
   align-self: start;
 }
 
+.rp-manage-nav {
+  scroll-padding-inline: 1.5rem;
+}
+
 .rp-manage-shell .rp-manage-tab {
   justify-content: flex-start;
   min-width: 2.75rem;
@@ -27,7 +31,8 @@
   text-align: start;
 }
 
-.rp-manage-shell .rp-manage-tab[aria-current='true'] {
+.rp-manage-shell .rp-manage-tab[aria-current='true'],
+.rp-manage-shell .rp-manage-tab[aria-current='true']:hover {
   background: var(--rp-control);
   color: var(--rp-on-control);
   font-weight: 600;
