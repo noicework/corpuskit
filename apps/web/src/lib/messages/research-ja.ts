@@ -1090,4 +1090,13 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   '{count} links out': '接続{count}件',
   '1 relation': '関連1件',
   '1 mention': '言及1件',
+  'Back to graph': 'グラフに戻る',
+  'studies': '研究する',
+  'affects': '影響を与える',
+  'conducted in': '実施場所',
+  'funded by': '資金提供元',
+  'collaborates with': '共同研究先',
+  'infects': '感染する',
+  'located in': '所在する',
+  'assesses': '評価する',
 }
