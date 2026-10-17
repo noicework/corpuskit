@@ -2,6 +2,7 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { layoutHrefTarget } from '@research-portal/core'
+import { ExternalLink } from './icons.tsx'
 
 /** What a screen reader hears after the label of every link that leaves the portal. */
 export const EXTERNAL_LINK_NOTE = '(opens external site)'
@@ -15,18 +16,7 @@ export function ExternalMark({ className = '' }: { className?: string }) {
   const { ui } = usePortalLocale()
   return (
     <>
-      <svg
-        viewBox='0 0 12 12'
-        fill='none'
-        stroke='currentColor'
-        strokeWidth='1.5'
-        strokeLinecap='round'
-        strokeLinejoin='round'
-        aria-hidden='true'
-        className={`rp-external-mark ${className}`}
-      >
-        <path d='M4 2.75h5.25V8M9 3L3 9' />
-      </svg>
+      <ExternalLink size='sm' className={`rp-external-mark ${className}`} />
       <span className='sr-only'>{ui(EXTERNAL_LINK_NOTE)}</span>
     </>
   )

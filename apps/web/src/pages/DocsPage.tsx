@@ -14,7 +14,8 @@ import {
 import { getHealth, streamDocsAsk } from '../api/client.ts'
 import { useQuery } from '@tanstack/react-query'
 import { ConfidenceIndicator, type QualityScores } from '../components/QualityGauge.tsx'
-import { LiveStatus } from '../components/ui.tsx'
+import { Button, LiveStatus } from '../components/ui.tsx'
+import { AlertCircle, ArrowRight, ChevronDown, Send, X } from '../components/icons.tsx'
 import { normaliseAnswerBullets } from '../lib/answer-text.ts'
 import { parseDocBlocks } from '../lib/resource-view.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
@@ -50,7 +51,7 @@ function renderInline(
 /** One accent-dot bullet row - the docs page's unordered list treatment. */
 function DotBullet({ children, small }: { children: ReactNode; small?: boolean }) {
   return (
-    <li className='flex gap-2.5 text-[0.9375rem] leading-relaxed text-ink-2'>
+    <li className='flex gap-2.5 text-base leading-relaxed text-ink-2'>
       <span
         aria-hidden='true'
         className={`mt-2 shrink-0 rounded-full ${small ? 'h-1 w-1' : 'h-1.5 w-1.5'}`}
@@ -64,27 +65,31 @@ function DotBullet({ children, small }: { children: ReactNode; small?: boolean }
 export function HelpMarkdown({
   text,
   citation,
+  headingLevel = 3,
 }: {
   text: string
   citation?: (index: number) => ReactNode
+  headingLevel?: 3 | 4
 }) {
+  const { ui } = usePortalLocale()
   const blocks = parseDocBlocks(text)
+  const Heading = `h${headingLevel}` as 'h3' | 'h4'
   return (
-    <div className='space-y-3.5'>
+    <div className='rp-measure rp-prose space-y-4'>
       {blocks.map((block, index) => {
         switch (block.kind) {
           case 'heading':
             return (
-              <h3 key={index} className='pt-1 font-display text-base font-semibold text-ink'>
+              <Heading key={index} className='rp-display pt-1 text-lg text-ink'>
                 {renderInline(block.text, `h${index}`, citation)}
-              </h3>
+              </Heading>
             )
           case 'list': {
             if (block.ordered) {
               return (
                 <ol key={index} className='list-decimal space-y-1.5 pl-5 marker:text-ink-3'>
                   {block.items.map((item, itemIndex) => (
-                    <li key={itemIndex} className='text-[0.9375rem] leading-relaxed text-ink-2'>
+                    <li key={itemIndex} className='text-base leading-relaxed text-ink-2'>
                       {renderInline(item.text, `ol${index}-${itemIndex}`, citation)}
                       {item.children.length > 0
                         ? (
@@ -135,7 +140,7 @@ export function HelpMarkdown({
             return (
               <blockquote
                 key={index}
-                className='break-words border-l-2 border-line pl-3 text-[0.9375rem] italic leading-relaxed text-ink-2'
+                className='break-words border-l-2 border-line pl-3 text-base italic leading-relaxed text-ink-2'
               >
                 {renderInline(block.text, `q${index}`, citation)}
               </blockquote>
@@ -151,14 +156,20 @@ export function HelpMarkdown({
             )
           case 'table':
             return (
-              <div key={index} className='overflow-x-auto'>
+              <div
+                key={index}
+                className='overflow-x-auto'
+                role='region'
+                aria-label={ui('Documentation')}
+                tabIndex={0}
+              >
                 <table className='w-full border-collapse text-sm'>
                   <thead>
                     <tr>
                       {block.headers.map((header, i) => (
                         <th
                           key={i}
-                          className='border-b border-line px-3 py-2 text-left font-semibold text-ink'
+                          className='border-b border-line px-3 py-2 text-left text-xs font-semibold text-ink-2'
                         >
                           {renderInline(header, `t${index}-h${i}`, citation)}
                         </th>
@@ -184,7 +195,7 @@ export function HelpMarkdown({
             )
           default:
             return (
-              <p key={index} className='text-[0.9375rem] leading-relaxed text-ink-2'>
+              <p key={index} className='text-base leading-relaxed text-ink-2'>
                 {renderInline(block.text, `p${index}`, citation)}
               </p>
             )
@@ -347,13 +358,13 @@ function DocsAssistant({ slug }: { slug: string }) {
   return (
     <section
       aria-label={ui('Ask the documentation')}
-      className='rp-card overflow-hidden p-5 sm:p-6'
+      className='rp-card overflow-hidden p-5 lg:p-6'
     >
       <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
-        <h2 className='font-display text-lg font-semibold text-ink'>{ui('How do I…?')}</h2>
+        <h2 className='rp-display text-xl text-ink'>{ui('How do I…?')}</h2>
         <p className='text-xs text-ink-3'>{ui('Answers drawn only from this documentation')}</p>
       </div>
-      <form onSubmit={handleSubmit} className='mt-3'>
+      <form onSubmit={handleSubmit} className='mt-4'>
         <div className='flex flex-col gap-2 sm:flex-row'>
           <label htmlFor='docs-ask' className='sr-only'>
             {ui('Ask a question about using the portal')}
@@ -364,26 +375,29 @@ function DocsAssistant({ slug }: { slug: string }) {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={ui('e.g. How do I ask a question and see its sources?')}
-            className='rp-input h-11 min-w-0 flex-1'
+            className='rp-input min-w-0 flex-1'
           />
           {streaming
             ? (
-              <button
+              <Button
                 type='button'
                 onClick={stop}
-                className='rp-btn rp-btn-outline h-11 shrink-0'
+                variant='outline'
+                leadingIcon={X}
+                className='shrink-0'
               >
                 {ui('Stop')}
-              </button>
+              </Button>
             )
             : (
-              <button
+              <Button
                 type='submit'
                 disabled={draft.trim().length === 0}
-                className='rp-btn rp-btn-primary h-11 shrink-0'
+                leadingIcon={Send}
+                className='shrink-0'
               >
                 {ui('Ask')}
-              </button>
+              </Button>
             )}
         </div>
       </form>
@@ -424,6 +438,7 @@ function DocsAssistant({ slug }: { slug: string }) {
                     color: 'var(--rp-bad-ink)',
                   }}
                 >
+                  <AlertCircle size='sm' className='mr-2 inline-block align-text-bottom' />
                   {locale.error(answer.error, 'The help assistant could not answer.')}
                 </div>
               )
@@ -457,13 +472,13 @@ function DocsAssistant({ slug }: { slug: string }) {
 
             {!answer.refused && answer.citations.length > 0
               ? (
-                <div className='mt-4 flex flex-wrap gap-1.5'>
+                <div className='mt-4 flex flex-wrap gap-2'>
                   {answer.citations.map((citation) => {
                     const page = pageByTitle.get(citation.title.toLowerCase())
                     const chip = (
                       <>
                         <span
-                          className='inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold text-[var(--rp-on-accent)]'
+                          className='inline-flex min-h-5 min-w-5 shrink-0 items-center justify-center rounded-full text-2xs font-semibold text-[var(--rp-on-accent)]'
                           style={{ backgroundColor: 'var(--rp-accent)' }}
                         >
                           {citation.index}
@@ -483,7 +498,7 @@ function DocsAssistant({ slug }: { slug: string }) {
                           {chip}
                         </Link>
                       )
-                      : <span key={citation.index} className='rp-chip'>{chip}</span>
+                      : <span key={citation.index} className='rp-tag'>{chip}</span>
                   })}
                 </div>
               )
@@ -515,12 +530,14 @@ function DocsNav({ slug, activeId }: { slug: string; activeId: string }) {
                   <Link
                     to={`/t/${slug}/help/${page.id}`}
                     aria-current={isActive ? 'page' : undefined}
-                    className={`rp-focus block rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-sm transition-colors duration-150 ${
+                    className={`rp-link-standalone rp-focus flex w-full justify-start rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-sm transition-colors duration-150 ${
                       isActive
                         ? 'font-medium text-ink'
                         : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-ink'
                     }`}
-                    style={isActive ? { backgroundColor: 'var(--rp-wash)' } : {}}
+                    style={isActive
+                      ? { backgroundColor: 'var(--rp-wash)', color: 'var(--rp-ink)' }
+                      : {}}
                   >
                     {localiseHelpPage(page, language).title}
                   </Link>
@@ -550,30 +567,31 @@ export function HelpArticle({ page, slug }: { page: DocPage; slug: string }) {
   const translated = localiseHelpPage(page, language)
   const illustrated = ILLUSTRATED_PAGES[page.id]
   return (
-    <article className='rp-measure'>
+    <article className='min-w-0'>
       <header>
-        <h1 className='font-display text-3xl font-semibold tracking-tight text-ink'>
+        <h2 className='rp-display text-xl text-ink'>
           {localiseHelpPage(page, language).title}
-        </h1>
-        <p className='mt-2 text-base leading-relaxed text-ink-2'>{translated.summary}</p>
+        </h2>
+        <p className='rp-measure mt-2 text-base leading-relaxed text-ink-2'>{translated.summary}</p>
         {illustrated
           ? (
             <Link to={`/t/${slug}/${illustrated}`} className='rp-btn rp-btn-outline mt-4'>
               {ui('See the illustrated page, with the flow diagram and live figures')}
+              <ArrowRight size='sm' />
             </Link>
           )
           : null}
       </header>
-      <div className='mt-8 space-y-8'>
+      <div className='mt-6 space-y-6 lg:space-y-8'>
         {translated.sections.map((section, index) => (
           <section
             key={page.sections[index]!.heading}
             id={sectionAnchor(page.sections[index]!.heading)}
             className='scroll-mt-24'
           >
-            <h2 className='font-display text-xl font-semibold text-ink'>{section.heading}</h2>
+            <h3 className='rp-display text-xl text-ink'>{section.heading}</h3>
             <div className='mt-3'>
-              <HelpMarkdown text={section.body} />
+              <HelpMarkdown text={section.body} headingLevel={4} />
             </div>
           </section>
         ))}
@@ -634,24 +652,24 @@ export function DocsPage() {
 
   if (!activePage) {
     return (
-      <main className='rp-shell py-12'>
+      <main className='rp-shell py-8 lg:py-10'>
         <p className='text-sm text-ink-2'>{ui('No documentation is available.')}</p>
       </main>
     )
   }
 
   return (
-    <main className='rp-shell py-6 sm:py-8 lg:py-10'>
+    <main className='rp-shell py-8 lg:py-10'>
       <div className='mb-6'>
-        <h1 className='mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl'>
+        <h1 className='rp-display text-2xl text-ink sm:text-3xl'>
           {ui('{name} documentation', { name: config.branding.productName })}
         </h1>
-        <p className='mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-2'>
+        <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>
           {ui(
             'Everything you need to use the portal - and a help assistant that answers your questions from these pages only.',
           )}
         </p>
-        <p className='mt-2 max-w-2xl text-sm leading-relaxed text-ink-2'>
+        <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>
           {ui('New here?')}{' '}
           <Link
             to={`/t/${slug}/how-it-works`}
@@ -667,33 +685,23 @@ export function DocsPage() {
       </div>
 
       {access.can('portal.ask', { kind: 'portal', slug }) && (
-        <div className='mb-8'>
+        <div className='mb-6 lg:mb-8'>
           <DocsAssistant key={`${access.generation}:${slug}:${pageId}`} slug={slug} />
         </div>
       )}
 
       {/* Mobile: collapsible table of contents. */}
       <div className='mb-4 lg:hidden'>
-        <button
+        <Button
           type='button'
           onClick={() => setNavOpen((open) => !open)}
           aria-expanded={navOpen}
-          className='rp-btn rp-btn-outline h-10 w-full justify-between'
+          variant='outline'
+          className='w-full justify-between'
         >
           <span>{ui('Browse the documentation')}</span>
-          <svg
-            viewBox='0 0 20 20'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='1.7'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-hidden='true'
-            className={`h-4 w-4 transition-transform duration-150 ${navOpen ? 'rotate-180' : ''}`}
-          >
-            <path d='M5 7.5l5 5 5-5' />
-          </svg>
-        </button>
+          <ChevronDown size='sm' className={navOpen ? 'rotate-180' : ''} />
+        </Button>
         {navOpen
           ? (
             <div className='mt-3 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>

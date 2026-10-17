@@ -2,6 +2,8 @@ import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Button } from './ui.tsx'
+import { Check, RotateCcw } from './icons.tsx'
 
 // ---------------------------------------------------------------------------
 // Shared interactive quiz renderer for the "assessment" generated-artefact
@@ -109,9 +111,14 @@ export function AssessmentQuiz({
               <p className='mt-1 text-sm text-ink-2'>{scoreVerdict(score, total, ui)}</p>
             </div>
             {onRetake && (
-              <button type='button' onClick={onRetake} className='rp-btn rp-btn-outline shrink-0'>
+              <Button
+                variant='outline'
+                leadingIcon={RotateCcw}
+                onClick={onRetake}
+                className='shrink-0'
+              >
                 {ui('Try another')}
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -170,14 +177,14 @@ export function AssessmentQuiz({
         {data.questions.map((q, qi) => (
           <div
             key={qi}
-            className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-5 shadow-sm'
+            className='rp-card p-5 lg:p-6'
           >
             {q.topic && (
               <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
                 {q.topic}
               </p>
             )}
-            <p className='mt-1 text-sm font-medium text-ink'>
+            <p className='rp-measure mt-1 text-sm font-medium text-ink'>
               {qi + 1}. {q.question}
             </p>
             <div className='mt-3 space-y-2'>
@@ -189,10 +196,18 @@ export function AssessmentQuiz({
                 if (submitted) {
                   if (isCorrect) {
                     cls = 'text-[var(--rp-ok-ink)]'
-                    optStyle = { borderColor: 'var(--rp-ok-line)', background: 'var(--rp-ok-bg)' }
+                    optStyle = {
+                      borderColor: 'var(--rp-ok-line)',
+                      background: 'var(--rp-ok-bg)',
+                      color: 'var(--rp-ok-ink)',
+                    }
                   } else if (isChosen) {
                     cls = 'text-[var(--rp-bad-ink)]'
-                    optStyle = { borderColor: 'var(--rp-bad-line)', background: 'var(--rp-bad-bg)' }
+                    optStyle = {
+                      borderColor: 'var(--rp-bad-line)',
+                      background: 'var(--rp-bad-bg)',
+                      color: 'var(--rp-bad-ink)',
+                    }
                   }
                 } else if (isChosen) {
                   cls = ''
@@ -214,17 +229,19 @@ export function AssessmentQuiz({
                     disabled={submitted}
                     aria-pressed={isChosen}
                     onClick={() => setSelected((prev) => ({ ...prev, [qi]: oi }))}
-                    style={optStyle}
-                    className={`rp-focus block w-full rounded-[var(--rp-radius)] border px-4 py-2.5 text-left text-sm text-ink transition-colors duration-150 disabled:cursor-default ${cls}`}
+                    style={submitted ? { ...optStyle, opacity: 1, cursor: 'default' } : optStyle}
+                    className={`rp-btn rp-btn-outline w-full disabled:cursor-default ${cls}`}
                   >
-                    {opt}
-                    {answerHint && <span className='sr-only'>{answerHint}</span>}
+                    <span className='w-full text-left'>
+                      {opt}
+                      {answerHint && <span className='sr-only'>{answerHint}</span>}
+                    </span>
                   </button>
                 )
               })}
             </div>
             {submitted && q.explanation && (
-              <p className='mt-3 text-sm leading-relaxed text-ink-2'>{q.explanation}</p>
+              <p className='rp-prose rp-measure mt-3 text-sm text-ink-2'>{q.explanation}</p>
             )}
             {submitted && (
               <p className='mt-2 text-xs text-ink-3'>
@@ -254,15 +271,14 @@ export function AssessmentQuiz({
       </div>
 
       {!submitted && total > 0 && (
-        <div className='mt-6 flex items-center gap-3'>
-          <button
-            type='button'
+        <div className='mt-6 flex flex-wrap items-center gap-3'>
+          <Button
+            leadingIcon={Check}
             disabled={answeredCount < total}
             onClick={() => setSubmitted(true)}
-            className='rp-btn rp-btn-primary'
           >
             {ui('Submit answers')}
-          </button>
+          </Button>
           <p className='text-xs text-ink-3'>
             {ui('{answered} / {total} answered', { answered: answeredCount, total })}
           </p>

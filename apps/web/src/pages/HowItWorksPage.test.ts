@@ -1,7 +1,9 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import { docPageById } from '@research-portal/core'
-import { FLOW_STEPS, HOW_IT_WORKS_SECTIONS, wrapWords } from './HowItWorksPage.tsx'
+import { FLOW_STEPS, FlowDiagram, HOW_IT_WORKS_SECTIONS } from './HowItWorksPage.tsx'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { helpMenuItems } from '../components/help-menu-items.ts'
 
 const pageSource = await Deno.readTextFile(new URL('./HowItWorksPage.tsx', import.meta.url))
@@ -32,13 +34,16 @@ describe('How this works page', () => {
     ) {
       expect(pageSource).toContain(`var(${token})`)
     }
-    // The node corners follow the shape dial through the stylesheet class.
-    expect(pageSource).toContain("className='rp-flow-node'")
-    expect(pageSource).toContain("fontFamily: 'var(--rp-font-body)'")
+    const html = renderToStaticMarkup(createElement(FlowDiagram))
+    // Normal document text grows with the reader's settings instead of clipping in SVG boxes.
+    expect(html).not.toContain('<text')
+    expect(html).not.toContain('<rect')
+    expect(html).not.toMatch(/font-size:[^;]*px|height="\d+(?:\.\d+)?(?:px)?"/)
+    expect(html).toContain('var(--rp-radius)')
     // Two orientations: a row from lg up and a stacked column below it.
-    expect(pageSource).toContain("data-orientation='row'")
-    expect(pageSource).toContain("data-orientation='column'")
-    expect(pageSource).toContain('lg:hidden')
+    expect(html).toContain('data-orientation="row"')
+    expect(html).toContain('data-orientation="column"')
+    expect(html).toContain('lg:hidden')
   })
 
   it('takes every figure from the live counters endpoint', () => {
@@ -52,18 +57,15 @@ describe('How this works page', () => {
     expect(pageSource).toContain('(retrieval-augmented generation)')
   })
 
-  it('wraps the six flow steps into short lines for both orientations', () => {
+  it('keeps all six step titles and details readable and includes an accessible description', () => {
+    const html = renderToStaticMarkup(createElement(FlowDiagram))
     expect(FLOW_STEPS.length).toBe(6)
     for (const step of FLOW_STEPS) {
-      const row = wrapWords(step.detail, 22)
-      expect(row.length).toBeLessThanOrEqual(4)
-      for (const line of row) expect(line.length).toBeLessThanOrEqual(22)
-      const column = wrapWords(step.detail, 34)
-      expect(column.length).toBeLessThanOrEqual(3)
-      for (const line of column) expect(line.length).toBeLessThanOrEqual(34)
+      expect(html).toContain(step.title)
+      expect(html).toContain(step.detail)
     }
-    expect(wrapWords('one two three', 7)).toEqual(['one two', 'three'])
-    expect(wrapWords('', 10)).toEqual([])
+    expect(html).toContain('role="img"')
+    expect(html).toContain('aria-label="The flow of one question through the portal.')
   })
 
   it('is linked from the header help menu, the phone menu and the Help landing page', () => {

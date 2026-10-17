@@ -11,8 +11,14 @@ import {
   type TenantConfig,
 } from '@research-portal/core'
 import { getCatalog, getResource } from '../api/client.ts'
-import { Skeleton, TypeBadge, typeLabel } from '../components/ui.tsx'
-import { ResourceThumb, resourceTypeGlyph } from '../components/ResourceThumb.tsx'
+import {
+  SectionHeader as SystemSectionHeader,
+  Skeleton,
+  TypeBadge,
+  typeLabel,
+} from '../components/ui.tsx'
+import { ResourceThumb } from '../components/ResourceThumb.tsx'
+import { ArrowRight, File, FileText, Globe, MessageSquare } from '../components/icons.tsx'
 import { EXTERNAL_LINK_NOTE, ExternalMark, LayoutAnchor } from '../components/LayoutLink.tsx'
 import { ExplorePage, Hero, TopicRows, useAskNavigation } from './ExplorePage.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
@@ -20,6 +26,7 @@ import type { TenantOutletContext } from './TenantLayout.tsx'
 type LayoutHome = NonNullable<PortalLayout['home']>
 /** Whether this home's cards end in an arrow (`home.cardArrows`, true unless set false). */
 const CardArrows = createContext(true)
+const RESOURCE_ICONS = { document: FileText, pdf: FileText, video: File, web: Globe } as const
 /** What a home row's card shows: a full summary, or a catalogue item with fewer fields. */
 type CardResource =
   & Pick<ResourceSummary, 'id' | 'title' | 'type'>
@@ -103,33 +110,36 @@ function SectionHeader(
 ) {
   const { ui } = usePortalLocale()
   return (
-    <div className='flex flex-wrap items-end justify-between gap-x-6 gap-y-3'>
-      <div className='min-w-0 max-w-3xl'>
-        <h2 id={id} className='rp-display break-words text-2xl text-ink sm:text-3xl'>
-          {heading}
-        </h2>
-        {intro
+    <div>
+      <SystemSectionHeader
+        title={<span id={id} className='rp-display break-words text-xl'>{heading}</span>}
+        actions={more
           ? (
-            <div className='mt-3 space-y-3'>
-              <Paragraphs text={intro} className='text-base leading-relaxed text-ink-2' />
-            </div>
+            <LayoutAnchor
+              href={more.href}
+              slug={more.slug}
+              className='rp-link-standalone shrink-0 text-sm font-medium'
+            >
+              {ui('See all')}
+              <ArrowRight size='sm' className='shrink-0' />
+            </LayoutAnchor>
           )
-          : null}
-      </div>
-      {more
+          : undefined}
+      />
+      {intro
         ? (
-          <LayoutAnchor
-            href={more.href}
-            slug={more.slug}
-            className='rp-focus -my-3 inline-flex shrink-0 items-center gap-1 rounded-[var(--rp-radius-btn)] py-3 text-sm font-medium text-[var(--rp-accent-fg)] hover:underline'
-          >
-            {ui('See all')}
-            <span aria-hidden='true'>&rarr;</span>
-          </LayoutAnchor>
+          <div className='rp-measure mt-3 space-y-3'>
+            <Paragraphs text={intro} className='text-base leading-relaxed text-ink-2' />
+          </div>
         )
         : null}
     </div>
   )
+}
+
+function ExternalNote() {
+  const { ui } = usePortalLocale()
+  return <span className='sr-only'>{ui(EXTERNAL_LINK_NOTE)}</span>
 }
 
 /** An uploaded layout image in a fixed-ratio box; a failed load leaves the box's own ground. */
@@ -204,8 +214,8 @@ function CardsSection(
                   />
                 )
                 : null}
-              <div className='flex flex-1 flex-col gap-2 p-5'>
-                <h3 className='break-words text-lg font-semibold leading-snug tracking-[-0.01em] text-ink'>
+              <div className='flex flex-1 flex-col gap-2 p-5 lg:p-6'>
+                <h3 className='break-words text-base font-semibold leading-snug tracking-[-0.01em] text-ink'>
                   {card.title}
                 </h3>
                 {card.body
@@ -220,11 +230,11 @@ function CardsSection(
                     <span className='rp-layout-card-arrow mt-auto pt-2 text-[var(--rp-accent-fg)]'>
                       {layoutHrefTarget(card.href, slug)?.external
                         ? <ExternalMark />
-                        : <span aria-hidden='true'>&rarr;</span>}
+                        : <ArrowRight size='sm' className='shrink-0' />}
                     </span>
                   )
                   : layoutHrefTarget(card.href, slug)?.external
-                  ? <span className='sr-only'>{EXTERNAL_LINK_NOTE}</span>
+                  ? <ExternalNote />
                   : null}
               </div>
             </LayoutAnchor>
@@ -280,6 +290,7 @@ function ResourceRow(
 function HomeResourceCard({ slug, resource }: { slug: string; resource: CardResource }) {
   const { ui } = usePortalLocale()
   const [hasThumbnail, setHasThumbnail] = useState(false)
+  const Icon = RESOURCE_ICONS[resource.type]
   const arrows = useContext(CardArrows)
   return (
     <Link
@@ -323,18 +334,7 @@ function HomeResourceCard({ slug, resource }: { slug: string; resource: CardReso
         aria-hidden={hasThumbnail ? 'true' : undefined}
       >
         <div className='rp-layout-textcard-band flex items-center gap-2 px-4 py-2.5'>
-          <svg
-            viewBox='0 0 24 24'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='1.6'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-hidden='true'
-            className='h-4 w-4 shrink-0'
-          >
-            <path d={resourceTypeGlyph(resource.type)} />
-          </svg>
+          <Icon size='sm' className='shrink-0' />
           <span className='rp-eyebrow'>{typeLabel(resource.type, ui)}</span>
         </div>
         <div className='relative flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
@@ -347,22 +347,11 @@ function HomeResourceCard({ slug, resource }: { slug: string; resource: CardReso
                 aria-hidden='true'
                 className='rp-layout-card-arrow relative z-10 mt-auto pt-3 text-[var(--rp-accent-fg)]'
               >
-                &rarr;
+                <ArrowRight />
               </span>
             )
             : null}
-          <svg
-            viewBox='0 0 24 24'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='1.2'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            aria-hidden='true'
-            className='rp-layout-textcard-glyph'
-          >
-            <path d={resourceTypeGlyph(resource.type)} />
-          </svg>
+          <Icon className='rp-layout-textcard-glyph' />
         </div>
       </div>
     </Link>
@@ -460,20 +449,9 @@ function QuestionsSection(
                   onAsk(question)}
                 className='rp-suggest-card'
               >
-                <svg
-                  viewBox='0 0 24 24'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth='1.6'
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  aria-hidden='true'
-                  className='rp-layout-question-icon h-5 w-5 shrink-0'
-                >
-                  <path d='M4 5.5h16v11H9l-5 4z' />
-                </svg>
+                <MessageSquare className='rp-layout-question-icon shrink-0' />
                 <span className='rp-suggest-text min-w-0 break-words'>{question}</span>
-                <span aria-hidden='true' className='rp-suggest-arrow shrink-0'>&rarr;</span>
+                <ArrowRight size='sm' className='rp-suggest-arrow shrink-0' />
               </button>
             </li>
           ))}
@@ -495,7 +473,7 @@ function AboutSection(
         }`}
       >
         <div className='min-w-0'>
-          <h2 id={id} className='rp-display break-words text-2xl text-ink sm:text-3xl'>
+          <h2 id={id} className='rp-display break-words text-xl text-ink'>
             {section.heading}
           </h2>
           <div className='rp-measure mt-5 space-y-4'>

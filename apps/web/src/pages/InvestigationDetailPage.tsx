@@ -26,13 +26,26 @@ import {
 } from '../api/client.ts'
 import { MakeCurrentToggle } from '../components/SaveEvidence.tsx'
 import {
+  Button,
   EmptyState,
   ErrorCard,
   ExportNotice,
+  IconButton,
   savedFileNotice,
   Skeleton,
   useExportNotice,
 } from '../components/ui.tsx'
+import {
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  Download,
+  MessageSquare,
+  Pencil,
+  RotateCcw,
+  Sparkles,
+  Trash,
+} from '../components/icons.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 // ---------------------------------------------------------------------------
@@ -121,10 +134,10 @@ function EditableField({
 
   if (!editable) {
     return (
-      <p className={`break-words ${className ?? ''}`}>
+      <span className={`block break-words ${className ?? ''}`}>
         {value ||
           (ariaLabel === 'Research question' ? ui('No research question set') : placeholder)}
-      </p>
+      </span>
     )
   }
 
@@ -153,19 +166,15 @@ function EditableField({
     <button
       type='button'
       onClick={() => setEditing(true)}
-      className='rp-focus group flex min-w-0 max-w-full items-center gap-1.5 rounded-[var(--rp-radius-btn)] text-left'
+      title={ui(ariaLabel)}
+      className='rp-link-standalone rp-focus group w-full min-w-0 text-left'
     >
-      <span className={`truncate ${value ? '' : 'italic text-ink-3'} ${className ?? ''}`}>
+      <span
+        className={`min-w-0 break-words ${value ? '' : 'italic text-ink-3'} ${className ?? ''}`}
+      >
         {value || placeholder}
       </span>
-      <svg
-        viewBox='0 0 20 20'
-        fill='currentColor'
-        aria-hidden='true'
-        className='h-3.5 w-3.5 shrink-0 text-ink-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100'
-      >
-        <path d='M14.69 2.86a1.5 1.5 0 012.12 0l.33.33a1.5 1.5 0 010 2.12L7.56 14.89l-3.02.67a.5.5 0 01-.6-.6l.67-3.02L14.69 2.86z' />
-      </svg>
+      <Pencil size='sm' className='shrink-0 text-ink-3' />
     </button>
   )
 }
@@ -206,6 +215,7 @@ function ConfirmButton({
         }}
         className={confirmClassName ?? 'rp-btn rp-btn-danger'}
       >
+        <Trash size='sm' />
         {confirmLabel}
       </button>
     )
@@ -221,6 +231,7 @@ function ConfirmButton({
       }}
       className={className ?? 'rp-btn rp-btn-outline'}
     >
+      <Trash size='sm' />
       {label}
     </button>
   )
@@ -256,19 +267,21 @@ function InvestigationHeader(
   })
 
   return (
-    <div className='rp-card p-5'>
+    <div className='rp-card p-5 lg:p-6'>
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='min-w-0 flex-1'>
-          <EditableField
-            editable={canWrite()}
-            value={investigation.name}
-            placeholder={ui('Untitled investigation')}
-            ariaLabel='Investigation name'
-            onSave={(name) => {
-              if (name.length > 0) patch.mutate({ name })
-            }}
-            className='text-xl font-semibold tracking-tight text-ink'
-          />
+          <h1>
+            <EditableField
+              editable={canWrite()}
+              value={investigation.name}
+              placeholder={ui('Untitled investigation')}
+              ariaLabel='Investigation name'
+              onSave={(name) => {
+                if (name.length > 0) patch.mutate({ name })
+              }}
+              className='rp-display text-2xl sm:text-3xl text-ink'
+            />
+          </h1>
           <div className='mt-1.5'>
             <EditableField
               editable={canWrite()}
@@ -276,7 +289,7 @@ function InvestigationHeader(
               placeholder={ui('No research question set - click to add one')}
               ariaLabel='Research question'
               onSave={(question) => patch.mutate({ question })}
-              className='text-sm text-ink-2'
+              className='rp-prose rp-measure text-sm text-ink-2'
             />
           </div>
         </div>
@@ -294,23 +307,24 @@ function InvestigationHeader(
               to={`/t/${slug}/ask?ask=${encodeURIComponent(investigation.question)}`}
               className='rp-btn rp-btn-primary'
             >
+              <MessageSquare size='sm' />
               {ui('Ask this question')}
             </Link>
           )
           : null}
         {canWrite()
           ? (
-            <button
-              type='button'
+            <Button
+              variant='outline'
+              leadingIcon={investigation.status === 'active' ? Check : RotateCcw}
               disabled={patch.isPending}
               onClick={() =>
                 patch.mutate({ status: investigation.status === 'active' ? 'closed' : 'active' })}
-              className='rp-btn rp-btn-outline'
             >
               {investigation.status === 'active'
                 ? ui('Close investigation')
                 : ui('Reopen investigation')}
-            </button>
+            </Button>
           )
           : null}
         <MakeCurrentToggle slug={slug} investigation={investigation} />
@@ -322,7 +336,7 @@ function InvestigationHeader(
                 confirmLabel={ui('Confirm delete')}
                 disabled={removeMutation.isPending}
                 onConfirm={() => removeMutation.mutate()}
-                className='rp-btn rp-btn-ghost text-[var(--rp-bad-ink)]'
+                className='rp-btn rp-btn-danger-outline'
                 confirmClassName='rp-btn rp-btn-danger'
               />
             </div>
@@ -385,9 +399,9 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
   }
 
   return (
-    <section className='rp-card p-5'>
+    <section className='rp-card p-5 lg:p-6'>
       <div className='flex items-center justify-between gap-3'>
-        <h2 className='text-sm font-semibold text-ink'>{ui('Notebook')}</h2>
+        <h2 className='rp-display text-xl text-ink'>{ui('Notebook')}</h2>
         <span aria-live='polite' className='text-xs text-ink-3'>
           {status === 'saving' ? ui('Saving…') : status === 'saved' ? ui('Saved') : ''}
         </span>
@@ -396,6 +410,7 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
         ? (
           <textarea
             rows={6}
+            aria-label={ui('Notebook')}
             value={draft}
             onChange={(event) => onChange(event.target.value)}
             placeholder={ui('Working notes, hunches, things still to check…')}
@@ -403,7 +418,7 @@ function NotebookSection({ slug, investigation }: { slug: string; investigation:
           />
         )
         : (
-          <p className='mt-3 whitespace-pre-wrap break-words text-sm text-ink-2'>
+          <p className='rp-prose rp-measure mt-3 whitespace-pre-wrap break-words text-sm text-ink-2'>
             {investigation.notes || ui('No notes yet.')}
           </p>
         )}
@@ -559,7 +574,7 @@ function EvidenceCard(
   const askHref = `/t/${slug}/ask?ask=${encodeURIComponent(askQuestion)}`
 
   return (
-    <div className='rp-card p-4'>
+    <div className='rp-card p-5 lg:p-6'>
       <div className='flex items-start justify-between gap-3'>
         {sourceGone
           ? (
@@ -573,7 +588,7 @@ function EvidenceCard(
           : (
             <Link
               to={sourceHref}
-              className='rp-focus min-w-0 truncate text-sm font-semibold text-ink underline-offset-2 hover:underline'
+              className='rp-link-standalone min-w-0 break-words text-sm font-semibold'
               title={item.resourceTitle}
             >
               {item.resourceTitle}
@@ -598,7 +613,7 @@ function EvidenceCard(
       )}
 
       <blockquote
-        className={`break-words mt-2 border-l-2 border-line pl-3 text-sm leading-relaxed text-ink-2 ${
+        className={`rp-prose rp-measure break-words mt-2 border-l-2 border-line pl-3 text-sm text-ink-2 ${
           expanded ? '' : 'rp-clamp-4'
         }`}
       >
@@ -609,8 +624,10 @@ function EvidenceCard(
           <button
             type='button'
             onClick={() => setExpanded((e) => !e)}
-            className='rp-focus mt-1 inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-xs font-medium text-ink-3 hover:text-ink'
+            aria-expanded={expanded}
+            className='rp-btn rp-btn-ghost rp-btn-sm mt-1'
           >
+            <ChevronDown size='sm' className={expanded ? 'rotate-180' : ''} />
             {expanded ? ui('Show less') : ui('Show more')}
           </button>
         )
@@ -626,7 +643,7 @@ function EvidenceCard(
         : null}
       {item.aiRelevance ? <p className='mt-1 text-xs text-ink-2'>{item.aiRelevance}</p> : null}
 
-      <div className='mt-3 flex flex-wrap gap-1.5' role='group' aria-label={ui('Verdict')}>
+      <div className='mt-3 flex flex-wrap gap-2' role='group' aria-label={ui('Verdict')}>
         {canWrite()
           ? VERDICTS.map((v) => {
             const active = item.verdict === v.id
@@ -644,23 +661,22 @@ function EvidenceCard(
               </button>
             )
           })
-          : <span className='rp-chip'>{verdictLabel(item.verdict, ui)}</span>}
+          : <span className='rp-tag'>{verdictLabel(item.verdict, ui)}</span>}
       </div>
 
-      <div className='mt-3 flex flex-wrap items-center gap-1.5' aria-label={ui('Tags')}>
+      <div className='mt-3 flex flex-wrap items-center gap-2' aria-label={ui('Tags')}>
         {item.tags.map((tag) => (
-          <span key={tag} className='rp-chip'>
+          <span key={tag} className='rp-tag'>
             {tag}
             {canWrite()
               ? (
-                <button
-                  type='button'
+                <IconButton
+                  icon={Trash}
+                  variant='danger'
+                  size='sm'
                   onClick={() => removeTag(tag)}
-                  aria-label={ui('Remove tag {tag}', { tag: tag })}
-                  className='rp-focus -my-1 inline-flex min-h-6 min-w-6 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 hover:text-ink'
-                >
-                  &times;
-                </button>
+                  label={ui('Remove tag {tag}', { tag: tag })}
+                />
               )
               : null}
           </span>
@@ -682,7 +698,7 @@ function EvidenceCard(
               }}
               placeholder={ui('Add tag…')}
               aria-label={ui('Add tag for {value1}', { value1: item.resourceTitle })}
-              className='rp-input h-7 w-24 text-xs'
+              className='rp-input w-28 text-xs'
             />
           )
           : null}
@@ -697,7 +713,7 @@ function EvidenceCard(
               onChange={(event) => onNoteChange(event.target.value)}
               placeholder={ui('Add a note…')}
               aria-label={ui('Note for {value1}', { value1: item.resourceTitle })}
-              className='rp-input h-8 text-xs'
+              className='rp-input min-w-0 text-xs'
             />
           )
           : <p className='text-xs text-ink-2 break-words'>{item.note}</p>}
@@ -710,8 +726,9 @@ function EvidenceCard(
         <span className='text-xs text-ink-3'>
           {ui('Added')} {date(item.createdAt, { year: 'numeric', month: 'short', day: 'numeric' })}
         </span>
-        <div className='flex items-center gap-2'>
-          <Link to={askHref} className='rp-btn rp-btn-ghost h-7 px-2 text-xs'>
+        <div className='flex flex-wrap items-center gap-2'>
+          <Link to={askHref} className='rp-btn rp-btn-ghost rp-btn-sm'>
+            <MessageSquare size='sm' />
             {ui('Ask about this')}
           </Link>
           {canWrite()
@@ -721,8 +738,8 @@ function EvidenceCard(
                 confirmLabel={ui('Confirm remove')}
                 disabled={removeMutation.isPending}
                 onConfirm={() => removeMutation.mutate()}
-                className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
-                confirmClassName='rp-btn rp-btn-danger h-7 px-2 text-xs'
+                className='rp-btn rp-btn-danger rp-btn-sm'
+                confirmClassName='rp-btn rp-btn-danger rp-btn-sm'
               />
             )
             : null}
@@ -742,7 +759,7 @@ function ArtefactRow({ artefact }: { artefact: InvestigationArtefact }) {
     <div className='rounded-[var(--rp-radius)] border border-line p-3'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='flex min-w-0 items-center gap-2'>
-          <span className='rp-badge rp-badge-quiet shrink-0 uppercase tracking-[0.06em]'>
+          <span className='rp-tag shrink-0 uppercase tracking-[0.06em]'>
             {artefact.kind}
           </span>
           <span className='truncate text-sm font-medium text-ink'>{artefact.title}</span>
@@ -753,11 +770,12 @@ function ArtefactRow({ artefact }: { artefact: InvestigationArtefact }) {
       </div>
       {isViewableObject
         ? (
-          <details className='mt-2'>
-            <summary className='cursor-pointer text-xs font-medium text-ink-3 hover:text-ink'>
+          <details className='group mt-2'>
+            <summary className='rp-btn rp-btn-ghost rp-btn-sm list-none [&::-webkit-details-marker]:hidden'>
+              <ChevronDown size='sm' className='group-open:rotate-180' />
               {ui('View')}
             </summary>
-            <pre className='mt-2 max-h-72 overflow-auto rounded-[var(--rp-radius)] bg-surface-2 p-3 text-xs text-ink-2'>
+            <pre className='mt-2 max-h-72 overflow-auto rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] bg-surface-2 p-3 text-xs text-ink-2'>
               {JSON.stringify(artefact.data, null, 2)}
             </pre>
           </details>
@@ -853,7 +871,7 @@ function SynthesisArtefactCard({
     >
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='flex min-w-0 items-center gap-2'>
-          <span className='rp-badge rp-badge-quiet shrink-0 uppercase tracking-[0.06em]'>
+          <span className='rp-tag shrink-0 uppercase tracking-[0.06em]'>
             {ui('Synthesis')}
           </span>
           <span className='truncate text-sm font-medium text-ink'>{artefact.title}</span>
@@ -864,7 +882,7 @@ function SynthesisArtefactCard({
       </div>
 
       {data.summary
-        ? <p className='mt-3 text-sm leading-relaxed text-ink-2'>{data.summary}</p>
+        ? <p className='rp-prose rp-measure mt-3 text-sm text-ink-2'>{data.summary}</p>
         : null}
 
       {data.supported.length > 0
@@ -873,7 +891,7 @@ function SynthesisArtefactCard({
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
               {ui('Established by the evidence')}
             </h4>
-            <ul className='mt-1.5 list-disc space-y-1 pl-5 text-sm leading-relaxed text-ink-2'>
+            <ul className='rp-prose rp-measure mt-1.5 list-disc space-y-1 pl-5 text-sm text-ink-2'>
               {data.supported.map((line, index) => <li key={index}>{line}</li>)}
             </ul>
           </div>
@@ -886,11 +904,11 @@ function SynthesisArtefactCard({
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
               {ui('Contested')}
             </h4>
-            <ul className='mt-1.5 space-y-1.5'>
+            <ul className='rp-measure mt-1.5 space-y-1.5'>
               {data.contested.map((line, index) => (
                 <li
                   key={index}
-                  className='border-l-2 pl-3 text-sm leading-relaxed text-ink-2'
+                  className='rp-prose rp-measure border-l-2 pl-3 text-sm text-ink-2'
                   style={{ borderColor: 'var(--rp-warn-line)' }}
                 >
                   {line}
@@ -907,7 +925,7 @@ function SynthesisArtefactCard({
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
               {ui('Gaps')}
             </h4>
-            <ul className='mt-1.5 list-disc space-y-1 pl-5 text-sm leading-relaxed text-ink-2'>
+            <ul className='rp-prose rp-measure mt-1.5 list-disc space-y-1 pl-5 text-sm text-ink-2'>
               {data.gaps.map((line, index) => <li key={index}>{line}</li>)}
             </ul>
           </div>
@@ -920,7 +938,7 @@ function SynthesisArtefactCard({
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
               {ui('What the synthesis left out')}
             </h4>
-            <ul className='mt-1.5 space-y-1 text-xs leading-relaxed text-ink-2'>
+            <ul className='rp-prose rp-measure mt-1.5 space-y-1 text-xs text-ink-2'>
               {coverage.excluded.length > 0
                 ? (
                   <li>
@@ -933,7 +951,7 @@ function SynthesisArtefactCard({
                         {index > 0 ? '; ' : ''}
                         <Link
                           to={`/t/${slug}/library/${encodeURIComponent(item.resourceId)}`}
-                          className='text-ink underline-offset-2 hover:underline'
+                          className='rp-focus text-[var(--rp-accent-fg)] underline-offset-2 hover:underline'
                         >
                           {item.resourceTitle}
                         </Link>
@@ -977,13 +995,13 @@ function SynthesisArtefactCard({
             <h4 className='text-xs font-semibold uppercase tracking-[0.06em] text-ink-3'>
               {ui('References')}
             </h4>
-            <ol className='mt-1.5 space-y-1 text-sm text-ink-2'>
+            <ol className='rp-prose rp-measure mt-1.5 space-y-1 text-sm text-ink-2'>
               {data.references.map((ref) => (
                 <li key={ref.n}>
                   [{ref.n}]{' '}
                   <Link
                     to={`/t/${slug}/library/${encodeURIComponent(ref.resourceId)}`}
-                    className='text-ink underline-offset-2 hover:underline'
+                    className='rp-focus text-[var(--rp-accent-fg)] underline-offset-2 hover:underline'
                   >
                     {ref.resourceTitle}
                   </Link>
@@ -1196,9 +1214,9 @@ function TagsSection({
   const tags = tagCounts(evidence)
 
   return (
-    <section className='rp-card p-5'>
-      <h2 className='text-sm font-semibold text-ink'>{ui('Tags')}</h2>
-      <p className='mt-1 text-sm text-ink-2'>
+    <section className='rp-card p-5 lg:p-6'>
+      <h2 className='rp-display text-xl text-ink'>{ui('Tags')}</h2>
+      <p className='rp-prose rp-measure mt-1 text-sm text-ink-2'>
         {ui('Tag evidence to group it under the claims or themes you are testing.')}
       </p>
       {tags.length === 0
@@ -1208,7 +1226,7 @@ function TagsSection({
           </p>
         )
         : (
-          <div className='mt-3 flex flex-wrap items-center gap-1.5'>
+          <div className='mt-3 flex flex-wrap items-center gap-2'>
             <button
               type='button'
               aria-pressed={activeTag === null}
@@ -1345,7 +1363,7 @@ function InvestigationDetailBody() {
 
   if (isLoading) {
     return (
-      <main className='rp-shell py-10'>
+      <main className='rp-shell py-8 lg:py-10'>
         <div className='space-y-3'>
           <Skeleton className='h-32 w-full' />
           <Skeleton className='h-40 w-full' />
@@ -1358,7 +1376,7 @@ function InvestigationDetailBody() {
   if (isError || !investigation) {
     const notFound = error instanceof ApiError && error.status === 404
     return (
-      <main className='rp-shell py-10'>
+      <main className='rp-shell py-8 lg:py-10'>
         <ErrorCard
           message={notFound
             ? ui('This investigation does not exist or has been removed.')
@@ -1366,6 +1384,7 @@ function InvestigationDetailBody() {
           onRetry={() => void refetch()}
         />
         <Link to={`/t/${config.slug}/investigations`} className='rp-btn rp-btn-outline mt-4'>
+          <ArrowLeft size='sm' />
           {ui('Back to investigations')}
         </Link>
       </main>
@@ -1403,62 +1422,53 @@ function InvestigationDetailBody() {
   }
 
   return (
-    <main className='rp-shell py-10'>
-      <h1 className='sr-only'>{investigation.name}</h1>
-      <Link to={`/t/${config.slug}/investigations`} className='text-sm text-ink-3 hover:text-ink'>
-        {ui('← Investigations')}
+    <main className='rp-shell py-8 lg:py-10'>
+      <Link to={`/t/${config.slug}/investigations`} className='rp-link-standalone text-sm'>
+        <ArrowLeft size='sm' />
+        {ui('Investigations')}
       </Link>
 
-      {
-        /* One column up to `xl`, in reading order. From `xl` the question,
-        * notebook and tags sit beside the evidence and artefacts, so a wide
-        * display is used rather than stranding a 900px column in its middle. */
-      }
-      <div className='xl:grid xl:grid-cols-2 xl:gap-8 2xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]'>
-        <div className='min-w-0'>
-          <div className='mt-3'>
-            <InvestigationHeader slug={config.slug} investigation={investigation} />
-          </div>
+      <div className='mt-3'>
+        <InvestigationHeader slug={config.slug} investigation={investigation} />
+      </div>
 
-          <div className='mt-6'>
-            <NotebookSection slug={config.slug} investigation={investigation} />
-          </div>
+      <div className='mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-8'>
+        <aside className='min-w-0 space-y-6 lg:col-start-2 lg:row-start-1'>
+          <NotebookSection slug={config.slug} investigation={investigation} />
+          <TagsSection
+            evidence={investigation.evidence}
+            activeTag={tagFilter}
+            onSelectTag={setTagFilter}
+            groupByTag={groupByTag}
+            onToggleGroupByTag={() => setGroupByTag((g) => !g)}
+          />
+        </aside>
 
-          <div className='mt-6'>
-            <TagsSection
-              evidence={investigation.evidence}
-              activeTag={tagFilter}
-              onSelectTag={setTagFilter}
-              groupByTag={groupByTag}
-              onToggleGroupByTag={() => setGroupByTag((g) => !g)}
-            />
-          </div>
-        </div>
-
-        <div className='min-w-0'>
-          <section id='evidence-list' className='mt-6 xl:mt-3'>
+        <div className='min-w-0 lg:col-start-1 lg:row-start-1'>
+          <section id='evidence-list'>
             <div className='flex flex-wrap items-center justify-between gap-3'>
-              <h2 className='text-sm font-semibold text-ink'>
+              <h2 className='rp-display text-xl text-ink'>
                 {ui('Evidence')}{' '}
                 <span className='font-normal text-ink-3'>({sortedEvidence.length})</span>
               </h2>
               <div className='flex flex-wrap items-center gap-2'>
                 {canWrite()
                   ? (
-                    <button
-                      type='button'
+                    <Button
+                      leadingIcon={Sparkles}
                       disabled={sortedEvidence.length === 0 || synthesise.isPending}
                       onClick={startSynthesis}
-                      className='rp-btn rp-btn-primary disabled:cursor-not-allowed'
+                      className='disabled:cursor-not-allowed'
                     >
                       {synthesise.isPending ? ui('Synthesising…') : ui('Synthesise the evidence')}
-                    </button>
+                    </Button>
                   )
                   : null}
                 {access.can('portal.export', { kind: 'portal', slug: config.slug })
                   ? (
-                    <button
-                      type='button'
+                    <Button
+                      variant='outline'
+                      leadingIcon={Download}
                       disabled={sortedEvidence.length === 0}
                       onClick={() => {
                         setExportError(false)
@@ -1476,10 +1486,10 @@ function InvestigationDetailBody() {
                             }
                           })
                       }}
-                      className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
+                      className='disabled:cursor-not-allowed'
                     >
                       {ui('Export to Word')}
-                    </button>
+                    </Button>
                   )
                   : null}
                 <ExportNotice notice={exportNotice} />
@@ -1545,13 +1555,12 @@ function InvestigationDetailBody() {
                       : null}
                   </ul>
                   <div className='mt-3 flex flex-wrap gap-2'>
-                    <button
-                      type='button'
+                    <Button
+                      leadingIcon={Sparkles}
                       onClick={startSynthesis}
-                      className='rp-btn rp-btn-primary'
                     >
                       {ui('Synthesise anyway')}
-                    </button>
+                    </Button>
                     <button
                       type='button'
                       onClick={() => {
@@ -1583,7 +1592,7 @@ function InvestigationDetailBody() {
 
             {sortedEvidence.length > 0
               ? (
-                <div className='mt-3 flex flex-wrap gap-1.5'>
+                <div className='mt-3 flex flex-wrap gap-2'>
                   {VERDICT_FILTERS.map((f) => (
                     <button
                       key={f}
@@ -1659,7 +1668,7 @@ function InvestigationDetailBody() {
           </section>
 
           <section className='mt-6'>
-            <h2 className='text-sm font-semibold text-ink'>
+            <h2 className='rp-display text-xl text-ink'>
               {ui('Artefacts')}{' '}
               <span className='font-normal text-ink-3'>({investigation.artefacts.length})</span>
             </h2>

@@ -156,7 +156,9 @@ describe('portal home', () => {
       'Just added',
       'About &lt;the&gt; group',
       'Upgrades',
-    ].map((heading) => html.indexOf(`>${heading}</h2>`))
+    ].map((heading) =>
+      Math.max(html.indexOf(`>${heading}</h2>`), html.indexOf(`>${heading}</span></h2>`))
+    )
     expect(order.every((at) => at > 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     // Each composed section is a region named by its own heading.

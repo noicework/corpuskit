@@ -28,7 +28,7 @@ export function RegionMap({ slug }: { slug: string }) {
 
   const go = (label: string) => navigate(`/t/${slug}/search?q=${encodeURIComponent(label)}`)
 
-  const onKey = (event: KeyboardEvent<SVGPathElement>, label: string) => {
+  const onKey = (event: KeyboardEvent<SVGGElement>, label: string) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       go(label)
@@ -45,19 +45,26 @@ export function RegionMap({ slug }: { slug: string }) {
       {STATES.map((state) => {
         const on = active === state.id
         return (
-          <g key={state.id}>
+          <g
+            key={state.id}
+            role='link'
+            tabIndex={0}
+            aria-label={ui('Search {value1} documents', { value1: state.label })}
+            onClick={() => go(state.label)}
+            onKeyDown={(event) => onKey(event, state.label)}
+            onMouseEnter={() => setActive(state.id)}
+            onMouseLeave={() => setActive(null)}
+            onFocus={() => setActive(state.id)}
+            onBlur={() => setActive(null)}
+            className='rp-pages-region-link cursor-pointer'
+          >
+            {/* Enlarge the island's hit area without changing its boundary. */}
+            {state.id === 'tas' && (
+              <rect x={740} y={750} width={150} height={148} fill='transparent' />
+            )}
             <path
               d={state.path}
-              role='link'
-              tabIndex={0}
-              aria-label={ui('Search {value1} documents', { value1: state.label })}
-              onClick={() => go(state.label)}
-              onKeyDown={(event) => onKey(event, state.label)}
-              onMouseEnter={() => setActive(state.id)}
-              onMouseLeave={() => setActive(null)}
-              onFocus={() => setActive(state.id)}
-              onBlur={() => setActive(null)}
-              className='cursor-pointer outline-none transition-[fill,stroke] duration-200'
+              className='transition-[fill,stroke] duration-150'
               style={{
                 fill: on
                   ? 'var(--rp-accent)'
@@ -84,7 +91,7 @@ export function RegionMap({ slug }: { slug: string }) {
             className='pointer-events-none select-none'
             style={{
               fill: on ? 'var(--rp-on-accent)' : 'var(--rp-on-primary)',
-              fontSize: state.id === 'tas' || state.id === 'vic' ? 24 : 30,
+              fontSize: state.id === 'tas' || state.id === 'vic' ? '1.5rem' : '1.875rem',
               fontWeight: 600,
               letterSpacing: '0.06em',
               paintOrder: 'stroke',
