@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react'
@@ -109,8 +110,7 @@ export function EmergencyAccessProvider({ session, children }: {
   const sendingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const overlayRef = useRef<HTMLDivElement>(null)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const mountedRef = useRef(true)
   const id = useId()
@@ -176,20 +176,24 @@ export function EmergencyAccessProvider({ session, children }: {
   }, [sending, error])
 
   const open = pending !== null && enabled
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return
+    const dialog = dialogRef.current!
     const previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null
     const previousOverflow = document.body.style.overflow
     const background = [...document.body.children].filter((node): node is HTMLElement =>
-      node instanceof HTMLElement && node !== overlayRef.current
+      node instanceof HTMLElement && node !== dialog
     )
     const inert = background.map((element) => element.inert)
     background.forEach((element) => {
       element.inert = true
     })
     document.body.style.overflow = 'hidden'
+    // Emergency access may follow another native confirmation. Join the top layer so its
+    // passcode and keyboard focus remain available above that existing modal.
+    dialog.showModal()
     inputRef.current?.focus()
     const focusable = () => {
       const elements = [
@@ -231,10 +235,15 @@ export function EmergencyAccessProvider({ session, children }: {
       clearInput()
       document.removeEventListener('keydown', onKey)
       document.removeEventListener('focusin', onFocus)
+      dialog.close()
       background.forEach((element, index) => {
         element.inert = inert[index]!
       })
-      document.body.style.overflow = previousOverflow
+      // An underlying confirmation may already have restored scrolling as the action
+      // completed. Restore only the lock this prompt still owns.
+      if (document.body.style.overflow === 'hidden') {
+        document.body.style.overflow = previousOverflow
+      }
       if (previousFocus?.isConnected) previousFocus.focus()
     }
   }, [open, cancel, clearInput])
@@ -313,93 +322,92 @@ export function EmergencyAccessProvider({ session, children }: {
       {children}
       {open && pending
         ? createPortal(
-          <div
-            ref={overlayRef}
-            className='rp-tenant rp-scrim fixed inset-0 z-[80] flex items-center justify-center p-4 text-ink'
+          <dialog
+            ref={dialogRef}
+            role='dialog'
+            tabIndex={-1}
+            aria-modal='true'
+            aria-labelledby={`${id}-title`}
+            aria-describedby={`${id}-description ${id}-action`}
+            aria-busy={sending}
+            onCancel={(event) => {
+              event.preventDefault()
+              cancel()
+            }}
+            className='rp-tenant rp-dialog rp-card rp-shadow-xl rp-focus fixed inset-0 m-auto w-[calc(100%-2rem)] min-w-0 max-w-xl overflow-y-auto p-6 text-ink'
+            style={{ maxHeight: 'calc(100dvh - 2rem)' }}
           >
-            <div
-              ref={dialogRef}
-              role='dialog'
-              tabIndex={-1}
-              aria-modal='true'
-              aria-labelledby={`${id}-title`}
-              aria-describedby={`${id}-description ${id}-action`}
-              aria-busy={sending}
-              className='rp-card rp-shadow-xl rp-focus w-full min-w-0 max-w-xl overflow-y-auto p-6'
-              style={{ maxHeight: 'calc(100dvh - 2rem)' }}
+            <h2 id={`${id}-title`} className='text-lg font-semibold'>{ui('Emergency access')}</h2>
+            <p id={`${id}-description`} className='mt-4 text-sm leading-relaxed text-ink-2'>
+              {ui(
+                'Enter the passcode for this action. You will need to enter it again for another action.',
+              )}
+            </p>
+            <p id={`${id}-action`} className='my-4 min-w-0 break-words text-sm font-semibold'>
+              {ui(pending.label)}
+            </p>
+            <form
+              className='flex min-w-0 flex-col gap-4'
+              onSubmit={(event) => {
+                event.preventDefault()
+                void confirm()
+              }}
             >
-              <h2 id={`${id}-title`} className='text-lg font-semibold'>{ui('Emergency access')}</h2>
-              <p id={`${id}-description`} className='mt-4 text-sm leading-relaxed text-ink-2'>
-                {ui(
-                  'Enter the passcode for this action. You will need to enter it again for another action.',
-                )}
-              </p>
-              <p id={`${id}-action`} className='my-4 min-w-0 break-words text-sm font-semibold'>
-                {ui(pending.label)}
-              </p>
-              <form
-                className='flex min-w-0 flex-col gap-4'
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  void confirm()
-                }}
-              >
-                <div className='min-w-0'>
-                  <label htmlFor={`${id}-passcode`} className='mb-2 block text-sm'>
-                    {ui('Passcode')}
-                  </label>
-                  <input
-                    ref={attachInput}
-                    id={`${id}-passcode`}
-                    type='password'
-                    autoComplete='off'
-                    spellCheck={false}
-                    required
-                    disabled={sending || error !== null}
-                    className='rp-input w-full min-w-0'
-                  />
-                </div>
-                {error
-                  ? (
-                    <p
-                      role='alert'
-                      className='flex items-start gap-2 p-4 text-xs leading-relaxed'
-                      style={{
-                        background: 'var(--rp-bad-bg)',
-                        color: 'var(--rp-bad-ink)',
-                        borderRadius: 'var(--rp-radius)',
-                      }}
-                    >
-                      <AlertCircle size='sm' className='shrink-0' />
-                      {error}
-                    </p>
-                  )
-                  : null}
-                {sending
-                  ? <p role='status' className='text-sm text-ink-2'>{ui('Sending request...')}</p>
-                  : null}
-                <div className='flex min-w-0 flex-wrap justify-end gap-2'>
-                  <Button
-                    ref={cancelRef}
-                    type='button'
-                    data-emergency-cancel
-                    disabled={sending}
-                    onClick={cancel}
-                    variant='ghost'
+              <div className='min-w-0'>
+                <label htmlFor={`${id}-passcode`} className='mb-2 block text-sm'>
+                  {ui('Passcode')}
+                </label>
+                <input
+                  ref={attachInput}
+                  id={`${id}-passcode`}
+                  type='password'
+                  autoComplete='off'
+                  spellCheck={false}
+                  required
+                  disabled={sending || error !== null}
+                  className='rp-input w-full min-w-0'
+                />
+              </div>
+              {error
+                ? (
+                  <p
+                    role='alert'
+                    className='flex items-start gap-2 p-4 text-xs leading-relaxed'
+                    style={{
+                      background: 'var(--rp-bad-bg)',
+                      color: 'var(--rp-bad-ink)',
+                      borderRadius: 'var(--rp-radius)',
+                    }}
                   >
-                    {ui('Cancel')}
-                  </Button>
-                  <Button
-                    type='submit'
-                    disabled={sending || error !== null}
-                    className='min-w-0 whitespace-normal py-2'
-                  >
-                    {ui('Continue with this action')}
-                  </Button>
-                </div>
-              </form>
-            </div>
-          </div>,
+                    <AlertCircle size='sm' className='shrink-0' />
+                    {error}
+                  </p>
+                )
+                : null}
+              {sending
+                ? <p role='status' className='text-sm text-ink-2'>{ui('Sending request...')}</p>
+                : null}
+              <div className='flex min-w-0 flex-wrap justify-end gap-2'>
+                <Button
+                  ref={cancelRef}
+                  type='button'
+                  data-emergency-cancel
+                  disabled={sending}
+                  onClick={cancel}
+                  variant='ghost'
+                >
+                  {ui('Cancel')}
+                </Button>
+                <Button
+                  type='submit'
+                  disabled={sending || error !== null}
+                  className='min-w-0 whitespace-normal py-2'
+                >
+                  {ui('Continue with this action')}
+                </Button>
+              </div>
+            </form>
+          </dialog>,
           document.body,
         )
         : null}
