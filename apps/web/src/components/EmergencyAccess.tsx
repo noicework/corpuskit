@@ -14,6 +14,8 @@ import type { AuthSession } from '../api/auth.ts'
 import type { Permission, Scope } from '@research-portal/core'
 import { useAccess, useScopeAccess } from './AccessProvider.tsx'
 import { currentAuthority } from '../api/access-lifecycle.ts'
+import { Button } from './ui.tsx'
+import { AlertCircle } from './icons.tsx'
 import {
   AdminAccessError,
   type AdminRequestAccess,
@@ -313,8 +315,7 @@ export function EmergencyAccessProvider({ session, children }: {
         ? createPortal(
           <div
             ref={overlayRef}
-            className='rp-tenant fixed inset-0 z-[100] flex items-center justify-center p-4 text-ink'
-            style={{ backgroundColor: 'color-mix(in srgb, var(--rp-ink) 40%, transparent)' }}
+            className='rp-tenant rp-scrim fixed inset-0 z-[80] flex items-center justify-center p-4 text-ink'
           >
             <div
               ref={dialogRef}
@@ -324,10 +325,10 @@ export function EmergencyAccessProvider({ session, children }: {
               aria-labelledby={`${id}-title`}
               aria-describedby={`${id}-description ${id}-action`}
               aria-busy={sending}
-              className='rp-card rp-focus w-full min-w-0 max-w-md overflow-y-auto p-6'
+              className='rp-card rp-shadow-xl rp-focus w-full min-w-0 max-w-xl overflow-y-auto p-6'
               style={{ maxHeight: 'calc(100dvh - 2rem)' }}
             >
-              <h2 id={`${id}-title`} className='rp-display text-xl'>{ui('Emergency access')}</h2>
+              <h2 id={`${id}-title`} className='text-lg font-semibold'>{ui('Emergency access')}</h2>
               <p id={`${id}-description`} className='mt-4 text-sm leading-relaxed text-ink-2'>
                 {ui(
                   'Enter the passcode for this action. You will need to enter it again for another action.',
@@ -362,13 +363,14 @@ export function EmergencyAccessProvider({ session, children }: {
                   ? (
                     <p
                       role='alert'
-                      className='p-4 text-sm leading-relaxed'
+                      className='flex items-start gap-2 p-4 text-xs leading-relaxed'
                       style={{
                         background: 'var(--rp-bad-bg)',
                         color: 'var(--rp-bad-ink)',
                         borderRadius: 'var(--rp-radius)',
                       }}
                     >
+                      <AlertCircle size='sm' className='shrink-0' />
                       {error}
                     </p>
                   )
@@ -376,29 +378,24 @@ export function EmergencyAccessProvider({ session, children }: {
                 {sending
                   ? <p role='status' className='text-sm text-ink-2'>{ui('Sending request...')}</p>
                   : null}
-                <div className='flex min-w-0 flex-wrap gap-2'>
-                  <button
-                    type='submit'
-                    disabled={sending || error !== null}
-                    className='rp-btn rp-btn-primary min-w-0 whitespace-normal'
-                    style={{
-                      height: 'auto',
-                      minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-                      paddingBlock: '0.5rem',
-                    }}
-                  >
-                    {ui('Continue with this action')}
-                  </button>
-                  <button
+                <div className='flex min-w-0 flex-wrap justify-end gap-2'>
+                  <Button
                     ref={cancelRef}
                     type='button'
                     data-emergency-cancel
                     disabled={sending}
                     onClick={cancel}
-                    className='rp-btn rp-btn-ghost'
+                    variant='ghost'
                   >
                     {ui('Cancel')}
-                  </button>
+                  </Button>
+                  <Button
+                    type='submit'
+                    disabled={sending || error !== null}
+                    className='min-w-0 whitespace-normal py-2'
+                  >
+                    {ui('Continue with this action')}
+                  </Button>
                 </div>
               </form>
             </div>

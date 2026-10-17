@@ -9,6 +9,8 @@ import { AdminAccessError } from '../../api/break-glass.ts'
 import { migrateKb } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { ArrowRight, ChevronDown } from '../../components/icons.tsx'
+import { Button, IconButton, SectionHeader } from '../../components/ui.tsx'
 
 type ItemEvent = Extract<MigrationEvent, { type: 'item' }>
 type DoneEvent = Extract<MigrationEvent, { type: 'done' }>
@@ -158,25 +160,27 @@ function MigratePanelContent(
 
   return (
     <section data-migrate-panel className='rp-card overflow-hidden'>
-      <button
-        type='button'
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-        className='flex w-full items-center justify-between gap-3 px-6 py-4 text-left'
-      >
-        <span className='flex items-center gap-2'>
-          <span aria-hidden='true' className='text-ink-3'>{open ? '▾' : '▸'}</span>
-          <span className='text-sm font-semibold text-ink'>{ui('Migrate resources')}</span>
-        </span>
-        {!open && (
-          <span className='hidden text-xs text-ink-3 sm:inline'>
-            {ui('Copy resources between portals')}
-          </span>
-        )}
-      </button>
+      <SectionHeader
+        className='rp-admin-section-head p-5 lg:p-6'
+        title={ui('Migrate resources')}
+        description={ui('Copy resources between portals')}
+        actions={
+          <IconButton
+            label={ui('Migrate resources')}
+            icon={ChevronDown}
+            size='sm'
+            onClick={() => setOpen((prev) => !prev)}
+            aria-expanded={open}
+            aria-controls='migrate-resources-form'
+            className={`transition-transform duration-150 motion-reduce:transition-none ${
+              open ? 'rotate-180' : ''
+            }`}
+          />
+        }
+      />
 
       {open && (
-        <div className='border-t border-line px-6 py-5'>
+        <div id='migrate-resources-form' className='border-t border-line p-5 lg:p-6'>
           <p className='text-sm text-ink-3'>
             {ui(
               "Copy every resource from one portal's knowledge box into another's. Results appear after the request is confirmed.",
@@ -190,7 +194,7 @@ function MigratePanelContent(
               </label>
               <select
                 id='migrate-from'
-                className='rp-input'
+                className='rp-input rp-select'
                 value={from}
                 onChange={(e) => setFrom(e.target.value)}
               >
@@ -208,7 +212,7 @@ function MigratePanelContent(
               </label>
               <select
                 id='migrate-to'
-                className='rp-input'
+                className='rp-input rp-select'
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
               >
@@ -229,14 +233,14 @@ function MigratePanelContent(
               </p>
             )
             : (
-              <button
-                type='button'
+              <Button
                 disabled={!canRun}
                 onClick={() => void onRun()}
-                className='rp-btn rp-btn-primary mt-4'
+                leadingIcon={ArrowRight}
+                className='mt-4'
               >
                 {running ? ui('Sending request...') : ui('Run migration')}
-              </button>
+              </Button>
             )}
 
           {total !== null && (

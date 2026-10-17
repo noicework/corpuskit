@@ -8,6 +8,8 @@ import { connectKnowledgeBox, revertKnowledgeBox } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { RotateCcw, ShieldCheck } from '../../components/icons.tsx'
 
 /** Portal connection controls require only this portal's binding permission. */
 function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onChanged }: {
@@ -115,17 +117,19 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
 
   return (
     <section data-portal-connections className='min-w-0'>
-      <h2 className='text-sm font-semibold text-ink'>{ui('Connection')}</h2>
-      <dl className='mt-3 grid min-w-0 grid-cols-1 gap-3 text-sm sm:grid-cols-2'>
+      <SectionHeader className='rp-admin-section-head' title={ui('Connection')} />
+      <dl className='mt-4 grid min-w-0 grid-cols-1 gap-3 text-sm sm:grid-cols-2'>
         <div className='min-w-0 rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-          <dt className='rp-eyebrow text-ink-3'>{ui('Knowledge box')}</dt>
+          <dt className='rp-eyebrow text-2xs font-semibold text-ink-3'>{ui('Knowledge box')}</dt>
           <dd className='mt-1 break-all font-mono text-ink'>
             {knowledgeBox.kbId ?? ui('Not connected')}
           </dd>
         </div>
         <div className='rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-          <dt className='rp-eyebrow text-ink-3'>{ui('Documents')}</dt>
-          <dd className='mt-1 text-ink'>{resourceCount ?? ui('Unavailable')}</dd>
+          <dt className='rp-eyebrow text-2xs font-semibold text-ink-3'>{ui('Documents')}</dt>
+          <dd className='mt-1 text-2xl font-semibold tabular-nums text-ink'>
+            {resourceCount ?? ui('Unavailable')}
+          </dd>
         </div>
       </dl>
       <form onSubmit={onConnect} className='mt-4 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2'>
@@ -161,36 +165,25 @@ function PortalConnectionsContent({ slug, name, knowledgeBox, resourceCount, onC
           />
         </div>
         <div className='flex min-w-0 flex-wrap items-center gap-3 sm:col-span-2'>
-          <button
+          <Button
             type='submit'
             disabled={busy || pending}
-            className='rp-btn rp-btn-primary'
-            style={{
-              height: 'auto',
-              minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-              paddingBlock: '0.5rem',
-              whiteSpace: 'normal',
-              maxWidth: '100%',
-            }}
+            className='max-w-full whitespace-normal'
+            leadingIcon={ShieldCheck}
           >
             {busy ? ui('Working...') : ui('Verify and connect')}
-          </button>
+          </Button>
           {(knowledgeBox.status === 'connected' || knowledgeBox.status === 'unavailable') && (
-            <button
+            <Button
               type='button'
               disabled={busy || pending}
               onClick={() => void onRevert()}
-              className='rp-btn rp-btn-outline'
-              style={{
-                height: 'auto',
-                minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-                paddingBlock: '0.5rem',
-                whiteSpace: 'normal',
-                maxWidth: '100%',
-              }}
+              variant='outline'
+              className='max-w-full whitespace-normal'
+              leadingIcon={RotateCcw}
             >
               {knowledgeBox.status === 'unavailable' ? ui('Disconnect') : ui('Revert to demo box')}
-            </button>
+            </Button>
           )}
         </div>
       </form>

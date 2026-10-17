@@ -8,6 +8,7 @@ import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { Button, SectionHeader } from '../../components/ui.tsx'
 
 /**
  * Inline rename form that swaps in for a portal's name/organisation lines.
@@ -21,6 +22,7 @@ function RenamePortalContent({
   initialTagline,
   onCancel,
   onSaved,
+  headingLevel = 2,
 }: {
   slug: string
   initialName: string
@@ -28,6 +30,7 @@ function RenamePortalContent({
   initialTagline: string
   onCancel: () => void
   onSaved: () => void
+  headingLevel?: 2 | 3
 }) {
   const { ui } = usePortalLocale()
 
@@ -82,13 +85,18 @@ function RenamePortalContent({
   }
 
   return (
-    <form onSubmit={onSubmit} className='min-w-0 flex-1 space-y-2.5'>
-      <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-3'>
-        <div>
-          <label htmlFor={`rename-name-${slug}`} className='sr-only'>{ui('Name')}</label>
+    <form onSubmit={onSubmit} className='min-w-0 flex-1 space-y-4'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={ui('Rename')}
+        headingLevel={headingLevel}
+      />
+      <div className='grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3'>
+        <div className='min-w-0'>
+          <label htmlFor={`rename-name-${slug}`} className='mb-2 block text-sm'>{ui('Name')}</label>
           <input
             id={`rename-name-${slug}`}
-            className='rp-input'
+            className='rp-input w-full min-w-0'
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={ui('Product name')}
@@ -97,11 +105,13 @@ function RenamePortalContent({
             minLength={2}
           />
         </div>
-        <div>
-          <label htmlFor={`rename-org-${slug}`} className='sr-only'>{ui('Organisation')}</label>
+        <div className='min-w-0'>
+          <label htmlFor={`rename-org-${slug}`} className='mb-2 block text-sm'>
+            {ui('Organisation')}
+          </label>
           <input
             id={`rename-org-${slug}`}
-            className='rp-input'
+            className='rp-input w-full min-w-0'
             value={organisation}
             onChange={(e) => setOrganisation(e.target.value)}
             placeholder={ui('Organisation')}
@@ -109,11 +119,13 @@ function RenamePortalContent({
             required
           />
         </div>
-        <div>
-          <label htmlFor={`rename-tagline-${slug}`} className='sr-only'>{ui('Tagline')}</label>
+        <div className='min-w-0'>
+          <label htmlFor={`rename-tagline-${slug}`} className='mb-2 block text-sm'>
+            {ui('Tagline')}
+          </label>
           <input
             id={`rename-tagline-${slug}`}
-            className='rp-input'
+            className='rp-input w-full min-w-0'
             value={tagline}
             onChange={(e) => setTagline(e.target.value)}
             placeholder={ui('Tagline')}
@@ -123,12 +135,12 @@ function RenamePortalContent({
         </div>
       </div>
       <div className='flex flex-wrap items-center gap-3'>
-        <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
+        <Button type='submit' disabled={busy}>
           {busy ? ui('Sending request...') : ui('Save')}
-        </button>
-        <button type='button' disabled={busy} onClick={onCancel} className='rp-btn rp-btn-outline'>
+        </Button>
+        <Button disabled={busy} onClick={onCancel} variant='outline'>
           {ui('Cancel')}
-        </button>
+        </Button>
       </div>
       {message && <MessagePanel message={message} />}
     </form>

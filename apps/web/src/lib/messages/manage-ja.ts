@@ -1197,4 +1197,17 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
   'Keep agent': 'エージェントを残す',
   'Remove this worked example from the strategy?': 'この具体例を戦略から削除しますか？',
   'Keep example': '具体例を残す',
+  'Light header preview': 'ライトモードのヘッダープレビュー',
+  'Dark header preview': 'ダークモードのヘッダープレビュー',
+  'The separate dark logo is shown on the header ground.':
+    'ダークモード用のロゴをヘッダーの背景に表示します。',
+  'Without a separate dark logo, the light logo is shown on a light plate in dark mode.':
+    'ダークモード用のロゴがない場合、通常のロゴを明るい背景のプレートに載せて表示します。',
+  'PNG or WebP with transparency works best. Previewed below as it appears in the header.':
+    '背景が透明なPNGまたはWebPを推奨します。ヘッダーでの表示を下にプレビューします。',
+  'Optional. Upload a separate logo designed for dark backgrounds.':
+    '任意です。暗い背景用のロゴを別途アップロードできます。',
+  'Open portal management': 'ポータル管理を開く',
+  '{count} document': '資料{count}件',
+  '{count} documents': '資料{count}件',
 }

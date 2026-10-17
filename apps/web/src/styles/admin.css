@@ -1,1 +1,51 @@
 /* Admin component styles. */
+
+/* The shared header's wrapping basis must not reserve vertical space in its column layout. */
+.rp-admin-section-head .rp-section-head-text {
+  flex-basis: auto;
+}
+
+.rp-admin-section-head .rp-section-head-actions {
+  max-width: 100%;
+}
+
+.rp-admin-upload:has(input:focus-visible) {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--rp-ring);
+}
+
+.rp-admin-disclosure {
+  list-style: none;
+}
+
+.rp-admin-disclosure::-webkit-details-marker {
+  display: none;
+}
+
+.rp-admin-disclosure-icon {
+  transition: transform 150ms var(--rp-ease);
+}
+
+[open] > .rp-admin-disclosure .rp-admin-disclosure-icon {
+  transform: rotate(180deg);
+}
+
+@media (max-width: 1023.98px) {
+  .rp-admin-platform-tabs {
+    mask-image: linear-gradient(to right, transparent, black 0.5rem, black calc(100% - 1rem),
+      transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-admin-disclosure-icon {
+    transition-duration: 1ms;
+  }
+}
+
+@media (forced-colors: active) {
+  .rp-admin-upload:has(input:focus-visible) {
+    outline-color: Highlight;
+  }
+}

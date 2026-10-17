@@ -9,6 +9,8 @@ import {
   useAccessMutation,
 } from '../../components/AssignmentSection.tsx'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { AlertCircle } from '../../components/icons.tsx'
 import { AssignmentError, changeAccessMode } from '../../api/access.ts'
 import type { TenantOutletContext } from '../TenantLayout.tsx'
 import { KeysPanel } from './KeysPanel.tsx'
@@ -38,19 +40,21 @@ export function AccessPanel({ slug, name }: { slug: string; name: string }) {
   const scope = { kind: 'portal' as const, slug }
   if (!ACCESS_SECTION_PERMISSIONS.some((permission) => access.can(permission, scope))) return null
   return (
-    <section className='rp-card min-w-0 p-6' data-access-panel>
-      <h2 className='rp-display break-words text-xl [overflow-wrap:anywhere]'>
-        {ui('Access to ')}
-        {name}
-      </h2>
-      <p className='mt-2 text-sm text-ink-2 [overflow-wrap:anywhere]'>{ui('Portal: ')}{slug}</p>
+    <div className='min-w-0 space-y-6 lg:space-y-8' data-access-panel>
+      <section className='rp-card min-w-0 p-5 lg:p-6'>
+        <SectionHeader
+          className='rp-admin-section-head [overflow-wrap:anywhere]'
+          title={<>{ui('Access to ')}{name}</>}
+          description={<>{ui('Portal: ')}{slug}</>}
+        />
+      </section>
       <AssignmentSection scope={scope} name={name} family='members' />
       <AssignmentSection scope={scope} name={name} family='groups' />
       {access.can('behaviour.write', scope) && (
         <AccessModeSection key={`${slug}:${access.generation}`} slug={slug} name={name} />
       )}
       <KeysPanel slug={slug} />
-    </section>
+    </div>
   )
 }
 function AccessModeSection({ slug, name }: { slug: string; name: string }) {
@@ -87,13 +91,17 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
   }
   return (
     <section
-      className='mt-8 min-w-0 border-t border-[var(--rp-line)] pt-6'
+      className='rp-card min-w-0 p-5 lg:p-6'
       data-access-mode
       aria-labelledby={id}
     >
-      <h3 id={id} className='rp-display text-xl'>{ui('Access mode')}</h3>
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={<span id={id}>{ui('Access mode')}</span>}
+      />
       {notice && (
-        <p role='alert' className='mt-4 text-sm text-[var(--rp-bad-ink)]'>
+        <p role='alert' className='mt-4 flex items-start gap-2 text-xs text-[var(--rp-bad-ink)]'>
+          <AlertCircle size='sm' className='shrink-0' />
           {localError(
             unconfirmedMessage,
             'The result could not be confirmed. Refresh this view before trying again.',
@@ -117,10 +125,10 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
               {modes.map((mode) => (
                 <label
                   key={mode.value}
-                  className='flex min-h-[44px] min-w-0 cursor-pointer items-start gap-3'
+                  className='rp-check w-full min-w-0'
                 >
                   <input
-                    className='mt-1 shrink-0'
+                    className='shrink-0'
                     type='radio'
                     name={id}
                     value={mode.value}
@@ -133,19 +141,18 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
                   </span>
                 </label>
               ))}
-              <button
-                type='button'
-                className='rp-btn rp-btn-primary min-h-[44px]'
+              <Button
                 disabled={!chosen || chosen === current}
                 onClick={() => setConfirm(true)}
               >
                 {ui('Save access mode')}
-              </button>
+              </Button>
             </fieldset>
           </>
         )}
       {confirm && chosen && (
         <ConfirmActionDialog
+          destructive={false}
           title={ui('Change access mode')}
           description={ui('Change {name} to {label}? {value3}', {
             name: name,
