@@ -375,7 +375,7 @@ function EvidenceRow({
                 aria-label={expanded
                   ? ui('Show less of the passage from {value1}', { value1: source.title })
                   : ui('Show more of the passage from {value1}', { value1: source.title })}
-                className='text-[var(--rp-accent-fg)]'
+                className='rp-answer-source-more'
               >
                 {expanded ? ui('Show less') : ui('Show more')}
                 <ChevronDown size='sm' className={expanded ? 'rotate-180' : ''} />

@@ -9,6 +9,7 @@
 }
 
 .rp-answer-actions {
+  position: relative;
   display: flex;
   align-items: center;
   flex: none;
@@ -82,4 +83,32 @@
   align-items: center;
   justify-content: flex-end;
   min-height: 2.75rem;
+}
+
+/* Selected controls use the same contrast-safe roles as segmented controls. */
+.rp-answer-page .rp-btn[aria-pressed='true'],
+.rp-answer-page .rp-btn[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--rp-control);
+  color: var(--rp-on-control);
+  border-color: var(--rp-control);
+  font-weight: 600;
+  filter: none;
+  opacity: 1;
+}
+
+.rp-answer-evidence-toggle.rp-btn,
+.rp-answer-journey-toggle.rp-btn {
+  justify-content: flex-start;
+  font-weight: 600;
+}
+
+/* Accent ink is guaranteed on the surface, including inside inset source cards. */
+.rp-answer-source-more.rp-btn,
+.rp-answer-source-more.rp-btn:hover:not(:disabled) {
+  background: var(--rp-surface);
+  color: var(--rp-accent-fg);
+}
+
+.rp-answer-source-more.rp-btn:hover:not(:disabled) {
+  text-decoration: underline;
 }
