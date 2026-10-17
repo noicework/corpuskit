@@ -11,6 +11,8 @@ import { createPortal } from 'react-dom'
 import { assessConfidence, type Confidence, type ConfidenceState } from '../lib/confidence.ts'
 import { type AnswerAudit, figureLabel } from '../lib/answer-marks.ts'
 import { useCompactViewport } from './useViewMode.ts'
+import { AlertTriangle, Info, ShieldCheck, X } from './icons.tsx'
+import { Button, IconButton } from './ui.tsx'
 
 const SEGMENTS = 5
 
@@ -48,68 +50,6 @@ function bandColour(score: number): string {
   return 'var(--rp-bad-ink)'
 }
 
-// ---------------------------------------------------------------------------
-// Icons. One 24-unit grid, round caps and joins, and a stroke that thins as the
-// box grows so every size lands at about the same optical weight - the grid and
-// the 1.7 stroke of the answer-action icons (`ActionIcon` in AskPage), so the
-// quality trigger reads as one of that row rather than a glyph pasted in from a
-// different set. The exclamation dots are zero-length strokes (`h.01`): with
-// round caps a stroke draws a dot exactly one stroke-width across at any render
-// size, where the filled 0.15-radius circles these replaced vanished below a
-// pixel and left the triangle reading as a bare outline.
-// ---------------------------------------------------------------------------
-
-type GlyphSize = 'sm' | 'md' | 'lg'
-
-const GLYPH_SIZE: Record<GlyphSize, { box: string; stroke: number }> = {
-  sm: { box: 'h-3.5 w-3.5', stroke: 2 },
-  md: { box: 'h-4 w-4', stroke: 1.8 },
-  lg: { box: 'h-[1.15rem] w-[1.15rem]', stroke: 1.7 },
-}
-
-const GLYPH = {
-  shieldCheck:
-    'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 01-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 011-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 011.52 0C14.51 3.81 17 5 19 5a1 1 0 011 1zM9 12l2 2 4-4',
-  checkCircle: 'M22 12a10 10 0 11-20 0 10 10 0 0120 0zM9 12l2 2 4-4',
-  info: 'M22 12a10 10 0 11-20 0 10 10 0 0120 0zM12 16v-4M12 8h.01',
-  alertTriangle:
-    'M21.73 18l-8-14a2 2 0 00-3.48 0l-8 14A2 2 0 004 21h16a2 2 0 001.73-3zM12 9v4M12 17h.01',
-}
-
-function Glyph({ d, size }: { d: string; size: GlyphSize }) {
-  const { box, stroke } = GLYPH_SIZE[size]
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth={stroke}
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className={`${box} shrink-0`}
-    >
-      <path d={d} />
-    </svg>
-  )
-}
-
-function ShieldCheckIcon({ size = 'sm' }: { size?: GlyphSize }) {
-  return <Glyph d={GLYPH.shieldCheck} size={size} />
-}
-
-function CheckCircleIcon({ size = 'sm' }: { size?: GlyphSize }) {
-  return <Glyph d={GLYPH.checkCircle} size={size} />
-}
-
-function InfoCircleIcon({ size = 'sm' }: { size?: GlyphSize }) {
-  return <Glyph d={GLYPH.info} size={size} />
-}
-
-function AlertTriangleIcon({ size = 'sm' }: { size?: GlyphSize }) {
-  return <Glyph d={GLYPH.alertTriangle} size={size} />
-}
-
 function MiniMeter(
   { label, description, score }: { label: string; description: string; score: number },
 ) {
@@ -118,7 +58,7 @@ function MiniMeter(
 
   return (
     <span className='inline-flex items-center gap-1.5' title={description}>
-      <span className='text-[10px] font-medium text-ink-3'>{label}</span>
+      <span className='text-2xs font-medium text-ink-3'>{label}</span>
       <span className='inline-flex items-center gap-[2px]' aria-hidden='true'>
         {Array.from({ length: SEGMENTS }).map((_, index) => (
           <span
@@ -128,7 +68,7 @@ function MiniMeter(
           />
         ))}
       </span>
-      <span className='text-[10px] font-semibold tabular-nums' style={{ color: colour }}>
+      <span className='text-2xs font-semibold tabular-nums' style={{ color: colour }}>
         {score.toFixed(1)}/5
       </span>
     </span>
@@ -170,10 +110,10 @@ export function TrustSignals({ quality, showLabel = true }: TrustSignalsProps) {
       {showLabel
         ? (
           <span
-            className={'inline-flex items-center gap-1 text-[10px] font-medium uppercase ' +
+            className={'inline-flex items-center gap-1 text-2xs font-semibold uppercase ' +
               'tracking-wide text-ink-3'}
           >
-            <ShieldCheckIcon />
+            <ShieldCheck size='sm' />
             {ui('Platform self-assessment')}
           </span>
         )
@@ -264,7 +204,7 @@ export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps
         className='rp-badge rp-badge-quiet inline-flex items-center gap-1'
         data-confidence={confidence.state}
       >
-        <InfoCircleIcon />
+        <Info size='sm' />
         {ui('Confidence not scored for this answer')}
       </span>
     )
@@ -277,7 +217,7 @@ export function ConfidenceIndicator({ quality, audit }: ConfidenceIndicatorProps
         title={confidenceDetail(confidence, audit, ui)}
         data-confidence={confidence.state}
       >
-        <CheckCircleIcon />
+        <ShieldCheck size='sm' />
         {ui('High confidence')}
       </span>
     )
@@ -339,11 +279,12 @@ function ConfidencePill(
         onBlur={() => setOpen(false)}
         aria-expanded={open}
         aria-label={`${label}. ${detail}`}
-        className={`rp-badge rp-focus inline-flex items-center gap-1 ${
+        title={`${label}. ${detail}`}
+        className={`rp-btn rp-btn-ghost rp-btn-sm rp-badge inline-flex items-center gap-1 ${
           tone === 'bad' ? 'rp-badge-bad' : 'rp-badge-warn'
         }`}
       >
-        <AlertTriangleIcon />
+        <AlertTriangle size='sm' />
         {label}
       </button>
       {open
@@ -369,14 +310,9 @@ function ConfidencePill(
 // actions row. On a phone that is most of a screen of chrome after every
 // answer, and it is chrome a reader mostly scrolls past.
 //
-// The thing this must NOT do is hide a bad answer. A groundedness of 1.0/5 is
-// an answer nobody should act on, and putting that behind a click the reader
-// has no reason to make would trade a UI problem for a credibility one. So the
-// TRIGGER carries the state: high and unscored collapse to a quiet icon, but
-// moderate and low keep their colour, their alert glyph AND their words right
-// there on the row, and the accessible name always leads with the level. The
-// reader still learns "low confidence" without opening anything; what the
-// popup saves them is the detail they only want once they act on it.
+// Confidence always leads with its full label. When space is tight, the action
+// group wraps below it so the reader can still see the answer's trust level.
+// Opening the badge restores the explanation and quality scores.
 // ---------------------------------------------------------------------------
 
 /** The focusable descendants of a panel, in tab order. */
@@ -388,46 +324,12 @@ function focusablesIn(panel: HTMLElement): HTMLElement[] {
   ]
 }
 
-function CloseIcon() {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.7'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className='h-4 w-4'
-    >
-      <path d='M6 6l12 12M18 6L6 18' />
-    </svg>
-  )
-}
-
-/**
- * How loudly each confidence level announces itself on the actions row - three
- * tiers, escalating only as far as the news warrants.
- *
- * Only `low` spells itself out. That is the state a reader must not miss (a
- * groundedness in the bad band: an answer to verify, not to act on), so it
- * keeps its words and its colour out on the row. `moderate` is a caution, not
- * an alarm, so it takes the warn tone and the alert glyph but no label -
- * visibly different from quiet without shouting, and the accessible name still
- * says "Moderate confidence". Good and unscored news collapses to a plain grey
- * icon indistinguishable in weight from copy or watch.
- *
- * The tiering is also what keeps the row on one line at 390px: six controls fit
- * comfortably when at most one of them carries text.
- */
-const TRIGGER_TONE: Record<
-  ConfidenceState,
-  { tone: 'quiet' | 'warn' | 'bad'; labelled: boolean }
-> = {
-  high: { tone: 'quiet', labelled: false },
-  unscored: { tone: 'quiet', labelled: false },
-  moderate: { tone: 'warn', labelled: false },
-  low: { tone: 'bad', labelled: true },
+/** Confidence stays visible in the toolbar through the badge's state and name. */
+const TRIGGER_TONE: Record<ConfidenceState, 'quiet' | 'ok' | 'warn' | 'bad'> = {
+  high: 'ok',
+  unscored: 'quiet',
+  moderate: 'warn',
+  low: 'bad',
 }
 
 export interface AnswerQualityDisclosureProps {
@@ -606,15 +508,9 @@ export function AnswerQualityDisclosure(
 
   const confidence = assessConfidence(quality, audit)
   const detail = confidenceDetail(confidence, audit, ui)
-  const { tone, labelled } = TRIGGER_TONE[confidence.state]
-  const loud = tone !== 'quiet'
-
-  const glyph = (size: GlyphSize) =>
-    loud
-      ? <AlertTriangleIcon size={size} />
-      : confidence.state === 'high'
-      ? <ShieldCheckIcon size={size} />
-      : <InfoCircleIcon size={size} />
+  const tone = TRIGGER_TONE[confidence.state]
+  const loud = tone === 'warn' || tone === 'bad'
+  const Glyph = loud ? AlertTriangle : confidence.state === 'high' ? ShieldCheck : Info
 
   const body = (
     <>
@@ -623,7 +519,7 @@ export function AnswerQualityDisclosure(
           className='mt-px shrink-0'
           style={{ color: loud ? `var(--rp-${tone}-ink)` : 'var(--rp-ink-3)' }}
         >
-          {glyph('md')}
+          <Glyph size='md' />
         </span>
         <div className='min-w-0'>
           <p className='text-sm font-semibold text-ink'>{ui(confidence.label)}</p>
@@ -665,16 +561,18 @@ export function AnswerQualityDisclosure(
             <p className='text-xs leading-relaxed text-[var(--rp-warn-ink)]'>
               {ui('This answer is thinly grounded - re-answer with full-document context?')}
             </p>
-            <button
-              type='button'
+            <Button
+              variant='outline'
+              size='sm'
+              leadingIcon={ShieldCheck}
               onClick={() => {
                 setOpen(false)
                 onReanswerDeeply()
               }}
-              className='rp-btn rp-btn-outline mt-2 h-8 px-3 text-xs'
+              className='mt-2'
             >
               {ui('Re-answer deeply')}
-            </button>
+            </Button>
           </div>
         )
         : sparselyGrounded
@@ -691,10 +589,10 @@ export function AnswerQualityDisclosure(
 
   const panel = compact
     ? createPortal(
-      <div className='fixed inset-0 z-[90]'>
+      <div className='fixed inset-0 z-[80]'>
         <div
           aria-hidden='true'
-          className='rp-answer-tail absolute inset-0 touch-none bg-[color-mix(in_srgb,var(--rp-ink)_45%,transparent)]'
+          className='rp-answer-tail rp-scrim absolute inset-0 touch-none'
         />
         <div
           ref={panelRef}
@@ -704,20 +602,13 @@ export function AnswerQualityDisclosure(
           aria-label={ui('Answer quality: {value1}', { value1: ui(confidence.label) })}
           onKeyDown={trapTab}
           style={{ '--rp-stage-i': 1 } as CSSProperties}
-          className='rp-answer-tail absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-[var(--rp-radius)] border-t border-line bg-surface p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] shadow-lg outline-none'
+          className='rp-answer-tail absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-[var(--rp-radius)] border-t border-line bg-surface p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] rp-shadow-lg rp-focus'
         >
           <div className='flex items-center justify-between gap-2 pb-3'>
-            <p className='text-xs font-medium uppercase tracking-wide text-ink-3'>
+            <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
               {ui('Answer quality')}
             </p>
-            <button
-              type='button'
-              onClick={() => setOpen(false)}
-              aria-label={ui('Close')}
-              className='rp-focus -mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:text-ink'
-            >
-              <CloseIcon />
-            </button>
+            <IconButton label={ui('Close')} icon={X} onClick={() => setOpen(false)} />
           </div>
           {body}
         </div>
@@ -731,9 +622,9 @@ export function AnswerQualityDisclosure(
         role='dialog'
         aria-label={ui('Answer quality: {value1}', { value1: ui(confidence.label) })}
         onKeyDown={trapTab}
-        className='rp-answer-tail absolute right-0 top-full z-30 mt-1.5 w-80 rounded-[var(--rp-radius)] border border-line bg-surface p-3.5 shadow-lg outline-none'
+        className='rp-answer-tail absolute left-0 top-full z-50 mt-1.5 w-80 rounded-[var(--rp-radius)] border border-line bg-surface p-3.5 rp-shadow-lg rp-focus'
       >
-        <p className='pb-2 text-xs font-medium uppercase tracking-wide text-ink-3'>
+        <p className='pb-2 text-xs font-semibold uppercase tracking-wide text-ink-3'>
           {ui('Answer quality')}
         </p>
         {body}
@@ -741,32 +632,30 @@ export function AnswerQualityDisclosure(
     )
 
   return (
-    <div ref={rootRef} className='relative inline-flex' data-confidence={confidence.state}>
-      <button
+    <div
+      ref={rootRef}
+      className='rp-answer-confidence-wrap relative inline-flex'
+      data-confidence={confidence.state}
+    >
+      <Button
         ref={triggerRef}
-        type='button'
+        variant='ghost'
+        size='sm'
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
         aria-haspopup='dialog'
-        // Leads with the level, so a screen-reader user gets the same signal a
-        // sighted one takes from the colour without opening anything - and, on
-        // the loud states, starts with the visible label it repeats.
         aria-label={ui('{value1}. Answer quality details.', { value1: ui(confidence.label) })}
         title={ui('{value1} - answer quality', { value1: ui(confidence.label) })}
-        className={`rp-focus flex h-9 shrink-0 items-center justify-center gap-1 rounded-[var(--rp-radius-btn)] transition-colors duration-150 ${
-          labelled ? 'px-2 text-[0.6875rem] font-semibold' : 'w-9'
-        } ${loud ? 'border' : 'text-ink-3 hover:bg-[var(--rp-surface-2)] hover:text-ink'}`}
-        style={loud
-          ? {
-            borderColor: `var(--rp-${tone}-line)`,
-            background: `var(--rp-${tone}-bg)`,
-            color: `var(--rp-${tone}-ink)`,
-          }
-          : undefined}
+        className='rp-answer-confidence border'
+        style={{
+          borderColor: tone === 'quiet' ? 'var(--rp-line)' : `var(--rp-${tone}-line)`,
+          background: tone === 'quiet' ? 'var(--rp-surface-2)' : `var(--rp-${tone}-bg)`,
+          color: tone === 'quiet' ? 'var(--rp-ink-2)' : `var(--rp-${tone}-ink)`,
+        }}
       >
-        {glyph('lg')}
-        {labelled ? <span>{ui(confidence.label)}</span> : null}
-      </button>
+        <Glyph size='sm' />
+        <span className='rp-answer-confidence-label'>{ui(confidence.label)}</span>
+      </Button>
       {open ? panel : null}
     </div>
   )
