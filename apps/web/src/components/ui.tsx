@@ -1,9 +1,125 @@
 import { portalUi } from '../lib/locale-messages.ts'
 import { type Locale, usePortalLocale } from '../lib/portal-locale.tsx'
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  type ButtonHTMLAttributes,
+  type ComponentType,
+  forwardRef,
+  type HTMLAttributes,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import { isStudyDesignId, type ResourceType, studyDesignLabel } from '@research-portal/core'
+import { AlertTriangle, type IconProps, RotateCcw } from './icons.tsx'
 
 const originalUi: Locale['ui'] = (english, values) => portalUi('en', english, values)
+
+export type ButtonVariant = 'primary' | 'outline' | 'ghost' | 'danger' | 'danger-outline'
+export type ButtonSize = 'sm' | 'md' | 'lg'
+
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant
+  size?: ButtonSize
+  leadingIcon?: ComponentType<IconProps>
+  trailingIcon?: ComponentType<IconProps>
+}
+
+/** Native button behaviour with the shared size, variant and icon contract. */
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  {
+    variant = 'primary',
+    size = 'md',
+    leadingIcon: LeadingIcon,
+    trailingIcon: TrailingIcon,
+    className = '',
+    children,
+    type = 'button',
+    ...props
+  },
+  ref,
+) {
+  const iconSize = size === 'lg' ? 'md' : 'sm'
+  return (
+    <button
+      {...props}
+      ref={ref}
+      type={type}
+      className={`rp-btn rp-btn-${variant}${size === 'md' ? '' : ` rp-btn-${size}`} ${className}`
+        .trim()}
+    >
+      {LeadingIcon && <LeadingIcon size={iconSize} />}
+      {children}
+      {TrailingIcon && <TrailingIcon size={iconSize} />}
+    </button>
+  )
+})
+
+export interface IconButtonProps
+  extends Omit<ButtonProps, 'children' | 'leadingIcon' | 'trailingIcon' | 'aria-label' | 'title'> {
+  label: string
+  icon: ComponentType<IconProps>
+}
+
+/** An icon-only action always has the same accessible name and hover title. */
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
+  { label, icon: Icon, variant = 'ghost', size = 'md', className = '', ...props },
+  ref,
+) {
+  if (!label?.trim()) throw new TypeError('IconButton requires a non-empty label')
+  return (
+    <Button
+      {...props}
+      ref={ref}
+      variant={variant}
+      size={size}
+      className={`rp-icon-btn ${className}`.trim()}
+      aria-label={label}
+      title={label}
+    >
+      <Icon size={size === 'lg' ? 'md' : 'sm'} />
+    </Button>
+  )
+})
+
+export interface SectionHeaderProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
+  title: ReactNode
+  description?: ReactNode
+  actions?: ReactNode
+  headingLevel?: 1 | 2 | 3 | 4 | 5 | 6
+}
+
+/** Section text and utilities share one responsive header anatomy. */
+export function SectionHeader({
+  title,
+  description,
+  actions,
+  headingLevel = 2,
+  className = '',
+  ...props
+}: SectionHeaderProps) {
+  const Heading = `h${headingLevel}` as `h${1 | 2 | 3 | 4 | 5 | 6}`
+  return (
+    <div
+      {...props}
+      className={`rp-section-head flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${className}`
+        .trim()}
+    >
+      <div className='rp-section-head-text min-w-0 flex-1'>
+        <Heading className='rp-section-title text-base font-semibold'>{title}</Heading>
+        {description && (
+          <p className='rp-section-desc mt-1 max-w-prose text-sm text-ink-2'>{description}</p>
+        )}
+      </div>
+      {actions && (
+        <div className='rp-section-head-actions flex shrink-0 flex-wrap items-center gap-2 sm:ml-auto'>
+          {actions}
+        </div>
+      )}
+    </div>
+  )
+}
 
 /**
  * A placeholder block used across loading states. A travelling shimmer rather
@@ -67,22 +183,16 @@ export function ErrorCard({
           aria-hidden='true'
           className='flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--rp-radius)] bg-[var(--rp-bad-bg)] text-[var(--rp-bad-ink)]'
         >
-          <svg viewBox='0 0 20 20' fill='currentColor' className='h-4 w-4'>
-            <path
-              fillRule='evenodd'
-              d='M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.63-1.516 2.63H3.72c-1.347 0-2.189-1.463-1.515-2.63zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 8a1 1 0 100-2 1 1 0 000 2z'
-              clipRule='evenodd'
-            />
-          </svg>
+          <AlertTriangle size='sm' />
         </span>
         <div className='min-w-0 flex-1'>
           <p className='text-sm font-semibold text-ink'>{ui('Something went wrong')}</p>
           <p className='mt-1 text-sm leading-relaxed text-ink-2'>
             {error(message, 'Something went wrong')}
           </p>
-          <button type='button' onClick={onRetry} className='rp-btn rp-btn-outline mt-3'>
+          <Button variant='outline' leadingIcon={RotateCcw} onClick={onRetry} className='mt-3'>
             {ui('Try again')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
