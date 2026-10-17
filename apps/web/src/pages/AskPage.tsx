@@ -335,6 +335,22 @@ function sessionTitle(session: ChatSession, ui: ResearchUi = englishResearchUi):
   return first.text.length > 60 ? `${first.text.slice(0, 60)}…` : first.text
 }
 
+/** Restored automatic sidebar titles stay short; the reading heading keeps the whole question. */
+export function sessionHeading(
+  session: Pick<ChatSession, 'messages' | 'title'>,
+  ui: ResearchUi = englishResearchUi,
+): string {
+  const automaticTitle = sessionTitle({
+    id: '',
+    createdAt: 0,
+    updatedAt: 0,
+    messages: session.messages,
+  }, ui)
+  const name = session.title?.trim()
+  if (name && name !== automaticTitle) return name
+  return session.messages.find((message) => message.author === 'USER')?.text || automaticTitle
+}
+
 // ---------------------------------------------------------------------------
 // Answer rendering: the shared AnswerText (components/AnswerInline.tsx) reads
 // the answer the same way Search does - markers, marks and the hedge.
@@ -433,16 +449,15 @@ function SessionList({
               )
             }
             return (
-              <div key={session.id} className='group relative'>
+              <div
+                key={session.id}
+                className={`rounded-[var(--rp-radius)] ${isActive ? 'bg-surface shadow-sm' : ''}`}
+              >
                 <button
                   type='button'
                   onClick={() => onSelect(session.id)}
                   aria-current={isActive ? 'true' : undefined}
-                  className={`rp-focus w-full rounded-[var(--rp-radius)] px-3 py-2.5 pr-14 ${
-                    isActive ? 'pr-24' : ''
-                  } text-left transition-colors duration-150 ${
-                    isActive ? 'bg-surface shadow-sm' : 'hover:bg-[var(--rp-surface-2)]'
-                  }`}
+                  className='rp-focus w-full rounded-[var(--rp-radius)] px-3 py-2.5 text-left transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
                 >
                   <p className='rp-clamp-2 text-sm font-medium text-ink'>
                     {sessionTitle(session, ui)}
@@ -454,7 +469,7 @@ function SessionList({
                     {relativeAge(session.updatedAt, ui)}
                   </p>
                 </button>
-                <div className='absolute right-0 top-1 flex'>
+                <div className='rp-answer-session-actions flex justify-end px-1 pb-1'>
                   {isActive
                     ? (
                       <IconButton
@@ -488,7 +503,11 @@ function SessionList({
 }
 
 /** A whole question is the reading title; its collapsed height follows the actual type. */
-export function QuestionHeading({ question }: { question: string }) {
+export function QuestionHeading({ question, actions, onExpandedChange }: {
+  question: string
+  actions?: ReactNode
+  onExpandedChange?: (expanded: boolean) => void
+}) {
   const { ui } = usePortalLocale()
   const headingRef = useRef<HTMLHeadingElement | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -496,6 +515,7 @@ export function QuestionHeading({ question }: { question: string }) {
 
   useEffect(() => {
     setExpanded(false)
+    onExpandedChange?.(false)
   }, [question])
 
   useEffect(() => {
@@ -505,7 +525,8 @@ export function QuestionHeading({ question }: { question: string }) {
       const style = getComputedStyle(heading)
       const lineHeight = Number.parseFloat(style.lineHeight) ||
         Number.parseFloat(style.fontSize) * 1.2
-      setOverflows(heading.scrollHeight > lineHeight * 4 + 1)
+      // Glyphs can extend past a line box without adding another line of text.
+      setOverflows(Math.round(heading.scrollHeight / lineHeight) > 4)
     }
     let active = true
     measure()
@@ -525,25 +546,35 @@ export function QuestionHeading({ question }: { question: string }) {
       <h1
         id='ask-question-heading'
         ref={headingRef}
-        className={`rp-answer-question rp-display text-2xl text-ink sm:text-3xl ${
+        className={`rp-answer-question rp-display text-xl text-ink lg:text-3xl ${
           expanded ? '' : 'rp-answer-question-clamped'
         }`}
       >
         {question}
       </h1>
-      {overflows
+      {overflows || actions
         ? (
-          <Button
-            variant='ghost'
-            size='sm'
-            aria-expanded={expanded}
-            aria-controls='ask-question-heading'
-            onClick={() => setExpanded((previous) => !previous)}
-            trailingIcon={ChevronDown}
-            className='mt-1'
-          >
-            {expanded ? ui('Collapse question') : ui('Show full question')}
-          </Button>
+          <div className='rp-answer-question-actions mt-1 flex items-center gap-2'>
+            {overflows
+              ? (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  aria-expanded={expanded}
+                  aria-controls='ask-question-heading'
+                  onClick={() => {
+                    const next = !expanded
+                    setExpanded(next)
+                    onExpandedChange?.(next)
+                  }}
+                >
+                  {expanded ? ui('Collapse question') : ui('Show full question')}
+                  <ChevronDown size='sm' className={expanded ? 'rotate-180' : ''} />
+                </Button>
+              )
+              : null}
+            {actions}
+          </div>
         )
         : null}
     </div>
@@ -622,22 +653,44 @@ export function UserBubble({
   )
 }
 
+type FeedbackStatus = { text: string; error?: boolean }
+
+export function FeedbackStatusMessage({ status }: { status: FeedbackStatus | null }) {
+  return (
+    <p
+      role='status'
+      aria-live='polite'
+      aria-atomic='true'
+      className={`${status ? 'mt-2 ' : ''}text-xs ${
+        status?.error ? 'text-[var(--rp-bad-ink)]' : 'text-ink-3'
+      }`}
+    >
+      {status?.text ?? ''}
+    </p>
+  )
+}
+
 /** Rating stays in the toolbar; any follow-up detail sits below it. */
-function FeedbackControl({ message, onFeedback, onError }: {
+export function FeedbackControl({ message, onFeedback, onStatus }: {
   message: ChatMessage
   onFeedback: (good: boolean, text?: string) => Promise<boolean>
-  onError: (error: string | null) => void
+  onStatus: (status: FeedbackStatus | null) => void
 }) {
   const { ui } = usePortalLocale()
   const [busy, setBusy] = useState(false)
   if (!message.learningId) return null
 
   async function handleRate(good: boolean) {
-    onError(null)
+    if (busy || message.feedbackSubmitted) return
+    onStatus(null)
     setBusy(true)
     const ok = await onFeedback(good)
     setBusy(false)
-    if (!ok) onError(ui('Could not send feedback - try again.'))
+    onStatus(
+      ok
+        ? { text: ui('Thanks - your feedback was sent.') }
+        : { text: ui('Could not send feedback - try again.'), error: true },
+    )
   }
 
   return (
@@ -646,72 +699,68 @@ function FeedbackControl({ message, onFeedback, onError }: {
         label={ui('Helpful answer')}
         icon={ThumbsUp}
         onClick={() => void handleRate(true)}
-        disabled={busy || message.feedbackSubmitted}
+        aria-disabled={busy || message.feedbackSubmitted}
         aria-pressed={message.feedbackSubmitted && message.feedbackGood === true}
       />
       <IconButton
         label={ui('Not a helpful answer')}
         icon={ThumbsDown}
         onClick={() => void handleRate(false)}
-        disabled={busy || message.feedbackSubmitted}
+        aria-disabled={busy || message.feedbackSubmitted}
         aria-pressed={message.feedbackSubmitted && message.feedbackGood === false}
       />
     </>
   )
 }
 
-function FeedbackDetail({ message, onFeedback }: {
+function FeedbackDetail({ message, onFeedback, onStatus }: {
   message: ChatMessage
   onFeedback: (good: boolean, text?: string) => Promise<boolean>
+  onStatus: (status: FeedbackStatus | null) => void
 }) {
   const { ui } = usePortalLocale()
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [detail, setDetail] = useState('')
   const [detailSent, setDetailSent] = useState(false)
-  if (!message.feedbackSubmitted) return null
+  if (!message.feedbackSubmitted || message.feedbackGood !== false || detailSent) return null
 
   async function sendDetail() {
-    if (!detail.trim()) return
+    if (busy || !detail.trim()) return
     setBusy(true)
-    setError(null)
+    onStatus(null)
     const ok = await onFeedback(false, detail.trim())
     setBusy(false)
     if (ok) setDetailSent(true)
-    else setError(ui('Could not send feedback - try again.'))
+    onStatus(
+      ok
+        ? { text: ui('Thanks - your feedback was sent.') }
+        : { text: ui('Could not send feedback - try again.'), error: true },
+    )
   }
 
   return (
-    <div className='mt-2 space-y-2 text-xs text-ink-3' role='status'>
-      <p>{ui('Thanks - your feedback was sent.')}</p>
-      {message.feedbackGood === false && !detailSent
-        ? (
-          <>
-            <div className='flex min-w-0 items-center gap-2'>
-              <input
-                type='text'
-                value={detail}
-                onChange={(event) => setDetail(event.target.value)}
-                placeholder={ui('What was wrong? (optional)')}
-                aria-label={ui('What was wrong with this answer? (optional)')}
-                disabled={busy}
-                className='rp-input min-w-0 flex-1 text-xs'
-              />
-              <Button
-                variant='ghost'
-                size='sm'
-                leadingIcon={Send}
-                onClick={() => void sendDetail()}
-                disabled={busy || !detail.trim()}
-              >
-                {ui('Send')}
-              </Button>
-            </div>
-            <p>{ui("This portal's curators can read what you write.")}</p>
-          </>
-        )
-        : null}
-      {error ? <p className='text-[var(--rp-bad-ink)]'>{error}</p> : null}
+    <div className='mt-2 space-y-2 text-xs text-ink-3'>
+      <div className='flex min-w-0 items-center gap-2'>
+        <input
+          type='text'
+          value={detail}
+          onChange={(event) => setDetail(event.target.value)}
+          placeholder={ui('What was wrong? (optional)')}
+          aria-label={ui('What was wrong with this answer? (optional)')}
+          readOnly={busy}
+          className='rp-input min-w-0 flex-1 text-xs'
+        />
+        <Button
+          variant='ghost'
+          size='sm'
+          leadingIcon={Send}
+          onClick={() => void sendDetail()}
+          aria-disabled={busy || !detail.trim()}
+        >
+          {ui('Send')}
+        </Button>
+      </div>
+      <p>{ui("This portal's curators can read what you write.")}</p>
     </div>
   )
 }
@@ -751,15 +800,20 @@ function CheckingBadge({ figures }: { figures?: number }) {
   )
 }
 
-function CopyAnswer({ text }: { text: string }) {
+export function CopyAnswer({ text }: { text: string }) {
   const { ui } = usePortalLocale()
   const [copied, setCopied] = useState(false)
+  const resetCopy = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (resetCopy.current) clearTimeout(resetCopy.current)
+  }, [])
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
+      if (resetCopy.current) clearTimeout(resetCopy.current)
+      resetCopy.current = setTimeout(() => setCopied(false), 1600)
     } catch {
       // Clipboard access can be refused; the button simply does not confirm.
     }
@@ -767,12 +821,16 @@ function CopyAnswer({ text }: { text: string }) {
 
   if (text.trim().length === 0) return null
   return (
-    <IconButton
-      label={copied ? ui('Answer copied') : ui('Copy the answer')}
-      onClick={() => void copy()}
-      aria-pressed={copied}
-      icon={copied ? Check : Copy}
-    />
+    <>
+      <IconButton
+        label={ui('Copy the answer')}
+        onClick={() => void copy()}
+        icon={copied ? Check : Copy}
+      />
+      <span role='status' aria-live='polite' aria-atomic='true' className='sr-only'>
+        {copied ? ui('Answer copied') : ''}
+      </span>
+    </>
   )
 }
 
@@ -998,7 +1056,9 @@ function AnswerCard({
   const verdictAbort = useRef<AbortController | null>(null)
   useEffect(() => () => verdictAbort.current?.abort(), [lifetime])
   const [showPipeline, setShowPipeline] = useState(false)
-  const [feedbackError, setFeedbackError] = useState<string | null>(null)
+  const [feedbackStatus, setFeedbackStatus] = useState<FeedbackStatus | null>(
+    message.feedbackSubmitted ? { text: ui('Thanks - your feedback was sent.') } : null,
+  )
   const [compare, setCompare] = useState<[string, string] | null>(null)
   // The sources/evidence block is collapsed by default and this state is
   // per-message (it lives in the card, not the page), so opening one answer's
@@ -1326,7 +1386,7 @@ function AnswerCard({
                     <FeedbackControl
                       message={message}
                       onFeedback={onFeedback}
-                      onError={setFeedbackError}
+                      onStatus={setFeedbackStatus}
                     />
                   )
                   : null}
@@ -1342,17 +1402,17 @@ function AnswerCard({
                   : null}
               </div>
             </div>
-            {message.sources.length === 0 && message.citations.length === 0
-              ? <div className='mt-2'>{secondaryTools}</div>
-              : null}
-            {feedbackError
+            <div className='mt-2'>{secondaryTools}</div>
+            <FeedbackStatusMessage status={feedbackStatus} />
+            {canAsk
               ? (
-                <p role='status' className='mt-2 text-xs text-[var(--rp-bad-ink)]'>
-                  {feedbackError}
-                </p>
+                <FeedbackDetail
+                  message={message}
+                  onFeedback={onFeedback}
+                  onStatus={setFeedbackStatus}
+                />
               )
               : null}
-            {canAsk ? <FeedbackDetail message={message} onFeedback={onFeedback} /> : null}
           </div>
         )
         : null}
@@ -1419,7 +1479,6 @@ function AnswerCard({
               summary={evidenceSummary(evidenceSources, citedSourceCount, ui)}
             >
               <div className='space-y-5'>
-                {secondaryTools}
                 {message.citations.length > 0
                   ? (
                     <div>
@@ -1729,6 +1788,10 @@ export function AskPage() {
    * a wide layout so the bar can never be left hidden where it does not move.
    */
   const [subHeaderHidden, setSubHeaderHidden] = useState(false)
+  const [questionExpanded, setQuestionExpanded] = useState(false)
+  useEffect(() => {
+    setSubHeaderHidden(false)
+  }, [questionExpanded])
 
   const abortRef = useRef<AbortController | null>(null)
   /** In-flight follow-up generation, cancelled the moment a new ask starts. */
@@ -2703,6 +2766,10 @@ export function AskPage() {
   }
 
   const firstQuestion = messages.find((message) => message.author === 'USER')
+  const headingText = sessionHeading({
+    messages,
+    title: sessions.find((session) => session.id === activeSessionId)?.title,
+  }, ui)
   const isEmpty = messages.length === 0
   const lastMessage = messages[messages.length - 1]
   // The latest settled answer and the question it answered, for the wide
@@ -2742,7 +2809,7 @@ export function AskPage() {
   return (
     <main
       aria-label={ui('Ask')}
-      className='mx-auto flex h-[calc(100dvh-var(--rp-header-h,126px))] max-w-[100rem] flex-col gap-3 px-4 pt-4 pb-0 sm:px-6 sm:pt-6 lg:flex-row lg:gap-6 lg:pb-6 2xl:gap-8'
+      className='rp-answer-page mx-auto flex h-[calc(100dvh-var(--rp-header-h,126px))] max-w-[100rem] flex-col gap-3 px-4 pt-4 pb-0 sm:px-6 sm:pt-6 lg:flex-row lg:gap-6 lg:pb-6 2xl:gap-8'
     >
       <aside
         aria-label={ui('Chat sessions')}
@@ -2832,30 +2899,35 @@ export function AskPage() {
               <div
                 ref={subHeaderRef}
                 onFocusCapture={() => setSubHeaderHidden(false)}
-                style={isCompact && subHeaderHidden
+                style={isCompact && !questionExpanded && subHeaderHidden
                   ? { transform: 'translateY(-100%)' }
                   : undefined}
-                className='sticky top-0 z-20 mb-6 flex shrink-0 flex-wrap items-center gap-3 bg-[var(--rp-app)] pb-2 transition-transform duration-300 ease-out motion-reduce:transition-none lg:static lg:bg-transparent lg:pb-0'
+                className={`z-20 mb-6 shrink-0 bg-[var(--rp-app)] pb-2 transition-transform duration-300 ease-out motion-reduce:transition-none lg:static lg:bg-transparent lg:pb-0 ${
+                  questionExpanded ? 'relative' : 'sticky top-0'
+                }`}
               >
-                <QuestionHeading question={firstQuestion?.text ?? currentSessionTitle()} />
-                {canExport
-                  ? (
-                    <button
-                      type='button'
-                      onClick={exportSession}
-                      disabled={isStreaming || !hasAnsweredTurn(messages)}
-                      title={isStreaming
-                        ? ui('Export is available once the answer has finished')
-                        : ui(
-                          'Save this research trail as a Word document with a numbered reference list',
-                        )}
-                      className='rp-btn rp-btn-ghost rp-btn-sm shrink-0 disabled:cursor-not-allowed'
-                    >
-                      <Download size='sm' />
-                      {ui('Export')}
-                    </button>
-                  )
-                  : null}
+                <QuestionHeading
+                  question={headingText}
+                  onExpandedChange={setQuestionExpanded}
+                  actions={canExport
+                    ? (
+                      <button
+                        type='button'
+                        onClick={exportSession}
+                        disabled={isStreaming || !hasAnsweredTurn(messages)}
+                        title={isStreaming
+                          ? ui('Export is available once the answer has finished')
+                          : ui(
+                            'Save this research trail as a Word document with a numbered reference list',
+                          )}
+                        className='rp-btn rp-btn-ghost rp-btn-sm shrink-0 disabled:cursor-not-allowed'
+                      >
+                        <Download size='sm' />
+                        {ui('Export')}
+                      </button>
+                    )
+                    : null}
+                />
                 <ExportNotice
                   notice={canExport &&
                       exportNoticeLifetime.current === sessionLifetime.current.signal
@@ -2929,7 +3001,8 @@ export function AskPage() {
                         <UserBubble
                           key={message.id}
                           message={message}
-                          showQuestion={message.id !== firstQuestion?.id}
+                          showQuestion={message.id !== firstQuestion?.id ||
+                            headingText !== message.text}
                           onAskSubquery={(subquery) => void send(subquery)}
                         />
                       )
@@ -3082,7 +3155,7 @@ export function AskPage() {
                     }}
                     disabled={isStreaming}
                     aria-pressed={deepResearch}
-                    className={`rp-btn rp-btn-outline rp-btn-sm ${deepResearch ? 'bg-wash' : ''}`}
+                    className='rp-btn rp-btn-outline rp-btn-sm'
                   >
                     <Search size='sm' />
                     {ui('Deep research')}

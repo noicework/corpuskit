@@ -152,7 +152,7 @@ export function EvidenceDisclosure({
       onClick={onToggle}
       aria-expanded={open}
       aria-controls={regionId}
-      className='w-full flex-wrap justify-start gap-x-2 gap-y-1 text-left font-semibold'
+      className='rp-answer-evidence-toggle w-full flex-wrap gap-x-2 gap-y-1 text-left'
     >
       <span className='flex min-w-0 items-center gap-1.5'>
         <DisclosureChevron open={open} />
@@ -363,7 +363,7 @@ function PermittedContextJourney({ slug, sources, query = '', onOpen }: ContextJ
           setIsOpen(true)
         }}
         aria-haspopup='dialog'
-        className='max-w-full flex-wrap justify-start font-semibold'
+        className='rp-answer-journey-toggle max-w-full flex-wrap'
       >
         {ui('Journey through the context')}
         <span className='rounded-[var(--rp-radius-chip)] bg-surface-2 px-1.5 py-0.5 text-2xs tabular-nums text-ink-3'>
