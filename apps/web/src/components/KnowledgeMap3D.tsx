@@ -149,6 +149,8 @@ export function KnowledgeMap3D({
     right: Math.max(insets.right, controlGutter),
   }), [insets, controlGutter])
 
+  const hasSize = size.w > 0 && size.h > 0
+
   // Coarse buckets follow the usable shape without rebuilding on every pixel.
   const aspect = size.w < 1 || size.h < 1 ? 1.5 : (size.w - controlGutter) / size.h
   const aspectBucket = aspect < 1
@@ -227,7 +229,7 @@ export function KnowledgeMap3D({
     // setData settles the force simulation synchronously. Keep the shell
     // hidden until that settled scene has made it through the renderer, so
     // the page never fades up an empty canvas or nodes still finding places.
-    if (size.w > 0 && size.h > 0 && visibleNodes.length > 0) {
+    if (hasSize && visibleNodes.length > 0) {
       return scheduleMapReadyAfterPaint(() => onReadyRef.current?.())
     }
   }, [
