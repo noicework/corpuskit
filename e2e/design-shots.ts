@@ -162,7 +162,8 @@ const ROUTES: Record<string, Route> = {
   },
   graph: {
     path: '/t/marine/graph',
-    ready: ['[data-graph-stage] canvas'],
+    // The stage drops aria-busy once the scene is measured and drawn.
+    ready: ['[data-graph-stage][aria-busy="false"] canvas'],
     full: false,
     settle: 2500,
   },

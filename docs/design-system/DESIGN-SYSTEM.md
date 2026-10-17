@@ -127,7 +127,7 @@ Action-to-glyph rule (buttons that do these things must carry these icons):
 
 | Action | Icon | Action | Icon |
 | --- | --- | --- | --- |
-| Save, saved | `Bookmark`, `BookmarkFilled` | Delete, remove | `Trash` |
+| Save to a collection, saved | `Bookmark`, `BookmarkFilled` | Delete, remove | `Trash` |
 | Hide, show | `EyeOff`, `Eye` | Publish | `Upload` or `Send` |
 | Add, new | `Plus` | Edit | `Pencil` |
 | Copy | `Copy` | Export, download | `Download` |
@@ -136,6 +136,9 @@ Action-to-glyph rule (buttons that do these things must carry these icons):
 | Close | `X` | Menu | `Menu` |
 | Helpful, not helpful | `ThumbsUp`, `ThumbsDown` | Confidence, checked | `ShieldCheck` |
 | Sessions, history | `History` | Back, forward | `ArrowLeft`, `ArrowRight` |
+
+Saving settings or a form ("Save colours", "Save changes") is a text-only button: the bookmark
+means keeping an item, not committing a change.
 
 ### 3.4 Spacing and layout rhythm
 
