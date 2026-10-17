@@ -53,7 +53,7 @@ function SchemaFields({ agent }: { agent: EnrichmentAgent }) {
             <code className='rounded-[var(--rp-radius-chip)] bg-surface-2 px-1.5 py-0.5 text-2xs text-ink-3'>
               {field.key}
             </code>
-            <span className='rp-badge rp-badge-quiet'>
+            <span className='rp-tag'>
               {ui(KIND_LABEL[field.kind] ?? field.kind)}
             </span>
           </div>

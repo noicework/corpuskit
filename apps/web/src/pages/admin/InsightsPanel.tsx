@@ -237,7 +237,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                     className='flex items-center justify-between gap-3 py-2 text-sm'
                   >
                     <span className='min-w-0 truncate text-ink-2'>{q.question}</span>
-                    <span className='rp-badge rp-badge-quiet shrink-0'>
+                    <span className='rp-tag shrink-0'>
                       {q.count} {q.count === 1 ? ui('ask') : ui('asks')}
                     </span>
                   </li>

@@ -440,22 +440,24 @@ function SourcesPanelContent({ slug }: { slug: string }) {
         className='mt-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_auto]'
       >
         <div className='min-w-0 sm:col-span-2 lg:col-span-1'>
-          <label
-            htmlFor={`source-url-${slug}`}
-            className='mb-1.5 block text-sm font-medium text-ink'
-          >
-            {ui('Site or sitemap URL')}
-          </label>
-          <input
-            id={`source-url-${slug}`}
-            type='url'
-            className='rp-input'
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder={ui('https://example.com/sitemap.xml')}
-            autoComplete='off'
-            required
-          />
+          <div className='min-w-[min(16rem,100%)] flex-1'>
+            <label
+              htmlFor={`source-url-${slug}`}
+              className='mb-1.5 block text-sm font-medium text-ink'
+            >
+              {ui('Site or sitemap URL')}
+            </label>
+            <input
+              id={`source-url-${slug}`}
+              type='url'
+              className='rp-input'
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder={ui('https://example.com/sitemap.xml')}
+              autoComplete='off'
+              required
+            />
+          </div>
         </div>
         <div>
           <label

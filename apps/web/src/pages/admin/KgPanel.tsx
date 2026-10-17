@@ -21,7 +21,7 @@ import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
-const TASK_BADGE = 'rp-badge rp-badge-quiet'
+const TASK_TAG = 'rp-tag'
 
 type ImplementDone = Extract<KgImplementEvent, { type: 'done' }>
 
@@ -370,7 +370,7 @@ function KgPanelContent(
               >
                 <div className='min-w-0'>
                   <p className='break-words text-sm font-medium text-ink'>{agent.title}</p>
-                  <span className={`${TASK_BADGE} mt-1`}>{agent.task}</span>
+                  <span className={`${TASK_TAG} mt-1`}>{agent.task}</span>
                 </div>
                 <div className='flex items-center gap-2'>
                   <Button
