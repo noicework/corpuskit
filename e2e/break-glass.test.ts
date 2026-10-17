@@ -870,6 +870,15 @@ createRoot(document.getElementById('emergency-fixture-root')!).render(<QueryClie
     }
     async function capture(name: string) {
       await settle(page!)
+      // The redesigned panels may render no heading in the display face, so make sure both
+      // pairing faces are loaded before the capture asserts that they are.
+      await page!.evaluate(async () => {
+        await Promise.all([
+          document.fonts.load('600 16px Lexend'),
+          document.fonts.load('16px "Zilla Slab"'),
+        ])
+        await document.fonts.ready
+      })
       const metrics = await page!.evaluate(() => ({
         width: innerWidth,
         overflow: document.documentElement.scrollWidth - innerWidth,
