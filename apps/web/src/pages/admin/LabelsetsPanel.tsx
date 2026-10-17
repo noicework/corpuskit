@@ -14,7 +14,8 @@ import {
   type LabelsetUpdateResult,
   updateAdminLabelset,
 } from '../../api/client.ts'
-import { ErrorCard, prettyLabel, Skeleton } from '../../components/ui.tsx'
+import { Button, ErrorCard, prettyLabel, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { Bookmark, ChevronDown, Plus, Trash, X } from '../../components/icons.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
@@ -167,17 +168,13 @@ function CardinalitySwitch({
       aria-pressed={multiple === value}
       disabled={disabled}
       onClick={() => onChange(value)}
-      className={`rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
-        multiple === value
-          ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
-          : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
-      }`}
+      className='rp-seg-item'
     >
       {label}
     </button>
   )
   return (
-    <div className='inline-flex rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
+    <div className='rp-seg'>
       {option(false, ui('Single'))}
       {option(true, ui('Multiple'))}
     </div>
@@ -229,15 +226,16 @@ function LabelRow({
         disabled={disabled}
         onChange={(e) => onChange({ text: e.target.value })}
       />
-      <button
-        type='button'
+      <Button
+        variant='danger'
+        size='sm'
+        leadingIcon={Trash}
         disabled={disabled}
         onClick={onRemove}
-        className='rp-btn rp-btn-ghost h-[calc(2.25rem*var(--rp-density-ctl,1))] shrink-0 justify-self-end px-2.5 text-xs md:justify-self-auto'
-        style={{ color: 'var(--rp-bad-ink)' }}
+        className='shrink-0 justify-self-start'
       >
         {ui('Remove')}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -305,7 +303,7 @@ function DraftFields({
       <div className='mt-5'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <p className='text-sm font-medium text-ink'>{ui('Labels and definitions')}</p>
-          <span className='rp-badge'>
+          <span className='rp-tag'>
             {draft.labels.length}
             {ui(' of ')}
             {LABELS_MAX}
@@ -333,14 +331,16 @@ function DraftFields({
           {draft.labels.length === 0 && <p className='text-sm text-ink-3'>{ui('No labels.')}</p>}
         </div>
 
-        <button
+        <Button
+          variant='outline'
+          leadingIcon={Plus}
           type='button'
           disabled={busy || draft.labels.length >= LABELS_MAX}
           onClick={() => update({ labels: [...draft.labels, { title: '', text: '' }] })}
-          className='rp-btn rp-btn-outline mt-3'
+          className='mt-3'
         >
           {ui('Add label')}
-        </button>
+        </Button>
       </div>
     </>
   )
@@ -394,6 +394,7 @@ function LabelsetEditor({
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
   const [previous, setPrevious] = useState<unknown>(null)
+  const [previousOpen, setPreviousOpen] = useState(false)
 
   const baseline = draftFrom(labelset)
   const dirty = !sameDraft(draft, baseline)
@@ -437,17 +438,17 @@ function LabelsetEditor({
     <div className='relative min-w-0'>
       {notice && !dirty && !message && <MessagePanel message={notice} className='mb-4' />}
 
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div className='min-w-0'>
-          <p className='text-sm font-semibold text-ink'>
-            {prettyLabel(labelsetDisplayTitle(labelset, ui), organisation)}
-          </p>
-          <p className='mt-0.5 font-mono text-xs text-ink-3'>{labelset.id}</p>
-        </div>
-        <span className='rp-badge'>
-          {labelset.kind === 'PARAGRAPHS' ? ui('Passage level') : ui('Document level')}
-        </span>
-      </div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        headingLevel={3}
+        title={prettyLabel(labelsetDisplayTitle(labelset, ui), organisation)}
+        description={<span className='break-all font-mono text-xs'>{labelset.id}</span>}
+        actions={
+          <span className='rp-tag'>
+            {labelset.kind === 'PARAGRAPHS' ? ui('Passage level') : ui('Document level')}
+          </span>
+        }
+      />
 
       <div className='mt-4'>
         <DraftFields setId={labelset.id} draft={draft} busy={saving} onChange={onDraft} />
@@ -458,14 +459,27 @@ function LabelsetEditor({
       {message && <MessagePanel message={message} className='mt-4' />}
 
       {previous !== null && (
-        <details className='mt-3 text-sm text-ink-2'>
-          <summary className='cursor-pointer font-medium text-ink'>
+        <div className='mt-3 text-sm text-ink-2'>
+          <Button
+            variant='ghost'
+            size='sm'
+            aria-expanded={previousOpen}
+            aria-controls={`ls-${labelset.id}-previous`}
+            onClick={() => setPreviousOpen(!previousOpen)}
+            className='max-w-full text-left'
+          >
+            <ChevronDown size='sm' className={`shrink-0 ${previousOpen ? 'rotate-180' : ''}`} />
             {ui('Previous agent configuration - keep this to restore the labeller by hand')}
-          </summary>
-          <pre className='mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[var(--rp-radius)] bg-surface-2 p-3 font-mono text-xs text-ink-2'>
+          </Button>
+          {previousOpen && (
+            <pre
+              id={`ls-${labelset.id}-previous`}
+              className='mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[var(--rp-radius)] bg-surface-2 p-3 font-mono text-xs text-ink-2'
+            >
             {JSON.stringify(previous, null, 2)}
-          </pre>
-        </details>
+            </pre>
+          )}
+        </div>
       )}
 
       {dirty && (
@@ -475,7 +489,9 @@ function LabelsetEditor({
               {ui("Saving restarts this set's labellers for new resources.")}
             </p>
             <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
-              <button
+              <Button
+                variant='outline'
+                leadingIcon={X}
                 type='button'
                 disabled={saving}
                 onClick={() => {
@@ -483,18 +499,20 @@ function LabelsetEditor({
                   setPrevious(null)
                   onDraft(null)
                 }}
-                className='rp-btn rp-btn-outline w-full sm:w-auto'
+                className='w-full sm:w-auto'
               >
                 {ui('Discard')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant='primary'
+                leadingIcon={Bookmark}
                 type='button'
                 disabled={!canSave}
                 onClick={() => void onSave()}
-                className='rp-btn rp-btn-primary w-full sm:w-auto'
+                className='w-full sm:w-auto'
               >
                 {saving ? ui('Saving…') : ui('Save')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -569,14 +587,15 @@ function NewLabelsetForm({
       {onCancel && (
         <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
           <p className='text-sm font-semibold text-ink'>{ui('New label set')}</p>
-          <button
+          <Button
+            leadingIcon={X}
+            variant='ghost'
             type='button'
             disabled={busy}
             onClick={onCancel}
-            className='rp-btn rp-btn-ghost h-8 px-2.5 text-xs'
           >
             {ui('Cancel')}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -596,14 +615,16 @@ function NewLabelsetForm({
       {message && <MessagePanel message={message} className='mt-4' />}
 
       <div className='mt-4 flex flex-col gap-2 sm:flex-row sm:items-center'>
-        <button
+        <Button
+          variant='primary'
+          leadingIcon={Plus}
           type='button'
           disabled={!canCreate}
           onClick={() => void onSubmit()}
-          className='rp-btn rp-btn-primary w-full sm:w-auto'
+          className='w-full sm:w-auto'
         >
           {busy ? ui('Creating…') : ui('Create label set')}
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -712,17 +733,19 @@ function LabelsetsPanelContent({
       {labelsets && labelsets.length > 0 && selected && (
         <div className='grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]'>
           <div className='flex flex-col gap-2'>
-            <button
+            <Button
+              variant={creating ? 'primary' : 'outline'}
+              leadingIcon={Plus}
               type='button'
               onClick={() => {
                 setNotice(null)
                 setCreating(true)
               }}
               aria-pressed={creating}
-              className={`rp-btn w-full ${creating ? 'rp-btn-primary' : 'rp-btn-outline'}`}
+              className='w-full'
             >
               {ui('New label set')}
-            </button>
+            </Button>
             <ul
               aria-label={ui('Label sets')}
               className='rp-no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 md:mx-0 md:flex-col md:overflow-visible md:px-0'
@@ -735,7 +758,7 @@ function LabelsetsPanelContent({
                       type='button'
                       onClick={() => select(ls.id)}
                       aria-current={active ? 'true' : undefined}
-                      className={`w-full rounded-[var(--rp-radius)] px-3 py-2 text-left transition-colors duration-150 ${
+                      className={`rp-focus min-h-11 w-full rounded-[var(--rp-radius-btn)] px-3 py-2 text-left transition-colors duration-150 ${
                         active
                           ? 'bg-[var(--rp-wash)] text-ink'
                           : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'

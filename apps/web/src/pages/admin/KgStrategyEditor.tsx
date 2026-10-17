@@ -10,7 +10,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { KgImplementEvent } from '@research-portal/core'
 import { getGraphStrategy, type GraphStrategy, saveGraphStrategy } from '../../api/client.ts'
-import { EmptyState, ErrorCard, Skeleton } from '../../components/ui.tsx'
+import { Button, EmptyState, ErrorCard, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { ArrowRight, Bookmark, Plus, RotateCw, Trash } from '../../components/icons.tsx'
+import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
@@ -179,55 +181,28 @@ function validate(draft: Draft, ui: Locale['ui'] = englishUi): string[] {
   return problems
 }
 
-// --- A two-click confirm, no window.confirm (mirrors InvestigationDetailPage) ----
-
-function ConfirmButton({
-  label,
-  confirmLabel,
-  onConfirm,
-  className,
-  confirmClassName,
-}: {
-  label: string
-  confirmLabel: string
-  onConfirm: () => void
-  className?: string
-  confirmClassName?: string
-}) {
+function ConfirmRemoveExample({ onConfirm }: { onConfirm: () => void }) {
+  const { ui } = usePortalLocale()
   const [confirming, setConfirming] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => () => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-  }, [])
-
-  if (confirming) {
-    return (
-      <button
-        type='button'
-        onClick={() => {
-          if (timerRef.current) clearTimeout(timerRef.current)
-          setConfirming(false)
-          onConfirm()
-        }}
-        className={confirmClassName ?? 'rp-btn rp-btn-danger'}
-      >
-        {confirmLabel}
-      </button>
-    )
-  }
-
   return (
-    <button
-      type='button'
-      onClick={() => {
-        setConfirming(true)
-        timerRef.current = setTimeout(() => setConfirming(false), 4000)
-      }}
-      className={className ?? 'rp-btn rp-btn-outline'}
-    >
-      {label}
-    </button>
+    <>
+      <Button variant='danger' size='sm' leadingIcon={Trash} onClick={() => setConfirming(true)}>
+        {ui('Remove example')}
+      </Button>
+      {confirming && (
+        <ConfirmActionDialog
+          title={ui('Remove example')}
+          description={ui('Remove this worked example from the strategy?')}
+          confirmLabel={ui('Remove example')}
+          cancelLabel={ui('Keep example')}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false)
+            onConfirm()
+          }}
+        />
+      )}
+    </>
   )
 }
 
@@ -252,35 +227,41 @@ function EntityTypeRow({
   })
 
   return (
-    <div className='flex flex-wrap items-start gap-2'>
+    <div className='grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-2 border-b border-line pb-3 last:border-0 last:pb-0 sm:flex sm:flex-row sm:flex-wrap'>
       <span
         aria-hidden='true'
         className='mt-2.5 h-2.5 w-2.5 shrink-0 rounded-full'
         style={{ background: colourFor(index) }}
       />
       <input
-        className='rp-input min-w-0 w-full basis-full sm:flex-1'
+        className='rp-input col-start-2 min-w-0 w-full sm:w-auto sm:flex-1'
+        aria-label={ui('Type name, e.g. Person')}
         placeholder={ui('Type name, e.g. Person')}
         value={type.label}
         onChange={(e) => onChange({ label: e.target.value })}
       />
       <input
-        className='rp-input min-w-0 w-full basis-full sm:flex-[2]'
+        className='rp-input col-start-2 min-w-0 w-full sm:w-auto sm:flex-[2]'
+        aria-label={ui('Description (optional)')}
         placeholder={ui('Description (optional)')}
         value={type.description}
         onChange={(e) => onChange({ description: e.target.value })}
       />
-      <button
+      <Button
+        size='sm'
+        leadingIcon={Trash}
+        variant='danger'
         type='button'
         disabled={disabled}
         title={disabled ? reason : undefined}
         onClick={onRemove}
-        className='rp-btn rp-btn-ghost h-9 shrink-0 px-2.5 text-xs'
-        style={disabled ? undefined : { color: 'var(--rp-bad-ink)' }}
+        className='col-start-2 justify-self-start shrink-0'
       >
         {ui('Remove')}
-      </button>
-      {disabled && <p className='basis-full pl-[1.125rem] text-xs text-ink-3'>{reason}</p>}
+      </Button>
+      {disabled && (
+        <p className='col-start-2 text-xs text-ink-3 sm:basis-full sm:pl-[1.125rem]'>{reason}</p>
+      )}
     </div>
   )
 }
@@ -332,20 +313,15 @@ function ExampleCard({
   const entityNames = example.entities.map((en) => en.name).filter(Boolean)
 
   return (
-    <div className='rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
-      <div className='flex items-center justify-between gap-3'>
+    <div className='min-w-0 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border border-line bg-surface-2 p-4'>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
         <p className='text-xs font-semibold text-ink-3'>{ui('Example ')}{index + 1}</p>
-        <ConfirmButton
-          label={ui('Remove example')}
-          confirmLabel={ui('Click again to remove')}
-          onConfirm={onRemove}
-          className='rp-btn rp-btn-ghost h-7 px-2 text-xs'
-          confirmClassName='rp-btn rp-btn-danger h-7 px-2 text-xs'
-        />
+        <ConfirmRemoveExample onConfirm={onRemove} />
       </div>
 
       <textarea
-        className='rp-input mt-2'
+        className='rp-input mt-2 min-w-0'
+        aria-label={`${ui('Example ')}${index + 1}`}
         rows={3}
         placeholder={ui('Paste or write a representative passage…')}
         value={example.text}
@@ -361,20 +337,25 @@ function ExampleCard({
               t.label.trim().toLowerCase() === en.label.trim().toLowerCase()
             )
             return (
-              <div key={i} className='flex flex-wrap items-center gap-1.5'>
+              <div
+                key={i}
+                className='grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 border-b border-line pb-3 last:border-0 last:pb-0 sm:flex sm:flex-wrap'
+              >
                 <span
                   aria-hidden='true'
                   className='h-2.5 w-2.5 shrink-0 rounded-full'
                   style={{ background: typeIndex >= 0 ? colourFor(typeIndex) : 'var(--rp-line)' }}
                 />
                 <input
-                  className='rp-input min-w-[8rem] flex-1'
+                  className='rp-input col-start-2 min-w-0 w-full sm:w-auto sm:flex-1'
+                  aria-label={ui('Name')}
                   placeholder={ui('Name')}
                   value={en.name}
                   onChange={(e) => updateEntity(i, { name: e.target.value })}
                 />
                 <select
-                  className='rp-input w-40 shrink-0'
+                  className='rp-input rp-select col-start-2 min-w-0 w-full sm:w-auto sm:flex-1'
+                  aria-label={ui('Entity type')}
                   value={en.label}
                   onChange={(e) => updateEntity(i, { label: e.target.value })}
                 >
@@ -383,74 +364,87 @@ function ExampleCard({
                     <option key={ti} value={t.label}>{t.label || ui('(unnamed)')}</option>
                   ))}
                 </select>
-                <button
+                <Button
+                  variant='danger'
+                  leadingIcon={Trash}
+                  size='sm'
                   type='button'
                   onClick={() => removeEntity(i)}
-                  className='rp-btn rp-btn-ghost h-9 shrink-0 px-2.5 text-xs'
+                  className='col-start-2 justify-self-start shrink-0'
                 >
                   {ui('Remove')}
-                </button>
+                </Button>
               </div>
             )
           })}
         </div>
-        <button
+        <Button
+          leadingIcon={Plus}
+          variant='outline'
           type='button'
           onClick={addEntity}
-          className='rp-btn rp-btn-outline mt-2 h-8 px-2.5 text-xs'
+          className='mt-2'
         >
           {ui('Add entity')}
-        </button>
+        </Button>
       </div>
 
       <div className='mt-3'>
         <p className='rp-eyebrow text-ink-3'>{ui('Relations')}</p>
         <div className='mt-1.5 space-y-1.5'>
           {example.relations.map((r, i) => (
-            <div key={i} className='flex flex-wrap items-center gap-1.5'>
+            <div
+              key={i}
+              className='flex min-w-0 flex-col items-start gap-2 border-b border-line pb-3 last:border-0 last:pb-0 sm:flex-row sm:flex-wrap sm:items-center'
+            >
               <select
-                className='rp-input w-36 shrink-0'
+                className='rp-input rp-select min-w-0 w-full sm:w-auto sm:flex-1'
+                aria-label={ui('Relation source')}
                 value={r.source}
-                onChange={(e) =>
-                  updateRelation(i, { source: e.target.value })}
+                onChange={(e) => updateRelation(i, { source: e.target.value })}
               >
                 <option value=''>{ui('source…')}</option>
                 {entityNames.map((name, ni) => <option key={ni} value={name}>{name}</option>)}
               </select>
-              <span aria-hidden='true' className='text-sm text-ink-3'>-</span>
               <input
-                className='rp-input min-w-[8rem] flex-1'
+                className='rp-input min-w-0 w-full sm:w-auto sm:flex-1'
+                aria-label={ui('e.g. funds, develops, studies')}
                 placeholder={ui('e.g. funds, develops, studies')}
                 value={r.label}
-                onChange={(e) =>
-                  updateRelation(i, { label: e.target.value })}
+                onChange={(e) => updateRelation(i, { label: e.target.value })}
               />
-              <span aria-hidden='true' className='text-sm text-ink-3'>{ui('→')}</span>
+              <ArrowRight size='sm' className='hidden shrink-0 text-ink-3 sm:block' />
               <select
-                className='rp-input w-36 shrink-0'
+                className='rp-input rp-select min-w-0 w-full sm:w-auto sm:flex-1'
+                aria-label={ui('Relation target')}
                 value={r.target}
                 onChange={(e) => updateRelation(i, { target: e.target.value })}
               >
                 <option value=''>{ui('target…')}</option>
                 {entityNames.map((name, ni) => <option key={ni} value={name}>{name}</option>)}
               </select>
-              <button
+              <Button
+                variant='danger'
+                leadingIcon={Trash}
+                size='sm'
                 type='button'
                 onClick={() => removeRelation(i)}
-                className='rp-btn rp-btn-ghost h-9 shrink-0 px-2.5 text-xs'
+                className='col-start-2 justify-self-start shrink-0'
               >
                 {ui('Remove')}
-              </button>
+              </Button>
             </div>
           ))}
         </div>
-        <button
+        <Button
+          leadingIcon={Plus}
+          variant='outline'
           type='button'
           onClick={addRelation}
-          className='rp-btn rp-btn-outline mt-2 h-8 px-2.5 text-xs'
+          className='mt-2'
         >
           {ui('Add relation')}
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -536,20 +530,39 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
     }
   }
   const readControl = (
-    <button
+    <Button
+      leadingIcon={RotateCw}
+      variant='ghost'
+      size='sm'
       type='button'
       data-graph-read='strategy'
-      className='rp-btn rp-btn-outline'
       onClick={() => void load()}
     >
       {ui('Load current strategy')}
-    </button>
+    </Button>
   )
-  if (isLoading) return <Skeleton className='h-9 w-full' />
+  const sectionHeader = (
+    <SectionHeader
+      className='rp-manage-section-head'
+      title={ui('Current strategy')}
+      description={ui(
+        'The entity types and worked examples that teach the extraction agent what to pull out - fully editable.',
+      )}
+      actions={readControl}
+    />
+  )
+  if (isLoading) {
+    return (
+      <div className='space-y-4'>
+        {sectionHeader}
+        <Skeleton className='h-9 w-full' />
+      </div>
+    )
+  }
   if (!data?.strategy || !draft) {
     return (
       <div className='space-y-3'>
-        {readControl}
+        {sectionHeader}
         {isError && (
           <ErrorCard
             message={ui('Could not load the knowledge-graph strategy.')}
@@ -640,13 +653,15 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
   }
 
   return (
-    <div className='space-y-5 pb-1'>
-      {readControl}
+    <div className='min-w-0 space-y-5 pb-1'>
+      {sectionHeader}
       <div>
-        <p className='text-sm font-semibold text-ink'>{ui('Entity types')}</p>
-        <p className='mt-0.5 text-xs text-ink-3'>
-          {ui('The kinds of things the extractor recognises.')}
-        </p>
+        <SectionHeader
+          className='rp-manage-section-head'
+          headingLevel={3}
+          title={ui('Entity types')}
+          description={ui('The kinds of things the extractor recognises.')}
+        />
         <div className='mt-2 space-y-2'>
           {draft.entityTypes.map((t, i) => (
             <EntityTypeRow
@@ -664,36 +679,38 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             />
           ))}
         </div>
-        <button
+        <Button
+          variant='outline'
+          leadingIcon={Plus}
           type='button'
           onClick={() =>
             setDraft({
               ...draft,
               entityTypes: [...draft.entityTypes, { label: '', description: '' }],
             })}
-          className='rp-btn rp-btn-outline mt-2'
+          className='mt-2'
         >
           {ui('Add entity type')}
-        </button>
+        </Button>
       </div>
 
       <div>
-        <div className='flex flex-wrap items-center justify-between gap-2'>
-          <div>
-            <p className='text-sm font-semibold text-ink'>{ui('Worked examples')}</p>
-            <p className='mt-0.5 text-xs text-ink-3'>
-              {ui(
-                'Worked examples teach the extractor which relations matter - at least six are needed.',
-              )}
-            </p>
-          </div>
-          <span
-            className={`rp-badge ${draft.examples.length >= 6 ? 'rp-badge-ok' : 'rp-badge-warn'}`}
-          >
-            {draft.examples.length}
-            {ui(' of 6+ examples')}
-          </span>
-        </div>
+        <SectionHeader
+          className='rp-manage-section-head'
+          headingLevel={3}
+          title={ui('Worked examples')}
+          description={ui(
+            'Worked examples teach the extractor which relations matter - at least six are needed.',
+          )}
+          actions={
+            <span
+              className={`rp-badge ${draft.examples.length >= 6 ? 'rp-badge-ok' : 'rp-badge-warn'}`}
+            >
+              {draft.examples.length}
+              {ui(' of 6+ examples')}
+            </span>
+          }
+        />
         <div className='mt-3 space-y-3'>
           {draft.examples.map((example, i) => (
             <ExampleCard
@@ -711,13 +728,15 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             />
           ))}
         </div>
-        <button
+        <Button
+          variant='outline'
+          leadingIcon={Plus}
           type='button'
           onClick={() => setDraft({ ...draft, examples: [...draft.examples, blankExample()] })}
-          className='rp-btn rp-btn-outline mt-3'
+          className='mt-3'
         >
           {ui('Add example')}
-        </button>
+        </Button>
       </div>
 
       {problems.length > 0 && (
@@ -766,9 +785,9 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
       )}
 
       {dirty && (
-        <div className='sticky bottom-0 z-10 -mx-4 border-t border-line bg-surface-2 px-4 py-3 shadow-[var(--rp-shadow-md)]'>
+        <div className='sticky bottom-0 z-10 border-t border-line bg-surface py-3 shadow-[var(--rp-shadow-md)]'>
           <div className='flex flex-wrap items-center justify-between gap-3'>
-            <label className='flex items-start gap-2 text-sm text-ink-2'>
+            <label className='rp-check min-w-0 items-start text-sm text-ink-2'>
               <input
                 type='checkbox'
                 checked={applyExisting}
@@ -785,14 +804,16 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
                 </span>
               </span>
             </label>
-            <button
+            <Button
+              variant='primary'
+              leadingIcon={Bookmark}
               type='button'
               disabled={!canSave}
               onClick={() => void onSave()}
-              className='rp-btn rp-btn-primary shrink-0'
+              className='shrink-0'
             >
               {saving ? ui('Saving…') : ui('Save and re-register agent')}
-            </button>
+            </Button>
           </div>
           <p className='mt-2 text-xs text-ink-3'>
             {ui(

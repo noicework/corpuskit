@@ -7,8 +7,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useOutletContext } from 'react-router-dom'
 import type { Labelset } from '@research-portal/core'
 import { createAdminLabelset, getCounters, getFacets, getLabelsets } from '../api/client.ts'
-import { prettyLabel } from '../components/ui.tsx'
-import { ErrorCard, Skeleton } from '../components/ui.tsx'
+import { Button, ErrorCard, prettyLabel, SectionHeader, Skeleton } from '../components/ui.tsx'
+import { Plus } from '../components/icons.tsx'
 import { MessagePanel } from './admin/MessagePanel.tsx'
 import { inputClass, type Message } from './admin/shared.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
@@ -60,7 +60,7 @@ function LabelsetCard({
   const chip = (label: string) => {
     const count = counts[label] ?? 0
     return (
-      <span className={`rp-chip ${count > 0 ? 'text-ink' : 'text-ink-3'}`}>
+      <span className={`rp-tag ${count > 0 ? 'text-ink' : 'text-ink-3'}`}>
         {prettyLabel(label, organisation, ui)}
         <span className='text-ink-3'>
           {count.toLocaleString()}
@@ -71,19 +71,22 @@ function LabelsetCard({
   }
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm'>
-      <div className='flex flex-wrap items-baseline justify-between gap-3'>
-        <h2 className='text-lg font-semibold tracking-tight text-ink'>
-          {prettyLabel(labelset.title, organisation, ui)}
-        </h2>
-        <span className='shrink-0 text-xs font-medium uppercase tracking-wide text-ink-3'>
-          {labelset.labels.length} {labelset.labels.length === 1 ? ui('value') : ui('values')}
-        </span>
-      </div>
-      <p className='mt-1 text-xs text-ink-3'>
-        {cardinalityLabel(labelset, counts, resources, ui)}
-        {passages ? ui(' - counts are passages') : ''}
-      </p>
+    <div className='rp-card min-w-0 p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={prettyLabel(labelset.title, organisation, ui)}
+        description={
+          <>
+            {cardinalityLabel(labelset, counts, resources, ui)}
+            {passages ? ui(' - counts are passages') : ''}
+          </>
+        }
+        actions={
+          <span className='rp-tag'>
+            {labelset.labels.length} {labelset.labels.length === 1 ? ui('value') : ui('values')}
+          </span>
+        }
+      />
 
       {sorted.length === 0
         ? <p className='mt-4 text-sm text-ink-3'>{ui('No values yet.')}</p>
@@ -174,8 +177,8 @@ function AddLabelsetCard({
   }
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-dashed border-line bg-surface-2 p-6'>
-      <h2 className='text-sm font-semibold text-ink'>{ui('Add a category')}</h2>
+    <div className='rp-card min-w-0 p-5 lg:p-6'>
+      <SectionHeader className='rp-manage-section-head' title={ui('Add a category')} />
       <form onSubmit={onSubmit} className='mt-4 space-y-3'>
         <div>
           <label
@@ -197,16 +200,12 @@ function AddLabelsetCard({
 
         <div>
           <p className='mb-1.5 block text-sm font-medium text-ink'>{ui('Values per resource')}</p>
-          <div className='inline-flex rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
+          <div className='rp-seg'>
             <button
               type='button'
               aria-pressed={!multiple}
               onClick={() => setMultiple(false)}
-              className={`rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
-                !multiple
-                  ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
-                  : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
-              }`}
+              className='rp-seg-item'
             >
               {ui('Single')}
             </button>
@@ -214,11 +213,7 @@ function AddLabelsetCard({
               type='button'
               aria-pressed={multiple}
               onClick={() => setMultiple(true)}
-              className={`rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
-                multiple
-                  ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
-                  : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
-              }`}
+              className='rp-seg-item'
             >
               {ui('Multiple')}
             </button>
@@ -242,13 +237,9 @@ function AddLabelsetCard({
           />
         </div>
 
-        <button
-          type='submit'
-          disabled={busy}
-          className='rp-btn rp-btn-primary'
-        >
+        <Button type='submit' disabled={busy} leadingIcon={Plus}>
           {busy ? ui('Adding…') : ui('Add category')}
-        </button>
+        </Button>
       </form>
 
       {message && <MessagePanel message={message} className='mt-4' />}
@@ -258,7 +249,7 @@ function AddLabelsetCard({
 
 function LabelsetCardSkeleton() {
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm'>
+    <div className='rp-card min-w-0 p-5 lg:p-6'>
       <Skeleton className='h-5 w-1/3' />
       <Skeleton className='mt-3 h-4 w-1/2' />
       <div className='mt-4 flex flex-wrap gap-2'>
@@ -327,14 +318,14 @@ function TaxonomyContent() {
     ])
 
   return (
-    <main className='rp-shell py-10'>
-      <h1 className='rp-display text-2xl text-ink'>{ui('Taxonomy')}</h1>
+    <main className='rp-shell py-8 lg:py-10'>
+      <h1 className='rp-display text-2xl text-ink sm:text-3xl'>{ui('Taxonomy')}</h1>
       <p className='mt-1 text-sm text-ink-3'>
         {ui('Categories used to classify resources. Counts reflect indexed content.')}
       </p>
 
       {isLoading && (
-        <div className='mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2'>
+        <div className='mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2'>
           <LabelsetCardSkeleton />
           <LabelsetCardSkeleton />
         </div>
@@ -351,7 +342,7 @@ function TaxonomyContent() {
 
       {labelsets && (
         <>
-          <div className='mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2'>
+          <div className='mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2'>
             {visible.map((ls) => (
               <LabelsetCard
                 key={ls.id}
