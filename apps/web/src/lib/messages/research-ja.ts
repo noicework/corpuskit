@@ -1090,4 +1090,7 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   '{count} links out': '接続{count}件',
   '1 relation': '関連1件',
   '1 mention': '言及1件',
+  'Show full question': '質問の全文を表示',
+  'Collapse question': '質問を折りたたむ',
+  'opens in a new tab': '新しいタブで開きます',
 }
