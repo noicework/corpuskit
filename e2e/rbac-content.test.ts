@@ -122,21 +122,25 @@ async function navigate(page: Page, tab: string) {
   }, { args: [tab] })
   await page.waitForSelector(`[data-manage-tab=${tab}][aria-current=true]`)
 }
-async function click(page: Page, text: string) {
+async function click(page: Page, text: string, scope = 'body') {
   await page.waitForFunction(
-    (text: string) =>
-      [...document.querySelectorAll('button')].some((b) =>
-        b.textContent?.trim().replace(/^[▸▾]\s*/, '') === text && !b.disabled
+    ({ text, scope }: { text: string; scope: string }) =>
+      [...(document.querySelector(scope)?.querySelectorAll('button') ?? [])].some((b) =>
+        (b.getAttribute('aria-label') ?? b.textContent?.trim().replace(/^[▸▾]\s*/, '')) ===
+          text && !b.disabled
       ),
-    { args: [text] },
+    { args: [{ text, scope }] },
   )
-  await page.evaluate((text) => {
-    const button = [...document.querySelectorAll('button')].find((b) =>
-      b.textContent?.trim().replace(/^[▸▾]\s*/, '') === text
+  await page.evaluate(({ text, scope }) => {
+    const button = [...(document.querySelector(scope)?.querySelectorAll('button') ?? [])].find((
+      b,
+    ) =>
+      (b.getAttribute('aria-label') ?? b.textContent?.trim().replace(/^[▸▾]\s*/, '')) === text &&
+      !b.disabled
     )
     if (!button) throw new Error(`Missing button: ${text}`)
     button.click()
-  }, { args: [text] })
+  }, { args: [{ text, scope }] })
 }
 async function fill(page: Page, selector: string, value: string) {
   await page.evaluate(({ selector, value }) => {
@@ -318,6 +322,24 @@ Deno.test('signed source add edit sync remove and insights use real declared rou
       await textShown(page, 'Synced - 1 page added.')
       await click(page, 'Refresh sources')
       await click(page, 'Remove')
+      await page.waitForSelector('dialog[open]')
+      expect(
+        await page.evaluate(() => {
+          const dialog = document.querySelector('dialog[open]')!
+          return {
+            title: document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent,
+            description: document.getElementById(dialog.getAttribute('aria-describedby')!)
+              ?.textContent,
+            focusedAction: document.activeElement?.textContent,
+          }
+        }),
+      ).toEqual({
+        title: 'Remove website source',
+        description: `Remove ${website.url}? Pages already added to the library are kept.`,
+        focusedAction: 'Keep source',
+      })
+      expect(server.requests.filter((r) => r.method === 'DELETE')).toEqual([])
+      await click(page, 'Remove', 'dialog[open]')
       await textShown(page, 'No sources registered yet.')
       await navigate(page, 'insights')
       await textShown(page, 'No questions asked yet')
@@ -499,6 +521,22 @@ Deno.test('sources insights and taxonomy obey light dark wide390 and22px appeara
                 `source-row-${dark ? 'dark' : 'light'}-${width}`,
                 width,
               )
+              // The list clips overflow, so document width alone cannot reveal lost source text.
+              expect(
+                await page.evaluate(() => {
+                  const row = document.querySelector(
+                    'select[id^=source-cap-]:not(#source-cap-marine)',
+                  )!.closest('li')!
+                  const bounds = row.getBoundingClientRect()
+                  return [...row.querySelectorAll('p')].flatMap((paragraph) => {
+                    const range = document.createRange()
+                    range.selectNodeContents(paragraph)
+                    return [...range.getClientRects()].filter((rect) =>
+                      rect.left < bounds.left - 1 || rect.right > bounds.right + 1
+                    ).map(() => paragraph.textContent)
+                  })
+                }),
+              ).toEqual([])
             }
           }
           await page.evaluate(() => {
@@ -1141,7 +1179,12 @@ Deno.test('dropped files upload one row each: progress, processing, ready or the
       20_000,
     )
     expect(
-      await page.evaluate(() => document.querySelector('[data-upload-queue] h4')?.textContent),
+      await page.evaluate(() => {
+        const headingId = document.querySelector('[data-upload-queue]')?.getAttribute(
+          'aria-labelledby',
+        )
+        return headingId ? document.getElementById(headingId)?.textContent : undefined
+      }),
     ).toBe('5 files: 2 ready, 3 failed')
     expect(
       await page.evaluate(() =>
