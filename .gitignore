@@ -30,3 +30,6 @@ data/
 
 # Persona evaluation transcripts - regenerate with --out, never committed
 persona-eval-*.json
+
+# Design-review screenshots (deno task shots) and their vendor cache
+.shots/
