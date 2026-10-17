@@ -1,1 +1,92 @@
-/* Chrome component styles. */
+/* Header, menus and overlays follow the tenant's shape, colour and type dials. */
+.rp-chrome-header-control.rp-btn.rp-icon-btn {
+  width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--rp-brand-fg) 25%, transparent);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--rp-brand-fg);
+}
+
+.rp-chrome-header-control.rp-btn:hover,
+.rp-chrome-header-control.rp-btn[aria-expanded='true'] {
+  background: var(--rp-wash);
+  color: var(--rp-brand-fg);
+}
+
+.rp-chrome-home {
+  min-height: 2.75rem;
+}
+
+.rp-chrome-logo {
+  --rp-chrome-logo-cap: 8.5rem;
+  width: 8.5rem;
+  height: auto;
+  max-width: min(var(--rp-chrome-logo-cap), 100%);
+  max-height: 2.5rem;
+}
+
+.rp-chrome-menu-item {
+  min-height: 2.25rem;
+}
+
+.rp-chrome-nav-row {
+  position: relative;
+}
+
+.rp-chrome-nav-row[aria-current='page'] {
+  font-weight: 600;
+}
+
+.rp-chrome-nav-row[aria-current='page']::after {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 0.1875rem;
+  background: var(--rp-accent);
+  content: '';
+}
+
+.rp-chrome-signin.rp-dialog {
+  max-width: 28rem;
+  padding: 0;
+}
+
+.rp-chrome-signin::backdrop {
+  backdrop-filter: blur(8px);
+}
+
+@media (min-width: 640px) {
+  .rp-chrome-logo {
+    --rp-chrome-logo-cap: 20rem;
+    width: auto;
+    max-height: 4rem;
+  }
+}
+
+@media (max-width: 1023.98px), (pointer: coarse) {
+  .rp-chrome-menu-item,
+  .rp-chrome-nav-link {
+    min-height: 2.75rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .rp-chrome-key-hint.rp-badge {
+    display: none;
+  }
+}
+
+.rp-chrome-switcher.rp-icon-btn {
+  width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+.rp-chrome-menu.rp-card {
+  box-shadow: var(--rp-shadow-lg);
+}
+
+.rp-chrome-palette.rp-card {
+  box-shadow: var(--rp-shadow-xl);
+}
