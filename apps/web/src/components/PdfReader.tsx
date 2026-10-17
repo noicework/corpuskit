@@ -121,6 +121,11 @@ export function pdfMenuFocusIndex(current: number, count: number, key: string): 
   return null
 }
 
+function availablePdfMenuItems(menu: HTMLDivElement | null): HTMLElement[] {
+  return Array.from(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])
+    .filter((item) => item.getClientRects().length > 0)
+}
+
 /** Inline PDF viewer built on pdfjs-dist, canvas-rendering one page at a
  * time. Falls back to the plain iframe embed (`fallback`) whenever pdfjs
  * cannot be loaded or fails to open the document. */
@@ -235,9 +240,9 @@ export function PdfReader(
 
   useEffect(() => {
     if (!menuOpen) return
-    const items = menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')
-    const index = menuInitialFocusRef.current === 'last' ? (items?.length ?? 1) - 1 : 0
-    items?.[index]?.focus()
+    const items = availablePdfMenuItems(menuRef.current)
+    const index = menuInitialFocusRef.current === 'last' ? items.length - 1 : 0
+    items[index]?.focus()
     const onPointerDown = (event: PointerEvent) => {
       if (event.target instanceof Node && !menuGroupRef.current?.contains(event.target)) {
         closeMenu(false)
@@ -557,9 +562,7 @@ export function PdfReader(
       closeMenu(false)
       return
     }
-    const items = Array.from(
-      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [],
-    )
+    const items = availablePdfMenuItems(menuRef.current)
     const index = pdfMenuFocusIndex(
       items.indexOf(document.activeElement as HTMLElement),
       items.length,
@@ -641,7 +644,7 @@ export function PdfReader(
             }}
             className='rp-input rp-library-pdf-page text-center text-sm tabular-nums'
           />
-          <span className='hidden whitespace-nowrap tabular-nums lg:inline'>
+          <span className='rp-library-pdf-secondary whitespace-nowrap tabular-nums'>
             {language === 'ja' ? '/' : ui('of')} {numPages || '–'}
           </span>
         </div>
@@ -651,25 +654,27 @@ export function PdfReader(
           onClick={() => goToPage(pageNumber + 1)}
           disabled={status !== 'ready' || pageNumber >= numPages}
         />
-        <span className='mx-1 hidden h-4 w-px bg-line lg:block' aria-hidden='true' />
-        <IconButton
-          label={ui('Zoom out')}
-          icon={ZoomOut}
-          onClick={zoomOut}
-          disabled={status !== 'ready'}
-        />
-        <span className='hidden w-11 shrink-0 text-center text-xs tabular-nums text-ink-2 lg:inline'>
-          {zoomPercent ? `${zoomPercent}%` : ui('Fit')}
-        </span>
-        <IconButton
-          label={ui('Zoom in')}
-          icon={ZoomIn}
-          onClick={zoomIn}
-          disabled={status !== 'ready'}
-        />
+        <div className='rp-library-pdf-inline-zoom'>
+          <span className='rp-library-pdf-secondary mx-1 h-4 w-px bg-line' aria-hidden='true' />
+          <IconButton
+            label={ui('Zoom out')}
+            icon={ZoomOut}
+            onClick={zoomOut}
+            disabled={status !== 'ready'}
+          />
+          <span className='rp-library-pdf-secondary w-11 shrink-0 text-center text-xs tabular-nums text-ink-2'>
+            {zoomPercent ? `${zoomPercent}%` : ui('Fit')}
+          </span>
+          <IconButton
+            label={ui('Zoom in')}
+            icon={ZoomIn}
+            onClick={zoomIn}
+            disabled={status !== 'ready'}
+          />
+        </div>
         <div
           ref={menuGroupRef}
-          className='relative ml-auto shrink-0'
+          className='rp-library-pdf-menu-group ml-auto shrink-0'
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) closeMenu(false)
           }}
@@ -700,8 +705,38 @@ export function PdfReader(
             aria-label={ui('More PDF actions')}
             hidden={!menuOpen}
             onKeyDown={handleMenuKeyDown}
-            className='rp-library-pdf-menu rp-card rp-shadow-lg absolute right-0 top-full z-50 mt-1 min-w-52 max-w-[calc(100vw-1rem)] p-1'
+            className='rp-library-pdf-menu rp-card rp-shadow-lg z-50 mt-1 p-1'
           >
+            <div className='rp-library-pdf-menu-zoom'>
+              <Button
+                role='menuitem'
+                tabIndex={-1}
+                variant='ghost'
+                leadingIcon={ZoomOut}
+                disabled={status !== 'ready'}
+                onClick={() => {
+                  zoomOut()
+                  closeMenu()
+                }}
+                className='w-full justify-start text-left'
+              >
+                {ui('Zoom out')}
+              </Button>
+              <Button
+                role='menuitem'
+                tabIndex={-1}
+                variant='ghost'
+                leadingIcon={ZoomIn}
+                disabled={status !== 'ready'}
+                onClick={() => {
+                  zoomIn()
+                  closeMenu()
+                }}
+                className='w-full justify-start text-left'
+              >
+                {ui('Zoom in')}
+              </Button>
+            </div>
             <Button
               role='menuitem'
               tabIndex={-1}

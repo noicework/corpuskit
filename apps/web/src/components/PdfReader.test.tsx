@@ -2,7 +2,7 @@ import { expect } from '@std/expect'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { pdfMenuFocusIndex, PdfReader } from './PdfReader.tsx'
 
-Deno.test('PDF controls keep page navigation before zoom and place file actions in a closed menu', () => {
+Deno.test('PDF controls prioritise page navigation and provide zoom actions in the closed menu', () => {
   const html = renderToStaticMarkup(
     <PdfReader fileUrl='/report.pdf' title='Reef survey' initialPage={2} />,
   )
@@ -20,12 +20,23 @@ Deno.test('PDF controls keep page navigation before zoom and place file actions 
   expect(order).toEqual([...order].sort((a, b) => a - b))
   expect(controls).toContain('aria-expanded="false"')
   expect(controls).toContain('aria-haspopup="menu"')
+  expect(controls).toContain('rp-library-pdf-inline-zoom')
   expect(html).toMatch(/role="menu"[^>]+hidden=""/)
-  expect(html.match(/role="menuitem"/g)?.length).toBe(5)
+  expect(html.match(/role="menuitem"/g)?.length).toBe(7)
+  const menu = html.slice(html.indexOf('role="menu"'))
+  expect(menu).toContain('rp-library-pdf-menu-zoom')
   for (
-    const label of ['Fit to width', 'Full screen', 'Print', 'Download PDF', 'Open PDF in a new tab']
+    const label of [
+      'Zoom out',
+      'Zoom in',
+      'Fit to width',
+      'Full screen',
+      'Print',
+      'Download PDF',
+      'Open PDF in a new tab',
+    ]
   ) {
-    expect(html.slice(html.indexOf('role="menu"'))).toContain(label)
+    expect(menu).toContain(label)
   }
 })
 
@@ -53,13 +64,15 @@ Deno.test('PDF page fields have unique associated labels when more than one read
 })
 
 Deno.test('PDF menu keyboard focus wraps available actions and supports the ends of the menu', () => {
-  expect(pdfMenuFocusIndex(-1, 5, 'ArrowDown')).toBe(0)
-  expect(pdfMenuFocusIndex(-1, 5, 'ArrowUp')).toBe(4)
-  expect(pdfMenuFocusIndex(4, 5, 'ArrowDown')).toBe(0)
-  expect(pdfMenuFocusIndex(0, 5, 'ArrowUp')).toBe(4)
-  expect(pdfMenuFocusIndex(1, 5, 'ArrowDown')).toBe(2)
-  expect(pdfMenuFocusIndex(3, 5, 'Home')).toBe(0)
-  expect(pdfMenuFocusIndex(1, 5, 'End')).toBe(4)
+  for (const count of [5, 7]) {
+    expect(pdfMenuFocusIndex(-1, count, 'ArrowDown')).toBe(0)
+    expect(pdfMenuFocusIndex(-1, count, 'ArrowUp')).toBe(count - 1)
+    expect(pdfMenuFocusIndex(count - 1, count, 'ArrowDown')).toBe(0)
+    expect(pdfMenuFocusIndex(0, count, 'ArrowUp')).toBe(count - 1)
+    expect(pdfMenuFocusIndex(1, count, 'ArrowDown')).toBe(2)
+    expect(pdfMenuFocusIndex(3, count, 'Home')).toBe(0)
+    expect(pdfMenuFocusIndex(1, count, 'End')).toBe(count - 1)
+  }
   expect(pdfMenuFocusIndex(0, 0, 'ArrowDown')).toBe(null)
   expect(pdfMenuFocusIndex(0, 5, 'Escape')).toBe(null)
 })

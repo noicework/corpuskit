@@ -417,12 +417,12 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                         <div
                           role='group'
                           aria-label={ui('AI answer')}
-                          className='rp-library-answer-toolbar mt-4 flex min-w-0 items-center justify-between gap-1 border-t border-line pt-3'
+                          className='rp-library-answer-toolbar mt-4 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-line pt-3'
                         >
-                          <div className='rp-library-answer-confidence min-w-0 flex-1'>
+                          <div className='rp-library-answer-confidence min-w-0 flex-auto'>
                             <ConfidenceIndicator quality={quality} audit={audit} />
                           </div>
-                          <div className='flex shrink-0 items-center'>
+                          <div className='ml-auto flex max-w-full shrink-0 items-center justify-end'>
                             <IconButton
                               label={ui('Helpful answer')}
                               icon={ThumbsUp}
