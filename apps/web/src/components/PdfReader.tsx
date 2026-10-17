@@ -186,8 +186,9 @@ export function PdfReader(
   const renderTaskRef = useRef<RenderTask | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const pageStageRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const [containerWidth, setContainerWidth] = useState(0)
+  const [stageWidth, setStageWidth] = useState(0)
   /** The scale the current page was last rendered at - the source of truth
    * for "current zoom" when the user zooms in/out from fit-width, since
    * fit-width itself has no single fixed scale. */
@@ -309,13 +310,14 @@ export function PdfReader(
     }
   }, [pageNumber, numPages, language])
 
-  // Track the reader's width for fit-width zoom.
+  // The content box excludes the stage's rem padding, so fit-width also
+  // updates when the reader changes text size without resizing the pane.
   useEffect(() => {
-    const el = containerRef.current
+    const el = pageStageRef.current
     if (!el) return
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width
-      if (width) setContainerWidth(width)
+      if (width) setStageWidth(width)
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -332,13 +334,13 @@ export function PdfReader(
     return cached
   }, [])
 
-  // Render the current page whenever it, the zoom, or the container width
+  // Render the current page whenever it, the zoom, or the stage content width
   // changes. Only the current page is ever drawn to canvas; neighbouring
   // pages are merely pre-fetched (their PDFPageProxy warmed, not rendered)
   // so paging forward/back feels instant without keeping a 200-page report's
   // worth of canvases in memory.
   useEffect(() => {
-    if (status !== 'ready' || containerWidth === 0) return
+    if (status !== 'ready' || stageWidth === 0) return
     const pagePromise = getPage(pageNumber)
     if (!pagePromise) return
     let cancelled = false
@@ -349,15 +351,8 @@ export function PdfReader(
       if (!canvas) return
 
       const baseViewport = page.getViewport({ scale: 1 })
-      const stage = canvas.parentElement?.parentElement
-      const stageStyle = stage ? getComputedStyle(stage) : null
-      const horizontalInset = stageStyle
-        ? Number.parseFloat(stageStyle.paddingLeft) + Number.parseFloat(stageStyle.paddingRight)
-        : 0
       const scale = clampScale(
-        zoomMode === 'fit-width'
-          ? Math.max(1, containerWidth - horizontalInset) / baseViewport.width
-          : zoomMode.scale,
+        zoomMode === 'fit-width' ? stageWidth / baseViewport.width : zoomMode.scale,
       )
       const viewport = page.getViewport({ scale })
       effectiveScaleRef.current = scale
@@ -444,7 +439,7 @@ export function PdfReader(
     return () => {
       cancelled = true
     }
-  }, [status, pageNumber, zoomMode, containerWidth, getPage, highlight, initialPage, numPages])
+  }, [status, pageNumber, zoomMode, stageWidth, getPage, highlight, initialPage, numPages])
 
   // A citation with a passage but no page - or one whose page did not carry
   // the passage and the reader asked for a search: find the page that
@@ -843,6 +838,7 @@ export function PdfReader(
           : null}
 
         <div
+          ref={pageStageRef}
           role='group'
           aria-label={ui('{title} - PDF page {pageNumber} of {value3}', {
             title: title,

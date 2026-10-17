@@ -44,7 +44,7 @@
 .rp-library-answer-confidence .rp-badge {
   max-inline-size: 100%;
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 
 .rp-library-answer-confidence > span {
@@ -59,7 +59,15 @@
   }
 
   .rp-library-answer-toolbar {
-    margin-inline: calc(-1.25rem * var(--rp-density, 1));
+    /* Keep the confidence words readable beside four scaled action targets. */
+    --rp-library-toolbar-width: max(
+      calc(100% + 2.5rem * var(--rp-density, 1)),
+      min(18rem, 100vw)
+    );
+    width: var(--rp-library-toolbar-width);
+    margin-inline: calc((100% - var(--rp-library-toolbar-width)) / 2);
+    padding-inline: 0.25rem;
+    background: var(--rp-surface);
   }
 }
 
