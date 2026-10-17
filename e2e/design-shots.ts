@@ -193,6 +193,28 @@ const ROUTES: Record<string, Route> = {
       })
     },
   },
+  'answer-end': {
+    path: `/t/marine/ask?ask=${encodeURIComponent(DESIGN_QUESTION)}`,
+    ready: ['main table', 'answer'],
+    full: false,
+    settle: 600,
+    // The end of the answer: its toolbar, the retrieved sources and the composer.
+    action: async (page) => {
+      await page.evaluate(() => {
+        for (
+          let el = document.querySelector('main table')?.parentElement ?? null;
+          el;
+          el = el.parentElement
+        ) {
+          const overflow = getComputedStyle(el).overflowY
+          if ((overflow === 'auto' || overflow === 'scroll') && el.scrollHeight > el.clientHeight) {
+            el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
+          }
+        }
+        scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' })
+      })
+    },
+  },
   search: { path: '/t/marine/search?q=heatwave', ready: ['main h1', `text:${FIRST.title}`] },
   help: { path: '/t/marine/help', ready: ['main h1'] },
   how: { path: '/t/marine/how-it-works', ready: ['main h1'] },
