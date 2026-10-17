@@ -226,6 +226,7 @@ function ResultCard(
               <Byline
                 parts={[byline.join('\u00a0·\u00a0')]}
                 doi={resource.doi}
+                className='rp-library-result-byline'
               />
             )
             : null}
@@ -939,7 +940,7 @@ export function SearchPage() {
                 aria-pressed={active}
                 onClick={() =>
                   updateParams({ mode: option.value === 'hybrid' ? null : option.value })}
-                className='rp-seg-item rp-btn-sm'
+                className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
               >
                 {ui(option.label)}
               </button>
@@ -1213,7 +1214,7 @@ export function SearchPage() {
                       type='button'
                       aria-pressed={active}
                       onClick={() => setStrength(option.value)}
-                      className='rp-seg-item rp-btn-sm'
+                      className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
                     >
                       {ui(option.label)}
                     </button>
@@ -1396,7 +1397,7 @@ export function SearchPage() {
                                     type='button'
                                     aria-pressed={active}
                                     onClick={() => setResultView(option.value)}
-                                    className='rp-seg-item rp-btn-sm'
+                                    className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
                                   >
                                     {ui(option.label)}
                                   </button>

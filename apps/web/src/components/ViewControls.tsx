@@ -33,7 +33,7 @@ export function ViewToggle(
             type='button'
             aria-pressed={active}
             onClick={() => onChange(option)}
-            className='rp-seg-item rp-btn-sm capitalize'
+            className='rp-seg-item rp-btn-sm min-w-[2.75rem] capitalize'
           >
             {ui(option)}
           </button>
@@ -71,7 +71,7 @@ export function GridDensity(
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className='rp-focus min-h-[2.75rem] w-24 lg:min-h-6 [@media(pointer:coarse)]:min-h-[2.75rem]'
+        className='rp-library-density rp-focus w-24'
       />
     </div>
   )

@@ -1,5 +1,9 @@
 /* Library component styles. */
 
+.rp-tenant input.rp-library-density[type='range'] {
+  min-height: 1.5rem;
+}
+
 .rp-library-pdf-reader {
   min-width: 0;
 }
@@ -67,6 +71,16 @@
 }
 
 @media (max-width: 1023.98px), (pointer: coarse) {
+  .rp-tenant input.rp-library-density[type='range'] {
+    min-height: 2.75rem;
+  }
+
+  .rp-library-result-byline a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+
   .rp-library-search-field,
   .rp-library-search-field input,
   .rp-library-typeahead-option,
