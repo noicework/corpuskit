@@ -12,7 +12,7 @@ import {
   useTextScale,
   useViewerScheme,
 } from '../lib/theme.ts'
-import { ArrowLeft, ArrowRight, Menu, Moon, Search, Sun, X } from '../components/icons.tsx'
+import { ArrowLeft, ArrowRight, type IconProps, Moon, Search, Sun } from '../components/icons.tsx'
 import { Button, IconButton } from '../components/ui.tsx'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
@@ -99,6 +99,33 @@ const NAV_ITEMS: {
 // from `helpMenuItems` for the same reason.
 const ACCOUNT_LABEL = 'My account'
 
+/** Keep all three strokes mounted for the expanded-state morph. */
+function MenuBars({ size = 'md', className, title }: IconProps) {
+  const sizes = { sm: '1rem', md: '1.25rem', lg: '1.5rem' }
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      width={sizes[size]}
+      height={sizes[size]}
+      fill='none'
+      stroke='currentColor'
+      strokeWidth={1.75}
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      className={`rp-chrome-menu-bars ${className ?? ''}`.trim()}
+      focusable='false'
+      aria-hidden={title ? undefined : true}
+      role={title ? 'img' : undefined}
+      aria-label={title}
+    >
+      {title && <title>{title}</title>}
+      <path className='rp-navtoggle-bar rp-navtoggle-bar-top' d='M4 7h16' />
+      <path className='rp-navtoggle-bar rp-navtoggle-bar-mid' d='M4 12h16' />
+      <path className='rp-navtoggle-bar rp-navtoggle-bar-bot' d='M4 17h16' />
+    </svg>
+  )
+}
+
 /** Cache stamps do not turn a light logo into a distinct dark asset. */
 export function portalLogo(
   branding: Pick<TenantConfig['branding'], 'logoUrl' | 'logoDarkUrl'>,
@@ -130,7 +157,7 @@ export function TenantLayout() {
   const navigate = useNavigate()
   const [navOpen, setNavOpen] = useState(false)
   // The sheet outlives `navOpen` by the length of its exit, so the panel, the
-  // scrim and the rows can animate away and the trigger can change back from the
+  // scrim and the rows can animate away and the trigger can morph back from the
   // cross instead of the whole thing being ripped out of the DOM mid-gesture.
   const [navMounted, setNavMounted] = useState(false)
   const [navTop, setNavTop] = useState<number | null>(null)
@@ -203,7 +230,7 @@ export function TenantLayout() {
 
   // Escape closes, and Tab is held inside the sheet. The trigger sits in the
   // header rather than in the panel - it is the sheet's own close control now
-  // that it shows the close icon - so it joins the front of the cycle instead
+  // that its bars morph into a cross - so it joins the front of the cycle instead
   // of being tabbed past into the page underneath.
   useEffect(() => {
     if (!navOpen) return
@@ -386,6 +413,7 @@ export function TenantLayout() {
     `rp-navlink rp-chrome-nav-link${isActive ? ' rp-navlink-active' : ''}`
 
   const logo = portalLogo(config.branding, scheme)
+  const hasImageLogo = Boolean(config.branding.logoUrl && !logoFailed && !isCorpusKit)
   const SchemeIcon = scheme === 'dark' ? Moon : Sun
 
   const accountControl = (
@@ -488,10 +516,10 @@ export function TenantLayout() {
                         aria-label={navOpen ? ui('Close menu') : ui('Open menu')}
                         aria-expanded={navOpen}
                         aria-controls='mobile-nav-sheet'
-                        className='rp-focus'
+                        className='rp-navtoggle rp-chrome-acmd-toggle rp-focus'
                       >
                         {ui('Explore ')}
-                        {navOpen ? <X size='sm' /> : <Menu size='sm' />}
+                        <MenuBars size='sm' />
                       </Button>
                     </span>
                   </div>
@@ -510,13 +538,17 @@ export function TenantLayout() {
             * into a 38px column and clipped to one letter a line. When the two
             * no longer fit, the controls take their own line instead. */
                   }
-                  <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-6'>
-                    <div className='flex min-w-[10rem] flex-1 items-center gap-2 sm:min-w-0'>
+                  <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:gap-6 lg:flex-nowrap'>
+                    <div
+                      className={`flex min-w-[10rem] flex-1 items-center gap-2 ${
+                        hasImageLogo ? 'sm:min-w-max' : 'sm:min-w-0'
+                      }`}
+                    >
                       <Link
                         to={`/t/${config.slug}`}
                         className={`rp-focus rp-chrome-home flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]${
-                          logo.plate && !logoFailed && !isCorpusKit ? ' rp-logo-plate' : ''
-                        }`}
+                          hasImageLogo ? ' sm:shrink-0' : ''
+                        }${logo.plate && !logoFailed && !isCorpusKit ? ' rp-logo-plate' : ''}`}
                       >
                         {isCorpusKit
                           ? (
@@ -560,7 +592,7 @@ export function TenantLayout() {
                       /* Header search, centred and full-measure: it is the only search
               * box in the product now, so it carries the weight. */
                     }
-                    <div className='hidden w-[min(40rem,42vw)] shrink-0 items-center lg:flex'>
+                    <div className='hidden w-[min(40rem,42vw)] min-w-0 items-center lg:flex'>
                       <form
                         role='search'
                         onSubmit={(event) => {
@@ -667,7 +699,7 @@ export function TenantLayout() {
                             setNavOpen(true)
                           }}
                           label={locale.ui(navOpen ? 'Close menu' : 'Open menu')}
-                          icon={navOpen ? X : Menu}
+                          icon={MenuBars}
                           size='lg'
                           aria-expanded={navOpen}
                           aria-controls='mobile-nav-sheet'
@@ -758,7 +790,7 @@ export function TenantLayout() {
 
         {
           /* The phone menu. It hangs from under the header rather than covering
-        * it, which is what lets the trigger stay put and show the close icon
+        * it, which is what lets the trigger stay put and morph into the cross
         * in place, and leaves a real scrim over the page below. Both layers
         * carry `md:hidden` and neither animation class sets `display`, so the
         * utility is unopposed - verified on the computed style at 1440px. */

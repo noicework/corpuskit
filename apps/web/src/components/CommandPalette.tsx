@@ -213,7 +213,7 @@ export function CommandPalette({
         aria-label={ui('Search or ask')}
         className='rp-card rp-shadow-xl rp-chrome-palette w-full max-w-lg overflow-hidden'
       >
-        <div className='flex items-center gap-2.5 border-b border-line px-4 py-3'>
+        <div className='rp-field rp-chrome-palette-field flex items-center gap-2.5 border-b px-4 py-3'>
           <Search size='sm' className='shrink-0 text-ink-3' />
           <label htmlFor='command-palette-input' className='sr-only'>
             {ui('Search the library or ask a question')}
@@ -232,7 +232,7 @@ export function CommandPalette({
             aria-expanded={options.length > 0}
             aria-controls={listboxId}
             aria-activedescendant={highlight >= 0 ? `${listboxId}-option-${highlight}` : undefined}
-            className='rp-focus min-h-[2.75rem] min-w-0 flex-1 rounded-[var(--rp-radius-input)] border-0 bg-transparent py-1 text-base text-ink placeholder:text-[var(--rp-ink-3)]'
+            className='min-h-[2.75rem] min-w-0 flex-1 border-0 bg-transparent py-1 text-base text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none focus:shadow-none'
           />
           <kbd className='rp-chrome-key-hint rp-badge rp-badge-quiet shrink-0 font-mono text-2xs'>
             {ui('Esc')}

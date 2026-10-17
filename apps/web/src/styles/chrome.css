@@ -61,7 +61,21 @@
   .rp-chrome-logo {
     --rp-chrome-logo-cap: 20rem;
     width: auto;
+    height: 4rem;
+    max-width: var(--rp-chrome-logo-cap);
     max-height: 4rem;
+    flex-shrink: 0;
+  }
+
+  /* Keep the light logo's footprint so scheme changes cannot reflow the row. */
+  .rp-chrome-home.rp-logo-plate {
+    padding: 0;
+    border: 0;
+    box-shadow: inset 0 0 0 1px var(--rp-line);
+  }
+
+  .rp-chrome-home.rp-logo-plate .rp-chrome-logo {
+    transform: scale(0.8);
   }
 }
 
@@ -94,4 +108,37 @@
 
 .rp-chrome-sheet-action.rp-btn {
   justify-content: flex-start;
+}
+
+/* The palette owns one focus boundary, kept inside its clipped card. */
+.rp-chrome-palette-field {
+  --rp-ring: inset 0 0 0 2px var(--rp-focus);
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
+}
+
+.rp-chrome-palette-field.rp-field:focus-within {
+  outline-offset: -2px;
+}
+
+/* The ACMD trigger keeps its label while sharing the three-stroke morph. */
+.rp-chrome-acmd-toggle.rp-navtoggle.rp-btn {
+  width: auto;
+  height: auto;
+  min-height: 2.75rem;
+  padding-inline: var(--rp-btn-px, 0.875rem);
+  border: 0;
+  border-radius: var(--rp-radius-btn);
+  background: transparent;
+  color: var(--rp-ink-2);
+}
+
+.rp-chrome-acmd-toggle.rp-navtoggle.rp-btn:hover {
+  background: var(--rp-surface-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-chrome-menu-bars .rp-navtoggle-bar {
+    transition: none !important;
+  }
 }
