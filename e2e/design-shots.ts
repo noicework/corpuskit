@@ -154,7 +154,12 @@ const manage = (tab: string, ready: string): Route => ({
 const ROUTES: Record<string, Route> = {
   home: { path: '/t/marine', ready: ['main h1'] },
   library: { path: '/t/marine/library', ready: ['main h1', `text:${SECOND.title}`] },
-  document: { path: `/t/marine/library/${FIRST.id}`, ready: ['main h1', 'main table'] },
+  document: {
+    path: `/t/marine/library/${FIRST.id}`,
+    // The first resource is a PDF: wait for the reader's first rendered page.
+    ready: ['main h1', '.rp-library-pdf-reader canvas'],
+    settle: 1000,
+  },
   graph: {
     path: '/t/marine/graph',
     ready: ['[data-graph-stage] canvas'],
