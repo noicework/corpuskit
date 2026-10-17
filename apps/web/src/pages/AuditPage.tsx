@@ -16,12 +16,12 @@ export function AuditPage() {
     >
       {allowed
         ? (
-          <div className='mt-8 min-w-0' data-platform-audit>
+          <div className='min-w-0' data-platform-audit>
             <AuditPanel scope={scope} name={ui('the platform')} />
           </div>
         )
         : (
-          <p className='mt-8 text-base text-ink-2' data-audit-unavailable>
+          <p className='text-base text-ink-2' data-audit-unavailable>
             {ui('This administration page is unavailable.')}
           </p>
         )}

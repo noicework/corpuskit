@@ -10,6 +10,8 @@ import {
 } from '../api/access.ts'
 import { useAccess } from './AccessProvider.tsx'
 import { ConfirmActionDialog } from './ConfirmActionDialog.tsx'
+import { Button, EmptyState, SectionHeader } from './ui.tsx'
+import { AlertCircle, Bookmark, Pencil, Plus, Trash } from './icons.tsx'
 
 export const assignmentRoleLabel: Record<Role, string> = {
   viewer: 'Viewer',
@@ -165,44 +167,40 @@ function Editor(
     : 'Add member'
   return (
     <div className='min-w-0' data-assignment-editor>
-      <p className='max-w-prose text-sm text-ink-2'>
-        {ui(
-          'Local assignments for {name}. Other Entra or local assignments may still provide access.',
-          { name: scopeName },
-        )}
-      </p>
       {items.length === 0 && (
-        <div className='py-6'>
-          <h3 className='rp-display text-xl'>
-            {group ? ui('No group mappings') : ui('No local members')}
-          </h3>
-          <p className='mt-2 text-base text-ink-2'>
-            {group
-              ? canEdit
-                ? ui('Map a supported Entra group to a role for this scope.')
-                : ui('Individual assignments remain available.')
-              : ui('Add a person by object ID or email. Entra access may still apply.')}
-          </p>
-        </div>
+        <EmptyState
+          title={group ? ui('No group mappings') : ui('No local members')}
+          description={group
+            ? canEdit
+              ? ui('Map a supported Entra group to a role for this scope.')
+              : ui('Individual assignments remain available.')
+            : ui('Add a person by object ID or email. Entra access may still apply.')}
+        />
       )}
       <ul className='mt-4 divide-y divide-[var(--rp-line)]'>
         {items.map((row) => (
           <li
             key={row.id}
-            className='flex min-w-0 flex-wrap items-start justify-between gap-4 py-4'
+            className='flex min-w-0 flex-col gap-3 py-4 sm:flex-row sm:items-start sm:justify-between'
             data-assignment-id={row.id}
           >
-            <div className='min-w-0 flex-1 basis-64 [overflow-wrap:anywhere]'>
+            <div className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
               <p className='text-base'>{row.subjectId}</p>
+              <p className='mt-2 text-sm'>
+                <span className='rp-tag'>{ui(assignmentRoleLabel[row.role])}</span>
+              </p>
               <p className='mt-1 text-sm text-ink-2'>
-                {ui(assignmentRoleLabel[row.role])} ·{' '}
                 {group ? ui('Local group mapping') : ui('Local assignment')}
               </p>
               <p className='mt-1 text-sm text-ink-2'>
                 {row.subjectKind === 'pending-email'
-                  ? ui('Pending sign-in')
+                  ? <span className='rp-badge rp-badge-warn'>{ui('Pending sign-in')}</span>
                   : row.subjectKind === 'group'
-                  ? canEdit ? ui('Group object ID') : ui('Inactive group mapping')
+                  ? canEdit ? ui('Group object ID') : (
+                    <span className='rp-badge rp-badge-quiet'>
+                      {ui('Inactive group mapping')}
+                    </span>
+                  )
                   : ui('Active object ID')}
               </p>
               {!group && sources && (
@@ -212,7 +210,7 @@ function Editor(
                 </p>
               )}
               {row.subjectKind === 'pending-email' && (
-                <p className='mt-1 text-sm text-ink-2'>
+                <p className='mt-2 text-sm text-ink-2'>
                   {ui('This assignment activates when the matching {source} account signs in.', {
                     source: !sources
                       ? ui('organisation')
@@ -228,11 +226,13 @@ function Editor(
                 </p>
               )}
             </div>
-            <div className='flex min-w-0 flex-wrap gap-2'>
+            <div className='flex w-full min-w-0 gap-2 sm:w-auto'>
               {canEdit && (
-                <button
-                  type='button'
-                  className='rp-btn rp-btn-outline min-h-[44px]'
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  leadingIcon={Pencil}
+                  className='min-w-0 flex-1 whitespace-normal sm:flex-none'
                   disabled={busy}
                   onClick={() => {
                     setForm(row)
@@ -241,12 +241,14 @@ function Editor(
                   }}
                   aria-label={ui('Edit role for {identity}', { identity: row.subjectId })}
                 >
-                  {ui('Edit role')}
-                </button>
+                  <span className='min-w-0 [overflow-wrap:anywhere]'>{ui('Edit role')}</span>
+                </Button>
               )}
-              <button
-                type='button'
-                className='rp-btn rp-btn-ghost min-h-[44px]'
+              <Button
+                variant='danger'
+                size='sm'
+                leadingIcon={Trash}
+                className='min-w-0 flex-[1.4] whitespace-normal sm:flex-none'
                 disabled={busy}
                 onClick={() => {
                   setError(null)
@@ -256,16 +258,18 @@ function Editor(
                   ? ui('Remove mapping {identity}', { identity: row.subjectId })
                   : ui('Remove member {identity}', { identity: row.subjectId })}
               >
-                {group ? ui('Remove mapping') : ui('Remove member')}
-              </button>
+                <span className='min-w-0 [overflow-wrap:anywhere]'>
+                  {group ? ui('Remove mapping') : ui('Remove member')}
+                </span>
+              </Button>
             </div>
           </li>
         ))}
       </ul>
       {!form && canEdit && (
-        <button
-          type='button'
-          className='rp-btn rp-btn-primary mt-4 min-h-[44px]'
+        <Button
+          leadingIcon={Plus}
+          className='mt-4'
           onClick={() => {
             setForm('new')
             setSubjectId('')
@@ -275,7 +279,7 @@ function Editor(
           }}
         >
           {ui(addLabel)}
-        </button>
+        </Button>
       )}
       {form && (
         <form
@@ -287,11 +291,13 @@ function Editor(
             } else void save()
           }}
         >
-          <h3 className='rp-display break-words text-xl [overflow-wrap:anywhere]'>
-            {form === 'new'
+          <SectionHeader
+            headingLevel={3}
+            className='rp-admin-section-head [overflow-wrap:anywhere]'
+            title={form === 'new'
               ? ui(addLabel)
               : ui('Edit role for {identity}', { identity: form.subjectId })}
-          </h3>
+          />
           <fieldset disabled={busy} className='mt-4 min-w-0 space-y-4'>
             <legend className='sr-only'>{ui('Assignment for {name}', { name: scopeName })}</legend>
             {form === 'new' && (
@@ -301,7 +307,7 @@ function Editor(
                     {ui('Assign by')}
                     <select
                       id={`${id}-kind`}
-                      className='rp-input mt-2 w-full text-base'
+                      className='rp-input rp-select mt-2 w-full text-base'
                       value={subjectKind}
                       onChange={(e) => setSubjectKind(e.target.value as typeof subjectKind)}
                     >
@@ -316,7 +322,7 @@ function Editor(
                     <select
                       id={`${id}-source`}
                       data-assignment-source-input
-                      className='rp-input mt-2 w-full text-base'
+                      className='rp-input rp-select mt-2 w-full text-base'
                       value={source}
                       onChange={(e) => setSource(e.target.value as typeof source)}
                       aria-describedby={`${id}-source-help`}
@@ -324,7 +330,7 @@ function Editor(
                       <option value='entra'>Microsoft Entra</option>
                       <option value='external'>{ui('External account')}</option>
                     </select>
-                    <span id={`${id}-source-help`} className='mt-2 block text-ink-2'>
+                    <span id={`${id}-source-help`} className='mt-2 block text-xs text-ink-3'>
                       {ui(
                         'Choose how this person signs in. Access stays bound to this identity source.',
                       )}
@@ -363,7 +369,7 @@ function Editor(
                 ref={roleField}
                 id={`${id}-role`}
                 data-assignment-role
-                className='rp-input mt-2 w-full text-base'
+                className='rp-input rp-select mt-2 w-full text-base'
                 value={role}
                 onChange={(e) => setRole(e.target.value as Role)}
                 aria-invalid={!!error}
@@ -378,37 +384,38 @@ function Editor(
               </select>
             </label>
             {scope.kind === 'platform' && (
-              <p id={`${id}-role-help`} data-platform-role-help className='text-sm text-ink-2'>
+              <p id={`${id}-role-help`} data-platform-role-help className='text-xs text-ink-3'>
                 {ui('{role} access applies to all present and future portals.', {
                   role: ui(assignmentRoleLabel[role]),
                 })}
               </p>
             )}
             {error && !confirmation && (
-              <p id={`${id}-error`} role='alert' className='text-sm text-[var(--rp-bad-ink)]'>
+              <p
+                id={`${id}-error`}
+                role='alert'
+                className='flex items-start gap-2 text-xs text-[var(--rp-bad-ink)]'
+              >
+                <AlertCircle size='sm' className='shrink-0' />
                 {locale.error(
                   error,
                   'The change could not be confirmed. Refresh this view before trying again.',
                 )}
               </p>
             )}
-            <div className='flex flex-wrap gap-3'>
-              <button
-                type='submit'
-                className='rp-btn rp-btn-primary min-h-[44px]'
-                disabled={!allowed.includes(role)}
-              >
-                {form === 'new' ? ui(addLabel) : ui('Save role')}
-              </button>
-              <button
-                type='button'
-                className='rp-btn rp-btn-outline min-h-[44px]'
-                onClick={clearForm}
-              >
+            <div className='flex flex-wrap justify-end gap-2'>
+              <Button variant='outline' onClick={clearForm}>
                 {form === 'new'
                   ? group ? ui('Keep mapping') : ui('Close member form')
                   : ui('Keep current role')}
-              </button>
+              </Button>
+              <Button
+                type='submit'
+                leadingIcon={form === 'new' ? Plus : Bookmark}
+                disabled={!allowed.includes(role)}
+              >
+                {form === 'new' ? ui(addLabel) : ui('Save role')}
+              </Button>
             </div>
           </fieldset>
           {busy && <p role='status' className='mt-4 text-sm'>{ui('Saving change...')}</p>}
@@ -416,6 +423,7 @@ function Editor(
       )}
       {confirmation && (
         <ConfirmActionDialog
+          destructive={confirmation.kind !== 'owner'}
           title={confirmation.kind === 'owner'
             ? ui('Grant Owner')
             : group

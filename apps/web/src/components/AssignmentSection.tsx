@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { type Permission, PLATFORM_ROLES, PORTAL_ROLES, type Scope } from '@research-portal/core'
 import { useAccess } from './AccessProvider.tsx'
 import { AssignmentEditor } from './AssignmentEditor.tsx'
+import { ErrorCard, SectionHeader, Skeleton } from './ui.tsx'
+import { AlertCircle } from './icons.tsx'
 import {
   AssignmentError,
   type AssignmentFamily,
@@ -133,37 +135,47 @@ function Section(
   })
   const supported = family !== 'groups' || rows.data?.capability === 'enabled'
   return (
-    <section className='mt-6 min-w-0' aria-labelledby={id} data-assignment-section={family}>
-      <h3 id={id} className='rp-display mb-4 text-xl'>{ui(title)}</h3>
+    <section
+      className='rp-card min-w-0 space-y-4 p-5 lg:p-6'
+      aria-labelledby={id}
+      data-assignment-section={family}
+    >
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={<span id={id}>{ui(title)}</span>}
+        description={ui(
+          'Local assignments for {name}. Other Entra or local assignments may still provide access.',
+          { name },
+        )}
+      />
       {notice && (
-        <p role='alert' className='mb-4 text-sm text-[var(--rp-bad-ink)]'>
+        <p role='alert' className='flex items-start gap-2 text-xs text-[var(--rp-bad-ink)]'>
+          <AlertCircle size='sm' className='shrink-0' />
           {ui(unconfirmedMessage)}
         </p>
       )}
       {!supported && (
-        <p className='mb-4 text-base text-ink-2'>
+        <p className='text-sm text-ink-2'>
           {ui(
             'Group mappings are unavailable. Use individual assignments until group support is confirmed.',
           )}
         </p>
       )}
       {rows.isLoading && (
-        <p role='status' className='text-base text-ink-2'>
-          {ui('Loading {items}...', { items: ui(title.toLowerCase()) })}
-        </p>
+        <div role='status' className='space-y-3'>
+          <span className='sr-only'>
+            {ui('Loading {items}...', { items: ui(title.toLowerCase()) })}
+          </span>
+          <Skeleton className='h-5 w-1/3' />
+          <Skeleton className='h-16 w-full' />
+        </div>
       )}
       {rows.isError && (
         <div role='alert'>
-          <p className='text-base text-ink-2'>
-            {ui('Could not load {items}. Try again.', { items: ui(title.toLowerCase()) })}
-          </p>
-          <button
-            type='button'
-            className='rp-btn rp-btn-outline mt-4 min-h-[44px]'
-            onClick={() => void rows.refetch()}
-          >
-            {ui('Try again')}
-          </button>
+          <ErrorCard
+            message={ui('Could not load {items}. Try again.', { items: ui(title.toLowerCase()) })}
+            onRetry={() => void rows.refetch()}
+          />
         </div>
       )}
       {rows.data && (
