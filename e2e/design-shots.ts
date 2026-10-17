@@ -54,6 +54,35 @@ const DEEP: Profile = {
     shape: 'rounded',
     density: 'comfortable',
     typography: 'default',
+    layout: {
+      footer: {
+        columns: [
+          {
+            heading: 'Research',
+            links: [
+              { label: 'Library', href: '/library' },
+              { label: 'Knowledge graph', href: '/graph' },
+            ],
+          },
+          {
+            heading: 'About',
+            links: [
+              { label: 'How it works', href: '/how-it-works' },
+              { label: 'Help', href: '/help' },
+            ],
+          },
+        ],
+        note: 'Explore evidence for the future of our coastal waters.',
+        credits: [
+          {
+            label: 'Powered by Progress Agentic RAG',
+            href: 'https://www.progress.com/agentic-rag',
+          },
+          { label: 'Research library', href: '/library' },
+        ],
+        poweredBy: true,
+      },
+    },
   },
   logo: 'light-only',
 }
@@ -66,6 +95,35 @@ const PROFILES: Record<string, Profile> = {
       colours: { primary: '#00a651', accent: '#f2a900', heroFrom: '#1c1c1c', heroTo: '#00a651' },
       shape: 'rounded',
       density: 'comfortable',
+      layout: {
+        footer: {
+          columns: [
+            {
+              heading: 'Research',
+              links: [
+                { label: 'Library', href: '/library' },
+                { label: 'Knowledge graph', href: '/graph' },
+              ],
+            },
+            {
+              heading: 'About',
+              links: [
+                { label: 'How it works', href: '/how-it-works' },
+                { label: 'Help', href: '/help' },
+              ],
+            },
+          ],
+          note: 'Explore evidence for the future of our coastal waters.',
+          credits: [
+            {
+              label: 'Powered by Progress Agentic RAG',
+              href: 'https://www.progress.com/agentic-rag',
+            },
+            { label: 'Research library', href: '/library' },
+          ],
+          poweredBy: true,
+        },
+      },
     },
     logo: 'both',
   },
