@@ -1188,4 +1188,13 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
   'Entity type': 'エンティティの種類',
   'Relation source': '関係の始点',
   'Relation target': '関係の終点',
+  'Keep source': 'ソースを保持',
+  'Remove {url}? Pages already added to the library are kept.':
+    '{url} を削除しますか？ライブラリに追加済みのページは保持されます。',
+  'Enrichment progress': '付加情報の生成状況',
+  'Remove graph agent?': 'グラフエージェントを削除しますか？',
+  'Remove {title} from this knowledge box?': 'このナレッジボックスから「{title}」を削除しますか？',
+  'Keep agent': 'エージェントを残す',
+  'Remove this worked example from the strategy?': 'この具体例を戦略から削除しますか？',
+  'Keep example': '具体例を残す',
 }

@@ -3,6 +3,18 @@
   flex-direction: row;
 }
 
+.rp-manage-section-head .rp-section-head-actions {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rp-manage-section-head .rp-btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .rp-manage-nav-wrap {
   position: relative;
   align-self: start;
@@ -51,4 +63,8 @@
 
 .rp-manage-disclosure.rp-btn {
   justify-content: flex-start;
+}
+
+.rp-manage-delete-action.rp-btn {
+  padding-inline-start: 2.25rem;
 }

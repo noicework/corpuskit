@@ -6,7 +6,8 @@ import type { RecentResource } from '@research-portal/core'
 import { getAdminRecent, setResourceHidden } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
-import { Skeleton } from '../../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { EyeOff, RotateCw, Trash, Upload } from '../../components/icons.tsx'
 import { deletedNotice, DeleteDocumentButton } from '../../components/DeleteDocument.tsx'
 import { errorMessage } from './shared.ts'
 
@@ -83,15 +84,16 @@ function VisibilityControl({
 
   return (
     <span className='flex flex-wrap items-center gap-2'>
-      {resource.hidden && <span className='rp-badge rp-badge-quiet'>{ui('Draft')}</span>}
-      <button
+      <Button
         type='button'
         disabled={busy}
         onClick={() => void toggle()}
-        className='rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        variant='ghost'
+        size='sm'
+        leadingIcon={resource.hidden ? Upload : EyeOff}
       >
         {busy ? '…' : resource.hidden ? ui('Publish') : ui('Hide')}
-      </button>
+      </Button>
       {error && (
         <span className='text-xs text-[var(--rp-bad-ink)]'>
           {localError(error, 'The action failed. Please try again.')}
@@ -122,7 +124,7 @@ function RecentListContent({ slug }: { slug: string }) {
   const [notice, setNotice] = useState<
     { title: string; outcome: Parameters<typeof deletedNotice>[1] } | null
   >(null)
-  const heading = useRef<HTMLHeadingElement>(null)
+  const heading = useRef<HTMLSpanElement>(null)
   const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: ['admin-recent', slug],
@@ -165,18 +167,21 @@ function RecentListContent({ slug }: { slug: string }) {
 
   return (
     <div>
-      <h3 ref={heading} tabIndex={-1} className='text-sm font-medium text-ink'>
-        {ui('Recent additions')}
-      </h3>
-      <button
-        type='button'
-        className='rp-btn rp-btn-outline mt-3 min-h-[44px] h-auto whitespace-normal py-2'
-        style={{ height: 'auto', minHeight: '44px', paddingBlock: '0.5rem' }}
-        disabled={pending}
-        onClick={() => void refresh()}
-      >
-        {ui('Refresh recent additions')}
-      </button>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={<span ref={heading} tabIndex={-1}>{ui('Recent additions')}</span>}
+        actions={
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+            disabled={pending}
+            onClick={() => void refresh()}
+          >
+            {ui('Refresh recent additions')}
+          </Button>
+        }
+      />
       {!sessionAllowed && (
         <p className='mt-2 text-xs text-ink-3'>
           {ui('This is a snapshot. Refresh explicitly to check processing or visibility changes.')}
@@ -207,29 +212,44 @@ function RecentListContent({ slug }: { slug: string }) {
       )}
 
       {data && data.length > 0 && (
-        <ul className='mt-2 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
+        <ul className='mt-4 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
           {data.map((resource) => (
             <li
               key={resource.id}
-              className='flex flex-wrap items-center justify-between gap-2 bg-surface px-4 py-2.5'
+              className='flex flex-col gap-2 bg-surface px-2 py-3 sm:px-4 lg:flex-row lg:items-center lg:justify-between lg:gap-4'
             >
-              <span className='min-w-0 truncate text-sm text-ink'>{resource.title}</span>
-              <span className='flex min-w-0 flex-wrap items-center gap-3'>
-                {resource.created && (
-                  <span className='text-xs text-ink-3'>{date(resource.created)}</span>
-                )}
-                <StatusChip status={resource.status} stuck={resource.stuck} />
+              <div className='min-w-0 flex-1'>
+                <p className='break-words text-sm text-ink [overflow-wrap:anywhere]'>
+                  {resource.title}
+                </p>
+                <div className='mt-1 flex flex-wrap items-center gap-2'>
+                  {resource.created && (
+                    <span className='text-xs text-ink-3'>{date(resource.created)}</span>
+                  )}
+                  <StatusChip status={resource.status} stuck={resource.stuck} />
+                  {resource.hidden && (
+                    <span className='rp-badge rp-badge-quiet'>{ui('Draft')}</span>
+                  )}
+                </div>
+              </div>
+              <div className='flex shrink-0 items-center gap-2'>
                 <VisibilityControl
                   slug={slug}
                   resource={resource}
                   onChanged={onChanged}
                 />
-                <DeleteDocumentButton
-                  slug={slug}
-                  document={resource}
-                  onDeleted={onDeleted(resource)}
-                />
-              </span>
+                <span className='relative inline-flex'>
+                  <span className='pointer-events-none absolute left-[0.625rem] top-1/2 -translate-y-1/2 text-[var(--rp-bad-ink)]'>
+                    <Trash size='sm' />
+                  </span>
+                  <DeleteDocumentButton
+                    slug={slug}
+                    document={resource}
+                    onDeleted={onDeleted(resource)}
+                    className='rp-manage-delete-action rp-btn rp-btn-sm rp-btn-danger'
+                  />
+                </span>
+              </div>
             </li>
           ))}
         </ul>

@@ -9,6 +9,8 @@ import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { UploadFiles } from './UploadFiles.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { Check, Plus, Search, X } from '../../components/icons.tsx'
 
 type Tab = 'upload' | 'link' | 'text' | 'crawl'
 
@@ -203,47 +205,51 @@ function CrawlTab({
           </label>
           <select
             id={`crawl-limit-${slug}`}
-            className='rp-input'
+            className='rp-input rp-select'
             value={limit}
             onChange={(e) => setLimit(Number(e.target.value) as (typeof CRAWL_LIMITS)[number])}
           >
             {CRAWL_LIMITS.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
-        <button type='submit' disabled={discovering} className='rp-btn rp-btn-primary'>
+        <Button type='submit' disabled={discovering} leadingIcon={Search}>
           {discovering ? ui('Discovering…') : ui('Discover')}
-        </button>
+        </Button>
       </form>
 
       {links && links.length > 0 && (
-        <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-4'>
+        <div className='rounded-[var(--rp-radius)] border border-line bg-surface-2 p-4'>
           <div className='flex flex-wrap items-center justify-between gap-3'>
             <p className='text-sm font-medium text-ink'>
               {links.length} {links.length === 1 ? ui('link') : ui('links')}
               {ui(' found')}
             </p>
-            <div className='flex flex-wrap items-center gap-3 text-sm font-medium text-ink-2'>
-              <button
+            <div className='flex flex-wrap items-center gap-2'>
+              <Button
                 type='button'
                 onClick={() => toggleAll(true)}
-                className='transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                variant='ghost'
+                size='sm'
+                leadingIcon={Check}
               >
                 {ui('Select all')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type='button'
                 onClick={() => toggleAll(false)}
-                className='transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                variant='ghost'
+                size='sm'
+                leadingIcon={X}
               >
                 {ui('Select none')}
-              </button>
+              </Button>
             </div>
           </div>
 
           <ul className='mt-3 max-h-64 space-y-1.5 overflow-y-auto'>
             {links.map((link) => (
               <li key={link}>
-                <label className='flex items-start gap-2 text-sm text-ink-2'>
+                <label className='rp-check w-full items-start text-sm text-ink-2'>
                   <input
                     type='checkbox'
                     className='mt-0.5'
@@ -256,11 +262,12 @@ function CrawlTab({
             ))}
           </ul>
 
-          <button
+          <Button
             type='button'
             onClick={() => void onIngest()}
             disabled={!sessionAllowed || ingesting || selectedLinks.length === 0}
-            className='rp-btn rp-btn-primary mt-4'
+            className='mt-4'
+            leadingIcon={Plus}
           >
             {ingesting
               ? ui('Ingesting {value1} of {value2}…', {
@@ -268,7 +275,7 @@ function CrawlTab({
                 value2: progress?.total ?? selectedLinks.length,
               })
               : ui('Ingest {length} selected', { length: selectedLinks.length })}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -418,17 +425,18 @@ function AddContentContent({
       className='scroll-mt-24 outline-none'
       data-add-documents-panel
     >
-      <h2 id={headingId} className='text-base font-semibold text-ink'>{ui('Add documents')}</h2>
-      <p className='mt-1 text-sm text-ink-2'>
-        {ui(
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={<span id={headingId}>{ui('Add documents')}</span>}
+        description={ui(
           'Upload files, add a web page, paste text or crawl a site. New documents become searchable once they are processed.',
         )}
-      </p>
+      />
 
       <div
         role='tablist'
         aria-label={ui('Ways to add documents')}
-        className='mt-4 flex flex-wrap gap-1 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-1'
+        className='rp-seg mt-4 w-full flex-wrap'
       >
         {TABS.map((t) => (
           <button
@@ -445,11 +453,7 @@ function AddContentContent({
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => choose(t.id)}
             onKeyDown={onTabKey}
-            className={`rp-focus shrink-0 rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
-              tab === t.id
-                ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
-                : 'text-ink-2 hover:bg-[var(--rp-surface)] hover:text-[var(--rp-ink)]'
-            }`}
+            className='rp-seg-item min-w-0 basis-[calc(50%_-_1px)] sm:flex-1'
           >
             {ui(t.label)}
           </button>
@@ -500,7 +504,7 @@ function AddContentContent({
                 autoComplete='off'
               />
             </div>
-            <label className='flex items-center gap-2 text-sm text-ink-2'>
+            <label className='rp-check text-sm text-ink-2'>
               <input
                 type='checkbox'
                 checked={linkDraft}
@@ -508,9 +512,9 @@ function AddContentContent({
               />
               {ui('Ingest as draft (hidden until published)')}
             </label>
-            <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
+            <Button type='submit' disabled={busy} leadingIcon={Plus}>
               {busy ? ui('Adding…') : ui('Add link')}
-            </button>
+            </Button>
           </form>
         )}
 
@@ -548,9 +552,9 @@ function AddContentContent({
                 required
               />
             </div>
-            <button type='submit' disabled={busy} className='rp-btn rp-btn-primary'>
+            <Button type='submit' disabled={busy} leadingIcon={Plus}>
               {busy ? ui('Adding…') : ui('Add text')}
-            </button>
+            </Button>
           </form>
         )}
 
