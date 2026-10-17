@@ -7,7 +7,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { createInvestigation, type InvestigationMeta, listInvestigations } from '../api/client.ts'
 import { MakeCurrentToggle, useCurrentInvestigation } from '../components/SaveEvidence.tsx'
-import { EmptyState, ErrorCard, Skeleton } from '../components/ui.tsx'
+import { Button, EmptyState, ErrorCard, Skeleton } from '../components/ui.tsx'
+import { Plus } from '../components/icons.tsx'
 import { tenantCopy } from '../lib/tenant-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
@@ -51,14 +52,16 @@ function InvestigationCard(
   const isCurrent = current?.id === investigation.id
 
   return (
-    <div className='rp-card relative flex flex-col gap-2.5 p-4 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'>
+    <div className='rp-card relative flex flex-col gap-3 p-5 lg:p-6 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'>
       <Link
         to={`/t/${slug}/investigations/${investigation.id}`}
         aria-label={investigation.name || ui('Untitled investigation')}
         className='rp-focus absolute inset-0 rounded-[inherit]'
       />
-      <div className='flex items-start justify-between gap-3'>
-        <h3 className='min-w-0 truncate text-sm font-semibold text-ink'>{investigation.name}</h3>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <h2 className='min-w-0 break-words text-base font-semibold text-ink'>
+          {investigation.name}
+        </h2>
         <div className='flex shrink-0 items-center gap-1.5'>
           {isCurrent ? <span className='rp-badge rp-badge-ok'>{ui('Current')}</span> : null}
           <StatusBadge status={investigation.status} />
@@ -67,7 +70,7 @@ function InvestigationCard(
       {investigation.question
         ? <p className='rp-clamp-2 text-sm leading-relaxed text-ink-2'>{investigation.question}</p>
         : <p className='text-sm italic text-ink-3'>{ui('No research question set')}</p>}
-      <div className='mt-auto flex items-center justify-between gap-3 pt-1 text-xs text-ink-3'>
+      <div className='mt-auto flex flex-wrap items-center justify-between gap-3 pt-1 text-xs text-ink-3'>
         <span>
           {ui(
             investigation.evidenceCount === 1
@@ -123,7 +126,7 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className='rp-card flex flex-col gap-3 p-5'>
+    <form onSubmit={onSubmit} className='rp-card flex flex-col gap-4 p-5 lg:p-6'>
       <div>
         <label htmlFor='investigation-name' className='mb-1.5 block text-sm font-medium text-ink'>
           {ui('Name')}
@@ -163,13 +166,13 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
         )
         : null}
       <div>
-        <button
+        <Button
           type='submit'
+          leadingIcon={Plus}
           disabled={mutation.isPending || name.trim().length === 0}
-          className='rp-btn rp-btn-primary'
         >
           {mutation.isPending ? ui('Starting…') : ui('Start investigation')}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -190,9 +193,9 @@ export function InvestigationsPage() {
     : []
 
   return (
-    <main className='rp-shell py-10'>
-      <h1 className='text-2xl font-semibold tracking-tight text-ink'>{ui('Investigations')}</h1>
-      <p className='mt-1 text-sm text-ink-3'>
+    <main className='rp-shell py-8 lg:py-10'>
+      <h1 className='rp-display text-2xl sm:text-3xl text-ink'>{ui('Investigations')}</h1>
+      <p className='rp-measure mt-1 text-sm text-ink-2'>
         {ui('Named research questions that accumulate evidence, sessions and outputs.')}
       </p>
 
