@@ -1,1 +1,19 @@
-/* Graph component styles. */
+/* Brand controls keep the identity surface and a contrasting selected fill. */
+.rp-graph-brand-seg {
+  background: var(--rp-primary);
+}
+
+.rp-graph-brand-seg .rp-seg-item {
+  color: var(--rp-on-primary-2);
+}
+
+.rp-graph-brand-seg .rp-seg-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rp-on-primary) 12%, var(--rp-primary));
+  color: var(--rp-on-primary);
+}
+
+.rp-graph-brand-seg .rp-seg-item[aria-pressed='true'],
+.rp-graph-brand-seg .rp-seg-item[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--rp-on-primary);
+  color: var(--rp-primary);
+}

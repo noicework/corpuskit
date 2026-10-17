@@ -1,3 +1,5 @@
+import { IconButton } from './ui.tsx'
+import { Maximize, Minus, Plus } from './icons.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -126,7 +128,7 @@ export function KnowledgeMap3D({
   const aspectBucket = size.w < 1 || size.h < 1
     ? 1.5
     : size.w / size.h < 1
-    ? 0.8
+    ? Math.max(0.4, Math.round((size.w / size.h) * 10) / 10)
     : size.w / size.h < 1.45
     ? 1.2
     : 1.9
@@ -315,38 +317,34 @@ export function KnowledgeMap3D({
       >
         {(() => {
           const zoomIn = (
-            <button
+            <IconButton
               key='in'
-              type='button'
-              aria-label={ui('Zoom in')}
+              label={ui('Zoom in')}
+              variant='outline'
+              icon={Plus}
               onClick={() => engineRef.current?.zoomBy(1.3)}
-              className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
-            >
-              +
-            </button>
+              className='rp-shadow-sm'
+            />
           )
           const zoomOut = (
-            <button
+            <IconButton
               key='out'
-              type='button'
-              aria-label={ui('Zoom out')}
+              label={ui('Zoom out')}
+              variant='outline'
+              icon={Minus}
               onClick={() => engineRef.current?.zoomBy(1 / 1.3)}
-              className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
-            >
-              −
-            </button>
+              className='rp-shadow-sm'
+            />
           )
           const fit = (
-            <button
+            <IconButton
               key='fit'
-              type='button'
-              aria-label={ui('Fit the whole map to view')}
-              title={ui('Fit to view')}
+              label={ui('Fit the whole map to view')}
+              variant='outline'
+              icon={Maximize}
               onClick={() => engineRef.current?.fit(true)}
-              className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-sm'
-            >
-              ⤢
-            </button>
+              className='rp-shadow-sm'
+            />
           )
           return insets.bottom > 0 ? [fit, zoomOut, zoomIn] : [zoomIn, zoomOut, fit]
         })()}
