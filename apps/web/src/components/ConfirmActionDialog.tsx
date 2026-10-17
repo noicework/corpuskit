@@ -1,6 +1,8 @@
 import { type ReactNode, useId, useLayoutEffect, useRef } from 'react'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { createPortal } from 'react-dom'
+import { Trash } from './icons.tsx'
+import { Button } from './ui.tsx'
 
 /** Native modality makes the background inert; explicit containment includes browser Tab edges. */
 export function ConfirmActionDialog(
@@ -11,6 +13,7 @@ export function ConfirmActionDialog(
     cancelLabel,
     busy = false,
     busyLabel = 'Saving change...',
+    destructive = true,
     error,
     onConfirm,
     onCancel,
@@ -22,6 +25,8 @@ export function ConfirmActionDialog(
     busy?: boolean
     /** What the status line says while the action runs. */
     busyLabel?: string
+    /** Existing confirmations retain their destructive appearance unless opted out. */
+    destructive?: boolean
     error?: string | null
     onConfirm(): void
     onCancel(): void
@@ -79,9 +84,9 @@ export function ConfirmActionDialog(
           first.focus()
         }
       }}
-      className='rp-card fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-xl overflow-y-auto bg-surface p-6 text-ink shadow-xl backdrop:bg-[color-mix(in_srgb,var(--rp-ink)_45%,transparent)]'
+      className='rp-dialog rp-card rp-shadow-xl fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-xl overflow-y-auto bg-surface p-6 text-ink'
     >
-      <h2 id={`${id}-title`} className='rp-display text-xl'>{title}</h2>
+      <h2 id={`${id}-title`} className='text-lg font-semibold'>{title}</h2>
       <div id={`${id}-description`} className='mt-4 break-words text-base [overflow-wrap:anywhere]'>
         {description}
       </div>
@@ -91,24 +96,23 @@ export function ConfirmActionDialog(
         </p>
       )}
       {busy && <p role='status' className='mt-4 text-sm'>{locale.ui(busyLabel)}</p>}
-      <div className='mt-6 flex flex-wrap gap-3'>
-        <button
+      <div className='mt-6 flex flex-wrap justify-end gap-3'>
+        <Button
           ref={safe}
-          type='button'
-          className='rp-btn rp-btn-outline min-h-[44px]'
+          variant='outline'
           disabled={busy}
           onClick={onCancel}
         >
           {locale.ui(cancelLabel)}
-        </button>
-        <button
-          type='button'
-          className='rp-btn min-h-[44px] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] text-[var(--rp-bad-ink)]'
+        </Button>
+        <Button
+          variant={destructive ? 'danger-outline' : 'primary'}
+          leadingIcon={destructive ? Trash : undefined}
           disabled={busy}
           onClick={onConfirm}
         >
           {locale.ui(confirmLabel)}
-        </button>
+        </Button>
       </div>
     </dialog>,
     document.body,
