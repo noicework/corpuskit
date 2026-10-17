@@ -1,1 +1,29 @@
 /* Pages component styles. */
+
+/* An opaque hero ground keeps the chip ink legible over photographs and glows. */
+.rp-pages-hero-chip {
+  background: var(--rp-hero-from);
+}
+
+.rp-pages-hero-chip:hover {
+  border-color: var(--rp-on-hero);
+}
+
+.rp-pages-entry-tile:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--rp-ring);
+}
+
+/* SVG paths need an outline around their geometry; a box shadow is not visible. */
+.rp-pages-region-link:focus-visible {
+  outline: 2px solid var(--rp-on-primary);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .rp-pages-entry-tile:focus-visible,
+  .rp-pages-region-link:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
