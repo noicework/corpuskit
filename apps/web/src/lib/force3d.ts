@@ -74,9 +74,9 @@ class Lcg {
 
 // ---------------------------------------------------------------------------
 // Cluster centres - a 3D port of clusterCentres (KnowledgeMap.tsx:242-287).
-// Categories sit on an ellipse in the ground (XZ) plane, aspect-stretched the
-// same way the 2D map stretches to the viewport, with alternating Y offsets
-// so the ring isn't flat and orbiting the map actually reveals depth. The
+// Categories sit on an ellipse, standing towards the initial camera on a
+// portrait canvas and in the ground (XZ) plane on a wide one. Alternating
+// depth offsets keep it from being flat when the reader orbits. The
 // ring radius is grown - exactly like the 2D version - by solving for the
 // smallest scale at which no two blobs overlap, using the UNIT-ellipse
 // points: every coordinate here (x, z from the ellipse, y from the fixed
@@ -124,9 +124,10 @@ function blobR(count: number): number {
 }
 
 /**
- * Where each category sits in 3D. Groups are laid out on an ellipse in the
- * XZ (ground) plane whose x-stretch follows the viewport aspect, with
- * alternating vertical (Y) offsets so orbiting the map reveals depth. The
+ * Where each category sits in 3D. Groups are laid out on an ellipse whose
+ * shape follows the viewport aspect. Portrait views stand it towards the
+ * landing camera; wide views use the ground plane. Alternating depth
+ * offsets let orbiting reveal the third axis. The
  * ring is grown until no two group blobs overlap, checked over every pair.
  * `groups` maps group name -> node count; this function trusts the caller's
  * iteration order (largest-first, as buildGroupStyles produces for the 2D
@@ -145,18 +146,35 @@ export function clusterCentres3D(
     return centres
   }
   const n = entries.length
-  const stretch = Math.pow(Math.max(0.7, Math.min(2.2, aspect)), 0.85)
+  const portrait = aspect < 1
+  const stretch = portrait
+    ? Math.sqrt(Math.max(0.35, aspect))
+    : Math.pow(Math.min(2.2, aspect), 0.85)
   const angles = ellipseAngles(n, stretch, 1 / stretch)
-  // Unit (ring = 1) points. Y is a fixed +-0.26 rather than derived from the
-  // ellipse, but it still scales linearly with the ring below, so it can
-  // share the same closed-form solve as x and z. The alternation is what
+  // Unit (ring = 1) points. Depth is a fixed +-0.26 rather than derived from
+  // the ellipse, but every axis scales linearly with the ring below, so
+  // they share the same closed-form solve. The alternation is what
   // separates ring-adjacent clusters on screen when the camera looks along
   // the ring - without it they stack straight behind one another.
-  const unit = angles.map((a, i) => ({
-    x: Math.cos(a) * stretch,
-    y: i % 2 === 0 ? 0.26 : -0.26,
-    z: Math.sin(a) / stretch,
-  }))
+  const unit = angles.map((a, i) => {
+    const x = Math.cos(a) * stretch
+    const y = Math.sin(a) / stretch
+    const depth = i % 2 === 0 ? 0.26 : -0.26
+    if (!portrait) return { x, y: depth, z: y }
+    // A phone's overview uses a standing ring, aligned with the landing
+    // camera. Its long axis therefore uses the available height rather than
+    // disappearing into ground-plane perspective. The alternating depth
+    // still reveals the third axis when the reader orbits the map.
+    const theta = -0.5
+    const phi = 0.95
+    return {
+      x: x * Math.cos(theta) - y * Math.cos(phi) * Math.sin(theta) +
+        depth * Math.sin(phi) * Math.sin(theta),
+      y: y * Math.sin(phi) + depth * Math.cos(phi),
+      z: -x * Math.sin(theta) - y * Math.cos(phi) * Math.cos(theta) +
+        depth * Math.sin(phi) * Math.cos(theta),
+    }
+  })
   let ring = 0
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
