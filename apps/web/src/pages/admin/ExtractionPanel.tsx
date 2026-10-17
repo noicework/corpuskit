@@ -38,7 +38,7 @@ import {
 } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { Button, SectionHeader } from '../../components/ui.tsx'
-import { Bookmark, ChevronDown, Pencil, RotateCw } from '../../components/icons.tsx'
+import { ChevronDown, Pencil, RotateCw } from '../../components/icons.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
 /**
@@ -857,7 +857,6 @@ function RulesCard(
           />
         </label>
         <Button
-          leadingIcon={Bookmark}
           disabled={busy || !loaded}
           onClick={() => void onSave()}
         >

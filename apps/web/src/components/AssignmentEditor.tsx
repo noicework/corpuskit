@@ -11,7 +11,7 @@ import {
 import { useAccess } from './AccessProvider.tsx'
 import { ConfirmActionDialog } from './ConfirmActionDialog.tsx'
 import { Button, EmptyState, SectionHeader } from './ui.tsx'
-import { AlertCircle, Bookmark, Pencil, Plus, Trash } from './icons.tsx'
+import { AlertCircle, Pencil, Plus, Trash } from './icons.tsx'
 
 export const assignmentRoleLabel: Record<Role, string> = {
   viewer: 'Viewer',
@@ -411,7 +411,7 @@ function Editor(
               </Button>
               <Button
                 type='submit'
-                leadingIcon={form === 'new' ? Plus : Bookmark}
+                leadingIcon={form === 'new' ? Plus : undefined}
                 disabled={!allowed.includes(role)}
               >
                 {form === 'new' ? ui(addLabel) : ui('Save role')}

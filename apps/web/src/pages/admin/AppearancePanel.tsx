@@ -35,7 +35,7 @@ import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { Button, SectionHeader } from '../../components/ui.tsx'
-import { Bookmark, Check, Upload } from '../../components/icons.tsx'
+import { Check, Upload } from '../../components/icons.tsx'
 
 const MAX_BYTES = 5 * 1024 * 1024
 
@@ -469,7 +469,6 @@ function ColoursSection({
       </div>
 
       <Button
-        leadingIcon={Bookmark}
         data-appearance-save='colours'
         disabled={busy || ((branding.paletteId ?? 'default') === selected)}
         onClick={() => void choose()}
@@ -693,7 +692,6 @@ function TypographySection({
       </div>
 
       <Button
-        leadingIcon={Bookmark}
         data-appearance-save='typography'
         disabled={busy ||
           ((branding.typography ?? 'default') === selected &&
@@ -928,7 +926,6 @@ function ShapeSection({
       </div>
 
       <Button
-        leadingIcon={Bookmark}
         data-appearance-save='shape'
         disabled={busy || ((branding.shape ?? 'square') === selected)}
         onClick={() => void choose()}
@@ -1044,7 +1041,6 @@ function DensitySection({
       </div>
 
       <Button
-        leadingIcon={Bookmark}
         data-appearance-save='density'
         disabled={busy || ((branding.density ?? 'default') === selected)}
         onClick={() => void choose()}
@@ -1152,7 +1148,6 @@ function ColourSchemeSection({
       </div>
 
       <Button
-        leadingIcon={Bookmark}
         data-appearance-save='colour-scheme'
         disabled={busy || current === selected}
         onClick={() => void choose()}

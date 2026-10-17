@@ -9,7 +9,6 @@ import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { Button, SectionHeader } from '../../components/ui.tsx'
-import { Bookmark } from '../../components/icons.tsx'
 
 /**
  * Inline rename form that swaps in for a portal's name/organisation lines.
@@ -136,7 +135,7 @@ function RenamePortalContent({
         </div>
       </div>
       <div className='flex flex-wrap items-center gap-3'>
-        <Button type='submit' disabled={busy} leadingIcon={Bookmark}>
+        <Button type='submit' disabled={busy}>
           {busy ? ui('Sending request...') : ui('Save')}
         </Button>
         <Button disabled={busy} onClick={onCancel} variant='outline'>

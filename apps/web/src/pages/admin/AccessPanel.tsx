@@ -10,7 +10,7 @@ import {
 } from '../../components/AssignmentSection.tsx'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 import { Button, SectionHeader } from '../../components/ui.tsx'
-import { AlertCircle, Bookmark } from '../../components/icons.tsx'
+import { AlertCircle } from '../../components/icons.tsx'
 import { AssignmentError, changeAccessMode } from '../../api/access.ts'
 import type { TenantOutletContext } from '../TenantLayout.tsx'
 import { KeysPanel } from './KeysPanel.tsx'
@@ -142,7 +142,6 @@ function AccessModeSection({ slug, name }: { slug: string; name: string }) {
                 </label>
               ))}
               <Button
-                leadingIcon={Bookmark}
                 disabled={!chosen || chosen === current}
                 onClick={() => setConfirm(true)}
               >

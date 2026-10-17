@@ -17,7 +17,7 @@ import { errorMessage, type Message } from './shared.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { Button, SectionHeader } from '../../components/ui.tsx'
-import { Bookmark, ChevronDown, Plus, RotateCw } from '../../components/icons.tsx'
+import { ChevronDown, Plus, RotateCw } from '../../components/icons.tsx'
 
 type Prompts = Awaited<ReturnType<typeof getPrompts>>
 type Routing = Awaited<ReturnType<typeof getRouting>>
@@ -218,7 +218,6 @@ function AskPromptEditor({ slug }: { slug: string }) {
           data-behaviour-save
           disabled={busy || !loaded}
           onClick={() => void onSave()}
-          leadingIcon={Bookmark}
         >
           {busy ? ui('Saving…') : ui('Save prompt')}
         </Button>
