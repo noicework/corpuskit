@@ -117,6 +117,31 @@ describe('PortalFooter', () => {
     expect(html).toContain('Example User Group</p>')
   })
 
+  it('links its credits in the closing row, beside the note it leaves as it was', () => {
+    const html = render({
+      ...branding,
+      layout: {
+        footer: {
+          note: 'Private demonstration. Reproduced courtesy of Example User Group.',
+          credits: [{
+            label: 'Powered by Progress Agentic RAG',
+            href: 'https://www.progress.com/agentic-rag',
+          }],
+          poweredBy: true,
+        },
+      },
+    })
+    expect(html).toContain('Private demonstration. Reproduced courtesy of Example User Group.')
+    expect(html).toContain('href="https://www.progress.com/agentic-rag" rel="noopener"')
+    expect(html).toContain('Powered by Progress Agentic RAG')
+    expect(html).toContain(EXTERNAL_LINK_NOTE)
+    // The credit sits after the note and before "Powered by CorpusKit".
+    const note = html.indexOf('Private demonstration.')
+    const credit = html.indexOf('Powered by Progress Agentic RAG')
+    expect(note).toBeLessThan(credit)
+    expect(credit).toBeLessThan(html.indexOf('Powered by CorpusKit'))
+  })
+
   it('leaves out "Powered by CorpusKit" unless the layout asks for it', () => {
     const html = render({ ...branding, layout: { footer: { note: 'A note.' } } })
     expect(html).toContain('A note.')
