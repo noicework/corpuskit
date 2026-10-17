@@ -16,6 +16,8 @@ import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { Bookmark, ChevronDown, Plus, RotateCw } from '../../components/icons.tsx'
 
 type Prompts = Awaited<ReturnType<typeof getPrompts>>
 type Routing = Awaited<ReturnType<typeof getRouting>>
@@ -145,22 +147,26 @@ function AskPromptEditor({ slug }: { slug: string }) {
   }
 
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Ask system prompt')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
+    <section className='rp-card min-w-0 p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={ui('Ask system prompt')}
+        description={ui(
           'Used for every grounded answer on this portal. Leave empty for the default analyst prompt.',
         )}
-      </p>
-      <button
-        type='button'
-        data-behaviour-read='prompts'
-        disabled={busy}
-        onClick={() => void onLoad()}
-        className='rp-btn rp-btn-outline mt-3'
-      >
-        {loaded ? ui('Reload current prompt') : ui('Load current prompt')}
-      </button>
+        actions={
+          <Button
+            data-behaviour-read='prompts'
+            disabled={busy}
+            onClick={() => void onLoad()}
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+          >
+            {loaded ? ui('Reload current prompt') : ui('Load current prompt')}
+          </Button>
+        }
+      />
       {!loaded && (
         <p className='mt-3 text-sm text-ink-3'>
           {isError
@@ -172,13 +178,13 @@ function AskPromptEditor({ slug }: { slug: string }) {
         data-behaviour-prompt
         aria-label={ui('Ask system prompt')}
         disabled={busy || !loaded}
-        className='rp-input mt-3'
+        className='rp-input mt-4 w-full'
         rows={8}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder={ui('Leave empty to use the default analyst prompt.')}
       />
-      <label className='mt-3 flex items-center gap-2 text-sm text-ink-2'>
+      <label className='rp-check mt-3 text-sm text-ink-2'>
         <input
           type='checkbox'
           disabled={busy || !loaded}
@@ -192,7 +198,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
           'Uses visual content (page images, tables) as extra context when answering - useful for PDF-heavy corpora.',
         )}
       </p>
-      <label className='mt-3 flex items-center gap-2 text-sm text-ink-2'>
+      <label className='rp-check mt-3 text-sm text-ink-2'>
         <input
           type='checkbox'
           data-behaviour-unlinked
@@ -208,18 +214,17 @@ function AskPromptEditor({ slug }: { slug: string }) {
         )}
       </p>
       <div className='mt-3 flex items-center gap-3'>
-        <button
-          type='button'
+        <Button
           data-behaviour-save
           disabled={busy || !loaded}
           onClick={() => void onSave()}
-          className='rp-btn rp-btn-primary'
+          leadingIcon={Bookmark}
         >
           {busy ? ui('Saving…') : ui('Save prompt')}
-        </button>
+        </Button>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
-    </div>
+    </section>
   )
 }
 
@@ -317,34 +322,38 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
   }
 
   return (
-    <div className='rp-card mt-4 p-5'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h3 className='text-sm font-semibold text-ink'>{ui('Search configurations')}</h3>
-          <p className='mt-1 text-xs text-ink-3'>
-            {ui("The named retrieval configurations this portal's search and ask calls draw on.")}
-          </p>
-        </div>
-        <button
-          type='button'
-          data-behaviour-ensure
-          disabled={busy}
-          onClick={() => void onEnsure()}
-          className='rp-btn rp-btn-outline h-auto whitespace-normal py-2'
-        >
-          {busy ? ui('Creating…') : ui('Create default configurations')}
-        </button>
-      </div>
-
-      <button
-        type='button'
-        data-behaviour-read='configs'
-        disabled={busy}
-        onClick={() => void onLoad()}
-        className='rp-btn rp-btn-outline mt-3 h-auto whitespace-normal py-2'
-      >
-        {ui('Refresh search configurations')}
-      </button>
+    <section className='rp-card min-w-0 p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={ui('Search configurations')}
+        description={ui(
+          "The named retrieval configurations this portal's search and ask calls draw on.",
+        )}
+        actions={
+          <>
+            <Button
+              data-behaviour-read='configs'
+              disabled={busy}
+              onClick={() => void onLoad()}
+              variant='ghost'
+              size='sm'
+              leadingIcon={RotateCw}
+            >
+              {ui('Refresh search configurations')}
+            </Button>
+            <Button
+              data-behaviour-ensure
+              disabled={busy}
+              onClick={() => void onEnsure()}
+              variant='outline'
+              size='sm'
+              leadingIcon={Plus}
+            >
+              {busy ? ui('Creating…') : ui('Create default configurations')}
+            </Button>
+          </>
+        }
+      />
       {!data && !isLoading && (
         <p className='mt-3 text-sm text-ink-3'>
           {ui('Load search configurations to inspect the current settings.')}
@@ -353,7 +362,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
 
       {created && created.length > 0 && (
         <ul className='mt-3 flex flex-wrap gap-1.5'>
-          {created.map((name) => <li key={name} className='rp-chip'>{name}</li>)}
+          {created.map((name) => <li key={name} className='rp-tag'>{name}</li>)}
         </ul>
       )}
 
@@ -365,8 +374,12 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
         error={isError}
       />
 
-      <details className='mt-4'>
-        <summary className='cursor-pointer text-xs font-medium text-ink-2'>
+      <details className='group mt-4'>
+        <summary className='rp-btn rp-btn-ghost rp-btn-sm list-none [&::-webkit-details-marker]:hidden'>
+          <ChevronDown
+            size='sm'
+            className='transition-transform duration-150 ease-[var(--rp-ease)] group-open:rotate-180 motion-reduce:transition-none'
+          />
           {ui('View raw configuration JSON')}
         </summary>
         <div className='mt-2 max-h-80 overflow-auto rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>
@@ -381,7 +394,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
           )}
         </div>
       </details>
-    </div>
+    </section>
   )
 }
 
@@ -391,7 +404,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
  */
 function BehaviourPanelContent({ slug }: { slug: string }) {
   return (
-    <div className='space-y-4'>
+    <div className='space-y-6 lg:space-y-8'>
       <AskPromptEditor slug={slug} />
       <SearchConfigsBlock slug={slug} />
     </div>
@@ -482,43 +495,49 @@ function IntentsTable(
   const summary = routing?.summary
   return (
     <div className='mt-5 border-t border-line pt-4'>
-      <div className='flex flex-wrap items-baseline justify-between gap-2'>
-        <h4 className='text-sm font-semibold text-ink'>{ui('Intent routing')}</h4>
-        {summary && summary.total > 0
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={3}
+        title={ui('Intent routing')}
+        description={summary && summary.total > 0
           ? (
-            <p className='text-xs text-ink-3'>
+            <>
               {summary.total}
               {ui(' decisions ·')}{' '}
               {Object.entries(summary.byStage).map(([k, v]) => `${v} ${k}`).join(', ')}
-            </p>
+            </>
           )
-          : (
-            <p className='text-xs text-ink-3'>
-              {routing
-                ? ui('No routing decisions logged yet.')
-                : ui('Load routing activity to view decisions.')}
-            </p>
-          )}
-      </div>
-      <button
-        type='button'
-        data-behaviour-read='routing'
-        disabled={busy}
-        onClick={() => void onLoad()}
-        className='rp-btn rp-btn-outline my-3'
-      >
-        {ui('Refresh routing activity')}
-      </button>
+          : routing
+          ? ui('No routing decisions logged yet.')
+          : ui('Load routing activity to view decisions.')}
+        actions={
+          <Button
+            data-behaviour-read='routing'
+            disabled={busy}
+            onClick={() => void onLoad()}
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+          >
+            {ui('Refresh routing activity')}
+          </Button>
+        }
+      />
       {message && <MessagePanel message={message} className='mt-3' />}
-      <div className='mt-2 overflow-x-auto'>
-        <table className='w-full text-left text-xs'>
-          <thead className='text-ink-3'>
+      <div
+        role='region'
+        aria-label={ui('Intent routing')}
+        tabIndex={0}
+        className='rp-focus mt-4 overflow-x-auto'
+      >
+        <table className='w-full min-w-[40rem] text-left text-sm'>
+          <thead className='text-xs font-semibold text-ink-2'>
             <tr>
-              <th className='py-1.5 pr-3 font-medium'>{ui('Intent')}</th>
-              <th className='py-1.5 pr-3 font-medium'>{ui('Configuration')}</th>
-              <th className='py-1.5 pr-3 font-medium'>{ui('Policy')}</th>
-              <th className='py-1.5 font-medium'>{ui('On the box')}</th>
-              <th className='py-1.5 pl-3 text-right font-medium'>{ui('Routed')}</th>
+              <th scope='col' className='py-2 pr-3'>{ui('Intent')}</th>
+              <th scope='col' className='py-2 pr-3'>{ui('Configuration')}</th>
+              <th scope='col' className='py-2 pr-3'>{ui('Policy')}</th>
+              <th scope='col' className='py-2'>{ui('On the box')}</th>
+              <th scope='col' className='py-2 pl-3 text-right'>{ui('Routed')}</th>
             </tr>
           </thead>
           <tbody>
@@ -528,7 +547,7 @@ function IntentsTable(
                   <span className='font-medium text-ink'>{intent.label}</span>
                   <span className='block text-ink-3'>{intent.description}</span>
                 </td>
-                <td className='py-2 pr-3 font-mono text-[11px] text-ink-2'>
+                <td className='py-2 pr-3 font-mono text-xs text-ink-2'>
                   {names(intent.id, intent.answer.surfaces).map((n) => (
                     <span key={n} className='block'>{n}</span>
                   ))}
@@ -545,7 +564,7 @@ function IntentsTable(
                             ? 'rp-badge rp-badge-ok'
                             : st === 'missing'
                             ? 'rp-badge rp-badge-warn'
-                            : 'text-ink-3'
+                            : 'rp-badge rp-badge-quiet'
                         }`}
                       >
                         {ui(st)}

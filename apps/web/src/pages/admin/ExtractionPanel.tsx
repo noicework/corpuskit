@@ -37,6 +37,8 @@ import {
   saveExtractionRules,
 } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { Bookmark, ChevronDown, Pencil, RotateCw } from '../../components/icons.tsx'
 import { errorMessage, type Message } from './shared.ts'
 
 /**
@@ -97,17 +99,9 @@ function ExtractionPanelContent({ slug }: { slug: string }) {
     }
   }
   return (
-    <div className='space-y-4'>
-      <button
-        type='button'
-        data-extraction-read
-        className='rp-btn rp-btn-outline'
-        onClick={() => void load()}
-      >
-        {ui('Load extraction methods')}
-      </button>
+    <div className='space-y-6 lg:space-y-8'>
       {message && <MessagePanel message={message} />}
-      <MethodsCard lab={lab} />
+      <MethodsCard lab={lab} onLoad={() => void load()} />
       <CompareCard slug={slug} methods={lab?.methods ?? []} available={lab?.available ?? false} />
       {(authority.can('behaviour.write', { kind: 'portal', slug }) ||
         (!sessionAllowed && breakGlassEnabled)) && (
@@ -146,30 +140,43 @@ function kindLabel(kind: ExtractionMethod['kind']): string {
 
 type LabInfo = Awaited<ReturnType<typeof getExtractionMethods>>
 
-function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
+function MethodsCard({ lab, onLoad }: { lab: LabInfo | undefined; onLoad: () => void }) {
   const { ui, error: localError } = usePortalLocale()
 
   return (
-    <div className='rp-card p-5'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div>
-          <h3 className='text-sm font-semibold text-ink'>
-            {ui('Extraction methods on the sandbox')}
-          </h3>
-          <p className='mt-1 text-xs text-ink-3'>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Extraction methods on the sandbox')}
+        description={
+          <>
             {ui('Custom methods are registered on a scratch knowledge box')}
             {lab ? ` (${lab.lab})` : ''}{' '}
             {ui('and applied per upload. The production box is never touched.')}
-          </p>
-        </div>
-        {lab
-          ? (
-            <span className={`rp-badge ${lab.available ? 'rp-badge-ok' : 'rp-badge-warn'}`}>
-              {lab.available ? ui('sandbox ready') : ui('sandbox unavailable')}
-            </span>
-          )
-          : null}
-      </div>
+          </>
+        }
+        actions={
+          <>
+            {lab
+              ? (
+                <span className={`rp-badge ${lab.available ? 'rp-badge-ok' : 'rp-badge-warn'}`}>
+                  {lab.available ? ui('sandbox ready') : ui('sandbox unavailable')}
+                </span>
+              )
+              : null}
+            <Button
+              data-extraction-read
+              variant='ghost'
+              size='sm'
+              leadingIcon={RotateCw}
+              onClick={onLoad}
+            >
+              {ui('Load extraction methods')}
+            </Button>
+          </>
+        }
+      />
       {lab && !lab.available
         ? (
           <p className='mt-3 text-xs text-[var(--rp-bad-ink)]'>
@@ -193,7 +200,7 @@ function MethodsCard({ lab }: { lab: LabInfo | undefined }) {
                   {m.model ? ` · ${m.model}` : ''}
                 </p>
                 {m.rules?.length
-                  ? <p className='mt-1 line-clamp-2 text-[11px] text-ink-3'>{m.rules[0]}</p>
+                  ? <p className='mt-1 line-clamp-2 text-2xs text-ink-3'>{m.rules[0]}</p>
                   : null}
               </li>
             ))}
@@ -397,20 +404,26 @@ function CompareCard(
     methods.findIndex((m) => m.id === a.method.id) - methods.findIndex((m) => m.id === b.method.id)
   )
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Profile and compare')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          "Pick a document from the library, profile it, then run it through the methods and compare the text, tables, a judge's score and the same question asked of each extraction.",
-        )}
-      </p>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Profile and compare')}
+        description={
+          <>
+            {ui(
+              "Pick a document from the library, profile it, then run it through the methods and compare the text, tables, a judge's score and the same question asked of each extraction.",
+            )}
+          </>
+        }
+      />
       <div className='mt-3 flex flex-col gap-2 sm:flex-row'>
         <input
           type='search'
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={ui('Find a document by title, or paste a resource id…')}
-          className='rp-input h-9 flex-1'
+          className='rp-input min-w-0 flex-1'
           aria-label={ui('Find a document')}
         />
       </div>
@@ -423,7 +436,7 @@ function CompareCard(
                   type='button'
                   disabled={busy}
                   onClick={() => void onProfile(item)}
-                  className='rp-focus block w-full px-3 py-2 text-left text-sm text-ink-2 hover:bg-[var(--rp-wash)]'
+                  className='rp-btn rp-btn-ghost w-full justify-start text-left'
                 >
                   {item.title}
                 </button>
@@ -437,18 +450,20 @@ function CompareCard(
           <div className='mt-3 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'>
             <div className='flex flex-wrap items-start justify-between gap-2'>
               <p className='text-sm font-medium text-ink'>{picked.title}</p>
-              <button
-                type='button'
+              <Button
+                variant='ghost'
+                size='sm'
+                leadingIcon={Pencil}
                 onClick={() => {
                   setPicked(null)
                   setProfile(null)
                   setResults([])
                   setDone(null)
                 }}
-                className='text-xs text-ink-3 hover:text-ink'
+                className='shrink-0'
               >
                 {ui('Change')}
-              </button>
+              </Button>
             </div>
             {profile
               ? <ProfileCard profile={profile.profile} filename={profile.filename} />
@@ -462,20 +477,14 @@ function CompareCard(
             <fieldset className='flex flex-wrap gap-3'>
               <legend className='rp-eyebrow text-ink-3'>{ui('Methods')}</legend>
               {methods.map((m) => (
-                <label key={m.id} className='flex items-center gap-2 text-sm text-ink-2'>
+                <label key={m.id} className='rp-check text-sm text-ink-2'>
                   <input
                     type='checkbox'
                     checked={selected.includes(m.id)}
                     onChange={() =>
                       setSelected((prev) =>
-                        prev.includes(m.id)
-                          ? prev.filter((x) =>
-                            x !== m.id
-                          )
-                          : [...prev, m.id]
+                        prev.includes(m.id) ? prev.filter((x) => x !== m.id) : [...prev, m.id]
                       )}
-                    className='h-4 w-4 rounded-[var(--rp-radius-input)] border-line'
-                    style={{ accentColor: 'var(--rp-accent)' }}
                   />
                   {m.name} <span className='text-xs text-ink-3'>({ui(kindLabel(m.kind))})</span>
                 </label>
@@ -488,7 +497,7 @@ function CompareCard(
               placeholder={ui(
                 'Question to ask of each extraction (optional; defaults to the main result and its numbers)',
               )}
-              className='rp-input h-9 w-full'
+              className='rp-input min-w-0 w-full'
               aria-label={ui('Question for the before and after ask')}
             />
             <div className='flex flex-wrap items-center gap-3'>
@@ -584,18 +593,18 @@ function ProfileCard({ profile, filename }: { profile: ExtractionProfile; filena
   return (
     <div className='mt-2'>
       <div className='flex flex-wrap items-center gap-2'>
-        <span className='rp-badge'>{cls ? ui(cls.label) : profile.class}</span>
+        <span className='rp-tag'>{cls ? ui(cls.label) : profile.class}</span>
         <span className='text-xs text-ink-3'>{cls && ui(cls.hint)}</span>
       </div>
       <dl className='mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4'>
         {cells.map(([k, v]) => (
           <div key={k}>
             <dt className='text-ink-3'>{ui(k)}</dt>
-            <dd className='tabular-nums text-ink-2'>{v}</dd>
+            <dd className='text-right tabular-nums text-ink-2'>{v}</dd>
           </div>
         ))}
       </dl>
-      <p className='mt-1 truncate text-[11px] text-ink-3'>{filename}</p>
+      <p className='mt-1 truncate text-2xs text-ink-3'>{filename}</p>
     </div>
   )
 }
@@ -613,7 +622,9 @@ function ResultColumn(
   return (
     <div
       className={`min-w-0 rounded-[var(--rp-radius)] border p-3 ${
-        recommended ? 'border-[var(--rp-accent)] bg-[var(--rp-wash)]' : 'border-line bg-surface-2'
+        recommended
+          ? 'border-[var(--rp-accent-fg)] bg-[var(--rp-wash)]'
+          : 'border-line bg-surface-2'
       }`}
     >
       <div className='flex items-start justify-between gap-2'>
@@ -625,24 +636,26 @@ function ResultColumn(
       </div>
       <dl className='mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs'>
         <dt className='text-ink-3'>{ui('Judge score')}</dt>
-        <dd className='tabular-nums text-ink-2'>
+        <dd className='text-right tabular-nums text-ink-2'>
           {m.judgeScore === null ? ui('n/a') : `${m.judgeScore} / 5`}
         </dd>
         <dt className='text-ink-3'>{ui('Chars / page')}</dt>
-        <dd className='tabular-nums text-ink-2'>
+        <dd className='text-right tabular-nums text-ink-2'>
           {m.charsPerPage}
           {yieldVsDefault !== null && yieldVsDefault !== 1
             ? ui(' ({yieldVsDefault}× default)', { yieldVsDefault: yieldVsDefault })
             : ''}
         </dd>
         <dt className='text-ink-3'>{ui('Table rows')}</dt>
-        <dd className='tabular-nums text-ink-2'>{m.tableRows}</dd>
+        <dd className='text-right tabular-nums text-ink-2'>{m.tableRows}</dd>
         <dt className='text-ink-3'>{ui('Paragraphs')}</dt>
-        <dd className='tabular-nums text-ink-2'>{m.paragraphs}</dd>
+        <dd className='text-right tabular-nums text-ink-2'>{m.paragraphs}</dd>
         <dt className='text-ink-3'>{ui('Word plausibility')}</dt>
-        <dd className='tabular-nums text-ink-2'>{Math.round(m.dictionaryHitRate * 100)}%</dd>
+        <dd className='text-right tabular-nums text-ink-2'>
+          {Math.round(m.dictionaryHitRate * 100)}%
+        </dd>
         <dt className='text-ink-3'>{ui('Time')}</dt>
-        <dd className='tabular-nums text-ink-2'>
+        <dd className='text-right tabular-nums text-ink-2'>
           {m.latencySec}
           {ui(' s')}
           {m.visionPages
@@ -652,12 +665,13 @@ function ResultColumn(
             : ''}
         </dd>
       </dl>
-      {m.judgeReason ? <p className='mt-2 text-[11px] italic text-ink-3'>{m.judgeReason}</p> : null}
+      {m.judgeReason ? <p className='mt-2 text-2xs italic text-ink-3'>{m.judgeReason}</p> : null}
       <details className='mt-2'>
-        <summary className='cursor-pointer text-xs text-[var(--rp-accent-fg)]'>
+        <summary className='rp-admin-disclosure rp-btn rp-btn-ghost rp-btn-sm'>
+          <ChevronDown size='sm' className='rp-admin-disclosure-icon' />
           {ui('Extracted text')}
         </summary>
-        <pre className='rp-scroll mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-[var(--rp-radius)] bg-surface p-2 text-[11px] leading-snug text-ink-2'>
+        <pre className='rp-scroll mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded-[var(--rp-radius)] bg-surface p-2 text-2xs leading-snug text-ink-2'>
           {result.textPreview}
         </pre>
       </details>
@@ -780,35 +794,45 @@ function RulesCard(
     }
   }
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Routing rules')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          'Which method each class of document gets. The visual page cap sends long scans to the default method regardless.',
-        )}
-      </p>
-      <div className='overflow-x-auto'>
-        <table className='mt-3 block w-full text-left text-xs sm:table'>
-          <thead className='hidden text-ink-3 sm:table-header-group'>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Routing rules')}
+        description={
+          <>
+            {ui(
+              'Which method each class of document gets. The visual page cap sends long scans to the default method regardless.',
+            )}
+          </>
+        }
+      />
+      <div
+        className='rp-focus mt-4 overflow-x-auto'
+        role='region'
+        aria-label={ui('Routing rules')}
+        tabIndex={0}
+      >
+        <table className='w-full min-w-[30rem] text-left text-sm'>
+          <thead className='text-xs font-semibold text-ink-2'>
             <tr>
-              <th className='py-1.5 pr-3 font-medium'>{ui('Profile class')}</th>
-              <th className='py-1.5 font-medium'>{ui('Method')}</th>
+              <th className='py-1.5 pr-3 font-semibold'>{ui('Profile class')}</th>
+              <th className='py-1.5 font-semibold'>{ui('Method')}</th>
             </tr>
           </thead>
-          <tbody className='block sm:table-row-group'>
+          <tbody>
             {CLASSES.map((cls) => (
-              <tr key={cls.id} className='block border-t border-line sm:table-row'>
-                <td className='block pt-3 pb-1 sm:table-cell sm:py-2 sm:pr-3'>
+              <tr key={cls.id} className='border-t border-line'>
+                <td className='py-3 pr-3'>
                   <span className='font-medium text-ink'>{ui(cls.label)}</span>
                   <span className='block text-ink-3'>{ui(cls.hint)}</span>
                 </td>
-                <td className='block pb-3 sm:table-cell sm:py-2'>
+                <td className='py-3'>
                   <select
                     aria-label={ui('{label} extraction method', { label: ui(cls.label) })}
                     value={methodFor(cls.id)}
-                    onChange={(e) =>
-                      setFor(cls.id, e.target.value)}
-                    className='rp-input py-1 text-sm'
+                    onChange={(e) => setFor(cls.id, e.target.value)}
+                    className='rp-input rp-select w-full'
                   >
                     {methods.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                   </select>
@@ -832,14 +856,13 @@ function RulesCard(
             className='rp-input w-20 py-1 text-sm'
           />
         </label>
-        <button
-          type='button'
+        <Button
+          leadingIcon={Bookmark}
           disabled={busy || !loaded}
           onClick={() => void onSave()}
-          className='rp-btn rp-btn-primary'
         >
           {busy ? ui('Saving…') : ui('Save rules')}
-        </button>
+        </Button>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
     </div>
