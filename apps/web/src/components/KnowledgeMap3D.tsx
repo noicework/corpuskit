@@ -241,6 +241,7 @@ export function KnowledgeMap3D({
     layout,
     aspectBucket,
     controlGutter,
+    hasSize,
   ])
 
   // The SVG fallback owns its own synchronous force layout. Its child effects
