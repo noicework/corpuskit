@@ -2,6 +2,16 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useRef, useState } from 'react'
 import type { ResourceType } from '@research-portal/core'
 import { thumbnailUrl } from '../api/client.ts'
+import { File, FileText, Globe, type IconComponent, Image } from './icons.tsx'
+
+const TYPE_ICONS: Record<string, IconComponent> = {
+  document: File,
+  pdf: FileText,
+  web: Globe,
+  image: Image,
+  text: FileText,
+  office: FileText,
+}
 
 const TYPE_GLYPHS: Record<string, string> = {
   document: 'M7 3h7l5 5v13H7zM14 3v5h5',
@@ -74,7 +84,7 @@ export function ResourceThumb({
   const requested = requestedSrc === src
   const loaded = loadedSrc === src
   const failed = failedSrc === src
-  const glyph = resourceTypeGlyph(type)
+  const TypeIcon = TYPE_ICONS[type] ?? File
   const label = labelOverride ?? ui(resourceThumbLabel(type))
 
   // Native lazy loading looks several viewports ahead. In a long card list that
@@ -111,17 +121,7 @@ export function ResourceThumb({
         }`}
       >
         <div className='rp-thumb-placeholder-mark'>
-          <svg
-            viewBox='0 0 24 24'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='1.5'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            className='rp-thumb-placeholder-icon'
-          >
-            <path d={glyph} />
-          </svg>
+          <TypeIcon size='lg' className='rp-thumb-placeholder-icon' />
           <span className='rp-thumb-placeholder-label'>{label}</span>
         </div>
       </div>
