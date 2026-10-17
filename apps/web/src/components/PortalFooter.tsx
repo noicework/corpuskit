@@ -48,8 +48,9 @@ function SlimFooter({ branding }: { branding: Branding }) {
 
 /**
  * The fuller footer a portal's layout asks for: the portal's name and tagline beside its own
- * link columns, then a closing row with the organisation, the layout's note and, when asked
- * for, "Powered by CorpusKit". Every word and link in it comes from the layout or the branding.
+ * link columns, then a closing row with the organisation, the layout's note, its credit links
+ * and, when asked for, "Powered by CorpusKit". Every word and link in it comes from the layout
+ * or the branding.
  */
 function LayoutFooter(
   { branding, slug, footer }: { branding: Branding; slug: string; footer: LayoutFooterContent },
@@ -57,6 +58,7 @@ function LayoutFooter(
   const { ui } = usePortalLocale()
   const year = new Date().getFullYear()
   const columns = footer.columns ?? []
+  const credits = footer.credits ?? []
   return (
     <footer className='bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'>
       <div className='rp-shell py-12 sm:py-14 lg:py-16'>
@@ -102,18 +104,35 @@ function LayoutFooter(
         <div className='mt-12 flex flex-col gap-3 border-t border-[var(--rp-on-primary)]/15 pt-6 text-xs leading-relaxed text-[var(--rp-on-primary)]/80 md:flex-row md:items-baseline md:gap-8'>
           <p className='min-w-0 shrink-0'>&copy; {year} {branding.organisation}</p>
           {footer.note ? <p className='min-w-0 flex-1'>{footer.note}</p> : null}
-          {footer.poweredBy
+          {credits.length || footer.poweredBy
             ? (
-              <p className='min-w-0 shrink-0 md:ml-auto'>
-                <a
-                  href='https://corpuskit.org'
-                  rel='noopener'
-                  className='rp-layout-footer-link rp-focus-inverse'
-                >
-                  {ui('Powered by CorpusKit')}
-                  <ExternalMark />
-                </a>
-              </p>
+              <div className='flex min-w-0 shrink-0 flex-wrap gap-x-6 gap-y-3 md:ml-auto'>
+                {credits.map((credit, index) => (
+                  <p key={`${index}-${credit.href}`} className='min-w-0'>
+                    <LayoutAnchor
+                      href={credit.href}
+                      slug={slug}
+                      className='rp-layout-footer-link rp-focus-inverse'
+                    >
+                      {credit.label}
+                    </LayoutAnchor>
+                  </p>
+                ))}
+                {footer.poweredBy
+                  ? (
+                    <p className='min-w-0'>
+                      <a
+                        href='https://corpuskit.org'
+                        rel='noopener'
+                        className='rp-layout-footer-link rp-focus-inverse'
+                      >
+                        {ui('Powered by CorpusKit')}
+                        <ExternalMark />
+                      </a>
+                    </p>
+                  )
+                  : null}
+              </div>
             )
             : null}
         </div>
