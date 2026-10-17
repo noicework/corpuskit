@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import type { Permission, Question } from '@research-portal/core'
 import { useAccess } from './AccessProvider.tsx'
 import { accountEntries } from './account-menu-behaviour.ts'
+import { ArrowRight, HelpCircle, MessageSquare, Search } from './icons.tsx'
 
 type PaletteOption =
   | { kind: 'search'; text: string }
@@ -200,7 +201,7 @@ export function CommandPalette({
 
   return createPortal(
     <div
-      className='rp-anim-fade fixed inset-0 z-[80] flex items-start justify-center bg-neutral-950/60 p-4 pt-[10vh] backdrop-blur-sm'
+      className='rp-anim-fade rp-scrim fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto p-4 pt-[10vh] backdrop-blur-sm'
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -210,21 +211,10 @@ export function CommandPalette({
         role='dialog'
         aria-modal='true'
         aria-label={ui('Search or ask')}
-        className='rp-card rp-shadow-xl w-full max-w-lg overflow-hidden'
+        className='rp-card rp-shadow-xl rp-chrome-palette w-full max-w-lg overflow-hidden'
       >
-        <div className='flex items-center gap-2.5 border-b border-line px-4 py-3'>
-          <svg
-            viewBox='0 0 20 20'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='1.8'
-            strokeLinecap='round'
-            aria-hidden='true'
-            className='h-4 w-4 shrink-0 text-ink-3'
-          >
-            <circle cx='9' cy='9' r='5.5' />
-            <path d='M13.2 13.2L17 17' />
-          </svg>
+        <div className='rp-field rp-chrome-palette-field flex items-center gap-2.5 border-b px-4 py-3'>
+          <Search size='sm' className='shrink-0 text-ink-3' />
           <label htmlFor='command-palette-input' className='sr-only'>
             {ui('Search the library or ask a question')}
           </label>
@@ -236,15 +226,17 @@ export function CommandPalette({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onInputKeyDown}
-            placeholder={ui('Search the library or ask a question')}
+            placeholder={ui('Search or ask')}
             role='combobox'
             aria-autocomplete='list'
             aria-expanded={options.length > 0}
             aria-controls={listboxId}
             aria-activedescendant={highlight >= 0 ? `${listboxId}-option-${highlight}` : undefined}
-            className='min-w-0 flex-1 border-0 bg-transparent py-1 text-[0.95rem] text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none'
+            className='min-h-[2.75rem] min-w-0 flex-1 border-0 bg-transparent py-1 text-base text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none focus:shadow-none'
           />
-          <kbd className='rp-badge rp-badge-quiet shrink-0 font-mono text-[10px]'>{ui('Esc')}</kbd>
+          <kbd className='rp-chrome-key-hint rp-badge rp-badge-quiet shrink-0 font-mono text-2xs'>
+            {ui('Esc')}
+          </kbd>
         </div>
 
         <ul
@@ -272,28 +264,22 @@ export function CommandPalette({
                 event.preventDefault()
                 activate(option)
               }}
-              className={`flex cursor-pointer items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2.5 text-sm transition-colors duration-150 ${
+              className={`flex min-h-[2.75rem] cursor-pointer items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2.5 text-sm transition-colors duration-150 ${
                 highlight === index ? 'bg-surface-2 text-ink' : 'text-ink-2'
               }`}
             >
               {option.kind === 'destination'
-                ? <span className='min-w-0'>{ui(option.text)}</span>
+                ? (
+                  <>
+                    <ArrowRight size='sm' className='shrink-0 text-ink-3' />
+                    <span className='min-w-0'>{ui(option.text)}</span>
+                  </>
+                )
                 : null}
               {option.kind === 'search'
                 ? (
                   <>
-                    <svg
-                      viewBox='0 0 20 20'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth='1.8'
-                      strokeLinecap='round'
-                      aria-hidden='true'
-                      className='h-4 w-4 shrink-0 text-ink-3'
-                    >
-                      <circle cx='9' cy='9' r='5.5' />
-                      <path d='M13.2 13.2L17 17' />
-                    </svg>
+                    <Search size='sm' className='shrink-0 text-ink-3' />
                     <span className='min-w-0 truncate'>
                       {ui('Search for')}{' '}
                       <span className='font-medium text-ink'>&ldquo;{option.text}&rdquo;</span>
@@ -304,18 +290,7 @@ export function CommandPalette({
               {option.kind === 'ask'
                 ? (
                   <>
-                    <svg
-                      viewBox='0 0 20 20'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth='1.8'
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      aria-hidden='true'
-                      className='h-4 w-4 shrink-0 text-ink-3'
-                    >
-                      <path d='M3 4.5h14v9H8.5L5 16.5v-3H3z' />
-                    </svg>
+                    <MessageSquare size='sm' className='shrink-0 text-ink-3' />
                     <span className='min-w-0 truncate'>
                       {ui('Ask')}{' '}
                       <span className='font-medium text-ink'>&ldquo;{option.text}&rdquo;</span>
@@ -326,19 +301,7 @@ export function CommandPalette({
               {option.kind === 'suggested'
                 ? (
                   <>
-                    <svg
-                      viewBox='0 0 20 20'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth='1.8'
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      aria-hidden='true'
-                      className='h-4 w-4 shrink-0 text-ink-3'
-                    >
-                      <path d='M10 13.5v-1c0-1 .6-1.5 1.2-2 .6-.5 1-1 1-1.9a2.2 2.2 0 10-4.4 0' />
-                      <circle cx='10' cy='16' r='0.15' fill='currentColor' />
-                    </svg>
+                    <HelpCircle size='sm' className='shrink-0 text-ink-3' />
                     <span className='rp-clamp-2 min-w-0'>{option.question.text}</span>
                   </>
                 )

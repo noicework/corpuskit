@@ -2,6 +2,8 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import { MessageSquare, X } from './icons.tsx'
+import { IconButton } from './ui.tsx'
 
 const DISMISS_KEY_PREFIX = 'rp-chat-fab-dismissed:'
 
@@ -65,34 +67,19 @@ export function ChatFab({ slug }: { slug: string }) {
         bottom: 'max(1.25rem, env(safe-area-inset-bottom))',
       }}
     >
-      <button
-        type='button'
+      <IconButton
+        icon={X}
+        label={ui('Dismiss the Ask button for this session')}
+        variant='outline'
         onClick={dismiss}
-        aria-label={ui('Dismiss the Ask button for this session')}
-        className='rp-focus rp-shadow-md flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line bg-surface text-ink-3 transition-colors duration-150 hover:text-ink'
-      >
-        <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3 w-3'>
-          <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-        </svg>
-      </button>
+        className='rp-shadow-md shrink-0 rounded-full'
+      />
       <Link
         to={`/t/${slug}/ask`}
         aria-label={ui('Ask a question')}
-        className='rp-focus rp-shadow-lg rp-lift inline-flex h-12 shrink-0 items-center gap-2 rounded-full px-4 text-sm font-semibold text-[var(--rp-on-primary)] transition-colors duration-150 hover:brightness-110'
-        style={{ backgroundColor: 'var(--rp-primary)' }}
+        className='rp-btn rp-btn-primary rp-btn-lg rp-shadow-lg rp-lift shrink-0 rounded-full'
       >
-        <svg
-          viewBox='0 0 20 20'
-          fill='none'
-          stroke='currentColor'
-          strokeWidth='1.7'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-          aria-hidden='true'
-          className='h-5 w-5 shrink-0'
-        >
-          <path d='M3 4.5h14v9H8.5L5 16.5v-3H3z' />
-        </svg>
+        <MessageSquare className='shrink-0' />
         <span className='hidden sm:inline'>{ui('Ask a question')}</span>
       </Link>
     </div>
