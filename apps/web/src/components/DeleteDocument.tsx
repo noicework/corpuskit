@@ -93,6 +93,7 @@ export function DeleteDocumentButton({
   className,
   label = 'Delete',
   onDocumentPage = false,
+  icon = false,
 }: {
   slug: string
   document: DeletableDocument
@@ -102,6 +103,8 @@ export function DeleteDocumentButton({
   label?: string
   /** Shown on the document's own page, which leaves once the delete is done. */
   onDocumentPage?: boolean
+  /** A trash glyph before the label, where the button sits beside Save and its bookmark. */
+  icon?: boolean
 }) {
   const { ui } = usePortalLocale()
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
@@ -179,6 +182,7 @@ export function DeleteDocumentButton({
         className={className ??
           'rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-bad-ink)]'}
       >
+        {icon ? <TrashIcon className='h-4 w-4 shrink-0' /> : null}
         {ui(label)}
       </button>
       {open && (
@@ -198,5 +202,26 @@ export function DeleteDocumentButton({
         />
       )}
     </>
+  )
+}
+
+/** A trash can in the house stroke idiom (the bookmark on Save is its pair on the document page). */
+function TrashIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      fill='none'
+      stroke='currentColor'
+      strokeWidth={1.8}
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      aria-hidden='true'
+      className={className}
+    >
+      <path d='M4.5 7h15' />
+      <path d='M9.5 7V5.5a1 1 0 011-1h3a1 1 0 011 1V7' />
+      <path d='M6.5 7l.8 11.6a1.5 1.5 0 001.5 1.4h6.4a1.5 1.5 0 001.5-1.4L17.5 7' />
+      <path d='M10 11v5.5M14 11v5.5' />
+    </svg>
   )
 }

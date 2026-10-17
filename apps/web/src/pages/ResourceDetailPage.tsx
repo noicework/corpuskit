@@ -1032,7 +1032,8 @@ function ManagerDelete({ slug, resource }: { slug: string; resource: ResourceSum
         slug={slug}
         document={resource}
         onDocumentPage
-        className='rp-btn rp-btn-outline min-h-[44px] hover:text-[var(--rp-bad-ink)]'
+        icon
+        className='rp-btn rp-btn-outline h-8 px-2.5 text-xs hover:text-[var(--rp-bad-ink)]'
         onDeleted={(outcome) =>
           navigate(`/t/${slug}/library`, {
             state: { notice: deletedNotice(resource.title, outcome, ui) },
