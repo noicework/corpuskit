@@ -122,7 +122,7 @@ Deno.test('analyst deep dispatch works and pending advisory is retired across A-
       true,
     )
     expect(generationCalls).toContain('follow_up_questions')
-    await clickText(page, '+ New session')
+    await clickText(page, 'New session')
     await page.evaluate(() =>
       [...document.querySelectorAll('button')].find((b) =>
         b.textContent?.includes('What affects abalone populations?')

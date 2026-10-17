@@ -32,6 +32,101 @@ function Panel(){const access=useAccess(),client=useQueryClient();const [search,
 createRoot(document.getElementById('root')).render(<BrowserRouter><AccessProvider><Controls/><PortalAccessGate><Panel/></PortalAccessGate></AccessProvider></BrowserRouter>)
 `
 
+const preparedFixture = '.shots/e3-rbac-lifecycle-fixture'
+const prepareCommand =
+  'deno run --allow-env --allow-read --allow-write --allow-run=esbuild e2e/rbac-lifecycle.test.ts'
+
+async function fixtureHash(bytes: Uint8Array): Promise<string> {
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function fixtureInputs(): Promise<Record<string, string>> {
+  const paths = ['e2e/support/rbac-fixture.ts']
+  async function collect(directory: string) {
+    for await (const entry of Deno.readDir(directory)) {
+      const path = `${directory}/${entry.name}`
+      if (entry.isDirectory) await collect(path)
+      else if (entry.isFile && /\.tsx?$/.test(entry.name)) paths.push(path)
+    }
+  }
+  await collect('apps/web/src')
+  await collect('packages/core/src')
+  return Object.fromEntries([
+    ['fixture-source', await fixtureHash(new TextEncoder().encode(source))],
+    ...await Promise.all(
+      paths.sort().map(async (path) => [
+        path,
+        await fixtureHash(
+          await Deno.readFile(path),
+        ),
+      ]),
+    ),
+  ])
+}
+
+// Prepare inside the sandbox before a browser runner that cannot launch esbuild:
+// deno run --allow-env --allow-read --allow-write --allow-run=esbuild e2e/rbac-lifecycle.test.ts
+// The normal e2e path still compiles the fixture whenever run permission permits it.
+if (import.meta.main) {
+  const inputs = await fixtureInputs()
+  const component = await buildComponentFixture({ entrySource: source })
+  try {
+    if (JSON.stringify(inputs) !== JSON.stringify(await fixtureInputs())) {
+      throw new Error('Lifecycle fixture inputs changed while preparing the bundle')
+    }
+    const entry = await Deno.readFile(`${component.directory}/entry.js`)
+    await Deno.mkdir(preparedFixture, { recursive: true })
+    await Deno.writeFile(`${preparedFixture}/entry.js`, entry)
+    await Deno.writeTextFile(
+      `${preparedFixture}/manifest.json`,
+      JSON.stringify({ version: 1, inputs, bundleHash: await fixtureHash(entry) }, null, 2),
+    )
+    console.log(`Prepared lifecycle fixture in ${preparedFixture}`)
+  } finally {
+    await component.close()
+  }
+}
+
+async function readPreparedFixture() {
+  let manifest: { version: number; inputs: Record<string, string>; bundleHash: string }
+  let entry: Uint8Array
+  try {
+    manifest = JSON.parse(await Deno.readTextFile(`${preparedFixture}/manifest.json`))
+    entry = await Deno.readFile(`${preparedFixture}/entry.js`)
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      throw new Error(`Lifecycle fixture is missing. Prepare it with: ${prepareCommand}`, {
+        cause: error,
+      })
+    }
+    throw error
+  }
+  if (
+    manifest.version !== 1 ||
+    JSON.stringify(manifest.inputs) !== JSON.stringify(await fixtureInputs())
+  ) throw new Error(`Lifecycle fixture is stale. Prepare it with: ${prepareCommand}`)
+  if (manifest.bundleHash !== await fixtureHash(entry)) {
+    throw new Error(`Lifecycle fixture bundle does not match its manifest. Run: ${prepareCommand}`)
+  }
+  await Deno.mkdir('.planning/logs', { recursive: true })
+  const directory = await Deno.makeTempDir({ dir: '.planning/logs', prefix: 'e3-lifecycle-' })
+  try {
+    await Deno.writeFile(`${directory}/entry.js`, entry)
+    return { directory, close: () => Deno.remove(directory, { recursive: true }) }
+  } catch (error) {
+    await Deno.remove(directory, { recursive: true })
+    throw error
+  }
+}
+
+async function lifecycleFixture() {
+  const permission = await Deno.permissions.query({ name: 'run', command: 'esbuild' })
+  return permission.state === 'granted'
+    ? buildComponentFixture({ entrySource: source })
+    : readPreparedFixture()
+}
+
 for (
   const transition of [
     'identity',
@@ -45,7 +140,7 @@ for (
   ] as const
 ) {
   Deno.test(`observed ${transition} retires populated caches and pending real search before late release`, async () => {
-    const component = await buildComponentFixture({ entrySource: source })
+    const component = await lifecycleFixture()
     const server = startTestServer({
       componentFixture: component,
       identity: { role: 'analyst' },
@@ -251,7 +346,7 @@ Deno.test('Ask verdict success is current and a pending verdict cannot restore o
       .toHaveLength(1)
     await page.evaluate(() =>
       [...document.querySelectorAll('button')].find((button) =>
-        button.textContent?.trim() === '+ New session'
+        button.textContent?.trim() === 'New session'
       )!.click()
     )
     const pending = server.delayResponse('/api/t/marine/verdicts')
