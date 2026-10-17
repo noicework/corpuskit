@@ -1,4 +1,6 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useId, useState } from 'react'
+import { Button } from '../../components/ui.tsx'
+import { ChevronDown } from '../../components/icons.tsx'
 
 /**
  * Small collapsible sub-section used inside an expanded portal row. Closed
@@ -20,6 +22,7 @@ export function Section({
   onToggle?: (open: boolean) => void
   children: ReactNode
 }) {
+  const contentId = useId()
   const [internalOpen, setInternalOpen] = useState(defaultOpen)
   const open = openProp ?? internalOpen
 
@@ -31,18 +34,18 @@ export function Section({
 
   return (
     <div className='border-t border-line py-3 first:border-t-0 first:pt-0'>
-      <button
-        type='button'
+      <Button
+        variant='ghost'
+        size='sm'
         onClick={toggle}
         aria-expanded={open}
-        className='flex w-full items-center gap-2 text-left'
+        aria-controls={contentId}
+        className='rp-manage-disclosure w-full text-left'
       >
-        <span aria-hidden='true' className='text-xs text-ink-3'>
-          {open ? '▾' : '▸'}
-        </span>
+        <ChevronDown size='sm' className={open ? '' : '-rotate-90'} />
         <span className='text-sm font-semibold text-ink'>{title}</span>
-      </button>
-      {open && <div className='mt-3'>{children}</div>}
+      </Button>
+      <div id={contentId} hidden={!open} className='mt-3'>{open && children}</div>
     </div>
   )
 }

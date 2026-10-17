@@ -10,7 +10,8 @@ import type { AnswerFeedbackSummary, AskInsightRow } from '../../api/client.ts'
 import { getInsights } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
-import { Skeleton } from '../../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { RotateCw } from '../../components/icons.tsx'
 
 function formatScore(value: number | null): string {
   return value === null ? '-' : `${value.toFixed(1)}/5`
@@ -23,8 +24,8 @@ function formatDuration(seconds: number | null, ui: Locale['ui'] = englishUi): s
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <div className='rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-      <dt className='rp-eyebrow text-ink-3'>{label}</dt>
-      <dd className='mt-1 text-lg font-semibold text-ink'>{value}</dd>
+      <dt className='rp-eyebrow text-2xs text-ink-3'>{label}</dt>
+      <dd className='mt-1 text-2xl font-semibold tabular-nums text-ink'>{value}</dd>
     </div>
   )
 }
@@ -40,24 +41,21 @@ export function UnhelpfulAnswers(
 
   const rated = feedback.helpful + feedback.unhelpful
   return (
-    <div className='rp-card p-5' data-unhelpful-answers>
-      <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
-        <h4 className='text-sm font-semibold text-ink'>{ui('Answers marked unhelpful')}</h4>
-        <p className='text-xs text-ink-3'>
-          {rated === 0 ? ui('No answers rated yet') : ui(
-            rated === 1
-              ? '{unhelpful} of {rated} rated answer marked unhelpful'
-              : '{unhelpful} of {rated} rated answers marked unhelpful',
-            {
-              unhelpful: feedback.unhelpful,
-              rated,
-            },
-          )}
-        </p>
-      </div>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
+    <div className='rp-card p-5 lg:p-6' data-unhelpful-answers>
+      <SectionHeader
+        className='rp-manage-section-head'
+        headingLevel={3}
+        title={ui('Answers marked unhelpful')}
+        description={ui(
           "Readers' thumbs-down ratings and what they said was wrong. Ask a question again to see the answer readers get now.",
+        )}
+      />
+      <p className='mt-2 text-xs text-ink-3'>
+        {rated === 0 ? ui('No answers rated yet') : ui(
+          rated === 1
+            ? '{unhelpful} of {rated} rated answer marked unhelpful'
+            : '{unhelpful} of {rated} rated answers marked unhelpful',
+          { unhelpful: feedback.unhelpful, rated },
         )}
       </p>
       {feedback.flagged.length === 0
@@ -70,15 +68,16 @@ export function UnhelpfulAnswers(
           <ul className='mt-3 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
             {feedback.flagged.map((item, index) => (
               <li key={index} className='bg-surface px-4 py-3'>
-                <div className='flex flex-wrap items-start justify-between gap-2'>
+                <div className='flex flex-col items-start gap-2 sm:flex-row sm:justify-between'>
                   <p className='min-w-0 break-words text-sm font-medium text-ink'>
                     {item.question}
                   </p>
                   <Link
                     to={`/t/${slug}/ask?ask=${encodeURIComponent(item.question)}`}
-                    className='rp-chip inline-flex h-9 shrink-0 items-center text-xs font-semibold sm:h-7'
+                    className='rp-btn rp-btn-ghost rp-btn-sm shrink-0'
                     aria-label={ui('Ask again: {question}', { question: item.question })}
                   >
+                    <RotateCw size='sm' />
                     {ui('Ask again')}
                   </Link>
                 </div>
@@ -162,22 +161,22 @@ function InsightsPanelContent({ slug }: { slug: string }) {
 
   return (
     <div className='space-y-4' data-admin-insights>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h3 className='text-sm font-semibold text-ink'>{ui('Insights')}</h3>
-          <p className='mt-0.5 text-xs text-ink-3'>
-            {ui('What people are asking, and where the corpus is falling short.')}
-          </p>
-        </div>
-        <button
-          type='button'
-          disabled={pending || isFetching}
-          onClick={() => void onRefresh()}
-          className='rp-btn rp-btn-outline'
-        >
-          {isFetching ? ui('Refreshing…') : ui('Refresh insights')}
-        </button>
-      </div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={ui('Insights')}
+        description={ui('What people are asking, and where the corpus is falling short.')}
+        actions={
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+            disabled={pending || isFetching}
+            onClick={() => void onRefresh()}
+          >
+            {isFetching ? ui('Refreshing…') : ui('Refresh insights')}
+          </Button>
+        }
+      />
 
       {!sessionAllowed && (
         <p className='text-xs text-ink-3'>
@@ -191,7 +190,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
       )}
       {isLoading && (
         <div className='space-y-3'>
-          <div className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
+          <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
             <Skeleton className='h-16 w-full' />
             <Skeleton className='h-16 w-full' />
             <Skeleton className='h-16 w-full' />
@@ -214,7 +213,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
 
       {data && data.totalAsks > 0 && (
         <>
-          <dl className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
+          <dl className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
             <StatTile label={ui('Questions asked')} value={String(data.totalAsks)} />
             <StatTile label={ui('Answered')} value={String(data.answered)} />
             <StatTile label={ui('Unanswered')} value={String(data.unanswered)} />
@@ -225,8 +224,12 @@ function InsightsPanelContent({ slug }: { slug: string }) {
           </dl>
 
           {data.topQuestions.length > 0 && (
-            <div className='rp-card p-5'>
-              <h4 className='text-sm font-semibold text-ink'>{ui('Most asked')}</h4>
+            <div className='rp-card p-5 lg:p-6'>
+              <SectionHeader
+                className='rp-manage-section-head'
+                headingLevel={3}
+                title={ui('Most asked')}
+              />
               <ul className='mt-3 divide-y divide-line'>
                 {data.topQuestions.map((q, index) => (
                   <li
@@ -234,7 +237,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                     className='flex items-center justify-between gap-3 py-2 text-sm'
                   >
                     <span className='min-w-0 truncate text-ink-2'>{q.question}</span>
-                    <span className='rp-badge rp-badge-quiet shrink-0'>
+                    <span className='rp-tag shrink-0'>
                       {q.count} {q.count === 1 ? ui('ask') : ui('asks')}
                     </span>
                   </li>
@@ -243,13 +246,15 @@ function InsightsPanelContent({ slug }: { slug: string }) {
             </div>
           )}
 
-          <div className='rp-card p-5'>
-            <h4 className='text-sm font-semibold text-ink'>{ui('Knowledge gaps')}</h4>
-            <p className='mt-1 text-xs text-ink-3'>
-              {ui(
+          <div className='rp-card p-5 lg:p-6'>
+            <SectionHeader
+              className='rp-manage-section-head'
+              headingLevel={3}
+              title={ui('Knowledge gaps')}
+              description={ui(
                 'Questions the corpus could not answer well - add sources that cover them to close the gap.',
               )}
-            </p>
+            />
             {data.gaps.length === 0
               ? (
                 <p className='mt-3 text-sm text-ink-3'>
@@ -260,8 +265,8 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                 <ul className='mt-3 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
                   {data.gaps.map((gap, index) => (
                     <li key={index} className='bg-surface px-4 py-2.5'>
-                      <div className='flex flex-wrap items-start justify-between gap-2'>
-                        <p className='min-w-0 text-sm text-ink'>{gap.question}</p>
+                      <div className='flex flex-col items-start gap-2 sm:flex-row sm:justify-between'>
+                        <p className='min-w-0 break-words text-sm text-ink'>{gap.question}</p>
                         <span
                           className='rp-badge rp-badge-warn shrink-0'
                           style={{ whiteSpace: 'normal' }}
@@ -284,22 +289,31 @@ function InsightsPanelContent({ slug }: { slug: string }) {
             ? <UnhelpfulAnswers slug={slug} feedback={data.feedback} />
             : null}
 
-          <div className='rp-card p-5'>
-            <h4 className='text-sm font-semibold text-ink'>{ui('Recent questions')}</h4>
+          <div className='rp-card p-5 lg:p-6'>
+            <SectionHeader
+              className='rp-manage-section-head'
+              headingLevel={3}
+              title={ui('Recent questions')}
+            />
             {data.recent.length === 0
               ? <p className='mt-3 text-sm text-ink-3'>{ui('Nothing recent.')}</p>
               : (
-                <div className='mt-3 overflow-x-auto'>
-                  <table className='w-full min-w-[640px] border-collapse text-sm'>
+                <div
+                  className='rp-focus mt-3 overflow-x-auto'
+                  role='region'
+                  aria-label={ui('Recent questions')}
+                  tabIndex={0}
+                >
+                  <table className='w-full min-w-[40rem] border-collapse text-sm'>
                     <thead>
-                      <tr className='border-b border-line text-left text-xs text-ink-3'>
-                        <th className='py-2 pr-3 font-medium'>{ui('Question')}</th>
-                        <th className='py-2 pr-3 font-medium'>{ui('When')}</th>
-                        <th className='py-2 pr-3 font-medium'>{ui('Answered')}</th>
-                        <th className='py-2 pr-3 font-medium'>{ui('Citations')}</th>
-                        <th className='py-2 pr-3 font-medium'>{ui('Relevance')}</th>
-                        <th className='py-2 pr-3 font-medium'>{ui('Grounded')}</th>
-                        <th className='py-2 pr-3 font-medium'>{ui('Duration')}</th>
+                      <tr className='border-b border-line text-left text-xs text-ink-2'>
+                        <th className='py-2 pr-3 font-semibold'>{ui('Question')}</th>
+                        <th className='py-2 pr-3 font-semibold'>{ui('When')}</th>
+                        <th className='py-2 pr-3 font-semibold'>{ui('Answered')}</th>
+                        <th className='py-2 pr-3 text-right font-semibold'>{ui('Citations')}</th>
+                        <th className='py-2 pr-3 text-right font-semibold'>{ui('Relevance')}</th>
+                        <th className='py-2 pr-3 text-right font-semibold'>{ui('Grounded')}</th>
+                        <th className='py-2 pr-3 text-right font-semibold'>{ui('Duration')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -312,12 +326,16 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                               ? <span className='rp-badge rp-badge-ok'>{ui('Answered')}</span>
                               : <span className='rp-badge rp-badge-bad'>{ui('Unanswered')}</span>}
                           </td>
-                          <td className='py-2 pr-3 text-ink-2'>{row.citations}</td>
-                          <td className='py-2 pr-3 text-ink-2'>
+                          <td className='py-2 pr-3 text-right tabular-nums text-ink-2'>
+                            {row.citations}
+                          </td>
+                          <td className='py-2 pr-3 text-right tabular-nums text-ink-2'>
                             {formatScore(row.answerRelevance)}
                           </td>
-                          <td className='py-2 pr-3 text-ink-2'>{formatScore(row.groundedness)}</td>
-                          <td className='py-2 pr-3 text-ink-2'>
+                          <td className='py-2 pr-3 text-right tabular-nums text-ink-2'>
+                            {formatScore(row.groundedness)}
+                          </td>
+                          <td className='py-2 pr-3 text-right tabular-nums text-ink-2'>
                             {formatDuration(row.durationSec, ui)}
                           </td>
                         </tr>

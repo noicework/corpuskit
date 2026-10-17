@@ -1,6 +1,7 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 import { useAccess } from './AccessProvider.tsx'
+import { Plus } from './icons.tsx'
 
 /** Where "Add documents" leads: the Manage content tab, scrolled to its open add panel. */
 export function addDocumentsPath(slug: string): string {
@@ -27,17 +28,7 @@ export function AddDocumentsLink({ slug, variant = 'primary', className = '' }: 
       className={`rp-btn rp-btn-${variant} ${className}`.trim()}
       data-add-documents
     >
-      <svg
-        aria-hidden='true'
-        viewBox='0 0 24 24'
-        className='h-4 w-4'
-        fill='none'
-        stroke='currentColor'
-        strokeWidth='2'
-        strokeLinecap='round'
-      >
-        <path d='M12 5v14M5 12h14' />
-      </svg>
+      <Plus size='sm' />
       {ui('Add documents')}
     </Link>
   )

@@ -4,7 +4,7 @@ import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   KbAgentSchema,
@@ -13,12 +13,15 @@ import {
   KgProposalSchema,
 } from '@research-portal/core'
 import { deleteAgent, getAgents, implementKg, proposeKg } from '../../api/client.ts'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { Plus, RotateCw, Trash, Wand } from '../../components/icons.tsx'
+import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 import { KgStrategyEditor } from './KgStrategyEditor.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
-const TASK_BADGE = 'rp-badge rp-badge-quiet'
+const TASK_TAG = 'rp-tag'
 
 type ImplementDone = Extract<KgImplementEvent, { type: 'done' }>
 
@@ -54,7 +57,7 @@ function ChipGroup({
       <p className='rp-eyebrow text-ink-3'>{title}</p>
       <div className='mt-1.5 flex flex-wrap gap-1.5'>
         {items.map((item) => (
-          <span key={item.label} title={item.description} className='rp-chip'>
+          <span key={item.label} title={item.description} className='rp-tag'>
             {item.label}
           </span>
         ))}
@@ -84,6 +87,8 @@ function KgPanelContent(
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<Awaited<ReturnType<typeof getAgents>>>()
   const queryClient = useQueryClient()
+  const agentsHeadingRef = useRef<HTMLSpanElement>(null)
+  const [removingAgent, setRemovingAgent] = useState<{ id: string; title: string } | null>(null)
   const [proposing, setProposing] = useState(false)
   const [proposal, setProposal] = useState<KgProposal | null>(null)
   const [applyExisting, setApplyExisting] = useState(true)
@@ -186,6 +191,8 @@ function KgPanelContent(
       if (sessionAllowed) {
         await queryClient.invalidateQueries({ queryKey: ['kb-agents', slug] })
       }
+      assertCurrent()
+      agentsHeadingRef.current?.focus()
     } catch (err) {
       if (context !== authority.controller.context) return
       setMessage(
@@ -221,123 +228,124 @@ function KgPanelContent(
   const agents = (sessionAllowed ? agentsQuery.data : snapshot) ?? []
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <p className='text-sm font-semibold text-ink'>{ui('Knowledge graph')}</p>
-          <p className='mt-0.5 text-xs text-ink-3'>
+    <div className='space-y-6 lg:space-y-8'>
+      <section className='rp-card min-w-0 p-5 lg:p-6'>
+        <SectionHeader
+          className='rp-manage-section-head'
+          title={ui('Knowledge graph')}
+          description={ui(
+            'Interrogates the corpus, designs a knowledge-graph strategy, and - once you approve it - installs it as agents on the box.',
+          )}
+          actions={
+            <Button disabled={proposing} onClick={() => void onPropose()} leadingIcon={Wand}>
+              {proposing ? ui('Interrogating the corpus…') : ui('Propose strategy')}
+            </Button>
+          }
+        />
+
+        {(proposing || implementing) && (
+          <p role='status' className='mt-3 text-sm text-ink-3'>
             {ui(
-              'Interrogates the corpus, designs a knowledge-graph strategy, and - once you approve it - installs it as agents on the box.',
+              'Waiting for the confirmed result. Progress may arrive together when the action finishes.',
             )}
           </p>
-        </div>
-        <button
-          type='button'
-          disabled={proposing}
-          onClick={() => void onPropose()}
-          className='rp-btn rp-btn-primary'
-        >
-          {proposing ? ui('Interrogating the corpus…') : ui('Propose strategy')}
-        </button>
-      </div>
+        )}
+        {proposal && (
+          <div className='mt-4 space-y-4 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border border-line bg-surface-2 p-4'>
+            <p className='text-sm text-ink-2'>{proposal.rationale}</p>
 
-      {(proposing || implementing) && (
-        <p role='status' className='mt-3 text-sm text-ink-3'>
-          {ui(
-            'Waiting for the confirmed result. Progress may arrive together when the action finishes.',
-          )}
-        </p>
-      )}
-      {proposal && (
-        <div className='mt-4 space-y-3 rounded-[var(--rp-radius)] border border-line bg-surface p-4'>
-          <p className='text-sm text-ink-2'>{proposal.rationale}</p>
+            <ChipGroup title={ui('Entity types')} items={proposal.entityTypes} />
+            <ChipGroup title={ui('Document labels')} items={proposal.resourceLabels} />
+            <ChipGroup title={ui('Passage labels')} items={proposal.chunkLabels} />
 
-          <ChipGroup title={ui('Entity types')} items={proposal.entityTypes} />
-          <ChipGroup title={ui('Document labels')} items={proposal.resourceLabels} />
-          <ChipGroup title={ui('Passage labels')} items={proposal.chunkLabels} />
+            <div className='flex flex-wrap items-center gap-4 border-t border-line pt-3'>
+              <label className='rp-check text-sm text-ink-2'>
+                <input
+                  type='checkbox'
+                  checked={applyExisting}
+                  onChange={(e) => setApplyExisting(e.target.checked)}
+                />
+                {ui('Run over existing resources')}
+              </label>
+              <label className='rp-check text-sm text-ink-2'>
+                <input
+                  type='checkbox'
+                  checked={includeSummaries}
+                  onChange={(e) => setIncludeSummaries(e.target.checked)}
+                />
+                {ui('Generate page summaries')}
+              </label>
+              <label className='rp-check text-sm text-ink-2'>
+                <input
+                  type='checkbox'
+                  checked={includeMemory}
+                  onChange={(e) => setIncludeMemory(e.target.checked)}
+                />
+                {ui('Conversation memory agent')}
+              </label>
+            </div>
+            <p className='text-xs text-ink-3'>
+              {ui(
+                "Conversation memory agent: remembers each user's research interests across conversations and sharpens future answers.",
+              )}
+            </p>
 
-          <div className='flex flex-wrap items-center gap-4 border-t border-line pt-3'>
-            <label className='flex items-center gap-2 text-sm text-ink-2'>
-              <input
-                type='checkbox'
-                checked={applyExisting}
-                onChange={(e) => setApplyExisting(e.target.checked)}
-              />
-              {ui('Run over existing resources')}
-            </label>
-            <label className='flex items-center gap-2 text-sm text-ink-2'>
-              <input
-                type='checkbox'
-                checked={includeSummaries}
-                onChange={(e) => setIncludeSummaries(e.target.checked)}
-              />
-              {ui('Generate page summaries')}
-            </label>
-            <label className='flex items-center gap-2 text-sm text-ink-2'>
-              <input
-                type='checkbox'
-                checked={includeMemory}
-                onChange={(e) => setIncludeMemory(e.target.checked)}
-              />
-              {ui('Conversation memory agent')}
-            </label>
+            <Button disabled={implementing} onClick={() => void onImplement()} leadingIcon={Plus}>
+              {implementing ? ui('Implementing…') : ui('Implement strategy')}
+            </Button>
+
+            {log.length > 0 && (
+              <ol className='max-h-56 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface p-3 text-xs'>
+                {log.map((event, index) => (
+                  <li key={index} className='flex gap-2'>
+                    {event.type === 'stage' && (
+                      <span className='font-semibold text-ink'>
+                        {stageText(event.label, { language, ui })}
+                      </span>
+                    )}
+                    {event.type === 'item' && (
+                      <span className='text-ink-2' title={event.detail}>{event.label}</span>
+                    )}
+                    {event.type === 'done' && (
+                      <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>
+                        {ui('Finished.')}
+                      </span>
+                    )}
+                    {event.type === 'error' && (
+                      <span style={{ color: 'var(--rp-bad-ink)' }}>
+                        {localError(event.message, 'The action failed. Please try again.')}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
-          <p className='text-xs text-ink-3'>
-            {ui(
-              "Conversation memory agent: remembers each user's research interests across conversations and sharpens future answers.",
-            )}
-          </p>
+        )}
 
-          <button
-            type='button'
-            disabled={implementing}
-            onClick={() => void onImplement()}
-            className='rp-btn rp-btn-primary'
-          >
-            {implementing ? ui('Implementing…') : ui('Implement strategy')}
-          </button>
+        {message && <MessagePanel message={message} className='mt-3' />}
+      </section>
 
-          {log.length > 0 && (
-            <ol className='max-h-56 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface p-3 text-xs'>
-              {log.map((event, index) => (
-                <li key={index} className='flex gap-2'>
-                  {event.type === 'stage' && (
-                    <span className='font-semibold text-ink'>
-                      {stageText(event.label, { language, ui })}
-                    </span>
-                  )}
-                  {event.type === 'item' && (
-                    <span className='text-ink-2' title={event.detail}>{event.label}</span>
-                  )}
-                  {event.type === 'done' && (
-                    <span className='font-medium' style={{ color: 'var(--rp-ok-ink)' }}>
-                      {ui('Finished.')}
-                    </span>
-                  )}
-                  {event.type === 'error' && (
-                    <span style={{ color: 'var(--rp-bad-ink)' }}>
-                      {localError(event.message, 'The action failed. Please try again.')}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
-
-      {message && <MessagePanel message={message} className='mt-3' />}
-
-      <div className='mt-4 border-t border-line pt-3'>
-        <p className='text-sm font-medium text-ink'>{ui('Agents on this box')}</p>
-        <button
-          type='button'
-          data-graph-read='agents'
-          className='rp-btn rp-btn-outline mt-2'
-          onClick={() => void onReadAgents()}
-        >
-          {ui('Load graph agents')}
-        </button>
+      <section className='rp-card min-w-0 p-5 lg:p-6'>
+        <SectionHeader
+          className='rp-manage-section-head'
+          title={
+            <span ref={agentsHeadingRef} tabIndex={-1} className='rp-focus'>
+              {ui('Agents on this box')}
+            </span>
+          }
+          actions={
+            <Button
+              variant='ghost'
+              size='sm'
+              leadingIcon={RotateCw}
+              data-graph-read='agents'
+              onClick={() => void onReadAgents()}
+            >
+              {ui('Load graph agents')}
+            </Button>
+          }
+        />
 
         {open && agentsQuery.isLoading && (
           <p className='mt-2 text-sm text-ink-3'>{ui('Loading…')}</p>
@@ -358,37 +366,46 @@ function KgPanelContent(
             {agents.map((agent) => (
               <li
                 key={agent.id}
-                className='flex items-center justify-between gap-3 bg-surface px-4 py-2.5'
+                className='flex flex-col items-start gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'
               >
-                <span className='flex min-w-0 items-center gap-2.5'>
-                  <span className={TASK_BADGE}>{agent.task}</span>
-                  <span className='truncate text-sm text-ink'>{agent.title}</span>
-                </span>
-                <button
-                  type='button'
-                  onClick={() => void onRemoveAgent(agent.id)}
-                  className='shrink-0 text-sm font-medium transition-colors duration-150'
-                  style={{ color: 'var(--rp-bad-ink)' }}
-                >
-                  {ui('Remove')}
-                </button>
+                <div className='min-w-0'>
+                  <p className='break-words text-sm font-medium text-ink'>{agent.title}</p>
+                  <span className={`${TASK_TAG} mt-1`}>{agent.task}</span>
+                </div>
+                <div className='flex items-center gap-2'>
+                  <Button
+                    variant='danger'
+                    size='sm'
+                    leadingIcon={Trash}
+                    onClick={() => setRemovingAgent({ id: agent.id, title: agent.title })}
+                  >
+                    {ui('Remove')}
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
         )}
-      </div>
+      </section>
 
-      <div className='mt-4 border-t border-line pt-3'>
-        <p className='text-sm font-medium text-ink'>{ui('Current strategy')}</p>
-        <p className='mt-0.5 text-xs text-ink-3'>
-          {ui(
-            'The entity types and worked examples that teach the extraction agent what to pull out - fully editable.',
-          )}
-        </p>
-        <div className='mt-3'>
-          <KgStrategyEditor slug={slug} />
-        </div>
-      </div>
+      <section className='rp-card min-w-0 p-5 lg:p-6'>
+        <KgStrategyEditor slug={slug} />
+      </section>
+      {removingAgent && (
+        <ConfirmActionDialog
+          title={ui('Remove graph agent?')}
+          description={ui('Remove {title} from this knowledge box?', {
+            title: removingAgent.title,
+          })}
+          confirmLabel={ui('Remove')}
+          cancelLabel={ui('Keep agent')}
+          onCancel={() => setRemovingAgent(null)}
+          onConfirm={() => {
+            void onRemoveAgent(removingAgent.id)
+            setRemovingAgent(null)
+          }}
+        />
+      )}
     </div>
   )
 }

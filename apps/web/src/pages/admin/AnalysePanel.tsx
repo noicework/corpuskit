@@ -8,6 +8,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { AnalyseEvent } from '@research-portal/core'
 import { analysePortal } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { Sparkles } from '../../components/icons.tsx'
 import type { Message } from './shared.ts'
 import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
@@ -96,23 +98,19 @@ function AnalysePanelContent({ slug }: { slug: string }) {
   }
 
   return (
-    <div className='mt-6 border-t border-line pt-5'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h3 className='text-sm font-semibold text-ink'>{ui('Analyse and configure')}</h3>
-          <p className='mt-0.5 text-xs text-ink-2'>
-            {ui('Derives the taxonomy, graph dimensions and suggested questions from the corpus.')}
-          </p>
-        </div>
-        <button
-          type='button'
-          disabled={running}
-          onClick={() => void run()}
-          className='rp-btn rp-btn-primary'
-        >
-          {running ? ui('Analysing…') : ui('Run analysis')}
-        </button>
-      </div>
+    <div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={ui('Analyse and configure')}
+        description={ui(
+          'Derives the taxonomy, graph dimensions and suggested questions from the corpus.',
+        )}
+        actions={
+          <Button leadingIcon={Sparkles} disabled={running} onClick={() => void run()}>
+            {running ? ui('Analysing…') : ui('Run analysis')}
+          </Button>
+        }
+      />
 
       {running && (
         <p role='status' className='mt-3 text-sm text-ink-3'>
@@ -122,7 +120,7 @@ function AnalysePanelContent({ slug }: { slug: string }) {
         </p>
       )}
       {log.length > 0 && (
-        <ol className='mt-3 max-h-56 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface p-3 text-xs'>
+        <ol className='mt-3 max-h-56 space-y-1 overflow-y-auto rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3 text-xs'>
           {log.map((event, index) => (
             <li key={index} className='flex gap-2'>
               {event.type === 'stage' && (

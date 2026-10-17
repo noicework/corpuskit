@@ -9,6 +9,8 @@ import { errorMessage, type Message } from './shared.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { ChevronDown, EyeOff, RotateCw, Search, Trash, Upload } from '../../components/icons.tsx'
 import {
   deletedNotice,
   DeleteDocumentButton,
@@ -73,10 +75,10 @@ function HealthRow({
     : null
 
   return (
-    <li className='bg-surface px-4 py-3'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div className='min-w-0'>
-          <p className='truncate text-sm font-medium text-ink'>{row.title}</p>
+    <li className='bg-surface px-2 py-3 sm:px-4'>
+      <div className='flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='min-w-0 flex-1'>
+          <p className='break-words text-sm font-medium text-ink'>{row.title}</p>
           <div className='mt-1 flex flex-wrap items-center gap-2'>
             {badge}
             <span className='text-xs text-ink-3'>
@@ -87,20 +89,27 @@ function HealthRow({
           </div>
         </div>
         <span className='flex shrink-0 flex-wrap items-center gap-2'>
-          <button
-            type='button'
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={row.hidden ? Upload : EyeOff}
             disabled={busy}
             onClick={() => void toggle()}
-            className='rp-btn rp-btn-outline shrink-0'
           >
             {busy ? ui('Updating…') : row.hidden ? ui('Publish') : ui('Hide')}
-          </button>
-          <DeleteDocumentButton
-            slug={slug}
-            document={row}
-            onDeleted={(outcome) => onDeleted(row, outcome)}
-            className='rp-btn rp-btn-outline shrink-0 hover:text-[var(--rp-bad-ink)]'
-          />
+          </Button>
+          <span className='relative inline-flex text-[var(--rp-bad-ink)]'>
+            <Trash
+              size='sm'
+              className='pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2'
+            />
+            <DeleteDocumentButton
+              slug={slug}
+              document={row}
+              onDeleted={(outcome) => onDeleted(row, outcome)}
+              className='rp-manage-delete-action rp-btn rp-btn-danger rp-btn-sm shrink-0'
+            />
+          </span>
         </span>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
@@ -133,7 +142,7 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
   const [notice, setNotice] = useState<
     { title: string; outcome: Parameters<typeof deletedNotice>[1] } | null
   >(null)
-  const heading = useRef<HTMLParagraphElement>(null)
+  const heading = useRef<HTMLDivElement>(null)
 
   const scan = async () => {
     setScanning(true)
@@ -172,29 +181,28 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
 
   return (
     <div
-      className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'
+      ref={heading}
+      tabIndex={-1}
+      className='rp-card p-5 lg:p-6'
       data-admin-health
     >
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div>
-          <p ref={heading} tabIndex={-1} className='text-sm font-semibold text-ink'>
-            {ui('Corpus health')}
-          </p>
-          <p className='mt-0.5 max-w-md text-xs text-ink-3'>
-            {ui(
-              'Pages that failed extraction (bot walls, empty pages) should be hidden or deleted so they can never be cited.',
-            )}
-          </p>
-        </div>
-        <button
-          type='button'
-          disabled={pending || scanning}
-          onClick={() => void scan()}
-          className='rp-btn rp-btn-primary shrink-0'
-        >
-          {scanning ? ui('Scanning…') : rows ? ui('Rescan corpus') : ui('Scan corpus')}
-        </button>
-      </div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={ui('Corpus health')}
+        description={ui(
+          'Pages that failed extraction (bot walls, empty pages) should be hidden or deleted so they can never be cited.',
+        )}
+        actions={
+          <Button
+            variant='outline'
+            leadingIcon={rows ? RotateCw : Search}
+            disabled={pending || scanning}
+            onClick={() => void scan()}
+          >
+            {scanning ? ui('Scanning…') : rows ? ui('Rescan corpus') : ui('Scan corpus')}
+          </Button>
+        }
+      />
 
       {!sessionAllowed && (
         <p className='mt-3 text-xs text-ink-3'>
@@ -259,9 +267,9 @@ function CorpusHealthPanelContent({ slug }: { slug: string }) {
                     type='button'
                     onClick={() => setHealthyOpen((open) => !open)}
                     aria-expanded={healthyOpen}
-                    className='rp-focus flex items-center gap-1.5 rounded-[var(--rp-radius-btn)] text-sm font-medium text-ink-2 transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                    className='rp-btn rp-btn-ghost rp-btn-sm'
                   >
-                    <span aria-hidden='true'>{healthyOpen ? '▾' : '▸'}</span>
+                    <ChevronDown size='sm' className={healthyOpen ? 'rotate-180' : ''} />
                     {healthy.length}
                     {ui(' healthy ')}
                     {healthy.length === 1 ? ui('resource') : ui('resources')}

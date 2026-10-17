@@ -13,6 +13,8 @@ import type { AskEvent } from '@research-portal/core'
 import { ApiError, streamAsk } from '../api/client.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { intentSummary } from './RouteChip.tsx'
+import { Button, SectionHeader } from './ui.tsx'
+import { RotateCw, X } from './icons.tsx'
 
 interface Column {
   intent: string
@@ -73,13 +75,14 @@ function RateLimitedColumn(
         {localError(message, 'The answer service is unavailable.')}
       </p>
       <div className='mt-3 flex flex-wrap items-center gap-3'>
-        <button
-          type='button'
+        <Button
+          variant='outline'
+          size='sm'
+          leadingIcon={RotateCw}
           onClick={onRetry}
-          className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
         >
           {ui('Retry now')}
-        </button>
+        </Button>
         {left > 0
           ? (
             <span className='text-xs tabular-nums' style={{ color: 'var(--rp-warn-ink)' }}>
@@ -155,26 +158,21 @@ export function CompareConfigurations(
 
   return (
     <section
-      className='rp-card mt-4 p-4'
+      className='rp-card mt-4 p-5 lg:p-6'
       aria-label={ui('Compare retrieval configurations')}
     >
-      <div className='flex items-start justify-between gap-3'>
-        <div className='min-w-0 max-w-2xl'>
-          <p className='rp-eyebrow text-ink-3'>{ui('Compare configurations')}</p>
-          <p className='mt-1 text-sm text-ink-2'>
-            {ui(
-              'The same question, two retrieval policies. Each column names the stored configuration it ran under.',
-            )}
-          </p>
-        </div>
-        <button
-          type='button'
-          onClick={onClose}
-          className='rp-btn rp-btn-ghost h-8 shrink-0 px-2 text-xs'
-        >
-          {ui('Close')}
-        </button>
-      </div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={ui('Compare configurations')}
+        description={ui(
+          'The same question, two retrieval policies. Each column names the stored configuration it ran under.',
+        )}
+        actions={
+          <Button variant='ghost' size='sm' leadingIcon={X} onClick={onClose}>
+            {ui('Close')}
+          </Button>
+        }
+      />
       <div className='mt-4 grid gap-4 lg:grid-cols-2'>
         {columns.map((col, index) => {
           const intent = intents.find((i) => i.id === col.intent)
@@ -184,14 +182,14 @@ export function CompareConfigurations(
               className='min-w-0 rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'
             >
               <div className='flex flex-wrap items-center justify-between gap-2'>
-                <label className='flex items-center gap-2 text-xs text-ink-3'>
+                <label className='flex min-w-0 max-w-full items-center gap-2 text-xs text-ink-3'>
                   <span className='sr-only'>
                     {ui('Intent for column {index}', { index: index + 1 })}
                   </span>
                   <select
                     value={col.intent}
                     onChange={(e) => run(index, e.target.value)}
-                    className='rp-input py-1 text-sm'
+                    className='rp-input rp-select min-w-0 max-w-full text-sm'
                   >
                     {intents.filter((i) => i.answer.surfaces.includes('ask')).map((i) => (
                       <option key={i.id} value={i.id}>{i.label}</option>
@@ -208,12 +206,12 @@ export function CompareConfigurations(
               </div>
               {intent
                 ? (
-                  <p className='mt-2 text-[11px] leading-relaxed text-ink-3'>
+                  <p className='mt-2 text-2xs leading-relaxed text-ink-3'>
                     {intentSummary(intent, ui)}
                   </p>
                 )
                 : null}
-              <div className='mt-3 min-h-[6rem] text-sm'>
+              <div className='rp-measure mt-3 min-h-[6rem] text-sm'>
                 {col.error && col.rateLimited
                   ? (
                     <RateLimitedColumn
@@ -228,13 +226,14 @@ export function CompareConfigurations(
                       <p className='text-[var(--rp-bad-ink)]'>
                         {localError(col.error, 'The answer service is unavailable.')}
                       </p>
-                      <button
-                        type='button'
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        leadingIcon={RotateCw}
                         onClick={() => run(index, col.intent)}
-                        className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
                       >
                         {ui('Retry')}
-                      </button>
+                      </Button>
                     </div>
                   )
                   : col.text

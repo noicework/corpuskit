@@ -2,13 +2,15 @@ import { messageFor } from './shared.ts'
 import { relativeTime } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PortalSource, SourceSyncEvent } from '../../api/client.ts'
 import { addSource, deleteSource, getSources, syncSource, updateSource } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
-import { Skeleton } from '../../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { Plus, RotateCcw, RotateCw, Trash } from '../../components/icons.tsx'
+import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { failedJobMessage, StreamedJob } from './streamed-job.ts'
@@ -49,10 +51,12 @@ function SourceRow({
   source,
   slug,
   onChanged,
+  onRemoved,
 }: {
   source: PortalSource
   slug: string
   onChanged: () => Promise<unknown>
+  onRemoved: () => void
 }) {
   const { ui, error: localError } = usePortalLocale()
 
@@ -63,6 +67,8 @@ function SourceRow({
   const [syncing, setSyncing] = useState(false)
   const [log, setLog] = useState<SourceSyncEvent[]>([])
   const [deleting, setDeleting] = useState(false)
+  const [removeOpen, setRemoveOpen] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
 
@@ -139,6 +145,7 @@ function SourceRow({
 
   const onDelete = async () => {
     setDeleting(true)
+    setRemoveError(null)
     setMessage(null)
     try {
       const result = await runExplicit(
@@ -148,9 +155,13 @@ function SourceRow({
       assertCurrent()
       if (result === undefined) return
       if (result.ok !== true) throw new AdminAccessError()
+      setRemoveOpen(false)
       assertCurrent()
       await onChanged()
+      assertCurrent()
+      onRemoved()
     } catch (err) {
+      setRemoveError(errorMessage(err, 'Could not remove that source.', localError))
       setMessage(
         messageFor(
           'error',
@@ -168,19 +179,13 @@ function SourceRow({
   const capId = `source-cap-${source.id}`
 
   return (
-    <li className='bg-surface px-4 py-3'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        {
-          /* `grow basis-64`, not `flex-1`: a 16rem basis makes a narrow panel
-            wrap the buttons onto their own line instead of squeezing the url
-            column to a useless "https://www…". `flex-1` cannot express this -
-            its `flex: 1 1 0%` shorthand resets the basis to zero. */
-        }
-        <div className='min-w-0 grow basis-64'>
-          <div className='flex flex-wrap items-center gap-2'>
-            <p className='min-w-0 truncate text-sm font-medium text-ink' title={source.url}>
-              {source.url}
-            </p>
+    <li className='bg-surface px-2 py-3 sm:px-4'>
+      <div className='flex flex-col items-start gap-3 lg:flex-row lg:justify-between'>
+        <div className='min-w-0 flex-1'>
+          <p className='break-words text-sm font-medium text-ink [overflow-wrap:anywhere]'>
+            {source.url}
+          </p>
+          <div className='mt-1 flex flex-wrap items-center gap-2'>
             {failed
               ? <span className='rp-badge rp-badge-bad'>{ui('Last sync failed')}</span>
               : source.lastSync === null
@@ -208,35 +213,42 @@ function SourceRow({
             </p>
           )}
         </div>
-        <div className='flex flex-wrap items-center gap-2'>
-          <button
+        <div className='flex shrink-0 items-center gap-2'>
+          <Button
             type='button'
             disabled={syncing}
             onClick={() => void onSync()}
-            className='rp-btn rp-btn-outline'
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
           >
             {syncing ? ui('Sending request...') : ui('Sync now')}
-          </button>
-          <button
+          </Button>
+          <Button
             type='button'
             disabled={deleting || syncing}
-            onClick={() => void onDelete()}
-            className='rp-btn rp-btn-ghost'
-            style={{ color: 'var(--rp-bad-ink)' }}
+            onClick={() => {
+              setRemoveError(null)
+              setRemoveOpen(true)
+            }}
+            variant='danger'
+            size='sm'
+            leadingIcon={Trash}
+            aria-haspopup='dialog'
           >
             {deleting ? ui('Removing…') : ui('Remove')}
-          </button>
+          </Button>
         </div>
       </div>
 
       <div className='mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-line pt-2.5'>
-        <label className='flex items-center gap-2 text-xs text-ink-2'>
+        <label className='rp-check text-sm text-ink-2'>
           <input
             type='checkbox'
             checked={source.auto}
             disabled={saving || syncing}
             onChange={(e) => void patch({ auto: e.target.checked })}
-            className='rp-focus h-4 w-4 rounded border-line'
+            className='rp-focus'
           />
           {ui('Sync automatically each day')}
         </label>
@@ -244,7 +256,7 @@ function SourceRow({
           <label htmlFor={capId} className='text-xs text-ink-2'>{ui('New pages per run')}</label>
           <select
             id={capId}
-            className='rp-input w-24 shrink-0'
+            className='rp-input rp-select w-24 shrink-0'
             value={cap}
             disabled={saving || syncing}
             onChange={(e) => void patch({ maxPages: Number(e.target.value) })}
@@ -283,6 +295,21 @@ function SourceRow({
       )}
 
       {message && <MessagePanel message={message} className='mt-3' />}
+      {removeOpen && (
+        <ConfirmActionDialog
+          title={ui('Remove website source')}
+          description={ui('Remove {url}? Pages already added to the library are kept.', {
+            url: source.url,
+          })}
+          confirmLabel={ui('Remove')}
+          cancelLabel={ui('Keep source')}
+          busy={deleting}
+          busyLabel={ui('Removing…')}
+          error={removeError}
+          onConfirm={() => void onDelete()}
+          onCancel={() => setRemoveOpen(false)}
+        />
+      )}
     </li>
   )
 }
@@ -309,6 +336,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
   const [auto, setAuto] = useState(true)
   const [adding, setAdding] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
+  const heading = useRef<HTMLSpanElement>(null)
 
   const query = useQuery({
     queryKey: ['admin-sources', slug],
@@ -387,34 +415,49 @@ function SourcesPanelContent({ slug }: { slug: string }) {
   }
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
-      <div>
-        <p className='text-sm font-semibold text-ink'>{ui('Website sources')}</p>
-        <p className='mt-0.5 text-xs text-ink-3'>
-          {ui(
-            'Register a website or sitemap once. Each source is re-checked daily, and pages published since the last check are ingested automatically. Pages already taken from a source are never ingested twice.',
-          )}
-        </p>
-      </div>
-
-      <form onSubmit={onSubmit} className='mt-3 flex flex-wrap items-end gap-2'>
-        <div className='min-w-[min(16rem,100%)] flex-1'>
-          <label
-            htmlFor={`source-url-${slug}`}
-            className='mb-1.5 block text-sm font-medium text-ink'
+    <section className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={<span ref={heading} tabIndex={-1}>{ui('Website sources')}</span>}
+        description={ui(
+          'Register a website or sitemap once. Each source is re-checked daily, and pages published since the last check are ingested automatically. Pages already taken from a source are never ingested twice.',
+        )}
+        actions={
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+            disabled={pending}
+            onClick={() => void refresh()}
           >
-            {ui('Site or sitemap URL')}
-          </label>
-          <input
-            id={`source-url-${slug}`}
-            type='url'
-            className='rp-input'
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder={ui('https://example.com/sitemap.xml')}
-            autoComplete='off'
-            required
-          />
+            {ui('Refresh sources')}
+          </Button>
+        }
+      />
+
+      <form
+        onSubmit={onSubmit}
+        className='mt-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_auto]'
+      >
+        <div className='min-w-0 sm:col-span-2 lg:col-span-1'>
+          <div className='min-w-[min(16rem,100%)] flex-1'>
+            <label
+              htmlFor={`source-url-${slug}`}
+              className='mb-1.5 block text-sm font-medium text-ink'
+            >
+              {ui('Site or sitemap URL')}
+            </label>
+            <input
+              id={`source-url-${slug}`}
+              type='url'
+              className='rp-input'
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder={ui('https://example.com/sitemap.xml')}
+              autoComplete='off'
+              required
+            />
+          </div>
         </div>
         <div>
           <label
@@ -425,24 +468,24 @@ function SourcesPanelContent({ slug }: { slug: string }) {
           </label>
           <select
             id={`source-cap-${slug}`}
-            className='rp-input'
+            className='rp-input rp-select'
             value={maxPages}
             onChange={(e) => setMaxPages(Number(e.target.value))}
           >
             {PAGE_CAPS.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
-        <button type='submit' disabled={adding} className='rp-btn rp-btn-primary'>
+        <Button type='submit' disabled={adding} leadingIcon={Plus}>
           {adding ? ui('Checking site…') : ui('Add source')}
-        </button>
+        </Button>
       </form>
 
-      <label className='mt-2 flex items-center gap-2 text-xs text-ink-2'>
+      <label className='rp-check mt-2 text-sm text-ink-2'>
         <input
           type='checkbox'
           checked={auto}
           onChange={(e) => setAuto(e.target.checked)}
-          className='rp-focus h-4 w-4 rounded border-line'
+          className='rp-focus'
         />
         {ui('Sync this source automatically each day')}
       </label>
@@ -450,14 +493,6 @@ function SourcesPanelContent({ slug }: { slug: string }) {
       {message && <MessagePanel message={message} className='mt-3' />}
 
       <div className='mt-4 border-t border-line pt-3'>
-        <button
-          type='button'
-          className='rp-btn rp-btn-outline mb-3'
-          disabled={pending}
-          onClick={() => void refresh()}
-        >
-          {ui('Refresh sources')}
-        </button>
         {!sessionAllowed && (
           <p className='mb-3 text-xs text-ink-3'>
             {ui('Sources are a snapshot. Refresh explicitly after changes.')}
@@ -473,13 +508,15 @@ function SourcesPanelContent({ slug }: { slug: string }) {
         {isError && (
           <p className='text-sm text-ink-3'>
             {ui('Could not load sources.')}{' '}
-            <button
+            <Button
               type='button'
               onClick={() => void refresh()}
-              className='font-medium text-ink-2 hover:text-[var(--rp-ink)]'
+              variant='ghost'
+              size='sm'
+              leadingIcon={RotateCcw}
             >
               {ui('Try again')}
-            </button>
+            </Button>
           </p>
         )}
 
@@ -499,12 +536,13 @@ function SourcesPanelContent({ slug }: { slug: string }) {
                 source={source}
                 slug={slug}
                 onChanged={onChanged}
+                onRemoved={() => heading.current?.focus()}
               />
             ))}
           </ul>
         )}
       </div>
-    </div>
+    </section>
   )
 }
 
