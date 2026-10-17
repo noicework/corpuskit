@@ -56,6 +56,7 @@ import { plainDashes } from '../lib/display-title.ts'
 import { extractedTextHint, extractedTextMode, extractedTextToggleLabel } from './extracted-text.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { useResizableRail } from '../components/useResizableRail.ts'
+import { ArrowLeft, Download, ExternalLink, MessageSquare } from '../components/icons.tsx'
 
 /** Publish year from an ISO date, or null when the date is missing/unparseable. */
 function formatYear(iso: string): string | null {
@@ -512,7 +513,7 @@ function TranscriptPanel(
                         else rowRefs.current.delete(index)
                       }}
                       onClick={() => seekTo(segment.startSec)}
-                      className='flex w-full items-start gap-3 px-3.5 py-2 text-left text-sm transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+                      className='rp-focus flex min-h-[1.5rem] w-full items-start gap-3 px-3.5 py-2 text-left text-sm transition-colors duration-150 hover:bg-[var(--rp-surface-2)] max-lg:min-h-[2.75rem] pointer-coarse:min-h-[2.75rem]'
                       style={isHighlighted
                         ? {
                           backgroundColor:
@@ -604,7 +605,7 @@ function GeneratedSummary({ text }: { text: string }) {
         {ui('Generated summary')}
       </h3>
       <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>{plainDashes(text)}</p>
-      <p className='mt-2 text-[11px] text-ink-3'>
+      <p className='mt-2 text-2xs text-ink-3'>
         {ui(
           "Written by the portal from the document's text. Check it against the document itself.",
         )}
@@ -717,6 +718,7 @@ function OriginalFileActions(
   return (
     <div className='flex flex-wrap gap-2'>
       <a href={fileUrl} download className='rp-btn rp-btn-primary font-semibold'>
+        <Download size='sm' />
         {ui(label)}
       </a>
       <a
@@ -725,6 +727,7 @@ function OriginalFileActions(
         rel='noopener noreferrer'
         className='rp-btn rp-btn-outline'
       >
+        <ExternalLink size='sm' />
         {ui('Open in a new tab')}
       </a>
     </div>
@@ -993,9 +996,9 @@ function BackToLibrary({ slug }: { slug: string }) {
     <Link
       to={`/t/${slug}/library`}
       aria-label={ui('Back to library')}
-      className='rp-focus -ml-2 inline-flex h-9 min-w-9 shrink-0 items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-2 text-sm font-medium text-ink-3 transition-colors duration-150 hover:text-ink'
+      className='rp-link-standalone -ml-2 min-w-6 shrink-0 px-2 text-sm font-medium'
     >
-      <span aria-hidden='true' className='shrink-0'>&larr;</span>
+      <ArrowLeft size='sm' />
       <span className='sm:hidden'>{language === 'ja' ? ui('Back') : ui('Library')}</span>
       <span className='hidden truncate sm:inline'>{ui('Back to library')}</span>
     </Link>
@@ -1033,7 +1036,6 @@ function ManagerDelete({ slug, resource }: { slug: string; resource: ResourceSum
         document={resource}
         onDocumentPage
         icon
-        className='rp-btn rp-btn-outline h-8 px-2.5 text-xs hover:text-[var(--rp-bad-ink)]'
         onDeleted={(outcome) =>
           navigate(`/t/${slug}/library`, {
             state: { notice: deletedNotice(resource.title, outcome, ui) },
@@ -1090,8 +1092,7 @@ function ResourceHeader(
     <header>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <BackToLibrary slug={slug} />
-        <div className='flex shrink-0 items-center gap-2'>
-          <ManagerDelete slug={slug} resource={resource} />
+        <div className='ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2'>
           {
             /* Just "Save" with a bookmark glyph. The picker it opens is
             * titled "Save to investigation", so the destination is stated the
@@ -1106,6 +1107,7 @@ function ResourceHeader(
               resourceTitle: resource.title,
             }}
           />
+          <ManagerDelete slug={slug} resource={resource} />
         </div>
       </div>
 
@@ -1121,7 +1123,7 @@ function ResourceHeader(
           <Link
             key={topic.id}
             to={`/t/${slug}/library?topics=${encodeURIComponent(topic.id)}`}
-            className='rp-focus rp-badge rp-badge-quiet min-h-6 transition-colors duration-150 hover:text-ink'
+            className='rp-focus rp-badge rp-badge-quiet min-h-[1.5rem] min-w-[1.5rem] justify-center transition-colors duration-150 hover:text-ink max-lg:min-h-[2.75rem] max-lg:min-w-[2.75rem] pointer-coarse:min-h-[2.75rem] pointer-coarse:min-w-[2.75rem]'
           >
             {topic.label}
           </Link>
@@ -1159,10 +1161,10 @@ function ResourceHeader(
               href={originUrl}
               target='_blank'
               rel='noopener noreferrer'
-              className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] text-xs font-medium underline decoration-dotted underline-offset-2'
+              className='rp-focus inline-flex min-h-[1.5rem] items-center gap-1.5 rounded-[var(--rp-radius-btn)] text-xs font-medium underline decoration-dotted underline-offset-2 max-lg:min-h-[2.75rem] pointer-coarse:min-h-[2.75rem]'
               style={{ color: 'var(--rp-accent-fg)' }}
             >
-              {ui('View original source')} <span aria-hidden='true'>&rarr;</span>
+              {ui('View original source')} <ExternalLink size='sm' />
             </a>
           )
           : null}
@@ -1337,18 +1339,7 @@ function DocumentChat(
   return (
     <section className='rp-card p-5 sm:p-6' aria-labelledby='chat-heading'>
       <div className='flex items-center gap-2'>
-        <svg
-          viewBox='0 0 24 24'
-          fill='none'
-          stroke='currentColor'
-          strokeWidth={1.8}
-          strokeLinecap='round'
-          strokeLinejoin='round'
-          aria-hidden='true'
-          className='h-[1.125rem] w-[1.125rem] shrink-0 text-ink-3'
-        >
-          <path d='M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' />
-        </svg>
+        <MessageSquare className='shrink-0 text-ink-3' />
         <h2 id='chat-heading' className='text-base font-semibold leading-6 text-ink'>
           {ui('Chat with this document')}
         </h2>
@@ -1370,7 +1361,7 @@ function DocumentChat(
             type='text'
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            className='min-w-0 flex-1 border-0 bg-transparent py-1.5 text-sm text-ink focus:outline-none'
+            className='min-h-[1.5rem] min-w-0 flex-1 border-0 bg-transparent py-1.5 text-sm text-ink focus:outline-none max-lg:min-h-[2.75rem] pointer-coarse:min-h-[2.75rem]'
           />
           <button type='submit' className='rp-btn rp-btn-primary shrink-0 font-semibold'>
             {ui('Ask')}
@@ -1398,7 +1389,7 @@ function DocumentChat(
                 key={text}
                 type='button'
                 onClick={() => askStarter(text)}
-                className='rp-focus rounded-[var(--rp-radius-chip)] border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium text-ink-2 transition-colors duration-150 hover:text-ink'
+                className='rp-focus min-h-[1.5rem] rounded-[var(--rp-radius-chip)] border border-line bg-surface-2 px-3 py-1.5 text-xs font-medium text-ink-2 transition-colors duration-150 hover:text-ink max-lg:min-h-[2.75rem] pointer-coarse:min-h-[2.75rem]'
               >
                 {text}
               </button>
@@ -1545,7 +1536,7 @@ function MatchesPanel(
             <button
               type='button'
               onClick={() => onJump(index)}
-              className='rp-focus block w-full rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-left text-xs leading-relaxed text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+              className='rp-focus block min-h-[1.5rem] w-full rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-left text-xs leading-relaxed text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] max-lg:min-h-[2.75rem] pointer-coarse:min-h-[2.75rem]'
             >
               <span className='rp-clamp-2'>{blockTexts[index]}</span>
             </button>
