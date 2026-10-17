@@ -251,7 +251,7 @@ Deno.test('Ask verdict success is current and a pending verdict cannot restore o
       .toHaveLength(1)
     await page.evaluate(() =>
       [...document.querySelectorAll('button')].find((button) =>
-        button.textContent?.trim() === '+ New session'
+        button.textContent?.trim() === 'New session'
       )!.click()
     )
     const pending = server.delayResponse('/api/t/marine/verdicts')

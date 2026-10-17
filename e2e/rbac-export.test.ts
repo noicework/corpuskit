@@ -166,9 +166,13 @@ for (const removed of ['portal.watch', 'portal.export', 'portal.generate'] as co
       await page.waitForSelector('#ask-composer')
       await completedAsk(page)
       await sinks(page)
-      expect(await page.$('button[aria-label="Add to Watches"]') !== null).toBe(
-        removed !== 'portal.watch',
-      )
+      expect(
+        await page.evaluate(() =>
+          [...document.querySelectorAll('button')].some((button) =>
+            (button.getAttribute('aria-label') ?? button.textContent)?.trim() === 'Add to Watches'
+          )
+        ),
+      ).toBe(removed !== 'portal.watch')
       const hasExport = await page.evaluate(() =>
         [...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Export')
       )
@@ -349,9 +353,8 @@ Deno.test('Ask hides empty export, blocks streaming keyboard export and retires 
     )
     await page.waitForFunction(() => document.body.textContent?.includes('Saved what-affects'))
     await page.evaluate(() =>
-      [...document.querySelectorAll('button')].find((b) =>
-        b.textContent?.trim() === '+ New session'
-      )!.click()
+      [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'New session')!
+        .click()
     )
     expect(await page.evaluate(() => document.body.textContent)).not.toContain('Saved what-affects')
   } finally {
@@ -411,13 +414,14 @@ Deno.test('Ask watch completion cannot announce success on another session', asy
     await completedAsk(page)
     const delayed = server.delayResponse('/api/t/marine/watches')
     await page.evaluate(() =>
-      document.querySelector<HTMLButtonElement>('button[aria-label="Add to Watches"]')!.click()
+      [...document.querySelectorAll('button')].find((button) =>
+        (button.getAttribute('aria-label') ?? button.textContent)?.trim() === 'Add to Watches'
+      )!.click()
     )
     await delayed.entered
     await page.evaluate(() =>
-      [...document.querySelectorAll('button')].find((b) =>
-        b.textContent?.trim() === '+ New session'
-      )!.click()
+      [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'New session')!
+        .click()
     )
     delayed.release()
     await new Promise((resolve) => setTimeout(resolve, 100))
