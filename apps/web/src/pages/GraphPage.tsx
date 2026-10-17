@@ -414,7 +414,7 @@ function EntityPanel({
             }}
             aria-hidden='true'
           />
-          <h2 className='font-display text-lg leading-tight text-ink'>{node.label}</h2>
+          <h2 className='rp-display text-lg leading-tight text-ink'>{node.label}</h2>
         </div>
         <p className='mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
           <span
@@ -622,7 +622,7 @@ function ConceptPanel({
     <>
       <div className='pr-8'>
         <p className='rp-eyebrow text-ink-3'>{isTopic ? ui('Topic') : ui('Kind')}</p>
-        <h2 className='mt-1 font-display text-lg text-ink'>{node.label}</h2>
+        <h2 className='rp-display mt-1 text-lg text-ink'>{node.label}</h2>
         <p
           className='mt-1 text-xs font-semibold uppercase tracking-wide'
           style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
@@ -1290,22 +1290,7 @@ export function GraphPage() {
           }
           <div className='relative py-3' style={{ paddingInline: '1.5rem' }}>
             <div className='flex flex-wrap items-baseline justify-between gap-x-2'>
-              {
-                /* At the house heading size the title cannot share a row with
-                  the five glyph controls on any phone, so they take the row
-                  below. That also retires the nowrap this title used to carry:
-                  it was there because the title had about 144px beside the
-                  controls and .rp-display's `text-wrap: balance` outranks the
-                  nowrap inside `truncate`, so it would have taken a second line
-                  and the strip's height with it. Sharing its row with only the
-                  counts it has 34px of slack at 320px, so it cannot wrap at the
-                  default font - and where it genuinely cannot fit, at 320px with
-                  a scaled-up root font, the counts wrap below it and balance
-                  takes a second line rather than nowrap clipping a two-word page
-                  title to "Knowledge ma…". `truncate` stays for its overflow
-                  guard, which still catches a single unbreakable word. */
-              }
-              <h1 className='rp-display truncate text-xl text-[var(--rp-on-primary)]'>
+              <h1 className='rp-display min-w-0 break-words text-xl text-[var(--rp-on-primary)]'>
                 {ui('Knowledge map')}
               </h1>
               {hasGraph
@@ -1324,7 +1309,7 @@ export function GraphPage() {
                 )
                 : null}
             </div>
-            <div className='mt-2 flex items-center justify-end gap-1.5'>
+            <div className='mt-2 flex flex-wrap items-center justify-end gap-2'>
               <div className='rp-seg rp-seg-on-brand rp-graph-brand-seg'>
                 <button
                   type='button'

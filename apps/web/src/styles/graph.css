@@ -1,5 +1,5 @@
 /* Brand controls keep the identity surface and a contrasting selected fill. */
-.rp-graph-brand-seg {
+.rp-graph-brand-seg.rp-seg {
   background: var(--rp-primary);
 }
 
@@ -16,4 +16,23 @@
 .rp-graph-brand-seg .rp-seg-item[aria-pressed='true']:hover:not(:disabled) {
   background: var(--rp-on-primary);
   color: var(--rp-primary);
+}
+
+/* The hover card follows text scaling while projected map captions stay in pixels. */
+.rp-map3d .rp-graph-popup {
+  padding: 0.625rem 0.75rem;
+  background: var(--rp-surface);
+}
+
+.rp-graph-popup .rp-graph-popup-name {
+  font-size: 0.875rem;
+}
+
+.rp-graph-popup .rp-graph-popup-meta,
+.rp-graph-popup .rp-graph-popup-hint {
+  font-size: 0.6875rem;
+}
+
+.rp-graph-popup .rp-graph-popup-counts {
+  font-size: 0.75rem;
 }

@@ -249,7 +249,7 @@ export function KnowledgeMap3D({
       const following = done !== null && done.id === id && done.pulse === focusPulse
       if (
         following && done.box.left === insets.left && done.box.right === insets.right &&
-        done.box.bottom === insets.bottom
+        done.box.top === insets.top && done.box.bottom === insets.bottom
       ) return
       const dist = engine.focusOn(id, following ? done.dist : null)
       focusServicedRef.current = { id, pulse: focusPulse, box: insets, dist }
@@ -258,7 +258,7 @@ export function KnowledgeMap3D({
     focusServicedRef.current = null
     if (!previous || !engine.focusOwned) return
     const dx = ((insets.left - previous.left) - (insets.right - previous.right)) / 2
-    const dy = -(insets.bottom - previous.bottom) / 2
+    const dy = ((insets.top - previous.top) - (insets.bottom - previous.bottom)) / 2
     engine.nudgeForInsets(dx, dy)
   }, [focusId, selectedId, focusPulse, insets])
 
