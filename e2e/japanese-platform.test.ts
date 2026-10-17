@@ -184,8 +184,13 @@ Deno.test('Japanese platform help and access preserve source identities across d
               document.querySelector('article')?.textContent?.includes('Cmd/Ctrl+K')
             ),
           ).toBe(true)
+          // The documentation page owns its h1; the selected guide is the
+          // article's h2 so the page keeps one ordered heading hierarchy.
+          expect(await page.evaluate(() => document.querySelectorAll('main h1').length)).toBe(1)
           expect(
-            await page.evaluate(() => document.querySelector('article h1')?.textContent?.trim()),
+            await page.evaluate(() =>
+              document.querySelector('article header h2')?.textContent?.trim()
+            ),
           ).toBe(language === 'ja' ? 'はじめに' : 'Getting started')
           await capture('help-body', 'article')
           await visit('/t/marine/how-it-works')
@@ -225,11 +230,13 @@ Deno.test('Japanese platform help and access preserve source identities across d
             { args: [language === 'ja' ? 'プロフィール' : 'Profile'] },
           )
           await page.keyboard.press('Enter')
-          await page.waitForSelector('[role=dialog]')
+          await page.waitForSelector('dialog[open]')
           expect(
-            await page.evaluate(() =>
-              document.querySelector('[role=dialog] h2')?.textContent?.trim()
-            ),
+            await page.evaluate(() => {
+              const dialog = document.querySelector('dialog[open]')!
+              return document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent
+                ?.trim()
+            }),
           ).toBe(language === 'ja' ? 'プロフィール' : 'Profile')
           await capture('profile')
           await page.keyboard.press('Escape')
