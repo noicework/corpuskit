@@ -3117,7 +3117,11 @@ button:disabled,
 /* CorpusKit's public homepage identity, shared by the documentation demo. */
 .rp-corpuskit-hero {
   --rp-primary: #155da6;
+  /* Hero roles follow the blue ground, so chips and secondary text drawn from them stay legible. */
+  --rp-hero-from: #155da6;
+  --rp-hero-to: #155da6;
   --rp-on-hero: #ffffff;
+  --rp-on-hero-2: #dce8f4;
   --rp-on-primary: #ffffff;
   background: #155da6;
   color: #ffffff;
