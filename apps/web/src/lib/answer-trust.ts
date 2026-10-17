@@ -48,6 +48,8 @@ export interface StreamedAnswer {
   refused?: boolean
   /** The generation stopped mid-sentence and was cut back to its last complete sentence. */
   truncated?: boolean
+  /** No citation could be tied to a passage: the sources are the ones consulted (D8-01). */
+  unlinked?: boolean
 }
 
 export const EMPTY_ANSWER: StreamedAnswer = { text: '', citations: [], sources: [] }
@@ -97,6 +99,7 @@ export function applyAnswerEvent<T extends StreamedAnswer>(answer: T, event: Ask
         text: event.text ?? answer.text,
         refused: event.refused ?? false,
         truncated: event.truncated === true,
+        unlinked: event.citationPresentation === 'unlinked',
       }
     default:
       return answer

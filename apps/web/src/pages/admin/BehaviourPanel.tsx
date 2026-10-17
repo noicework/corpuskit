@@ -24,7 +24,8 @@ function validPrompts(value: Prompts): Prompts {
   if (
     !value || typeof value !== 'object' || Array.isArray(value) ||
     (value.ask !== undefined && typeof value.ask !== 'string') ||
-    (value.images !== undefined && typeof value.images !== 'boolean')
+    (value.images !== undefined && typeof value.images !== 'boolean') ||
+    (value.uncitedAnswers !== undefined && !['show', 'refuse'].includes(value.uncitedAnswers))
   ) throw new AdminAccessError()
   return value
 }
@@ -62,6 +63,9 @@ function AskPromptEditor({ slug }: { slug: string }) {
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const [value, setValue] = useState('')
   const [images, setImages] = useState(false)
+  // D8-01: an answer no citation could be tied to is shown with its sources consulted unless
+  // the portal refuses such answers.
+  const [showUnlinked, setShowUnlinked] = useState(true)
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<Message | null>(null)
@@ -77,6 +81,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
     if (data && !loaded) {
       setValue(data.ask ?? '')
       setImages(data.images ?? false)
+      setShowUnlinked(data.uncitedAnswers !== 'refuse')
       setLoaded(true)
     }
   }, [data, loaded])
@@ -93,6 +98,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
       if (result === undefined) return
       setValue(result.ask ?? '')
       setImages(result.images ?? false)
+      setShowUnlinked(result.uncitedAnswers !== 'refuse')
       setLoaded(true)
     } catch (err) {
       if (context !== authority.controller.context) return
@@ -112,7 +118,11 @@ function AskPromptEditor({ slug }: { slug: string }) {
     setMessage(null)
     try {
       const result = await runExplicit(ui('Save the ask prompt'), async (access) => {
-        const saved = await savePrompts(slug, access, { ask: value.trim() || undefined, images })
+        const saved = await savePrompts(slug, access, {
+          ask: value.trim() || undefined,
+          images,
+          uncitedAnswers: showUnlinked ? 'show' : 'refuse',
+        })
         if (saved?.ok !== true) throw new AdminAccessError()
         return true
       })
@@ -180,6 +190,21 @@ function AskPromptEditor({ slug }: { slug: string }) {
       <p className='mt-1 text-xs text-ink-3'>
         {ui(
           'Uses visual content (page images, tables) as extra context when answering - useful for PDF-heavy corpora.',
+        )}
+      </p>
+      <label className='mt-3 flex items-center gap-2 text-sm text-ink-2'>
+        <input
+          type='checkbox'
+          data-behaviour-unlinked
+          disabled={busy || !loaded}
+          checked={showUnlinked}
+          onChange={(e) => setShowUnlinked(e.target.checked)}
+        />
+        {ui('Show answers that cannot be linked to specific passages')}
+      </label>
+      <p className='mt-1 text-xs text-ink-3'>
+        {ui(
+          'Such an answer carries a note and lists the sources consulted. Turn this off to decline instead. An answer is always declined when nothing relevant was found.',
         )}
       </p>
       <div className='mt-3 flex items-center gap-3'>

@@ -4545,22 +4545,33 @@ export class AragProvider implements RetrievalProvider {
             byId.get(resourceId)?.title ?? sources.find((s) => s.id === resourceId)?.title ??
               'Untitled resource'
           const parsedFootnotes = footnotes?.finish()
-          if (
-            parsedFootnotes && parsedFootnotes.anchors.length === 0 &&
+          // The service can answer a footnote request with standard offset attribution and
+          // no markers at all: that attribution is bound the standard way, through the same
+          // scope check, rather than failing an answer it verifiably supports.
+          const standardInstead = !!parsedFootnotes && parsedFootnotes.references === 0 &&
             Object.keys(citationsMapAccum).length > 0
-          ) {
-            // The service returned standard attribution despite our explicit
-            // footnote request. Do not quietly accept an uncited answer.
-            throw new FootnoteError('unexpected_standard_citations')
-          }
           let bound: ReturnType<typeof bindFootnotes>
-          if (parsedFootnotes) {
-            bound = bindFootnotes(parsedFootnotes, citable, resolveTitle, extraContext.resources)
+          if (parsedFootnotes && !standardInstead) {
+            bound = bindFootnotes(
+              parsedFootnotes,
+              citable,
+              resolveTitle,
+              extraContext.resources,
+              !!(opts.resourceId || opts.resourceIds?.length || opts.docScope),
+            )
+            // Markers that resolved nothing were dropped, never guessed. Counts only.
+            if (bound.unresolved > 0) {
+              console.info(JSON.stringify({
+                event: 'arag_footnote_repaired',
+                unresolved: bound.unresolved,
+                kept: bound.citations.length,
+              }))
+            }
           } else {
             const scoped = scopeCitationsMap(citationsMapAccum, citable, extraContext.resources)
             bound = {
               ...spliceCitationMarkers(
-                fullAnswer,
+                parsedFootnotes ? parsedFootnotes.text : fullAnswer,
                 scoped.citations,
                 // Both branches already resolve through toSummary/displayTitle,
                 // so this never surfaces a raw hash - but a resource id absent
@@ -4570,6 +4581,7 @@ export class AragProvider implements RetrievalProvider {
                 resolveTitle,
               ),
               generated: scoped.generated,
+              unresolved: 0,
             }
           }
           // A reference to a generated summary binds to its resource or is

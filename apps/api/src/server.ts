@@ -20,7 +20,7 @@ import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
 import { platformShellResponse } from './platform-shell.ts'
-import { llmsTxt, robotsTag, robotsTxt, sitemapXml } from './search-files.ts'
+import { llmsTxt, robotsTag, robotsTxt, sitemapXml, withRobotsMeta } from './search-files.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
 import { showcasePortalsWarning } from './tenants.ts'
@@ -235,9 +235,12 @@ Deno.serve({ port, hostname: process.env.HOST ?? '0.0.0.0' }, async (request, in
   if (!tag || response.headers.has('x-robots-tag')) return response
   const headers = new Headers(response.headers)
   headers.set('x-robots-tag', tag)
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  })
+  return await withRobotsMeta(
+    new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    }),
+    tag,
+  )
 })

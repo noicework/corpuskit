@@ -368,6 +368,7 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'Retrieved for “': '検索した質問：「',
   'Retrieved sources': '取得した資料',
   'Retrieved, but not cited in the answer': '取得しましたが、回答では引用していません',
+  'Sources consulted': '参照した資料',
   'Retrieving evidence…': '根拠を検索中…',
   'Retry now': '今すぐ再試行',
   'Retrying in': '再試行まで',

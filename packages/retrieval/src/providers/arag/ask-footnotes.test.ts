@@ -219,15 +219,19 @@ Deno.test('grouping is generation guidance, not post-generation removal of repea
   }
 })
 
-Deno.test('broken or excluded references fail explicitly without success or standard-mode retry', async () => {
-  for (
-    const options of [
-      { broken: true },
-      { id: 'unknown/f/pdf/0-16' },
-      { id: 'USER_CONTEXT_0' },
-      { doc: true },
-    ]
-  ) {
+Deno.test('unresolvable references keep the prose; out-of-scope ones still fail explicitly', async () => {
+  for (const options of [{ broken: true }, { id: 'USER_CONTEXT_0' }]) {
+    const f = fixture(options)
+    const events = await collect(f.provider)
+    expect(events.some((e) => e.type === 'citation' || e.type === 'error')).toBe(false)
+    const done = events.find((e) => e.type === 'done')
+    // The prose stands without a marker that could not be tied to a passage.
+    expect(done && done.type === 'done' && !done.refused && done.text?.trim()).toBe(
+      '## Findings\n\nStocks recovered.',
+    )
+    expect(f.bodies.length).toBe(1)
+  }
+  for (const options of [{ id: 'unknown/f/pdf/0-16' }, { doc: true }]) {
     const f = fixture(options)
     const events = await collect(f.provider)
     expect(events.some((e) => e.type === 'citation')).toBe(false)
@@ -258,7 +262,11 @@ Deno.test('document pins reject references leaked by weak platform filters', asy
   }
 })
 
-Deno.test('standard attribution returned despite the footnote request is not silently accepted', async () => {
+Deno.test('standard attribution returned despite the footnote request is bound the standard way', async () => {
+  const resource = {
+    title: 'Original report',
+    fields: { 'f/pdf': { paragraphs: { 'report/f/pdf/0-16': { score: 0.9, text: 'x' } } } },
+  }
   const footnoteProvider = new AragProvider({
     resolveBinding: () => ({
       baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
@@ -266,8 +274,10 @@ Deno.test('standard attribution returned despite the footnote request is not sil
     }),
     fetchImpl: async (input) => {
       if (String(input).includes('/catalog')) return Response.json({ resources: {} })
+      if (String(input).includes('/predict/remi')) return Response.json({})
       return new Response(
         [
+          { item: { type: 'retrieval', results: { resources: { report: resource } } } },
           { item: { type: 'answer', text: 'Stocks recovered.' } },
           { item: { type: 'citations', citations: { 'report/f/pdf/0-16': [[0, 17]] } } },
         ].map((item) => JSON.stringify(item)).join('\n') + '\n',
@@ -275,8 +285,14 @@ Deno.test('standard attribution returned despite the footnote request is not sil
     },
   })
   const events = await collect(footnoteProvider)
-  expect(events.some((e) => e.type === 'error')).toBe(true)
-  expect(events.some((e) => e.type === 'done')).toBe(false)
+  expect(events.some((e) => e.type === 'error')).toBe(false)
+  expect(
+    events.filter((e) => e.type === 'citation').map((e) =>
+      e.type === 'citation' && e.citation.resourceId
+    ),
+  ).toEqual(['report'])
+  const done = events.find((e) => e.type === 'done')
+  expect(done && done.type === 'done' && done.text).toBe('Stocks recovered.[1]')
 })
 
 Deno.test('standard mode remains available through server construction only', async () => {
@@ -301,36 +317,48 @@ Deno.test('structured JSON never receives either citation mode', async () => {
   expect(f.bodies[0]?.citations).toBeUndefined()
 })
 
-Deno.test('footnote validation logs fixed reason codes without leaking source IDs or payloads', async () => {
+Deno.test('footnote repair and failure log fixed codes and counts, never source IDs or payloads', async () => {
   const originalError = console.error
-  const logs: unknown[][] = []
-  console.error = (...args: unknown[]) => logs.push(args)
+  const originalInfo = console.info
+  const errors: unknown[][] = []
+  const info: unknown[][] = []
+  console.error = (...args: unknown[]) => errors.push(args)
+  console.info = (...args: unknown[]) => info.push(args)
   try {
     for (
-      const [id, reason] of [
-        ['USER_CONTEXT_0', 'anonymous_context'],
-        ['report/a/private-metadata/0-16', 'metadata_context'],
-        ['private-excluded-source/f/pdf/0-16', 'out_of_scope'],
-        ['private-unsupported-value', 'unsupported_context'],
+      const id of [
+        'USER_CONTEXT_0',
+        'report/a/private-metadata/0-16',
+        'private-unsupported-value',
       ]
     ) {
       const f = fixture({ id })
       const events = await collect(f.provider)
-      expect(events.some((e) => e.type === 'done' || e.type === 'citation')).toBe(false)
-      expect(events.filter((e) => e.type === 'error')).toEqual([{
-        type: 'error',
-        message: 'The response citation links could not be verified. Please try again.',
-      }])
-      expect(logs.at(-1)).toEqual([JSON.stringify({
-        event: 'arag_footnote_validation_failed',
-        reason,
+      expect(events.some((e) => e.type === 'error' || e.type === 'citation')).toBe(false)
+      expect(events.some((e) => e.type === 'done' && !e.refused)).toBe(true)
+      expect(info.at(-1)).toEqual([JSON.stringify({
+        event: 'arag_footnote_repaired',
+        unresolved: 1,
+        kept: 0,
       })])
-      expect(f.bodies.length).toBe(1)
     }
-    expect(logs.length).toBe(4)
-    expect(JSON.stringify(logs)).not.toMatch(/private|USER_CONTEXT|block-AA|Stocks|report/)
+    const f = fixture({ id: 'private-excluded-source/f/pdf/0-16' })
+    const events = await collect(f.provider)
+    expect(events.some((e) => e.type === 'done' || e.type === 'citation')).toBe(false)
+    expect(events.filter((e) => e.type === 'error')).toEqual([{
+      type: 'error',
+      message: 'The response citation links could not be verified. Please try again.',
+    }])
+    expect(errors.at(-1)).toEqual([JSON.stringify({
+      event: 'arag_footnote_validation_failed',
+      reason: 'out_of_scope',
+    })])
+    expect(f.bodies.length).toBe(1)
+    expect(errors.length).toBe(1)
+    expect(JSON.stringify([errors, info])).not.toMatch(/private|USER_CONTEXT|block-AA|Stocks/)
   } finally {
     console.error = originalError
+    console.info = originalInfo
   }
 })
 

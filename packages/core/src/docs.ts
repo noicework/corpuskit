@@ -353,7 +353,7 @@ export const DOC_PAGES: DocPage[] = [
       {
         heading: 'What it deliberately does not do',
         body:
-          '- It never answers without a source. An answer with nothing to cite is not shown.\n' +
+          '- It never answers without a source. When nothing relevant is found it declines; when an answer draws on relevant sources but cannot be linked to specific passages, it says so and lists the sources it consulted.\n' +
           '- It says plainly when the collection does not hold something, and shows the closest ' +
           'passages it found, rather than filling the gap.\n' +
           '- It does not browse the internet. Every answer comes from the collection alone.\n' +

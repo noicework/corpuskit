@@ -12,6 +12,7 @@ import {
   robotsTag,
   robotsTxt,
   sitemapXml,
+  withRobotsMeta,
 } from './search-files.ts'
 
 Deno.test('the sitemap lists the home page, About and every public documentation page, once', () => {
@@ -123,4 +124,24 @@ Deno.test('with PORTAL_INDEXING=deny, portal hosts disallow everything and porta
   function robotTagOf(host: string, path: string, indexing: string | undefined) {
     return robotsTag(domain, host, path, indexing)
   }
+})
+
+Deno.test('withRobotsMeta writes the directive into an HTML head once, and leaves other bodies alone', async () => {
+  const page = (body: string, type = 'text/html; charset=utf-8') =>
+    new Response(body, { headers: { 'content-type': type, 'content-length': String(body.length) } })
+  const head = await withRobotsMeta(
+    page('<!doctype html><html><head><title>x</title></head></html>'),
+    'noindex',
+  )
+  expect(await head.text()).toBe(
+    '<!doctype html><html><head><meta name="robots" content="noindex"><title>x</title></head></html>',
+  )
+  expect(head.headers.get('content-length')).toBeNull()
+  const again = await withRobotsMeta(
+    page('<head><meta name="robots" content="noindex"></head>'),
+    'noindex',
+  )
+  expect(await again.text()).toBe('<head><meta name="robots" content="noindex"></head>')
+  const json = page('{"a":1}', 'application/json')
+  expect(await withRobotsMeta(json, 'noindex')).toBe(json)
 })

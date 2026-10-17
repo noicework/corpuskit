@@ -2303,6 +2303,31 @@ describe('appearance (typography, shape, branding fonts)', () => {
     expect(new Uint8Array(await served.arrayBuffer())).toEqual(bytes)
   })
 
+  it('stores a logo for the dark colour scheme and exposes it as logoDarkUrl', async () => {
+    const app = appearanceApp()
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+    const upload = await app.request('/api/admin/t/marine/branding/logo-dark', {
+      method: 'POST',
+      headers: { 'x-admin-passcode': passcode, 'content-type': 'image/png' },
+      body: png,
+    })
+    expect(upload.status).toBe(200)
+    expect(((await upload.json()) as { url: string }).url).toBe('/api/t/marine/branding/logo-dark')
+    const config = TenantConfigSchema.parse(
+      await (await app.request('/api/t/marine/config')).json(),
+    )
+    expect(config.branding.logoDarkUrl).toContain('/api/t/marine/branding/logo-dark?v=')
+    const served = await app.request('/api/t/marine/branding/logo-dark')
+    expect(served.status).toBe(200)
+    expect(new Uint8Array(await served.arrayBuffer())).toEqual(png)
+    const svg = await app.request('/api/admin/t/marine/branding/logo-dark', {
+      method: 'POST',
+      headers: { 'x-admin-passcode': passcode, 'content-type': 'image/svg+xml' },
+      body: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    })
+    expect(svg.status).toBe(415)
+  })
+
   it('rejects a font upload with a non-font content type', async () => {
     const app = appearanceApp()
     const response = await app.request('/api/admin/t/marine/branding/font-body', {
@@ -3528,30 +3553,26 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
     ])
   })
 
-  it('refuses an answer that asserts a finding with no citation at all (D7-08)', async () => {
-    // Loop 7 Z2: "The RANSOM study found that nonadherence ... is associated
-    // with increased mortality" went out with no citation event, no source
-    // and no figure - and a figure in the text was the only trigger for the
-    // uncited refusal, so the prose sailed through under a banner claiming
-    // second-hand sources that did not exist.
-    class UncitedProvider extends StubProvider {
+  // D8-01 (17 Oct 2026) replaces D7-08's refusal as the default: prose whose citations could not
+  // be tied to any passage stands, marked unlinked, beside the sources consulted. A portal that
+  // refuses uncited answers keeps D7-08, and nothing relevant retrieved is always declined.
+  const RANSOM =
+    'The RANSOM study found that nonadherence to antiepileptic drugs is associated with increased mortality.'
+  function uncitedProvider(relevance: number) {
+    return new class extends StubProvider {
       override async *ask(): AsyncIterable<AskEvent> {
-        yield { type: 'sources', resources: [{ ...resourceTwo, relevance: 0.4, citedCount: 0 }] }
-        yield {
-          type: 'delta',
-          text:
-            'The RANSOM study found that nonadherence to antiepileptic drugs is associated with increased mortality.',
-        }
-        yield {
-          type: 'done',
-          text:
-            'The RANSOM study found that nonadherence to antiepileptic drugs is associated with increased mortality.',
-        }
+        yield { type: 'sources', resources: [{ ...resourceTwo, relevance, citedCount: 0 }] }
+        yield { type: 'delta', text: RANSOM }
+        yield { type: 'done', text: RANSOM }
       }
-    }
+    }()
+  }
+  async function askUncited(relevance: number, uncitedAnswers?: 'show' | 'refuse') {
+    const tenants = freshTenants()
+    if (uncitedAnswers) tenants.patch('neuro', { prompts: { uncitedAnswers } })
     const app = buildApp({
-      provider: new UncitedProvider(),
-      tenants: freshTenants(),
+      provider: uncitedProvider(relevance),
+      tenants,
       management: fakeManagement({ 'res-2': TRIAL_TEXT }),
     })
     const response = await app.request('/api/t/neuro/ask', {
@@ -3559,11 +3580,37 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query: 'What did the RANSOM study find about nonadherence?' }),
     })
-    const events = await sseEvents(response)
+    return await sseEvents(response)
+  }
+
+  it('shows an answer no citation could be tied to, unlinked, with the sources consulted (D8-01)', async () => {
+    const events = await askUncited(0.4)
+    expect(events.some((e) => e.type === 'citation' || e.type === 'error')).toBe(false)
+    const done = events.find((e) => e.type === 'done')
+    expect(done && done.type === 'done' && done.refused).toBe(false)
+    expect(done && done.type === 'done' && done.citationPresentation).toBe('unlinked')
+    const text = done && done.type === 'done' ? done.text ?? '' : ''
+    expect(text).toContain('nonadherence to antiepileptic drugs is associated')
+    expect(text).toContain('could not be linked to specific passages')
+    expect(text).not.toMatch(/\[\d+\]/)
+    const sources = events.filter((e) => e.type === 'sources').at(-1)
+    expect(sources && sources.type === 'sources' ? sources.resources.map((r) => r.id) : [])
+      .toEqual(['res-2'])
+  })
+
+  it('still refuses an uncited assertion where the portal refuses them (D7-08)', async () => {
+    const events = await askUncited(0.4, 'refuse')
     const done = events.find((e) => e.type === 'done')
     expect(done && done.type === 'done' ? done.refused : false).toBe(true)
     const text = done && done.type === 'done' ? done.text ?? '' : ''
     expect(text).not.toContain('nonadherence to antiepileptic drugs is associated')
+  })
+
+  it('declines an uncited assertion when nothing relevant was retrieved (D8-01)', async () => {
+    const events = await askUncited(0.1)
+    const done = events.find((e) => e.type === 'done')
+    expect(done && done.type === 'done' ? done.refused : false).toBe(true)
+    expect(done && done.type === 'done' && done.citationPresentation).toBeFalsy()
   })
 
   it('fires the safety prequeries for a medication on a treatment question, never for an antigen', async () => {
@@ -3889,7 +3936,7 @@ describe('POST /api/t/:slug/ask automatic routing', () => {
     }
   })
 
-  it('declines instead of showing figures whose every citation was stripped', async () => {
+  it('labels uncited figures as unlinked by default, and declines them where the portal refuses', async () => {
     class UncitedProvider extends StubProvider {
       override async *ask(): AsyncIterable<AskEvent> {
         yield { type: 'sources', resources: [{ ...resourceOne, relevance: 0.9, citedCount: 0 }] }
@@ -3897,19 +3944,29 @@ describe('POST /api/t/:slug/ask automatic routing', () => {
         yield { type: 'done', text: '15 patients were implanted for 4 months.' }
       }
     }
-    const app = buildApp({ provider: new UncitedProvider(), tenants: freshTenants() })
-    const response = await app.request('/api/t/neuro/ask', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query: 'How many were implanted in UMPIRE?' }),
-    })
-    const events = await sseEvents(response)
-    const done = events.find((e) => e.type === 'done')
-    expect(done && done.type === 'done' ? done.refused : false).toBe(true)
-    const text = done && done.type === 'done' ? done.text ?? '' : ''
-    expect(text).toContain("This portal's sources do not answer this question directly")
-    expect(text).not.toContain('15 patients')
-    expect(events.some((e) => e.type === 'citation')).toBe(false)
+    for (const uncitedAnswers of ['show', 'refuse'] as const) {
+      const tenants = freshTenants()
+      tenants.patch('neuro', { prompts: { uncitedAnswers } })
+      const app = buildApp({ provider: new UncitedProvider(), tenants })
+      const response = await app.request('/api/t/neuro/ask', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: 'How many were implanted in UMPIRE?' }),
+      })
+      const events = await sseEvents(response)
+      const done = events.find((e) => e.type === 'done')
+      const text = done && done.type === 'done' ? done.text ?? '' : ''
+      expect(events.some((e) => e.type === 'citation')).toBe(false)
+      if (uncitedAnswers === 'refuse') {
+        expect(done && done.type === 'done' ? done.refused : false).toBe(true)
+        expect(text).toContain("This portal's sources do not answer this question directly")
+        expect(text).not.toContain('15 patients')
+      } else {
+        expect(done && done.type === 'done' && done.citationPresentation).toBe('unlinked')
+        expect(text).toContain('15 patients')
+        expect(text).toContain('could not be linked to specific passages')
+      }
+    }
   })
 })
 

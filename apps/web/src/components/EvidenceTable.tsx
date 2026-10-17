@@ -457,6 +457,11 @@ export interface EvidenceTableProps {
   title?: string
   /** The answer's inline `[n]` citations - when supplied, cited sources render first with a matching badge. */
   citations?: EvidenceCitation[]
+  /**
+   * The answer could not be linked to passages (D8-01): every source is one it consulted, so
+   * they are listed as such rather than as retrieved but not cited.
+   */
+  unlinked?: boolean
   /** Prefix for each row's DOM id (`${anchorPrefix}-src-${resourceId}`), so a page can scroll to a row. */
   anchorPrefix?: string
   /**
@@ -493,6 +498,7 @@ export function EvidenceTable({
   judging = false,
   title = undefined,
   citations,
+  unlinked = false,
   anchorPrefix,
   collapsible = true,
 }: EvidenceTableProps) {
@@ -563,7 +569,7 @@ export function EvidenceTable({
             <div className='flex items-center gap-2 pt-1' role='separator'>
               <span className='h-px flex-1' style={{ backgroundColor: 'var(--rp-line)' }} />
               <span className='shrink-0 text-[11px] font-medium uppercase tracking-wide text-ink-3'>
-                {ui('Retrieved, but not cited in the answer')}
+                {unlinked ? ui('Sources consulted') : ui('Retrieved, but not cited in the answer')}
               </span>
               <span className='h-px flex-1' style={{ backgroundColor: 'var(--rp-line)' }} />
             </div>
