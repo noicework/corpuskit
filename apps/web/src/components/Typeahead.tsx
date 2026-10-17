@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react'
 import { getTypeahead } from '../api/client.ts'
+import { FileText } from './icons.tsx'
 
 /** One suggestion: a corpus entity to fold into the query, or a resource title. */
 export interface TypeaheadItem {
@@ -211,7 +212,7 @@ export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
   return (
     <div
       id={listboxId}
-      className='rp-card rp-anim-fade absolute left-0 right-0 top-full z-40 mt-2 p-2.5 text-left'
+      className='rp-card rp-shadow-lg rp-anim-fade absolute left-0 right-0 top-full z-50 mt-2 p-2.5 text-left'
       role='listbox'
       aria-label={ui('Suggestions')}
     >
@@ -234,7 +235,7 @@ export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
         ? (
           <div>
             <p className='rp-eyebrow px-1 pb-1.5 text-ink-3'>{ui('Entities')}</p>
-            <div className='flex flex-wrap gap-1.5'>
+            <div className='flex flex-wrap gap-2'>
               {entities.map((text, index) => (
                 <div
                   key={text}
@@ -278,22 +279,11 @@ export function TypeaheadDropdown({ state }: { state: TypeaheadState }) {
                       event.preventDefault()
                       pick({ kind: 'title', text })
                     }}
-                    className={`flex cursor-pointer items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-1.5 py-2 text-left text-sm transition-colors duration-150 ${
+                    className={`rp-library-typeahead-option flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] cursor-pointer items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-1.5 py-2 text-left text-sm transition-colors duration-150 max-lg:min-h-11 ${
                       highlight === flatIndex ? 'bg-surface-2 text-ink' : 'text-ink-2'
                     }`}
                   >
-                    <svg
-                      viewBox='0 0 24 24'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth='1.6'
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      aria-hidden='true'
-                      className='h-3.5 w-3.5 shrink-0 text-ink-3'
-                    >
-                      <path d='M7 3h7l5 5v13H7zM14 3v5h5' />
-                    </svg>
+                    <FileText size='sm' className='shrink-0 text-ink-3' />
                     <span className='rp-clamp-2 min-w-0'>{text}</span>
                   </div>
                 )

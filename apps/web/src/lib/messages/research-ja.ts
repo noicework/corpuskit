@@ -1102,4 +1102,9 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'Show full question': '質問の全文を表示',
   'Collapse question': '質問を折りたたむ',
   'opens in a new tab': '新しいタブで開きます',
+  'PDF controls': 'PDFの操作',
+  'More PDF actions': 'PDFのその他の操作',
+  'Full screen': '全画面表示',
+  'Exit full screen': '全画面表示を終了',
+  'Full screen is unavailable.': '全画面表示を利用できません。',
 }

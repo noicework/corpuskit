@@ -8,9 +8,8 @@ import { VIEW_MODES, type ViewMode } from './useViewMode.ts'
  * no-query state) render the same listing, so they render these same controls
  * rather than each growing its own take on them.
  *
- * Neither sets its own height - the host passes one so the pair lines up with
- * whatever row it sits in. The library's toolbar is a full 2.25rem control row
- * anchored by a search field; the search page's is a compact chip row.
+ * The shared segment and range classes supply their control heights, including
+ * the phone target floor, so callers do not need to impose a fixed height.
  */
 export function ViewToggle(
   { value, onChange, className = '' }: {
@@ -22,32 +21,19 @@ export function ViewToggle(
   const { ui } = usePortalLocale()
   return (
     <div
-      className={`inline-flex overflow-hidden rounded-[var(--rp-radius-btn)] border border-line bg-surface ${className}`}
-      role='radiogroup'
+      className={`rp-seg shrink-0 ${className}`}
+      role='group'
       aria-label={ui('Result layout')}
     >
-      {VIEW_MODES.map((option, index) => {
+      {VIEW_MODES.map((option) => {
         const active = value === option
         return (
           <button
             key={option}
             type='button'
-            role='radio'
-            aria-checked={active}
+            aria-pressed={active}
             onClick={() => onChange(option)}
-            // The padding lives on the button, never the group: the selected
-            // fill has to reach the group's border, and a host that sets a
-            // taller group just stretches these to meet it.
-            className={`rp-focus px-3 py-1.5 text-xs font-medium capitalize transition-colors duration-150 ${
-              index > 0 ? 'border-l border-line' : ''
-            } ${
-              active
-                // The on-primary token, not a literal white: a tenant whose
-                // primary is a pale brand colour needs dark type on it.
-                ? 'text-[var(--rp-on-primary)]'
-                : 'text-[var(--rp-ink-2)] hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-            }`}
-            style={active ? { backgroundColor: 'var(--rp-primary)' } : undefined}
+            className='rp-seg-item rp-btn-sm min-w-[2.75rem] capitalize'
           >
             {ui(option)}
           </button>
@@ -58,9 +44,8 @@ export function ViewToggle(
 }
 
 /**
- * How many cards the grid aims to fit across. Hidden rather than unmounted in
- * list view, where it has nothing to size, so the rest of the toolbar does not
- * shuffle sideways as the layout is toggled.
+ * How many cards the grid aims to fit across, with a visible label and a range
+ * box that remains easy to reach on a phone or with a coarse pointer.
  */
 export function GridDensity(
   { value, onChange, view, className = '' }: {
@@ -72,11 +57,11 @@ export function GridDensity(
 ) {
   const { ui } = usePortalLocale()
   const id = useId()
-  const hidden = view === 'list' ? 'hidden' : ''
+  if (view === 'list') return null
   return (
-    <>
-      <label htmlFor={id} className={`text-xs font-medium text-ink-3 ${hidden}`}>
-        {ui('Grid')}
+    <div className={`flex flex-wrap items-center gap-x-2 ${className}`}>
+      <label htmlFor={id} className='text-xs font-medium text-ink-3'>
+        {ui('Cards across the grid')}
       </label>
       <input
         id={id}
@@ -86,9 +71,8 @@ export function GridDensity(
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        aria-label={ui('Cards across the grid')}
-        className={`rp-focus w-24 accent-[var(--rp-accent-fg)] ${className} ${hidden}`}
+        className='rp-library-density rp-focus w-24'
       />
-    </>
+    </div>
   )
 }

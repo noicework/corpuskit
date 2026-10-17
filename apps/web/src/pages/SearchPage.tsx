@@ -28,11 +28,11 @@ import {
   SORT_VALUES,
   type SortValue,
 } from './LibraryPage.tsx'
-import { sameLabel, typeLabel } from '../components/ui.tsx'
+import { Button, IconButton, sameLabel, typeLabel } from '../components/ui.tsx'
 import { plainDashes, presentTitle } from '../lib/display-title.ts'
 import { SaveEvidenceButton } from '../components/SaveEvidence.tsx'
 import { SearchAnswer, type SearchAnswerResult } from '../components/SearchAnswer.tsx'
-import { EmptyState, ErrorCard, prettyLabel, Skeleton, TypeBadge } from '../components/ui.tsx'
+import { EmptyState, ErrorCard, prettyLabel, Skeleton } from '../components/ui.tsx'
 import { answerModeParam, readAnswerMode } from '../lib/search-mode.ts'
 import { RouteChip } from '../components/RouteChip.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
@@ -43,6 +43,15 @@ import {
   scrubSnippetBoilerplate,
 } from '../lib/passage.ts'
 import { Byline, bylineFor } from '../components/Byline.tsx'
+import {
+  ArrowRight,
+  Check,
+  Copy,
+  EyeOff,
+  SlidersHorizontal,
+  Trash,
+  X,
+} from '../components/icons.tsx'
 
 /**
  * An author lookup's heading counts articles and their attachments apart:
@@ -88,12 +97,6 @@ const STRENGTH_OPTIONS: { value: MatchStrength; label: string }[] = [
   { value: 'strong', label: 'Strong (60%+)' },
 ]
 
-/** Publish year from an ISO date, or null when the date is missing/unparseable. */
-function formatYear(iso: string): string | null {
-  const match = /^(\d{4})/.exec(iso)
-  return match ? match[1] ?? null : null
-}
-
 function RelevanceMeter(
   { relevance, referenceChunk }: { relevance: number; referenceChunk?: boolean },
 ) {
@@ -103,10 +106,8 @@ function RelevanceMeter(
 
   return (
     <div className='flex shrink-0 items-center gap-2'>
-      {referenceChunk
-        ? <span className='text-[11px] text-ink-3'>{ui('reference list')}</span>
-        : null}
-      {weak ? <span className='text-[11px] text-ink-3'>{ui('weak match')}</span> : null}
+      {referenceChunk ? <span className='text-2xs text-ink-3'>{ui('reference list')}</span> : null}
+      {weak ? <span className='text-2xs text-ink-3'>{ui('weak match')}</span> : null}
       <div
         className='h-1 w-20 overflow-hidden rounded-[var(--rp-radius)] bg-surface-3'
         role='progressbar'
@@ -161,7 +162,6 @@ function ResultCard(
 ) {
   const { ui } = usePortalLocale()
   const keyFacts = resource.keyFacts.slice(0, 3)
-  const year = resource.published ? formatYear(resource.published) : null
   const byline = bylineFor(resource, ui)
   const title = presentTitle(resource.title)
   const summary = resource.summary ? plainDashes(resource.summary) : ''
@@ -181,20 +181,20 @@ function ResultCard(
   return (
     <article id={`result-${resource.id}`} className='rp-card scroll-mt-6 p-4 sm:p-5'>
       <div className='flex gap-4'>
-        <div className='hidden aspect-[210/297] w-[4.5rem] shrink-0 self-start overflow-hidden rounded-[2px] border border-line sm:block'>
+        <div className='hidden aspect-[210/297] w-[4.5rem] shrink-0 self-start overflow-hidden rounded-[var(--rp-radius)] border border-line sm:block'>
           <ResourceThumb slug={slug} id={resource.id} type={resource.type} />
         </div>
 
         <div className='min-w-0 flex-1'>
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <div className='flex flex-wrap items-center gap-1.5'>
-              <TypeBadge type={resource.type} />
+              <span className='rp-tag'>{typeLabel(resource.type, ui)}</span>
               {
                 /* The kind chip is dropped when it only restates the type badge
                 * (a `document` typed "Report" filed under kind "report"). */
               }
               {resource.kind && !sameLabel(kindLabel(resource.kind), typeLabel(resource.type, ui))
-                ? <span className='rp-badge rp-badge-quiet'>{kindLabel(resource.kind)}</span>
+                ? <span className='rp-tag'>{kindLabel(resource.kind)}</span>
                 : null}
               {citedIndex !== undefined
                 ? (
@@ -206,9 +206,6 @@ function ResultCard(
                   </span>
                 )
                 : null}
-              {year
-                ? <span className='text-xs font-medium tabular-nums text-ink-3'>{year}</span>
-                : null}
             </div>
             <RelevanceMeter
               relevance={resource.relevance}
@@ -219,21 +216,29 @@ function ResultCard(
           <h3 className='mt-2.5 text-base font-semibold tracking-[-0.01em] text-ink'>
             <Link
               to={resourceLink(slug, resource)}
-              className='rp-focus rounded-[var(--rp-radius-btn)]'
+              className='rp-focus inline-block min-h-6 rounded-[var(--rp-radius-btn)] max-lg:min-h-11'
             >
-              {title}
+              <span className='rp-clamp-2'>{title}</span>
             </Link>
           </h3>
-          {byline ? <Byline parts={byline} doi={resource.doi} /> : null}
+          {byline
+            ? (
+              <Byline
+                parts={[byline.join('\u00a0·\u00a0')]}
+                doi={resource.doi}
+                className='rp-library-result-byline'
+              />
+            )
+            : null}
           {resource.sourceName && !byline
             ? (
-              <p className='mt-0.5 truncate text-[11px] tabular-nums text-ink-3/80'>
+              <p className='mt-0.5 truncate text-2xs tabular-nums text-ink-3'>
                 {resource.sourceName}
               </p>
             )
             : null}
           {summary && summary !== resource.title
-            ? <p className='mt-1.5 text-sm leading-relaxed text-ink-2'>{summary}</p>
+            ? <p className='rp-clamp-3 mt-1.5 text-sm leading-relaxed text-ink-2'>{summary}</p>
             : null}
 
           {showSnippet
@@ -357,7 +362,7 @@ function SummaryModal({
 
   return createPortal(
     <div
-      className='rp-anim-fade fixed inset-0 z-[70] flex items-center justify-center bg-neutral-950/60 p-4 backdrop-blur-sm'
+      className='rp-scrim rp-anim-fade fixed inset-0 z-[80] flex items-center justify-center p-4 backdrop-blur-sm'
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -371,17 +376,12 @@ function SummaryModal({
         className='rp-card rp-shadow-xl flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden'
       >
         <div className='flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3.5'>
-          <h2 className='text-sm font-semibold text-ink'>{ui('Summary')}</h2>
-          <button
-            type='button'
+          <h2 className='text-lg font-semibold text-ink'>{ui('Summary')}</h2>
+          <IconButton
             onClick={onClose}
-            aria-label={ui('Close')}
-            className='rp-btn rp-btn-ghost h-8 w-8 !px-0'
-          >
-            <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3.5 w-3.5'>
-              <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-            </svg>
-          </button>
+            label={ui('Close')}
+            icon={X}
+          />
         </div>
 
         <div className='min-h-0 flex-1 overflow-y-auto px-5 py-4'>
@@ -408,7 +408,11 @@ function SummaryModal({
           {!loading && error ? <ErrorCard message={error} onRetry={onRetry} /> : null}
 
           {!loading && !error
-            ? <p className='whitespace-pre-wrap text-sm leading-relaxed text-ink-2'>{summary}</p>
+            ? (
+              <p className='rp-measure rp-prose whitespace-pre-wrap text-sm text-ink-2'>
+                {summary}
+              </p>
+            )
             : null}
         </div>
 
@@ -420,9 +424,9 @@ function SummaryModal({
                 {titles.map((title, index) => <li key={index} className='truncate'>{title}</li>)}
               </ul>
               <div className='mt-3 flex justify-end'>
-                <button type='button' onClick={copy} className='rp-btn rp-btn-outline'>
+                <Button variant='outline' onClick={copy} leadingIcon={copied ? Check : Copy}>
                   {copied ? ui('Copied') : ui('Copy')}
-                </button>
+                </Button>
               </div>
             </div>
           )
@@ -548,19 +552,16 @@ function WatchStrip(
           </button>
           {canWatch
             ? (
-              <button
-                type='button'
+              <IconButton
                 onClick={(event) => {
                   event.stopPropagation()
                   onDelete(watch.id)
                 }}
-                aria-label={ui('Remove saved search "{value1}"', { value1: watch.query })}
-                className='rp-focus flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-              >
-                <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-3 w-3'>
-                  <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-                </svg>
-              </button>
+                label={ui('Remove saved search "{value1}"', { value1: watch.query })}
+                icon={Trash}
+                variant='danger'
+                size='sm'
+              />
             )
             : null}
         </div>
@@ -881,7 +882,7 @@ export function SearchPage() {
   }
 
   return (
-    <main className='rp-shell py-8'>
+    <main className='rp-shell py-8 lg:py-10'>
       {
         /* Heading, then the field, then the controls - the library's shape, so
         * the two listing pages read as one product. The heading is "Search"
@@ -891,7 +892,7 @@ export function SearchPage() {
         * count rides on the heading line the way the library's total does. */
       }
       <div className='flex flex-wrap items-baseline justify-between gap-2'>
-        <h1 className='rp-display text-2xl text-ink'>{ui('Search')}</h1>
+        <h1 className='rp-display text-2xl text-ink sm:text-3xl'>{ui('Search')}</h1>
         {hasQuery && !isLoading && !isError && results
           ? (
             <p className='text-sm font-medium tabular-nums text-ink-3'>
@@ -926,28 +927,20 @@ export function SearchPage() {
         />
 
         <div
-          className='inline-flex overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
-          role='radiogroup'
+          className='rp-seg'
+          role='group'
           aria-label={ui('Retrieval mode')}
         >
-          {MODES.map((option, index) => {
+          {MODES.map((option) => {
             const active = mode === option.value
             return (
               <button
                 key={option.value}
                 type='button'
-                role='radio'
-                aria-checked={active}
+                aria-pressed={active}
                 onClick={() =>
                   updateParams({ mode: option.value === 'hybrid' ? null : option.value })}
-                className={`rp-focus px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 ${
-                  index > 0 ? 'border-l border-line' : ''
-                } ${
-                  active
-                    ? 'text-[var(--rp-on-primary)]'
-                    : 'text-[var(--rp-ink-2)] hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-                }`}
-                style={active ? { backgroundColor: 'var(--rp-primary)' } : undefined}
+                className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
               >
                 {ui(option.label)}
               </button>
@@ -961,15 +954,16 @@ export function SearchPage() {
           * too. (The class was on it and inert - .rp-chip sets its own display
           * and beat the utility - so dropping it changes nothing but the lie.) */
         }
-        <button
-          type='button'
+        <Button
+          variant='outline'
+          size='sm'
+          leadingIcon={SlidersHorizontal}
           onClick={() => setFiltersOpen((open) => !open)}
-          className='rp-chip h-9 sm:h-7'
           aria-expanded={filtersOpen}
         >
           {ui('Filters')}
           {activeFilters.length > 0 ? ` (${activeFilters.length})` : ''}
-        </button>
+        </Button>
 
         {
           /* The listing's own controls, in the no-query state. Right-aligned
@@ -980,7 +974,7 @@ export function SearchPage() {
         }
         {!hasQuery
           ? (
-            <div className='flex items-center gap-2 lg:ml-auto'>
+            <div className='flex min-w-0 flex-wrap items-center gap-2 lg:ml-auto'>
               <ViewToggle value={libraryView} onChange={setLibraryView} />
               <GridDensity
                 value={libraryDensity}
@@ -994,7 +988,7 @@ export function SearchPage() {
                 id='search-sort'
                 value={librarySort}
                 onChange={(event) => setLibrarySort(event.target.value as SortValue)}
-                className='rp-focus rp-select rounded-[var(--rp-radius-input)] border border-line bg-surface px-2.5 py-1.5 text-xs text-ink'
+                className='rp-select min-w-0 max-w-full rounded-[var(--rp-radius-input)] border bg-surface px-2.5 py-1.5 text-xs text-ink'
               >
                 {SORT_VALUES.map((value) => (
                   <option key={value} value={value}>{ui(SORT_OPTIONS[value].label)}</option>
@@ -1007,17 +1001,19 @@ export function SearchPage() {
         {/* The answer opt-out, which used to live beside the removed search box. */}
         {hasQuery
           ? (
-            <button
-              type='button'
+            <Button
+              variant='outline'
+              size='sm'
+              leadingIcon={EyeOff}
               onClick={() => runSearch(q, !answerMode)}
               aria-pressed={!answerMode}
               title={answerMode
                 ? ui('Hide the AI answer and show only the matching resources')
                 : ui('Show a cited AI answer above the results again')}
-              className={`rp-chip h-9 sm:h-7 ${!answerMode ? 'rp-chip-active' : ''}`}
+              className={!answerMode ? 'rp-chip-active' : ''}
             >
               {ui('Results only')}
-            </button>
+            </Button>
           )
           : null}
 
@@ -1036,17 +1032,17 @@ export function SearchPage() {
               )
               : canWatch
               ? (
-                <button
-                  type='button'
+                <Button
+                  variant='outline'
+                  size='sm'
                   onClick={() => {
                     if (permits('portal.watch')) addWatchMutation.mutate()
                   }}
                   disabled={addWatchMutation.isPending}
                   title={ui('Get notified here when new results appear for this search')}
-                  className='rp-chip h-9 sm:h-7'
                 >
                   {addWatchMutation.isPending ? ui('Adding…') : ui('Add to Watches')}
-                </button>
+                </Button>
               )
               : null
           )
@@ -1061,9 +1057,10 @@ export function SearchPage() {
               ? (
                 <Link
                   to={`/t/${config.slug}/ask?ask=${encodeURIComponent(q)}`}
-                  className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
+                  className='rp-btn rp-btn-outline rp-btn-sm'
                 >
                   {ui('Ask about these results')}
+                  <ArrowRight size='sm' />
                 </Link>
               )
               : null}
@@ -1094,7 +1091,9 @@ export function SearchPage() {
         : null}
 
       <div
-        className={`mt-6 grid grid-cols-1 gap-6 ${filtersOpen ? 'lg:grid-cols-[17rem_1fr]' : ''}`}
+        className={`mt-6 grid grid-cols-1 gap-6 ${
+          filtersOpen ? 'lg:grid-cols-[17rem_minmax(0,1fr)]' : ''
+        }`}
       >
         <aside className={filtersOpen ? 'block' : 'hidden'}>
           <div className='rp-card p-4 lg:sticky lg:top-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_4)]'>
@@ -1108,7 +1107,7 @@ export function SearchPage() {
                         <button
                           type='button'
                           onClick={() => updateParams({ topics: null })}
-                          className='text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                          className='rp-btn rp-btn-ghost rp-btn-sm'
                         >
                           {ui('Clear')}
                         </button>
@@ -1123,7 +1122,7 @@ export function SearchPage() {
                       return (
                         <label
                           key={topic.id}
-                          className={`flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm ${
+                          className={`rp-check w-full px-1 py-1 text-sm ${
                             muted ? 'text-ink-3' : 'text-ink-2'
                           }`}
                         >
@@ -1131,8 +1130,7 @@ export function SearchPage() {
                             type='checkbox'
                             checked={checked}
                             onChange={() => toggleTopic(topic.id)}
-                            className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
-                            style={{ accentColor: 'var(--rp-accent)' }}
+                            className='shrink-0 rounded-[var(--rp-radius-input)]'
                           />
                           <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
                             {topic.label}
@@ -1158,7 +1156,7 @@ export function SearchPage() {
                         <button
                           type='button'
                           onClick={() => updateParams({ kinds: null })}
-                          className='text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+                          className='rp-btn rp-btn-ghost rp-btn-sm'
                         >
                           {ui('Clear')}
                         </button>
@@ -1173,7 +1171,7 @@ export function SearchPage() {
                       return (
                         <label
                           key={id}
-                          className={`flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm ${
+                          className={`rp-check w-full px-1 py-1 text-sm ${
                             muted ? 'text-ink-3' : 'text-ink-2'
                           }`}
                         >
@@ -1181,8 +1179,7 @@ export function SearchPage() {
                             type='checkbox'
                             checked={checked}
                             onChange={() => toggleKind(id)}
-                            className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
-                            style={{ accentColor: 'var(--rp-accent)' }}
+                            className='shrink-0 rounded-[var(--rp-radius-input)]'
                           />
                           <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
                             {kindLabel(id)}
@@ -1205,27 +1202,19 @@ export function SearchPage() {
             >
               <p className='rp-eyebrow text-ink-3'>{ui('Match strength')}</p>
               <div
-                className='mt-2.5 inline-flex overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
-                role='radiogroup'
+                className='rp-seg mt-2.5'
+                role='group'
                 aria-label={ui('Match strength')}
               >
-                {STRENGTH_OPTIONS.map((option, index) => {
+                {STRENGTH_OPTIONS.map((option) => {
                   const active = strength === option.value
                   return (
                     <button
                       key={option.value}
                       type='button'
-                      role='radio'
-                      aria-checked={active}
+                      aria-pressed={active}
                       onClick={() => setStrength(option.value)}
-                      className={`rp-focus px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-                        index > 0 ? 'border-l border-line' : ''
-                      } ${
-                        active
-                          ? 'text-[var(--rp-on-primary)]'
-                          : 'text-[var(--rp-ink-2)] hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-                      }`}
-                      style={active ? { backgroundColor: 'var(--rp-primary)' } : undefined}
+                      className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
                     >
                       {ui(option.label)}
                     </button>
@@ -1297,16 +1286,16 @@ export function SearchPage() {
               <>
                 {activeFilters.length > 0
                   ? (
-                    <div className='mb-3 flex flex-wrap items-center gap-1.5'>
+                    <div className='mb-3 flex flex-wrap items-center gap-2'>
                       {activeFilters.map((filter) => (
                         <button
                           key={filter.key}
                           type='button'
                           onClick={filter.onRemove}
-                          className='rp-chip h-7 gap-1'
+                          className='rp-chip gap-1'
                         >
                           {filter.label}
-                          <span aria-hidden='true' className='text-ink-3'>&times;</span>
+                          <X size='sm' className='shrink-0 text-ink-3' />
                         </button>
                       ))}
                     </div>
@@ -1385,8 +1374,8 @@ export function SearchPage() {
                         {answerMode
                           ? (
                             <div
-                              className='inline-flex overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
-                              role='radiogroup'
+                              className='rp-seg'
+                              role='group'
                               aria-label={ui('Results view')}
                             >
                               {[
@@ -1400,25 +1389,15 @@ export function SearchPage() {
                                   value: 'citations' as const,
                                   label: ui('Cited ({count})', { count: citedResults.length }),
                                 },
-                              ].map((option, index) => {
+                              ].map((option) => {
                                 const active = resultView === option.value
                                 return (
                                   <button
                                     key={option.value}
                                     type='button'
-                                    role='radio'
-                                    aria-checked={active}
+                                    aria-pressed={active}
                                     onClick={() => setResultView(option.value)}
-                                    className={`rp-focus px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-                                      index > 0 ? 'border-l border-line' : ''
-                                    } ${
-                                      active
-                                        ? 'text-[var(--rp-on-primary)]'
-                                        : 'text-[var(--rp-ink-2)] hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-                                    }`}
-                                    style={active
-                                      ? { backgroundColor: 'var(--rp-primary)' }
-                                      : undefined}
+                                    className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
                                   >
                                     {ui(option.label)}
                                   </button>
@@ -1433,13 +1412,13 @@ export function SearchPage() {
                           )}
                         {canGenerate
                           ? (
-                            <button
-                              type='button'
+                            <Button
+                              variant='ghost'
+                              size='sm'
                               onClick={summariseResults}
-                              className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                             >
                               {ui('Summarise these results')}
-                            </button>
+                            </Button>
                           )
                           : null}
                       </div>
@@ -1493,10 +1472,10 @@ export function SearchPage() {
                             key={question.id}
                             type='button'
                             onClick={() => askQuestion(question.text)}
-                            className='rp-focus flex items-center justify-between gap-3 rounded-[var(--rp-radius-btn)] border border-line bg-[var(--rp-surface)] px-3.5 py-2.5 text-left text-sm text-[var(--rp-ink-2)] transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
+                            className='rp-focus flex min-h-11 items-center justify-between gap-3 rounded-[var(--rp-radius-btn)] border border-line bg-[var(--rp-surface)] px-3.5 py-2.5 text-left text-sm text-[var(--rp-ink-2)] transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
                           >
                             <span>{question.text}</span>
-                            <span aria-hidden='true' className='shrink-0 text-ink-3'>&rarr;</span>
+                            <ArrowRight size='sm' className='shrink-0 text-ink-3' />
                           </button>
                         ))}
                       </div>

@@ -1,1 +1,119 @@
 /* Library component styles. */
+
+.rp-tenant input.rp-library-density[type='range'] {
+  min-height: 1.5rem;
+}
+
+.rp-library-pdf-reader {
+  min-width: 0;
+  container-type: inline-size;
+  container-name: rp-library-pdf;
+}
+
+.rp-library-pdf-toolbar {
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0;
+  padding: 0.375rem 0;
+}
+
+.rp-library-pdf-inline-zoom,
+.rp-library-pdf-secondary {
+  display: none;
+}
+
+.rp-library-pdf-menu-zoom {
+  display: contents;
+}
+
+@container rp-library-pdf (min-width: 18rem) {
+  .rp-library-pdf-toolbar {
+    gap: 0.125rem;
+    padding-inline: 0.125rem;
+  }
+
+  .rp-library-pdf-inline-zoom {
+    display: contents;
+  }
+
+  .rp-library-pdf-menu-zoom {
+    display: none;
+  }
+}
+
+@container rp-library-pdf (min-width: 26rem) {
+  .rp-library-pdf-toolbar {
+    gap: 0.25rem;
+    padding-inline: 0.5rem;
+  }
+
+  .rp-library-pdf-secondary {
+    display: block;
+  }
+}
+
+.rp-library-pdf-toolbar .rp-library-pdf-page {
+  width: 2.75rem;
+  min-width: 2.75rem;
+  padding-inline: 0;
+  flex: none;
+}
+
+.rp-library-pdf-reader .rp-library-pdf-menu {
+  position: absolute;
+  top: 100%;
+  box-shadow: var(--rp-shadow-lg);
+  right: 0.125rem;
+  width: min(16rem, calc(100% - 0.25rem));
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rp-library-pdf-menu-group {
+  position: static;
+}
+
+.rp-library-pdf-menu .rp-btn {
+  justify-content: flex-start;
+  text-align: start;
+}
+
+.rp-library-pdf-reader:fullscreen {
+  height: 100dvh;
+  background: var(--rp-surface);
+}
+
+.rp-library-pdf-reader:fullscreen .rp-library-pdf-scroll {
+  max-height: calc(100dvh - 4.5rem);
+}
+
+.rp-library-answer-confidence .rp-badge {
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: normal;
+}
+
+.rp-library-answer-confidence > span {
+  max-inline-size: 100%;
+}
+
+@media (max-width: 1023.98px), (pointer: coarse) {
+  .rp-tenant input.rp-library-density[type='range'] {
+    min-height: 2.75rem;
+  }
+
+  .rp-library-result-byline a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+
+  .rp-library-search-field,
+  .rp-library-search-field input,
+  .rp-library-typeahead-option,
+  .rp-library-answer-confidence button {
+    min-height: 2.75rem;
+  }
+}

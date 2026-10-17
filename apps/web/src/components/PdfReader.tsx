@@ -1,7 +1,19 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
-import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
-import { ErrorCard, LiveStatus, Skeleton } from './ui.tsx'
+import { Button, ErrorCard, IconButton, LiveStatus, Skeleton } from './ui.tsx'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Download,
+  ExternalLink,
+  FitWidth,
+  Maximize,
+  Menu,
+  Printer,
+  ZoomIn,
+  ZoomOut,
+} from './icons.tsx'
 import { findPassageRange, passageNeedles } from '../lib/pdf-highlight.ts'
 
 /**
@@ -99,38 +111,19 @@ function printFile(fileUrl: string) {
   document.body.appendChild(iframe)
 }
 
-function ToolbarButton(
-  { label, onClick, disabled, children }: {
-    label: string
-    onClick: () => void
-    disabled?: boolean
-    children: ReactNode
-  },
-) {
-  const { ui } = usePortalLocale()
-  return (
-    <button
-      type='button'
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={ui(label)}
-      title={ui(label)}
-      className='rp-focus rp-btn rp-btn-ghost h-8 w-8 shrink-0 !px-0'
-    >
-      {children}
-    </button>
-  )
+/** The menu skips unavailable actions and wraps focus in either direction. */
+export function pdfMenuFocusIndex(current: number, count: number, key: string): number | null {
+  if (count < 1) return null
+  if (key === 'Home') return 0
+  if (key === 'End') return count - 1
+  if (key === 'ArrowDown') return (current + 1) % count
+  if (key === 'ArrowUp') return current < 0 ? count - 1 : (current - 1 + count) % count
+  return null
 }
 
-const ICON_PROPS = {
-  viewBox: '0 0 24 24',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.8,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-  'aria-hidden': true,
-  className: 'h-4 w-4',
+function availablePdfMenuItems(menu: HTMLDivElement | null): HTMLElement[] {
+  return Array.from(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])
+    .filter((item) => item.getClientRects().length > 0)
 }
 
 /** Inline PDF viewer built on pdfjs-dist, canvas-rendering one page at a
@@ -184,14 +177,23 @@ export function PdfReader(
   const [pageInput, setPageInput] = useState(String(pageNumber))
   const [zoomMode, setZoomMode] = useState<ZoomMode>('fit-width')
   const [announcement, setAnnouncement] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+  const pageInputId = useId()
+  const menuId = useId()
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuGroupRef = useRef<HTMLDivElement | null>(null)
+  const menuInitialFocusRef = useRef<'first' | 'last'>('first')
 
   const docRef = useRef<PDFDocumentProxy | null>(null)
   const pageCacheRef = useRef(new Map<number, Promise<PDFPageProxy>>())
   const renderTaskRef = useRef<RenderTask | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const pageStageRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const [containerWidth, setContainerWidth] = useState(0)
+  const [stageWidth, setStageWidth] = useState(0)
   /** The scale the current page was last rendered at - the source of truth
    * for "current zoom" when the user zooms in/out from fit-width, since
    * fit-width itself has no single fixed scale. */
@@ -224,6 +226,31 @@ export function PdfReader(
    * to the cited page later must not yank the window again.
    */
   const scrolledPageToReaderRef = useRef<string | null>(null)
+
+  const closeMenu = useCallback((restoreFocus = true) => {
+    setMenuOpen(false)
+    if (restoreFocus) menuTriggerRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    const update = () => setFullscreen(document.fullscreenElement === rootRef.current)
+    document.addEventListener('fullscreenchange', update)
+    return () => document.removeEventListener('fullscreenchange', update)
+  }, [])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const items = availablePdfMenuItems(menuRef.current)
+    const index = menuInitialFocusRef.current === 'last' ? items.length - 1 : 0
+    items[index]?.focus()
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !menuGroupRef.current?.contains(event.target)) {
+        closeMenu(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [menuOpen, closeMenu])
 
   // Load the document whenever the file or retry token changes.
   useEffect(() => {
@@ -288,13 +315,14 @@ export function PdfReader(
     }
   }, [pageNumber, numPages, language])
 
-  // Track the reader's width for fit-width zoom.
+  // The content box excludes the stage's rem padding, so fit-width also
+  // updates when the reader changes text size without resizing the pane.
   useEffect(() => {
-    const el = containerRef.current
+    const el = pageStageRef.current
     if (!el) return
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width
-      if (width) setContainerWidth(width)
+      if (width) setStageWidth(width)
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -302,7 +330,7 @@ export function PdfReader(
 
   const getPage = useCallback((n: number): Promise<PDFPageProxy> | null => {
     const doc = docRef.current
-    if (!doc) return null
+    if (!doc || n < 1 || n > doc.numPages) return null
     let cached = pageCacheRef.current.get(n)
     if (!cached) {
       cached = doc.getPage(n)
@@ -311,13 +339,13 @@ export function PdfReader(
     return cached
   }, [])
 
-  // Render the current page whenever it, the zoom, or the container width
+  // Render the current page whenever it, the zoom, or the stage content width
   // changes. Only the current page is ever drawn to canvas; neighbouring
   // pages are merely pre-fetched (their PDFPageProxy warmed, not rendered)
   // so paging forward/back feels instant without keeping a 200-page report's
   // worth of canvases in memory.
   useEffect(() => {
-    if (status !== 'ready' || containerWidth === 0) return
+    if (status !== 'ready' || stageWidth === 0) return
     const pagePromise = getPage(pageNumber)
     if (!pagePromise) return
     let cancelled = false
@@ -329,7 +357,7 @@ export function PdfReader(
 
       const baseViewport = page.getViewport({ scale: 1 })
       const scale = clampScale(
-        zoomMode === 'fit-width' ? containerWidth / baseViewport.width : zoomMode.scale,
+        zoomMode === 'fit-width' ? stageWidth / baseViewport.width : zoomMode.scale,
       )
       const viewport = page.getViewport({ scale })
       effectiveScaleRef.current = scale
@@ -416,7 +444,7 @@ export function PdfReader(
     return () => {
       cancelled = true
     }
-  }, [status, pageNumber, zoomMode, containerWidth, getPage, highlight, initialPage, numPages])
+  }, [status, pageNumber, zoomMode, stageWidth, getPage, highlight, initialPage, numPages])
 
   // A citation with a passage but no page - or one whose page did not carry
   // the passage and the reader asked for a search: find the page that
@@ -523,6 +551,37 @@ export function PdfReader(
     setZoomMode({ scale: clampScale(effectiveScaleRef.current / ZOOM_STEP) })
   }
 
+  function handleMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeMenu()
+      return
+    }
+    if (event.key === 'Tab') {
+      closeMenu(false)
+      return
+    }
+    const items = availablePdfMenuItems(menuRef.current)
+    const index = pdfMenuFocusIndex(
+      items.indexOf(document.activeElement as HTMLElement),
+      items.length,
+      event.key,
+    )
+    if (index !== null) {
+      event.preventDefault()
+      items[index]?.focus()
+    }
+  }
+
+  function toggleFullscreen() {
+    const change = document.fullscreenElement === rootRef.current
+      ? document.exitFullscreen()
+      : rootRef.current?.requestFullscreen()
+    change?.catch(() => setAnnouncement(ui('Full screen is unavailable.')))
+    closeMenu()
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === 'ArrowLeft') {
       event.preventDefault()
@@ -554,32 +613,23 @@ export function PdfReader(
   return (
     <div
       ref={rootRef}
-      className='scroll-mt-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_2)] overflow-hidden rounded-[var(--rp-radius)] border border-line bg-surface'
+      className='rp-library-pdf-reader scroll-mt-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_2)] rounded-[var(--rp-radius)] border border-line bg-surface'
     >
-      <div className='flex flex-wrap items-center gap-1 border-b border-line bg-surface-2 px-2 py-1.5'>
-        <ToolbarButton
+      <div
+        role='group'
+        aria-label={ui('PDF controls')}
+        className='rp-library-pdf-toolbar rounded-t-[var(--rp-radius)] border-b border-line bg-surface-2'
+      >
+        <IconButton
           label={ui('Previous page')}
+          icon={ArrowLeft}
           onClick={() => goToPage(pageNumber - 1)}
           disabled={status !== 'ready' || pageNumber <= 1}
-        >
-          <svg {...ICON_PROPS}>
-            <path d='M15 18l-6-6 6-6' />
-          </svg>
-        </ToolbarButton>
-        <ToolbarButton
-          label={ui('Next page')}
-          onClick={() => goToPage(pageNumber + 1)}
-          disabled={status !== 'ready' || pageNumber >= numPages}
-        >
-          <svg {...ICON_PROPS}>
-            <path d='M9 6l6 6-6 6' />
-          </svg>
-        </ToolbarButton>
-
-        <div className='mx-1 flex items-center gap-1.5 text-xs text-ink-2'>
-          <label htmlFor='pdf-page-input' className='sr-only'>{ui('Page number')}</label>
+        />
+        <div className='flex min-w-0 items-center gap-1.5 text-xs text-ink-2'>
+          <label htmlFor={pageInputId} className='sr-only'>{ui('Page number')}</label>
           <input
-            id='pdf-page-input'
+            id={pageInputId}
             type='text'
             inputMode='numeric'
             value={pageInput}
@@ -592,70 +642,164 @@ export function PdfReader(
                 commitPageInput()
               }
             }}
-            className='rp-focus h-7 w-10 rounded-[var(--rp-radius)] border border-line bg-surface text-center text-xs tabular-nums text-ink'
+            className='rp-input rp-library-pdf-page text-center text-sm tabular-nums'
           />
-          <span className='tabular-nums'>
+          <span className='rp-library-pdf-secondary whitespace-nowrap tabular-nums'>
             {language === 'ja' ? '/' : ui('of')} {numPages || '–'}
           </span>
         </div>
-
-        <div className='mx-1 h-4 w-px bg-line' aria-hidden='true' />
-
-        <ToolbarButton label={ui('Zoom out')} onClick={zoomOut} disabled={status !== 'ready'}>
-          <svg {...ICON_PROPS}>
-            <circle cx='11' cy='11' r='7' />
-            <path d='M21 21l-4.3-4.3M8 11h6' />
-          </svg>
-        </ToolbarButton>
-        <span className='w-11 shrink-0 text-center text-xs tabular-nums text-ink-2'>
-          {zoomPercent ? `${zoomPercent}%` : ui('Fit')}
-        </span>
-        <ToolbarButton label={ui('Zoom in')} onClick={zoomIn} disabled={status !== 'ready'}>
-          <svg {...ICON_PROPS}>
-            <circle cx='11' cy='11' r='7' />
-            <path d='M21 21l-4.3-4.3M11 8v6M8 11h6' />
-          </svg>
-        </ToolbarButton>
-        <ToolbarButton
-          label={ui('Fit to width')}
-          onClick={() => setZoomMode('fit-width')}
-          disabled={status !== 'ready'}
+        <IconButton
+          label={ui('Next page')}
+          icon={ArrowRight}
+          onClick={() => goToPage(pageNumber + 1)}
+          disabled={status !== 'ready' || pageNumber >= numPages}
+        />
+        <div className='rp-library-pdf-inline-zoom'>
+          <span className='rp-library-pdf-secondary mx-1 h-4 w-px bg-line' aria-hidden='true' />
+          <IconButton
+            label={ui('Zoom out')}
+            icon={ZoomOut}
+            onClick={zoomOut}
+            disabled={status !== 'ready'}
+          />
+          <span className='rp-library-pdf-secondary w-11 shrink-0 text-center text-xs tabular-nums text-ink-2'>
+            {zoomPercent ? `${zoomPercent}%` : ui('Fit')}
+          </span>
+          <IconButton
+            label={ui('Zoom in')}
+            icon={ZoomIn}
+            onClick={zoomIn}
+            disabled={status !== 'ready'}
+          />
+        </div>
+        <div
+          ref={menuGroupRef}
+          className='rp-library-pdf-menu-group ml-auto shrink-0'
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) closeMenu(false)
+          }}
         >
-          <svg {...ICON_PROPS}>
-            <path d='M4 8V5a1 1 0 011-1h3M20 8V5a1 1 0 00-1-1h-3M4 16v3a1 1 0 001 1h3m12-4v3a1 1 0 01-1 1h-3' />
-          </svg>
-        </ToolbarButton>
-
-        <div className='mx-1 h-4 w-px bg-line' aria-hidden='true' />
-
-        <ToolbarButton label={ui('Print')} onClick={() => printFile(fileUrl)}>
-          <svg {...ICON_PROPS}>
-            <path d='M6 9V3h12v6M6 18H4a1 1 0 01-1-1v-5a1 1 0 011-1h16a1 1 0 011 1v5a1 1 0 01-1 1h-2M6 14h12v7H6z' />
-          </svg>
-        </ToolbarButton>
-        <a
-          href={fileUrl}
-          download
-          aria-label={ui('Download PDF')}
-          title={ui('Download PDF')}
-          className='rp-focus rp-btn rp-btn-ghost h-8 w-8 shrink-0 !px-0'
-        >
-          <svg {...ICON_PROPS}>
-            <path d='M12 3v12m0 0l-4-4m4 4l4-4M5 21h14' />
-          </svg>
-        </a>
-        <a
-          href={initialPage ? `${fileUrl}#page=${initialPage}` : fileUrl}
-          target='_blank'
-          rel='noopener noreferrer'
-          aria-label={ui('Open PDF in a new tab')}
-          title={ui('Open in a new tab')}
-          className='rp-focus rp-btn rp-btn-ghost h-8 w-8 shrink-0 !px-0'
-        >
-          <svg {...ICON_PROPS}>
-            <path d='M14 4h6v6M10 14L20 4M19 13v6a1 1 0 01-1 1H6a1 1 0 01-1-1V6a1 1 0 011-1h6' />
-          </svg>
-        </a>
+          <IconButton
+            ref={menuTriggerRef}
+            label={ui('More PDF actions')}
+            icon={Menu}
+            aria-haspopup='menu'
+            aria-expanded={menuOpen}
+            aria-controls={menuId}
+            onClick={() => {
+              menuInitialFocusRef.current = 'first'
+              setMenuOpen((open) => !open)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                menuInitialFocusRef.current = event.key === 'ArrowUp' ? 'last' : 'first'
+                setMenuOpen(true)
+              }
+            }}
+          />
+          <div
+            ref={menuRef}
+            id={menuId}
+            role='menu'
+            aria-label={ui('More PDF actions')}
+            hidden={!menuOpen}
+            onKeyDown={handleMenuKeyDown}
+            className='rp-library-pdf-menu rp-card rp-shadow-lg z-50 mt-1 p-1'
+          >
+            <div className='rp-library-pdf-menu-zoom'>
+              <Button
+                role='menuitem'
+                tabIndex={-1}
+                variant='ghost'
+                leadingIcon={ZoomOut}
+                disabled={status !== 'ready'}
+                onClick={() => {
+                  zoomOut()
+                  closeMenu()
+                }}
+                className='w-full justify-start text-left'
+              >
+                {ui('Zoom out')}
+              </Button>
+              <Button
+                role='menuitem'
+                tabIndex={-1}
+                variant='ghost'
+                leadingIcon={ZoomIn}
+                disabled={status !== 'ready'}
+                onClick={() => {
+                  zoomIn()
+                  closeMenu()
+                }}
+                className='w-full justify-start text-left'
+              >
+                {ui('Zoom in')}
+              </Button>
+            </div>
+            <Button
+              role='menuitem'
+              tabIndex={-1}
+              variant='ghost'
+              leadingIcon={FitWidth}
+              disabled={status !== 'ready'}
+              onClick={() => {
+                setZoomMode('fit-width')
+                closeMenu()
+              }}
+              className='w-full justify-start text-left'
+            >
+              {ui('Fit to width')}
+            </Button>
+            <Button
+              role='menuitem'
+              tabIndex={-1}
+              variant='ghost'
+              leadingIcon={Maximize}
+              disabled={typeof document !== 'undefined' && !document.fullscreenEnabled}
+              onClick={toggleFullscreen}
+              className='w-full justify-start text-left'
+            >
+              {fullscreen ? ui('Exit full screen') : ui('Full screen')}
+            </Button>
+            <Button
+              role='menuitem'
+              tabIndex={-1}
+              variant='ghost'
+              leadingIcon={Printer}
+              onClick={() => {
+                printFile(fileUrl)
+                closeMenu()
+              }}
+              className='w-full justify-start text-left'
+            >
+              {ui('Print')}
+            </Button>
+            <a
+              role='menuitem'
+              tabIndex={-1}
+              href={fileUrl}
+              download
+              onClick={() => closeMenu()}
+              className='rp-btn rp-btn-ghost w-full justify-start text-left'
+            >
+              <Download size='sm' />
+              {ui('Download PDF')}
+            </a>
+            <a
+              role='menuitem'
+              tabIndex={-1}
+              href={initialPage ? `${fileUrl}#page=${initialPage}` : fileUrl}
+              target='_blank'
+              rel='noopener noreferrer'
+              onClick={() => closeMenu()}
+              className='rp-btn rp-btn-ghost w-full justify-start text-left'
+            >
+              <ExternalLink size='sm' />
+              {ui('Open PDF in a new tab')}
+            </a>
+          </div>
+        </div>
       </div>
 
       <LiveStatus message={announcement} />
@@ -687,7 +831,7 @@ export function PdfReader(
                 <button
                   type='button'
                   onClick={() => setScanRequested(true)}
-                  className='rp-focus inline-flex min-h-6 items-center rounded-[var(--rp-radius-btn)] font-medium underline decoration-dotted underline-offset-2'
+                  className='rp-link-standalone rp-focus font-medium underline decoration-dotted underline-offset-2'
                 >
                   {ui('Find it in the document')}
                 </button>
@@ -698,7 +842,7 @@ export function PdfReader(
 
       <div
         ref={containerRef}
-        className='rp-scroll max-h-[75vh] overflow-auto bg-surface-2 sm:max-h-[80vh]'
+        className='rp-scroll rp-library-pdf-scroll max-h-[75vh] overflow-auto rounded-b-[var(--rp-radius)] bg-surface-2 sm:max-h-[80vh]'
       >
         {status === 'loading'
           ? (
@@ -719,15 +863,17 @@ export function PdfReader(
                 href={fileUrl}
                 target='_blank'
                 rel='noopener noreferrer'
-                className='rp-focus inline-block text-sm font-medium text-[var(--rp-ink-3)] underline decoration-dotted underline-offset-2 hover:text-[var(--rp-ink)]'
+                className='rp-link-standalone rp-focus text-sm font-medium text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink'
               >
                 {ui('Open PDF in a new tab instead')}
+                <ExternalLink size='sm' />
               </a>
             </div>
           )
           : null}
 
         <div
+          ref={pageStageRef}
           role='group'
           aria-label={ui('{title} - PDF page {pageNumber} of {value3}', {
             title: title,

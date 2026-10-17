@@ -665,6 +665,93 @@ Intact seagrass held five times more juvenile whiting than bare sand. Meadows ne
 
 const byId = new Map(DESIGN_RESOURCES.map((r) => [r.summary.id, r]))
 
+/** A small, text-bearing PDF keeps the document harness on the real viewer path. */
+function designPdf(): Uint8Array {
+  const pages = [
+    {
+      heading: 'Marine heatwaves and greenlip abalone',
+      lines: [
+        'Southern Waters Research Institute | November 2024',
+        '',
+        'Summary',
+        'The Reef Recruitment Monitoring Program surveyed greenlip abalone',
+        'on 46 reef sites along the southern coast from 2019 to 2024.',
+        'Juvenile density fell by 38% at sites with more than 21 days of',
+        'water temperature above the local 90th percentile.',
+        '',
+        'Methods',
+        'Pairs of divers counted juvenile abalone under 40 mm shell length',
+        'along fixed 50 metre transects every autumn. Temperature loggers',
+        'recorded water temperature every 30 minutes at 8 metres depth.',
+      ],
+    },
+    {
+      heading: 'Results by reef group',
+      lines: [
+        'Heatwave exposure and change in juvenile density, 2019 to 2024',
+        '',
+        'Reef group              Heatwave days      Density change',
+        'Western Gulf reefs      64                 -52%',
+        'Cape Wren               31                 -24%',
+        'Tern Island             12                  -6%',
+        '',
+        'Recruitment recovered within two seasons where giant kelp canopy',
+        'stayed intact. Where purple sea urchin barrens had replaced the',
+        'kelp, juvenile counts stayed low for the rest of the survey.',
+      ],
+    },
+    {
+      heading: 'Recommendations for managers',
+      lines: [
+        'Repeat juvenile surveys in the autumn after any season with more',
+        'than 21 heatwave days.',
+        '',
+        'Hold size-limit and quota changes until the repeat survey is in.',
+        '',
+        'Prioritise kelp protection on reefs that still carry a canopy.',
+        '',
+        'This fictional report is used only by the offline design harness.',
+      ],
+    },
+  ]
+  const escape = (value: string) => value.replace(/[\\()]/g, '\\$&')
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R] /Count 3 >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
+  ]
+  for (const [index, page] of pages.entries()) {
+    const stream = [
+      `BT /F1 19 Tf 50 780 Td (${escape(page.heading)}) Tj ET`,
+      'BT /F2 11 Tf 16 TL 50 744 Td',
+      ...page.lines.map((line, i) => `${i ? 'T* ' : ''}(${escape(line)}) Tj`),
+      'ET',
+      `BT /F2 10 Tf 50 48 Td (Southern Waters | ${index + 1} of 3) Tj ET`,
+    ].join('\n')
+    objects.push(
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] ' +
+        `/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6 + index * 2} 0 R >>`,
+      `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    )
+  }
+  // All content is ASCII, so string offsets are also byte offsets in the xref.
+  let pdf = '%PDF-1.4\n'
+  const offsets = [0]
+  for (const [index, object] of objects.entries()) {
+    offsets.push(pdf.length)
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
+  }
+  const xref = pdf.length
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return new TextEncoder().encode(pdf)
+}
+
+const DESIGN_PDF_RESOURCE = DESIGN_RESOURCES[0]!.summary.id
+const DESIGN_PDF_BYTES = designPdf()
+
 // ---------------------------------------------------------------------------
 // Text helpers: deterministic scoring and passage selection
 // ---------------------------------------------------------------------------
@@ -1309,7 +1396,7 @@ function resourceContent(id: string): ResourceContent | null {
   return {
     id: s.id,
     title: s.title,
-    kind: s.type === 'web' ? 'web' : 'text',
+    kind: s.id === DESIGN_PDF_RESOURCE ? 'pdf' : s.type === 'web' ? 'web' : 'text',
     originUrl: s.originUrl,
     summary: s.summary,
     ...(s.sourceName ? { sourceName: s.sourceName } : {}),
@@ -1318,7 +1405,9 @@ function resourceContent(id: string): ResourceContent | null {
     enriched: true,
     texts: [{ fieldId: 'body', text: record.body }],
     transcript: [],
-    files: [],
+    files: s.id === DESIGN_PDF_RESOURCE
+      ? [{ group: 'file', fieldId: 'report', contentType: 'application/pdf' }]
+      : [],
   }
 }
 
@@ -1458,11 +1547,18 @@ export function designManagement(
     generativeModel: () => Promise.resolve('fixture-answer-model'),
     hasSlug: () => Promise.resolve(false),
     thumbnailResponse: () => Promise.resolve(new Response(null, { status: 404 })),
-    fileStream: () =>
+    fileStream: (_config, id, fieldId) =>
       Promise.resolve(
-        new Response('Fixture bytes: the design corpus has no original files.', {
-          headers: { 'content-type': 'text/plain' },
-        }),
+        id === DESIGN_PDF_RESOURCE && fieldId === 'report'
+          ? new Response(DESIGN_PDF_BYTES.slice(), {
+            headers: {
+              'content-type': 'application/pdf',
+              'content-length': String(DESIGN_PDF_BYTES.length),
+            },
+          })
+          : new Response('Fixture bytes: the design corpus has no original files.', {
+            headers: { 'content-type': 'text/plain' },
+          }),
       ),
     askStructured: (_config, schema, _prompt, options) =>
       Promise.resolve(

@@ -1,13 +1,49 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
 import {
   bulkImportDay,
   DEFAULT_SORT,
   facetsFromUrl,
   formatLabel,
+  LibraryCard,
   SORT_OPTIONS,
 } from './LibraryPage.tsx'
 import { cardinalityLabel, labelsetHasCounts } from './TaxonomyPage.tsx'
+
+describe('library card bibliography', () => {
+  it('keeps the year attached to the author and limits static category tags', () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(LibraryCard, {
+          slug: 'southern-waters',
+          organisation: 'Southern Waters',
+          topicLabel: (id: string) => id,
+          view: 'list',
+          item: {
+            id: 'kelp',
+            title: 'Restoring giant kelp forests',
+            status: 'processed',
+            authors: ['Priya Ramanathan', 'Tomas Okafor'],
+            year: '2026',
+            kind: 'Report',
+            topicIds: ['Marine sustainability', 'Fisheries policy'],
+          },
+        }),
+      ),
+    )
+    expect(markup).toContain('Priya Ramanathan, Tomas Okafor\u00a0·\u00a02026')
+    expect(markup).toContain('class="rp-tag">Report</span>')
+    expect(markup).toContain('class="rp-tag">Marine sustainability</span>')
+    expect(markup).toContain('class="rp-tag">+1</span>')
+    expect(markup).not.toContain('>Fisheries policy</span>')
+    expect(markup).not.toContain('rp-badge-quiet')
+  })
+})
 
 describe('library sort', () => {
   it('opens on newest published, and offers the publication-date sorts', () => {
