@@ -1,5 +1,6 @@
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import type { Message } from './shared.ts'
+import { AlertCircle, CheckCircle } from '../../components/icons.tsx'
 
 /** ok / error inline panel, shared by every admin action. */
 export function MessagePanel(
@@ -21,14 +22,19 @@ export function MessagePanel(
   return (
     <div
       role={message.tone === 'error' ? 'alert' : 'status'}
-      className={`rounded-[calc(var(--rp-radius)+4px)] border px-4 py-3 text-sm ${className}`}
+      className={`flex items-start gap-2 rounded-[var(--rp-radius)] border px-4 py-3 text-sm ${className}`}
       style={tone}
     >
-      {message.render
-        ? message.render(locale)
-        : message.tone === 'error'
-        ? locale.error(message.text, 'The action failed. Please try again.')
-        : message.text}
+      {message.tone === 'error'
+        ? <AlertCircle size='sm' className='mt-0.5 shrink-0' />
+        : <CheckCircle size='sm' className='mt-0.5 shrink-0' />}
+      <span className='min-w-0 break-words'>
+        {message.render
+          ? message.render(locale)
+          : message.tone === 'error'
+          ? locale.error(message.text, 'The action failed. Please try again.')
+          : message.text}
+      </span>
     </div>
   )
 }

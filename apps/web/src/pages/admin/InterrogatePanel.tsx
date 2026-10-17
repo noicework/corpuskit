@@ -2,7 +2,7 @@ import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   getSuggestions,
@@ -11,7 +11,8 @@ import {
   runInterrogation,
   type SetupSuggestion,
 } from '../../api/client.ts'
-import { Skeleton } from '../../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { Check, ChevronDown, RotateCw, Sparkles, X } from '../../components/icons.tsx'
 
 // ---------------------------------------------------------------------------
 // Knowledge-box interrogation: one click examines the corpus and current
@@ -37,7 +38,7 @@ function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
           {suggestion.labelset.paragraphs ? ui('Passage-level') : ui('Document-level')}:
         </span>
         {suggestion.labelset.labels.map((label) => (
-          <span key={label} className='rp-chip text-xs'>{label}</span>
+          <span key={label} className='rp-tag'>{label}</span>
         ))}
       </div>
     )
@@ -47,7 +48,7 @@ function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
       <div className='mt-2 flex flex-wrap items-center gap-1.5'>
         <span className='text-xs text-ink-3'>{ui('Add to ')}{suggestion.labels.labelsetId}:</span>
         {suggestion.labels.labels.map((label) => (
-          <span key={label} className='rp-chip text-xs'>{label}</span>
+          <span key={label} className='rp-tag'>{label}</span>
         ))}
       </div>
     )
@@ -55,7 +56,7 @@ function SuggestionBody({ suggestion }: { suggestion: SetupSuggestion }) {
   if (suggestion.kind === 'entity-type' && suggestion.entityType) {
     return (
       <p className='mt-2 text-xs text-ink-2'>
-        <span className='rp-chip mr-1.5 text-xs'>{suggestion.entityType.label}</span>
+        <span className='rp-tag mr-1.5'>{suggestion.entityType.label}</span>
         {suggestion.entityType.description}
       </p>
     )
@@ -186,23 +187,23 @@ function SuggestionCard({
         decided ? 'opacity-70' : ''
       }`}
     >
-      <div className='flex flex-wrap items-start justify-between gap-2'>
-        <div className='min-w-0'>
+      <div className='flex flex-col items-start gap-3 sm:flex-row sm:justify-between'>
+        <div className='min-w-0 flex-1'>
           <div className='flex flex-wrap items-center gap-2'>
-            <span className='rp-badge'>
+            <span className='rp-tag'>
               {KIND_COPY[suggestion.kind] ?? ui('Unsupported suggestion')}
             </span>
             {status === 'implemented'
               ? (
-                <span className='text-xs font-medium text-[var(--rp-ok-ink)]'>
+                <span className='rp-badge rp-badge-ok'>
                   {ui('Implemented')}
                 </span>
               )
               : status === 'ignored'
-              ? <span className='text-xs text-ink-3'>{ui('Ignored')}</span>
+              ? <span className='rp-badge rp-badge-quiet'>{ui('Ignored')}</span>
               : null}
           </div>
-          <h4 className='mt-1.5 text-sm font-semibold text-ink'>{suggestion.title}</h4>
+          <h3 className='mt-1.5 text-sm font-semibold text-ink'>{suggestion.title}</h3>
           <p className='mt-0.5 text-xs text-ink-2'>{suggestion.detail}</p>
           <SuggestionBody suggestion={suggestion} />
         </div>
@@ -210,25 +211,26 @@ function SuggestionCard({
           ? (
             <div className='flex max-w-full flex-wrap gap-1.5'>
               {canImplement && (
-                <button
-                  type='button'
+                <Button
+                  size='sm'
+                  leadingIcon={Check}
                   disabled={busy !== null}
                   data-suggestion-implement
                   onClick={() => void implement()}
-                  className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
                 >
                   {busy === 'implement' ? ui('Implementing…') : ui('Implement')}
-                </button>
+                </Button>
               )}
-              <button
-                type='button'
+              <Button
+                variant='ghost'
+                size='sm'
+                leadingIcon={X}
                 disabled={busy !== null}
                 data-suggestion-ignore
                 onClick={() => void ignore()}
-                className='rp-btn rp-btn-ghost h-8 px-2.5 text-xs'
               >
                 {ui('Ignore')}
-              </button>
+              </Button>
             </div>
           )
           : null}
@@ -257,6 +259,8 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const [snapshot, setSnapshot] = useState<SetupSuggestion[]>()
   const [running, setRunning] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const historyId = useId()
   const [runError, setRunError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
@@ -324,34 +328,31 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
   const decided = (suggestions ?? []).filter((s) => s.status !== 'pending')
 
   return (
-    <div className='mt-6 border-t border-line pt-5'>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h3 className='text-sm font-semibold text-ink'>{ui('Interrogate the knowledge box')}</h3>
-          <p className='mt-0.5 text-xs text-ink-2'>
-            {ui(
-              'Examines the corpus and current setup, then proposes discrete improvements to labelsets and the knowledge graph - implement or ignore each with one click.',
-            )}
-          </p>
-        </div>
-        <button
-          type='button'
-          disabled={running}
-          onClick={() => void interrogate()}
-          className='rp-btn rp-btn-primary'
-        >
-          {running ? ui('Interrogating…') : ui('Run interrogation')}
-        </button>
-      </div>
-      <button
-        type='button'
-        data-suggestions-read
-        className='rp-btn rp-btn-outline mt-3'
-        disabled={running}
-        onClick={() => void interrogate(true)}
-      >
-        {ui('Load suggestions')}
-      </button>
+    <div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={ui('Interrogate the knowledge box')}
+        description={ui(
+          'Examines the corpus and current setup, then proposes discrete improvements to labelsets and the knowledge graph - implement or ignore each with one click.',
+        )}
+        actions={
+          <>
+            <Button
+              variant='ghost'
+              size='sm'
+              leadingIcon={RotateCw}
+              data-suggestions-read
+              disabled={running}
+              onClick={() => void interrogate(true)}
+            >
+              {ui('Load suggestions')}
+            </Button>
+            <Button leadingIcon={Sparkles} disabled={running} onClick={() => void interrogate()}>
+              {running ? ui('Interrogating…') : ui('Run interrogation')}
+            </Button>
+          </>
+        }
+      />
       {running
         ? (
           <p className='mt-3 text-xs text-ink-3' role='status'>
@@ -400,12 +401,19 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
 
       {decided.length > 0
         ? (
-          <details className='mt-4'>
-            <summary className='cursor-pointer text-xs text-ink-3'>
+          <div className='mt-4'>
+            <Button
+              variant='ghost'
+              size='sm'
+              aria-expanded={historyOpen}
+              aria-controls={historyId}
+              onClick={() => setHistoryOpen((open) => !open)}
+            >
+              <ChevronDown size='sm' className={historyOpen ? 'rotate-180' : ''} />
               {ui('Decision history (')}
               {decided.length})
-            </summary>
-            <div className='mt-2 space-y-2'>
+            </Button>
+            <div id={historyId} hidden={!historyOpen} className='mt-2 space-y-2'>
               {decided.slice(0, 12).map((suggestion) => (
                 <SuggestionCard
                   key={suggestion.id}
@@ -421,7 +429,7 @@ function InterrogatePanelContent({ slug }: { slug: string }) {
                 />
               ))}
             </div>
-          </details>
+          </div>
         )
         : null}
     </div>
