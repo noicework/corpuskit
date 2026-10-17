@@ -6,6 +6,7 @@ import {
   DEFAULT_PORTAL_COLOURS,
   fieldBorder,
   HOUSE_LIGHT_SUITE,
+  mixHex,
   paletteFromColours,
   type TenantConfig,
 } from '@research-portal/core'
@@ -19,6 +20,7 @@ import {
   PAIRING_IDS,
   paletteMode,
   paletteVars,
+  secondaryInk,
   shapeVars,
   tenantThemeVars,
   TEXT_SCALES,
@@ -164,7 +166,7 @@ describe('paletteVars', () => {
   it('renders the default portal colours with the palette that passes the contract', () => {
     const vars = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
     const derived = paletteFromColours(DEFAULT_PORTAL_COLOURS)!
-    expect(vars).toEqual({
+    expect(vars).toMatchObject({
       '--rp-primary': derived.brandSurface,
       '--rp-accent': derived.accent,
       '--rp-hero-from': derived.heroFrom,
@@ -252,6 +254,218 @@ describe('paletteVars', () => {
     expect(paletteMode(branding({ paletteId: 'observatory' }))).toBe('dark')
     expect(paletteMode(branding({ paletteId: 'fathom' }))).toBe('light')
     expect(paletteMode(branding())).toBe('light')
+  })
+})
+
+describe('foundation colour role guarantees', () => {
+  const portalColours = {
+    dark: {
+      primary: '#2e2359',
+      accent: '#b4ef2c',
+      heroFrom: '#1f1740',
+      heroTo: '#4a3a8f',
+    },
+    bright: {
+      primary: '#4fbc62',
+      accent: '#f4b400',
+      heroFrom: '#237531',
+      heroTo: '#164f35',
+    },
+    'mid-tone': {
+      primary: '#767676',
+      accent: '#bb6688',
+      heroFrom: '#727272',
+      heroTo: '#696969',
+    },
+    'near-black': {
+      primary: '#101319',
+      accent: '#5ce500',
+      heroFrom: '#08090c',
+      heroTo: '#1e2226',
+    },
+    pale: {
+      primary: '#f7edcc',
+      accent: '#c8e7ff',
+      heroFrom: '#f2ecd9',
+      heroTo: '#e1e5ee',
+    },
+    'CorpusKit paper': {
+      primary: DEFAULT_PALETTES.corpuskit.palette.brandSurface,
+      accent: DEFAULT_PALETTES.corpuskit.palette.accent,
+      heroFrom: DEFAULT_PALETTES.corpuskit.palette.heroFrom,
+      heroTo: DEFAULT_PALETTES.corpuskit.palette.heroTo,
+    },
+  }
+  const fixtures = [
+    ...Object.keys(DEFAULT_PALETTES).map((id) => ({
+      label: `library ${id}`,
+      branding: branding({ paletteId: id as keyof typeof DEFAULT_PALETTES }),
+    })),
+    ...Object.entries(portalColours).map(([label, colours]) => ({
+      label: `portal ${label}`,
+      branding: branding({ colours }),
+    })),
+  ]
+
+  for (const fixture of fixtures) {
+    for (const scheme of ['light', 'dark'] as const) {
+      it(`${fixture.label}, ${scheme}: readable secondary tiers and distinct controls`, () => {
+        const vars = paletteVars(fixture.branding, scheme)
+        expect(contrastRatio(vars['--rp-on-primary-2']!, vars['--rp-primary']!))
+          .toBeGreaterThanOrEqual(4.5)
+        for (const endpoint of ['--rp-hero-from', '--rp-hero-to']) {
+          expect(contrastRatio(vars['--rp-on-hero-2']!, vars[endpoint]!), endpoint)
+            .toBeGreaterThanOrEqual(4.5)
+        }
+        const surface = vars['--rp-surface'] ?? HOUSE_LIGHT_SUITE.surface
+        const paper = vars['--rp-paper'] ?? HOUSE_LIGHT_SUITE.paper
+        for (const ground of [surface, paper]) {
+          expect(contrastRatio(vars['--rp-control']!, ground), `control on ${ground}`)
+            .toBeGreaterThanOrEqual(3)
+        }
+        expect(contrastRatio(vars['--rp-on-control']!, vars['--rp-control']!))
+          .toBeGreaterThanOrEqual(4.5)
+        if (paletteMode(fixture.branding, scheme) === 'dark') {
+          for (let category = 1; category <= 6; category++) {
+            const hue = vars[`--rp-cat-${category}`]!
+            expect(contrastRatio(hue, surface), `category ${category} mark`)
+              .toBeGreaterThanOrEqual(3)
+            const ink = mixHex(hue, vars['--rp-ink']!, 0.55)
+            expect(contrastRatio(ink, surface), `category ${category} ink`)
+              .toBeGreaterThanOrEqual(4.5)
+          }
+        }
+      })
+    }
+  }
+
+  it('keeps white secondary text at least as strong as the 75% text tier', () => {
+    for (const fixture of fixtures) {
+      for (const scheme of ['light', 'dark'] as const) {
+        const vars = paletteVars(fixture.branding, scheme)
+        for (
+          const [foreground, secondary, grounds] of [
+            ['--rp-on-primary', '--rp-on-primary-2', ['--rp-primary']],
+            ['--rp-on-hero', '--rp-on-hero-2', ['--rp-hero-from', '--rp-hero-to']],
+          ] as const
+        ) {
+          if (vars[foreground] !== '#ffffff') continue
+          const tier = mixHex(vars[grounds[0]]!, '#ffffff', 0.25)
+          for (const ground of grounds) {
+            expect(contrastRatio(vars[secondary]!, vars[ground]!), fixture.label)
+              .toBeGreaterThanOrEqual(contrastRatio(tier, vars[ground]!))
+          }
+          if (grounds.every((ground) => contrastRatio(tier, vars[ground]!) >= 4.5)) {
+            expect(vars[secondary], fixture.label).toBe(tier)
+          }
+        }
+      }
+    }
+  })
+
+  it('recovers contrast beyond the 75% tier for bright and mid-tone grounds', () => {
+    for (const primary of ['#245ad4', '#767676']) {
+      const vars = paletteVars(branding({
+        colours: { ...DEFAULT_PORTAL_COLOURS, primary, heroFrom: primary, heroTo: primary },
+      }))
+      const tier = mixHex(primary, vars['--rp-on-primary']!, 0.25)
+      expect(contrastRatio(tier, primary), primary).toBeLessThan(4.5)
+      expect(vars['--rp-on-primary-2'], primary).not.toBe(tier)
+      expect(contrastRatio(vars['--rp-on-primary-2']!, primary), primary)
+        .toBeGreaterThanOrEqual(4.5)
+      expect(vars['--rp-on-hero-2']).toBe(vars['--rp-on-primary-2'])
+    }
+  })
+
+  it('uses a full-strength contrast fallback when the supplied foreground cannot read', () => {
+    for (const grounds of [['#ffffff'], ['#f2efe7', '#fffdf8']]) {
+      const fallback = secondaryInk('#ffffff', grounds)
+      expect(fallback).toBe(HOUSE_LIGHT_SUITE.ink)
+      for (const ground of grounds) {
+        expect(contrastRatio(fallback, ground)).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  it('chooses primary, then a qualified accent, then brand ink for light controls', () => {
+    const fathom = paletteVars(branding({ paletteId: 'fathom' }))
+    expect(fathom['--rp-control']).toBe(fathom['--rp-primary'])
+    const corpuskit = paletteVars(branding({ paletteId: 'corpuskit' }))
+    expect(corpuskit['--rp-control']).toBe(corpuskit['--rp-accent'])
+    expect(corpuskit['--rp-control']).not.toBe(corpuskit['--rp-paper'])
+    const pale = paletteVars(branding({ colours: portalColours.pale }))
+    expect(pale['--rp-control']).toBe(pale['--rp-brand-fg'])
+  })
+
+  it('keeps the logo plate on its light design paper through a scheme change', () => {
+    for (const fixture of fixtures) {
+      const light = paletteVars(fixture.branding)
+      const dark = paletteVars(fixture.branding, 'dark')
+      const palette = fixture.branding.paletteId && fixture.branding.paletteId !== 'default'
+        ? DEFAULT_PALETTES[fixture.branding.paletteId].palette
+        : undefined
+      expect(light['--rp-logo-plate']).toBe(
+        palette?.mode === 'light' ? palette.paper : HOUSE_LIGHT_SUITE.paper,
+      )
+      expect(dark['--rp-logo-plate']).toBe(light['--rp-logo-plate'])
+    }
+  })
+
+  it('always darkens the modal backdrop, including on the intrinsic dark palette', () => {
+    for (const fixture of fixtures) {
+      for (const scheme of ['light', 'dark'] as const) {
+        expect(paletteVars(fixture.branding, scheme)['--rp-scrim']).toBe(
+          paletteMode(fixture.branding, scheme) === 'dark'
+            ? 'rgba(0, 0, 0, 0.62)'
+            : 'rgba(10, 10, 12, 0.5)',
+        )
+      }
+    }
+  })
+
+  it('dims and edges thumbnails by the actual palette mode, including Observatory', () => {
+    for (const fixture of fixtures) {
+      for (const scheme of ['light', 'dark'] as const) {
+        const vars = paletteVars(fixture.branding, scheme)
+        const dark = paletteMode(fixture.branding, scheme) === 'dark'
+        expect(vars['--rp-thumb-brightness']).toBe(dark ? '0.92' : '1')
+        expect(vars['--rp-thumb-edge']).toBe(dark ? 'var(--rp-line)' : 'transparent')
+      }
+    }
+  })
+
+  it('emits every new role for non-hex identities with measurable control fallbacks', () => {
+    const fallback = branding({
+      colours: {
+        primary: 'navy',
+        accent: 'gold',
+        heroFrom: 'midnightblue',
+        heroTo: 'rebeccapurple',
+      },
+    })
+    for (const scheme of ['light', 'dark'] as const) {
+      const vars = paletteVars(fallback, scheme)
+      for (
+        const token of [
+          '--rp-on-primary-2',
+          '--rp-on-hero-2',
+          '--rp-control',
+          '--rp-on-control',
+          '--rp-logo-plate',
+          '--rp-scrim',
+          ...Array.from({ length: 6 }, (_, i) => `--rp-cat-${i + 1}`),
+        ]
+      ) expect(vars[token], token).toBeTruthy()
+      expect(vars['--rp-primary']).toBe('navy')
+      expect(vars['--rp-on-primary-2']).toBe(vars['--rp-on-primary'])
+      expect(vars['--rp-on-hero-2']).toBe(vars['--rp-on-hero'])
+      expect(
+        contrastRatio(vars['--rp-control']!, vars['--rp-surface'] ?? HOUSE_LIGHT_SUITE.surface),
+      )
+        .toBeGreaterThanOrEqual(3)
+      expect(contrastRatio(vars['--rp-on-control']!, vars['--rp-control']!))
+        .toBeGreaterThanOrEqual(4.5)
+    }
   })
 })
 
@@ -427,9 +641,11 @@ describe('viewer dark scheme', () => {
 
 /** A rule's declarations, by its exact selector, from the stylesheet. */
 function rule(selector: string, source = styles): string {
-  const start = source.indexOf(`${selector} {`)
-  expect(start, selector).toBeGreaterThanOrEqual(0)
-  return source.slice(start, source.indexOf('}', start))
+  for (const match of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = match[1]!.replace(/\/\*[\s\S]*?\*\//g, '').split(',').map((s) => s.trim())
+    if (selectors.includes(selector)) return match[2]!
+  }
+  throw new Error(`Missing stylesheet rule: ${selector}`)
 }
 
 describe('the house light suite', () => {

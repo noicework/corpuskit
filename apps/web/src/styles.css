@@ -1,4 +1,11 @@
 @import 'tailwindcss';
+@import './styles/chrome.css';
+@import './styles/graph.css';
+@import './styles/answer.css';
+@import './styles/library.css';
+@import './styles/manage.css';
+@import './styles/admin.css';
+@import './styles/pages.css';
 
 /* ---------------------------------------------------------------------------
  * Token layer.
@@ -20,11 +27,19 @@
   --rp-hero-from: #3f3f46;
   --rp-hero-to: #18181b;
   --rp-on-primary: #ffffff;
+  --rp-on-primary-2: #c9c9ca;
+  --rp-control: #27272a;
+  --rp-on-control: #ffffff;
+  --rp-logo-plate: #ffffff;
+  --rp-scrim: rgba(10, 10, 12, 0.5);
+  --rp-thumb-brightness: 1;
+  --rp-thumb-edge: transparent;
   --rp-brand-fg: #27272a;
   --rp-on-accent: #ffffff;
   --rp-accent-fg: #52525b;
   --rp-focus: #52525b;
   --rp-on-hero: #ffffff;
+  --rp-on-hero-2: #cfcfd1;
   --rp-wash: color-mix(in srgb, #52525b 12%, #ffffff);
   --rp-wash-strong: color-mix(in srgb, #52525b 22%, #ffffff);
 
@@ -84,6 +99,8 @@
    * Manage typography choice both flow through these hooks - see lib/theme.ts). */
   --font-sans: var(--rp-font-body);
   --font-display: var(--rp-font-display);
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
 }
 
 html {
@@ -848,6 +865,12 @@ body {
   --spacing: calc(0.25rem * var(--rp-density, 1));
   /* Recomputed here so the halo and ring pick up this wrapper's palette. */
   --rp-ring: 0 0 0 2px var(--rp-surface), 0 0 0 4px var(--rp-focus);
+  --rp-cat-1-ink: color-mix(in srgb, var(--rp-cat-1) 55%, var(--rp-ink));
+  --rp-cat-2-ink: color-mix(in srgb, var(--rp-cat-2) 55%, var(--rp-ink));
+  --rp-cat-3-ink: color-mix(in srgb, var(--rp-cat-3) 55%, var(--rp-ink));
+  --rp-cat-4-ink: color-mix(in srgb, var(--rp-cat-4) 55%, var(--rp-ink));
+  --rp-cat-5-ink: color-mix(in srgb, var(--rp-cat-5) 55%, var(--rp-ink));
+  --rp-cat-6-ink: color-mix(in srgb, var(--rp-cat-6) 55%, var(--rp-ink));
 }
 
 /* Pin a subtree to canonical spacing - canvas-coordinate UIs and other
@@ -1124,6 +1147,17 @@ body {
   background: var(--rp-surface-2);
 }
 
+/* Paint above loaded images so their pixels cannot cover the dark-suite edge. */
+.rp-resource-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 1px solid var(--rp-thumb-edge);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
 .rp-thumb-placeholder {
   position: absolute;
   inset: 0;
@@ -1186,7 +1220,7 @@ body {
   border-radius: var(--rp-radius-chip);
   background: var(--rp-surface);
   color: var(--rp-ink-2);
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.025em;
@@ -1196,6 +1230,7 @@ body {
   z-index: 2;
   opacity: 0;
   background: var(--rp-surface);
+  filter: brightness(var(--rp-thumb-brightness));
   transition: opacity 180ms var(--rp-ease);
 }
 
@@ -1528,9 +1563,9 @@ label.rp-btn:has(input:focus-visible) {
    * rest of the chrome (the label size itself never scales with density). */
   padding: calc(0.7rem * var(--rp-density, 1)) calc(0.85rem * var(--rp-density, 1));
   font-size: 1rem;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.35;
-  color: color-mix(in srgb, var(--rp-on-primary) 86%, transparent);
+  color: var(--rp-on-primary);
   white-space: nowrap;
   transition: color 150ms var(--rp-ease), background-color 150ms var(--rp-ease);
 }
@@ -1550,7 +1585,7 @@ label.rp-btn:has(input:focus-visible) {
  * light header used. */
 .rp-navlink-active {
   color: var(--rp-on-primary);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .rp-navlink-active::after {
@@ -1570,13 +1605,14 @@ label.rp-btn:has(input:focus-visible) {
   border-radius: var(--rp-radius);
   box-shadow: var(--rp-shadow-sm);
 }
-.rp-btn {
+.rp-btn,
+.rp-seg-item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   /* Keep the usual control height, but let translated labels grow at large text sizes. */
-  min-height: calc(2.25rem * var(--rp-density-ctl, 1));
+  min-height: calc(var(--rp-btn-size, 2.25rem) * var(--rp-density-ctl, 1));
   height: auto;
   /* Pills need a touch more air at their rounded ends - the shape dial sets
    * --rp-btn-px (see lib/theme.ts). */
@@ -1588,18 +1624,44 @@ label.rp-btn:has(input:focus-visible) {
     border-color 150ms var(--rp-ease), opacity 150ms var(--rp-ease);
   cursor: pointer;
 }
-.rp-btn:disabled {
+
+.rp-btn-sm {
+  --rp-btn-size: 2rem;
+  padding-inline: 0.625rem;
+  font-size: 0.75rem;
+}
+
+.rp-btn-lg {
+  --rp-btn-size: 2.75rem;
+  font-size: 1rem;
+}
+
+.rp-icon-btn {
+  flex: none;
+  width: calc(var(--rp-btn-size, 2.25rem) * var(--rp-density-ctl, 1));
+  aspect-ratio: 1;
+  padding: 0;
+}
+
+.rp-btn > svg,
+.rp-seg-item > svg {
+  flex: none;
+}
+
+.rp-btn:disabled,
+.rp-seg-item:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
-.rp-btn:focus-visible {
+.rp-btn:focus-visible,
+.rp-seg-item:focus-visible {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: var(--rp-ring);
 }
 .rp-btn-primary {
-  background: var(--rp-primary);
-  color: var(--rp-on-primary);
+  background: var(--rp-control);
+  color: var(--rp-on-control);
 }
 .rp-btn-primary:hover:not(:disabled) {
   filter: brightness(1.12);
@@ -1626,6 +1688,47 @@ label.rp-btn:has(input:focus-visible) {
 }
 .rp-btn-danger:hover:not(:disabled) {
   background: var(--rp-bad-bg);
+}
+
+.rp-btn-danger-outline {
+  border: 1px solid var(--rp-bad-line);
+  background: var(--rp-surface);
+  color: var(--rp-bad-ink);
+}
+
+.rp-btn-danger-outline:hover:not(:disabled) {
+  background: var(--rp-bad-bg);
+}
+
+.rp-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius-btn);
+  background: var(--rp-surface-2);
+}
+
+.rp-seg-item {
+  background: transparent;
+  color: var(--rp-ink-2);
+}
+
+.rp-seg-item:hover:not(:disabled) {
+  background: var(--rp-surface-3);
+  color: var(--rp-ink);
+}
+
+.rp-seg-item:is([aria-pressed='true'], [aria-selected='true'], [aria-current], .rp-seg-item-active),
+.rp-seg-item:is([aria-pressed='true'], [aria-selected='true'], [aria-current], .rp-seg-item-active):hover:not(:disabled) {
+  background: var(--rp-control);
+  color: var(--rp-on-control);
+  font-weight: 600;
+}
+
+.rp-seg-on-brand {
+  border-color: color-mix(in srgb, var(--rp-on-primary) 50%, transparent);
 }
 
 /* The house switch: the visual half of a toggle whose semantics live on the
@@ -1675,7 +1778,7 @@ label.rp-btn:has(input:focus-visible) {
   /* min-height, not height: a chip whose label wraps (a long source title, or
    * a phone with the system font scaled up) grew taller than its own border and
    * the text spilled outside the box. */
-  min-height: calc(1.75rem * var(--rp-density-ctl, 1));
+  min-height: calc(2rem * var(--rp-density-ctl, 1));
   max-width: 100%;
   padding: 0 0.625rem;
   border-radius: var(--rp-radius-chip);
@@ -1702,9 +1805,23 @@ label.rp-btn:has(input:focus-visible) {
   color: var(--rp-ink);
   background: var(--rp-wash);
 }
+
+.rp-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.5rem;
+  max-width: 100%;
+  padding-inline: 0.5rem;
+  border-radius: var(--rp-radius-chip);
+  background: var(--rp-surface-2);
+  color: var(--rp-ink-2);
+  font-size: 0.75rem;
+}
+
 .rp-input {
   width: 100%;
-  border: 1px solid var(--rp-line);
+  border: 1px solid var(--rp-field);
   border-radius: var(--rp-radius-input);
   background: var(--rp-surface);
   color: var(--rp-ink);
@@ -1718,12 +1835,15 @@ label.rp-btn:has(input:focus-visible) {
 /* Native selects: replace the UA arrow (which hugs the edge) with a padded
  * chevron. Mid-grey reads on both light and dark suites. */
 .rp-select {
+  border-color: var(--rp-field);
   appearance: none;
   -webkit-appearance: none;
   padding-inline-end: 2.4rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5' fill='none' stroke='%238a8f9c' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: linear-gradient(45deg, transparent 50%, var(--rp-ink-3) 50%),
+    linear-gradient(135deg, var(--rp-ink-3) 50%, transparent 50%);
   background-repeat: no-repeat;
-  background-position: right 0.85rem center;
+  background-position: right 1.2rem center, right 0.85rem center;
+  background-size: 0.35rem 0.35rem;
 }
 
 .rp-input-icon {
@@ -1741,7 +1861,8 @@ label.rp-btn:has(input:focus-visible) {
 .rp-input::placeholder {
   color: var(--rp-ink-3);
 }
-.rp-input:focus-visible {
+.rp-input:focus-visible,
+.rp-select:focus-visible {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: var(--rp-ring);
@@ -1758,6 +1879,151 @@ label.rp-btn:has(input:focus-visible) {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: var(--rp-ring);
+}
+
+.rp-tenant input:is([type='checkbox'], [type='radio'], [type='range']) {
+  accent-color: var(--rp-accent-fg);
+}
+
+.rp-tenant input:is([type='checkbox'], [type='radio']) {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.rp-tenant input[type='range'] {
+  min-height: 1.125rem;
+}
+
+.rp-tenant input:is([type='checkbox'], [type='radio'], [type='range']):focus-visible,
+.rp-check:has(input:focus-visible),
+.rp-link-standalone:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--rp-ring);
+}
+
+.rp-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: calc(2rem * var(--rp-density-ctl, 1));
+  border-radius: var(--rp-radius-input);
+  cursor: pointer;
+}
+
+.rp-link-standalone {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.5rem;
+  border-radius: var(--rp-radius-btn);
+  color: var(--rp-accent-fg);
+  text-underline-offset: 0.2em;
+}
+
+.rp-link-standalone:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+}
+
+.rp-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.rp-section-head-text {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.rp-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.rp-section-desc {
+  max-width: 72ch;
+  margin-top: 0.375rem;
+  color: var(--rp-ink-2);
+  font-size: 0.875rem;
+}
+
+.rp-section-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-inline-start: auto;
+}
+
+.rp-dialog {
+  width: min(36rem, calc(100% - 2rem));
+  max-width: 36rem;
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  overflow-y: auto;
+  padding: calc(1.5rem * var(--rp-density, 1));
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius);
+  background: var(--rp-surface);
+  color: var(--rp-ink);
+  box-shadow: var(--rp-shadow-xl);
+  z-index: 80;
+}
+
+.rp-dialog::backdrop,
+dialog.rp-card::backdrop {
+  background: rgba(10, 10, 12, 0.5);
+  background: var(--rp-scrim, rgba(10, 10, 12, 0.5));
+}
+
+.rp-scrim {
+  background: var(--rp-scrim);
+}
+
+.rp-logo-plate {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--rp-line);
+  border-radius: var(--rp-radius-btn);
+  background: var(--rp-logo-plate);
+}
+
+/* Control floors remain independent of compact density and utility heights. */
+@media (max-width: 1023.98px), (pointer: coarse) {
+  .rp-btn,
+  .rp-seg-item {
+    min-height: max(2.75rem, calc(var(--rp-btn-size, 2.25rem) * var(--rp-density-ctl, 1)));
+  }
+
+  .rp-icon-btn {
+    width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .rp-input,
+  .rp-select {
+    min-height: max(2.75rem, calc(2.25rem * var(--rp-density-ctl, 1)));
+  }
+
+  .rp-chip {
+    min-height: max(2.25rem, calc(2rem * var(--rp-density-ctl, 1)));
+    gap: 0.5rem;
+  }
+
+  .rp-check {
+    min-height: max(2.75rem, calc(2rem * var(--rp-density-ctl, 1)));
+  }
+
+  .rp-link-standalone {
+    min-height: 2.75rem;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1785,17 +2051,6 @@ label.rp-btn:has(input:focus-visible) {
 @media (max-width: 1023.98px) {
   :is(input, textarea, select):not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']) {
     font-size: max(16px, 1rem);
-  }
-
-  /* Raising the text without raising the box would be a half fix. The compact
-   * .rp-input variants pin an explicit height (h-7, h-8, h-9) cut for 12-14px
-   * text, which leaves a 16px line as little as 8px of room; this floors them
-   * at the 44px touch target, which is also the natural height of an
-   * unconstrained .rp-input, so fields end up a consistent size on a phone.
-   * Anything already taller - a rows=8 textarea, a tall search field - is
-   * untouched, and min-height on a control with no .rp-input is not affected. */
-  .rp-input {
-    min-height: 2.75rem;
   }
 }
 .rp-badge {
@@ -1911,13 +2166,13 @@ label.rp-btn:has(input:focus-visible) {
 }
 
 .rp-stage-mark-active {
-  background-color: color-mix(in srgb, var(--rp-accent) 18%, var(--rp-surface));
-  color: var(--rp-accent);
+  background-color: var(--rp-wash);
+  color: var(--rp-accent-fg);
 }
 
 .rp-stage-mark-done {
   background-color: var(--rp-accent);
-  color: #ffffff;
+  color: var(--rp-on-accent);
 }
 
 .rp-stage-line {
@@ -2087,12 +2342,13 @@ label.rp-btn:has(input:focus-visible) {
 
 .rp-rail-handle:hover::before,
 .rp-rail-handle:focus-visible::before {
-  background-color: var(--rp-accent);
+  background-color: var(--rp-accent-fg);
 }
 
 .rp-rail-handle:focus-visible {
-  outline: 2px solid var(--rp-accent);
+  outline: 2px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--rp-ring);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2126,14 +2382,15 @@ label.rp-btn:has(input:focus-visible) {
 }
 
 .rp-suggest-card:hover {
-  background: color-mix(in srgb, var(--rp-accent) 8%, var(--rp-surface));
-  border-color: color-mix(in srgb, var(--rp-accent) 45%, var(--rp-line));
+  background: var(--rp-wash);
+  border-color: var(--rp-accent-fg);
   transform: translateY(-1px);
 }
 
 .rp-suggest-card:focus-visible {
-  outline: 2px solid var(--rp-accent);
+  outline: 2px solid transparent;
   outline-offset: 2px;
+  box-shadow: var(--rp-ring);
 }
 
 .rp-suggest-text {
@@ -2148,7 +2405,7 @@ label.rp-btn:has(input:focus-visible) {
 }
 
 .rp-suggest-card:hover .rp-suggest-arrow {
-  color: var(--rp-accent);
+  color: var(--rp-accent-fg);
   transform: translateX(3px);
 }
 
@@ -2287,7 +2544,7 @@ label.rp-btn:has(input:focus-visible) {
   align-items: center;
   padding-block: 0.375rem;
   border-radius: var(--rp-radius-btn);
-  color: color-mix(in srgb, var(--rp-on-primary) 88%, transparent);
+  color: var(--rp-on-primary);
   transition: color 150ms var(--rp-ease);
 }
 
@@ -2761,7 +3018,7 @@ button:disabled,
  * the page rather than a full-bleed fill, and the trigger stays on screen to
  * morph. Panel and scrim animate opacity and transform only. */
 .rp-navsheet-scrim {
-  background-color: rgba(10, 10, 12, 0.45);
+  background-color: var(--rp-scrim);
   animation: rp-fade-in 200ms var(--rp-ease) both;
 }
 
@@ -3052,11 +3309,11 @@ button:disabled,
   color: var(--rp-ink);
 }
 .rp-acmd .rp-btn-primary {
-  color: #212d57;
-  background: #83d0f5;
+  color: var(--rp-on-control);
+  background: var(--rp-control);
 }
 .rp-acmd .rp-btn-primary:hover:not(:disabled) {
-  background: #a9e0fa;
+  background: var(--rp-control);
 }
 .rp-acmd-hero {
   --rp-on-hero: var(--rp-ink);
@@ -3474,8 +3731,15 @@ button:disabled,
   .rp-focus:focus-visible,
   .rp-focus-inverse:focus-visible,
   .rp-btn:focus-visible,
+  .rp-seg-item:focus-visible,
   .rp-chip:focus-visible,
   .rp-input:focus-visible,
+  .rp-select:focus-visible,
+  .rp-tenant input:is([type='checkbox'], [type='radio'], [type='range']):focus-visible,
+  .rp-check:has(input:focus-visible),
+  .rp-link-standalone:focus-visible,
+  .rp-rail-handle:focus-visible,
+  .rp-suggest-card:focus-visible,
   .rp-field:focus-within {
     outline: 2px solid Highlight;
     outline-offset: 2px;
