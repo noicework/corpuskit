@@ -20,6 +20,7 @@ import {
   PAIRING_IDS,
   paletteMode,
   paletteVars,
+  secondaryInk,
   shapeVars,
   tenantThemeVars,
   TEXT_SCALES,
@@ -338,16 +339,52 @@ describe('foundation colour role guarantees', () => {
     }
   }
 
-  it('dims secondary tiers close to AA while preserving the full-strength text', () => {
-    const vars = paletteVars(branding({ paletteId: 'fathom' }))
-    expect(vars['--rp-on-primary']).toBe(DEFAULT_PALETTES.fathom.palette.onBrandSurface)
-    expect(vars['--rp-on-primary-2']).not.toBe(vars['--rp-on-primary'])
-    expect(contrastRatio(vars['--rp-on-primary-2']!, vars['--rp-primary']!)).toBeLessThan(4.8)
-    const heroContrast = Math.min(
-      contrastRatio(vars['--rp-on-hero-2']!, vars['--rp-hero-from']!),
-      contrastRatio(vars['--rp-on-hero-2']!, vars['--rp-hero-to']!),
-    )
-    expect(heroContrast).toBeLessThan(4.8)
+  it('keeps white secondary text at least as strong as the 75% text tier', () => {
+    for (const fixture of fixtures) {
+      for (const scheme of ['light', 'dark'] as const) {
+        const vars = paletteVars(fixture.branding, scheme)
+        for (
+          const [foreground, secondary, grounds] of [
+            ['--rp-on-primary', '--rp-on-primary-2', ['--rp-primary']],
+            ['--rp-on-hero', '--rp-on-hero-2', ['--rp-hero-from', '--rp-hero-to']],
+          ] as const
+        ) {
+          if (vars[foreground] !== '#ffffff') continue
+          const tier = mixHex(vars[grounds[0]]!, '#ffffff', 0.25)
+          for (const ground of grounds) {
+            expect(contrastRatio(vars[secondary]!, vars[ground]!), fixture.label)
+              .toBeGreaterThanOrEqual(contrastRatio(tier, vars[ground]!))
+          }
+          if (grounds.every((ground) => contrastRatio(tier, vars[ground]!) >= 4.5)) {
+            expect(vars[secondary], fixture.label).toBe(tier)
+          }
+        }
+      }
+    }
+  })
+
+  it('recovers contrast beyond the 75% tier for bright and mid-tone grounds', () => {
+    for (const primary of ['#245ad4', '#767676']) {
+      const vars = paletteVars(branding({
+        colours: { ...DEFAULT_PORTAL_COLOURS, primary, heroFrom: primary, heroTo: primary },
+      }))
+      const tier = mixHex(primary, vars['--rp-on-primary']!, 0.25)
+      expect(contrastRatio(tier, primary), primary).toBeLessThan(4.5)
+      expect(vars['--rp-on-primary-2'], primary).not.toBe(tier)
+      expect(contrastRatio(vars['--rp-on-primary-2']!, primary), primary)
+        .toBeGreaterThanOrEqual(4.5)
+      expect(vars['--rp-on-hero-2']).toBe(vars['--rp-on-primary-2'])
+    }
+  })
+
+  it('uses a full-strength contrast fallback when the supplied foreground cannot read', () => {
+    for (const grounds of [['#ffffff'], ['#f2efe7', '#fffdf8']]) {
+      const fallback = secondaryInk('#ffffff', grounds)
+      expect(fallback).toBe(HOUSE_LIGHT_SUITE.ink)
+      for (const ground of grounds) {
+        expect(contrastRatio(fallback, ground)).toBeGreaterThanOrEqual(4.5)
+      }
+    }
   })
 
   it('chooses primary, then a qualified accent, then brand ink for light controls', () => {

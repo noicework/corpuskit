@@ -27,7 +27,7 @@
   --rp-hero-from: #3f3f46;
   --rp-hero-to: #18181b;
   --rp-on-primary: #ffffff;
-  --rp-on-primary-2: #a9a9aa;
+  --rp-on-primary-2: #c9c9ca;
   --rp-control: #27272a;
   --rp-on-control: #ffffff;
   --rp-logo-plate: #ffffff;
@@ -39,7 +39,7 @@
   --rp-accent-fg: #52525b;
   --rp-focus: #52525b;
   --rp-on-hero: #ffffff;
-  --rp-on-hero-2: #b2b2b4;
+  --rp-on-hero-2: #cfcfd1;
   --rp-wash: color-mix(in srgb, #52525b 12%, #ffffff);
   --rp-wash-strong: color-mix(in srgb, #52525b 22%, #ffffff);
 
@@ -100,6 +100,7 @@
   --font-sans: var(--rp-font-body);
   --font-display: var(--rp-font-display);
   --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
 }
 
 html {

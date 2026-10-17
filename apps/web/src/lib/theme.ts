@@ -313,26 +313,21 @@ function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
 }
 
 /**
- * Secondary ink steps toward its ground until the next 1% would fall below AA.
- * Hero ink checks both endpoints while stepping toward the first one. An
+ * Secondary ink starts at 75% text and regains strength in 1% steps until AA.
+ * Hero ink checks both endpoints while mixing toward the first one. An
  * unmeasurable CSS colour keeps the full-strength foreground rather than dimming
  * text without evidence that the result remains readable.
  */
-function secondaryInk(foreground: string, grounds: readonly string[]): string {
+export function secondaryInk(foreground: string, grounds: readonly string[]): string {
   const text = normaliseHex(foreground)
   const measuredGrounds = grounds.map(normaliseHex)
   if (!text || measuredGrounds.some((ground) => ground === null)) return foreground
   const hexGrounds = measuredGrounds as string[]
-  const start = hexGrounds.every((ground) => contrastRatio(text, ground) >= 4.5)
-    ? text
-    : textOn(hexGrounds, 4.5)
-  let result = start
-  for (let step = 1; step <= 100; step++) {
-    const candidate = mixHex(hexGrounds[0]!, start, step / 100)
-    if (!hexGrounds.every((ground) => contrastRatio(candidate, ground) >= 4.5)) break
-    result = candidate
+  for (let step = 25; step >= 0; step--) {
+    const candidate = mixHex(hexGrounds[0]!, text, step / 100)
+    if (hexGrounds.every((ground) => contrastRatio(candidate, ground) >= 4.5)) return candidate
   }
-  return result
+  return textOn(hexGrounds, 4.5)
 }
 
 /** Derived roles run after the scheme swap, so they measure the actual grounds. */
