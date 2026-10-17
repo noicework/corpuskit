@@ -10,7 +10,8 @@ import {
   Plus,
   X,
 } from './icons.tsx'
-import { IconButton } from './ui.tsx'
+import { Button, IconButton } from './ui.tsx'
+import type { ResearchUi } from '../lib/research-copy.ts'
 import {
   createResearchStorageContext,
   type CurrentInvestigation,
@@ -415,6 +416,70 @@ function InvestigationPicker({
   )
 }
 
+/** Keeps the saved control focusable while making further activations inert. */
+export function SaveEvidenceAction({
+  compact,
+  saved,
+  busy,
+  current,
+  label,
+  open,
+  ui,
+  onSave,
+  onPick,
+}: {
+  compact: boolean
+  saved: string | null
+  busy: boolean
+  current: CurrentInvestigation | null
+  label: string
+  open: boolean
+  ui: ResearchUi
+  onSave: () => void
+  onPick: () => void
+}) {
+  const saveLabel = current ? ui('Save to {value1}', { value1: current.name }) : undefined
+  return (
+    <Button
+      variant='outline'
+      size={compact ? 'sm' : 'md'}
+      leadingIcon={saved ? BookmarkFilled : Bookmark}
+      disabled={busy && Boolean(current) && !saved}
+      aria-pressed={Boolean(saved)}
+      aria-disabled={saved ? true : undefined}
+      title={saved ? ui('Saved to {name}', { name: saved }) : saveLabel}
+      aria-label={saved
+        ? ui('Saved to {name}', { name: saved })
+        : saveLabel ?? (label === 'Save' ? ui('Save to investigation') : undefined)}
+      aria-expanded={!saved && !current ? open : undefined}
+      aria-haspopup={!saved && !current ? 'dialog' : undefined}
+      onClick={(event) => {
+        if (saved || (busy && current)) {
+          event.preventDefault()
+          return
+        }
+        if (current) onSave()
+        else onPick()
+      }}
+    >
+      {saved
+        ? <span role='status'>{ui('Saved to {name}', { name: saved })}</span>
+        : current
+        ? busy ? ui('Saving…') : (
+          <>
+            <span>{ui('Save')}</span>
+            <span className='hidden sm:inline'>
+              {ui('to {name}', { name: truncateName(current.name) })}
+            </span>
+          </>
+        )
+        : label === 'Save'
+        ? ui('Save')
+        : label}
+    </Button>
+  )
+}
+
 export function SaveEvidenceButton({
   slug,
   evidence,
@@ -518,7 +583,7 @@ export function SaveEvidenceButton({
 
   if (!canWrite()) return null
 
-  if (saved) {
+  if (saved && compact) {
     return (
       <span
         className={`inline-flex items-center gap-1 text-xs text-[var(--rp-ok-ink)] ${
@@ -532,64 +597,35 @@ export function SaveEvidenceButton({
     )
   }
 
-  const icon = <Bookmark size='sm' className='shrink-0' />
   return (
     <div ref={rootRef} className='relative inline-flex items-center gap-1'>
-      {current
+      <SaveEvidenceAction
+        compact={compact}
+        saved={saved}
+        busy={busy}
+        current={current}
+        label={label}
+        open={open}
+        ui={ui}
+        onSave={() => {
+          if (current) void saveTo(current.id, current.name)
+        }}
+        onPick={() => setOpen((value) => !value)}
+      />
+      {current && !saved
         ? (
-          <button
-            type='button'
-            disabled={busy}
-            title={ui('Save to {value1}', { value1: current.name })}
-            aria-label={ui('Save to {value1}', { value1: current.name })}
-            onClick={() => void saveTo(current.id, current.name)}
-            className='rp-btn rp-btn-sm rp-btn-outline'
-          >
-            {busy ? ui('Saving…') : (
-              <>
-                {icon}
-                <span>{ui('Save')}</span>
-                {
-                  /* The destination is worth its width on a wide screen; on a
-                  * phone it is in the accessible name, the tooltip and the
-                  * picker, and the confirmation names it after the save. */
-                }
-                <span className='hidden sm:inline'>
-                  {ui('to {name}', { name: truncateName(current.name) })}
-                </span>
-              </>
-            )}
-          </button>
-        )
-        : (
-          <button
-            type='button'
+          <IconButton
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-haspopup='dialog'
-            aria-label={label === 'Save' ? ui('Save to investigation') : undefined}
-            className='rp-btn rp-btn-sm rp-btn-outline'
-          >
-            {icon}
-            {label === 'Save' ? ui('Save') : label}
-          </button>
-        )}
-      {current
-        ? (
-          <button
-            type='button'
-            onClick={() => setOpen((o) => !o)}
-            aria-expanded={open}
-            aria-haspopup='dialog'
-            aria-label={ui('Choose a different investigation')}
-            title={ui('Choose a different investigation')}
-            className='rp-btn rp-btn-sm rp-btn-outline rp-icon-btn'
-          >
-            <ChevronDown size='sm' />
-          </button>
+            label={ui('Choose a different investigation')}
+            icon={ChevronDown}
+            variant='outline'
+            size={compact ? 'sm' : 'md'}
+          />
         )
         : null}
-      {open
+      {open && !saved
         ? (
           <InvestigationPicker
             slug={slug}
