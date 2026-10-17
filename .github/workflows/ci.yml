@@ -17,9 +17,12 @@ concurrency:
 jobs:
   gate:
     name: Typecheck, lint, format, tests, build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
