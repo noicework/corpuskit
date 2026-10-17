@@ -12,6 +12,8 @@ import {
   useTextScale,
   useViewerScheme,
 } from '../lib/theme.ts'
+import { ArrowLeft, ArrowRight, type IconProps, Moon, Search, Sun } from '../components/icons.tsx'
+import { Button, IconButton } from '../components/ui.tsx'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
 import {
@@ -97,51 +99,49 @@ const NAV_ITEMS: {
 // from `helpMenuItems` for the same reason.
 const ACCOUNT_LABEL = 'My account'
 
-/** Sun and moon, for the viewer's scheme toggle. */
-function SchemeIcon({ scheme, className }: { scheme: 'light' | 'dark'; className: string }) {
+/** Keep all three strokes mounted for the expanded-state morph. */
+function MenuBars({ size = 'md', className, title }: IconProps) {
+  const sizes = { sm: '1rem', md: '1.25rem', lg: '1.5rem' }
   return (
     <svg
       viewBox='0 0 24 24'
+      width={sizes[size]}
+      height={sizes[size]}
       fill='none'
       stroke='currentColor'
-      strokeWidth='1.6'
+      strokeWidth={1.75}
       strokeLinecap='round'
       strokeLinejoin='round'
-      className={className}
-      aria-hidden='true'
+      className={`rp-chrome-menu-bars ${className ?? ''}`.trim()}
+      focusable='false'
+      aria-hidden={title ? undefined : true}
+      role={title ? 'img' : undefined}
+      aria-label={title}
     >
-      {scheme === 'dark' ? <path d='M20 14.5A8.5 8.5 0 019.5 4a7 7 0 1010.5 10.5z' /> : (
-        <>
-          <circle cx='12' cy='12' r='4' />
-          <path d='M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8' />
-        </>
-      )}
-    </svg>
-  )
-}
-
-/**
- * The menu trigger's three bars, which rotate and translate into the cross
- * rather than cross-fading to a second icon. Every state lives in
- * `.rp-navtoggle-bar` in styles.css, keyed off the button's own
- * `aria-expanded`, so the drawn state and the announced state cannot disagree.
- */
-function MenuBars() {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.8'
-      strokeLinecap='round'
-      className='h-6 w-6'
-      aria-hidden='true'
-    >
+      {title && <title>{title}</title>}
       <path className='rp-navtoggle-bar rp-navtoggle-bar-top' d='M4 7h16' />
       <path className='rp-navtoggle-bar rp-navtoggle-bar-mid' d='M4 12h16' />
       <path className='rp-navtoggle-bar rp-navtoggle-bar-bot' d='M4 17h16' />
     </svg>
   )
+}
+
+/** Cache stamps do not turn a light logo into a distinct dark asset. */
+export function portalLogo(
+  branding: Pick<TenantConfig['branding'], 'logoUrl' | 'logoDarkUrl'>,
+  scheme: 'light' | 'dark',
+): { src: string | undefined; plate: boolean } {
+  const withoutVersion = (value: string) => {
+    const url = new URL(value, 'https://corpuskit.invalid')
+    url.searchParams.delete('v')
+    return url.href
+  }
+  const distinctDark = !!branding.logoDarkUrl &&
+    (!branding.logoUrl || withoutVersion(branding.logoDarkUrl) !== withoutVersion(branding.logoUrl))
+  return {
+    src: scheme === 'dark' && distinctDark ? branding.logoDarkUrl : branding.logoUrl,
+    plate: scheme === 'dark' && !!branding.logoUrl && !distinctDark,
+  }
 }
 
 /** Anything the sheet's focus cycle should stop on. */
@@ -199,6 +199,10 @@ export function TenantLayout() {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
+        if (document.querySelector('dialog[open]')) return
+        navRestoreFocus.current = false
+        setNavOpen(false)
+        setNavMounted(false)
         setPaletteOpen(true)
       }
     }
@@ -226,7 +230,7 @@ export function TenantLayout() {
 
   // Escape closes, and Tab is held inside the sheet. The trigger sits in the
   // header rather than in the panel - it is the sheet's own close control now
-  // that it morphs into the cross - so it joins the front of the cycle instead
+  // that its bars morph into a cross - so it joins the front of the cycle instead
   // of being tabbed past into the page underneath.
   useEffect(() => {
     if (!navOpen) return
@@ -402,11 +406,15 @@ export function TenantLayout() {
     config.branding.layout,
   )
 
-  // Links sit on the solid brand band, so the active state is white type over
+  // Links sit on the solid brand band, so the active state is on-primary type over
   // an accent underline (see .rp-navlink in styles.css) rather than the accent
   // wash the old light-background header used.
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `rp-navlink${isActive ? ' rp-navlink-active' : ''}`
+    `rp-navlink rp-chrome-nav-link${isActive ? ' rp-navlink-active' : ''}`
+
+  const logo = portalLogo(config.branding, scheme)
+  const hasImageLogo = Boolean(config.branding.logoUrl && !logoFailed && !isCorpusKit)
+  const SchemeIcon = scheme === 'dark' ? Moon : Sun
 
   const accountControl = (
     <AccountMenu
@@ -430,7 +438,7 @@ export function TenantLayout() {
         lang={locale.language}
       >
         {
-          /* Two-tier header: a white strip carrying the logo, over a solid
+          /* Two-tier header: a surface strip carrying the logo, over a solid
         * brand-colour band carrying the navigation. */
         }
         <header
@@ -461,7 +469,7 @@ export function TenantLayout() {
                         key={`custom-${index}`}
                         href={link.href}
                         slug={config.slug}
-                        className='rp-navlink'
+                        className='rp-navlink rp-chrome-nav-link'
                         nav
                       >
                         {link.label}
@@ -471,16 +479,14 @@ export function TenantLayout() {
                   <div className='acmd-portal-tools'>
                     {!lightOnly && (
                       <span className='hidden sm:inline-flex'>
-                        <button
-                          type='button'
+                        <IconButton
                           onClick={toggleScheme}
-                          aria-label={schemeLabel}
-                          title={schemeLabel}
+                          label={schemeLabel}
+                          icon={SchemeIcon}
+                          size='lg'
                           aria-pressed={scheme === 'dark'}
-                          className='acmd-scheme rp-focus'
-                        >
-                          <SchemeIcon scheme={scheme} className='h-5 w-5' />
-                        </button>
+                          className='rp-chrome-header-control'
+                        />
                       </span>
                     )}
                     <span className='hidden sm:inline-flex'>
@@ -490,7 +496,9 @@ export function TenantLayout() {
                       {accountControl}
                     </span>
                     <span className='md:hidden'>
-                      <button
+                      <Button
+                        variant='ghost'
+                        size='sm'
                         ref={navTriggerRef}
                         type='button'
                         onClick={() => {
@@ -508,11 +516,11 @@ export function TenantLayout() {
                         aria-label={navOpen ? ui('Close menu') : ui('Open menu')}
                         aria-expanded={navOpen}
                         aria-controls='mobile-nav-sheet'
-                        className='acmd-portal-menu rp-focus'
+                        className='rp-navtoggle rp-chrome-acmd-toggle rp-focus'
                       >
                         {ui('Explore ')}
-                        <MenuBars />
-                      </button>
+                        <MenuBars size='sm' />
+                      </Button>
                     </span>
                   </div>
                 </div>
@@ -530,18 +538,24 @@ export function TenantLayout() {
             * into a 38px column and clipped to one letter a line. When the two
             * no longer fit, the controls take their own line instead. */
                   }
-                  <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-6'>
-                    <div className='flex min-w-[10rem] flex-1 items-center gap-2 sm:min-w-0'>
+                  <div className='rp-shell flex flex-wrap items-center gap-3 py-3 sm:gap-6 lg:flex-nowrap'>
+                    <div
+                      className={`flex min-w-[10rem] flex-1 items-center gap-2 ${
+                        hasImageLogo ? 'sm:min-w-max' : 'sm:min-w-0'
+                      }`}
+                    >
                       <Link
                         to={`/t/${config.slug}`}
-                        className='rp-focus flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]'
+                        className={`rp-focus rp-chrome-home flex min-w-0 items-center gap-3 rounded-[var(--rp-radius-btn)]${
+                          hasImageLogo ? ' sm:shrink-0' : ''
+                        }${logo.plate && !logoFailed && !isCorpusKit ? ' rp-logo-plate' : ''}`}
                       >
                         {isCorpusKit
                           ? (
                             <span className='rp-corpuskit-wordmark'>
                               {ui('CorpusKit')}
                               <span
-                                style={{ color: scheme === 'dark' ? '#8fc0ee' : '#155da6' }}
+                                style={{ color: 'var(--rp-accent-fg)' }}
                               >
                                 /
                               </span>
@@ -550,32 +564,14 @@ export function TenantLayout() {
                           : config.branding.logoUrl && !logoFailed
                           ? (
                             <img
-                              src={scheme === 'dark'
-                                ? config.branding.logoDarkUrl ?? config.branding.logoUrl
-                                : config.branding.logoUrl}
+                              src={logo.src}
                               alt={config.branding.organisation}
                               onError={() => setLogoFailed(true)}
                               style={config.branding.logoMaxWidth === undefined ? undefined : {
                                 maxWidth:
-                                  `min(${config.branding.logoMaxWidth}px, var(--rp-logo-width-cap), 100%)`,
+                                  `min(${config.branding.logoMaxWidth}px, var(--rp-chrome-logo-cap), 100%)`,
                               }}
-                              // Tenant logos vary wildly in aspect ratio (a wordmark
-                              // with a tagline under it can be 4:1 while a compact
-                              // wordmark is closer to 2:1), so a fixed height alone
-                              // decides nothing about how much of a phone row the logo
-                              // eats. Below `sm` it is boxed by BOTH a max
-                              // width and a max height and left free to pick its own
-                              // height, so every tenant fits the same slot without being
-                              // letterboxed. `min-w-0` is the real overlap guard: an
-                              // image is a flex item whose automatic minimum size is its
-                              // intrinsic width, so without it the logo refuses to
-                              // shrink and simply paints over its neighbours. Desktop is
-                              // untouched - `sm:` restores h-16 with the 20rem cap.
-                              className={`h-auto max-h-10 w-[8.5rem] shrink-0 object-contain sm:h-16 sm:max-h-none sm:w-auto sm:max-w-[20rem] ${
-                                config.branding.logoMaxWidth === undefined
-                                  ? ''
-                                  : '[--rp-logo-width-cap:170px] sm:[--rp-logo-width-cap:640px]'
-                              }`}
+                              className='rp-chrome-logo min-w-0 shrink object-contain'
                             />
                           )
                           : (
@@ -596,7 +592,7 @@ export function TenantLayout() {
                       /* Header search, centred and full-measure: it is the only search
               * box in the product now, so it carries the weight. */
                     }
-                    <div className='hidden w-[min(40rem,42vw)] shrink-0 items-center lg:flex'>
+                    <div className='hidden w-[min(40rem,42vw)] min-w-0 items-center lg:flex'>
                       <form
                         role='search'
                         onSubmit={(event) => {
@@ -606,7 +602,7 @@ export function TenantLayout() {
                           navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
                           setHeaderQuery('')
                         }}
-                        className='flex w-full items-center'
+                        className='rp-field flex w-full items-center gap-1 rounded-[var(--rp-radius-input)] border bg-surface p-1'
                       >
                         <label htmlFor='header-search' className='sr-only'>
                           {locale.ui('Search')} {config.branding.productName}
@@ -617,30 +613,14 @@ export function TenantLayout() {
                           value={headerQuery}
                           onChange={(event) => setHeaderQuery(event.target.value)}
                           placeholder={config.searchPlaceholder}
-                          className='rp-input rp-input-flush-end h-[calc(3rem*var(--rp-density-ctl,1))] min-w-0 flex-1 text-base'
+                          className='min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] min-w-0 flex-1 bg-transparent px-3 text-base text-ink outline-none'
                         />
-                        <button
+                        <IconButton
                           type='submit'
-                          aria-label={locale.ui('Search')}
-                          className='rp-focus flex h-[calc(3rem*var(--rp-density-ctl,1))] w-[calc(3rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-e-[var(--rp-radius-input)] border border-l-0 transition-colors duration-150'
-                          style={{
-                            borderColor: 'var(--rp-line)',
-                            color: 'var(--rp-brand-fg)',
-                          }}
-                        >
-                          <svg
-                            viewBox='0 0 20 20'
-                            fill='none'
-                            stroke='currentColor'
-                            strokeWidth='1.8'
-                            strokeLinecap='round'
-                            className='h-5 w-5'
-                            aria-hidden='true'
-                          >
-                            <circle cx='9' cy='9' r='5.5' />
-                            <path d='M13.2 13.2 17 17' />
-                          </svg>
-                        </button>
+                          label={locale.ui('Search')}
+                          icon={Search}
+                          size='lg'
+                        />
                       </form>
                     </div>
 
@@ -655,7 +635,10 @@ export function TenantLayout() {
                       {kbStatus?.status === 'none' &&
                         access.can('portal.create', { kind: 'platform' }) && (
                         <span className='hidden shrink-0 lg:block'>
-                          <Link to='/admin' className='rp-badge rp-badge-quiet rp-focus'>
+                          <Link
+                            to='/admin'
+                            className='rp-chrome-status-link rp-badge rp-badge-quiet rp-focus'
+                          >
                             {ui('Not connected')}
                           </Link>
                         </span>
@@ -670,21 +653,14 @@ export function TenantLayout() {
                       }
                       {!lightOnly && (
                         <span className='hidden sm:inline-flex'>
-                          <button
-                            type='button'
+                          <IconButton
                             onClick={toggleScheme}
-                            aria-label={schemeLabel}
-                            title={schemeLabel}
+                            label={schemeLabel}
+                            icon={SchemeIcon}
+                            size='lg'
                             aria-pressed={scheme === 'dark'}
-                            className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150'
-                            style={{
-                              borderColor:
-                                'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-                              color: 'var(--rp-brand-fg)',
-                            }}
-                          >
-                            <SchemeIcon scheme={scheme} className='h-6 w-6' />
-                          </button>
+                            className='rp-chrome-header-control'
+                          />
                         </span>
                       )}
                       <span className='hidden sm:inline-flex'>
@@ -704,7 +680,7 @@ export function TenantLayout() {
                 * read as one 44px cluster. */
                       }
                       <span className='md:hidden'>
-                        <button
+                        <IconButton
                           ref={navTriggerRef}
                           type='button'
                           onClick={() => {
@@ -722,13 +698,13 @@ export function TenantLayout() {
                             setNavMounted(true)
                             setNavOpen(true)
                           }}
-                          aria-label={locale.ui(navOpen ? 'Close menu' : 'Open menu')}
+                          label={locale.ui(navOpen ? 'Close menu' : 'Open menu')}
+                          icon={MenuBars}
+                          size='lg'
                           aria-expanded={navOpen}
                           aria-controls='mobile-nav-sheet'
-                          className='rp-navtoggle rp-focus'
-                        >
-                          <MenuBars />
-                        </button>
+                          className='rp-navtoggle rp-chrome-header-control'
+                        />
                       </span>
                     </div>
                   </div>
@@ -755,7 +731,7 @@ export function TenantLayout() {
                           key={`custom-${index}`}
                           href={link.href}
                           slug={config.slug}
-                          className='rp-navlink'
+                          className='rp-navlink rp-chrome-nav-link'
                           nav
                         >
                           {link.label}
@@ -827,7 +803,7 @@ export function TenantLayout() {
                 navRestoreFocus.current = true
                 setNavOpen(false)
               }}
-              className={`fixed inset-x-0 bottom-0 z-50 ${
+              className={`rp-scrim fixed inset-x-0 bottom-0 z-60 ${
                 navOpen ? 'rp-navsheet-scrim' : 'rp-navsheet-scrim rp-navsheet-scrim-exit'
               }`}
               style={{ top: navTop === null ? 'var(--rp-header-h, 4rem)' : `${navTop}px` }}
@@ -836,7 +812,7 @@ export function TenantLayout() {
               id='mobile-nav-sheet'
               ref={navPanelRef}
               aria-label={ui('Primary')}
-              className={`fixed inset-x-0 z-50 overflow-y-auto overflow-x-hidden border-b border-[var(--rp-on-primary)]/20 px-4 pb-7 pt-2 ${
+              className={`fixed inset-x-0 z-60 overflow-y-auto overflow-x-hidden border-b border-[var(--rp-on-primary)]/20 px-4 pb-7 pt-2 ${
                 navOpen ? 'rp-navsheet-panel' : 'rp-navsheet-panel rp-navsheet-panel-exit'
               }`}
               style={{
@@ -857,14 +833,9 @@ export function TenantLayout() {
                     <NavLink
                       to={`/t/${config.slug}${item.path}`}
                       end={item.end}
-                      className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
+                      className='rp-chrome-nav-row rp-focus-inverse flex min-h-11 items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-normal text-[var(--rp-on-primary)]'
                     >
-                      <span
-                        aria-hidden='true'
-                        className='transition-transform duration-200 group-hover:translate-x-1'
-                      >
-                        →
-                      </span>
+                      <ArrowRight className='shrink-0' />
                       {locale.ui(item.label)}
                     </NavLink>
                   </li>
@@ -878,14 +849,9 @@ export function TenantLayout() {
                     <LayoutAnchor
                       href={link.href}
                       slug={config.slug}
-                      className='rp-focus-inverse group flex items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-light text-[var(--rp-on-primary)]'
+                      className='rp-chrome-nav-row rp-focus-inverse flex min-h-11 items-center gap-3 border-b border-[var(--rp-on-primary)]/15 py-4 text-lg font-normal text-[var(--rp-on-primary)]'
                     >
-                      <span
-                        aria-hidden='true'
-                        className='transition-transform duration-200 group-hover:translate-x-1'
-                      >
-                        →
-                      </span>
+                      <ArrowRight className='shrink-0' />
                       {link.label}
                     </LayoutAnchor>
                   </li>
@@ -906,15 +872,15 @@ export function TenantLayout() {
                 style={{ '--rp-stage-i': navigation.length + customLinks.length } as CSSProperties}
               >
                 {!lightOnly && (
-                  <button
-                    type='button'
+                  <Button
+                    variant='ghost'
                     onClick={toggleScheme}
                     aria-pressed={scheme === 'dark'}
-                    className='rp-navsheet-action rp-focus-inverse'
+                    className='rp-navsheet-action rp-chrome-sheet-action rp-focus-inverse'
                   >
-                    <SchemeIcon scheme={scheme} className='h-5 w-5 shrink-0' />
+                    <SchemeIcon className='shrink-0' />
                     {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}
-                  </button>
+                  </Button>
                 )}
                 {helpMenuItems(config.slug).map((item) => (
                   <NavLink
@@ -922,7 +888,7 @@ export function TenantLayout() {
                     to={item.href}
                     className='rp-navsheet-action rp-focus-inverse'
                   >
-                    <HelpItemIcon item={item} className='h-5 w-5 shrink-0' />
+                    <HelpItemIcon item={item} className='shrink-0' />
                     {ui(item.label)}
                   </NavLink>
                 ))}
@@ -967,7 +933,8 @@ export function TenantLayout() {
                 <p className='mt-4 text-ink-2'>
                   {ui('You cannot open this page with your current account.')}
                 </p>
-                <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-secondary mt-6'>
+                <Link to={`/t/${config.slug}/library`} className='rp-btn rp-btn-outline mt-6'>
+                  <ArrowLeft size='sm' />
                   {ui('Back to the library')}
                 </Link>
               </main>

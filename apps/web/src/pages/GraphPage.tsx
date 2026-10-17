@@ -11,7 +11,20 @@ import {
   searchTenantFull,
 } from '../api/client.ts'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
-import { EmptyState, ErrorCard } from '../components/ui.tsx'
+import { EmptyState, ErrorCard, IconButton } from '../components/ui.tsx'
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  Grid2x2,
+  LayoutList,
+  Network,
+  Plus,
+  Scatter,
+  Search,
+  Share,
+  X,
+} from '../components/icons.tsx'
 import {
   buildDegrees,
   buildGroupStyles,
@@ -41,88 +54,6 @@ import type { TenantOutletContext } from './TenantLayout.tsx'
 // ---------------------------------------------------------------------------
 
 type Mode = 'entity' | 'concept'
-
-// ---------------------------------------------------------------------------
-// Icons. There is no icon library here, so the map's glyphs are drawn inline
-// in the house idiom - stroked, never filled, rounded caps, on a 20-unit grid.
-// They stand in for the spelled-out control labels on a phone, where the words
-// cost more height than the map can spare; every one of them still carries the
-// label as an aria-label and a title.
-// ---------------------------------------------------------------------------
-
-function Glyph({ children }: { children: React.ReactNode }) {
-  return (
-    <svg
-      viewBox='0 0 20 20'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth={1.8}
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className='h-[17px] w-[17px]'
-      aria-hidden='true'
-    >
-      {children}
-    </svg>
-  )
-}
-
-/** Entity lens: nodes joined by relations. */
-function EntityGlyph() {
-  return (
-    <Glyph>
-      <path d='M7.1 6.6 12.9 7.4' />
-      <path d='M6 8.4 8.5 13.1' />
-      <circle cx='5' cy='6.5' r='2.1' />
-      <circle cx='15' cy='7.5' r='2.1' />
-      <circle cx='9.5' cy='15' r='2.1' />
-    </Glyph>
-  )
-}
-
-/** Concept lens: two categories sharing resources - the overlap is the point. */
-function ConceptGlyph() {
-  return (
-    <Glyph>
-      <circle cx='7.6' cy='10' r='4.7' />
-      <circle cx='12.4' cy='10' r='4.7' />
-    </Glyph>
-  )
-}
-
-/** Grouped layout: each category gathered into its own territory. */
-function GroupedGlyph() {
-  return (
-    <Glyph>
-      <rect x='3.4' y='3.4' width='5.6' height='5.6' rx='1.4' />
-      <rect x='11' y='3.4' width='5.6' height='5.6' rx='1.4' />
-      <rect x='3.4' y='11' width='5.6' height='5.6' rx='1.4' />
-      <rect x='11' y='11' width='5.6' height='5.6' rx='1.4' />
-    </Glyph>
-  )
-}
-
-/** Free layout: one open field, nothing gathered. */
-function FreeGlyph() {
-  return (
-    <Glyph>
-      <circle cx='5.2' cy='6.4' r='1.45' />
-      <circle cx='11.2' cy='4.6' r='1.45' />
-      <circle cx='15.4' cy='9.6' r='1.45' />
-      <circle cx='6.8' cy='13.4' r='1.45' />
-      <circle cx='13.2' cy='15.2' r='1.45' />
-    </Glyph>
-  )
-}
-
-function SearchGlyph() {
-  return (
-    <Glyph>
-      <circle cx='9' cy='9' r='5.5' />
-      <path d='M13.5 13.5 17 17' />
-    </Glyph>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // How much of the canvas the floating panels are actually covering.
@@ -245,7 +176,7 @@ function NodeSearch({
   onPick,
   autoFocus = false,
   onDismiss,
-  className = 'h-[calc(2.75rem*var(--rp-density-ctl,1))]',
+  className = 'min-h-[calc(2.75rem*var(--rp-density-ctl,1))]',
 }: {
   nodes: MapNode[]
   groupStyles: Map<string, GroupStyle>
@@ -273,16 +204,7 @@ function NodeSearch({
         aria-hidden='true'
         className='pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-3'
       >
-        <svg
-          viewBox='0 0 20 20'
-          fill='none'
-          stroke='currentColor'
-          strokeWidth='1.7'
-          className='h-4 w-4'
-        >
-          <circle cx='9' cy='9' r='5.5' />
-          <path d='M13.5 13.5 17 17' strokeLinecap='round' />
-        </svg>
+        <Search size='sm' />
       </span>
       <input
         ref={inputRef}
@@ -310,7 +232,7 @@ function NodeSearch({
                     onPick(node.id)
                     setQuery('')
                   }}
-                  className='flex w-full items-start gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-[var(--rp-surface-2)]'
+                  className='rp-focus flex min-h-[2.75rem] w-full items-start gap-2 rounded-[var(--rp-radius-btn)] px-3 py-2 text-left text-sm text-ink hover:bg-[var(--rp-surface-2)]'
                 >
                   <span
                     className='mt-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full'
@@ -424,18 +346,14 @@ function DetailDock({
       // hand the reading position to the details it opened; -1 keeps it out
       // of the tab order itself.
       tabIndex={-1}
-      className='rp-anim-fade absolute inset-x-0 bottom-0 z-30 flex max-h-[68%] flex-col overflow-hidden rounded-t-[var(--rp-radius)] border border-line rp-map-panel outline-none rp-map-gutter-right md:inset-x-auto md:top-3 md:bottom-3 md:max-h-none md:w-[360px] md:rounded-[calc(var(--rp-radius)+4px)]'
+      className='rp-focus rp-anim-fade absolute inset-x-0 bottom-0 z-30 flex max-h-[68%] flex-col overflow-hidden rounded-t-[var(--rp-radius)] border border-line rp-map-panel rp-map-gutter-right md:inset-x-auto md:top-3 md:bottom-3 md:max-h-none md:w-[360px] md:rounded-[calc(var(--rp-radius)+4px)]'
     >
-      <button
-        type='button'
+      <IconButton
+        label={ui('Close details')}
         onClick={onClose}
-        aria-label={ui('Close details')}
-        className='rp-btn rp-btn-ghost absolute right-2 top-2 z-10 h-8 w-8 !px-0'
-      >
-        <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
-          <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-        </svg>
-      </button>
+        icon={X}
+        className='absolute right-2 top-2 z-10'
+      />
       <div className='rp-scroll flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-5'>
         {children}
       </div>
@@ -496,7 +414,7 @@ function EntityPanel({
             }}
             aria-hidden='true'
           />
-          <h2 className='font-display text-lg leading-tight text-ink'>{node.label}</h2>
+          <h2 className='rp-display text-lg leading-tight text-ink'>{node.label}</h2>
         </div>
         <p className='mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
           <span
@@ -521,17 +439,19 @@ function EntityPanel({
           type='button'
           onClick={onExpand}
           disabled={expanding}
-          className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
+          className='rp-btn rp-btn-outline rp-btn-sm'
         >
+          <Plus size='sm' />
           {expanding ? ui('Expanding…') : ui('Expand connections')}
         </button>
         <button
           type='button'
           onClick={pathState.from === node.id ? onClearPath : onArmPath}
-          className={`rp-btn h-8 px-2.5 text-xs ${
+          className={`rp-btn rp-btn-sm ${
             pathState.from === node.id ? 'rp-btn-primary' : 'rp-btn-outline'
           }`}
         >
+          <Share size='sm' />
           {pathState.from === node.id ? ui('Cancel trace') : ui('Trace a connection')}
         </button>
       </div>
@@ -567,7 +487,9 @@ function EntityPanel({
               {pathState.path.map((step, i) => (
                 <li key={i} className='text-xs text-ink'>
                   <span className='font-medium'>{step.source}</span>{' '}
-                  <span className='text-ink-3'>{graphRelationLabel(step.label, ui)} →</span>{' '}
+                  <span className='inline-flex items-center gap-1 text-ink-3'>
+                    {graphRelationLabel(step.label, ui)} <ArrowRight size='sm' />
+                  </span>{' '}
                   <span className='font-medium'>{step.target}</span>
                 </li>
               ))}
@@ -575,7 +497,7 @@ function EntityPanel({
             <button
               type='button'
               onClick={onClearPath}
-              className='rp-btn rp-btn-ghost mt-2 h-7 px-2 text-xs'
+              className='rp-btn rp-btn-ghost rp-btn-sm mt-2'
             >
               {ui('Clear')}
             </button>
@@ -609,7 +531,7 @@ function EntityPanel({
                           : `${other} ${graphRelationLabel(label, ui)} ${node.label}`}
                       >
                         <span className='shrink-0 text-ink-3' aria-hidden='true'>
-                          {outgoing ? '→' : '←'}
+                          {outgoing ? <ArrowRight size='sm' /> : <ArrowLeft size='sm' />}
                         </span>
                         <span className='min-w-0'>{other}</span>
                       </button>
@@ -640,15 +562,16 @@ function EntityPanel({
       <div className='mt-auto flex flex-wrap gap-1.5 border-t border-line pt-3'>
         <Link
           to={`/t/${slug}/entity/${encodeURIComponent(node.label)}`}
-          className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
+          className='rp-btn rp-btn-outline rp-btn-sm'
         >
           {ui('Open dossier')}
+          <ArrowRight size='sm' />
         </Link>
         <Link
           to={`/t/${slug}/ask?ask=${
             encodeURIComponent(ui('What does the research say about {name}?', { name: node.label }))
           }`}
-          className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
+          className='rp-btn rp-btn-primary rp-btn-sm'
         >
           {ui('Ask about this')}
         </Link>
@@ -699,7 +622,7 @@ function ConceptPanel({
     <>
       <div className='pr-8'>
         <p className='rp-eyebrow text-ink-3'>{isTopic ? ui('Topic') : ui('Kind')}</p>
-        <h2 className='mt-1 font-display text-lg text-ink'>{node.label}</h2>
+        <h2 className='rp-display mt-1 text-lg text-ink'>{node.label}</h2>
         <p
           className='mt-1 text-xs font-semibold uppercase tracking-wide'
           style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
@@ -722,13 +645,13 @@ function ConceptPanel({
                     <button
                       type='button'
                       onClick={() => onSelect(otherId)}
-                      className='min-w-0 truncate rounded-[var(--rp-radius)] px-1.5 py-1 text-left text-sm text-ink hover:bg-[var(--rp-surface-2)]'
+                      className='rp-focus min-h-[2.75rem] min-w-0 truncate rounded-[var(--rp-radius-btn)] px-1.5 py-1 text-left text-sm text-ink hover:bg-[var(--rp-surface-2)]'
                     >
                       {labelById.get(otherId) ?? otherId}
                     </button>
                     <Link
                       to={libraryHref(otherId)}
-                      className='shrink-0 text-xs text-ink-3 underline-offset-2 hover:text-[var(--rp-ink)] hover:underline'
+                      className='rp-link-standalone shrink-0 text-xs text-ink-3 underline-offset-2 hover:text-[var(--rp-ink)] hover:underline'
                       title={ui('View the resources where both appear')}
                     >
                       {ui(count === 1 ? '{count} resource' : '{count} resources', { count })}
@@ -753,7 +676,7 @@ function ConceptPanel({
       <div className='mt-auto border-t border-line pt-3'>
         <Link
           to={libraryHref()}
-          className='rp-btn rp-btn-primary h-8 px-2.5 text-xs'
+          className='rp-btn rp-btn-primary rp-btn-sm'
         >
           {ui(node.weight === 1 ? 'View these {count} resource' : 'View these {count} resources', {
             count: node.weight,
@@ -814,16 +737,12 @@ function NavigatorRail({
       aria-label={ui('Map navigator')}
       className='rp-anim-fade absolute inset-x-0 bottom-0 z-20 flex max-h-[60%] flex-col overflow-hidden rounded-t-[var(--rp-radius)] border border-line rp-map-panel rp-map-gutter-left md:inset-x-auto md:bottom-auto md:top-1/2 md:max-h-[calc(100%-2rem)] md:w-[300px] md:-translate-y-1/2 md:rounded-[calc(var(--rp-radius)+4px)]'
     >
-      <button
-        type='button'
+      <IconButton
+        label={ui('Hide navigator')}
         onClick={onClose}
-        aria-label={ui('Hide navigator')}
-        className='rp-btn rp-btn-ghost absolute right-2 top-2 z-10 h-8 w-8 shrink-0 !px-0'
-      >
-        <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
-          <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-        </svg>
-      </button>
+        icon={X}
+        className='absolute right-2 top-2 z-10'
+      />
 
       <div className='rp-scroll flex-1 overflow-y-auto px-4 py-4'>
         {groupStyles.size > 1
@@ -842,9 +761,11 @@ function NavigatorRail({
                     type='button'
                     aria-pressed={!hiddenGroups.has(group)}
                     onClick={() => onToggleGroup(group)}
-                    className={`rp-chip gap-1.5 text-xs ${
-                      hiddenGroups.has(group) ? 'opacity-40' : ''
-                    }`}
+                    className='rp-chip gap-1.5 text-xs'
+                    style={{
+                      color: style.ink,
+                      textDecoration: hiddenGroups.has(group) ? 'line-through' : undefined,
+                    }}
                   >
                     <span
                       className='inline-block h-2.5 w-2.5 rounded-full'
@@ -880,7 +801,7 @@ function NavigatorRail({
                     type='button'
                     onClick={() => onSelect(node.id)}
                     aria-current={active ? 'true' : undefined}
-                    className={`flex w-full items-center gap-2 rounded-[var(--rp-radius)] px-2 py-1.5 text-left text-sm transition-colors ${
+                    className={`rp-focus flex min-h-[2.75rem] w-full items-center gap-2 rounded-[var(--rp-radius-btn)] px-2 py-1.5 text-left text-sm transition-colors ${
                       active
                         ? 'bg-[var(--rp-surface-2)] text-ink'
                         : 'text-ink hover:bg-[var(--rp-surface-2)]'
@@ -907,7 +828,7 @@ function NavigatorRail({
                 type='button'
                 aria-expanded={showAll}
                 onClick={() => setShowAll((v) => !v)}
-                className='rp-btn rp-btn-ghost mt-1.5 h-8 px-2 text-xs'
+                className='rp-btn rp-btn-ghost rp-btn-sm mt-1.5'
               >
                 {showAll ? ui('Show fewer') : ui(
                   isEntity ? 'Show all {count} entities' : 'Show all {count} categories',
@@ -933,215 +854,116 @@ type SegmentOption<T extends string> = {
   icon: React.ReactNode
 }
 
-/**
- * The phone form of a segmented control: the spelled-out option names and the
- * VIEW / LAYOUT caption are what make the desktop control 300px wide, so on a
- * narrow screen each option becomes its glyph and the caption moves onto the
- * group's aria-label. The chosen option is filled solid rather than washed -
- * with no words to read, the selected state has to be unmistakable at a
- * glance, and white-on-primary holds its contrast over the banner scrim.
- */
-function IconSegmented<T extends string>({
+/** The same segmented control keeps its names in tooltips on a phone. */
+function GraphSegmented<T extends string>({
   groupLabel,
+  caption,
   value,
   options,
   onChange,
+  compact,
 }: {
   groupLabel: string
+  caption: string
   value: T
   options: SegmentOption<T>[]
   onChange: (value: T) => void
+  compact: boolean
 }) {
-  const { ui } = usePortalLocale()
   return (
-    <div
-      role='group'
-      aria-label={groupLabel}
-      className='inline-flex h-9 shrink-0 items-center overflow-hidden rounded-[var(--rp-radius-btn)] border border-[var(--rp-on-primary)]/45'
-    >
-      {options.map((option, index) => {
-        const active = option.value === value
-        return (
+    <div className='flex items-center gap-2'>
+      {!compact
+        ? <span className='text-2xs font-semibold text-[var(--rp-on-primary-2)]'>{caption}</span>
+        : null}
+      <div
+        role='group'
+        aria-label={groupLabel}
+        className='rp-seg rp-seg-on-brand rp-graph-brand-seg shrink-0'
+      >
+        {options.map((option) => (
           <button
             key={option.value}
             type='button'
-            aria-pressed={active}
-            aria-label={ui(option.label)}
-            title={`${ui(option.label)} - ${ui(option.title)}`}
+            aria-pressed={value === option.value}
+            aria-label={compact ? option.label : undefined}
+            title={`${option.label} - ${option.title}`}
             onClick={() => onChange(option.value)}
-            className={`rp-focus flex h-full w-9 items-center justify-center transition-colors duration-150 ${
-              index > 0 ? 'border-l border-[var(--rp-on-primary)]/35' : ''
-            } ${
-              active
-                ? 'bg-[var(--rp-on-primary)] text-[var(--rp-primary)]'
-                : 'text-[var(--rp-on-primary)]/80 hover:bg-[var(--rp-on-primary)]/15'
-            }`}
+            className={`rp-seg-item ${compact ? 'rp-icon-btn' : ''}`}
           >
             {option.icon}
+            {!compact ? option.label : null}
           </button>
-        )
-      })}
+        ))}
+      </div>
     </div>
   )
 }
 
-function ModeToggle({
-  mode,
-  onChange,
-  compact = false,
-}: {
+function ModeToggle({ mode, onChange, compact = false }: {
   mode: Mode
   onChange: (mode: Mode) => void
   compact?: boolean
 }) {
   const { ui } = usePortalLocale()
-  const options: SegmentOption<Mode>[] = [
-    {
-      value: 'entity',
-      label: ui('Entity graph'),
-      title: ui('The entities and the relations between them'),
-      icon: <EntityGlyph />,
-    },
-    {
-      value: 'concept',
-      label: ui('Concept map'),
-      title: ui('The topics and kinds that share resources'),
-      icon: <ConceptGlyph />,
-    },
-  ]
-  if (compact) {
-    return (
-      <IconSegmented
-        groupLabel={ui('Graph mode')}
-        value={mode}
-        options={options}
-        onChange={onChange}
-      />
-    )
-  }
   return (
-    <div
-      role='group'
-      aria-label={ui('Graph mode')}
-      className='inline-flex h-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center overflow-hidden rounded-[var(--rp-radius-btn)] border border-[var(--rp-on-primary)]/30'
-    >
-      <span className='px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--rp-on-primary)]/60'>
-        {ui('View')}
-      </span>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type='button'
-          aria-pressed={mode === option.value}
-          onClick={() => onChange(option.value)}
-          className={`rp-focus h-full border-l border-[var(--rp-on-primary)]/20 px-3.5 text-sm font-medium transition-colors duration-150 ${
-            mode === option.value
-              ? 'bg-[var(--rp-on-primary)]/20 text-[var(--rp-on-primary)]'
-              : 'text-[var(--rp-on-primary)]/65 hover:bg-[var(--rp-on-primary)]/10 hover:text-[var(--rp-on-primary)]'
-          }`}
-        >
-          {ui(option.label)}
-        </button>
-      ))}
-    </div>
+    <GraphSegmented
+      groupLabel={ui('Graph mode')}
+      caption={ui('View')}
+      value={mode}
+      onChange={onChange}
+      compact={compact}
+      options={[
+        {
+          value: 'entity',
+          label: ui('Entity graph'),
+          title: ui('The entities and the relations between them'),
+          icon: <Network size='sm' />,
+        },
+        {
+          value: 'concept',
+          label: ui('Concept map'),
+          title: ui('The topics and kinds that share resources'),
+          icon: <Share size='sm' />,
+        },
+      ]}
+    />
   )
 }
 
-/**
- * Secondary control, styled against the hero rather than as a second white
- * segmented control, so it never competes with the lens toggle beside it.
- */
-function LayoutToggle({
-  layout,
-  onChange,
-  compact = false,
-}: {
+function LayoutToggle({ layout, onChange, compact = false }: {
   layout: MapLayout
   onChange: (layout: MapLayout) => void
   compact?: boolean
 }) {
   const { ui } = usePortalLocale()
-  const options: SegmentOption<MapLayout>[] = [
-    {
-      value: 'grouped',
-      label: ui('Grouped'),
-      title: ui('Gather each category into its own territory'),
-      icon: <GroupedGlyph />,
-    },
-    {
-      value: 'free',
-      label: ui('Free'),
-      title: ui('One open force layout, no category grouping'),
-      icon: <FreeGlyph />,
-    },
-  ]
-  if (compact) {
-    return (
-      <IconSegmented
-        groupLabel={ui('Map layout')}
-        value={layout}
-        options={options}
-        onChange={onChange}
-      />
-    )
-  }
   return (
-    <div
-      role='group'
-      aria-label={ui('Map layout')}
-      className='inline-flex h-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center overflow-hidden rounded-[var(--rp-radius-btn)] border border-[var(--rp-on-primary)]/30'
-    >
-      <span className='px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--rp-on-primary)]/60'>
-        {ui('Layout')}
-      </span>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type='button'
-          aria-pressed={layout === option.value}
-          title={option.title}
-          onClick={() => onChange(option.value)}
-          className={`rp-focus h-full border-l border-[var(--rp-on-primary)]/20 px-3.5 text-sm font-medium transition-colors duration-150 ${
-            layout === option.value
-              ? 'bg-[var(--rp-on-primary)]/20 text-[var(--rp-on-primary)]'
-              : 'text-[var(--rp-on-primary)]/65 hover:bg-[var(--rp-on-primary)]/10 hover:text-[var(--rp-on-primary)]'
-          }`}
-        >
-          {ui(option.label)}
-        </button>
-      ))}
-    </div>
+    <GraphSegmented
+      groupLabel={ui('Map layout')}
+      caption={ui('Layout')}
+      value={layout}
+      onChange={onChange}
+      compact={compact}
+      options={[
+        {
+          value: 'grouped',
+          label: ui('Grouped'),
+          title: ui('Gather each category into its own territory'),
+          icon: <Grid2x2 size='sm' />,
+        },
+        {
+          value: 'free',
+          label: ui('Free'),
+          title: ui('One open force layout, no category grouping'),
+          icon: <Scatter size='sm' />,
+        },
+      ]}
+    />
   )
 }
 
-/**
- * The banner (or the flat primary) behind the page chrome, plus the scrim that
- * guarantees the type a ground. Shared by the wide hero and the phone strip.
- */
-function HeroGround({ bannerImageUrl }: { bannerImageUrl?: string }) {
-  return (
-    <>
-      {bannerImageUrl
-        ? (
-          <img
-            src={bannerImageUrl}
-            alt=''
-            aria-hidden='true'
-            className='absolute inset-0 h-full w-full object-cover'
-          />
-        )
-        : null}
-      {/* Scrim - the banner is bright, so the type needs a guaranteed ground. */}
-      <div
-        className='absolute inset-0'
-        style={{
-          background:
-            'linear-gradient(180deg, color-mix(in srgb, var(--rp-primary) 78%, transparent), color-mix(in srgb, var(--rp-primary) 92%, transparent))',
-        }}
-        aria-hidden='true'
-      />
-    </>
-  )
+/** The brand ground matches the secondary text and segmented-control roles. */
+function HeroGround() {
+  return <div className='absolute inset-0 bg-[var(--rp-primary)]' aria-hidden='true' />
 }
 
 /** Empty, error and everything-filtered-out share one frame on the map's own ground. */
@@ -1205,6 +1027,26 @@ export function GraphPage() {
   const [railEl, setRailEl] = useState<HTMLElement | null>(null)
   const [dockEl, setDockEl] = useState<HTMLElement | null>(null)
   const insets = usePanelInsets(stageEl, railEl, dockEl)
+  const [showBackToTop, setShowBackToTop] = useState(false)
+  useEffect(() => {
+    if (!stageEl) return
+    const update = () => {
+      // The phone header scrolls above the viewport; its negative bottom
+      // must not move the return threshold above the visible screen.
+      const header = document.querySelector('.rp-tenant > header')?.getBoundingClientRect()
+      setShowBackToTop(
+        globalThis.scrollY > 0 &&
+          stageEl.getBoundingClientRect().bottom <= Math.max(0, header?.bottom ?? 0),
+      )
+    }
+    update()
+    globalThis.addEventListener('scroll', update, { passive: true })
+    globalThis.addEventListener('resize', update)
+    return () => {
+      globalThis.removeEventListener('scroll', update)
+      globalThis.removeEventListener('resize', update)
+    }
+  }, [stageEl])
 
   const relationsQuery = useQuery({
     queryKey: ['relations-graph', slug],
@@ -1428,7 +1270,7 @@ export function GraphPage() {
   return (
     <div
       data-graph-page
-      className='flex flex-col bg-app md:h-[calc(100dvh-var(--rp-header-h,126px))] md:overflow-hidden'
+      className='flex h-[calc(100dvh-var(--rp-header-h,7.875rem))] min-h-0 flex-col overflow-hidden bg-app'
     >
       {
         /* Phone chrome - one strip. A stacked hero (title, stats, a full-width
@@ -1440,66 +1282,38 @@ export function GraphPage() {
       }
       <div data-graph-masthead='mobile' className='relative z-30 shrink-0 md:hidden'>
         <div className='relative overflow-hidden border-b border-line'>
-          <HeroGround bannerImageUrl={config.branding.bannerImageUrl} />
-          {
-            /* A literal 1.5rem, not px-6. Tailwind emits every spacing utility
-              as calc(var(--spacing) * n) and this app derives --spacing from
-              the per-tenant density dial, while the header's own gutter
-              (.rp-shell) is a fixed 1.5rem. On a spacious portal px-6 would
-              resolve to 33.6px against the header's 24px and the map's title
-              would sit visibly off the logo directly above it. */
-          }
-          <div className='relative py-3' style={{ paddingInline: '1.5rem' }}>
-            <div className='flex flex-wrap items-baseline justify-between gap-x-2'>
-              {
-                /* At the house heading size the title cannot share a row with
-                  the five glyph controls on any phone, so they take the row
-                  below. That also retires the nowrap this title used to carry:
-                  it was there because the title had about 144px beside the
-                  controls and .rp-display's `text-wrap: balance` outranks the
-                  nowrap inside `truncate`, so it would have taken a second line
-                  and the strip's height with it. Sharing its row with only the
-                  counts it has 34px of slack at 320px, so it cannot wrap at the
-                  default font - and where it genuinely cannot fit, at 320px with
-                  a scaled-up root font, the counts wrap below it and balance
-                  takes a second line rather than nowrap clipping a two-word page
-                  title to "Knowledge ma…". `truncate` stays for its overflow
-                  guard, which still catches a single unbreakable word. */
-              }
-              <h1 className='rp-display truncate text-xl text-[var(--rp-on-primary)]'>
-                {ui('Knowledge map')}
-              </h1>
-              {hasGraph
-                ? (
-                  <p className='shrink-0 text-[11px] leading-tight text-[var(--rp-on-primary)]/75'>
-                    {
-                      /* Demoted, and demoted again on the narrowest phones: the
-                        category count the wide hero carries is dropped here (the
-                        navigator's legend names every category anyway), and the
-                        relation count follows it on a narrow screen rather than
-                        being cut off mid-word. */
-                    }
-                    {nodeCount}
-                    <span className='hidden min-[390px]:inline'>{` · ${edgeCount}`}</span>
-                  </p>
-                )
-                : null}
+          <HeroGround />
+          {/* Keep Find beside the title so four lens/layout targets fit below it. */}
+          <div className='rp-graph-mobile-chrome relative py-1'>
+            <div className='flex items-center justify-between gap-2'>
+              <div className='min-w-0'>
+                <h1 className='rp-display min-w-0 break-words text-xl text-[var(--rp-on-primary)]'>
+                  {ui('Knowledge map')}
+                </h1>
+                {hasGraph
+                  ? (
+                    <p className='mt-1 text-2xs leading-tight text-[var(--rp-on-primary-2)]'>
+                      {nodeCount}
+                      <span className='hidden min-[390px]:inline'>{` · ${edgeCount}`}</span>
+                    </p>
+                  )
+                  : null}
+              </div>
+              <div className='rp-seg rp-seg-on-brand rp-graph-brand-seg shrink-0'>
+                <button
+                  type='button'
+                  aria-label={ui('Find in the map')}
+                  aria-expanded={searchOpen}
+                  aria-pressed={searchOpen}
+                  title={ui('Find in the map')}
+                  onClick={() => setSearchOpen((open) => !open)}
+                  className='rp-seg-item rp-icon-btn'
+                >
+                  <Search size='sm' />
+                </button>
+              </div>
             </div>
-            <div className='mt-2 flex items-center justify-end gap-1.5'>
-              <button
-                type='button'
-                aria-label={ui('Find in the map')}
-                aria-expanded={searchOpen}
-                title={ui('Find in the map')}
-                onClick={() => setSearchOpen((open) => !open)}
-                className={`rp-focus flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] border transition-colors duration-150 ${
-                  searchOpen
-                    ? 'border-transparent bg-[var(--rp-on-primary)] text-[var(--rp-primary)]'
-                    : 'border-[var(--rp-on-primary)]/45 text-[var(--rp-on-primary)]/80'
-                }`}
-              >
-                <SearchGlyph />
-              </button>
+            <div className='mt-1 flex flex-wrap items-center justify-end gap-2'>
               <ModeToggle mode={mode} onChange={switchMode} compact />
               {hasGraph ? <LayoutToggle layout={layout} onChange={setLayout} compact /> : null}
             </div>
@@ -1523,7 +1337,7 @@ export function GraphPage() {
                 }}
                 autoFocus
                 onDismiss={() => setSearchOpen(false)}
-                className='h-10'
+                className='min-h-[2.75rem]'
               />
             </div>
           )
@@ -1538,14 +1352,14 @@ export function GraphPage() {
         data-graph-masthead='desktop'
         className='relative z-40 hidden shrink-0 border-b border-line md:block'
       >
-        <HeroGround bannerImageUrl={config.branding.bannerImageUrl} />
-        <div className='rp-shell relative flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-3'>
+        <HeroGround />
+        <div className='rp-shell relative flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-2'>
           <div className='min-w-0'>
             <h1 className='rp-display text-2xl text-[var(--rp-on-primary)]'>
               {ui('Knowledge map')}
             </h1>
             {hasGraph
-              ? <p className='mt-1 text-xs text-[var(--rp-on-primary)]/75'>{subtitle}</p>
+              ? <p className='mt-1 text-xs text-[var(--rp-on-primary-2)]'>{subtitle}</p>
               : null}
           </div>
           <div className='flex flex-wrap items-center justify-end gap-2.5'>
@@ -1560,7 +1374,7 @@ export function GraphPage() {
       <div
         ref={setStageEl}
         data-graph-stage
-        className='relative h-dvh min-h-0 bg-surface md:h-auto md:flex-1'
+        className='relative min-h-0 flex-1 bg-surface'
         aria-busy={mapBusy}
       >
         <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
@@ -1652,7 +1466,7 @@ export function GraphPage() {
                     // screen: centred at 390px the chip lands straight on top
                     // of it.
                     className='rp-anim-fade absolute left-1/2 top-14 z-30 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-2 rounded-full border bg-surface px-3.5 py-1.5 text-xs rp-shadow-md md:top-3'
-                    style={{ borderColor: 'var(--rp-accent)' }}
+                    style={{ borderColor: 'var(--rp-line-2)' }}
                     role='status'
                   >
                     <span
@@ -1669,50 +1483,17 @@ export function GraphPage() {
                 )
                 : null}
 
-              {/* Canvas gestures orbit the map; this returns phone navigation. */}
-              <div className='absolute right-3 top-3 z-20 md:hidden'>
-                <button
-                  type='button'
-                  data-graph-back-top
-                  aria-label={ui('Back to top')}
-                  title={ui('Back to top')}
-                  onClick={() => {
-                    document.querySelector<HTMLElement>('.rp-tenant > header a[href]')?.focus({
-                      preventScroll: true,
-                    })
-                    globalThis.scrollTo({
-                      top: 0,
-                      behavior: globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
-                        ? 'instant'
-                        : 'smooth',
-                    })
-                  }}
-                  className='rp-btn rp-btn-outline rp-shadow-md gap-1.5 px-3 text-sm'
-                >
-                  <span aria-hidden='true'>↑</span>
-                  <span className='hidden min-[390px]:inline'>{ui('Back to top')}</span>
-                </button>
-              </div>
               {/* Reopen affordance when the navigator is hidden. */}
               {!railOpen
                 ? (
-                  <button
-                    type='button'
+                  <IconButton
+                    data-graph-overlay
+                    label={ui('Browse')}
+                    icon={LayoutList}
+                    variant='outline'
                     onClick={() => setRailOpen(true)}
-                    className='rp-btn rp-btn-outline rp-shadow-md absolute left-3 top-3 z-20 h-9 gap-1.5 px-3 text-sm'
-                  >
-                    <svg
-                      viewBox='0 0 20 20'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth='1.7'
-                      className='h-4 w-4'
-                      aria-hidden='true'
-                    >
-                      <path d='M4 6h12M4 10h12M4 14h8' strokeLinecap='round' />
-                    </svg>
-                    {ui('Browse')}
-                  </button>
+                    className='rp-shadow-md absolute left-3 top-3 z-20'
+                  />
                 )
                 : (
                   <NavigatorRail
@@ -1779,6 +1560,30 @@ export function GraphPage() {
             </>
           )}
       </div>
+      {showBackToTop
+        ? (
+          <button
+            type='button'
+            data-graph-back-top
+            title={ui('Back to top')}
+            onClick={() => {
+              document.querySelector<HTMLElement>('.rp-tenant > header a[href]')?.focus({
+                preventScroll: true,
+              })
+              globalThis.scrollTo({
+                top: 0,
+                behavior: globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
+                  ? 'instant'
+                  : 'smooth',
+              })
+            }}
+            className='rp-btn rp-btn-outline rp-shadow-md fixed bottom-4 right-4 z-30 md:hidden'
+          >
+            <ArrowUp size='sm' />
+            {ui('Back to top')}
+          </button>
+        )
+        : null}
     </div>
   )
 }

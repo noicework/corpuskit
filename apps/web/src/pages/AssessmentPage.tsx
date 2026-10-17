@@ -6,7 +6,8 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
 import type { GenerateResult, Topic } from '@research-portal/core'
 import { ApiError, generateArtifact, getFacets } from '../api/client.ts'
-import { EmptyState, ErrorCard, LiveStatus, Skeleton } from '../components/ui.tsx'
+import { Button, EmptyState, ErrorCard, LiveStatus, Skeleton } from '../components/ui.tsx'
+import { ArrowLeft, ArrowRight, Pencil, RotateCcw, Wand } from '../components/icons.tsx'
 import {
   type AssessmentObject,
   AssessmentQuiz,
@@ -62,13 +63,14 @@ function TopicForm({ onSubmit }: { onSubmit: (topic: string) => void }) {
           placeholder={ui('For example: autoimmune encephalitis')}
           className='rp-input min-w-0 flex-1'
         />
-        <button
+        <Button
           type='submit'
+          leadingIcon={Wand}
           disabled={!usable}
-          className='rp-btn rp-btn-primary shrink-0 disabled:cursor-not-allowed'
+          className='shrink-0 disabled:cursor-not-allowed'
         >
           {ui('Build on this topic')}
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -87,7 +89,7 @@ function PillRadioGroup<T extends string | number>({
   onChange: (next: T) => void
 }) {
   return (
-    <div role='radiogroup' aria-label={label} className='flex flex-wrap gap-2'>
+    <div role='radiogroup' aria-label={label} className='rp-seg'>
       {options.map((option) => {
         const active = option.id === value
         return (
@@ -97,14 +99,7 @@ function PillRadioGroup<T extends string | number>({
             role='radio'
             aria-checked={active}
             onClick={() => onChange(option.id)}
-            className={`rp-focus rounded-[var(--rp-radius)] border px-4 py-2 text-sm font-medium transition-colors duration-150 ${
-              active
-                ? 'text-[var(--rp-on-primary)]'
-                : 'border-line bg-surface text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-ink'
-            }`}
-            style={active
-              ? { backgroundColor: 'var(--rp-primary)', borderColor: 'var(--rp-primary)' }
-              : undefined}
+            className={`rp-seg-item ${active ? 'rp-seg-item-active' : ''}`}
           >
             {option.label}
           </button>
@@ -143,20 +138,11 @@ function AreaCard({
         )
         : null}
       <span
-        className='mt-2 inline-flex items-center gap-1 text-sm font-medium transition-transform duration-150 group-hover:translate-x-0.5'
+        className='mt-2 inline-flex items-center gap-1 text-sm font-medium'
         style={{ color: 'var(--rp-accent-fg)' }}
       >
         {ui('Build an assessment')}
-        <svg viewBox='0 0 16 16' fill='currentColor' className='h-3.5 w-3.5' aria-hidden='true'>
-          <path
-            d='M6 3.5l4.5 4.5L6 12.5'
-            stroke='currentColor'
-            strokeWidth='1.5'
-            fill='none'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-          />
-        </svg>
+        <ArrowRight size='sm' />
       </span>
     </button>
   )
@@ -174,12 +160,13 @@ export function AssessmentPage() {
   return access.can('portal.generate', { kind: 'portal', slug: config.slug })
     ? <AssessmentWorkspace key={access.generation} />
     : (
-      <main className='rp-shell py-10'>
+      <main className='rp-shell py-8 lg:py-10'>
         <EmptyState
           title={ui('This page is unavailable')}
           description={ui('You can continue exploring the portal.')}
         >
           <Link className='rp-btn rp-btn-outline' to={`/t/${config.slug}/library`}>
+            <ArrowLeft size='sm' />
             {ui('Back to Library')}
           </Link>
         </EmptyState>
@@ -305,15 +292,15 @@ function AssessmentWorkspace() {
     : ''
 
   return (
-    <main className='mx-auto max-w-6xl px-6 py-10'>
+    <main className='rp-shell py-8 lg:py-10'>
       <LiveStatus message={liveMessage} />
       <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
         {ui('Self assessment')}
       </p>
-      <h1 className='mt-1 text-2xl font-semibold tracking-tight text-ink'>
+      <h1 className='rp-display mt-1 text-2xl sm:text-3xl text-ink'>
         {config.assessmentHeading ?? ui('Knowledge areas')}
       </h1>
-      <p className='mt-1 max-w-2xl text-sm text-ink-2'>
+      <p className='rp-prose rp-measure mt-1 text-sm text-ink-2'>
         {ui(
           "Pick a knowledge area or type a topic, choose how many questions and how deep to go, then take a generated knowledge check grounded in this portal's content.",
         )}
@@ -324,7 +311,7 @@ function AssessmentWorkspace() {
           <h2
             ref={headingRef}
             tabIndex={-1}
-            className='text-sm font-semibold uppercase tracking-wide text-ink-3'
+            className='rp-display text-xl text-ink'
           >
             {ui('Choose a knowledge area')}
           </h2>
@@ -340,6 +327,7 @@ function AssessmentWorkspace() {
                 >
                   <Link to={`/t/${slug}/taxonomy`} className='rp-btn rp-btn-primary'>
                     {ui('Open taxonomy')}
+                    <ArrowRight size='sm' />
                   </Link>
                 </EmptyState>
               </div>
@@ -363,17 +351,17 @@ function AssessmentWorkspace() {
 
       {currentView === 'build' && selectedTopic && (
         <section className='mt-8'>
-          <div className='flex items-center justify-between gap-3'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
             <h2
               ref={headingRef}
               tabIndex={-1}
-              className='text-lg font-semibold tracking-tight text-ink'
+              className='rp-display min-w-0 text-xl text-ink'
             >
               {ui('Build your assessment:')} {selectedTopic.label}
             </h2>
-            <button type='button' onClick={changeArea} className='rp-btn rp-btn-ghost shrink-0'>
+            <Button variant='ghost' leadingIcon={Pencil} onClick={changeArea} className='shrink-0'>
               {ui('Change topic')}
-            </button>
+            </Button>
           </div>
 
           {!mutation.isPending && (
@@ -398,27 +386,26 @@ function AssessmentWorkspace() {
                 />
               </div>
 
-              <button
-                type='button'
+              <Button
+                leadingIcon={Wand}
                 onClick={() => generate(selectedTopic, count, depth)}
-                className='rp-btn rp-btn-primary'
               >
                 {ui('Generate assessment')}
-              </button>
+              </Button>
             </div>
           )}
 
           {mutation.isPending && (
-            <div className='mt-4 animate-pulse rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-8'>
+            <div className='rp-card mt-4 p-5 lg:p-6'>
               <p className='text-sm font-medium text-ink'>
                 {ui('Generating your {topic} assessment - this can take up to half a minute…', {
                   topic: selectedTopic.label,
                 })}
               </p>
-              <div className='mt-5 h-4 w-1/3 rounded bg-surface-3' />
-              <div className='mt-4 h-3 w-full rounded bg-surface-2' />
-              <div className='mt-2 h-3 w-5/6 rounded bg-surface-2' />
-              <div className='mt-2 h-3 w-2/3 rounded bg-surface-2' />
+              <Skeleton className='mt-5 h-4 w-1/3' />
+              <Skeleton className='mt-4 h-3 w-full' />
+              <Skeleton className='mt-2 h-3 w-5/6' />
+              <Skeleton className='mt-2 h-3 w-2/3' />
             </div>
           )}
 
@@ -468,17 +455,17 @@ function ResultsView({
   const { ui, language } = usePortalLocale()
   return (
     <section className='mt-8'>
-      <div className='flex items-center justify-between gap-3'>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
         <h2
           ref={headingRef}
           tabIndex={-1}
-          className='text-lg font-semibold tracking-tight text-ink'
+          className='rp-display min-w-0 text-xl text-ink'
         >
           {ui('{topic} knowledge check', { topic: topic.label })}
         </h2>
-        <button type='button' onClick={onChangeArea} className='rp-btn rp-btn-ghost shrink-0'>
+        <Button variant='ghost' leadingIcon={Pencil} onClick={onChangeArea} className='shrink-0'>
           {ui('Change topic')}
-        </button>
+        </Button>
       </div>
 
       <div className='mt-4'>
@@ -492,24 +479,29 @@ function ResultsView({
                   { value1: topic.label },
                 )}
             >
-              <button type='button' onClick={onTryAnother} className='rp-btn rp-btn-outline'>
+              <Button variant='outline' leadingIcon={RotateCcw} onClick={onTryAnother}>
                 {ui('Try another')}
-              </button>
+              </Button>
             </EmptyState>
           )
           : assessmentObject
           ? <AssessmentQuiz data={assessmentObject} onRetake={onTryAnother} slug={slug} />
           : (
             <div
-              className='rounded-[calc(var(--rp-radius)+4px)] border p-4'
+              className='rounded-[var(--rp-radius)] border p-4'
               style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
             >
               <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
                 {ui('This result did not match the expected quiz shape.')}
               </p>
-              <button type='button' onClick={onTryAnother} className='rp-btn rp-btn-outline mt-3'>
+              <Button
+                variant='outline'
+                leadingIcon={RotateCcw}
+                onClick={onTryAnother}
+                className='mt-3'
+              >
                 {ui('Try another')}
-              </button>
+              </Button>
             </div>
           )}
       </div>
@@ -527,7 +519,7 @@ function ResultsView({
           {result.sources.length > 0 && (
             <div className='mt-2 flex flex-wrap gap-2'>
               {result.sources.map((s) => (
-                <span key={s.id} title={s.title} className='rp-chip max-w-[16rem] truncate'>
+                <span key={s.id} title={s.title} className='rp-tag max-w-[16rem] truncate'>
                   {s.title}
                 </span>
               ))}

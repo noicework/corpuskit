@@ -12,7 +12,8 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
-import { LiveStatus } from '../../components/ui.tsx'
+import { Button, LiveStatus, SectionHeader } from '../../components/ui.tsx'
+import { RotateCcw, Trash, Upload } from '../../components/icons.tsx'
 import type { AdminRequestAccess } from '../../api/break-glass.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { readRecent } from './RecentList.tsx'
@@ -35,25 +36,6 @@ const noSubscription = () => () => {}
 /** How often followed uploads are checked, and how often the collection counts are re-read. */
 const STATUS_POLL_MS = 3000
 const COUNTS_POLL_MS = 9000
-
-function UploadIcon() {
-  return (
-    <svg
-      aria-hidden='true'
-      viewBox='0 0 24 24'
-      className='h-8 w-8 text-ink-3'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.6'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-    >
-      <path d='M12 16V4' />
-      <path d='m7 9 5-5 5 5' />
-      <path d='M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2' />
-    </svg>
-  )
-}
 
 function UploadBadge({ row }: { row: UploadRow }) {
   const { ui } = usePortalLocale()
@@ -89,7 +71,7 @@ function UploadProgressBar({ row }: { row: UploadRow }) {
   const percent = row.progress === null ? null : Math.round(row.progress * 100)
   return (
     <div
-      className='mt-2 h-1.5 overflow-hidden rounded-full bg-surface-3'
+      className='mt-2 h-1.5 overflow-hidden rounded-full border border-line bg-paper'
       role='progressbar'
       aria-label={ui('Uploading {name}', { name: row.name })}
       aria-valuemin={0}
@@ -101,7 +83,7 @@ function UploadProgressBar({ row }: { row: UploadRow }) {
           percent === null ? 'w-1/3 animate-pulse' : ''
         }`}
         style={{
-          background: 'var(--rp-primary)',
+          background: 'var(--rp-control)',
           ...(percent === null ? {} : { width: `${Math.max(percent, 2)}%` }),
         }}
       />
@@ -270,12 +252,12 @@ export function UploadFiles({ slug, onAdded }: {
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
-        className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[calc(var(--rp-radius)+4px)] border-2 border-dashed px-4 py-10 text-center transition-colors duration-150 focus-within:shadow-[var(--rp-ring)] ${
-          dragActive ? 'bg-surface-3' : 'bg-surface hover:bg-[var(--rp-surface-2)]'
+        className={`relative flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[var(--rp-radius)] border-2 border-dashed px-4 py-10 text-center transition-colors duration-150 focus-within:shadow-[var(--rp-ring)] ${
+          dragActive ? 'bg-surface-3' : 'bg-surface-2 hover:bg-[var(--rp-surface-3)]'
         }`}
-        style={{ borderColor: dragActive ? 'var(--rp-primary)' : 'var(--rp-line)' }}
+        style={{ borderColor: dragActive ? 'var(--rp-control)' : 'var(--rp-line)' }}
       >
-        <UploadIcon />
+        <Upload size='lg' className='text-ink-3' />
         <span className='text-base font-semibold text-ink'>
           {dragActive
             ? ui('Drop to upload')
@@ -285,6 +267,7 @@ export function UploadFiles({ slug, onAdded }: {
         </span>
         <span className='text-sm text-ink-2'>{ui('or')}</span>
         <span className='rp-btn rp-btn-primary' aria-hidden='true'>
+          <Upload size='sm' />
           {sessionAllowed ? ui('Choose files') : ui('Choose a file')}
         </span>
         <span id={hintId} className='max-w-md text-xs text-ink-3'>
@@ -296,7 +279,7 @@ export function UploadFiles({ slug, onAdded }: {
           id={inputId}
           type='file'
           multiple={sessionAllowed}
-          className='sr-only'
+          className='absolute inset-0 h-full w-full cursor-pointer opacity-0'
           aria-label={sessionAllowed ? ui('Choose files to upload') : ui('Choose a file to upload')}
           aria-describedby={hintId}
           onChange={onChoose}
@@ -307,16 +290,16 @@ export function UploadFiles({ slug, onAdded }: {
 
       {rows.length > 0 && (
         <section aria-labelledby={queueHeadingId} data-upload-queue>
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <h4 id={queueHeadingId} className='text-sm font-medium text-ink'>
-              {summarise(rows, ui)}
-            </h4>
-            {finishedCount > 0 && (
-              <button type='button' className='rp-btn rp-btn-ghost' onClick={clearFinished}>
+          <SectionHeader
+            className='rp-manage-section-head'
+            headingLevel={3}
+            title={<span id={queueHeadingId}>{summarise(rows, ui)}</span>}
+            actions={finishedCount > 0 && (
+              <Button variant='ghost' size='sm' leadingIcon={Trash} onClick={clearFinished}>
                 {ui('Clear finished')}
-              </button>
+              </Button>
             )}
-          </div>
+          />
           <ul className='mt-2 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
             {rows.map((row) => (
               <li
@@ -325,8 +308,11 @@ export function UploadFiles({ slug, onAdded }: {
                 data-upload-row
                 data-upload-status={row.status}
               >
-                <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1'>
-                  <span className='min-w-0 flex-1 truncate text-sm text-ink' title={row.name}>
+                <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                  <span
+                    className='min-w-0 flex-1 break-words text-sm text-ink [overflow-wrap:anywhere]'
+                    title={row.name}
+                  >
                     {row.name}
                   </span>
                   <span className='flex shrink-0 items-center gap-3'>
@@ -338,7 +324,7 @@ export function UploadFiles({ slug, onAdded }: {
                 </div>
                 {row.status === 'uploading' && <UploadProgressBar row={row} />}
                 {row.status === 'failed' && (
-                  <div className='mt-1.5 flex flex-wrap items-start justify-between gap-2'>
+                  <div className='mt-1.5 flex flex-col items-start gap-2 sm:flex-row sm:justify-between'>
                     <p
                       className='min-w-0 flex-1 text-sm text-[var(--rp-bad-ink)]'
                       data-upload-error
@@ -346,13 +332,15 @@ export function UploadFiles({ slug, onAdded }: {
                       {localError(row.error, 'Upload failed. Please try again.')}
                     </p>
                     {row.retryable && queue?.canRetry(row.key) && (
-                      <button
+                      <Button
                         type='button'
-                        className='rp-btn rp-btn-outline'
+                        variant='ghost'
+                        size='sm'
+                        leadingIcon={RotateCcw}
                         onClick={() => retry(row.key)}
                       >
                         {ui('Try again')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}

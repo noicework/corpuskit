@@ -2,7 +2,8 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
-import { Skeleton } from '../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../components/ui.tsx'
+import { ArrowLeft, ArrowRight, Check, Pencil } from '../components/icons.tsx'
 import { AddContent } from './admin/AddContent.tsx'
 import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { AnalysePanel } from './admin/AnalysePanel.tsx'
@@ -51,21 +52,18 @@ function AddDocumentsCard({ slug, empty }: { slug: string; empty: boolean }) {
 
   return (
     <div
-      className='rp-card flex flex-wrap items-center justify-between gap-4 p-5'
+      className='rp-card p-5 lg:p-6'
       data-overview-add-documents
       data-collection-empty={empty ? 'true' : undefined}
     >
-      <div className='min-w-0'>
-        <h2 className='text-base font-semibold text-ink'>
-          {empty ? ui('No documents yet') : ui('Add documents')}
-        </h2>
-        <p className='mt-1 max-w-prose text-sm text-ink-2'>
-          {empty
-            ? ui('This collection is empty. Upload files or add web pages to start building it.')
-            : ui('Upload files, add web pages, paste text or crawl a site.')}
-        </p>
-      </div>
-      <AddDocumentsLink slug={slug} />
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={empty ? ui('No documents yet') : ui('Add documents')}
+        description={empty
+          ? ui('This collection is empty. Upload files or add web pages to start building it.')
+          : ui('Upload files, add web pages, paste text or crawl a site.')}
+        actions={<AddDocumentsLink slug={slug} />}
+      />
     </div>
   )
 }
@@ -99,21 +97,39 @@ function ManageContent() {
   const wanted = searchParams.get('tab')
   const tab = allowedTabs.find((item) => item.id === wanted)?.id ?? allowedTabs[0]?.id
   const navigation = useRef<HTMLElement>(null)
+  const [scrollEdges, setScrollEdges] = useState({ start: false, end: false })
   useLayoutEffect(() => {
     const nav = navigation.current
     const active = nav?.querySelector<HTMLElement>('[aria-current=true]')
     if (!nav || !active) return
+    const updateEdges = () => {
+      const start = nav.scrollLeft > 1
+      const end = nav.scrollWidth - nav.clientWidth - nav.scrollLeft > 1
+      setScrollEdges((current) =>
+        current.start === start && current.end === end ? current : { start, end }
+      )
+    }
     const reveal = () => {
-      if (nav.scrollWidth <= nav.clientWidth) return
-      const container = nav.getBoundingClientRect()
-      const item = active.getBoundingClientRect()
-      if (item.left < container.left) nav.scrollLeft += item.left - container.left
-      else if (item.right > container.right) nav.scrollLeft += item.right - container.right
+      if (nav.scrollWidth > nav.clientWidth) {
+        const container = nav.parentElement?.getBoundingClientRect() ?? nav.getBoundingClientRect()
+        const item = active.getBoundingClientRect()
+        const inset = Number.parseFloat(getComputedStyle(nav).scrollPaddingInlineStart) || 0
+        if (item.left < container.left + inset) {
+          nav.scrollLeft += item.left - container.left - inset
+        } else if (item.right > container.right - inset) {
+          nav.scrollLeft += item.right - container.right + inset
+        }
+      }
+      updateEdges()
     }
     reveal()
+    nav.addEventListener('scroll', updateEdges, { passive: true })
     const observer = new ResizeObserver(reveal)
     observer.observe(nav)
-    return () => observer.disconnect()
+    return () => {
+      nav.removeEventListener('scroll', updateEdges)
+      observer.disconnect()
+    }
   }, [tab])
   const [renaming, setRenaming] = useState(false)
   const status = useQuery({
@@ -153,7 +169,7 @@ function ManageContent() {
   )
   if (!tab) {
     return (
-      <main className='rp-shell py-10' data-route-unavailable>
+      <main className='rp-shell py-8 lg:py-10' data-route-unavailable>
         <h1 className='rp-display text-2xl'>{ui('Manage')}</h1>
         <p className='mt-4 text-ink-2'>{ui('This administration page is unavailable.')}</p>
       </main>
@@ -161,59 +177,62 @@ function ManageContent() {
   }
 
   return (
-    <main className='min-h-[calc(100dvh-var(--rp-header-h,126px))] bg-app' data-manage-shell>
-      <div className='rp-shell py-10'>
+    <main
+      className='rp-manage-shell min-h-[calc(100dvh-var(--rp-header-h,126px))] bg-app'
+      data-manage-shell
+    >
+      <div className='rp-shell py-8 lg:py-10'>
         <div className='flex flex-wrap items-center justify-between gap-3'>
-          <h1 className='rp-display text-2xl text-ink'>{ui('Manage')}</h1>
-          <div className='flex min-w-0 flex-wrap items-center gap-4'>
+          <h1 className='rp-display text-2xl text-ink sm:text-3xl'>{ui('Manage')}</h1>
+          <div className='flex min-w-0 flex-wrap items-center gap-2 sm:gap-4'>
             <Link
               to={`/t/${slug}`}
-              className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
+              className='rp-link-standalone text-sm font-medium'
             >
-              {ui('← Back to the portal')}
+              <ArrowLeft size='sm' />
+              {ui('Back to the portal')}
             </Link>
             {platformConnections && (
               <Link
                 to='/admin'
-                className='text-sm font-medium text-ink-3 hover:text-[var(--rp-ink)]'
+                className='rp-link-standalone text-sm font-medium'
               >
-                {ui('Platform connections →')}
+                {ui('Platform connections')}
+                <ArrowRight size='sm' />
               </Link>
             )}
           </div>
         </div>
-        <section aria-label={ui('Portal status')} className='rp-card mt-6 min-w-0 p-5'>
-          <p className='flex items-start gap-2 text-sm text-ink-2' data-manage-status>
-            {status.isSuccess && !status.isFetching && status.data.status === 'connected' && (
-              <svg
-                aria-hidden='true'
-                focusable='false'
-                viewBox='0 0 20 20'
-                fill='none'
-                stroke='currentColor'
-                strokeWidth='2'
-                strokeLinecap='round'
-                strokeLinejoin='round'
-                className='mt-0.5 h-4 w-4 shrink-0 text-[var(--rp-ok-ink)]'
-                data-manage-connected-check
-              >
-                <path d='m4 10 4 4 8-8' />
-              </svg>
-            )}
-            <span className='min-w-0'>
-              {status.data
-                ? status.data.status === 'connected'
-                  ? ui('Knowledge box connected')
-                  : status.data.status === 'demo'
-                  ? ui('Demo knowledge box')
-                  : status.data.status === 'unavailable'
-                  ? ui('Knowledge box connection unavailable. Reconnect or disconnect it.')
-                  : ui('Knowledge box not connected')
-                : status.isError
-                ? ui('Connection status is unavailable.')
-                : ui('Checking connection...')}
-            </span>
-          </p>
+        <section aria-label={ui('Portal status')} className='rp-card mt-6 min-w-0 p-5 lg:p-6'>
+          <SectionHeader
+            className='rp-manage-section-head'
+            title={ui('Portal status')}
+            description={
+              <span className='flex items-start gap-2' data-manage-status>
+                {status.isSuccess && !status.isFetching && status.data.status === 'connected' && (
+                  <span
+                    data-manage-connected-check
+                    className='mt-0.5 shrink-0 text-[var(--rp-ok-ink)]'
+                  >
+                    <Check size='sm' />
+                  </span>
+                )}
+                <span className='min-w-0'>
+                  {status.data
+                    ? status.data.status === 'connected'
+                      ? ui('Knowledge box connected')
+                      : status.data.status === 'demo'
+                      ? ui('Demo knowledge box')
+                      : status.data.status === 'unavailable'
+                      ? ui('Knowledge box connection unavailable. Reconnect or disconnect it.')
+                      : ui('Knowledge box not connected')
+                    : status.isError
+                    ? ui('Connection status is unavailable.')
+                    : ui('Checking connection...')}
+                </span>
+              </span>
+            }
+          />
           {can('content.write') && content.data && (
             <div className='mt-3 min-w-0 space-y-2 text-sm'>
               <p data-manage-counts>
@@ -236,39 +255,42 @@ function ManageContent() {
           )}
           {(status.data?.status === 'none' || status.data?.status === 'unavailable') &&
             can('bindings.write') && tab !== 'connections' && (
-            <button
-              type='button'
-              className='rp-btn rp-btn-outline mt-3'
+            <Button
+              variant='outline'
+              trailingIcon={ArrowRight}
+              className='mt-3'
               onClick={() => chooseTab('connections')}
             >
               {ui('Open connections')}
-            </button>
+            </Button>
           )}
         </section>
-        <div className='mt-8 grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'>
-          <nav
-            ref={navigation}
-            aria-label={ui('Manage sections')}
-            className='rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
+        <div className='mt-8 grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[12.5rem_minmax(0,1fr)]'>
+          <div
+            className='rp-manage-nav-wrap min-w-0'
+            data-scroll-start={scrollEdges.start || undefined}
+            data-scroll-end={scrollEdges.end || undefined}
           >
-            {allowedTabs.map((item) => (
-              <button
-                key={item.id}
-                type='button'
-                data-manage-tab={item.id}
-                onClick={() => chooseTab(item.id)}
-                aria-current={tab === item.id ? 'true' : undefined}
-                className={`shrink-0 rounded-[var(--rp-radius)] px-3 py-2 text-left text-sm font-medium transition-colors duration-150 ${
-                  tab === item.id
-                    ? 'bg-surface-3 text-ink'
-                    : 'text-ink-2 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-                }`}
-              >
-                {ui(item.label)}
-              </button>
-            ))}
-          </nav>
-          <div className='min-w-0 space-y-4'>
+            <nav
+              ref={navigation}
+              aria-label={ui('Manage sections')}
+              className='rp-manage-nav rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
+            >
+              {allowedTabs.map((item) => (
+                <button
+                  key={item.id}
+                  type='button'
+                  data-manage-tab={item.id}
+                  onClick={() => chooseTab(item.id)}
+                  aria-current={tab === item.id ? 'true' : undefined}
+                  className='rp-btn rp-btn-ghost rp-manage-tab shrink-0 justify-start'
+                >
+                  {ui(item.label)}
+                </button>
+              ))}
+            </nav>
+          </div>
+          <div className='min-w-0 space-y-6 lg:space-y-8'>
             {tab === 'access' && <AccessPanel slug={slug} name={config.branding.productName} />}
             {tab === 'audit' && <AuditPanel scope={scope} name={config.branding.productName} />}
             {tab === 'overview' && can('content.write') && (
@@ -280,12 +302,12 @@ function ManageContent() {
                   />
                 )}
                 {can('content.write') && reachable && (
-                  <div className='rp-card p-5'>
+                  <div className='rp-card p-5 lg:p-6'>
                     <StatTiles slug={slug} resourceCount={content.data?.counters.resources ?? 0} />
                   </div>
                 )}
                 {can('content.write') && (
-                  <div className='rp-card p-5'>
+                  <div className='rp-card p-5 lg:p-6'>
                     <RecentList slug={slug} />
                   </div>
                 )}
@@ -294,13 +316,13 @@ function ManageContent() {
             {tab === 'content' && can('content.write') && (
               <>
                 {can('content.write') && reachable && (
-                  <div className='rp-card p-5'>
+                  <div className='rp-card p-5 lg:p-6'>
                     <AddContent slug={slug} onAdded={refresh} />
                   </div>
                 )}
                 {can('content.write') && reachable && <SourcesPanel slug={slug} />}
                 {can('content.write') && (
-                  <div className='rp-card p-5'>
+                  <div className='rp-card p-5 lg:p-6'>
                     <RecentList slug={slug} />
                   </div>
                 )}
@@ -310,25 +332,37 @@ function ManageContent() {
             {tab === 'insights' && can('content.write') &&
               (can('content.write') && reachable
                 ? (
-                  <div className='rp-card p-5'>
+                  <div className='rp-card p-5 lg:p-6'>
                     <InsightsPanel slug={slug} />
                   </div>
                 )
                 : unavailable)}
             {tab === 'taxonomy' && can('taxonomy.write') && (
-              <div className='rp-card p-5'>
-                <div className='flex flex-wrap items-baseline justify-between gap-3'>
-                  <h2 className='text-sm font-semibold text-ink'>{ui('Label sets')}</h2>
-                  <Link to={`/t/${slug}/taxonomy`} className='text-sm text-ink-2'>
-                    {ui('Open taxonomy →')}
-                  </Link>
-                </div>
+              <div className='rp-card p-5 lg:p-6'>
+                <SectionHeader
+                  className='rp-manage-section-head'
+                  title={ui('Label sets')}
+                  actions={
+                    <Link to={`/t/${slug}/taxonomy`} className='rp-link-standalone text-sm'>
+                      {ui('Open taxonomy')}
+                      <ArrowRight size='sm' />
+                    </Link>
+                  }
+                />
                 {can('taxonomy.write') && reachable && (
                   <LabelsetsPanel slug={slug} organisation={config.branding.organisation} />
                 )}
-                {can('behaviour.write') && reachable && <AnalysePanel slug={slug} />}
-                {can('behaviour.write') && reachable && <InterrogatePanel slug={slug} />}
               </div>
+            )}
+            {tab === 'taxonomy' && can('behaviour.write') && reachable && (
+              <>
+                <div className='rp-card p-5 lg:p-6'>
+                  <AnalysePanel slug={slug} />
+                </div>
+                <div className='rp-card p-5 lg:p-6'>
+                  <InterrogatePanel slug={slug} />
+                </div>
+              </>
             )}
             {tab === 'graph' && can('graph.write') &&
               (can('graph.write') && reachable ? <KgPanel slug={slug} open /> : unavailable)}
@@ -342,7 +376,7 @@ function ManageContent() {
             {tab === 'behaviour' && can('behaviour.write') && <BehaviourPanel slug={slug} />}
             {tab === 'extraction' && can('content.write') && <ExtractionPanel slug={slug} />}
             {tab === 'details' && can('appearance.write') && (
-              <div className='rp-card p-5'>
+              <div className='rp-card p-5 lg:p-6'>
                 {renaming && can('appearance.write')
                   ? (
                     <RenamePortal
@@ -359,20 +393,22 @@ function ManageContent() {
                   )
                   : (
                     <>
-                      <h2 className='text-sm font-semibold text-ink'>
-                        {config.branding.productName}
-                      </h2>
-                      <p className='mt-2 text-sm text-ink-2'>{config.branding.organisation}</p>
-                      <p className='mt-2 text-sm text-ink-2'>{config.branding.tagline}</p>
-                      {can('appearance.write') && (
-                        <button
-                          type='button'
-                          className='rp-btn rp-btn-outline mt-4'
-                          onClick={() => setRenaming(true)}
-                        >
-                          {ui('Rename')}
-                        </button>
-                      )}
+                      <SectionHeader
+                        className='rp-manage-section-head'
+                        title={config.branding.productName}
+                        description={config.branding.organisation}
+                        actions={can('appearance.write') && (
+                          <Button
+                            variant='ghost'
+                            size='sm'
+                            leadingIcon={Pencil}
+                            onClick={() => setRenaming(true)}
+                          >
+                            {ui('Rename')}
+                          </Button>
+                        )}
+                      />
+                      <p className='mt-4 text-sm text-ink-2'>{config.branding.tagline}</p>
                     </>
                   )}
               </div>

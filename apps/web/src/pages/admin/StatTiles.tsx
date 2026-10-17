@@ -5,7 +5,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getAdminCounters } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
-import { Skeleton } from '../../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
+import { RotateCw } from '../../components/icons.tsx'
 
 async function readCounters(slug: string, access: AdminRequestAccess) {
   const counters = await getAdminCounters(slug, access)
@@ -20,10 +21,10 @@ async function readCounters(slug: string, access: AdminRequestAccess) {
 function StatTile({ label, value }: { label: string; value: string | null }) {
   return (
     <div className='rounded-[var(--rp-radius)] bg-surface-2 px-4 py-3'>
-      <dt className='rp-eyebrow text-ink-3'>{label}</dt>
+      <dt className='rp-eyebrow text-2xs text-ink-3'>{label}</dt>
       {value === null
         ? <Skeleton className='mt-1.5 h-5 w-10' />
-        : <dd className='mt-1 text-lg font-semibold text-ink'>{value}</dd>}
+        : <dd className='mt-1 text-2xl font-semibold tabular-nums text-ink'>{value}</dd>}
     </div>
   )
 }
@@ -82,14 +83,21 @@ function StatTilesContent({
 
   return (
     <div className='space-y-3' data-admin-metrics>
-      <button
-        type='button'
-        className='rp-btn rp-btn-outline'
-        disabled={pending || query.isFetching}
-        onClick={() => void refresh()}
-      >
-        {ui('Refresh metrics')}
-      </button>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={ui('Corpus metrics')}
+        actions={
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+            disabled={pending || query.isFetching}
+            onClick={() => void refresh()}
+          >
+            {ui('Refresh metrics')}
+          </Button>
+        }
+      />
       {!sessionAllowed && (
         <p className='text-xs text-ink-3'>
           {ui('Metrics are a snapshot. Refresh explicitly to read them again.')}
@@ -100,7 +108,7 @@ function StatTilesContent({
           {localError(error ?? query.error, 'Could not load metrics.')}
         </p>
       )}
-      <dl className='grid grid-cols-1 gap-3 sm:grid-cols-4'>
+      <dl className='grid grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))] gap-3'>
         <StatTile label={ui('Documents')} value={number(resourceCount)} />
         <StatTile
           label={ui('Paragraphs')}

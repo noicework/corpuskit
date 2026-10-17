@@ -43,7 +43,7 @@ async function geometry(page: Page) {
   })
 }
 
-Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scrolls away above a full map', async () => {
+Deno.test('graph fits below compact chrome and recovers mobile navigation only after scrolling past the map', async () => {
   const calls: string[] = []
   const management = new Proxy({}, {
     get: (_target, method) => () => {
@@ -129,9 +129,7 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
           expect(before.canvas.width).toBeGreaterThan(width - 2)
           if (width === 1440) {
             expect(
-              await page.evaluate(() =>
-                document.querySelector('[data-graph-back-top]')!.getBoundingClientRect().height
-              ),
+              await page.evaluate(() => document.querySelectorAll('[data-graph-back-top]').length),
             ).toBe(0)
             expect(before.header.position).toBe('sticky')
             expect(before.masthead.height).toBeLessThanOrEqual(8 * 22)
@@ -145,8 +143,28 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
           } else {
             expect(before.header.position).toBe('relative')
             expect(before.masthead.height).toBeLessThanOrEqual(7 * 22)
-            expect(Math.abs(before.stage.height - before.viewport.height)).toBeLessThanOrEqual(1)
-            expect(before.documentHeight).toBeGreaterThan(before.viewport.height)
+            // Section 4.13 sizes the map to the remaining visible viewport,
+            // rather than adding a full viewport below the chrome.
+            expect(Math.abs(before.stage.top - before.masthead.bottom)).toBeLessThanOrEqual(1)
+            expect(Math.abs(before.stage.bottom - before.viewport.height)).toBeLessThanOrEqual(1)
+            expect(Math.abs(
+              before.stage.height -
+                (before.viewport.height - before.header.height - before.masthead.height),
+            )).toBeLessThanOrEqual(1)
+            expect(before.canvas.height).toBe(before.stage.height)
+            expect(before.documentHeight).toBeLessThanOrEqual(before.viewport.height + 1)
+            expect(
+              await page.evaluate(() => document.querySelectorAll('[data-graph-back-top]').length),
+            ).toBe(0)
+            // Supply surrounding scrollable content to exercise the recovery
+            // contract independently of the new viewport-fitting page layout.
+            // First stop at the map's top, where return must still be absent.
+            await page.evaluate((height) => {
+              const tail = document.createElement('div')
+              tail.id = 'graph-scroll-fixture'
+              tail.style.height = `${height}px`
+              document.querySelector('.rp-tenant')!.append(tail)
+            }, { args: [before.stage.top] })
             // Open the menu while its trigger is still visible but the header
             // is partly scrolled away. Its fixed layers must meet that edge.
             await page.evaluate(() => scrollTo(0, 12))
@@ -304,26 +322,46 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
             expect(after.canvas.height).toBe(before.canvas.height)
             await Deno.writeFile(`${directory}/${scene}-scrolled.png`, await page.screenshot())
             evidence.push({ scene, scrolled: after, menu, gesture, trajectory, touches })
-            // Canvas touch gestures still belong to the graph. A native tap
-            // on its visible return control must always recover navigation.
+            // Scrolling only the chrome away must not show return while
+            // the map remains visible. It appears after the entire map.
+            expect(
+              await page.evaluate(() => document.querySelectorAll('[data-graph-back-top]').length),
+            ).toBe(0)
+            await page.evaluate(() => {
+              document.querySelector<HTMLElement>('#graph-scroll-fixture')!.style.height = `${
+                innerHeight * 2
+              }px`
+              const stage = document.querySelector('[data-graph-stage]')!
+              scrollTo(0, Math.ceil(scrollY + stage.getBoundingClientRect().bottom))
+            })
+            await page.waitForSelector('[data-graph-back-top]')
+            expect((await geometry(page)).stage.bottom).toBeLessThanOrEqual(0)
+            // A native tap on the return control recovers visible navigation
+            // and restores keyboard focus to the header.
             const back = await page.evaluate((browseLabel) => {
               const button = document.querySelector('[data-graph-back-top]')!
               const rect = button.getBoundingClientRect()
               const browse = [...document.querySelectorAll('[data-graph-stage] button')]
-                .find((element) => element.textContent?.trim() === browseLabel)!
+                .find((element) => element.getAttribute('aria-label') === browseLabel)!
                 .getBoundingClientRect()
               return {
                 x: rect.x + rect.width / 2,
                 y: rect.y + rect.height / 2,
                 left: rect.left,
                 right: rect.right,
+                top: rect.top,
                 browseRight: browse.right,
+                browseBottom: browse.bottom,
               }
             }, { args: [ui('Browse')] })
-            expect(back.left).toBeGreaterThan(back.browseRight)
+            // Return now appears after Browse has scrolled off-screen.
+            // Preserve the non-overlap guarantee in both dimensions.
+            expect(back.left > back.browseRight || back.top >= back.browseBottom).toBe(true)
             expect(back.right).toBeLessThanOrEqual(width)
             await page.touchscreen.tap(back.x, back.y)
             await page.waitForFunction(() => scrollY === 0)
+            await page.waitForFunction(() => !document.querySelector('[data-graph-back-top]'))
+            await page.evaluate(() => document.querySelector('#graph-scroll-fixture')!.remove())
             await Deno.writeFile(`${directory}/${scene}-returned.png`, await page.screenshot())
             // The native gesture must recover the actual navigation targets,
             // including after the returned frame has been composited.
@@ -359,8 +397,10 @@ Deno.test('graph chrome is compact and fixed on desktop, while mobile chrome scr
               expect((await geometry(page)).header.position).toBe('sticky')
               await page.setViewportSize({ width, height: 844 })
               await page.waitForFunction(() =>
-                document.querySelector('[data-graph-stage]')!.getBoundingClientRect().height ===
-                  innerHeight
+                Math.abs(
+                  document.querySelector('[data-graph-stage]')!
+                    .getBoundingClientRect().bottom - innerHeight,
+                ) <= 1
               )
             }
           }

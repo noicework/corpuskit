@@ -7,6 +7,7 @@ import {
   DEFAULT_PALETTES,
   type DensityId,
   FONT_PAIRINGS,
+  HOUSE_LIGHT_SUITE,
   type Palette,
   type PaletteChoice,
   pickerPaletteIds,
@@ -22,7 +23,10 @@ import {
   DENSITY_DIALS,
   fontStack,
   PAIRING_IDS,
+  paletteMode,
+  paletteVars,
   SHAPE_RADII,
+  tenantThemeVars,
   useAllPairingFonts,
 } from '../../lib/theme.ts'
 import { MessagePanel } from './MessagePanel.tsx'
@@ -30,6 +34,8 @@ import { errorMessage, type Message } from './shared.ts'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { Check, Upload } from '../../components/icons.tsx'
 
 const MAX_BYTES = 5 * 1024 * 1024
 
@@ -66,12 +72,14 @@ function UploadCard({
   kind,
   title,
   guidance,
+  branding,
   onUploaded,
 }: {
   slug: string
   kind: ImageKind
   title: string
   guidance: string
+  branding: Branding
   onUploaded: () => Promise<unknown>
 }) {
   const { ui } = usePortalLocale()
@@ -127,48 +135,118 @@ function UploadCard({
   }
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
-      <h4 className='text-sm font-semibold text-ink'>{title}</h4>
+    <div className='min-w-0 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border border-line bg-surface-2 p-4'>
+      <h3 className='text-sm font-semibold text-ink'>{title}</h3>
       <p className='mt-1 text-xs text-ink-3'>{guidance}</p>
 
-      <div
-        style={CHECKERBOARD_STYLE}
-        className={`mt-3 overflow-hidden rounded-[var(--rp-radius)] border border-line ${
-          kind === 'hero' ? 'aspect-[16/6]' : 'flex h-16 items-center justify-center p-2'
-        }`}
-      >
-        {missing
-          ? (
-            <div className='flex h-full w-full items-center justify-center text-xs text-ink-3'>
-              {ui('None uploaded yet')}
-            </div>
-          )
-          : (
-            <img
-              key={version}
-              src={brandingUrl(slug, kind, version)}
-              alt={ui('{title} preview', { title: title })}
-              onError={() => setMissing(true)}
-              className={kind === 'hero'
-                ? 'h-full w-full object-cover'
-                : 'h-full w-auto object-contain'}
-            />
-          )}
-      </div>
+      {kind === 'hero'
+        ? (
+          <div
+            style={CHECKERBOARD_STYLE}
+            className='mt-3 aspect-[16/6] overflow-hidden rounded-[var(--rp-radius)] border border-line'
+          >
+            {missing
+              ? (
+                <div className='flex h-full items-center justify-center text-xs text-ink-3'>
+                  {ui('None uploaded yet')}
+                </div>
+              )
+              : (
+                <img
+                  key={version}
+                  src={brandingUrl(slug, kind, version)}
+                  alt={ui('{title} preview', { title })}
+                  onError={() => setMissing(true)}
+                  className='h-full w-full object-cover'
+                />
+              )}
+          </div>
+        )
+        : (
+          <LogoHeaderPreview
+            key={`${branding.logoUrl}:${branding.logoDarkUrl}:${version}`}
+            slug={slug}
+            branding={branding}
+            scheme={kind === 'logo-dark' ? 'dark' : 'light'}
+            version={version}
+          />
+        )}
 
-      <label className='rp-btn rp-btn-primary mt-3 cursor-pointer'>
+      <label className='rp-admin-upload relative rp-btn rp-btn-primary mt-3 cursor-pointer'>
+        <Upload size='sm' />
         {busy ? ui('Uploading…') : ui('Upload…')}
         <input
           type='file'
           data-branding-upload={kind}
           accept='image/png,image/jpeg,image/webp'
-          className='sr-only'
+          className='absolute inset-0 h-full w-full cursor-pointer opacity-0'
           disabled={busy}
           onChange={(e) => void onChoose(e)}
         />
       </label>
 
       {message && <MessagePanel message={message} className='mt-3' />}
+    </div>
+  )
+}
+
+/** Preview the same asset and header ground used by the portal in each scheme. */
+export function LogoHeaderPreview({ slug, branding, scheme, version = 0 }: {
+  slug: string
+  branding: Branding
+  scheme: 'light' | 'dark'
+  version?: number
+}) {
+  const { ui } = usePortalLocale()
+  const [missing, setMissing] = useState(false)
+  const distinctDark = Boolean(branding.logoDarkUrl && branding.logoDarkUrl !== branding.logoUrl)
+  const dark = paletteMode(branding, scheme) === 'dark'
+  const plate = dark && !distinctDark
+  const source = dark && distinctDark ? branding.logoDarkUrl : branding.logoUrl
+  // A light preview must not inherit the surrounding page's dark grey suite.
+  const previewVars = {
+    '--rp-surface': HOUSE_LIGHT_SUITE.surface,
+    '--rp-line': HOUSE_LIGHT_SUITE.line,
+    '--rp-ink-3': HOUSE_LIGHT_SUITE.ink3,
+    ...tenantThemeVars(branding, scheme),
+  }
+  return (
+    <div className='mt-3'>
+      <p className='mb-2 text-xs font-medium text-ink-2'>
+        {scheme === 'dark' ? ui('Dark header preview') : ui('Light header preview')}
+      </p>
+      <div
+        style={previewVars}
+        className='rp-tenant rp-admin-logo-preview flex min-h-24 items-center justify-center overflow-hidden rounded-[var(--rp-radius-btn)] border border-line bg-surface p-3'
+      >
+        {missing
+          ? <span className='text-xs text-ink-3'>{ui('None uploaded yet')}</span>
+          : (
+            <span className={plate ? 'rp-logo-plate min-w-0' : 'inline-flex min-w-0'}>
+              <img
+                src={source ??
+                  brandingUrl(
+                    slug,
+                    dark && distinctDark ? 'logo-dark' : 'logo',
+                    version,
+                  )}
+                alt={ui('{title} preview', { title: ui('Logo') })}
+                onError={() => setMissing(true)}
+                className='rp-admin-logo-image h-auto max-h-10 w-auto max-w-full lg:max-h-16'
+                style={branding.logoMaxWidth === undefined
+                  ? undefined
+                  : { maxWidth: `min(${branding.logoMaxWidth / 16}rem, 100%)` }}
+              />
+            </span>
+          )}
+      </div>
+      {scheme === 'dark' && (
+        <p className='mt-2 text-xs text-ink-3'>
+          {distinctDark ? ui('The separate dark logo is shown on the header ground.') : ui(
+            'Without a separate dark logo, the light logo is shown on a light plate in dark mode.',
+          )}
+        </p>
+      )}
     </div>
   )
 }
@@ -195,13 +273,13 @@ function ChoiceTile({
       aria-label={label}
       disabled={disabled}
       onClick={onSelect}
-      className={`rp-focus relative rounded-[calc(var(--rp-radius)+4px)] border p-4 text-left transition-colors duration-150 disabled:opacity-60 ${
+      className={`rp-focus relative min-w-0 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border p-4 text-left transition-colors duration-150 disabled:opacity-60 ${
         selected ? '' : 'border-line hover:bg-surface-2'
       }`}
       style={selected
         ? {
-          borderColor: 'var(--rp-accent)',
-          backgroundColor: 'color-mix(in srgb, var(--rp-accent) 7%, var(--rp-surface))',
+          borderColor: 'var(--rp-accent-fg)',
+          backgroundColor: 'var(--rp-wash)',
         }
         : undefined}
     >
@@ -211,15 +289,7 @@ function ChoiceTile({
           className='absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full text-[var(--rp-on-accent)]'
           style={{ backgroundColor: 'var(--rp-accent)' }}
         >
-          <svg
-            viewBox='0 0 12 12'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='2'
-            className='h-3 w-3'
-          >
-            <path d='M2.5 6.5 5 9l4.5-5.5' strokeLinecap='round' strokeLinejoin='round' />
-          </svg>
+          <Check size='sm' />
         </span>
       )}
       {children}
@@ -248,7 +318,7 @@ function PaletteMini({ palette }: { palette: MiniPalette }) {
         className='flex h-10 items-center justify-center'
         style={{ background: `linear-gradient(135deg, ${palette.heroFrom}, ${palette.heroTo})` }}
       >
-        <span style={{ color: palette.onHero, fontSize: '9px', fontWeight: 700 }}>{ui('Aa')}</span>
+        <span className='text-2xs font-semibold' style={{ color: palette.onHero }}>{ui('Aa')}</span>
       </span>
       <span className='flex items-center gap-1.5 p-1.5' style={{ background: palette.paper }}>
         <span
@@ -339,26 +409,33 @@ function ColoursSection({
     }
   }
 
+  const ownRoles = paletteVars({ ...branding, paletteId: 'default' }, 'light')
   const defaultMini: MiniPalette = {
     band: branding.colours.primary,
     underline: branding.colours.accent,
     heroFrom: branding.colours.heroFrom,
     heroTo: branding.colours.heroTo,
-    onHero: '#ffffff',
-    paper: '#ffffff',
-    wash: `color-mix(in srgb, ${branding.colours.accent} 12%, #ffffff)`,
-    chipBorder: branding.colours.accent,
+    onHero: ownRoles['--rp-on-hero']!,
+    paper: ownRoles['--rp-logo-plate']!,
+    wash: ownRoles['--rp-wash']!,
+    chipBorder: ownRoles['--rp-accent-fg']!,
     accent: branding.colours.accent,
   }
 
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Colours')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          "The portal's colour identity - its own brand colours, or a palette from the library. Each library palette carries its matching greys; Observatory is a dark interface. Choose a preview, then save to apply it.",
-        )}
-      </p>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Colours')}
+        description={
+          <>
+            {ui(
+              "The portal's colour identity - its own brand colours, or a palette from the library. Each library palette carries its matching greys; Observatory is a dark interface. Choose a preview, then save to apply it.",
+            )}
+          </>
+        }
+      />
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
         <ChoiceTile
@@ -391,15 +468,14 @@ function ColoursSection({
         })}
       </div>
 
-      <button
-        type='button'
+      <Button
         data-appearance-save='colours'
         disabled={busy || ((branding.paletteId ?? 'default') === selected)}
         onClick={() => void choose()}
-        className='rp-btn rp-btn-primary mt-4'
+        className='mt-4'
       >
         {busy ? ui('Saving…') : ui('Save colours')}
-      </button>
+      </Button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -509,13 +585,19 @@ function TypographySection({
   ]
 
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Typography')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          'The heading and body faces used across this portal - pick a pairing, or upload your own. Choose a preview, then save to apply it.',
-        )}
-      </p>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Typography')}
+        description={
+          <>
+            {ui(
+              'The heading and body faces used across this portal - pick a pairing, or upload your own. Choose a preview, then save to apply it.',
+            )}
+          </>
+        }
+      />
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
         {previews.map((option) => (
@@ -526,13 +608,13 @@ function TypographySection({
             onSelect={() => setSelected(option.id)}
             label={ui('{label} typeface pairing', { label: option.label })}
           >
-            <span className='block truncate pr-6 text-xl text-ink' style={option.headingStyle}>
+            <span className='block break-words pr-6 text-xl text-ink' style={option.headingStyle}>
               {option.headingText}
             </span>
             <span className='rp-clamp-2 mt-1.5 block text-sm text-ink-2' style={option.bodyStyle}>
               {option.bodyText}
             </span>
-            <span className='mt-2 block text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-ink-3'>
+            <span className='mt-2 block text-2xs font-semibold uppercase tracking-[0.08em] text-ink-3'>
               {option.id === 'default' ? ui('Portal default') : ui('Heading & body')}
             </span>
           </ChoiceTile>
@@ -545,7 +627,7 @@ function TypographySection({
           label={ui('Custom uploaded fonts')}
         >
           <span
-            className='block truncate pr-6 text-xl text-ink'
+            className='block break-words pr-6 text-xl text-ink'
             style={branding.headingFontUrl
               ? { fontFamily: fontStack(CUSTOM_HEADING_FAMILY) }
               : undefined}
@@ -558,7 +640,7 @@ function TypographySection({
           >
             {ui('Upload your own heading and body faces.')}
           </span>
-          <span className='mt-2 block text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-ink-3'>
+          <span className='mt-2 block text-2xs font-semibold uppercase tracking-[0.08em] text-ink-3'>
             {ui('WOFF2, WOFF, TTF or OTF')}
           </span>
         </ChoiceTile>
@@ -583,7 +665,7 @@ function TypographySection({
         </div>
       )}
 
-      <h4 className='mt-6 text-sm font-semibold text-ink'>{ui('Text size')}</h4>
+      <h3 className='mt-6 text-sm font-semibold text-ink'>{ui('Text size')}</h3>
       <p className='mt-1 text-xs text-ink-3'>
         {ui('The base size everything is set against - the whole interface scales with it.')}
       </p>
@@ -609,17 +691,16 @@ function TypographySection({
         ))}
       </div>
 
-      <button
-        type='button'
+      <Button
         data-appearance-save='typography'
         disabled={busy ||
           ((branding.typography ?? 'default') === selected &&
             (branding.textScale ?? 'default') === selectedScale)}
         onClick={() => void save()}
-        className='rp-btn rp-btn-primary mt-4'
+        className='mt-4'
       >
         {busy ? ui('Saving…') : ui('Save typography')}
-      </button>
+      </Button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -711,27 +792,28 @@ function FontUploadCard({
   }
 
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'>
+    <div className='min-w-0 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border border-line bg-surface-2 p-4'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <h4 className='text-sm font-semibold text-ink'>{title}</h4>
+        <h3 className='text-sm font-semibold text-ink'>{title}</h3>
         <span className={`rp-badge shrink-0 ${uploaded ? 'rp-badge-ok' : 'rp-badge-quiet'}`}>
           {uploaded ? ui('In use') : ui('None yet')}
         </span>
       </div>
       <p
-        className='mt-2 truncate text-2xl text-ink'
+        className='mt-2 break-words text-2xl text-ink'
         style={uploaded ? { fontFamily: fontStack(previewFamily) } : undefined}
         aria-hidden='true'
       >
         {uploaded ? ui('Aa Research knowledge') : ui('Awaiting a font file')}
       </p>
-      <label className='rp-btn rp-btn-primary mt-3 cursor-pointer'>
+      <label className='rp-admin-upload relative rp-btn rp-btn-primary mt-3 cursor-pointer'>
+        <Upload size='sm' />
         {busy ? ui('Uploading…') : ui('Upload…')}
         <input
           type='file'
           data-branding-upload={kind}
           accept='.woff2,.woff,.ttf,.otf'
-          className='sr-only'
+          className='absolute inset-0 h-full w-full cursor-pointer opacity-0'
           disabled={busy}
           onChange={(e) => void onChoose(e)}
         />
@@ -792,13 +874,19 @@ function ShapeSection({
   }
 
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Shape')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          'How rounded surfaces, buttons and tags are across the portal. Choose a preview, then save to apply it.',
-        )}
-      </p>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Shape')}
+        description={
+          <>
+            {ui(
+              'How rounded surfaces, buttons and tags are across the portal. Choose a preview, then save to apply it.',
+            )}
+          </>
+        }
+      />
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3'>
         {SHAPE_OPTIONS.map((option) => {
@@ -817,12 +905,12 @@ function ShapeSection({
                 className='block border border-line bg-surface p-2.5'
                 style={{ borderRadius: radii.surface }}
               >
-                <span className='block h-1.5 w-3/5 rounded-[1px] bg-surface-3' />
-                <span className='mt-1 block h-1.5 w-2/5 rounded-[1px] bg-surface-3' />
+                <span className='block h-1.5 w-3/5 rounded-[var(--rp-radius-chip)] bg-surface-3' />
+                <span className='mt-1 block h-1.5 w-2/5 rounded-[var(--rp-radius-chip)] bg-surface-3' />
                 <span className='mt-2.5 flex items-center gap-1.5'>
                   <span
                     className='block h-5 w-14'
-                    style={{ borderRadius: radii.btn, backgroundColor: 'var(--rp-primary)' }}
+                    style={{ borderRadius: radii.btn, backgroundColor: 'var(--rp-control)' }}
                   />
                   <span
                     className='block h-5 w-11 border border-line bg-surface-2'
@@ -837,15 +925,14 @@ function ShapeSection({
         })}
       </div>
 
-      <button
-        type='button'
+      <Button
         data-appearance-save='shape'
         disabled={busy || ((branding.shape ?? 'square') === selected)}
         onClick={() => void choose()}
-        className='rp-btn rp-btn-primary mt-4'
+        className='mt-4'
       >
         {busy ? ui('Saving…') : ui('Save shape')}
-      </button>
+      </Button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -904,13 +991,19 @@ function DensitySection({
   }
 
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Density')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          'How much air the interface keeps around content. Spacing changes; text size does not. Choose a preview, then save to apply it.',
-        )}
-      </p>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Density')}
+        description={
+          <>
+            {ui(
+              'How much air the interface keeps around content. Spacing changes; text size does not. Choose a preview, then save to apply it.',
+            )}
+          </>
+        }
+      />
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4'>
         {DENSITY_OPTIONS.map((option) => {
@@ -929,14 +1022,14 @@ function DensitySection({
                 className='block border border-line bg-surface'
                 style={{
                   borderRadius: 'var(--rp-radius)',
-                  padding: `${Math.round(10 * rhythm)}px`,
+                  padding: `${0.625 * rhythm}rem`,
                 }}
               >
                 {['60%', '40%', '50%'].map((width, index) => (
                   <span
                     key={width}
-                    className='block h-1.5 rounded-[1px] bg-surface-3'
-                    style={{ width, marginTop: index === 0 ? 0 : `${Math.round(7 * rhythm)}px` }}
+                    className='block h-1.5 rounded-[var(--rp-radius-chip)] bg-surface-3'
+                    style={{ width, marginTop: index === 0 ? 0 : `${0.4375 * rhythm}rem` }}
                   />
                 ))}
               </span>
@@ -947,15 +1040,14 @@ function DensitySection({
         })}
       </div>
 
-      <button
-        type='button'
+      <Button
         data-appearance-save='density'
         disabled={busy || ((branding.density ?? 'default') === selected)}
         onClick={() => void choose()}
-        className='rp-btn rp-btn-primary mt-4'
+        className='mt-4'
       >
         {busy ? ui('Saving…') : ui('Save density')}
-      </button>
+      </Button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -1026,13 +1118,19 @@ function ColourSchemeSection({
   }
 
   return (
-    <div className='rp-card p-5'>
-      <h3 className='text-sm font-semibold text-ink'>{ui('Dark mode')}</h3>
-      <p className='mt-1 text-xs text-ink-3'>
-        {ui(
-          'Whether viewers may read the portal in dark. Choose an option, then save to apply it.',
-        )}
-      </p>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-admin-section-head'
+        headingLevel={2}
+        title={ui('Dark mode')}
+        description={
+          <>
+            {ui(
+              'Whether viewers may read the portal in dark. Choose an option, then save to apply it.',
+            )}
+          </>
+        }
+      />
 
       <div className='mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2'>
         {COLOUR_SCHEME_OPTIONS.map((option) => (
@@ -1049,15 +1147,14 @@ function ColourSchemeSection({
         ))}
       </div>
 
-      <button
-        type='button'
+      <Button
         data-appearance-save='colour-scheme'
         disabled={busy || current === selected}
         onClick={() => void choose()}
-        className='rp-btn rp-btn-primary mt-4'
+        className='mt-4'
       >
         {busy ? ui('Saving…') : ui('Save dark mode')}
-      </button>
+      </Button>
 
       {message && <MessagePanel message={message} className='mt-4' />}
     </div>
@@ -1086,33 +1183,42 @@ function AppearancePanelContent({
     ])
 
   return (
-    <div className='space-y-4'>
-      <div className='rp-card p-5'>
-        <h3 className='text-sm font-semibold text-ink'>{ui('Images')}</h3>
-        <p className='mt-1 text-xs text-ink-3'>
-          {ui('The logo shown in the header and the photograph behind the portal hero.')}
-        </p>
+    <div className='space-y-6 lg:space-y-8'>
+      <div className='rp-card p-5 lg:p-6'>
+        <SectionHeader
+          className='rp-admin-section-head'
+          headingLevel={2}
+          title={ui('Images')}
+          description={
+            <>
+              {ui('The logo shown in the header and the photograph behind the portal hero.')}
+            </>
+          }
+        />
         <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2'>
           <UploadCard
             slug={slug}
+            branding={branding}
             kind='logo'
             title={ui('Logo')}
             guidance={ui(
-              'PNG or WebP with transparency works best - shown in the header at 28px tall.',
+              'PNG or WebP with transparency works best. Previewed below as it appears in the header.',
             )}
             onUploaded={onUploaded}
           />
           <UploadCard
             slug={slug}
+            branding={branding}
             kind='logo-dark'
             title={ui('Logo for dark mode')}
             guidance={ui(
-              'Optional. A light version of the logo for dark backgrounds; without one the logo above is used.',
+              'Optional. Upload a separate logo designed for dark backgrounds.',
             )}
             onUploaded={onUploaded}
           />
           <UploadCard
             slug={slug}
+            branding={branding}
             kind='hero'
             title={ui('Hero image')}
             guidance={ui(

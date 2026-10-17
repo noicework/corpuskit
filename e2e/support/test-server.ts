@@ -48,7 +48,20 @@ export interface TestServer {
   bindings: BindingStore
   close: () => Promise<void>
 }
-let nextPort = 8791
+/**
+ * The next fixture port, from 8791 upward unless `DS_PORT_BASE` names another first port (the
+ * design screenshot harness starts at 8931, clear of the agents' dev servers). Read on the first
+ * start, so a caller can set it before starting a server.
+ */
+let nextPort: number | undefined
+function firstFixturePort(): number {
+  try {
+    const base = Number(Deno.env.get('DS_PORT_BASE'))
+    return Number.isInteger(base) && base > 0 && base < 65536 ? base : 8791
+  } catch {
+    return 8791
+  }
+}
 
 export interface EmergencyFixtureState {
   capability: 'enabled' | 'disabled' | 'unknown' | 'failed' | 'loading' | 'session'
@@ -393,6 +406,8 @@ export function startTestServer(options: {
       return response
     }
     let server: Deno.HttpServer<Deno.NetAddr> | undefined
+    nextPort ??= firstFixturePort()
+    const firstPort = nextPort
     for (let attempt = 0; attempt < 200; attempt++) {
       const port = nextPort++
       try {
@@ -402,7 +417,7 @@ export function startTestServer(options: {
         if (!(error instanceof Deno.errors.AddrInUse)) throw error
       }
     }
-    if (!server) throw new Error('No available fixture port from 8791')
+    if (!server) throw new Error(`No available fixture port from ${firstPort}`)
     const addr = server.addr as Deno.NetAddr
     let closing: Promise<void> | undefined
     return {

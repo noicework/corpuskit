@@ -50,15 +50,23 @@ describe('How this works', () => {
           document.querySelectorAll('.rp-shimmer').length === 0,
       )
       const state = await page.evaluate(() => {
-        const visibleSvgs = Array.from(
-          document.querySelectorAll<SVGSVGElement>('[data-testid="how-it-works-flow"] svg'),
-        ).filter((svg) => getComputedStyle(svg).display !== 'none')
+        // The diagram uses real text in responsive lists so labels scale with
+        // the reader's font size. Its decorative arrow SVGs are not the flow.
+        const flow = document.querySelector(
+          '[role="img"][aria-label^="The flow of one question through the portal."]',
+        )
+        const visibleFlows = Array.from(
+          flow?.querySelectorAll<HTMLElement>('[data-orientation]') ?? [],
+        ).filter((list) => list.getBoundingClientRect().width > 0)
         return {
           heading: document.querySelector('h1')?.textContent?.trim(),
           sections: Array.from(document.querySelectorAll('main h2')).map((h) =>
             h.textContent?.trim()
           ),
-          visibleOrientation: visibleSvgs.map((svg) => svg.dataset.orientation),
+          visibleOrientation: visibleFlows.map((list) => list.dataset.orientation),
+          steps: Array.from(visibleFlows[0]?.querySelectorAll('li') ?? []).map((step) =>
+            step.querySelector('p')?.textContent?.trim()
+          ),
           platformMentions: (document.body.innerText.match(/Progress Agentic RAG/g) ?? []).length,
           toolLinks: Array.from(document.querySelectorAll<HTMLAnchorElement>('#tools a')).map(
             (a) => a.getAttribute('href'),
@@ -77,6 +85,14 @@ describe('How this works', () => {
         'Under the hood',
       ])
       expect(state.visibleOrientation).toEqual(['row'])
+      expect(state.steps).toEqual([
+        'The collection',
+        'The index',
+        'Your question',
+        'The passages',
+        'The answer',
+        'The check',
+      ])
       expect(state.platformMentions).toBe(1)
       for (
         const path of ['/t/marine/search', '/t/marine/ask', '/t/marine/library', '/t/marine/graph']
@@ -98,21 +114,33 @@ describe('How this works', () => {
         document.documentElement.style.fontSize = '22px'
       })
       const state = await page.evaluate(() => {
-        const visibleSvgs = Array.from(
-          document.querySelectorAll<SVGSVGElement>('[data-testid="how-it-works-flow"] svg'),
-        ).filter((svg) => getComputedStyle(svg).display !== 'none')
-        const svg = visibleSvgs[0]
-        const rect = svg?.getBoundingClientRect()
+        const flow = document.querySelector(
+          '[role="img"][aria-label^="The flow of one question through the portal."]',
+        )
+        const visibleFlows = Array.from(
+          flow?.querySelectorAll<HTMLElement>('[data-orientation]') ?? [],
+        ).filter((list) => list.getBoundingClientRect().width > 0)
+        const diagram = visibleFlows[0]
+        const rect = diagram?.getBoundingClientRect()
+        const steps = Array.from(diagram?.querySelectorAll('li') ?? [])
         return {
-          visibleOrientation: visibleSvgs.map((s) => s.dataset.orientation),
-          svgWidth: rect?.width ?? 0,
+          visibleOrientation: visibleFlows.map((list) => list.dataset.orientation),
+          diagramWidth: rect?.width ?? 0,
+          stepCount: steps.length,
+          stacked: steps.every((step, index) => {
+            const previous = steps[index - 1]?.getBoundingClientRect()
+            const current = step.getBoundingClientRect()
+            return !previous || (current.top > previous.bottom && current.left === previous.left)
+          }),
           horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
           bodyOverflow: document.body.scrollWidth - innerWidth,
         }
       })
       expect(state.visibleOrientation).toEqual(['column'])
-      expect(state.svgWidth).toBeGreaterThan(260)
-      expect(state.svgWidth).toBeLessThanOrEqual(390)
+      expect(state.diagramWidth).toBeGreaterThan(260)
+      expect(state.diagramWidth).toBeLessThanOrEqual(390)
+      expect(state.stepCount).toBe(6)
+      expect(state.stacked).toBe(true)
       expect(state.horizontalOverflow).toBeLessThanOrEqual(0)
       expect(state.bodyOverflow).toBeLessThanOrEqual(0)
     } finally {

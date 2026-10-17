@@ -10,6 +10,8 @@ import { CurrencyNote } from './CurrencyNote.tsx'
 import { type QualityScores, TrustSignals } from './QualityGauge.tsx'
 import { type AnswerAudit, auditBadge } from '../lib/answer-marks.ts'
 import { StageTimeline, statusesFor, useAnswerPhase } from './StageTimeline.tsx'
+import { ChevronDown, Compass, RotateCcw, ShieldCheck } from './icons.tsx'
+import { Button, IconButton } from './ui.tsx'
 
 type Status = 'idle' | 'streaming' | 'done' | 'error'
 type UsageEvent = Extract<AskEvent, { type: 'usage' }>
@@ -74,7 +76,7 @@ export function InferenceMark() {
   const { ui } = usePortalLocale()
   return (
     <sup
-      className='ml-0.5 select-none rounded-[var(--rp-radius-chip)] px-1 text-[0.6em] font-semibold uppercase tracking-wide text-ink-3'
+      className='ml-0.5 select-none rounded-[var(--rp-radius-chip)] px-1 text-2xs font-semibold uppercase tracking-wide text-ink-3'
       style={{ backgroundColor: 'var(--rp-surface-3)' }}
       title={ui("The model's own inference, not a statement in the cited sources")}
     >
@@ -89,20 +91,12 @@ export function InferenceMark() {
  */
 function DisclosureChevron({ open }: { open: boolean }) {
   return (
-    <svg
-      viewBox='0 0 20 20'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.7'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className={`h-3 w-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none ${
-        open ? 'rotate-90' : ''
+    <ChevronDown
+      size='sm'
+      className={`shrink-0 transition-transform duration-150 motion-reduce:transition-none ${
+        open ? '' : '-rotate-90'
       }`}
-    >
-      <path d='M7 4l6 6-6 6' />
-    </svg>
+    />
   )
 }
 
@@ -152,12 +146,13 @@ export function EvidenceDisclosure({
 }: EvidenceDisclosureProps) {
   const { ui } = usePortalLocale()
   const control = (
-    <button
-      type='button'
+    <Button
+      variant='ghost'
+      size='sm'
       onClick={onToggle}
       aria-expanded={open}
       aria-controls={regionId}
-      className='rp-focus flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-[var(--rp-radius-btn)] py-1.5 text-left text-xs font-semibold text-ink-2 transition-colors duration-150 hover:text-ink motion-reduce:transition-none sm:py-1'
+      className='rp-answer-evidence-toggle w-full flex-wrap gap-x-2 gap-y-1 text-left'
     >
       <span className='flex min-w-0 items-center gap-1.5'>
         <DisclosureChevron open={open} />
@@ -167,12 +162,12 @@ export function EvidenceDisclosure({
       </span>
       {summary
         ? (
-          <span className='rounded-[var(--rp-radius-chip)] border border-line bg-surface-2 px-1.5 py-0.5 text-[10px] font-normal tabular-nums text-ink-3'>
+          <span className='rounded-[var(--rp-radius-chip)] border border-line bg-surface-2 px-1.5 py-0.5 text-2xs font-normal tabular-nums text-ink-3'>
             {summary}
           </span>
         )
         : null}
-    </button>
+    </Button>
   )
 
   return (
@@ -200,6 +195,7 @@ function ScopedAuditBadge({ audit }: { audit: AnswerAudit | null }) {
         className={`rp-badge ${badge.tone === 'ok' ? 'rp-badge-ok' : 'rp-badge-warn'}`}
         title={badge.title}
       >
+        <ShieldCheck size='sm' />
         {badge.label}
       </span>
       <span className='text-xs text-ink-3'>{ui("Checked against this document's text")}</span>
@@ -263,7 +259,7 @@ function renderAnswerText(text: string, renderMarker: MarkerRenderer): ReactNode
     <AnswerMarkdown
       text={text}
       renderInline={(run, keyPrefix) => renderInline(run, renderMarker, keyPrefix)}
-      bodyClassName='leading-relaxed'
+      bodyClassName='rp-measure leading-relaxed'
     />
   )
 }
@@ -354,8 +350,10 @@ function PermittedContextJourney({ slug, sources, query = '', onOpen }: ContextJ
 
   return (
     <>
-      <button
-        type='button'
+      <Button
+        variant='outline'
+        size='sm'
+        leadingIcon={Compass}
         onClick={() => {
           if (
             access.controller.context !== context ||
@@ -365,27 +363,13 @@ function PermittedContextJourney({ slug, sources, query = '', onOpen }: ContextJ
           setIsOpen(true)
         }}
         aria-haspopup='dialog'
-        className='rp-chip group h-9 font-semibold sm:h-7'
+        className='rp-answer-journey-toggle max-w-full flex-wrap'
       >
-        <svg
-          viewBox='0 0 24 24'
-          fill='none'
-          stroke='currentColor'
-          strokeWidth='1.6'
-          strokeLinecap='round'
-          strokeLinejoin='round'
-          aria-hidden='true'
-          className='h-3.5 w-3.5 shrink-0 transition-transform duration-300 group-hover:rotate-45'
-          style={{ color: 'var(--rp-accent-fg)' }}
-        >
-          <circle cx='12' cy='12' r='9' />
-          <path d='M15.2 8.8l-1.6 4.4-4.4 1.6 1.6-4.4z' />
-        </svg>
         {ui('Journey through the context')}
-        <span className='rounded-[var(--rp-radius-chip)] bg-surface-2 px-1.5 py-0.5 text-[10px] tabular-nums text-ink-3'>
+        <span className='rounded-[var(--rp-radius-chip)] bg-surface-2 px-1.5 py-0.5 text-2xs tabular-nums text-ink-3'>
           {Math.min(sources.length, 8)}
         </span>
-      </button>
+      </Button>
 
       <AnswerJourney
         open={isOpen}
@@ -643,7 +627,7 @@ function PermittedAnswerStream(
         </p>
       </div>
 
-      <div className='rp-prose mt-3 space-y-3 text-sm text-ink'>
+      <div className='rp-prose mt-3 space-y-3 text-base text-ink sm:text-sm'>
         {phase !== 'answer' && status === 'streaming'
           ? (
             <StageTimeline
@@ -693,38 +677,40 @@ function PermittedAnswerStream(
       {citations.length > 0 && !scopedToResource
         ? (
           <>
-            <div className='mt-4 flex flex-wrap items-center gap-1.5'>
+            <div className='mt-4 flex flex-wrap items-center gap-2'>
               {citations.map((citation) => {
                 const matchedPassage = sources.find((resource) =>
                   resource.id === citation.resourceId
                 )?.matchedPassage
                 return (
-                  <div key={citation.index} className='inline-flex items-center gap-1'>
+                  <div
+                    key={citation.index}
+                    className='inline-flex min-w-0 max-w-full items-center gap-1'
+                  >
                     <Link
                       to={citationHref(slug, citation.resourceId, matchedPassage)}
-                      className='rp-focus inline-flex items-center gap-1.5 rounded-[var(--rp-radius-btn)] border border-line bg-[var(--rp-surface-2)] px-2 py-1 text-xs font-medium text-[var(--rp-ink-2)] transition-colors duration-150 hover:bg-[var(--rp-surface-3)] hover:text-[var(--rp-ink)]'
+                      className='rp-btn rp-btn-ghost rp-btn-sm min-w-0 max-w-full gap-1.5 border border-line bg-surface-2'
                     >
                       <span
-                        className='flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--rp-radius-chip)] text-[10px] font-semibold tabular-nums text-[var(--rp-on-primary)]'
-                        style={{ backgroundColor: 'var(--rp-primary)' }}
+                        className='flex min-h-5 min-w-5 shrink-0 items-center justify-center rounded-[var(--rp-radius-chip)] px-1 text-2xs font-semibold tabular-nums text-[var(--rp-on-accent)]'
+                        style={{ backgroundColor: 'var(--rp-accent)' }}
                       >
                         {citation.index}
                       </span>
-                      <span className='max-w-[16rem] truncate text-left'>{citation.title}</span>
+                      <span className='min-w-0 max-w-[16rem] truncate text-left'>
+                        {citation.title}
+                      </span>
                     </Link>
                     {existingResultIds.has(citation.resourceId)
                       ? (
-                        <button
-                          type='button'
+                        <IconButton
+                          icon={ChevronDown}
                           onClick={() => scrollToResource(citation.resourceId)}
-                          aria-label={ui('Scroll to {value1} in the results below', {
+                          label={ui('Scroll to {value1} in the results below', {
                             value1: citation.title,
                           })}
-                          title={ui('Scroll to this result')}
-                          className='rp-focus flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-xs text-[var(--rp-ink-3)] transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-[var(--rp-ink)]'
-                        >
-                          &darr;
-                        </button>
+                          size='sm'
+                        />
                       )
                       : null}
                   </div>
@@ -749,13 +735,14 @@ function PermittedAnswerStream(
               {ui('Answer unavailable right now -')}{' '}
               {localError(errorMessage, 'The answer service is unavailable.')}
             </p>
-            <button
-              type='button'
+            <Button
+              variant='outline'
+              size='sm'
+              leadingIcon={RotateCcw}
               onClick={retry}
-              className='rp-btn rp-btn-outline h-auto px-2.5 py-1 text-xs'
             >
               {ui('Try again')}
-            </button>
+            </Button>
           </div>
         )
         : null}

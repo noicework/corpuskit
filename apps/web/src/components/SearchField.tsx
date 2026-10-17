@@ -1,4 +1,5 @@
 import type { ChangeEvent, FormEvent } from 'react'
+import { Search } from './icons.tsx'
 
 /**
  * The bordered text field a listing page puts at the top of itself: a magnifier
@@ -38,23 +39,12 @@ export function SearchField(
   },
 ) {
   const shell =
-    `rp-field flex h-[calc(2.25rem*var(--rp-density-ctl,1))] items-center gap-2 rounded-[var(--rp-radius-input)] border bg-surface px-3 max-lg:min-h-11 ${className}`
+    `rp-field rp-library-search-field flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] items-center gap-2 rounded-[var(--rp-radius-input)] border bg-surface px-3 max-lg:min-h-11 ${className}`
 
   const body = (
     <>
       <label htmlFor={id} className='sr-only'>{label}</label>
-      <svg
-        viewBox='0 0 20 20'
-        fill='none'
-        stroke='currentColor'
-        strokeWidth='1.8'
-        strokeLinecap='round'
-        aria-hidden='true'
-        className='h-4 w-4 shrink-0 text-ink-3'
-      >
-        <circle cx='9' cy='9' r='5.5' />
-        <path d='M13.2 13.2L17 17' />
-      </svg>
+      <Search size='sm' className='shrink-0 text-ink-3' />
       <input
         id={id}
         type='text'

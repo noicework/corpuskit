@@ -3,12 +3,20 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import type { CatalogItem } from '@research-portal/core'
 import { getCatalog, getFacets } from '../api/client.ts'
-import { Byline, bylineFor } from '../components/Byline.tsx'
+import { bylineFor } from '../components/Byline.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { SearchField } from '../components/SearchField.tsx'
 import { GridDensity, ViewToggle } from '../components/ViewControls.tsx'
 import { useViewMode, type ViewMode } from '../components/useViewMode.ts'
-import { EmptyState, ErrorCard, prettyLabel, sameLabel, Skeleton } from '../components/ui.tsx'
+import {
+  Button,
+  EmptyState,
+  ErrorCard,
+  prettyLabel,
+  sameLabel,
+  Skeleton,
+} from '../components/ui.tsx'
+import { SlidersHorizontal, X } from '../components/icons.tsx'
 import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { plainDashes, presentTitle } from '../lib/display-title.ts'
@@ -88,14 +96,13 @@ function formatYear(iso: string): string | null {
   return match ? match[1] ?? null : null
 }
 
-function LibraryCard(
+export function LibraryCard(
   {
     item,
     slug,
     topicLabel,
     organisation,
     view = 'grid',
-    compact = false,
     hideAdded = false,
   }: {
     item: CatalogItem
@@ -104,8 +111,6 @@ function LibraryCard(
     organisation: string
     /** A list row is a horizontal card with a small A4 thumbnail. */
     view?: ViewMode
-    /** Narrow viewport - a list row's short lines earn a longer summary. */
-    compact?: boolean
     /** This item's created date is the corpus's bulk-import day - say nothing about it. */
     hideAdded?: boolean
   },
@@ -126,6 +131,9 @@ function LibraryCard(
   const kind = item.kind && !(format && sameLabel(prettyLabel(item.kind, organisation, ui), format))
     ? prettyLabel(item.kind, organisation, ui)
     : null
+  const tags = [
+    ...new Set([displayFormat, kind, ...topicLabels].filter((tag): tag is string => Boolean(tag))),
+  ]
   const title = presentTitle(item.title)
   const summary = item.summary ? plainDashes(item.summary) : ''
 
@@ -181,45 +189,35 @@ function LibraryCard(
         <h3 className='rp-clamp-2 text-sm font-semibold leading-snug text-ink'>
           {title}
         </h3>
-        {byline ? <Byline parts={byline} className='!mt-0' /> : null}
-        {
-          /* Three lines is the budget almost everywhere: two clipped most grid
-          * summaries mid-sentence, and the third line is what lets a card read
-          * as a description rather than a truncated fragment. A phone's list
-          * row still wants more - its text column is barely 230px, so three
-          * lines is about a dozen words - and four costs nothing there, since
-          * the row is only as tall as the text it actually has. A desktop list
-          * row is the opposite case: its column runs the best part of a
-          * thousand pixels, so three lines already carry a few hundred
-          * characters and a four-line clamp would mostly buy whitespace. */
-        }
+        {byline
+          ? (
+            <p className='min-w-0 text-xs text-ink-3 [overflow-wrap:anywhere]'>
+              {byline.join('\u00a0·\u00a0')}
+            </p>
+          )
+          : null}
         {summary && summary !== item.title
           ? (
-            <p
-              className={`text-xs leading-relaxed text-ink-3 ${
-                list && compact ? 'rp-clamp-4' : 'rp-clamp-3'
-              }`}
-            >
+            <p className='rp-clamp-3 text-xs leading-relaxed text-ink-3'>
               {summary}
             </p>
           )
           : null}
-        {topicLabels.length > 0 || format || kind || (statusInfo && list)
+        {tags.length > 0 || (statusInfo && list)
           ? (
             <div className='flex flex-wrap gap-1'>
               {statusInfo && list
                 ? <span className={statusInfo.className}>{ui(statusInfo.label)}</span>
                 : null}
-              {format ? <span className='rp-badge rp-badge-quiet'>{displayFormat}</span> : null}
-              {kind ? <span className='rp-badge rp-badge-quiet'>{kind}</span> : null}
-              {topicLabels.slice(0, 3).map((label) => (
+              {tags.slice(0, 2).map((label) => (
                 <span
                   key={label}
-                  className='rp-badge rp-badge-quiet'
+                  className='rp-tag'
                 >
                   {label}
                 </span>
               ))}
+              {tags.length > 2 ? <span className='rp-tag'>+{tags.length - 2}</span> : null}
             </div>
           )
           : null}
@@ -245,7 +243,7 @@ function LibraryCard(
                 : null}
               {item.sourceName
                 ? (
-                  <p className='truncate text-[11px] tabular-nums text-ink-3/80'>
+                  <p className='truncate text-2xs tabular-nums text-ink-3'>
                     {item.sourceName}
                   </p>
                 )
@@ -321,7 +319,7 @@ export function LibraryBrowser(
   // Uncontrolled, the layout starts from the viewport - a phone opens in list -
   // and switches to whatever the toggle is set to from the first click on. A
   // host that controls `view` (the search page) wins at every width either way.
-  const { view: viewState, setView: setViewState, compact } = useViewMode()
+  const { view: viewState, setView: setViewState } = useViewMode()
   const view = viewProp ?? viewState
   const setView = onViewChange ?? setViewState
 
@@ -468,10 +466,10 @@ export function LibraryBrowser(
   const importDay = useMemo(() => bulkImportDay(accumulated), [accumulated])
 
   return (
-    <main className={bare ? '' : 'rp-shell py-8'}>
+    <main className={bare ? '' : 'rp-shell py-8 lg:py-10'}>
       {!bare && (
         <div className='flex flex-wrap items-center justify-between gap-3'>
-          <h1 className='rp-display text-2xl text-ink'>{ui('Library')}</h1>
+          <h1 className='rp-display text-2xl text-ink sm:text-3xl'>{ui('Library')}</h1>
           <div className='flex flex-wrap items-center gap-3'>
             {!isInitialLoading && !isError
               ? (
@@ -496,7 +494,7 @@ export function LibraryBrowser(
           <ViewToggle
             value={view}
             onChange={setView}
-            className='mr-1 h-[calc(2.25rem*var(--rp-density-ctl,1))]'
+            className='mr-1'
           />
           <GridDensity value={density} onChange={setDensity} view={view} className='mr-3' />
           <label htmlFor='library-sort-bare' className='text-xs font-medium text-ink-3'>
@@ -506,7 +504,7 @@ export function LibraryBrowser(
             id='library-sort-bare'
             value={sort}
             onChange={(event) => setSort(event.target.value as SortValue)}
-            className='rp-focus rp-select h-[calc(2.25rem*var(--rp-density-ctl,1))] rounded-[var(--rp-radius-input)] border border-line bg-surface px-3 text-sm text-ink'
+            className='rp-focus rp-select min-h-[calc(2.25rem*var(--rp-density-ctl,1))] rounded-[var(--rp-radius-input)] border bg-surface px-3 text-sm text-ink'
           >
             {SORT_VALUES.map((value) => (
               <option key={value} value={value}>
@@ -539,7 +537,6 @@ export function LibraryBrowser(
           <ViewToggle
             value={view}
             onChange={setView}
-            className='h-[calc(2.25rem*var(--rp-density-ctl,1))]'
           />
           <GridDensity value={density} onChange={setDensity} view={view} />
 
@@ -550,7 +547,7 @@ export function LibraryBrowser(
             id='library-sort'
             value={sort}
             onChange={(event) => setSort(event.target.value as SortValue)}
-            className='rp-focus rp-select h-[calc(2.25rem*var(--rp-density-ctl,1))] rounded-[var(--rp-radius-input)] border border-line bg-surface px-3 text-sm text-ink'
+            className='rp-focus rp-select min-h-[calc(2.25rem*var(--rp-density-ctl,1))] rounded-[var(--rp-radius-input)] border bg-surface px-3 text-sm text-ink'
           >
             {SORT_VALUES.map((value) => (
               <option key={value} value={value}>
@@ -569,10 +566,10 @@ export function LibraryBrowser(
           {showFilterRail
             ? (
               <span className='lg:hidden'>
-                <button
-                  type='button'
+                <Button
+                  variant='outline'
+                  leadingIcon={SlidersHorizontal}
                   onClick={() => setFiltersOpen((open) => !open)}
-                  className='rp-btn rp-btn-outline'
                   aria-expanded={filtersOpen}
                 >
                   {ui('Filters')}
@@ -580,7 +577,7 @@ export function LibraryBrowser(
                       0
                     ? ` (${selectedTopics.length + selectedKinds.length + selectedFormats.length})`
                     : ''}
-                </button>
+                </Button>
               </span>
             )
             : null}
@@ -602,7 +599,7 @@ export function LibraryBrowser(
                 title={ui('Remove this filter')}
               >
                 {kindLabel(kind)}
-                <span aria-hidden='true'>×</span>
+                <X size='sm' />
               </button>
             ))}
           </div>
@@ -628,13 +625,13 @@ export function LibraryBrowser(
                   <p className='rp-eyebrow text-ink-3'>{ui('Topics')}</p>
                   {selectedTopics.length > 0
                     ? (
-                      <button
-                        type='button'
+                      <Button
+                        variant='ghost'
+                        size='sm'
                         onClick={() => setSelectedTopics([])}
-                        className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                       >
                         {ui('Clear')}
-                      </button>
+                      </Button>
                     )
                     : null}
                 </div>
@@ -646,7 +643,7 @@ export function LibraryBrowser(
                     return (
                       <label
                         key={topic.id}
-                        className={`flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm ${
+                        className={`rp-check w-full px-1 py-1 text-sm ${
                           muted ? 'text-ink-3' : 'text-ink-2'
                         }`}
                       >
@@ -654,8 +651,7 @@ export function LibraryBrowser(
                           type='checkbox'
                           checked={checked}
                           onChange={() => toggleTopic(topic.id)}
-                          className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
-                          style={{ accentColor: 'var(--rp-accent)' }}
+                          className='shrink-0 rounded-[var(--rp-radius-input)]'
                         />
                         <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
                           {topic.label}
@@ -691,13 +687,13 @@ export function LibraryBrowser(
                         <p className='rp-eyebrow text-ink-3'>{ui('Kind')}</p>
                         {selectedKinds.length > 0
                           ? (
-                            <button
-                              type='button'
+                            <Button
+                              variant='ghost'
+                              size='sm'
                               onClick={() => setSelectedKinds([])}
-                              className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                             >
                               {ui('Clear')}
-                            </button>
+                            </Button>
                           )
                           : null}
                       </div>
@@ -708,7 +704,7 @@ export function LibraryBrowser(
                           return (
                             <label
                               key={id}
-                              className={`flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm ${
+                              className={`rp-check w-full px-1 py-1 text-sm ${
                                 count === 0 && !checked ? 'text-ink-3' : 'text-ink-2'
                               }`}
                             >
@@ -716,8 +712,7 @@ export function LibraryBrowser(
                                 type='checkbox'
                                 checked={checked}
                                 onChange={() => toggleKind(id)}
-                                className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
-                                style={{ accentColor: 'var(--rp-accent)' }}
+                                className='shrink-0 rounded-[var(--rp-radius-input)]'
                               />
                               <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
                                 {kindLabel(id)}
@@ -739,16 +734,16 @@ export function LibraryBrowser(
                         <p className='rp-eyebrow text-ink-3'>{ui('Format')}</p>
                         {selectedFormats.length > 0
                           ? (
-                            <button
-                              type='button'
+                            <Button
+                              variant='ghost'
+                              size='sm'
                               onClick={() => {
                                 setFormatTouched(true)
                                 setSelectedFormats([])
                               }}
-                              className='inline-flex min-h-6 items-center text-xs font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
                             >
                               {ui('Clear')}
-                            </button>
+                            </Button>
                           )
                           : null}
                       </div>
@@ -758,14 +753,13 @@ export function LibraryBrowser(
                           return (
                             <label
                               key={format.id}
-                              className='flex cursor-pointer items-start gap-2.5 rounded-[var(--rp-radius-btn)] px-1 py-1 text-sm text-ink-2'
+                              className='rp-check w-full px-1 py-1 text-sm text-ink-2'
                             >
                               <input
                                 type='checkbox'
                                 checked={checked}
                                 onChange={() => toggleFormat(format.id)}
-                                className='mt-[2px] h-4 w-4 shrink-0 rounded-[var(--rp-radius-input)] border-line'
-                                style={{ accentColor: 'var(--rp-accent)' }}
+                                className='shrink-0 rounded-[var(--rp-radius-input)]'
                               />
                               <span className='min-w-0 flex-1 [overflow-wrap:anywhere]'>
                                 {ui(format.label)}
@@ -832,7 +826,6 @@ export function LibraryBrowser(
                   {accumulated.map((item) => (
                     <LibraryCard
                       view={view}
-                      compact={compact}
                       key={item.id}
                       item={item}
                       slug={config.slug}
@@ -846,14 +839,13 @@ export function LibraryBrowser(
                 {hasMore
                   ? (
                     <div className='mt-6 flex justify-center'>
-                      <button
-                        type='button'
+                      <Button
+                        variant='outline'
                         onClick={() => setPage((prev) => prev + 1)}
                         disabled={isFetching}
-                        className='rp-btn rp-btn-outline'
                       >
                         {isFetching ? ui('Loading…') : ui('Load more')}
-                      </button>
+                      </Button>
                     </div>
                   )
                   : null}

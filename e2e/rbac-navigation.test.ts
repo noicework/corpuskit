@@ -23,12 +23,12 @@ async function captureBoundary(page: Page, directory: string, name: string, widt
 }
 
 async function openAccount(page: Page, menu: boolean) {
-  await page.waitForSelector('button[title="My account"]')
+  await page.waitForSelector('button[aria-label="My account"]')
   await page.evaluate(() =>
-    document.querySelector<HTMLButtonElement>('button[title="My account"]')!.focus()
+    document.querySelector<HTMLButtonElement>('button[aria-label="My account"]')!.focus()
   )
   await page.keyboard.press(menu ? 'ArrowDown' : 'Enter')
-  await page.waitForSelector(menu ? '[role=menu]' : '[role=dialog]')
+  await page.waitForSelector(menu ? '[role=menu]' : 'dialog[open]')
 }
 
 Deno.test('navigation and direct generation links use permissions for every role', async () => {
@@ -120,7 +120,7 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
     server.tenants.patchBranding('grains', { productName: 'Grains private catalogue' })
     const page = await browser.newPage(`${server.url}/t/marine/library`)
     try {
-      await click(page, 'button[title="Switch portal"]')
+      await click(page, 'button[aria-label^="Switch portal - currently "]')
       await page.waitForSelector('[role=menu] button[role=menuitem]')
       expect(await page.evaluate(() => document.querySelector('[role=menu]')!.textContent))
         .toContain('Grains private catalogue')
@@ -133,9 +133,9 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
       )
       await page.waitForSelector('a[href="/t/grains/library"]')
       await openAccount(page, false)
-      expect(await page.evaluate(() => document.querySelector('[role=dialog]')!.textContent))
+      expect(await page.evaluate(() => document.querySelector('dialog[open]')!.textContent))
         .toContain('Viewer')
-      expect(await page.evaluate(() => document.querySelector('[role=dialog]')!.textContent)).not
+      expect(await page.evaluate(() => document.querySelector('dialog[open]')!.textContent)).not
         .toContain('Portal administrator')
       await page.keyboard.press('Escape')
       await page.evaluate(() => {
@@ -143,7 +143,7 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
         dispatchEvent(new PopStateEvent('popstate'))
       })
       await page.waitForSelector('a[href="/t/marine/library"]')
-      await click(page, 'button[title="Switch portal"]')
+      await click(page, 'button[aria-label^="Switch portal - currently "]')
       // Let the open switcher finish its status probes under the current identity
       // before the identity changes; a probe still in flight at the flip would be
       // evaluated as the new identity and recorded as a denial.
@@ -158,7 +158,7 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
         'Grains private catalogue',
       )
       delayed.release()
-      await click(page, 'button[title="Switch portal"]')
+      await click(page, 'button[aria-label^="Switch portal - currently "]')
       await page.waitForSelector('[role=menu] button[role=menuitem]')
       expect(await page.evaluate(() => document.querySelector('[role=menu]')!.textContent)).not
         .toContain('Grains private catalogue')
@@ -193,7 +193,7 @@ Deno.test('navigation commands and switcher remain readable in both token scheme
           if (width === 390) await click(page, 'button[aria-label="Open menu"]')
           await captureBoundary(page, '.planning/logs/04-04-03', `nav-${scheme}-${width}`, width)
           if (width === 390) await page.keyboard.press('Escape')
-          await click(page, 'button[title="Switch portal"]')
+          await click(page, 'button[aria-label^="Switch portal - currently "]')
           await captureBoundary(
             page,
             '.planning/logs/04-04-03',
@@ -259,9 +259,9 @@ Deno.test('signed accounts display selected roles and preserve profile keyboard 
             'Profile',
           )
           await page.keyboard.press('Enter')
-          await page.waitForSelector('[role=dialog]')
+          await page.waitForSelector('dialog[open]')
         }
-        const text = await page.evaluate(() => document.querySelector('[role=dialog]')!.textContent)
+        const text = await page.evaluate(() => document.querySelector('dialog[open]')!.textContent)
         expect(text).toContain(role === 'viewer' ? 'Viewer' : 'Portal administrator')
         expect(text).toContain(
           role === 'viewer' || role === 'portal-admin' ? 'Local assignment' : 'Entra app role',
@@ -281,7 +281,7 @@ Deno.test('signed accounts display selected roles and preserve profile keyboard 
           'Close',
         )
         await page.keyboard.press('Escape')
-        expect(await page.evaluate(() => document.querySelector('[role=dialog]'))).toBe(null)
+        expect(await page.evaluate(() => document.querySelector('dialog'))).toBe(null)
       } finally {
         await page.close()
       }
@@ -342,11 +342,11 @@ Deno.test('account profile follows tenant tokens at wide and real mobile viewpor
         try {
           await page.setViewportSize({ width, height: 960 })
           await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }])
-          await page.waitForSelector('button[title="My account"]')
+          await page.waitForSelector('button[aria-label="My account"]')
           if (width === 390) {
             await (await page.waitForSelector('button[aria-label="Open menu"]')).click()
-            await page.waitForSelector('#mobile-nav-sheet button[title="My account"]')
-            await (await page.waitForSelector('#mobile-nav-sheet button[title="My account"]'))
+            await page.waitForSelector('#mobile-nav-sheet button[aria-label="My account"]')
+            await (await page.waitForSelector('#mobile-nav-sheet button[aria-label="My account"]'))
               .click()
           } else await openAccount(page, true)
           await page.waitForSelector('[role=menu]')
@@ -358,7 +358,7 @@ Deno.test('account profile follows tenant tokens at wide and real mobile viewpor
           )
           await page.keyboard.press('End')
           await page.keyboard.press('Enter')
-          await page.waitForSelector('[role=dialog]')
+          await page.waitForSelector('dialog[open]')
           await captureBoundary(
             page,
             '.planning/logs/04-04-02',
@@ -366,7 +366,7 @@ Deno.test('account profile follows tenant tokens at wide and real mobile viewpor
             width,
           )
           const tokens = await page.evaluate(() => {
-            const el = document.querySelector<HTMLElement>('[role=dialog]')!
+            const el = document.querySelector<HTMLElement>('dialog[open]')!
             const style = getComputedStyle(el)
             return {
               radius: style.borderRadius,

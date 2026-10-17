@@ -6,6 +6,8 @@ import { useLocation } from 'react-router-dom'
 import { type PortalRole } from '@research-portal/core'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
+import { Button, SectionHeader } from '../../components/ui.tsx'
+import { AlertCircle, Copy, Plus, RotateCw, Trash, X } from '../../components/icons.tsx'
 import {
   createKey,
   KeyError,
@@ -184,14 +186,27 @@ function KeyManager({ slug }: { slug: string }) {
     <section
       aria-labelledby='access-keys'
       data-keys-panel
-      className='mt-8 min-w-0 border-t border-line pt-6'
+      className='rp-card min-w-0 p-5 lg:p-6'
     >
-      <h3 id='access-keys' tabIndex={-1} className='rp-display scroll-mt-24 text-xl'>
-        {ui('Keys')}
-      </h3>
-      <p className='mt-2 text-base text-ink-2'>
-        {ui('Connect a tool to this portal. Keys cannot manage portal access or settings.')}
-      </p>
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={<span id='access-keys' tabIndex={-1} className='scroll-mt-24'>{ui('Keys')}</span>}
+        description={ui(
+          'Connect a tool to this portal. Keys cannot manage portal access or settings.',
+        )}
+        headingLevel={3}
+        actions={
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={RotateCw}
+            disabled={busy || rows.isFetching}
+            onClick={() => void refreshList()}
+          >
+            {ui('Refresh key list')}
+          </Button>
+        }
+      />
       <form onSubmit={(event) => void create(event)} data-key-form className='mt-4 min-w-0'>
         <fieldset
           disabled={busy || uncertain || !!issued}
@@ -218,11 +233,11 @@ function KeyManager({ slug }: { slug: string }) {
               data-key-role
               aria-describedby={error ? `${id}-error` : undefined}
               aria-invalid={!!error && !uncertain}
-              className='rp-input mt-2 w-full'
+              className='rp-input rp-select mt-2 w-full'
               value={role}
               onChange={(e) => setRole(e.target.value as PortalRole)}
             >
-              {roles.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+              {roles.map((r) => <option key={r} value={r}>{ui(roleLabel(r))}</option>)}
             </select>
           </label>
           <label className='block min-w-0 text-sm' htmlFor={`${id}-expiry`}>
@@ -238,13 +253,14 @@ function KeyManager({ slug }: { slug: string }) {
               onChange={(e) => setExpiry(e.target.value)}
             />
           </label>
-          <button
+          <Button
             type='submit'
-            className='rp-btn rp-btn-primary min-h-[44px] justify-self-start'
+            className='justify-self-start'
+            leadingIcon={Plus}
             disabled={!roles.includes(role)}
           >
             {busy ? ui('Creating key...') : ui('Create key')}
-          </button>
+          </Button>
         </fieldset>
       </form>
       <p className='mt-3 text-sm text-ink-2'>
@@ -256,16 +272,22 @@ function KeyManager({ slug }: { slug: string }) {
           id={`${id}-error`}
           tabIndex={-1}
           role='alert'
-          className='mt-4 text-sm text-[var(--rp-bad-ink)]'
+          className='mt-4 flex items-start gap-2 text-xs text-[var(--rp-bad-ink)]'
         >
-          {localError(error, keyUnconfirmed)}
+          <AlertCircle size='sm' className='shrink-0' />
+          <span>{localError(error, keyUnconfirmed)}</span>
         </p>
       )}
       {notice && <p role='status' className='mt-4 text-sm'>{ui(notice)}</p>}
       {rows.isPending
         ? <p role='status' className='mt-4'>{ui('Loading keys...')}</p>
         : rows.isError
-        ? <p role='alert' className='mt-4'>{ui('Could not load keys. Try again.')}</p>
+        ? (
+          <p role='alert' className='mt-4 flex items-start gap-2 text-xs text-[var(--rp-bad-ink)]'>
+            <AlertCircle size='sm' className='shrink-0' />
+            <span>{ui('Could not load keys. Try again.')}</span>
+          </p>
+        )
         : rows.data?.length === 0
         ? (
           <div className='mt-6'>
@@ -295,7 +317,17 @@ function KeyManager({ slug }: { slug: string }) {
                   {row.effectiveRole && row.effectiveRole !== row.role && (
                     <p className='mt-2'>{ui("The creator's current access limits this key.")}</p>
                   )}
-                  <p className='mt-2'>{ui(keyExplanation(row))}</p>
+                  <p className='mt-2'>
+                    <span
+                      className={row.inactiveReason === 'active'
+                        ? 'rp-badge rp-badge-ok'
+                        : row.inactiveReason === 'revoked'
+                        ? 'rp-badge rp-badge-quiet'
+                        : undefined}
+                    >
+                      {ui(keyExplanation(row))}
+                    </span>
+                  </p>
                   {row.legacy && <p className='mt-2'>{ui('legacy, viewer, cannot be upgraded')}</p>}
                   <p className='mt-2 text-ink-2'>
                     {ui('Created ')}
@@ -312,9 +344,11 @@ function KeyManager({ slug }: { slug: string }) {
                   </p>
                 </div>
                 {!row.revokedAt && (
-                  <button
-                    type='button'
-                    className='rp-btn rp-btn-outline min-h-[44px] self-start'
+                  <Button
+                    variant='danger'
+                    size='sm'
+                    leadingIcon={Trash}
+                    className='self-start'
                     disabled={busy || uncertain}
                     onClick={() => {
                       setRevoke(row)
@@ -322,20 +356,12 @@ function KeyManager({ slug }: { slug: string }) {
                     }}
                   >
                     {ui('Revoke key')}
-                  </button>
+                  </Button>
                 )}
               </li>
             ))}
           </ul>
         )}
-      <button
-        type='button'
-        className='rp-btn rp-btn-outline mt-4 min-h-[44px]'
-        disabled={busy || rows.isFetching}
-        onClick={() => void refreshList()}
-      >
-        {ui('Refresh key list')}
-      </button>
       {revoke && (
         <ConfirmActionDialog
           title={ui('Revoke key')}
@@ -410,7 +436,7 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
       ref={dialog}
       aria-labelledby={`${id}-title`}
       data-one-time-key
-      className='rp-card fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-xl overflow-y-auto bg-surface p-6 text-ink shadow-xl backdrop:bg-[color-mix(in_srgb,var(--rp-ink)_45%,transparent)]'
+      className='rp-dialog'
       onCancel={(event) => {
         event.preventDefault()
         onClose()
@@ -427,7 +453,7 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
         }
       }}
     >
-      <h2 id={`${id}-title`} className='rp-display text-xl'>{ui('Copy your key')}</h2>
+      <h2 id={`${id}-title`} className='text-lg font-semibold'>{ui('Copy your key')}</h2>
       <p className='mt-4 text-base'>
         {ui('This key is shown once. Copy it to your secure credential store before closing.')}
       </p>
@@ -442,22 +468,22 @@ function OneTimeKey({ value, onClose }: { value: string; onClose(): void }) {
         value={value}
       />
       <p role='status' className='mt-3 text-sm'>{ui(status)}</p>
-      <div className='mt-6 flex flex-wrap gap-3'>
+      <div className='mt-6 flex flex-wrap justify-end gap-2'>
         <button
           type='button'
           ref={close}
-          className='rp-btn rp-btn-outline min-h-[44px]'
+          className='rp-btn rp-btn-outline'
           onClick={onClose}
         >
+          <X size='sm' />
           {ui('Close key')}
         </button>
-        <button
-          type='button'
-          className='rp-btn rp-btn-primary min-h-[44px]'
+        <Button
+          leadingIcon={Copy}
           onClick={() => void copy()}
         >
           {ui('Copy key')}
-        </button>
+        </Button>
       </div>
     </dialog>,
     document.body,

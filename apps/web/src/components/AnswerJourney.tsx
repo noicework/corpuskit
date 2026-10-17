@@ -1,10 +1,12 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import type { AskEvent, ResourceType, ScoredResource } from '@research-portal/core'
 import { streamAsk } from '../api/client.ts'
 import { ResourceThumb } from './ResourceThumb.tsx'
+import { ArrowRight, ChevronLeft, ChevronRight, RotateCcw, Sparkles, X } from './icons.tsx'
+import { Button, IconButton } from './ui.tsx'
 
 /** At most eight stops - past that the walk stops feeling like a story. */
 const MAX_STOPS = 8
@@ -31,9 +33,9 @@ type RelationState = 'streaming' | 'done' | 'error'
 
 /** Confidence bands - the same three colours everywhere a score is shown. */
 function scoreColour(score: number): string {
-  if (score >= 0.7) return '#34d399'
-  if (score >= 0.4) return '#fbbf24'
-  return '#fb7185'
+  if (score >= 0.7) return 'var(--rp-ok-ink)'
+  if (score >= 0.4) return 'var(--rp-warn-ink)'
+  return 'var(--rp-bad-ink)'
 }
 
 function scoreWord(score: number): string {
@@ -70,20 +72,9 @@ function SparkleMark() {
   return (
     <span
       aria-hidden='true'
-      className='flex h-12 w-12 items-center justify-center rounded-[var(--rp-radius)] bg-white/10 ring-1 ring-inset ring-white/15'
+      className='inline-flex h-12 w-12 items-center justify-center rounded-[var(--rp-radius)] border border-line bg-surface-2 text-[var(--rp-brand-fg)]'
     >
-      <svg
-        viewBox='0 0 24 24'
-        fill='none'
-        stroke='currentColor'
-        strokeWidth='1.5'
-        strokeLinecap='round'
-        strokeLinejoin='round'
-        className='h-6 w-6 text-white'
-      >
-        <path d='M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z' />
-        <path d='M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z' />
-      </svg>
+      <Sparkles size='lg' />
     </span>
   )
 }
@@ -121,7 +112,7 @@ function ConfidenceRing({
 
   return (
     <div
-      className={`relative shrink-0 ${className}`}
+      className={`relative shrink-0 rounded-full bg-surface ${className}`}
       role='img'
       aria-label={ui('{value1} - {percent} per cent confidence', {
         value1: ui(scoreWord(score)),
@@ -129,13 +120,13 @@ function ConfidenceRing({
       })}
     >
       <svg viewBox='0 0 96 96' className='h-full w-full -rotate-90'>
-        <circle cx='48' cy='48' r={radius} fill='rgba(10, 10, 12, 0.5)' />
+        <circle cx='48' cy='48' r={radius} fill='var(--rp-surface)' />
         <circle
           cx='48'
           cy='48'
           r={radius}
           fill='none'
-          stroke='rgba(255, 255, 255, 0.16)'
+          stroke='var(--rp-line-2)'
           strokeWidth='6'
         />
         <circle
@@ -156,59 +147,11 @@ function ConfidenceRing({
         />
       </svg>
       <span className='absolute inset-0 flex items-center justify-center'>
-        <span className='text-sm font-semibold tabular-nums text-white sm:text-base'>
+        <span className='text-sm font-semibold tabular-nums text-ink sm:text-base'>
           {percent}%
         </span>
       </span>
     </div>
-  )
-}
-
-function IconButton({
-  label,
-  onClick,
-  disabled,
-  children,
-}: {
-  label: string
-  onClick: () => void
-  disabled?: boolean
-  children: ReactNode
-}) {
-  return (
-    <button
-      type='button'
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      className='rp-focus-inverse flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-white/70 ring-1 ring-inset ring-white/15 transition-colors duration-150 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent sm:h-9 sm:w-9'
-    >
-      {children}
-    </button>
-  )
-}
-
-function ChevronLeft() {
-  return (
-    <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
-      <path
-        fillRule='evenodd'
-        d='M12.79 5.23a.75.75 0 01-.02 1.06L8.83 10l3.94 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z'
-        clipRule='evenodd'
-      />
-    </svg>
-  )
-}
-
-function ChevronRight() {
-  return (
-    <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
-      <path
-        fillRule='evenodd'
-        d='M7.21 5.23a.75.75 0 011.06-.02l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.04-1.08L11.17 10 7.23 6.29a.75.75 0 01-.02-1.06z'
-        clipRule='evenodd'
-      />
-    </svg>
   )
 }
 
@@ -317,8 +260,18 @@ export function AnswerJourney({
   // Move focus into the dialog so keyboard users land in the right place.
   useEffect(() => {
     if (!open) return
+    const opener = document.activeElement as HTMLElement | null
     cardRef.current?.focus()
+    return () => {
+      if (opener && document.contains(opener)) opener.focus()
+    }
   }, [open])
+
+  // Autoplay can replace the focused source action as it moves to the next stop.
+  useEffect(() => {
+    const card = cardRef.current
+    if (open && card && !card.contains(document.activeElement)) card.focus()
+  }, [open, index])
 
   // Keyboard, captured so a focused control never sees the same key twice.
   useEffect(() => {
@@ -329,6 +282,32 @@ export function AnswerJourney({
         event.preventDefault()
         event.stopPropagation()
         onClose()
+        return
+      }
+
+      if (event.key === 'Tab') {
+        const card = cardRef.current
+        const controls = [
+          ...(card?.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+          ) ?? []),
+        ]
+        const first = controls[0]
+        const last = controls[controls.length - 1]
+        if (first && last) {
+          if (!card?.contains(document.activeElement)) {
+            event.preventDefault()
+            ;(event.shiftKey ? last : first).focus()
+          } else if (
+            event.shiftKey && (document.activeElement === first || document.activeElement === card)
+          ) {
+            event.preventDefault()
+            last.focus()
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault()
+            first.focus()
+          }
+        }
         return
       }
 
@@ -480,7 +459,7 @@ export function AnswerJourney({
     ? ui('The trail')
     : ui('Source {index} of {total}', { index: index + 1, total })
 
-  const accent = current ? scoreColour(current.score) : 'rgba(255, 255, 255, 0.5)'
+  const accent = current ? scoreColour(current.score) : 'var(--rp-accent-fg)'
   const relationText = relations[index] ?? ''
   const relationStatus = relationState[index]
 
@@ -491,7 +470,7 @@ export function AnswerJourney({
 
   return createPortal(
     <div
-      className='rp-anim-fade fixed inset-0 z-[70] flex items-center justify-center bg-neutral-950/85 backdrop-blur-sm sm:p-6'
+      className='rp-anim-fade rp-scrim fixed inset-0 z-[80] flex items-center justify-center backdrop-blur-sm sm:p-6'
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -502,50 +481,25 @@ export function AnswerJourney({
         aria-modal='true'
         aria-label={ui('Journey through the context')}
         tabIndex={-1}
-        className='rp-shadow-xl fixed inset-2 flex flex-col overflow-hidden rounded-[var(--rp-radius)] bg-neutral-900 text-white ring-1 ring-white/10 focus:outline-none sm:static sm:max-h-[88vh] sm:w-full sm:max-w-3xl'
+        className='rp-card rp-shadow-xl rp-focus fixed inset-2 flex flex-col overflow-hidden text-ink sm:static sm:max-h-[88vh] sm:w-full sm:max-w-3xl'
       >
         {/* Top bar */}
-        <div className='flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-5'>
-          <p className='rp-eyebrow min-w-0 truncate text-white/50'>{phaseLabel}</p>
+        <div className='flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5'>
+          <p className='rp-eyebrow min-w-0 truncate text-ink-3'>{phaseLabel}</p>
           <div className='flex shrink-0 items-center gap-2'>
             {total > 0
               ? (
-                <button
-                  type='button'
+                <Button
+                  variant='ghost'
+                  size='sm'
                   onClick={() => setPlaying((prev) => !prev)}
                   aria-pressed={playing}
-                  className='rp-focus-inverse inline-flex min-h-11 items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-3 py-1.5 text-xs font-medium text-white/70 ring-1 ring-inset ring-white/15 transition-colors duration-150 hover:bg-white/10 hover:text-white sm:min-h-0'
                 >
-                  {playing
-                    ? (
-                      <svg
-                        viewBox='0 0 20 20'
-                        fill='currentColor'
-                        aria-hidden='true'
-                        className='h-3.5 w-3.5'
-                      >
-                        <path d='M6 4.5h2.5v11H6zM11.5 4.5H14v11h-2.5z' />
-                      </svg>
-                    )
-                    : (
-                      <svg
-                        viewBox='0 0 20 20'
-                        fill='currentColor'
-                        aria-hidden='true'
-                        className='h-3.5 w-3.5'
-                      >
-                        <path d='M6.5 4.3l9 5.7-9 5.7z' />
-                      </svg>
-                    )}
                   {playing ? ui('Pause') : ui('Play')}
-                </button>
+                </Button>
               )
               : null}
-            <IconButton label={ui('Close the journey')} onClick={onClose}>
-              <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className='h-4 w-4'>
-                <path d='M5.3 4.3l4.7 4.7 4.7-4.7 1 1L11 10l4.7 4.7-1 1L10 11l-4.7 4.7-1-1L9 10 4.3 5.3z' />
-              </svg>
-            </IconButton>
+            <IconButton label={ui('Close the journey')} icon={X} onClick={onClose} />
           </div>
         </div>
 
@@ -555,19 +509,18 @@ export function AnswerJourney({
             ? (
               <div className='px-6 py-16 text-center'>
                 <SparkleMark />
-                <h2 className='rp-display mt-5 text-2xl text-white'>{ui('Nothing to walk yet')}</h2>
-                <p className='mx-auto mt-3 max-w-sm text-sm leading-relaxed text-white/60'>
+                <h2 className='rp-display mt-5 text-2xl text-ink'>{ui('Nothing to walk yet')}</h2>
+                <p className='mx-auto mt-3 max-w-sm text-sm leading-relaxed text-ink-3'>
                   {ui(
                     'This answer did not come back with any retrieved sources, so there is no trail to follow.',
                   )}
                 </p>
-                <button
-                  type='button'
+                <Button
                   onClick={onClose}
-                  className='rp-focus-inverse mt-6 inline-flex items-center rounded-[var(--rp-radius-btn)] bg-white px-5 py-2 text-sm font-semibold text-neutral-900 transition-colors duration-150 hover:bg-white/90'
+                  className='mt-6'
                 >
                   {ui('Close')}
-                </button>
+                </Button>
               </div>
             )
             : index === -1
@@ -576,10 +529,10 @@ export function AnswerJourney({
                 <div className='flex justify-center'>
                   <SparkleMark />
                 </div>
-                <h2 className='rp-display mt-5 text-2xl text-white sm:text-3xl'>
+                <h2 className='rp-display mt-5 text-2xl text-ink sm:text-3xl'>
                   {ui('How this answer was built')}
                 </h2>
-                <p className='mx-auto mt-3 max-w-md text-sm leading-relaxed text-white/60'>
+                <p className='mx-auto mt-3 max-w-md text-sm leading-relaxed text-ink-3'>
                   {ui(
                     total === 1
                       ? 'We grounded your answer in {count} source. Let’s walk them - strongest match first - and ask each one how it relates.'
@@ -589,19 +542,18 @@ export function AnswerJourney({
                 </p>
                 {query
                   ? (
-                    <p className='mx-auto mt-6 max-w-lg rounded-[var(--rp-radius)] bg-white/[0.06] px-5 py-3 text-sm italic leading-relaxed text-white/80 ring-1 ring-inset ring-white/10'>
+                    <p className='mx-auto mt-6 max-w-lg rounded-[var(--rp-radius)] bg-surface-2 px-5 py-3 text-sm italic leading-relaxed text-ink-2 ring-1 ring-inset ring-line'>
                       &ldquo;{query}&rdquo;
                     </p>
                   )
                   : null}
-                <button
-                  type='button'
+                <Button
                   onClick={() => goTo(0)}
-                  className='rp-focus-inverse mt-8 inline-flex items-center gap-2 rounded-[var(--rp-radius-btn)] bg-white px-5 py-2.5 text-sm font-semibold text-neutral-900 transition-transform duration-150 hover:-translate-y-px'
+                  trailingIcon={ArrowRight}
+                  className='mt-8'
                 >
                   {ui('Begin the journey')}
-                  <ChevronRight />
-                </button>
+                </Button>
               </div>
             )
             : index >= total
@@ -609,10 +561,10 @@ export function AnswerJourney({
               <div key='outro' className='rp-anim-rise px-5 py-8 sm:px-6'>
                 <div className='text-center'>
                   <SparkleMark />
-                  <h2 className='rp-display mt-4 text-2xl text-white sm:text-3xl'>
+                  <h2 className='rp-display mt-4 text-2xl text-ink sm:text-3xl'>
                     {ui('That’s the trail')}
                   </h2>
-                  <p className='mx-auto mt-2 max-w-md text-sm leading-relaxed text-white/60'>
+                  <p className='mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-3'>
                     {ui(
                       'Every source behind the answer, ranked by how strongly it matched. Open any of them to read it in full.',
                     )}
@@ -625,24 +577,24 @@ export function AnswerJourney({
                       <Link
                         to={libraryHref(stop)}
                         onClick={onClose}
-                        className='rp-focus-inverse flex items-center gap-3 rounded-[var(--rp-radius-btn)] px-3 py-3 ring-1 ring-inset ring-white/10 transition-colors duration-150 hover:bg-white/[0.06]'
+                        className='rp-focus flex items-center gap-3 rounded-[var(--rp-radius-btn)] px-3 py-3 ring-1 ring-inset ring-line transition-colors duration-150 hover:bg-surface-2'
                       >
-                        <span className='w-5 shrink-0 text-center text-xs font-semibold tabular-nums text-white/40'>
+                        <span className='w-5 shrink-0 text-center text-xs font-semibold tabular-nums text-ink-3'>
                           {stopIndex + 1}
                         </span>
-                        <span className='block h-10 w-14 shrink-0 overflow-hidden rounded-[var(--rp-radius)] bg-white/10'>
+                        <span className='block h-10 w-14 shrink-0 overflow-hidden rounded-[var(--rp-radius)] bg-surface-2'>
                           <ResourceThumb slug={slug} id={stop.resourceId} type={stop.type} />
                         </span>
                         <span className='min-w-0 flex-1'>
-                          <span className='rp-clamp-2 block text-sm font-medium leading-snug text-white'>
+                          <span className='rp-clamp-2 block text-sm font-medium leading-snug text-ink'>
                             {stop.title}
                           </span>
                           {stop.cited
                             ? (
-                              <span className='mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300'>
+                              <span className='mt-1 inline-flex items-center gap-1 text-2xs font-medium text-[var(--rp-ok-ink)]'>
                                 <span
                                   aria-hidden='true'
-                                  className='h-1.5 w-1.5 rounded-full bg-emerald-400'
+                                  className='h-1.5 w-1.5 rounded-full bg-[var(--rp-ok-ink)]'
                                 />
                                 {ui('Cited in the answer')}
                               </span>
@@ -656,7 +608,7 @@ export function AnswerJourney({
                           >
                             {Math.round(stop.score * 100)}%
                           </span>
-                          <span className='block text-[11px] text-white/40'>
+                          <span className='block text-2xs text-ink-3'>
                             {ui('confidence')}
                           </span>
                         </span>
@@ -666,75 +618,54 @@ export function AnswerJourney({
                 </ol>
 
                 <div className='mt-7 flex flex-wrap items-center justify-center gap-3'>
-                  <button
-                    type='button'
+                  <Button
+                    variant='outline'
+                    leadingIcon={RotateCcw}
                     onClick={() => {
                       setPlaying(!reducedMotion)
                       goTo(-1)
                     }}
-                    className='rp-focus-inverse inline-flex items-center gap-2 rounded-[var(--rp-radius-btn)] px-4 py-2 text-sm font-medium text-white/80 ring-1 ring-inset ring-white/15 transition-colors duration-150 hover:bg-white/10 hover:text-white'
                   >
-                    <svg
-                      viewBox='0 0 20 20'
-                      fill='none'
-                      stroke='currentColor'
-                      strokeWidth='1.6'
-                      strokeLinecap='round'
-                      aria-hidden='true'
-                      className='h-4 w-4'
-                    >
-                      <path d='M4 10a6 6 0 106-6' />
-                      <path d='M4 5.5V10h4.5' />
-                    </svg>
                     {ui('Replay')}
-                  </button>
-                  <button
-                    type='button'
-                    onClick={onClose}
-                    className='rp-focus-inverse inline-flex items-center rounded-[var(--rp-radius-btn)] bg-white px-5 py-2 text-sm font-semibold text-neutral-900 transition-colors duration-150 hover:bg-white/90'
-                  >
+                  </Button>
+                  <Button onClick={onClose}>
                     {ui('Done')}
-                  </button>
+                  </Button>
                 </div>
               </div>
             )
             : current
             ? (
               <div key={`stop-${index}`} className='rp-anim-fade'>
-                {/* Hero band */}
-                <div className='relative h-36 w-full overflow-hidden bg-neutral-800 sm:h-52'>
-                  <ResourceThumb
-                    slug={slug}
-                    id={current.resourceId}
-                    type={current.type}
-                    className={reducedMotion ? '' : 'rp-anim-kenburns'}
-                  />
-                  <div className='absolute inset-0 bg-gradient-to-t from-neutral-900 via-neutral-900/45 to-neutral-900/10' />
-
-                  {current.cited
-                    ? (
-                      <span className='absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-[var(--rp-radius-chip)] bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-200 ring-1 ring-inset ring-emerald-400/30 backdrop-blur-sm'>
-                        <span
-                          aria-hidden='true'
-                          className='h-1.5 w-1.5 rounded-full bg-emerald-400'
-                        />
-                        {ui('Cited in the answer')}
-                      </span>
-                    )
-                    : null}
-
-                  <div className='absolute inset-x-0 bottom-0 flex items-end gap-3 p-4 sm:p-5'>
+                {/* Artwork and identity use separate blocks so the title can grow. */}
+                <div className='bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'>
+                  <div className='relative h-36 w-full overflow-hidden bg-surface-2 sm:h-52'>
+                    <ResourceThumb
+                      slug={slug}
+                      id={current.resourceId}
+                      type={current.type}
+                      className={reducedMotion ? '' : 'rp-anim-kenburns'}
+                    />
+                    {current.cited
+                      ? (
+                        <span className='rp-badge rp-badge-ok absolute right-3 top-3'>
+                          {ui('Cited in the answer')}
+                        </span>
+                      )
+                      : null}
+                  </div>
+                  <div className='flex items-end gap-3 p-4 sm:p-5'>
                     <div className='min-w-0 flex-1'>
-                      <h2 className='rp-display rp-display-bold rp-clamp-2 text-lg text-white sm:text-2xl'>
+                      <h2 className='rp-display rp-display-bold break-words text-lg sm:text-2xl'>
                         {current.title}
                       </h2>
                       {current.labels.length > 0
                         ? (
-                          <div className='rp-no-scrollbar mt-2 flex gap-1.5 overflow-x-auto'>
+                          <div className='mt-2 flex flex-wrap gap-1.5'>
                             {current.labels.slice(0, 4).map((label) => (
                               <span
                                 key={label}
-                                className='shrink-0 rounded-[var(--rp-radius-chip)] bg-white/10 px-2.5 py-0.5 text-[11px] font-medium capitalize text-white/75 ring-1 ring-inset ring-white/15 backdrop-blur-sm'
+                                className='max-w-full break-words rounded-[var(--rp-radius-chip)] border border-[color-mix(in_srgb,var(--rp-on-primary)_25%,transparent)] px-2.5 py-0.5 text-2xs font-medium capitalize text-[var(--rp-on-primary-2)]'
                               >
                                 {labelText(label)}
                               </span>
@@ -755,18 +686,18 @@ export function AnswerJourney({
                 {/* Stop body */}
                 <div className='space-y-6 px-5 py-5 sm:px-6 sm:py-6'>
                   <section>
-                    <p className='rp-eyebrow text-white/40'>{ui('What we found here')}</p>
+                    <p className='rp-eyebrow text-ink-3'>{ui('What we found here')}</p>
                     {current.quote
                       ? (
                         <blockquote
-                          className='break-words rp-clamp-4 mt-2 border-l-2 pl-4 text-sm leading-relaxed text-white/80'
+                          className='break-words rp-clamp-4 mt-2 border-l-2 pl-4 text-sm leading-relaxed text-ink-2'
                           style={{ borderColor: accent }}
                         >
                           &ldquo;{current.quote}&rdquo;
                         </blockquote>
                       )
                       : (
-                        <p className='mt-2 text-sm leading-relaxed text-white/45'>
+                        <p className='mt-2 text-sm leading-relaxed text-ink-3'>
                           {ui(
                             'This source matched the question overall, but the retrieval step did not single out one passage.',
                           )}
@@ -775,20 +706,20 @@ export function AnswerJourney({
                   </section>
 
                   <section>
-                    <p className='rp-eyebrow text-white/40'>
+                    <p className='rp-eyebrow text-ink-3'>
                       {query
                         ? ui('How this relates to your question')
                         : ui('What this source contributes')}
                     </p>
                     {relationText
                       ? (
-                        <p className='rp-prose mt-2 text-sm text-white/85'>
+                        <p className='rp-prose rp-measure mt-2 text-sm text-ink-2'>
                           {relationText}
                           {relationStatus === 'streaming'
                             ? (
                               <span
                                 aria-hidden='true'
-                                className='ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-white/60 align-text-bottom'
+                                className='ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-[var(--rp-accent-fg)] align-text-bottom'
                               />
                             )
                             : null}
@@ -796,17 +727,17 @@ export function AnswerJourney({
                       )
                       : relationStatus === 'error'
                       ? (
-                        <p className='mt-2 text-sm leading-relaxed text-white/45'>
+                        <p className='mt-2 text-sm leading-relaxed text-ink-3'>
                           {ui(
                             'We could not reach the answer service for this source. The passage above is still what matched.',
                           )}
                         </p>
                       )
                       : (
-                        <p className='mt-2 flex items-center gap-2 text-sm text-white/45'>
+                        <p className='mt-2 flex items-center gap-2 text-sm text-ink-3'>
                           <span
                             aria-hidden='true'
-                            className='h-3.5 w-3.5 animate-spin rounded-full border border-white/20 border-t-white/70'
+                            className='h-3.5 w-3.5 animate-spin rounded-full border border-line border-t-[var(--rp-accent-fg)]'
                           />
                           {ui('Asking this source…')}
                         </p>
@@ -816,10 +747,10 @@ export function AnswerJourney({
                   <Link
                     to={libraryHref(current)}
                     onClick={onClose}
-                    className='rp-focus-inverse inline-flex items-center gap-1.5 rounded-[var(--rp-radius-btn)] px-3.5 py-1.5 text-xs font-semibold text-white/80 ring-1 ring-inset ring-white/15 transition-colors duration-150 hover:bg-white/10 hover:text-white'
+                    className='rp-link-standalone gap-1.5 text-xs font-semibold text-[var(--rp-accent-fg)]'
                   >
                     {ui('View in library')}
-                    <ChevronRight />
+                    <ArrowRight size='sm' />
                   </Link>
                 </div>
               </div>
@@ -830,8 +761,8 @@ export function AnswerJourney({
         {/* Footer: dwell bar, chevrons, dot rail */}
         {total > 0
           ? (
-            <div className='shrink-0 border-t border-white/10 px-4 py-3 sm:px-5'>
-              <div className='h-[3px] w-full overflow-hidden rounded-full bg-white/10'>
+            <div className='shrink-0 border-t border-line px-4 py-3 sm:px-5'>
+              <div className='h-[3px] w-full overflow-hidden rounded-full bg-surface-2'>
                 {dwellArmed && dwellDuration > 0
                   ? (
                     <div
@@ -848,7 +779,7 @@ export function AnswerJourney({
                   ? (
                     // Waiting on this source's relation answer before the dwell starts.
                     <div
-                      className='h-full w-1/4 animate-pulse rounded-full bg-white/25'
+                      className='h-full w-1/4 animate-pulse rounded-full bg-surface-3'
                       aria-hidden='true'
                     />
                   )
@@ -858,14 +789,13 @@ export function AnswerJourney({
               <div className='mt-3 flex items-center justify-between gap-3'>
                 <IconButton
                   label={ui('Previous source')}
+                  icon={ChevronLeft}
                   onClick={() => goTo(index - 1)}
                   disabled={index <= -1}
-                >
-                  <ChevronLeft />
-                </IconButton>
+                />
 
                 <div
-                  className='rp-no-scrollbar flex min-w-0 items-center justify-center gap-1.5 overflow-x-auto px-1'
+                  className='rp-no-scrollbar flex min-w-0 items-center gap-1.5 overflow-x-auto px-1'
                   role='group'
                   aria-label={ui('Sources in this journey')}
                 >
@@ -881,11 +811,17 @@ export function AnswerJourney({
                           value2: stop.title,
                         })}
                         onClick={() => goTo(stopIndex)}
-                        className='rp-focus-inverse group flex shrink-0 items-center rounded-full p-2'
+                        title={ui('Source {value1}: {value2}', {
+                          value1: stopIndex + 1,
+                          value2: stop.title,
+                        })}
+                        className='rp-btn rp-btn-ghost rp-icon-btn group shrink-0'
                       >
                         <span
                           className={`h-1.5 rounded-full transition-all duration-300 ${
-                            active ? 'w-6' : 'w-1.5 bg-white/25 group-hover:bg-white/50'
+                            active
+                              ? 'w-6'
+                              : 'w-1.5 bg-[var(--rp-ink-3)] group-hover:bg-[var(--rp-ink-2)]'
                           }`}
                           style={active ? { backgroundColor: scoreColour(stop.score) } : undefined}
                         />
@@ -896,11 +832,10 @@ export function AnswerJourney({
 
                 <IconButton
                   label={ui('Next source')}
+                  icon={ChevronRight}
                   onClick={() => goTo(index + 1)}
                   disabled={index >= total}
-                >
-                  <ChevronRight />
-                </IconButton>
+                />
               </div>
             </div>
           )

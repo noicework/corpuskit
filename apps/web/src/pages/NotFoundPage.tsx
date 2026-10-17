@@ -3,6 +3,7 @@ import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 import { Link, useParams } from 'react-router-dom'
 import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect } from 'react'
+import { ArrowLeft } from '../components/icons.tsx'
 
 // ---------------------------------------------------------------------------
 // Not-found pages - the catch-all for any route the app does not recognise.
@@ -31,19 +32,20 @@ export function NotFoundPage() {
   ]
 
   return (
-    <main className='mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center px-4 py-16 text-center'>
+    <main className='rp-shell flex min-h-[60vh] flex-col items-center justify-center py-8 text-center lg:py-10'>
       <p className='rp-eyebrow text-ink-3'>{ui('Error 404')}</p>
-      <h1 className='mt-3 font-display text-2xl text-ink sm:text-3xl'>{ui('Page not found')}</h1>
-      <p className='mt-3 text-sm leading-relaxed text-ink-2'>
+      <h1 className='rp-display mt-3 text-2xl text-ink sm:text-3xl'>{ui('Page not found')}</h1>
+      <p className='rp-measure mt-3 text-sm leading-relaxed text-ink-2'>
         {ui(
           'We could not find that page in this portal. It may have moved, or the link you followed may be out of date.',
         )}
       </p>
       <Link to={base} className='rp-btn rp-btn-primary mt-6'>
+        <ArrowLeft size='sm' />
         {ui('Back to Explore')}
       </Link>
-      <div className='mt-8 w-full border-t border-line pt-5'>
-        <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
+      <div className='rp-measure mt-6 w-full border-t border-line pt-5 lg:mt-8'>
+        <p className='rp-eyebrow text-ink-3'>
           {ui('Or jump to')}
         </p>
         <div className='mt-3 flex flex-wrap justify-center gap-2'>
@@ -72,16 +74,17 @@ export function RootNotFound() {
       style={tenantThemeVars(platformBranding, scheme)}
       data-platform-scheme={scheme}
     >
-      <div className='rp-card max-w-md p-6 text-center'>
+      <div className='rp-card w-full max-w-xl p-5 text-center lg:p-6'>
         <div className='mb-6 flex justify-center'>
           <AppLanguageSwitch />
         </div>
         <p className='rp-eyebrow text-ink-3'>{ui('Error 404')}</p>
-        <h1 className='mt-3 font-display text-xl text-ink'>{ui('Page not found')}</h1>
-        <p className='mt-2 text-sm text-ink-2'>
+        <h1 className='rp-display mt-3 text-2xl text-ink sm:text-3xl'>{ui('Page not found')}</h1>
+        <p className='rp-measure mt-2 text-sm leading-relaxed text-ink-2'>
           {ui('We could not find that page. It may have moved, or the link may be out of date.')}
         </p>
-        <Link to='/' className='rp-btn rp-btn-primary mt-4'>
+        <Link to='/' className='rp-btn rp-btn-primary mt-6'>
+          <ArrowLeft size='sm' />
           {ui('Back to portals')}
         </Link>
       </div>

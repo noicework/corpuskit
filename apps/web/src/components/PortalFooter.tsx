@@ -1,8 +1,13 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { Branding, PortalLayout } from '@research-portal/core'
-import { ExternalMark, LayoutAnchor } from './LayoutLink.tsx'
+import { LayoutAnchor } from './LayoutLink.tsx'
 
 type LayoutFooterContent = NonNullable<PortalLayout['footer']>
+
+const footerLinkTargets =
+  'min-h-[2.75rem] min-w-[2.75rem] lg:min-h-[1.5rem] lg:min-w-[1.5rem] [@media(pointer:coarse)]:min-h-[2.75rem] [@media(pointer:coarse)]:min-w-[2.75rem]'
+const creditLinkClassName =
+  `rp-focus-inverse inline-flex max-w-full items-center rounded-[var(--rp-radius-btn)] py-1.5 text-[var(--rp-on-primary-2)] underline-offset-[0.2em] [overflow-wrap:anywhere] hover:underline ${footerLinkTargets}`
 
 /**
  * The portal footer, on the brand surface. A portal whose layout sets a footer gets the fuller
@@ -30,14 +35,14 @@ export function PortalFooter({ branding, slug }: { branding: Branding; slug: str
 function SlimFooter({ branding }: { branding: Branding }) {
   const year = new Date().getFullYear()
   return (
-    <footer className='bg-[var(--rp-primary)]'>
+    <footer className='bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'>
       <div className='rp-shell flex flex-col gap-3 py-8 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8'>
-        <p className='min-w-0 text-sm text-[var(--rp-on-primary)]'>
+        <p className='min-w-0 text-xs text-[var(--rp-on-primary-2)]'>
           &copy; {year} {branding.organisation}
         </p>
         <div className='min-w-0 sm:text-right'>
-          <p className='text-sm text-[var(--rp-on-primary)]/80'>{branding.productName}</p>
-          <p className='mt-1 text-xs leading-relaxed text-[var(--rp-on-primary)]/65'>
+          <p className='rp-display break-words text-2xl'>{branding.productName}</p>
+          <p className='mt-1 text-sm leading-relaxed text-[var(--rp-on-primary-2)]'>
             {branding.tagline}
           </p>
         </div>
@@ -58,7 +63,12 @@ function LayoutFooter(
   const { ui } = usePortalLocale()
   const year = new Date().getFullYear()
   const columns = footer.columns ?? []
-  const credits = footer.credits ?? []
+  const credits = [
+    ...(footer.credits ?? []),
+    ...(footer.poweredBy
+      ? [{ label: ui('Powered by CorpusKit'), href: 'https://corpuskit.org' }]
+      : []),
+  ]
   return (
     <footer className='bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'>
       <div className='rp-shell py-12 sm:py-14 lg:py-16'>
@@ -69,7 +79,7 @@ function LayoutFooter(
         >
           <div className='min-w-0 max-w-md'>
             <p className='rp-display break-words text-2xl'>{branding.productName}</p>
-            <p className='mt-3 text-sm leading-relaxed text-[var(--rp-on-primary)]/75'>
+            <p className='mt-3 text-sm leading-relaxed text-[var(--rp-on-primary-2)]'>
               {branding.tagline}
             </p>
           </div>
@@ -81,14 +91,14 @@ function LayoutFooter(
               >
                 {columns.map((column, index) => (
                   <div key={`${index}-${column.heading}`} className='min-w-0'>
-                    <h2 className='rp-eyebrow text-[var(--rp-on-primary)]/75'>{column.heading}</h2>
+                    <h2 className='rp-eyebrow text-[var(--rp-on-primary-2)]'>{column.heading}</h2>
                     <ul className='mt-3 space-y-0.5 text-[0.9375rem]'>
                       {column.links.map((link, linkIndex) => (
                         <li key={`${linkIndex}-${link.href}`}>
                           <LayoutAnchor
                             href={link.href}
                             slug={slug}
-                            className='rp-layout-footer-link rp-focus-inverse'
+                            className={`rp-layout-footer-link rp-focus-inverse ${footerLinkTargets}`}
                           >
                             {link.label}
                           </LayoutAnchor>
@@ -101,38 +111,33 @@ function LayoutFooter(
             )
             : null}
         </div>
-        <div className='mt-12 flex flex-col gap-3 border-t border-[var(--rp-on-primary)]/15 pt-6 text-xs leading-relaxed text-[var(--rp-on-primary)]/80 md:flex-row md:items-baseline md:gap-8'>
-          <p className='min-w-0 shrink-0'>&copy; {year} {branding.organisation}</p>
-          {footer.note ? <p className='min-w-0 flex-1'>{footer.note}</p> : null}
-          {credits.length || footer.poweredBy
+        <div className='mt-12 flex flex-col gap-3 border-t border-[var(--rp-on-primary)]/15 pt-6 text-xs leading-relaxed text-[var(--rp-on-primary-2)] md:flex-row md:flex-wrap md:items-baseline md:gap-8'>
+          <p className='min-w-0'>&copy; {year} {branding.organisation}</p>
+          {footer.note ? <p className='min-w-0 max-w-prose md:flex-1'>{footer.note}</p> : null}
+          {credits.length
             ? (
-              <div className='flex min-w-0 shrink-0 flex-wrap gap-x-6 gap-y-3 md:ml-auto'>
+              <ul
+                role='list'
+                className='flex min-w-0 max-w-full flex-col items-start gap-x-2 gap-y-1 md:ml-auto md:shrink-0 md:flex-row md:flex-nowrap md:items-baseline'
+              >
                 {credits.map((credit, index) => (
-                  <p key={`${index}-${credit.href}`} className='min-w-0'>
+                  <li
+                    key={`${index}-${credit.href}`}
+                    className='inline-flex min-w-0 max-w-full items-baseline gap-2'
+                  >
+                    {index > 0
+                      ? <span aria-hidden='true' className='hidden shrink-0 md:inline'>·</span>
+                      : null}
                     <LayoutAnchor
                       href={credit.href}
                       slug={slug}
-                      className='rp-layout-footer-link rp-focus-inverse'
+                      className={creditLinkClassName}
                     >
                       {credit.label}
                     </LayoutAnchor>
-                  </p>
+                  </li>
                 ))}
-                {footer.poweredBy
-                  ? (
-                    <p className='min-w-0'>
-                      <a
-                        href='https://corpuskit.org'
-                        rel='noopener'
-                        className='rp-layout-footer-link rp-focus-inverse'
-                      >
-                        {ui('Powered by CorpusKit')}
-                        <ExternalMark />
-                      </a>
-                    </p>
-                  )
-                  : null}
-              </div>
+              </ul>
             )
             : null}
         </div>

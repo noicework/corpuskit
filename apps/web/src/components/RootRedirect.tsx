@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { ArrowRight } from './icons.tsx'
 
 /**
  * The runtime serves the dedicated marketing document at `/`. This redirect is
@@ -12,8 +13,11 @@ export function RootRedirect() {
   }, [])
 
   return (
-    <main className='min-h-screen bg-[#f2efe7] p-8 text-[#1c1c19]'>
-      <a href='/home.html'>{ui('Open the CorpusKit homepage')}</a>
+    <main className='min-h-screen bg-app p-8 text-ink'>
+      <a className='rp-link-standalone' href='/home.html'>
+        {ui('Open the CorpusKit homepage')}
+        <ArrowRight size='sm' />
+      </a>
     </main>
   )
 }

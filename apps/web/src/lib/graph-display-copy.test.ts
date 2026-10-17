@@ -14,10 +14,21 @@ Deno.test('graph display aliases translate only exact finite category and predic
     Material: '材料',
     'Research topic': '研究テーマ',
   }
-  const relations = { examines: '検討する', 'uses material': '材料として使用する' }
+  const relations = {
+    studies: ['studies', '研究する'],
+    affects: ['affects', '影響を与える'],
+    'conducted-in': ['conducted in', '実施場所'],
+    'funded-by': ['funded by', '資金提供元'],
+    'collaborates-with': ['collaborates with', '共同研究先'],
+    infects: ['infects', '感染する'],
+    'located-in': ['located in', '所在する'],
+    assesses: ['assesses', '評価する'],
+    examines: ['examines', '検討する'],
+    'uses material': ['uses material', '材料として使用する'],
+  } as const
   expect(missingPortalMessages([
     ...Object.keys(groups),
-    ...Object.keys(relations),
+    ...Object.values(relations).map(([english]) => english),
     'Show all {count} entities',
     'Show all {count} categories',
   ])).toEqual([])
@@ -25,9 +36,9 @@ Deno.test('graph display aliases translate only exact finite category and predic
     expect(graphGroupLabel(original, ja)).toBe(translated)
     expect(graphGroupLabel(original)).toBe(original)
   }
-  for (const [original, translated] of Object.entries(relations)) {
+  for (const [original, [english, translated]] of Object.entries(relations)) {
     expect(graphRelationLabel(original, ja)).toBe(translated)
-    expect(graphRelationLabel(original)).toBe(original)
+    expect(graphRelationLabel(original)).toBe(english)
   }
   expect(graphGroupLabel('', ja)).toBe(ja('Entity'))
   expect(graphRelationLabel('', ja)).toBe(ja('related to'))
@@ -61,6 +72,11 @@ Deno.test('unknown graph copy keeps catalog-key authored values, case, whitespac
       'examines ',
       ' uses material',
       'uses material {count}',
+      'Located-in',
+      ' located-in',
+      'located-in ',
+      'located-in {name}',
+      'custom-authored-relation',
       '__proto__',
       'constructor',
       'toString',

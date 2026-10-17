@@ -18,8 +18,9 @@ import {
   importEnrichmentArchive,
   readEnrichmentArchive,
 } from '../../api/enrichment-import.ts'
-import { ErrorCard, Skeleton } from '../../components/ui.tsx'
+import { Button, ErrorCard, SectionHeader, Skeleton } from '../../components/ui.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
+import { ChevronDown, Download, Eye, RotateCw, Sparkles, Upload } from '../../components/icons.tsx'
 import { errorMessage, type Message } from './shared.ts'
 import { failedJobMessage, StreamedJob } from './streamed-job.ts'
 
@@ -49,10 +50,10 @@ function SchemaFields({ agent }: { agent: EnrichmentAgent }) {
         >
           <div className='flex flex-wrap items-center gap-2'>
             <span className='text-sm font-semibold text-ink'>{field.label}</span>
-            <code className='rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-ink-3'>
+            <code className='rounded-[var(--rp-radius-chip)] bg-surface-2 px-1.5 py-0.5 text-2xs text-ink-3'>
               {field.key}
             </code>
-            <span className='rp-badge rp-badge-quiet'>
+            <span className='rp-tag'>
               {ui(KIND_LABEL[field.kind] ?? field.kind)}
             </span>
           </div>
@@ -77,15 +78,16 @@ function Coverage({ done, total }: { done: number; total: number }) {
         </span>
       </div>
       <div
-        className='mt-1.5 h-2 overflow-hidden rounded-full bg-surface-2'
+        className='mt-1.5 h-2 overflow-hidden rounded-full border border-line bg-paper'
         role='progressbar'
+        aria-label={ui('Coverage')}
         aria-valuenow={pct}
         aria-valuemin={0}
         aria-valuemax={100}
       >
         <div
-          className='h-full rounded-full transition-[width] duration-500'
-          style={{ width: `${pct}%`, background: 'var(--rp-accent)' }}
+          className='h-full rounded-full transition-[width] duration-150 motion-reduce:transition-none'
+          style={{ width: `${pct}%`, background: 'var(--rp-control)' }}
         />
       </div>
     </div>
@@ -208,44 +210,45 @@ function AgentCard(
   }
 
   return (
-    <div className='rp-card p-5'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div className='min-w-0'>
-          <div className='flex flex-wrap items-center gap-2'>
-            <h3 className='rp-display text-lg text-ink'>{agent.title}</h3>
-            {agent.isDefault
-              ? <span className='rp-badge rp-badge-quiet'>{ui('Default')}</span>
-              : null}
-            <span className='rp-badge rp-badge-quiet'>
-              {agent.scope === 'resource' ? ui('Resource level') : ui('Paragraph level')}
-            </span>
-            <span className='rp-badge rp-badge-quiet'>
-              {agent.cardinality === 'single' ? ui('One per resource') : ui('Multiple')}
-            </span>
-          </div>
-          <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
-            {agent.description}
-          </p>
-        </div>
+    <div className='rp-card p-5 lg:p-6'>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={agent.title}
+        description={agent.description}
+      />
+      <div className='mt-3 flex flex-wrap items-center gap-2'>
+        {agent.isDefault ? <span className='rp-badge rp-badge-quiet'>{ui('Default')}</span> : null}
+        <span className='rp-tag'>
+          {agent.scope === 'resource' ? ui('Resource level') : ui('Paragraph level')}
+        </span>
+        <span className='rp-tag'>
+          {agent.cardinality === 'single' ? ui('One per resource') : ui('Multiple')}
+        </span>
       </div>
 
       <Coverage done={status.enrichedCount} total={status.totalCount} />
 
       <div className='mt-5'>
-        <div className='flex items-center justify-between'>
-          <p className='rp-eyebrow text-ink-3'>{ui('JSON schema')}</p>
-          <button
-            type='button'
-            onClick={() => setShowSchema((v) => !v)}
-            className='rp-focus rounded-[var(--rp-radius-btn)] text-xs font-medium text-ink-3 hover:text-ink'
-          >
-            {showSchema ? ui('Hide raw schema') : ui('Show raw schema')}
-          </button>
-        </div>
+        <SectionHeader
+          className='rp-manage-section-head'
+          headingLevel={3}
+          title={ui('JSON schema')}
+          actions={
+            <Button
+              variant='ghost'
+              size='sm'
+              aria-expanded={showSchema}
+              onClick={() => setShowSchema((value) => !value)}
+            >
+              <ChevronDown size='sm' className={showSchema ? 'rotate-180' : ''} />
+              {showSchema ? ui('Hide raw schema') : ui('Show raw schema')}
+            </Button>
+          }
+        />
         <SchemaFields agent={agent} />
         {showSchema
           ? (
-            <pre className='mt-3 overflow-x-auto rounded-[calc(var(--rp-radius))] border border-line bg-surface-2 p-3 text-[11px] leading-relaxed text-ink-2'>
+            <pre className='mt-3 overflow-x-auto rounded-[calc(var(--rp-radius))] border border-line bg-surface-2 p-3 text-2xs leading-relaxed text-ink-2'>
               {JSON.stringify(status.jsonSchema, null, 2)}
             </pre>
           )
@@ -258,7 +261,7 @@ function AgentCard(
 
       <div className='mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4'>
         <div
-          className='flex overflow-hidden rounded-[var(--rp-radius)] border border-line'
+          className='rp-seg max-w-full flex-wrap'
           role='group'
           aria-label={ui('Run scope')}
         >
@@ -270,29 +273,24 @@ function AgentCard(
               onClick={() => setScope(value)}
               data-enrichment-scope={value}
               aria-pressed={scope === value}
-              className={`px-3 py-1.5 text-sm font-medium transition-colors ${
-                scope === value
-                  ? 'bg-[var(--rp-accent)] text-[var(--rp-on-accent)]'
-                  : 'bg-surface text-ink-2 hover:text-ink'
-              }`}
+              className='rp-seg-item rp-btn-sm whitespace-normal'
             >
               {value === 'missing' ? ui('Missing only') : ui('Regenerate all')}
             </button>
           ))}
         </div>
-        <button
-          type='button'
+        <Button
+          leadingIcon={scope === 'missing' ? Sparkles : RotateCw}
           disabled={running}
           data-enrichment-run
           onClick={() => void run()}
-          className='rp-btn rp-btn-primary'
         >
           {running
             ? ui('Running…')
             : scope === 'missing'
             ? ui('Generate missing')
             : ui('Regenerate all')}
-        </button>
+        </Button>
         {running && progress
           ? (
             <span className='text-sm tabular-nums text-ink-3'>
@@ -314,12 +312,19 @@ function AgentCard(
       )}
       {running && progress && progress.total > 0
         ? (
-          <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2'>
+          <div
+            className='mt-3 h-1.5 overflow-hidden rounded-full border border-line bg-paper'
+            role='progressbar'
+            aria-label={ui('Enrichment progress')}
+            aria-valuemin={0}
+            aria-valuemax={progress.total}
+            aria-valuenow={progress.done}
+          >
             <div
-              className='h-full rounded-full transition-[width] duration-300'
+              className='h-full rounded-full transition-[width] duration-150 motion-reduce:transition-none'
               style={{
                 width: `${Math.round((progress.done / progress.total) * 100)}%`,
-                background: 'var(--rp-accent)',
+                background: 'var(--rp-control)',
               }}
             />
           </div>
@@ -443,34 +448,36 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
   }
   return (
     <section
-      className='rp-card space-y-4 p-5'
+      className='rp-card space-y-4 p-5 lg:p-6'
       aria-labelledby={`${id}-heading`}
       data-enrichments-import
     >
-      <div>
-        <h2 id={`${id}-heading`} className='rp-display text-xl text-ink'>
-          {ui('Import enrichment archive')}
-        </h2>
-        <p id={`${id}-help`} className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
-          {ui(
-            'Restore reviewed titles, summaries and other enrichments from an exported JSON archive. Existing records stay unchanged. Maximum file size: 8 MB.',
-          )}
-        </p>
-      </div>
+      <SectionHeader
+        className='rp-manage-section-head'
+        title={<span id={`${id}-heading`}>{ui('Import enrichment archive')}</span>}
+        description={
+          <span id={`${id}-help`}>
+            {ui(
+              'Restore reviewed titles, summaries and other enrichments from an exported JSON archive. Existing records stay unchanged. Maximum file size: 8 MB.',
+            )}
+          </span>
+        }
+      />
       <div className='space-y-2'>
         <p className='text-sm font-medium text-ink'>{ui('Archive file')}</p>
-        <button
-          type='button'
-          className='rp-btn rp-btn-outline'
+        <Button
+          variant='outline'
+          leadingIcon={Upload}
           disabled={busy !== null}
           onClick={() => fileInput.current?.click()}
         >
           {ui('Choose archive file')}
-        </button>
+        </Button>
         <input
           ref={fileInput}
           id={`${id}-file`}
           type='file'
+          hidden
           tabIndex={-1}
           accept='.json,application/json'
           className='sr-only'
@@ -489,15 +496,15 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
           {file?.name ?? ui('No file selected')}
         </p>
       </div>
-      <button
-        type='button'
-        className='rp-btn rp-btn-outline'
+      <Button
+        variant='outline'
+        leadingIcon={Eye}
         disabled={!file || busy !== null}
         data-enrichments-import-review
         onClick={() => void reviewFile()}
       >
         {busy === 'review' ? ui('Reviewing…') : ui('Review archive')}
-      </button>
+      </Button>
       {review
         ? (
           <div
@@ -514,15 +521,14 @@ export function EnrichmentArchiveImport({ slug, access, assertCurrent, onImporte
                 slug,
               })}
             </p>
-            <button
-              type='button'
-              className='rp-btn rp-btn-primary'
+            <Button
+              leadingIcon={Upload}
               disabled={busy !== null}
               data-enrichments-import-confirm
               onClick={() => void confirmImport()}
             >
               {busy === 'import' ? ui('Importing…') : ui('Import reviewed archive')}
-            </button>
+            </Button>
           </div>
         )
         : null}
@@ -622,24 +628,39 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
   }
 
   return (
-    <div className='space-y-4'>
-      <button
-        type='button'
-        data-enrichments-read
-        className='rp-btn rp-btn-outline'
-        onClick={() => void load()}
-      >
-        {ui('Load enrichment schemas')}
-      </button>
-      {message && <MessagePanel message={message} />}
-      <button
-        type='button'
-        data-enrichments-export
-        className='rp-btn rp-btn-outline'
-        onClick={() => void exportArchive()}
-      >
-        {ui('Export enrichment archive')}
-      </button>
+    <div className='space-y-6 lg:space-y-8'>
+      <div className='rp-card p-5 lg:p-6'>
+        <SectionHeader
+          className='rp-manage-section-head'
+          title={ui('Enrichments')}
+          description={ui(
+            'Enrichments are schema-driven generator agents that read each resource and write a real title, summary, key takeaways and quotes, so the library never shows a raw filename. The app renders whatever fields a schema defines, so new fields flow through everywhere. Run the default agent below to merchandise the corpus.',
+          )}
+          actions={
+            <>
+              <Button
+                variant='ghost'
+                size='sm'
+                leadingIcon={RotateCw}
+                data-enrichments-read
+                onClick={() => void load()}
+              >
+                {ui('Load enrichment schemas')}
+              </Button>
+              <Button
+                variant='ghost'
+                size='sm'
+                leadingIcon={Download}
+                data-enrichments-export
+                onClick={() => void exportArchive()}
+              >
+                {ui('Export enrichment archive')}
+              </Button>
+            </>
+          }
+        />
+        {message && <MessagePanel message={message} className='mt-4' />}
+      </div>
       {sessionAllowed
         ? (
           <EnrichmentArchiveImport
@@ -655,15 +676,6 @@ function EnrichmentsPanelContent({ slug }: { slug: string }) {
           />
         )
         : null}
-      <div className='rp-card p-5'>
-        <h2 className='rp-display text-xl text-ink'>{ui('Enrichments')}</h2>
-        <p className='mt-1.5 max-w-[70ch] text-sm leading-relaxed text-ink-2'>
-          {ui(
-            'Enrichments are schema-driven generator agents that read each resource and write a real title, summary, key takeaways and quotes, so the library never shows a raw filename. The app renders whatever fields a schema defines, so new fields flow through everywhere. Run the default agent below to merchandise the corpus.',
-          )}
-        </p>
-      </div>
-
       {isLoading
         ? (
           <div className='rp-card space-y-3 p-5'>

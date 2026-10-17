@@ -203,6 +203,78 @@ function easeInOut(t: number): number {
 /** Screen-space label box, pooled per frame so placement allocates nothing. */
 type LabelBox = { x1: number; y1: number; x2: number; y2: number }
 
+type CaptionMark = { sx: number; sy: number; screenR: number; opacity: number; ok: boolean }
+
+/** A caption stays inside its plate and clear of both text and visible marks. */
+export function findMapCaptionBox(
+  width: number,
+  height: number,
+  anchor: { x: number; y: number; r: number },
+  plate: LabelBox,
+  occupied: readonly LabelBox[],
+  marks: readonly CaptionMark[],
+  markCount = marks.length,
+): LabelBox | null {
+  const half = width / 2 + 4
+  if (half * 2 > plate.x2 - plate.x1 || height > plate.y2 - plate.y1) return null
+  const clampX = (x: number) => Math.max(plate.x1 + half, Math.min(plate.x2 - half, x))
+  const gap = 6
+  // Above and below preserve the association with the mark. Side positions
+  // and another row give crowded neighbouring categories room to separate.
+  const positions = [
+    [anchor.x, anchor.y - anchor.r - gap - height],
+    [anchor.x, anchor.y + anchor.r + gap],
+    [anchor.x - anchor.r - gap - half, anchor.y - height / 2],
+    [anchor.x + anchor.r + gap + half, anchor.y - height / 2],
+    [anchor.x, anchor.y - anchor.r - gap * 2 - height * 2],
+    [anchor.x, anchor.y + anchor.r + gap * 2 + height],
+  ]
+  for (const position of positions) {
+    const x = clampX(position[0] ?? anchor.x)
+    const y1 = position[1] ?? anchor.y
+    const box = { x1: x - half, y1, x2: x + half, y2: y1 + height }
+    if (box.y1 < plate.y1 || box.y2 > plate.y2) continue
+    if (occupied.some((p) => box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1)) {
+      continue
+    }
+    let coversMark = false
+    for (let index = 0; index < markCount; index++) {
+      const mark = marks[index]
+      if (!mark || !mark.ok || mark.opacity <= 0.2) continue
+      const x = Math.max(box.x1, Math.min(box.x2, mark.sx))
+      const y = Math.max(box.y1, Math.min(box.y2, mark.sy))
+      if (Math.hypot(x - mark.sx, y - mark.sy) < mark.screenR + 3) {
+        coversMark = true
+        break
+      }
+    }
+    if (!coversMark) return box
+  }
+  return null
+}
+
+/** Watch the wrapper that owns the tokens, including a viewer's scheme swap. */
+export function observeMapAppearance(
+  element: HTMLElement,
+  onChange: () => void,
+  Observer: typeof MutationObserver = MutationObserver,
+): MutationObserver {
+  const observer = new Observer(onChange)
+  const tenant = element.closest('.rp-tenant') ?? element
+  const targets = new Set([
+    tenant,
+    element.ownerDocument.body,
+    element.ownerDocument.documentElement,
+  ])
+  for (const target of targets) {
+    observer.observe(target, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-colour-scheme'],
+    })
+  }
+  return observer
+}
+
 type ScreenDisc = {
   ok: boolean
   sx: number
@@ -510,6 +582,8 @@ export class KnowledgeMapEngine {
   private labelFont = ''
   private captionFont = ''
   private captionSpacing = 0
+  private captionH = CAPTION_H
+  private captionHubH = CAPTION_H
 
   private data: EngineData | null = null
   private sim: ForceSim3D | null = null
@@ -553,6 +627,8 @@ export class KnowledgeMapEngine {
   private viewOwnedFlag = false
   private focusOwnedFlag = false
   private fitDist = 420
+  /** A phone first names categories; zooming or opening one releases the overview. */
+  private overviewFold = false
   /** The azimuth the idle sway swings about, and how far through a swing it is. */
   private idleAnchor = -0.5
   private idlePhase = 0
@@ -618,16 +694,16 @@ export class KnowledgeMapEngine {
     // The hover card - one pooled element, filled per node. DOM in the label
     // layer idiom: inert to the pointer, styled by the appearance tokens.
     this.popup = document.createElement('div')
-    this.popup.className = 'rp-map3d-popup'
+    this.popup.className = 'rp-map3d-popup rp-graph-popup'
     this.popup.style.display = 'none'
     this.popupName = document.createElement('div')
-    this.popupName.className = 'rp-map3d-popup-name'
+    this.popupName.className = 'rp-map3d-popup-name rp-graph-popup-name'
     this.popupMeta = document.createElement('div')
-    this.popupMeta.className = 'rp-map3d-popup-meta'
+    this.popupMeta.className = 'rp-map3d-popup-meta rp-graph-popup-meta'
     this.popupCounts = document.createElement('div')
-    this.popupCounts.className = 'rp-map3d-popup-counts'
+    this.popupCounts.className = 'rp-map3d-popup-counts rp-graph-popup-counts'
     this.popupHint = document.createElement('div')
-    this.popupHint.className = 'rp-map3d-popup-hint'
+    this.popupHint.className = 'rp-map3d-popup-hint rp-graph-popup-hint'
     this.popupHint.textContent = this.ui('Click to explore')
     this.popup.append(this.popupName, this.popupMeta, this.popupCounts, this.popupHint)
     labelLayer.appendChild(this.popup)
@@ -685,15 +761,7 @@ export class KnowledgeMapEngine {
 
     // Appearance changes rewrite CSS custom properties on the tenant wrapper
     // and the body; when they do, the resolved WebGL colours must follow.
-    this.paletteObserver = new MutationObserver(() => this.refreshPalette())
-    this.paletteObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-    })
-    this.paletteObserver.observe(document.body, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-    })
+    this.paletteObserver = observeMapAppearance(labelLayer, () => this.refreshPalette())
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize())
     this.resizeObserver.observe(canvas.parentElement ?? canvas)
@@ -720,27 +788,20 @@ export class KnowledgeMapEngine {
       const hub = territory.hub
       if (hub) this.applyHubColour(hub, territory.style.slot)
     }
+    this.measureLabels()
+    if (!this.viewOwnedFlag && this.nodeVisuals.size > 0) this.fit(false)
     this.renderDirty = true
   }
 
   /**
-   * A hub wears its category's hue, ringed in a hairline of the same hue
-   * pushed away from the surface. The `-ink` token is the hue DARKENED to
-   * clear contrast on a light surface, so on a dark tenant palette it sinks
-   * into the ground and the ring disappears; the ring lightens instead there,
-   * the way the hemisphere light already flips off the surface token.
+   * Both category roles resolve on the tenant wrapper, whose scheme supplies
+   * the text-safe ink as well as the mark hue.
    */
   private applyHubColour(hub: HubVisual, slot: number) {
     const cat = this.catColour(slot)
     hub.material.color.copy(cat)
     hub.material.emissive.copy(cat).multiplyScalar(0.16)
-    const surface = this.palette.surface
-    const lightSurface = surface.r * 0.2126 + surface.g * 0.7152 + surface.b * 0.0722 > 0.5
-    hub.ringMaterial.color.copy(
-      lightSurface
-        ? this.palette.inks[slot] ?? cat
-        : cat.clone().lerp(new THREE.Color(0xffffff), 0.45),
-    )
+    hub.ringMaterial.color.copy(this.palette.inks[slot] ?? cat)
   }
 
   private applyPaletteToScene() {
@@ -836,7 +897,7 @@ export class KnowledgeMapEngine {
     // centres furthest apart on screen. A reader who has taken the view
     // keeps it.
     if (!this.viewOwnedFlag && centres.size > 2) {
-      this.view.theta = this.bestTheta(centres)
+      this.view.theta = data.aspect < 1 ? -0.5 : this.bestTheta(centres)
       this.idleAnchor = this.view.theta
       this.idlePhase = 0
     }
@@ -1245,13 +1306,18 @@ export class KnowledgeMapEngine {
       this.measureCtx = document.createElement('canvas').getContext('2d')
     }
     const ctx = this.measureCtx
-    const fontOf = (element: HTMLElement | undefined): { font: string; spacing: number } => {
-      if (!element || typeof getComputedStyle !== 'function') return { font: '', spacing: 0 }
+    const fontOf = (
+      element: HTMLElement | undefined,
+    ): { font: string; spacing: number; height: number } => {
+      if (!element || typeof getComputedStyle !== 'function') {
+        return { font: '', spacing: 0, height: CAPTION_H }
+      }
       const cs = getComputedStyle(element)
       const spacing = parseFloat(cs.letterSpacing)
       return {
         font: `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`,
         spacing: Number.isFinite(spacing) ? spacing : 0,
+        height: Math.ceil(parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5),
       }
     }
     const label = fontOf(this.paintRank[0]?.label)
@@ -1265,6 +1331,8 @@ export class KnowledgeMapEngine {
     this.labelFont = label.font
     this.captionFont = caption.font
     this.captionSpacing = caption.spacing
+    this.captionH = caption.height
+    this.captionHubH = hubCaption.height
     const measure = (text: string, font: string, spacing: number, fallback: number): number => {
       if (!ctx || !font) return text.length * fallback
       ctx.font = font
@@ -1590,7 +1658,10 @@ export class KnowledgeMapEngine {
   // -------------------------------------------------------------------
 
   setInsets(insets: Insets) {
+    const changed = insets.left !== this.insets.left || insets.right !== this.insets.right ||
+      insets.top !== this.insets.top || insets.bottom !== this.insets.bottom
     this.insets = insets
+    if (changed && !this.viewOwnedFlag && this.nodeVisuals.size > 0) this.fit(false)
   }
 
   get viewOwned(): boolean {
@@ -1620,6 +1691,7 @@ export class KnowledgeMapEngine {
    * reader turning a just-opened cluster around must not watch it refold.
    */
   private releaseDives() {
+    this.overviewFold = false
     for (const hub of this.hubs.values()) hub.dived = false
   }
 
@@ -1677,6 +1749,7 @@ export class KnowledgeMapEngine {
     this.focusOwnedFlag = false
     this.releaseDives()
     if (this.nodeVisuals.size === 0) return
+    this.overviewFold = this.freeBox().w < 640 && this.territories.length > 1
     this.updateWorldBounds()
     this.updateCamera()
     const dist = this.fitDistance()
@@ -1795,6 +1868,7 @@ export class KnowledgeMapEngine {
     let plusU = -Infinity
     let minusU = -Infinity
     for (const visual of this.nodeVisuals.values()) {
+      if (this.overviewFold && visual.territory?.hub) continue
       d.set(visual.sim.x, visual.sim.y, visual.sim.z).sub(centre)
       const depth = d.dot(e)
       const pr = d.dot(right)
@@ -1816,19 +1890,39 @@ export class KnowledgeMapEngine {
     // Captions: centred on the cluster, half a caption wide to either side,
     // and a caption tall above the territory's rim (above, where the
     // placement pass puts it first; the nodes already hold the side below).
-    const tall = CAPTION_H + 5 + PLATE_INSET
+    const tall = Math.max(this.captionH, this.captionHubH) + 5 + PLATE_INSET
     const fracV = (tall * k) / tanV
     for (const territory of this.territories) {
       d.copy(territory.centre).sub(centre)
       const depth = d.dot(e)
-      const halfW = Math.max(territory.captionW, territory.captionHubW) / 2 + 4 + PLATE_INSET
+      const overviewR = this.overviewFold && territory.hub ? territory.hub.anchor.r * 1.3 : 0
+      // Folded members occupy one mark, not their expanded territory. A
+      // caption may slide inward at the plate edge, so its entire half-width
+      // must not force every category into a tiny centre strip on a phone.
+      const halfW = overviewR > 0
+        ? PLATE_INSET + 4
+        : Math.max(territory.captionW, territory.captionHubW) / 2 + 4 + PLATE_INSET
       const fracH = (halfW * k) / tanH
       if (fracH < 0.9) {
-        dist = Math.max(dist, (Math.abs(d.dot(right)) / tanH + depth) / (1 - fracH))
+        dist = Math.max(
+          dist,
+          ((Math.abs(d.dot(right)) + overviewR) / tanH + depth) / (1 - fracH),
+        )
       }
-      const top = d.dot(up) + territory.r
+      const rim = overviewR > 0 ? overviewR : territory.r
+      const top = d.dot(up) + rim
       if (fracV < 0.9 && top > 0) {
         dist = Math.max(dist, (top / tanV + depth) / (1 - fracV))
+      }
+      if (overviewR > 0) {
+        dist = Math.max(dist, (-d.dot(up) + overviewR) / tanV + depth)
+        if (measure) {
+          const pr = d.dot(right)
+          const pu = d.dot(up)
+          plusR = Math.max(plusR, pr + overviewR + tanH * depth)
+          minusR = Math.max(minusR, -pr + overviewR + tanH * depth)
+          minusU = Math.max(minusU, -pu + overviewR + tanV * depth)
+        }
       }
     }
     if (measure) {
@@ -1838,12 +1932,14 @@ export class KnowledgeMapEngine {
         const depth = d.dot(e)
         const pr = d.dot(right)
         const pu = d.dot(up)
-        const halfW = (Math.max(territory.captionW, territory.captionHubW) / 2 + 4 + PLATE_INSET) *
-          k * dist
+        const overviewR = this.overviewFold && territory.hub ? territory.hub.anchor.r * 1.3 : 0
+        const halfW = overviewR > 0
+          ? overviewR + (PLATE_INSET + 4) * k * dist
+          : (Math.max(territory.captionW, territory.captionHubW) / 2 + 4 + PLATE_INSET) * k * dist
         const dh = tanH * depth
         if (pr + halfW + dh > plusR) plusR = pr + halfW + dh
         if (-pr + halfW + dh > minusR) minusR = -pr + halfW + dh
-        const top = pu + territory.r + tall * k * dist + tanV * depth
+        const top = pu + (overviewR > 0 ? overviewR : territory.r) + tall * k * dist + tanV * depth
         if (top > plusU) plusU = top
       }
       this.fitMidR = Number.isFinite(plusR) && Number.isFinite(minusR) ? (plusR - minusR) / 2 : 0
@@ -2774,10 +2870,10 @@ export class KnowledgeMapEngine {
       const hub = territory.hub
       if (!hub) continue
       const px = clusterScreenPx(territory.spread, this.height, dist)
-      const want = nextFold(hub.lodTarget === 1 ? 1 : 0, px, {
-        pinned: pinnedGroups !== null && pinnedGroups.has(hub.group),
-        dived: hub.dived,
-      })
+      const pinned = pinnedGroups !== null && pinnedGroups.has(hub.group)
+      const want = this.overviewFold && !pinned && !hub.dived
+        ? 1
+        : nextFold(hub.lodTarget === 1 ? 1 : 0, px, { pinned, dived: hub.dived })
       if (hub.lodStarted < 0) {
         // First evaluation: land in the resolved state without a show.
         hub.lodTarget = want
@@ -2832,6 +2928,7 @@ export class KnowledgeMapEngine {
     const territory = this.territories.find((t) => t.group === group)
     const hub = territory?.hub
     if (!territory || !hub) return
+    this.overviewFold = false
     this.updateCamera()
     // Frame the cluster with room around it: its neighbours stay in view, so
     // the reader keeps their bearings.
@@ -2883,9 +2980,9 @@ export class KnowledgeMapEngine {
   private labelVec = new THREE.Vector3()
 
   /** Claim a screen box unless it collides with one already claimed. */
-  private placeBox(x1: number, y1: number, x2: number, y2: number, force = false): boolean {
+  private placeBox(x1: number, y1: number, x2: number, y2: number, overlay = false): boolean {
     const placed = this.placedLabelBoxes
-    if (!force) {
+    if (!overlay) {
       for (const p of placed) {
         if (x1 < p.x2 && x2 > p.x1 && y1 < p.y2 && y2 > p.y1) return false
       }
@@ -2904,6 +3001,27 @@ export class KnowledgeMapEngine {
     return true
   }
 
+  /** Floating controls and the gesture hint own their actual rendered boxes. */
+  private reserveOverlayBoxes() {
+    const stage = this.canvas.closest('[data-graph-stage]') ?? this.canvas.parentElement
+    if (!stage) return
+    const canvas = this.canvas.getBoundingClientRect()
+    for (const overlay of stage.querySelectorAll('[data-graph-overlay]')) {
+      const rect = overlay.getBoundingClientRect()
+      if (
+        rect.width < 1 || rect.height < 1 || rect.right <= canvas.left ||
+        rect.left >= canvas.right || rect.bottom <= canvas.top || rect.top >= canvas.bottom
+      ) continue
+      this.placeBox(
+        rect.left - canvas.left - 4,
+        rect.top - canvas.top - 4,
+        rect.right - canvas.left + 4,
+        rect.bottom - canvas.top + 4,
+        true,
+      )
+    }
+  }
+
   /** The last successful caption placement - fields, so the pass allocates nothing. */
   private capText = ''
   private capBaseline = 0
@@ -2917,34 +3035,44 @@ export class KnowledgeMapEngine {
    * never drawn cut off, nor under a panel. Sets capText, capX and
    * capBaseline on success.
    */
-  private placeCaption(text: string, w: number, sx: number, sy: number, screenR: number): boolean {
-    const half = w / 2 + 4
-    const plateL = this.insets.left + PLATE_INSET
-    const plateR = this.width - this.insets.right - PLATE_INSET
-    const plateT = this.insets.top + PLATE_INSET
-    const plateB = this.height - this.insets.bottom - PLATE_INSET
-    if (half * 2 > plateR - plateL) return false
-    for (let pass = 0; pass < 2; pass++) {
-      for (let side = 0; side < 2; side++) {
-        const y1 = side === 0 ? sy - screenR - 5 - CAPTION_H : sy + screenR + 5
-        const y2 = y1 + CAPTION_H
-        if (y1 < plateT || y2 > plateB) continue
-        let x1 = sx - half
-        let x2 = sx + half
-        if (x1 < plateL || x2 > plateR) {
-          if (pass === 0) continue
-          const shift = x1 < plateL ? plateL - x1 : plateR - x2
-          x1 += shift
-          x2 += shift
-        }
-        if (!this.placeBox(x1, y1, x2, y2)) continue
-        this.capText = text
-        this.capBaseline = y2
-        this.capX = (x1 + x2) / 2
-        return true
-      }
-    }
-    return false
+  private placeCaption(
+    text: string,
+    w: number,
+    h: number,
+    sx: number,
+    sy: number,
+    screenR: number,
+  ): boolean {
+    return this.placeLabel(text, w, h, sx, sy, screenR)
+  }
+
+  private placeLabel(
+    text: string,
+    w: number,
+    h: number,
+    sx: number,
+    sy: number,
+    screenR: number,
+  ): boolean {
+    const box = findMapCaptionBox(
+      w,
+      h,
+      { x: sx, y: sy, r: screenR },
+      {
+        x1: this.insets.left + PLATE_INSET,
+        y1: this.insets.top + PLATE_INSET,
+        x2: this.width - this.insets.right - PLATE_INSET,
+        y2: this.height - this.insets.bottom - PLATE_INSET,
+      },
+      this.placedLabelBoxes,
+      this.discs,
+      this.discCount,
+    )
+    if (!box || !this.placeBox(box.x1, box.y1, box.x2, box.y2)) return false
+    this.capText = text
+    this.capBaseline = box.y2
+    this.capX = (box.x1 + box.x2) / 2
+    return true
   }
 
   /** Record a mark's screen disc in the pooled list; returns it. */
@@ -2986,6 +3114,7 @@ export class KnowledgeMapEngine {
     const focus = this.emphasis.selectedId ?? this.hoveredId
     const { selectedId, pathFrom } = this.emphasis
     this.placedLabelBoxes.length = 0
+    this.reserveOverlayBoxes()
     this.discCount = 0
 
     // Every node's screen disc first, so a label can be tested against ALL
@@ -3003,7 +3132,6 @@ export class KnowledgeMapEngine {
         halfTan,
       )
     }
-    const nodeDiscs = this.discCount
     for (const hub of this.hubs.values()) {
       if (hub.lod > 0.5) {
         this.pushDisc(
@@ -3015,7 +3143,6 @@ export class KnowledgeMapEngine {
       }
     }
     const discs = this.discs
-    const discCount = this.discCount
 
     const isEmphasised = (id: string) =>
       id === focus || id === this.hoveredId || id === pathFrom ||
@@ -3043,9 +3170,20 @@ export class KnowledgeMapEngine {
         continue
       }
       const { sx, sy, screenR } = disc
-      const half = visual.labelW * (id === selectedId ? 1.2 : 1.1) / 2 + 4
-      this.placeBox(sx - half, sy - screenR - 25, sx + half, sy - screenR - 3, true)
-      show(visual, sx, sy - screenR - 4, 1)
+      if (
+        !this.placeLabel(
+          label.textContent ?? '',
+          visual.labelW * (id === selectedId ? 1.2 : 1.1),
+          22,
+          sx,
+          sy,
+          screenR,
+        )
+      ) {
+        label.style.display = 'none'
+        continue
+      }
+      show(visual, this.capX, this.capBaseline - 2, 1)
       label.setAttribute('data-emphasised', '')
       if (id === selectedId) label.setAttribute('data-selected', '')
       else label.removeAttribute('data-selected')
@@ -3082,6 +3220,7 @@ export class KnowledgeMapEngine {
         !this.placeCaption(
           territory.captionFull,
           isHub ? territory.captionHubW : territory.captionW,
+          isHub ? this.captionHubH : this.captionH,
           sx,
           sy,
           screenR,
@@ -3089,6 +3228,7 @@ export class KnowledgeMapEngine {
         !this.placeCaption(
           territory.captionShort,
           isHub ? territory.captionShortHubW : territory.captionShortW,
+          isHub ? this.captionHubH : this.captionH,
           sx,
           sy,
           screenR,
@@ -3102,14 +3242,9 @@ export class KnowledgeMapEngine {
       caption.style.transform = `translate(-50%, -100%) translate(${this.capX.toFixed(1)}px, ${
         this.capBaseline.toFixed(1)
       }px)`
-      // A folded cluster's caption is its name: it dims with the hub, never
-      // to the whisper an open territory's caption drops to under focus.
-      const opacity = isHub
-        ? 0.95 * (0.35 + 0.65 * (hub ? hub.opacity.current : 1))
-        : focus
-        ? 0.3
-        : 0.9
-      caption.style.opacity = opacity.toFixed(2)
+      // The category ink already carries the scheme's contrast guarantee.
+      // Keep it opaque rather than weakening that guarantee with a fade.
+      caption.style.opacity = '1'
       if (isHub) caption.setAttribute('data-hub', '')
       else caption.removeAttribute('data-hub')
     }
@@ -3139,39 +3274,12 @@ export class KnowledgeMapEngine {
         continue
       }
       const { sx, sy, camDist, screenR } = disc
-      // A name that would be cut by the plate edge, or sit under a panel, is
-      // not drawn at all.
-      const half = visual.labelW / 2 + 4
+      // The complete label box avoids every visible mark, including a
+      // smaller or farther one. Checking just the anchor against nearer
+      // spheres lets the ends of long names cover neighbouring centres.
       if (
-        sx - half < this.insets.left + PLATE_INSET ||
-        sx + half > this.width - this.insets.right - PLATE_INSET ||
-        sy - screenR - 23 < this.insets.top + PLATE_INSET ||
-        sy - screenR - 3 > this.height - this.insets.bottom - PLATE_INSET
+        !this.placeLabel(label.textContent ?? '', visual.labelW, 20, sx, sy, screenR)
       ) {
-        label.style.display = 'none'
-        continue
-      }
-      // The label's anchor must not sit on the face of a nearer, clearly
-      // visible sphere of readable size - see the discs note.
-      const ax = sx
-      const ay = sy - screenR - 13
-      let covered = false
-      for (let j = 0; j < discCount; j++) {
-        if (j === rank) continue
-        const p = discs[j]
-        if (!p || !p.ok || p.opacity <= 0.2 || p.screenR <= 13 || p.camDist >= camDist - 1) continue
-        // A hub disc covers generously: a name over a hub reads as the hub's.
-        const reach = j >= nodeDiscs ? 1.15 : 0.92
-        if (Math.hypot(ax - p.sx, ay - p.sy) < p.screenR * reach) {
-          covered = true
-          break
-        }
-      }
-      if (covered) {
-        label.style.display = 'none'
-        continue
-      }
-      if (!this.placeBox(sx - half, sy - screenR - 23, sx + half, sy - screenR - 3)) {
         label.style.display = 'none'
         continue
       }
@@ -3188,7 +3296,7 @@ export class KnowledgeMapEngine {
       )
       const opacity = Math.max(0.35, (1 - fogT * 0.5) * Math.min(1, visual.opacity.current + 0.1)) *
         fadeIn * (1 - lod / 0.35)
-      show(visual, sx, sy - screenR - 4, opacity)
+      show(visual, this.capX, this.capBaseline - 2, opacity)
     }
     this.positionPopup()
     this.projectEdgeLabels()
@@ -3224,14 +3332,13 @@ export class KnowledgeMapEngine {
     const sy = (-this.labelVec.y * 0.5 + 0.5) * this.height
     // Relation labels give way to node labels: an italic riding an edge that
     // mushes into an entity name reads as neither.
-    const halfW = visual.labelW * 0.5
-    if (!this.placeBox(sx - halfW, sy - 21, sx + halfW, sy - 5)) {
+    if (!this.placeLabel(visual.label.textContent ?? '', visual.labelW, 17, sx, sy, 0)) {
       visual.label.style.display = 'none'
       return
     }
     visual.label.style.display = 'block'
-    visual.label.style.transform = `translate(-50%, -140%) translate(${sx.toFixed(1)}px, ${
-      sy.toFixed(1)
+    visual.label.style.transform = `translate(-50%, -100%) translate(${this.capX.toFixed(1)}px, ${
+      this.capBaseline.toFixed(1)
     }px)`
   }
 

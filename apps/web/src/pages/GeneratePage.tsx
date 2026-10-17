@@ -13,7 +13,15 @@ import {
 } from '../lib/research-export.ts'
 import { generateArtifact } from '../api/client.ts'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
-import { EmptyState, ExportNotice, savedFileNotice, useExportNotice } from '../components/ui.tsx'
+import {
+  Button,
+  EmptyState,
+  ExportNotice,
+  savedFileNotice,
+  Skeleton,
+  useExportNotice,
+} from '../components/ui.tsx'
+import { ArrowLeft, Check, ChevronDown, Download, Wand } from '../components/icons.tsx'
 import { SaveArtefactButton } from '../components/SaveEvidence.tsx'
 import { suggestedTopicChips } from '../lib/generate-suggestions.ts'
 import { tenantCopy } from '../lib/tenant-copy.ts'
@@ -334,8 +342,13 @@ function truncateSource(source: string, max = 40): string {
 function ComparisonTable({ data }: { data: ComparisonObject }) {
   const { ui } = usePortalLocale()
   return (
-    <div className='overflow-x-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface shadow-sm'>
-      <table className='w-full min-w-[640px] border-collapse text-sm'>
+    <div
+      className='rp-focus rp-card overflow-x-auto'
+      role='region'
+      aria-label={ui('Comparison')}
+      tabIndex={0}
+    >
+      <table className='w-full min-w-[40rem] border-collapse text-sm'>
         <thead>
           <tr>
             <th className='sticky left-0 bg-surface-2 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-ink-3'>
@@ -394,19 +407,19 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
   const untraced = data.key_takeaways.filter((_, i) => (takeawayRefs[i] ?? []).length === 0)
     .length
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm sm:p-8'>
+    <div className='rp-card p-5 lg:p-6'>
       <div className='flex flex-wrap items-start justify-between gap-x-4 gap-y-2'>
-        <h2 className='min-w-0 text-xl font-semibold tracking-tight text-ink'>{data.title}</h2>
+        <h2 className='rp-display min-w-0 text-xl text-ink'>{data.title}</h2>
         {data.audit ? <BriefingAuditBadge audit={data.audit} /> : null}
       </div>
-      <p className='mt-3 text-sm leading-relaxed text-ink-2'>{data.executive_summary}</p>
+      <p className='rp-prose rp-measure mt-3 text-sm text-ink-2'>{data.executive_summary}</p>
 
       {data.key_takeaways.length > 0 && (
-        <div className='mt-5 rounded-[var(--rp-radius)] bg-surface-2 p-4'>
+        <div className='mt-5 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] bg-surface-2 p-4'>
           <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
             {ui('Key takeaways')}
           </p>
-          <ul className='mt-2 space-y-1.5'>
+          <ul className='rp-prose rp-measure mt-2 space-y-1.5'>
             {data.key_takeaways.map((t, i) => (
               <li key={i} className='flex gap-2 text-sm text-ink'>
                 <span aria-hidden='true' className='text-ink-3'>&bull;</span>
@@ -436,7 +449,7 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
         {data.sections.map((s, i) => (
           <div key={i}>
             <h3 className='text-sm font-semibold text-ink'>{s.heading}</h3>
-            <p className='mt-1.5 text-sm leading-relaxed text-ink-2'>
+            <p className='rp-prose rp-measure mt-1.5 text-sm text-ink-2'>
               {s.content}
               <RefMarkers refs={s.refs ?? []} references={references} slug={slug} />
             </p>
@@ -503,8 +516,8 @@ function BriefingDoc({ data, slug }: { data: BriefingObject; slug: string }) {
 
 function TimelineView({ data }: { data: TimelineObject }) {
   return (
-    <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-6 shadow-sm sm:p-8'>
-      <h2 className='text-xl font-semibold tracking-tight text-ink'>{data.title}</h2>
+    <div className='rp-card p-5 lg:p-6'>
+      <h2 className='rp-display text-xl text-ink'>{data.title}</h2>
       <ol className='mt-6 space-y-6 border-l-2 border-line pl-6'>
         {data.events.map((ev, i) => (
           <li key={i} className='relative'>
@@ -513,11 +526,11 @@ function TimelineView({ data }: { data: TimelineObject }) {
               style={{ backgroundColor: 'var(--rp-accent)' }}
               aria-hidden='true'
             />
-            <span className='rp-chip'>
+            <span className='rp-tag'>
               {ev.date}
             </span>
             <h3 className='mt-1.5 text-sm font-semibold text-ink'>{ev.title}</h3>
-            <p className='mt-1 text-sm leading-relaxed text-ink-2'>{ev.description}</p>
+            <p className='rp-prose rp-measure mt-1 text-sm text-ink-2'>{ev.description}</p>
           </li>
         ))}
       </ol>
@@ -529,17 +542,19 @@ function ProsConsView({ data }: { data: ProsConsObject }) {
   const { ui } = usePortalLocale()
   return (
     <div>
-      <h2 className='text-lg font-semibold tracking-tight text-ink'>{data.subject}</h2>
+      <h2 className='rp-display text-xl text-ink'>{data.subject}</h2>
       <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2'>
-        <div className='rounded-[calc(var(--rp-radius)+4px)] border border-[var(--rp-ok-line)] bg-[var(--rp-ok-bg)] p-5'>
+        <div className='rounded-[var(--rp-radius)] border border-[var(--rp-ok-line)] bg-[var(--rp-ok-bg)] p-5'>
           <p className='text-xs font-semibold uppercase tracking-wide text-[var(--rp-ok-ink)]'>
             {ui('Pros')}
           </p>
           <ul className='mt-3 space-y-3'>
             {data.pros.map((p, i) => (
               <li key={i}>
-                <p className='text-sm font-medium text-[var(--rp-ok-ink)]'>{p.point}</p>
-                <p className='mt-0.5 text-sm text-[var(--rp-ok-ink)]'>{p.rationale}</p>
+                <p className='rp-measure text-sm font-medium text-[var(--rp-ok-ink)]'>{p.point}</p>
+                <p className='rp-prose rp-measure mt-0.5 text-sm text-[var(--rp-ok-ink)]'>
+                  {p.rationale}
+                </p>
               </li>
             ))}
           </ul>
@@ -549,15 +564,17 @@ function ProsConsView({ data }: { data: ProsConsObject }) {
             </p>
           )}
         </div>
-        <div className='rounded-[calc(var(--rp-radius)+4px)] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] p-5'>
+        <div className='rounded-[var(--rp-radius)] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] p-5'>
           <p className='text-xs font-semibold uppercase tracking-wide text-[var(--rp-bad-ink)]'>
             {ui('Cons')}
           </p>
           <ul className='mt-3 space-y-3'>
             {data.cons.map((c, i) => (
               <li key={i}>
-                <p className='text-sm font-medium text-[var(--rp-bad-ink)]'>{c.point}</p>
-                <p className='mt-0.5 text-sm text-[var(--rp-bad-ink)]'>{c.rationale}</p>
+                <p className='rp-measure text-sm font-medium text-[var(--rp-bad-ink)]'>{c.point}</p>
+                <p className='rp-prose rp-measure mt-0.5 text-sm text-[var(--rp-bad-ink)]'>
+                  {c.rationale}
+                </p>
               </li>
             ))}
           </ul>
@@ -571,24 +588,24 @@ function ProsConsView({ data }: { data: ProsConsObject }) {
 function FaqView({ data }: { data: FaqObject }) {
   return (
     <div>
-      <h2 className='text-lg font-semibold tracking-tight text-ink'>{data.title}</h2>
+      <h2 className='rp-display text-xl text-ink'>{data.title}</h2>
       <div className='mt-4 space-y-2'>
         {data.entries.map((e, i) => (
           <details
             key={i}
-            className='group rounded-[var(--rp-radius)] border border-line bg-surface open:shadow-sm'
+            className='rp-card group'
           >
-            <summary className='flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-ink [&::-webkit-details-marker]:hidden'>
+            <summary className='rp-focus flex min-h-[2.75rem] cursor-pointer list-none items-center justify-between gap-3 rounded-[inherit] px-4 py-3 text-sm font-medium text-ink [&::-webkit-details-marker]:hidden'>
               {e.question}
               <span
                 className='shrink-0 text-ink-3 transition-transform duration-150 group-open:rotate-180'
                 aria-hidden='true'
               >
-                &#9662;
+                <ChevronDown size='sm' />
               </span>
             </summary>
-            <div className='border-t border-line px-4 py-3 text-sm leading-relaxed text-ink-2'>
-              {e.answer}
+            <div className='rp-prose border-t border-line px-4 py-3 text-sm text-ink-2'>
+              <p className='rp-measure'>{e.answer}</p>
             </div>
           </details>
         ))}
@@ -611,7 +628,7 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
   return (
     <div>
       <div className='flex items-center justify-between gap-3'>
-        <h2 className='text-lg font-semibold tracking-tight text-ink'>{ui('Assessment')}</h2>
+        <h2 className='rp-display text-xl text-ink'>{ui('Assessment')}</h2>
         {submitted && (
           <p className='text-sm font-semibold text-ink'>
             {ui('Score:')} {score} / {data.questions.length}
@@ -636,14 +653,14 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
         {data.questions.map((q, qi) => (
           <div
             key={qi}
-            className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-5 shadow-sm'
+            className='rp-card p-5 lg:p-6'
           >
             {q.topic && (
               <p className='text-xs font-semibold uppercase tracking-wide text-ink-3'>
                 {q.topic}
               </p>
             )}
-            <p className='mt-1 text-sm font-medium text-ink'>{q.question}</p>
+            <p className='rp-measure mt-1 text-sm font-medium text-ink'>{q.question}</p>
             <div className='mt-3 space-y-2'>
               {q.options.map((opt, oi) => {
                 const isChosen = selected[qi] === oi
@@ -653,10 +670,18 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
                 if (submitted) {
                   if (isCorrect) {
                     cls = 'text-[var(--rp-ok-ink)]'
-                    optStyle = { borderColor: 'var(--rp-ok-line)', background: 'var(--rp-ok-bg)' }
+                    optStyle = {
+                      borderColor: 'var(--rp-ok-line)',
+                      background: 'var(--rp-ok-bg)',
+                      color: 'var(--rp-ok-ink)',
+                    }
                   } else if (isChosen) {
                     cls = 'text-[var(--rp-bad-ink)]'
-                    optStyle = { borderColor: 'var(--rp-bad-line)', background: 'var(--rp-bad-bg)' }
+                    optStyle = {
+                      borderColor: 'var(--rp-bad-line)',
+                      background: 'var(--rp-bad-bg)',
+                      color: 'var(--rp-bad-ink)',
+                    }
                   }
                 } else if (isChosen) {
                   cls = ''
@@ -678,17 +703,19 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
                     disabled={submitted}
                     aria-pressed={isChosen}
                     onClick={() => setSelected((prev) => ({ ...prev, [qi]: oi }))}
-                    style={optStyle}
-                    className={`block w-full rounded-[var(--rp-radius)] border px-4 py-2.5 text-left text-sm transition-colors duration-150 disabled:cursor-default ${cls}`}
+                    style={submitted ? { ...optStyle, opacity: 1, cursor: 'default' } : optStyle}
+                    className={`rp-btn rp-btn-outline w-full disabled:cursor-default ${cls}`}
                   >
-                    {opt}
-                    {answerHint && <span className='sr-only'>{answerHint}</span>}
+                    <span className='w-full text-left'>
+                      {opt}
+                      {answerHint && <span className='sr-only'>{answerHint}</span>}
+                    </span>
                   </button>
                 )
               })}
             </div>
             {submitted && q.explanation && (
-              <p className='mt-3 text-sm leading-relaxed text-ink-2'>{q.explanation}</p>
+              <p className='rp-prose rp-measure mt-3 text-sm text-ink-2'>{q.explanation}</p>
             )}
             {submitted && (
               <p className='mt-2 text-xs text-ink-3'>
@@ -715,13 +742,13 @@ function AssessmentQuiz({ data, slug }: { data: AssessmentObject; slug: string }
       </div>
 
       {!submitted && data.questions.length > 0 && (
-        <button
-          type='button'
+        <Button
+          leadingIcon={Check}
           onClick={() => setSubmitted(true)}
-          className='rp-btn rp-btn-primary mt-6'
+          className='mt-6'
         >
           {ui('Submit answers')}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -731,13 +758,13 @@ function RawFallback({ value }: { value: unknown }) {
   const { ui } = usePortalLocale()
   return (
     <div
-      className='rounded-[calc(var(--rp-radius)+4px)] border p-4'
+      className='rounded-[var(--rp-radius)] border p-4'
       style={{ borderColor: 'var(--rp-warn-line)', background: 'var(--rp-warn-bg)' }}
     >
       <p className='text-sm font-medium' style={{ color: 'var(--rp-warn-ink)' }}>
         {ui('This result did not match the expected shape - showing the raw data instead.')}
       </p>
-      <pre className='mt-3 max-h-96 overflow-auto rounded-[var(--rp-radius)] bg-surface p-4 text-xs text-ink-2'>
+      <pre className='mt-3 max-h-96 overflow-auto rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] bg-surface p-4 text-xs text-ink-2'>
         {JSON.stringify(value, null, 2)}
       </pre>
     </div>
@@ -759,7 +786,7 @@ function SourcesRow({ sources }: { sources: ResourceSummary[] }) {
             <span
               key={s.id}
               title={s.title}
-              className='rp-chip max-w-[16rem] truncate'
+              className='rp-tag max-w-[16rem] truncate'
             >
               {s.title}
             </span>
@@ -839,7 +866,7 @@ function artifactToHtml(
             const rating = item.ratings.find((r) => r.dimension === dim)
             const assessment = escapeHtml(rating?.assessment ?? ui('Not covered'))
             const sourceLine = rating?.source
-              ? `<br><small>&mdash; ${escapeHtml(rating.source)}</small>`
+              ? `<br><small>- ${escapeHtml(rating.source)}</small>`
               : ''
             return `<td>${assessment}${sourceLine}</td>`
           })
@@ -1104,22 +1131,24 @@ function ExportRow(
         : null}
       {canExport && (
         <>
-          <button
-            type='button'
+          <Button
+            variant='outline'
+            leadingIcon={Download}
             disabled={disabled}
             onClick={() => void output('word')}
-            className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
+            className='disabled:cursor-not-allowed'
           >
             {ui('Export to Word')}
-          </button>
-          <button
-            type='button'
+          </Button>
+          <Button
+            variant='outline'
+            leadingIcon={Download}
             disabled={disabled}
             onClick={() => void output('pdf')}
-            className='rp-btn rp-btn-outline disabled:cursor-not-allowed'
+            className='disabled:cursor-not-allowed'
           >
             {ui('Export to PDF')}
-          </button>
+          </Button>
         </>
       )}
       <ExportNotice notice={notice} />
@@ -1167,13 +1196,13 @@ function SuggestedTopicChips({
   return (
     <div className='mt-3'>
       <p className='text-xs font-medium text-ink-3'>{ui('Try one of these')}</p>
-      <div className='mt-1.5 flex flex-wrap gap-1.5'>
+      <div className='mt-1.5 flex flex-wrap gap-2'>
         {chips.map((chip) => (
           <button
             key={chip.key}
             type='button'
             onClick={() => onPick(chip.text)}
-            className='rp-chip h-9 sm:h-7'
+            className='rp-chip text-left'
           >
             {chip.text}
           </button>
@@ -1195,12 +1224,13 @@ export function GeneratePage() {
   return access.can('portal.generate', { kind: 'portal', slug: config.slug })
     ? <GenerateWorkspace key={access.generation} />
     : (
-      <main className='rp-shell py-10'>
+      <main className='rp-shell py-8 lg:py-10'>
         <EmptyState
           title={ui('This page is unavailable')}
           description={ui('You can continue exploring the portal.')}
         >
           <Link className='rp-btn rp-btn-outline' to={`/t/${config.slug}/library`}>
+            <ArrowLeft size='sm' />
             {ui('Back to Library')}
           </Link>
         </EmptyState>
@@ -1278,9 +1308,9 @@ function GenerateWorkspace() {
   }
 
   return (
-    <main className='mx-auto max-w-5xl px-6 py-10'>
-      <h1 className='text-2xl font-semibold tracking-tight text-ink'>{ui('Generate')}</h1>
-      <p className='mt-1 text-sm text-ink-3'>
+    <main className='rp-shell py-8 lg:py-10'>
+      <h1 className='rp-display text-2xl sm:text-3xl text-ink'>{ui('Generate')}</h1>
+      <p className='rp-measure mt-1 text-sm text-ink-2'>
         {ui("Schema-enforced research artifacts, grounded in the portal's content.")}
       </p>
 
@@ -1288,18 +1318,14 @@ function GenerateWorkspace() {
         /* The tabs wrap onto a second row on a phone rather than clipping at
         * "Pros a" with no scroll affordance. */
       }
-      <div className='mt-6 flex flex-wrap items-center gap-1 rounded-[var(--rp-radius)] border border-line bg-surface p-1'>
+      <div className='rp-seg mt-6'>
         {KINDS.map((k) => (
           <button
             key={k.id}
             type='button'
             aria-pressed={kind === k.id}
             onClick={() => selectKind(k.id)}
-            className={`shrink-0 rounded-[calc(var(--rp-radius)-2px)] px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ${
-              kind === k.id
-                ? 'bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'
-                : 'text-ink-2 hover:bg-[var(--rp-surface-2)]'
-            }`}
+            className='rp-seg-item'
           >
             {ui(k.label)}
           </button>
@@ -1327,23 +1353,26 @@ function GenerateWorkspace() {
           className='rp-input'
         />
         <SuggestedTopicChips kind={kind} topics={config.topics} onPick={pickSuggestion} />
-        <button
+        <Button
           type='submit'
+          leadingIcon={Wand}
           disabled={mutation.isPending || drafts[kind].trim().length === 0}
-          className='rp-btn rp-btn-primary mt-3'
+          className='mt-3'
         >
           {mutation.isPending
             ? ui('Generating - this can take up to half a minute…')
             : ui('Generate')}
-        </button>
+        </Button>
       </form>
 
       {mutation.isError && (
         <div
           role='alert'
-          className='mt-8 rounded-[calc(var(--rp-radius)+4px)] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] p-6'
+          className='mt-8 rounded-[var(--rp-radius)] border border-[var(--rp-bad-line)] bg-[var(--rp-bad-bg)] p-6'
         >
-          <p className='text-sm font-medium text-[var(--rp-bad-ink)]'>{ui('Generation failed')}</p>
+          <p className='rp-measure text-sm font-medium text-[var(--rp-bad-ink)]'>
+            {ui('Generation failed')}
+          </p>
           <p className='mt-1 text-sm text-[var(--rp-bad-ink)]'>
             {localError(mutation.error, 'Something went wrong - try a narrower request.')}
           </p>
@@ -1360,11 +1389,11 @@ function GenerateWorkspace() {
       )}
 
       {mutation.isPending && (
-        <div className='mt-8 animate-pulse rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-8'>
-          <div className='h-4 w-1/3 rounded bg-surface-3' />
-          <div className='mt-4 h-3 w-full rounded bg-surface-2' />
-          <div className='mt-2 h-3 w-5/6 rounded bg-surface-2' />
-          <div className='mt-2 h-3 w-2/3 rounded bg-surface-2' />
+        <div className='rp-card mt-8 p-5 lg:p-6'>
+          <Skeleton className='h-4 w-1/3' />
+          <Skeleton className='mt-4 h-3 w-full' />
+          <Skeleton className='mt-2 h-3 w-5/6' />
+          <Skeleton className='mt-2 h-3 w-2/3' />
         </div>
       )}
 

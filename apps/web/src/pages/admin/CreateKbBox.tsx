@@ -8,6 +8,8 @@ import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { createAdminKb } from '../../api/client.ts'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
+import { Plus } from '../../components/icons.tsx'
+import { Button } from '../../components/ui.tsx'
 
 /**
  * Provisioning affordance for a tenant's knowledge box: a prominent call to
@@ -82,27 +84,20 @@ function CreateKbBoxContent({
   if (row.knowledgeBox.status === 'none') {
     return (
       <div
-        className='mt-4 rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface-2 p-4'
+        className='mt-4 rounded-[max(0px,calc(var(--rp-radius)-0.25rem))] border border-line bg-surface-2 p-4'
         style={{ borderStyle: 'dashed' }}
       >
         <p className='text-sm text-ink-2'>
           {ui('This portal has no knowledge box yet. Create one to start adding content.')}
         </p>
-        <button
-          type='button'
+        <Button
           disabled={busy}
           onClick={() => void onCreate()}
-          className='rp-btn rp-btn-primary mt-3'
-          style={{
-            height: 'auto',
-            minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-            paddingBlock: '0.5rem',
-            whiteSpace: 'normal',
-            maxWidth: '100%',
-          }}
+          leadingIcon={Plus}
+          className='mt-3 max-w-full whitespace-normal py-2 text-left'
         >
           {busy ? ui('Creating…') : ui('Create a knowledge box')}
-        </button>
+        </Button>
         {message && <MessagePanel message={message} className='mt-3' />}
       </div>
     )
@@ -112,21 +107,15 @@ function CreateKbBoxContent({
     return (
       <div className='mt-4'>
         <div className='flex flex-wrap items-center gap-3'>
-          <button
-            type='button'
+          <Button
+            variant='outline'
             disabled={busy}
             onClick={() => void onCreate()}
-            className='rp-btn rp-btn-outline'
-            style={{
-              height: 'auto',
-              minHeight: 'calc(2.25rem * var(--rp-density-ctl, 1))',
-              paddingBlock: '0.5rem',
-              whiteSpace: 'normal',
-              maxWidth: '100%',
-            }}
+            leadingIcon={Plus}
+            className='max-w-full whitespace-normal py-2 text-left'
           >
             {busy ? ui('Creating…') : ui('Create new box')}
-          </button>
+          </Button>
           <p className='text-xs text-ink-3'>
             {ui('Creates a fresh box on the platform and connects this portal to it.')}
           </p>

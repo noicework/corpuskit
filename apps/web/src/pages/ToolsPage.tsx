@@ -2,6 +2,8 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import { useAccess } from '../components/AccessProvider.tsx'
+import { ArrowRight, Copy } from '../components/icons.tsx'
+import { Button } from '../components/ui.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
 export function mcpConfigSnippet(endpoint: string, slug: string, key?: string): string {
@@ -27,11 +29,6 @@ export function ToolsPage() {
   const slug = config.slug
   const scope = { kind: 'portal' as const, slug }
   const canExtract = access.can('content.write', scope)
-  const actionStyle = {
-    height: 'auto',
-    minHeight: 'max(44px, calc(2.25rem * var(--rp-density-ctl, 1)))',
-    paddingBlock: '0.5rem',
-  }
   const endpoint = `${globalThis.location?.origin ?? ''}/api/t/${encodeURIComponent(slug)}/mcp`
   const isPublic = config.accessMode === 'public'
   const snippet = mcpConfigSnippet(endpoint, slug, isPublic ? undefined : 'YOUR_KEY')
@@ -58,24 +55,24 @@ export function ToolsPage() {
     }
   }
   return (
-    <main className='rp-shell py-10 sm:py-14' data-tools-page>
-      <header className='max-w-3xl'>
-        <h1 className='rp-display text-3xl text-ink sm:text-4xl'>{ui('Tools')}</h1>
+    <main className='rp-shell py-8 lg:py-10' data-tools-page>
+      <header className='rp-measure'>
+        <h1 className='rp-display text-2xl text-ink sm:text-3xl'>{ui('Tools')}</h1>
         <p className='mt-3 text-base leading-relaxed text-ink-2'>
           {ui("Connect research tools to this portal's knowledge.")}
         </p>
       </header>
-      <div className={`mt-8 grid min-w-0 gap-6 ${canExtract ? 'xl:grid-cols-2' : 'grid-cols-1'}`}>
-        <section className='rp-card min-w-0 p-6 sm:p-8' aria-labelledby='connector-heading'>
-          <h2 id='connector-heading' className='rp-display text-2xl'>
+      <div className={`mt-6 grid min-w-0 gap-6 ${canExtract ? 'xl:grid-cols-2' : 'grid-cols-1'}`}>
+        <section className='rp-card min-w-0 p-5 lg:p-6' aria-labelledby='connector-heading'>
+          <h2 id='connector-heading' className='rp-display text-xl'>
             {ui('Knowledge box MCP connector')}
           </h2>
-          <p className='mt-3 max-w-prose text-base leading-relaxed text-ink-2'>
+          <p className='rp-measure mt-3 text-base leading-relaxed text-ink-2'>
             {ui(
               'Search, browse documents and ask questions with cited answers from an MCP client. The connector is read-only and stays within this portal.',
             )}
           </p>
-          <p className='mt-4 max-w-prose text-base' data-mcp-guidance>
+          <p className='rp-measure mt-4 text-base leading-relaxed' data-mcp-guidance>
             {isPublic
               ? ui(
                 'This public portal supports anonymous MCP access without a key. Paste these connection details into a client that supports Streamable HTTP.',
@@ -95,14 +92,14 @@ export function ToolsPage() {
             className='mt-5 max-w-full whitespace-pre-wrap break-words rounded-[var(--rp-radius-input)] border border-line bg-[var(--rp-surface-2)] p-4 text-sm leading-relaxed [overflow-wrap:anywhere]'
             data-mcp-configuration
           ><code>{snippet}</code></pre>
-          <button
+          <Button
             type='button'
-            className='rp-btn rp-btn-primary mt-4 min-h-[44px]'
-            style={actionStyle}
+            leadingIcon={Copy}
+            className='mt-4'
             onClick={() => void copy()}
           >
             {ui('Copy connection details')}
-          </button>
+          </Button>
           <p role='status' className='mt-3 text-sm'>
             {status === 'copied'
               ? ui('Connection details copied.')
@@ -112,9 +109,10 @@ export function ToolsPage() {
           </p>
           <Link
             to={`/t/${encodeURIComponent(slug)}/help/generate`}
-            className='mt-3 inline-block text-sm text-[var(--rp-accent-fg)] underline'
+            className='rp-link-standalone rp-focus mt-3 text-sm text-[var(--rp-accent-fg)] underline'
           >
             {ui('How to connect an MCP client')}
+            <ArrowRight size='sm' />
           </Link>
           {access.can('keys.manage', scope) && (
             <div className='mt-6 border-t border-line pt-5'>
@@ -125,34 +123,34 @@ export function ToolsPage() {
               </p>
               <Link
                 to={`/t/${encodeURIComponent(slug)}/manage?tab=access#access-keys`}
-                className='rp-btn rp-btn-outline mt-3 min-h-[44px]'
+                className='rp-btn rp-btn-outline mt-3'
                 data-manage-keys-link
-                style={actionStyle}
               >
                 {ui('Manage portal keys')}
+                <ArrowRight size='sm' />
               </Link>
             </div>
           )}
         </section>
         {canExtract && (
           <section
-            className='rp-card min-w-0 self-start p-6 sm:p-8'
+            className='rp-card min-w-0 self-start p-5 lg:p-6'
             aria-labelledby='extraction-lab-heading'
           >
-            <h2 id='extraction-lab-heading' className='rp-display text-2xl'>
+            <h2 id='extraction-lab-heading' className='rp-display text-xl'>
               {ui('Extraction Lab')}
             </h2>
-            <p className='mt-3 text-base leading-relaxed text-ink-2'>
+            <p className='rp-measure mt-3 text-base leading-relaxed text-ink-2'>
               {ui(
                 'Profile a document and compare extraction methods, text and tables before adding it to the portal.',
               )}
             </p>
             <Link
               to={`/t/${encodeURIComponent(slug)}/manage?tab=extraction`}
-              className='rp-btn rp-btn-outline mt-4 min-h-[44px]'
-              style={actionStyle}
+              className='rp-btn rp-btn-outline mt-4'
             >
               {ui('Open the Extraction Lab')}
+              <ArrowRight size='sm' />
             </Link>
           </section>
         )}

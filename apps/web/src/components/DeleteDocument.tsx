@@ -5,6 +5,8 @@ import { ApiError, deleteAdminResource } from '../api/client.ts'
 import { useAccess } from './AccessProvider.tsx'
 import { ConfirmActionDialog } from './ConfirmActionDialog.tsx'
 import { usePermissionAdminAccess } from './EmergencyAccess.tsx'
+import { Trash } from './icons.tsx'
+import { Button } from './ui.tsx'
 
 export interface DeletableDocument {
   id: string
@@ -167,24 +169,41 @@ export function DeleteDocumentButton({
     }
   }
 
+  const triggerProps = {
+    'aria-haspopup': 'dialog' as const,
+    'aria-label': ui('{action} “{title}”', { action: ui(label), title: document.title }),
+    'data-delete-document': document.id,
+    disabled: busy,
+    onClick: () => {
+      setError(null)
+      setOpen(true)
+    },
+  }
+
   return (
     <>
-      <button
-        type='button'
-        aria-haspopup='dialog'
-        aria-label={ui('{action} “{title}”', { action: ui(label), title: document.title })}
-        data-delete-document={document.id}
-        disabled={busy}
-        onClick={() => {
-          setError(null)
-          setOpen(true)
-        }}
-        className={className ??
-          'rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-bad-ink)]'}
-      >
-        {icon ? <TrashIcon className='h-4 w-4 shrink-0' /> : null}
-        {ui(label)}
-      </button>
+      {onDocumentPage
+        ? (
+          <Button
+            {...triggerProps}
+            variant='danger-outline'
+            leadingIcon={Trash}
+            className={className}
+          >
+            {ui(label)}
+          </Button>
+        )
+        : (
+          <button
+            {...triggerProps}
+            type='button'
+            className={className ??
+              'rp-focus min-h-[2.75rem] min-w-[2.75rem] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-bad-ink)]'}
+          >
+            {icon ? <Trash size='sm' /> : null}
+            {ui(label)}
+          </button>
+        )}
       {open && (
         <ConfirmActionDialog
           title={ui('Delete document')}
@@ -202,26 +221,5 @@ export function DeleteDocumentButton({
         />
       )}
     </>
-  )
-}
-
-/** A trash can in the house stroke idiom (the bookmark on Save is its pair on the document page). */
-function TrashIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth={1.8}
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className={className}
-    >
-      <path d='M4.5 7h15' />
-      <path d='M9.5 7V5.5a1 1 0 011-1h3a1 1 0 011 1V7' />
-      <path d='M6.5 7l.8 11.6a1.5 1.5 0 001.5 1.4h6.4a1.5 1.5 0 001.5-1.4L17.5 7' />
-      <path d='M10 11v5.5M14 11v5.5' />
-    </svg>
   )
 }

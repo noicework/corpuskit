@@ -1,3 +1,5 @@
+import { IconButton } from './ui.tsx'
+import { Maximize, Minus, Plus } from './icons.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -97,6 +99,8 @@ export function KnowledgeMap3D({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const labelsRef = useRef<HTMLDivElement | null>(null)
   const engineRef = useRef<KnowledgeMapEngine | null>(null)
+  const controlsRef = useRef<HTMLDivElement | null>(null)
+  const [controlGutter, setControlGutter] = useState(0)
   const onSelectRef = useRef(onSelect)
   const onReadyRef = useRef(onReady)
   const uiRef = useRef(ui)
@@ -121,13 +125,37 @@ export function KnowledgeMap3D({
     return () => observer.disconnect()
   }, [])
 
-  // Coarse buckets only, as in 2D: the cluster ring follows the viewport
-  // shape but must not re-run the layout on every pixel of a window drag.
-  const aspectBucket = size.w < 1 || size.h < 1
-    ? 1.5
-    : size.w / size.h < 1
-    ? 0.8
-    : size.w / size.h < 1.45
+  // Keep the phone's overview clear of the measured zoom-control column,
+  // including when the reader enlarges the root font.
+  useEffect(() => {
+    const controls = controlsRef.current
+    const container = containerRef.current
+    if (!controls || !container) return
+    const update = () => {
+      const box = container.getBoundingClientRect()
+      const toolbar = controls.getBoundingClientRect()
+      setControlGutter(
+        box.width < 768 && insets.bottom === 0 ? Math.ceil(box.right - toolbar.left + 8) : 0,
+      )
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(controls)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [insets.bottom])
+  const mapInsets = useMemo(() => ({
+    ...insets,
+    right: Math.max(insets.right, controlGutter),
+  }), [insets, controlGutter])
+
+  const hasSize = size.w > 0 && size.h > 0
+
+  // Coarse buckets follow the usable shape without rebuilding on every pixel.
+  const aspect = size.w < 1 || size.h < 1 ? 1.5 : (size.w - controlGutter) / size.h
+  const aspectBucket = aspect < 1
+    ? Math.max(0.35, Math.round(aspect * 10) / 10)
+    : aspect < 1.45
     ? 1.2
     : 1.9
 
@@ -180,8 +208,11 @@ export function KnowledgeMap3D({
       layout,
       aspect: aspectBucket,
     }
+    engine.setInsets(mapInsets)
     engine.setData(data)
-    const sig = `${layout}|${aspectBucket}|${visibleNodes.map((n) => n.id).join('|')}`
+    const sig = `${layout}|${aspectBucket}|${controlGutter}|${
+      visibleNodes.map((n) => n.id).join('|')
+    }`
     if (sig !== fitSigRef.current) {
       fitSigRef.current = sig
       // Data changing under a selection is an expand: keep the reader at the
@@ -198,10 +229,20 @@ export function KnowledgeMap3D({
     // setData settles the force simulation synchronously. Keep the shell
     // hidden until that settled scene has made it through the renderer, so
     // the page never fades up an empty canvas or nodes still finding places.
-    if (size.w > 0 && size.h > 0 && visibleNodes.length > 0) {
+    if (hasSize && visibleNodes.length > 0) {
       return scheduleMapReadyAfterPaint(() => onReadyRef.current?.())
     }
-  }, [visibleNodes, visibleEdges, groupStyles, degrees, measure, layout, aspectBucket])
+  }, [
+    visibleNodes,
+    visibleEdges,
+    groupStyles,
+    degrees,
+    measure,
+    layout,
+    aspectBucket,
+    controlGutter,
+    hasSize,
+  ])
 
   // The SVG fallback owns its own synchronous force layout. Its child effects
   // commit the fitted scene before this two-frame reveal runs.
@@ -238,27 +279,27 @@ export function KnowledgeMap3D({
   useEffect(() => {
     const engine = engineRef.current
     if (!engine) return
-    engine.setInsets(insets)
+    engine.setInsets(mapInsets)
     const previous = lastInsetsRef.current
-    lastInsetsRef.current = insets
+    lastInsetsRef.current = mapInsets
     const id = focusId ?? selectedId
     if (id) {
       const done = focusServicedRef.current
       const following = done !== null && done.id === id && done.pulse === focusPulse
       if (
-        following && done.box.left === insets.left && done.box.right === insets.right &&
-        done.box.bottom === insets.bottom
+        following && done.box.left === mapInsets.left && done.box.right === mapInsets.right &&
+        done.box.top === mapInsets.top && done.box.bottom === mapInsets.bottom
       ) return
       const dist = engine.focusOn(id, following ? done.dist : null)
-      focusServicedRef.current = { id, pulse: focusPulse, box: insets, dist }
+      focusServicedRef.current = { id, pulse: focusPulse, box: mapInsets, dist }
       return
     }
     focusServicedRef.current = null
     if (!previous || !engine.focusOwned) return
-    const dx = ((insets.left - previous.left) - (insets.right - previous.right)) / 2
-    const dy = -(insets.bottom - previous.bottom) / 2
+    const dx = ((mapInsets.left - previous.left) - (mapInsets.right - previous.right)) / 2
+    const dy = ((mapInsets.top - previous.top) - (mapInsets.bottom - previous.bottom)) / 2
     engine.nudgeForInsets(dx, dy)
-  }, [focusId, selectedId, focusPulse, insets])
+  }, [focusId, selectedId, focusPulse, mapInsets])
 
   if (!usable) {
     return (
@@ -299,7 +340,10 @@ export function KnowledgeMap3D({
       <div className='rp-map3d-vignette' aria-hidden='true' />
       <div ref={labelsRef} className='rp-map3d-labels' aria-hidden='true' />
 
-      <p className='pointer-events-none absolute bottom-4 left-1/2 hidden -translate-x-1/2 text-xs text-ink-3 lg:block'>
+      <p
+        data-graph-overlay
+        className='pointer-events-none absolute top-4 left-1/2 hidden -translate-x-1/2 text-xs text-ink-3 lg:block'
+      >
         {hint}
       </p>
 
@@ -310,43 +354,41 @@ export function KnowledgeMap3D({
           flex-row-reverse, so the tab order always follows the visual one. */
       }
       <div
+        ref={controlsRef}
+        data-graph-overlay
         className={`absolute right-4 flex gap-1 ${insets.bottom > 0 ? 'flex-row' : 'flex-col'}`}
         style={{ bottom: insets.bottom + 16 }}
       >
         {(() => {
           const zoomIn = (
-            <button
+            <IconButton
               key='in'
-              type='button'
-              aria-label={ui('Zoom in')}
+              label={ui('Zoom in')}
+              variant='outline'
+              icon={Plus}
               onClick={() => engineRef.current?.zoomBy(1.3)}
-              className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
-            >
-              +
-            </button>
+              className='rp-shadow-sm'
+            />
           )
           const zoomOut = (
-            <button
+            <IconButton
               key='out'
-              type='button'
-              aria-label={ui('Zoom out')}
+              label={ui('Zoom out')}
+              variant='outline'
+              icon={Minus}
               onClick={() => engineRef.current?.zoomBy(1 / 1.3)}
-              className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-lg'
-            >
-              −
-            </button>
+              className='rp-shadow-sm'
+            />
           )
           const fit = (
-            <button
+            <IconButton
               key='fit'
-              type='button'
-              aria-label={ui('Fit the whole map to view')}
-              title={ui('Fit to view')}
+              label={ui('Fit the whole map to view')}
+              variant='outline'
+              icon={Maximize}
               onClick={() => engineRef.current?.fit(true)}
-              className='rp-btn rp-btn-outline rp-shadow-sm h-9 w-9 p-0 text-sm'
-            >
-              ⤢
-            </button>
+              className='rp-shadow-sm'
+            />
           )
           return insets.bottom > 0 ? [fit, zoomOut, zoomIn] : [zoomIn, zoomOut, fit]
         })()}

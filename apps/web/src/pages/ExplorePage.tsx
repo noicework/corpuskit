@@ -9,7 +9,8 @@ import {
 } from '@research-portal/core'
 import { getCatalog, getFacets, getTopicResources } from '../api/client.ts'
 import { topicsWithFacetCounts } from '../lib/topic-rows.ts'
-import { EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
+import { Button, EmptyState, ErrorCard, Skeleton, TypeBadge } from '../components/ui.tsx'
+import { ArrowRight, Library, MessageSquare, Network, Search } from '../components/icons.tsx'
 import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { RegionMap, REGIONS } from '../components/RegionMap.tsx'
@@ -84,8 +85,6 @@ export function Hero({
   const chips = hero?.questions ??
     config.suggestedQuestions.slice(0, 3).map((question) => question.text)
   const heroImage = hero?.image?.url ? hero.image : undefined
-  // A layout's chips are often whole questions, which wrap on a phone.
-  const chipAlign = hero ? ' text-left' : ''
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -101,6 +100,9 @@ export function Hero({
   // there is width to spend on it.
   return (
     <section
+      style={!isAcmd && config.branding.paletteId !== 'corpuskit'
+        ? { background: 'linear-gradient(135deg, var(--rp-hero-from), var(--rp-hero-to))' }
+        : undefined}
       className={`relative isolate pb-24 pt-14 sm:px-6 sm:pb-28 sm:pt-20 ${
         isAcmd
           ? 'rp-acmd-hero'
@@ -128,7 +130,7 @@ export function Hero({
               : hero?.heading ?? ui('What would you like to explore?')}
           </h1>
           {!isAcmd && hero?.body && (
-            <p className='rp-anim-rise rp-delay-1 mt-5 max-w-2xl whitespace-pre-line text-lg leading-relaxed text-[var(--rp-on-hero)] opacity-90'>
+            <p className='rp-anim-rise rp-delay-1 mt-5 max-w-2xl whitespace-pre-line text-lg leading-relaxed text-[var(--rp-on-hero-2)]'>
               {hero.body}
             </p>
           )}
@@ -145,19 +147,8 @@ export function Hero({
               {ui('Ask')} {config.branding.productName}
             </label>
             <div className='relative max-w-2xl'>
-              <div className='rp-shadow-xl flex items-center gap-2 rounded-[var(--rp-radius-input)] bg-surface p-1.5 pl-3.5 ring-1 ring-[var(--rp-on-hero)]/40 focus-within:ring-2 focus-within:ring-[var(--rp-on-hero)]'>
-                <svg
-                  viewBox='0 0 20 20'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth='1.8'
-                  strokeLinecap='round'
-                  aria-hidden='true'
-                  className='h-5 w-5 shrink-0 text-ink-3'
-                >
-                  <circle cx='9' cy='9' r='5.5' />
-                  <path d='M13.2 13.2L17 17' />
-                </svg>
+              <div className='rp-field rp-shadow-xl flex items-center gap-2 rounded-[var(--rp-radius-input)] border bg-surface p-1.5 pl-3.5'>
+                <Search className='shrink-0 text-ink-3' />
                 {
                   /* No placeholder: the tenant's corpus blurb is far longer than
                    * the field is wide and clipped mid-word ("Ask fisheries,
@@ -173,11 +164,11 @@ export function Hero({
                   placeholder={isAcmd ? ui('Ask a question') : undefined}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  className='min-w-0 flex-1 border-0 bg-transparent px-2 py-2 text-[0.95rem] text-ink focus:outline-none'
+                  className='min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] min-w-0 flex-1 border-0 bg-transparent px-2 py-2 text-base text-ink focus:outline-none'
                 />
-                <button type='submit' className='rp-btn rp-btn-primary shrink-0 font-semibold'>
+                <Button type='submit' size='lg' className='shrink-0 self-stretch font-semibold'>
                   {ui('Ask')}
-                </button>
+                </Button>
               </div>
             </div>
           </form>
@@ -190,7 +181,7 @@ export function Hero({
                     key={`${index}-${text}`}
                     type='button'
                     onClick={() => onAsk(text)}
-                    className={`rp-focus-inverse rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-hero)]/30 bg-[var(--rp-on-hero)]/12 px-3 py-1.5 text-sm text-[var(--rp-on-hero)] backdrop-blur-sm transition-colors duration-150 hover:bg-[var(--rp-on-hero)]/25${chipAlign}`}
+                    className='rp-pages-hero-chip rp-focus-inverse min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-hero)]/30 px-3 py-2 text-left text-sm text-[var(--rp-on-hero)] backdrop-blur-sm transition-colors duration-150'
                   >
                     {text}
                   </button>
@@ -263,22 +254,22 @@ function RecentDocuments({ slug }: { slug: string }) {
 
   return (
     <div className='rp-anim-rise rp-delay-3 hidden lg:block'>
-      <p className='rp-eyebrow text-[var(--rp-on-primary)]/60'>{ui('Recently added')}</p>
+      <p className='rp-eyebrow text-[var(--rp-on-hero-2)]'>{ui('Recently added')}</p>
       <ul className='mt-4 space-y-1'>
         {isLoading
           ? Array.from({ length: 4 }).map((_, index) => (
             <li key={index} className='flex items-center gap-3 py-2.5'>
-              <span className='rp-shimmer h-14 w-11 shrink-0 bg-[var(--rp-on-primary)]/15' />
-              <span className='rp-shimmer h-3 w-40 bg-[var(--rp-on-primary)]/15' />
+              <span className='rp-shimmer h-14 w-11 shrink-0 bg-[var(--rp-on-hero)]/15' />
+              <span className='rp-shimmer h-3 w-40 bg-[var(--rp-on-hero)]/15' />
             </li>
           ))
           : items.map((item) => (
             <li key={item.id}>
               <Link
                 to={`/t/${slug}/library/${item.id}`}
-                className='rp-focus-inverse group -mx-2.5 flex items-center gap-3 rounded-[var(--rp-radius-btn)] border-b border-[var(--rp-on-primary)]/15 px-2.5 py-2.5 transition-colors duration-150 hover:bg-[var(--rp-on-primary)]/10'
+                className='rp-focus-inverse group -mx-2.5 flex items-center gap-3 rounded-[var(--rp-radius-btn)] border-b border-[var(--rp-on-hero)]/15 px-2.5 py-2.5 transition-colors duration-150 hover:bg-[var(--rp-on-hero)]/10'
               >
-                <span className='h-14 w-11 shrink-0 overflow-hidden bg-[var(--rp-on-primary)]/10'>
+                <span className='h-14 w-11 shrink-0 overflow-hidden bg-[var(--rp-on-hero)]/10'>
                   <ResourceThumb
                     slug={slug}
                     id={item.id}
@@ -287,16 +278,11 @@ function RecentDocuments({ slug }: { slug: string }) {
                   />
                 </span>
                 <span className='min-w-0 flex-1'>
-                  <span className='rp-clamp-2 block text-sm leading-snug text-[var(--rp-on-primary)]'>
+                  <span className='rp-clamp-2 block text-sm leading-snug text-[var(--rp-on-hero)]'>
                     {item.title}
                   </span>
                 </span>
-                <span
-                  aria-hidden='true'
-                  className='shrink-0 text-[var(--rp-on-primary)]/50 transition-transform duration-200 group-hover:translate-x-0.5'
-                >
-                  &rarr;
-                </span>
+                <ArrowRight size='sm' className='shrink-0 text-[var(--rp-on-hero-2)]' />
               </Link>
             </li>
           ))}
@@ -309,69 +295,23 @@ function RecentDocuments({ slug }: { slug: string }) {
  * Quick entry
  * ---------------------------------------------------------------------- */
 
-const TILE_ICONS = {
-  library: <path d='M4 4.5h7v6H4zM4 13.5h7v6H4zM15 4.5h5v15h-5z' />,
-  ask: <path d='M4 5.5h16v11H9l-5 4z' />,
-  graph: (
-    <>
-      <circle cx='6' cy='6.5' r='2.5' />
-      <circle cx='18' cy='9.5' r='2.5' />
-      <circle cx='10' cy='17.5' r='2.5' />
-      <path d='M8.2 7.7l7.6 1.4M16.4 11.6l-4.7 4.2M8.4 15.4l-1.6-6.5' />
-    </>
-  ),
-  investigations: (
-    <>
-      <circle cx='10.5' cy='10.5' r='5.5' />
-      <path d='M14.6 14.6L20 20' />
-    </>
-  ),
-} as const
-
-function TileIcon({ name }: { name: keyof typeof TILE_ICONS }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.5'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className='h-9 w-9 shrink-0'
-      aria-hidden='true'
-    >
-      {TILE_ICONS[name]}
-    </svg>
-  )
-}
-
 /** The four ways into the corpus, as brand-washed blocks under the hero. */
 function QuickEntry({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
   const tiles = [
-    { to: 'library', label: 'Browse the library', icon: 'library' },
-    { to: 'ask', label: 'Ask a question', icon: 'ask' },
-    { to: 'graph', label: 'Explore the graph', icon: 'graph' },
-    { to: 'investigations', label: 'Run an investigation', icon: 'investigations' },
+    { to: 'library', label: 'Browse the library', icon: Library },
+    { to: 'ask', label: 'Ask a question', icon: MessageSquare },
+    { to: 'graph', label: 'Explore the graph', icon: Network },
+    { to: 'investigations', label: 'Run an investigation', icon: Search },
   ] as const
 
   return (
     <div className='rp-shell rp-anim-rise rp-delay-2 grid grid-cols-1 gap-3 py-10 sm:grid-cols-2'>
-      {tiles.map((tile) => (
-        <Link key={tile.to} to={`/t/${slug}/${tile.to}`} className='rp-tile'>
-          <TileIcon name={tile.icon} />
-          <span className='rp-tile-label'>{tile.label}</span>
-          <svg
-            viewBox='0 0 24 24'
-            fill='none'
-            stroke='currentColor'
-            strokeWidth='1.5'
-            strokeLinecap='round'
-            strokeLinejoin='round'
-            className='rp-tile-arrow h-5 w-5 shrink-0'
-            aria-hidden='true'
-          >
-            <path d='M4 12h15M13 6l6 6-6 6' />
-          </svg>
+      {tiles.map(({ to, label, icon: Icon }) => (
+        <Link key={to} to={`/t/${slug}/${to}`} className='rp-tile rp-pages-entry-tile min-w-0'>
+          <Icon size='lg' className='shrink-0' />
+          <span className='rp-tile-label min-w-0 break-words'>{ui(label)}</span>
+          <ArrowRight className='rp-tile-arrow shrink-0' />
         </Link>
       ))}
     </div>
@@ -405,22 +345,22 @@ function RegionBand({ slug }: { slug: string }) {
           <h2 className='rp-display text-3xl text-[var(--rp-on-primary)] sm:text-4xl'>
             {ui('Explore by region')}
           </h2>
-          <p className='mt-4 max-w-md text-base leading-relaxed text-[var(--rp-on-primary)]/75'>
+          <p className='mt-4 max-w-md text-base leading-relaxed text-[var(--rp-on-primary-2)]'>
             {ui('Research from every corner of the country')}
           </p>
           {
             /* On a phone the seven links fill their wrap lines, so the group
              * reads as a justified block of destinations rather than a ragged
              * cloud of tags, and each one clears 44px for a thumb - a 33px pill
-             * is a poor target. Both are dropped at `sm:`, where the row goes
-             * back to natural widths beside the map. */
+             * is a poor target. Widths return to natural sizes at `sm:`, and fine-pointer
+             * targets keep their minimum at every width. */
           }
           <ul aria-label={ui('Regions')} className='mt-6 flex flex-wrap gap-2'>
             {REGIONS.map((region) => (
               <li key={region.id} className='grow sm:grow-0'>
                 <Link
                   to={`/t/${slug}/search?q=${encodeURIComponent(region.query)}`}
-                  className='rp-focus-inverse inline-flex min-h-11 w-full items-center justify-center rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-primary)]/30 bg-[var(--rp-on-primary)]/10 px-3 py-1.5 text-sm text-[var(--rp-on-primary)] transition-colors duration-150 hover:bg-[var(--rp-on-primary)]/20 sm:min-h-0 sm:w-auto'
+                  className='rp-focus-inverse inline-flex min-h-[2.75rem] w-full items-center justify-center rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-primary)]/30 bg-[var(--rp-on-primary)]/10 px-3 py-1.5 text-sm text-[var(--rp-on-primary)] transition-colors duration-150 hover:bg-[var(--rp-on-primary)]/20 sm:w-auto'
                 >
                   {region.label}
                 </Link>
@@ -474,7 +414,7 @@ function ResourceCard({ slug, resource }: { slug: string; resource: ResourceSumm
           : null}
         {resource.sourceName
           ? (
-            <p className='mt-auto truncate pt-1 text-[11px] tabular-nums text-ink-3/80'>
+            <p className='mt-auto truncate pt-1 text-xs tabular-nums text-ink-3'>
               {resource.sourceName}
             </p>
           )
@@ -504,18 +444,12 @@ export function SectionHeading(
       </h2>
       <span className='rp-badge rp-badge-quiet shrink-0 tabular-nums'>{count}</span>
       <span className='h-px flex-1 bg-[var(--rp-line)]' aria-hidden='true' />
-      {
-        /* `py-3 -my-3` grows the hit area to 44px tall without moving anything:
-         * the link's own text box is only 20px, too small to hit reliably on a
-         * phone, and the negative margin keeps its outer size unchanged so the
-         * heading row's height is still set by the heading. */
-      }
       <Link
         to={`/t/${slug}/library?topic=${encodeURIComponent(topicId)}`}
-        className='rp-focus -my-3 shrink-0 rounded-[var(--rp-radius-btn)] py-3 text-sm font-medium text-[var(--rp-ink-3)] transition-colors duration-150 hover:text-[var(--rp-ink)]'
+        className='rp-link-standalone shrink-0 text-sm font-medium'
       >
         {ui('See all')}
-        <span aria-hidden='true'>&rarr;</span>
+        <ArrowRight size='sm' className='shrink-0' />
       </Link>
     </div>
   )

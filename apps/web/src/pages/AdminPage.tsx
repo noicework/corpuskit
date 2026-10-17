@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink } from 'react-router-dom'
 import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
@@ -6,7 +6,16 @@ import { getAdminOverview } from '../api/client.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { platformBranding } from '../components/PortalAccessGate.tsx'
 import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
-import { Skeleton } from '../components/ui.tsx'
+import { Button, SectionHeader, Skeleton } from '../components/ui.tsx'
+import {
+  AlertCircle,
+  ArrowLeft,
+  Database,
+  History,
+  RotateCw,
+  ShieldCheck,
+  Users,
+} from '../components/icons.tsx'
 import { AddPortal } from './admin/AddPortal.tsx'
 import { MigratePanel } from './admin/MigratePanel.tsx'
 import { PortalRow } from './admin/PortalRow.tsx'
@@ -81,48 +90,57 @@ export function OverviewAccess(
   const locale = usePortalLocale()
   const { ui } = locale
   return (
-    <div className='mt-5 space-y-4' data-admin-unavailable={!overview.data ? true : undefined}>
-      {!overview.sessionAllowed && (
-        <>
-          <p className='text-sm text-ink-2'>
-            {overview.data
-              ? ui('This overview is a snapshot. Each emergency action needs its own confirmation.')
-              : ui('You do not have access to this administration page.')}
-          </p>
-        </>
-      )}
-      <div className='flex flex-wrap gap-3'>
-        {!overview.sessionAllowed && overview.auth?.entraEnabled !== false && (
-          <a href={microsoftLoginUrl(returnTo)} className='rp-btn rp-btn-primary'>
-            {ui('Sign in with Microsoft')}
-          </a>
-        )}
-        {!overview.sessionAllowed && overview.auth?.externalLogin && (
-          <a
-            href={externalLoginUrl(overview.auth.externalLogin.startUrl, returnTo)}
-            className='rp-btn rp-btn-outline whitespace-normal text-center'
-            data-external-login
-          >
-            {overview.auth.externalLogin.name}
-          </a>
-        )}
-        {(overview.sessionAllowed || overview.breakGlassEnabled) && (
-          <button
-            type='button'
+    <section
+      className='rp-card space-y-4 p-5 lg:p-6'
+      data-admin-unavailable={!overview.data ? true : undefined}
+    >
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={ui('Overview')}
+        actions={(overview.sessionAllowed || overview.breakGlassEnabled) && (
+          <Button
+            variant='ghost'
+            size='sm'
+            leadingIcon={overview.sessionAllowed ? RotateCw : ShieldCheck}
             disabled={overview.pending}
             onClick={() => void overview.refresh()}
-            className='rp-btn rp-btn-outline'
           >
             {overview.sessionAllowed ? ui('Refresh overview') : ui('Use emergency access')}
-          </button>
+          </Button>
         )}
-      </div>
+      />
+      {!overview.sessionAllowed && (
+        <p className='text-sm text-ink-2'>
+          {overview.data
+            ? ui('This overview is a snapshot. Each emergency action needs its own confirmation.')
+            : ui('You do not have access to this administration page.')}
+        </p>
+      )}
+      {!overview.sessionAllowed && (
+        <div className='flex flex-wrap gap-3'>
+          {overview.auth?.entraEnabled !== false && (
+            <a href={microsoftLoginUrl(returnTo)} className='rp-btn rp-btn-primary'>
+              {ui('Sign in with Microsoft')}
+            </a>
+          )}
+          {overview.auth?.externalLogin && (
+            <a
+              href={externalLoginUrl(overview.auth.externalLogin.startUrl, returnTo)}
+              className='rp-btn rp-btn-outline whitespace-normal text-center'
+              data-external-login
+            >
+              {overview.auth.externalLogin.name}
+            </a>
+          )}
+        </div>
+      )}
       {overview.error && (
-        <p role='alert' className='text-sm' style={{ color: 'var(--rp-bad-ink)' }}>
+        <p role='alert' className='flex items-start gap-2 text-sm text-[var(--rp-bad-ink)]'>
+          <AlertCircle size='sm' className='mt-0.5 shrink-0' />
           {locale.error(overview.error, 'Could not load the overview.')}
         </p>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -146,20 +164,30 @@ export function PlatformAdminShell(
   const { scheme } = useViewerScheme()
   useBodyTheme(platformBranding, scheme)
   const access = useAccess()
+  const navigation = useRef<HTMLElement>(null)
+  useEffect(() => {
+    navigation.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    })
+  }, [])
   const links = [
     {
       to: '/admin',
       label: 'Knowledge boxes',
+      icon: Database,
       allowed: access.can('portal.create', { kind: 'platform' }),
     },
     {
       to: '/admin/people',
       label: 'People',
+      icon: Users,
       allowed: access.can('platform.members.manage', { kind: 'platform' }),
     },
     {
       to: '/admin/audit',
       label: 'Audit',
+      icon: History,
       allowed: access.can('audit.read', { kind: 'platform' }) ||
         access.can('audit.export', { kind: 'platform' }),
     },
@@ -170,37 +198,52 @@ export function PlatformAdminShell(
       style={tenantThemeVars(platformBranding, scheme)}
       data-platform-scheme={scheme}
     >
-      <div className='rp-shell min-w-0 py-12'>
+      <div className='rp-shell min-w-0 py-8 lg:py-10'>
         <div className='flex flex-wrap items-start justify-between gap-3'>
           <div className='min-w-0'>
             <p className='rp-eyebrow text-ink-3'>{ui('Research portal')}</p>
-            <h1 className='rp-display mt-1 break-words text-2xl text-ink'>{title}</h1>
-            <p className='mt-1 max-w-prose text-sm text-ink-3'>{description}</p>
+            <h1 className='rp-display mt-1 break-words text-2xl text-ink sm:text-3xl'>{title}</h1>
+            <p className='mt-1 max-w-prose text-sm text-ink-2'>{description}</p>
           </div>
-          <AppLanguageSwitch />
-          <Link
-            to='/'
-            className='rp-focus inline-flex min-h-[44px] shrink-0 items-center text-sm text-ink-3 hover:text-[var(--rp-ink)]'
-          >
-            &larr; {ui('Back to portals')}
-          </Link>
+          <div className='flex flex-wrap items-center gap-3'>
+            <div className='[&_button]:min-h-11 [&_button]:min-w-11'>
+              <AppLanguageSwitch />
+            </div>
+            <Link to='/' className='rp-link-standalone'>
+              <ArrowLeft size='sm' />
+              {ui('Back to portals')}
+            </Link>
+          </div>
         </div>
-        {links.length > 0 && (
-          <nav className='mt-6 flex flex-wrap gap-3' aria-label={ui('Platform administration')}>
-            {links.map((link) => (
-              <NavLink
-                key={link.to}
-                to={link.to}
-                end
-                className={({ isActive }) =>
-                  `rp-btn min-h-[44px] ${isActive ? 'rp-btn-primary' : 'rp-btn-outline'}`}
-              >
-                {ui(link.label)}
-              </NavLink>
-            ))}
-          </nav>
-        )}
-        {children}
+        <div
+          className={`mt-6 min-w-0 gap-6 lg:gap-8 ${
+            links.length > 0 ? 'lg:grid lg:grid-cols-[12rem_minmax(0,1fr)]' : ''
+          }`}
+        >
+          {links.length > 0 && (
+            <nav
+              ref={navigation}
+              className='rp-admin-platform-tabs mb-6 flex min-w-0 gap-2 overflow-x-auto pb-2 lg:mb-0 lg:flex-col lg:overflow-visible lg:pb-0'
+              aria-label={ui('Platform administration')}
+            >
+              {links.map((link) => (
+                <NavLink
+                  key={link.to}
+                  to={link.to}
+                  end
+                  className={({ isActive }) =>
+                    `rp-btn shrink-0 whitespace-nowrap lg:justify-start ${
+                      isActive ? 'rp-btn-primary' : 'rp-btn-ghost'
+                    }`}
+                >
+                  <link.icon size='sm' />
+                  {ui(link.label)}
+                </NavLink>
+              ))}
+            </nav>
+          )}
+          <div className='min-w-0'>{children}</div>
+        </div>
       </div>
     </main>
   )
@@ -220,7 +263,7 @@ function AdminContent() {
       )}
     >
       {isLoading && (
-        <div className='mt-8 space-y-3'>
+        <div className='mb-6 space-y-3'>
           <Skeleton className='h-16 w-full' />
           <Skeleton className='h-16 w-full' />
           <Skeleton className='h-16 w-full' />
@@ -230,10 +273,10 @@ function AdminContent() {
       <OverviewAccess overview={overview} returnTo='/admin' />
 
       {data && (
-        <div className='mt-8 space-y-4' data-admin-overview>
+        <div className='mt-6 space-y-6 lg:space-y-8' data-admin-overview>
           <AddPortal />
 
-          <div className='space-y-3'>
+          <div className='space-y-4'>
             {data.map((row) => (
               <PortalRow
                 key={row.tenant.slug}

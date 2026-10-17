@@ -6,16 +6,15 @@ import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 import { googleFontsUrl, tenantThemeVars } from '../apps/web/src/lib/theme.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
 
-async function clickText(page: Page, text: string) {
-  await page.evaluate((text) => {
-    const buttons = [...document.querySelectorAll('button')]
-    const button = buttons.find((button) => button.textContent?.trim() === text) ??
-      buttons.find((button) =>
-        [...button.querySelectorAll('span')].some((span) => span.textContent?.trim() === text)
-      )
-    if (!button) throw new Error(`Button unavailable: ${text}`)
+async function clickButton(page: Page, name: string, scope = 'body') {
+  await page.evaluate((name, scope) => {
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>(`${scope} button`)]
+    const button = buttons.find((button) =>
+      (button.getAttribute('aria-label') ?? button.textContent)?.trim() === name
+    )
+    if (!button) throw new Error(`Button unavailable: ${name}`)
     button.click()
-  }, { args: [text] })
+  }, { args: [name, scope] })
 }
 
 async function fill(page: Page, selector: string, value: string) {
@@ -24,6 +23,39 @@ async function fill(page: Page, selector: string, value: string) {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }, { args: [selector, value] })
+}
+
+async function applyAppearance(page: Page, branding: Parameters<typeof tenantThemeVars>[0]) {
+  const expected = tenantThemeVars(branding)
+  await page.evaluate((vars, font) => {
+    const { colorScheme = 'light', ...theme } = vars
+    const paper = Object.entries(theme).find(([name]) => name === '--rp-paper')?.[1]
+    if (paper) document.documentElement.style.setProperty('--rp-paper', String(paper))
+    else document.documentElement.style.removeProperty('--rp-paper')
+    document.documentElement.style.colorScheme = String(colorScheme)
+    for (const root of [document.body, document.querySelector<HTMLElement>('main.rp-tenant')]) {
+      if (!root) continue
+      root.classList.add('rp-tenant')
+      // An own-colour light palette inherits stylesheet greys. Remove the viewer's existing
+      // dark overrides before applying it, so the light fixture really exercises light mode.
+      for (const key of [...root.style]) {
+        if (key.startsWith('--rp-')) root.style.removeProperty(key)
+      }
+      root.style.colorScheme = String(colorScheme)
+      for (const [key, value] of Object.entries(theme)) {
+        root.style.setProperty(key, String(value))
+      }
+    }
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = font
+    document.head.append(link)
+  }, { args: [expected, googleFontsUrl('lexend-zilla')] })
+  expect(
+    await page.evaluate(() =>
+      getComputedStyle(document.querySelector('main.rp-tenant')!).colorScheme
+    ),
+  ).toBe(expected.colorScheme)
 }
 
 /**
@@ -90,7 +122,7 @@ Deno.test('owner migration needs both independent scopes and clears results on s
   const page = await browser.newPage(`${server.url}/admin`)
   try {
     await page.waitForSelector('[data-migrate-panel]')
-    await clickText(page, 'Migrate resources')
+    await clickButton(page, 'Migrate resources')
     const delayed = server.delayResponse(`/auth/me?portal=${destination}`)
     await selectMigration(page, 'marine', destination)
     await delayed.entered
@@ -108,7 +140,7 @@ Deno.test('owner migration needs both independent scopes and clears results on s
         b.textContent?.trim() === 'Run migration' && !b.disabled
       )
     )
-    await clickText(page, 'Run migration')
+    await clickButton(page, 'Run migration')
     await page.waitForFunction(() =>
       document.body.textContent?.includes('Copied 1, skipped 0, 0 errors.')
     )
@@ -126,7 +158,7 @@ Deno.test('owner migration needs both independent scopes and clears results on s
       )
     )
     const late = server.delayResponse('/api/admin/migrate')
-    await clickText(page, 'Run migration')
+    await clickButton(page, 'Run migration')
     await late.entered
     await selectMigration(page, 'marine', destination)
     await selectMigration(page, destination, 'marine')
@@ -172,7 +204,7 @@ Deno.test('owner reduced or failed source and destination snapshots never permit
             return response
           }
         }, { args: [blocked] })
-        await clickText(page, 'Migrate resources')
+        await clickButton(page, 'Migrate resources')
         await selectMigration(page, 'marine', 'migration-destination')
         await migrationSettledUnavailable(page)
         expect(
@@ -190,7 +222,7 @@ Deno.test('owner reduced or failed source and destination snapshots never permit
           ),
         ).toBe(false)
         expect(server.requests.some((r) => r.path === '/api/admin/migrate')).toBe(false)
-        expect(await page.$('[role=dialog]')).toBeNull()
+        expect(await page.$('dialog[open], [role=dialog]')).toBeNull()
         expect(await page.$('[data-add-portal]')).not.toBeNull()
         expect(service.copied).toEqual([])
       } finally {
@@ -204,7 +236,7 @@ Deno.test('owner reduced or failed source and destination snapshots never permit
     const page = await browser.newPage(`${server.url}/admin`)
     try {
       await page.waitForSelector('[data-migrate-panel]')
-      await clickText(page, 'Migrate resources')
+      await clickButton(page, 'Migrate resources')
       await selectMigration(page, 'marine', 'migration-destination')
       await migrationSettledUnavailable(page)
       expect(
@@ -230,10 +262,10 @@ Deno.test('new portal validation and server failures never refresh or retry and 
   const page = await browser.newPage(`${server.url}/admin`)
   try {
     await page.waitForSelector('[data-add-portal]')
-    await clickText(page, 'Add a knowledge box')
+    await clickButton(page, 'Add portal', '[data-add-portal]')
     await fill(page, '#portal-name', '!!!')
     const before = server.requests.filter((r) => r.path === '/api/admin/overview').length
-    await clickText(page, 'Add portal')
+    await clickButton(page, 'Add portal', '[data-add-portal] form')
     await page.waitForSelector('[data-add-portal] [role=alert]')
     expect(server.requests.filter((r) => r.path === '/api/admin/tenants')).toHaveLength(1)
     expect(server.requests.filter((r) => r.path === '/api/admin/overview')).toHaveLength(before)
@@ -242,10 +274,10 @@ Deno.test('new portal validation and server failures never refresh or retry and 
     ).toBe('!!!')
     server.setResponseStatus('/api/admin/tenants', 500)
     await fill(page, '#portal-name', 'Unconfirmed portal')
-    await clickText(page, 'Add portal')
+    await clickButton(page, 'Add portal', '[data-add-portal] form')
     await page.waitForSelector('[data-add-portal] [role=alert]')
     await page.waitForFunction(() =>
-      [...document.querySelectorAll('button')].some((b) =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-add-portal] form button')].some((b) =>
         b.textContent?.trim() === 'Add portal' && !b.disabled
       )
     )
@@ -257,7 +289,7 @@ Deno.test('new portal validation and server failures never refresh or retry and 
     server.setResponseStatus('/api/admin/tenants', null)
     const late = server.delayResponse('/api/admin/tenants')
     await fill(page, '#portal-name', 'Late creation')
-    await clickText(page, 'Add portal')
+    await clickButton(page, 'Add portal', '[data-add-portal] form')
     await late.entered
     server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
     await page.evaluate(() => dispatchEvent(new Event('focus')))
@@ -295,18 +327,18 @@ Deno.test('platform-admin creates a server-named portal without owner migration 
     expect(
       await page.evaluate(() =>
         [...document.querySelectorAll('button')].some((b) =>
-          b.textContent?.includes('Migrate resources')
+          (b.getAttribute('aria-label') ?? b.textContent)?.includes('Migrate resources')
         )
       ),
     ).toBe(false)
-    await clickText(page, 'Add a knowledge box')
+    await clickButton(page, 'Add portal', '[data-add-portal]')
     await page.evaluate(() => document.querySelector<HTMLInputElement>('#portal-name')?.focus())
     await page.keyboard.press('Tab')
     expect(await page.evaluate(() => document.activeElement?.id)).toBe('portal-org')
     await fill(page, '#portal-name', 'New research fixture')
     await fill(page, '#portal-org', 'Research organisation')
     await fill(page, '#portal-tagline', 'A useful research portal')
-    await clickText(page, 'Add portal')
+    await clickButton(page, 'Add portal', '[data-add-portal] form')
     await page.waitForSelector('[data-portal-row=new-research-fixture]')
     expect(server.tenants.get('new-research-fixture')?.branding.organisation).toBe(
       'Research organisation',
@@ -340,7 +372,9 @@ async function openRow(page: Page, slug: string) {
   await page.waitForSelector(`[data-portal-row="${slug}"]`)
   await page.evaluate(
     (slug) =>
-      document.querySelector<HTMLButtonElement>(`[data-portal-row="${slug}"] > button`)!.click(),
+      document.querySelector<HTMLButtonElement>(
+        `[data-portal-row="${slug}"] button[aria-controls="portal-actions-${slug}"]`,
+      )!.click(),
     { args: [slug] },
   )
   await page.waitForSelector(`[data-portal-actions="${slug}"]`)
@@ -365,7 +399,7 @@ Deno.test('platform overview does not grant deletion and disabled recovery has o
         expect(await page.$('[data-portal-remove]')).toBeNull()
         expect(await page.$('[data-portal-actions] a')).toBeNull()
         expect((await fetch(`${server.url}/api/t/marine/resources`)).status).toBe(403)
-        await clickText(page, 'Enable')
+        await clickButton(page, 'Enable')
         await page.waitForFunction(() => {
           const row = document.querySelector('[data-portal-row=marine]')
           return !!row && !row.textContent?.includes('Hidden') &&
@@ -398,7 +432,7 @@ Deno.test('scoped portal admin connections work without estate overview and clea
   const page = await browser.newPage(`${server.url}/t/marine/manage?tab=connections`)
   try {
     await page.waitForSelector('[data-portal-connections]')
-    await clickText(page, 'Revert to demo box')
+    await clickButton(page, 'Revert to demo box')
     await page.waitForFunction(() =>
       document.body.textContent?.includes('Reverted to the demo knowledge box.')
     )
@@ -445,15 +479,14 @@ Deno.test('owner deletion detaches only with current portal domain permission', 
   try {
     await openRow(page, custom.slug)
     await page.waitForSelector('[data-portal-remove]')
-    await page.evaluate(() => {
-      globalThis.confirm = () => false
-    })
-    await clickText(page, 'Remove')
+    await clickButton(page, 'Remove', `[data-portal-row="${custom.slug}"]`)
+    await page.waitForSelector('dialog[open]')
+    await clickButton(page, 'Cancel', 'dialog[open]')
+    await page.waitForFunction(() => !document.querySelector('dialog[open]'))
     expect(detached).toEqual([])
-    await page.evaluate(() => {
-      globalThis.confirm = () => true
-    })
-    await clickText(page, 'Remove')
+    await clickButton(page, 'Remove', `[data-portal-row="${custom.slug}"]`)
+    await page.waitForSelector('dialog[open]')
+    await clickButton(page, 'Remove', 'dialog[open]')
     await page.waitForFunction(() => !document.querySelector('[data-portal-row=remove-fixture]'))
     expect(detached).toEqual(['remove-fixture.corpuskit.org'])
     expect(server.tenants.get(custom.slug)).toBeUndefined()
@@ -479,7 +512,7 @@ Deno.test('row scopes fail closed independently and collapse discards connection
     await page.waitForSelector('[data-portal-connections]')
     await (await page.waitForSelector('#kb-token-marine')).type('discard-me')
     const delay = server.delayResponse('/api/admin/t/marine/knowledge-box')
-    await clickText(page, 'Revert to demo box')
+    await clickButton(page, 'Revert to demo box')
     await delay.entered
     await openRow(page, custom.slug)
     delay.release()
@@ -542,17 +575,7 @@ Deno.test('platform connections and disabled row fit light dark wide and actual3
           density: 'spacious' as const,
           typography: 'lexend-zilla' as const,
         }
-        await page.evaluate((vars, font) => {
-          document.body.classList.add('rp-tenant')
-          Object.assign(document.body.style, vars)
-          for (const [key, value] of Object.entries(vars)) {
-            document.body.style.setProperty(key, String(value))
-          }
-          const link = document.createElement('link')
-          link.rel = 'stylesheet'
-          link.href = font
-          document.head.append(link)
-        }, { args: [tenantThemeVars(branding), googleFontsUrl('lexend-zilla')] })
+        await applyAppearance(page, branding)
         for (const width of [1440, 390]) {
           await page.setViewportSize({ width, height: 960 })
           await page.evaluate(() =>
@@ -618,18 +641,8 @@ Deno.test('portal creation and migration results fit inherited appearance at wid
           density: 'spacious' as const,
           typography: 'lexend-zilla' as const,
         }
-        await page.evaluate((vars, font) => {
-          document.body.classList.add('rp-tenant')
-          Object.assign(document.body.style, vars)
-          for (const [key, value] of Object.entries(vars)) {
-            document.body.style.setProperty(key, String(value))
-          }
-          const link = document.createElement('link')
-          link.rel = 'stylesheet'
-          link.href = font
-          document.head.append(link)
-        }, { args: [tenantThemeVars(branding), googleFontsUrl('lexend-zilla')] })
-        await clickText(page, 'Add a knowledge box')
+        await applyAppearance(page, branding)
+        await clickButton(page, 'Add portal', '[data-add-portal]')
         await fill(page, '#portal-name', 'New research portal')
         await fill(page, '#portal-org', 'Research organisation')
         await fill(page, '#portal-tagline', 'Research for a resilient future')
@@ -643,14 +656,14 @@ Deno.test('portal creation and migration results fit inherited appearance at wid
             width,
           )
         }
-        await clickText(page, 'Migrate resources')
+        await clickButton(page, 'Migrate resources')
         await selectMigration(page, 'marine', destination)
         await page.waitForFunction(() =>
           [...document.querySelectorAll('button')].some((b) =>
             b.textContent?.trim() === 'Run migration' && !b.disabled
           )
         )
-        await clickText(page, 'Run migration')
+        await clickButton(page, 'Run migration')
         await page.waitForFunction(() =>
           document.body.textContent?.includes('Copied 1, skipped 0, 0 errors.')
         )

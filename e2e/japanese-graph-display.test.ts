@@ -20,15 +20,18 @@ const edges = [
   { source: 'AP-M0', target: 'Material', label: 'Summary {count}' },
 ]
 
-async function clickText(page: Page, text: string) {
-  await page.evaluate((text) => {
+async function clickButton(page: Page, name: string) {
+  await page.evaluate((name) => {
     const button = [...document.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) =>
-        button.textContent?.trim() === text && button.getBoundingClientRect().width > 0
-      )
-    if (!button) throw new Error(`Missing fixture control: ${text}`)
+      .find((button) => {
+        const labelledBy = button.getAttribute('aria-labelledby')?.split(/\s+/)
+          .map((id) => document.getElementById(id)?.textContent?.trim() ?? '').join(' ')
+        const label = labelledBy || button.getAttribute('aria-label') || button.textContent?.trim()
+        return label === name && button.getBoundingClientRect().width > 0
+      })
+    if (!button) throw new Error(`Missing fixture control: ${name}`)
     button.click()
-  }, { args: [text] })
+  }, { args: [name] })
 }
 
 async function findNode(page: Page, name: string, language: 'ja' | 'en') {
@@ -129,7 +132,7 @@ Deno.test('graph display aliases switch on the real graph and dossier at wide390
             )
           )
           if (width === 390) {
-            await clickText(page, createPortalLocale('ja').ui('Browse'))
+            await clickButton(page, createPortalLocale('ja').ui('Browse'))
           }
           const navigator = createPortalLocale('ja').ui('Map navigator')
           expect(
@@ -142,9 +145,9 @@ Deno.test('graph display aliases switch on the real graph and dossier at wide390
             ),
           ).toContain('すべての項目を表示（12件）')
           expect(await findNode(page, 'EX-M20-032', 'ja')).toBe('実験')
-          await clickText(page, createPortalLocale('ja').ui('Trace a connection'))
+          await clickButton(page, createPortalLocale('ja').ui('Trace a connection'))
           await findNode(page, 'AP-M0', 'ja')
-          await clickText(page, createPortalLocale('ja').ui('Expand connections'))
+          await clickButton(page, createPortalLocale('ja').ui('Expand connections'))
           await page.waitForFunction(
             (label) =>
               [...document.querySelectorAll('button')].some((button) =>

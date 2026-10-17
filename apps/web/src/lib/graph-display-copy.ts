@@ -11,6 +11,14 @@ const GROUP_COPY = {
 } as const
 
 const RELATION_COPY = {
+  studies: 'studies',
+  affects: 'affects',
+  'conducted-in': 'conducted in',
+  'funded-by': 'funded by',
+  'collaborates-with': 'collaborates with',
+  infects: 'infects',
+  'located-in': 'located in',
+  assesses: 'assesses',
   examines: 'examines',
   'uses material': 'uses material',
 } as const
