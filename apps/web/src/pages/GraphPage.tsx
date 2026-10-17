@@ -1031,9 +1031,12 @@ export function GraphPage() {
   useEffect(() => {
     if (!stageEl) return
     const update = () => {
+      // The phone header scrolls above the viewport; its negative bottom
+      // must not move the return threshold above the visible screen.
       const header = document.querySelector('.rp-tenant > header')?.getBoundingClientRect()
       setShowBackToTop(
-        globalThis.scrollY > 0 && stageEl.getBoundingClientRect().bottom <= (header?.bottom ?? 0),
+        globalThis.scrollY > 0 &&
+          stageEl.getBoundingClientRect().bottom <= Math.max(0, header?.bottom ?? 0),
       )
     }
     update()
@@ -1280,37 +1283,23 @@ export function GraphPage() {
       <div data-graph-masthead='mobile' className='relative z-30 shrink-0 md:hidden'>
         <div className='relative overflow-hidden border-b border-line'>
           <HeroGround />
-          {
-            /* A literal 1.5rem, not px-6. Tailwind emits every spacing utility
-              as calc(var(--spacing) * n) and this app derives --spacing from
-              the per-tenant density dial, while the header's own gutter
-              (.rp-shell) is a fixed 1.5rem. On a spacious portal px-6 would
-              resolve to 33.6px against the header's 24px and the map's title
-              would sit visibly off the logo directly above it. */
-          }
-          <div className='relative py-3' style={{ paddingInline: '1.5rem' }}>
-            <div className='flex flex-wrap items-baseline justify-between gap-x-2'>
-              <h1 className='rp-display min-w-0 break-words text-xl text-[var(--rp-on-primary)]'>
-                {ui('Knowledge map')}
-              </h1>
-              {hasGraph
-                ? (
-                  <p className='shrink-0 text-2xs leading-tight text-[var(--rp-on-primary-2)]'>
-                    {
-                      /* Demoted, and demoted again on the narrowest phones: the
-                        category count the wide hero carries is dropped here (the
-                        navigator's legend names every category anyway), and the
-                        relation count follows it on a narrow screen rather than
-                        being cut off mid-word. */
-                    }
-                    {nodeCount}
-                    <span className='hidden min-[390px]:inline'>{` · ${edgeCount}`}</span>
-                  </p>
-                )
-                : null}
-            </div>
-            <div className='mt-2 flex flex-wrap items-center justify-end gap-2'>
-              <div className='rp-seg rp-seg-on-brand rp-graph-brand-seg'>
+          {/* Keep Find beside the title so four lens/layout targets fit below it. */}
+          <div className='rp-graph-mobile-chrome relative py-1'>
+            <div className='flex items-center justify-between gap-2'>
+              <div className='min-w-0'>
+                <h1 className='rp-display min-w-0 break-words text-xl text-[var(--rp-on-primary)]'>
+                  {ui('Knowledge map')}
+                </h1>
+                {hasGraph
+                  ? (
+                    <p className='mt-1 text-2xs leading-tight text-[var(--rp-on-primary-2)]'>
+                      {nodeCount}
+                      <span className='hidden min-[390px]:inline'>{` · ${edgeCount}`}</span>
+                    </p>
+                  )
+                  : null}
+              </div>
+              <div className='rp-seg rp-seg-on-brand rp-graph-brand-seg shrink-0'>
                 <button
                   type='button'
                   aria-label={ui('Find in the map')}
@@ -1323,6 +1312,8 @@ export function GraphPage() {
                   <Search size='sm' />
                 </button>
               </div>
+            </div>
+            <div className='mt-1 flex flex-wrap items-center justify-end gap-2'>
               <ModeToggle mode={mode} onChange={switchMode} compact />
               {hasGraph ? <LayoutToggle layout={layout} onChange={setLayout} compact /> : null}
             </div>
@@ -1362,7 +1353,7 @@ export function GraphPage() {
         className='relative z-40 hidden shrink-0 border-b border-line md:block'
       >
         <HeroGround />
-        <div className='rp-shell relative flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-3'>
+        <div className='rp-shell relative flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-2'>
           <div className='min-w-0'>
             <h1 className='rp-display text-2xl text-[var(--rp-on-primary)]'>
               {ui('Knowledge map')}

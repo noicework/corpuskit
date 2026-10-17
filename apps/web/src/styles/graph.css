@@ -36,3 +36,14 @@
 .rp-graph-popup .rp-graph-popup-counts {
   font-size: 0.75rem;
 }
+
+/* Match the header gutter, with room for four enlarged targets at 320px. */
+.rp-graph-mobile-chrome {
+  padding-inline: 1.5rem;
+}
+
+@media (max-width: 389px) {
+  .rp-graph-mobile-chrome {
+    padding-inline: 1rem;
+  }
+}
