@@ -1,6 +1,17 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import {
+  AlertCircle,
+  Bookmark,
+  BookmarkFilled,
+  Check,
+  ChevronDown,
+  Pin,
+  Plus,
+  X,
+} from './icons.tsx'
+import { IconButton } from './ui.tsx'
+import {
   createResearchStorageContext,
   type CurrentInvestigation,
   readCurrentInvestigation,
@@ -72,61 +83,6 @@ export function useCurrentInvestigation(slug: string): CurrentInvestigation | nu
 
 function truncateName(name: string, max = 18): string {
   return name.length > max ? `${name.slice(0, Math.max(0, max - 1))}…` : name
-}
-
-function PinIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className={className}>
-      <path d='M9.69 18.933a.75.75 0 00.62 0c.204-.093.478-.227.797-.406.636-.357 1.48-.9 2.325-1.634C15.31 15.375 17 13.02 17 10a7 7 0 10-14 0c0 3.02 1.69 5.375 3.268 6.893.845.734 1.689 1.277 2.325 1.634.32.179.593.313.797.406zM10 11.5a2 2 0 110-4 2 2 0 010 4z' />
-    </svg>
-  )
-}
-
-function ChevronDownIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox='0 0 20 20' fill='currentColor' aria-hidden='true' className={className}>
-      <path
-        fillRule='evenodd'
-        d='M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z'
-        clipRule='evenodd'
-      />
-    </svg>
-  )
-}
-
-/** Bookmark glyph for the Save action - the house stroke idiom. */
-function SaveIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth={1.8}
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className={className}
-    >
-      <path d='M6 4.5h12a1 1 0 011 1V20l-7-4-7 4V5.5a1 1 0 011-1z' />
-    </svg>
-  )
-}
-
-function CloseIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth={1.8}
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      aria-hidden='true'
-      className={className}
-    >
-      <path d='M6 6l12 12M18 6L6 18' />
-    </svg>
-  )
 }
 
 /**
@@ -239,12 +195,13 @@ export function MakeCurrentToggle({
         type='button'
         onClick={toggle}
         aria-pressed={isCurrent}
-        title={isCurrent ? ui('This is your current investigation') : ui('Make current')}
-        className={`rp-btn rp-btn-ghost h-7 w-7 shrink-0 p-0 ${
+        title={isCurrent ? ui('Current investigation') : ui('Make current')}
+        aria-label={isCurrent ? ui('Current investigation') : ui('Make current')}
+        className={`rp-btn rp-btn-sm rp-btn-ghost rp-icon-btn shrink-0 ${
           isCurrent ? 'text-[var(--rp-accent-fg)]' : 'text-ink-3'
         } ${className ?? ''}`}
       >
-        <PinIcon className='h-3.5 w-3.5' />
+        <Pin size='sm' />
         <span className='sr-only'>
           {isCurrent ? ui('Current investigation') : ui('Make current')}
         </span>
@@ -257,10 +214,11 @@ export function MakeCurrentToggle({
       type='button'
       onClick={toggle}
       aria-pressed={isCurrent}
-      className={`rp-chip ${isCurrent ? 'rp-chip-active' : ''} ${className ?? ''}`}
+      className={`rp-chip rp-answer-chip ${isCurrent ? 'rp-chip-active' : ''} ${className ?? ''}`}
     >
-      <PinIcon className='h-3.5 w-3.5' />
-      {isCurrent ? ui('Current ✓') : ui('Make current')}
+      <Pin size='sm' />
+      {isCurrent ? ui('Current investigation') : ui('Make current')}
+      {isCurrent ? <Check size='sm' /> : null}
     </button>
   )
 }
@@ -348,7 +306,11 @@ function InvestigationPicker({
     <>
       {error
         ? (
-          <p className='px-1 pb-1 text-xs text-[var(--rp-bad-ink)]'>
+          <p
+            role='alert'
+            className='flex items-start gap-1.5 px-1 pb-1 text-xs text-[var(--rp-bad-ink)]'
+          >
+            <AlertCircle size='sm' className='shrink-0' />
             {ui('Could not save - try again.')}
           </p>
         )
@@ -361,9 +323,7 @@ function InvestigationPicker({
               disabled={busy}
               onClick={() =>
                 onPick(investigation.id, investigation.name)}
-              className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded-[var(--rp-radius)] px-2 text-left text-ink hover:bg-[var(--rp-surface-2)] ${
-                compact ? 'min-h-11 py-2 text-sm' : 'py-1.5 text-sm'
-              }`}
+              className='rp-focus flex min-h-[2.75rem] min-w-0 flex-1 items-center justify-between gap-2 rounded-[var(--rp-radius-btn)] px-2 py-2 text-left text-sm text-ink hover:bg-[var(--rp-surface-2)] lg:py-1.5'
             >
               <span className='truncate'>{investigation.name}</span>
               <span className='shrink-0 text-xs text-ink-3'>{investigation.evidenceCount}</span>
@@ -392,15 +352,14 @@ function InvestigationPicker({
           onChange={(event) => onNewNameChange(event.target.value)}
           placeholder={ui('New investigation…')}
           aria-label={ui('New investigation name')}
-          className={`rp-input min-w-0 flex-1 ${compact ? 'h-11 text-sm' : 'h-8 text-xs'}`}
+          className='rp-input min-w-0 flex-1 text-sm'
         />
         <button
           type='submit'
           disabled={busy || newName.trim().length === 0}
-          className={`rp-btn rp-btn-primary shrink-0 px-3 ${
-            compact ? 'h-11 text-sm' : 'h-8 px-2 text-xs'
-          }`}
+          className='rp-btn rp-btn-sm rp-btn-primary shrink-0'
         >
+          <Plus size='sm' />
           {busy ? '…' : ui('Create')}
         </button>
       </form>
@@ -414,7 +373,7 @@ function InvestigationPicker({
         tabIndex={-1}
         role='dialog'
         aria-label={ariaLabel}
-        className='absolute right-0 z-30 mt-1 w-64 outline-none rounded-[var(--rp-radius)] border border-line bg-surface p-2 shadow-lg'
+        className='rp-card rp-shadow-lg rp-focus absolute right-0 z-50 mt-1 w-64 p-2'
       >
         <p className='px-1 pb-1 text-xs font-medium uppercase tracking-wide text-ink-3'>
           {ui('Save to investigation')}
@@ -425,10 +384,10 @@ function InvestigationPicker({
   }
 
   return createPortal(
-    <div className='fixed inset-0 z-[90]'>
+    <div className='fixed inset-0 z-[80]'>
       <div
         aria-hidden='true'
-        className='absolute inset-0 touch-none bg-[color-mix(in_srgb,var(--rp-ink)_45%,transparent)]'
+        className='rp-scrim absolute inset-0 touch-none'
       />
       <div
         ref={panelRef}
@@ -441,20 +400,13 @@ function InvestigationPicker({
           bottom: keyboardInset,
           maxHeight: `calc(100vh - ${keyboardInset}px - 3rem)`,
         }}
-        className='absolute inset-x-0 flex flex-col outline-none overflow-y-auto rounded-t-[var(--rp-radius)] border-t border-line bg-surface p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] shadow-lg'
+        className='rp-shadow-xl rp-focus absolute inset-x-0 flex flex-col overflow-y-auto rounded-t-[var(--rp-radius)] border-t border-line bg-surface p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]'
       >
         <div className='flex items-center justify-between gap-2 pb-2'>
           <p className='text-xs font-medium uppercase tracking-wide text-ink-3'>
             {ui('Save to investigation')}
           </p>
-          <button
-            type='button'
-            onClick={onClose}
-            aria-label={ui('Close')}
-            className='rp-focus -mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:text-ink'
-          >
-            <CloseIcon className='h-4 w-4' />
-          </button>
+          <IconButton label={ui('Close')} icon={X} onClick={onClose} />
         </div>
         {body}
       </div>
@@ -574,17 +526,13 @@ export function SaveEvidenceButton({
         }`}
         role='status'
       >
+        <BookmarkFilled size='sm' />
         {ui('Saved to {name}', { name: saved })}
       </span>
     )
   }
 
-  const sizeClass = compact ? 'h-7 px-2 text-xs' : 'h-8 px-2.5 text-xs'
-  // The glyph is for the roomy variants (the document header, the selection
-  // popover). Evidence rows and search cards stay exactly as they were: they
-  // are already tight, and the word alone reads fine there.
-  const icon = compact ? null : <SaveIcon className='h-4 w-4 shrink-0' />
-
+  const icon = <Bookmark size='sm' className='shrink-0' />
   return (
     <div ref={rootRef} className='relative inline-flex items-center gap-1'>
       {current
@@ -595,7 +543,7 @@ export function SaveEvidenceButton({
             title={ui('Save to {value1}', { value1: current.name })}
             aria-label={ui('Save to {value1}', { value1: current.name })}
             onClick={() => void saveTo(current.id, current.name)}
-            className={`rp-btn rp-btn-outline ${sizeClass}`}
+            className='rp-btn rp-btn-sm rp-btn-outline'
           >
             {busy ? ui('Saving…') : (
               <>
@@ -620,7 +568,7 @@ export function SaveEvidenceButton({
             aria-expanded={open}
             aria-haspopup='dialog'
             aria-label={label === 'Save' ? ui('Save to investigation') : undefined}
-            className={`rp-btn rp-btn-outline ${sizeClass}`}
+            className='rp-btn rp-btn-sm rp-btn-outline'
           >
             {icon}
             {label === 'Save' ? ui('Save') : label}
@@ -632,12 +580,12 @@ export function SaveEvidenceButton({
             type='button'
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
-            aria-haspopup='true'
+            aria-haspopup='dialog'
             aria-label={ui('Choose a different investigation')}
             title={ui('Choose a different investigation')}
-            className={`rp-btn rp-btn-outline px-1.5 ${compact ? 'h-7' : 'h-8'}`}
+            className='rp-btn rp-btn-sm rp-btn-outline rp-icon-btn'
           >
-            <ChevronDownIcon className='h-3.5 w-3.5' />
+            <ChevronDown size='sm' />
           </button>
         )
         : null}
@@ -765,6 +713,7 @@ export function SaveArtefactButton({
         className='inline-flex items-center gap-1 px-1 text-xs text-[var(--rp-ok-ink)]'
         role='status'
       >
+        <BookmarkFilled size='sm' />
         {ui('Saved to {name}', { name: saved })}
       </span>
     )
@@ -780,11 +729,11 @@ export function SaveArtefactButton({
             title={ui('Save to {value1}', { value1: current.name })}
             aria-label={ui('Save to {value1}', { value1: current.name })}
             onClick={() => void saveTo(current.id, current.name)}
-            className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
+            className='rp-btn rp-btn-sm rp-btn-outline'
           >
             {busy ? ui('Saving…') : (
               <>
-                <SaveIcon className='h-4 w-4 shrink-0' />
+                <Bookmark size='sm' className='shrink-0' />
                 <span>{ui('Save')}</span>
                 <span className='hidden sm:inline'>
                   {ui('to {name}', { name: truncateName(current.name) })}
@@ -800,9 +749,9 @@ export function SaveArtefactButton({
             aria-expanded={open}
             aria-haspopup='dialog'
             aria-label={ui('Save to investigation')}
-            className='rp-btn rp-btn-outline h-8 px-2.5 text-xs'
+            className='rp-btn rp-btn-sm rp-btn-outline'
           >
-            <SaveIcon className='h-4 w-4 shrink-0' />
+            <Bookmark size='sm' className='shrink-0' />
             <span>{ui('Save')}</span>
             <span className='hidden sm:inline'>{ui('to investigation')}</span>
           </button>
@@ -813,12 +762,12 @@ export function SaveArtefactButton({
             type='button'
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
-            aria-haspopup='true'
+            aria-haspopup='dialog'
             aria-label={ui('Choose a different investigation')}
             title={ui('Choose a different investigation')}
-            className='rp-btn rp-btn-outline h-8 px-1.5'
+            className='rp-btn rp-btn-sm rp-btn-outline rp-icon-btn'
           >
-            <ChevronDownIcon className='h-3.5 w-3.5' />
+            <ChevronDown size='sm' />
           </button>
         )
         : null}

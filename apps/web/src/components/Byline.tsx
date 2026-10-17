@@ -1,5 +1,6 @@
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { ExternalLink } from './icons.tsx'
 /**
  * "Karoly PJ, Freestone DR, Eden D et al. · Frontiers in Neurology · 2021"
  * - the line a clinician or researcher triages by. Built only from stored
@@ -30,9 +31,9 @@ export function Byline(
       className={`mt-1 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-xs text-ink-3 ${className}`}
     >
       {parts.map((part, i) => (
-        <span key={i} className='min-w-0'>
-          {i > 0 ? <span aria-hidden='true' className='mr-1.5'>·</span> : null}
-          <span className={i === 0 ? 'text-ink-2' : ''}>{part}</span>
+        <span key={i} className='inline-flex min-w-0 max-w-full items-baseline'>
+          {i > 0 ? <span aria-hidden='true' className='mr-1.5 shrink-0'>·</span> : null}
+          <span className={`min-w-0 break-words ${i === 0 ? 'text-ink-2' : ''}`}>{part}</span>
         </span>
       ))}
       {doi
@@ -41,12 +42,14 @@ export function Byline(
             href={`https://doi.org/${doi}`}
             target='_blank'
             rel='noopener noreferrer'
-            className='rp-focus -my-1 min-w-0 truncate rounded-[var(--rp-radius-btn)] py-1 underline decoration-dotted underline-offset-2'
+            className='rp-focus -my-1 min-w-0 max-w-full break-all rounded-[var(--rp-radius-btn)] py-1 underline decoration-dotted underline-offset-2'
             style={{ color: 'var(--rp-accent-fg)' }}
             onClick={(event) => event.stopPropagation()}
           >
             {ui('doi:')}
             {doi}
+            <ExternalLink size='sm' className='ml-1 inline-block align-text-bottom' />
+            <span className='sr-only'>{ui('opens in a new tab')}</span>
           </a>
         )
         : null}
