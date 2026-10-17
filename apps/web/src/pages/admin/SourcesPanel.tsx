@@ -181,7 +181,7 @@ function SourceRow({
   return (
     <li className='bg-surface px-2 py-3 sm:px-4'>
       <div className='flex flex-col items-start gap-3 lg:flex-row lg:justify-between'>
-        <div className='min-w-0 flex-1'>
+        <div className='min-w-0 w-full flex-1'>
           <p className='break-words text-sm font-medium text-ink [overflow-wrap:anywhere]'>
             {source.url}
           </p>
