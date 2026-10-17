@@ -1658,7 +1658,10 @@ export class KnowledgeMapEngine {
   // -------------------------------------------------------------------
 
   setInsets(insets: Insets) {
+    const changed = insets.left !== this.insets.left || insets.right !== this.insets.right ||
+      insets.top !== this.insets.top || insets.bottom !== this.insets.bottom
     this.insets = insets
+    if (changed && !this.viewOwnedFlag && this.nodeVisuals.size > 0) this.fit(false)
   }
 
   get viewOwned(): boolean {
@@ -2977,10 +2980,12 @@ export class KnowledgeMapEngine {
   private labelVec = new THREE.Vector3()
 
   /** Claim a screen box unless it collides with one already claimed. */
-  private placeBox(x1: number, y1: number, x2: number, y2: number): boolean {
+  private placeBox(x1: number, y1: number, x2: number, y2: number, overlay = false): boolean {
     const placed = this.placedLabelBoxes
-    for (const p of placed) {
-      if (x1 < p.x2 && x2 > p.x1 && y1 < p.y2 && y2 > p.y1) return false
+    if (!overlay) {
+      for (const p of placed) {
+        if (x1 < p.x2 && x2 > p.x1 && y1 < p.y2 && y2 > p.y1) return false
+      }
     }
     let box = this.boxPool[placed.length]
     if (!box) {
@@ -2994,6 +2999,27 @@ export class KnowledgeMapEngine {
     }
     placed.push(box)
     return true
+  }
+
+  /** Floating controls and the gesture hint own their actual rendered boxes. */
+  private reserveOverlayBoxes() {
+    const stage = this.canvas.closest('[data-graph-stage]') ?? this.canvas.parentElement
+    if (!stage) return
+    const canvas = this.canvas.getBoundingClientRect()
+    for (const overlay of stage.querySelectorAll('[data-graph-overlay]')) {
+      const rect = overlay.getBoundingClientRect()
+      if (
+        rect.width < 1 || rect.height < 1 || rect.right <= canvas.left ||
+        rect.left >= canvas.right || rect.bottom <= canvas.top || rect.top >= canvas.bottom
+      ) continue
+      this.placeBox(
+        rect.left - canvas.left - 4,
+        rect.top - canvas.top - 4,
+        rect.right - canvas.left + 4,
+        rect.bottom - canvas.top + 4,
+        true,
+      )
+    }
   }
 
   /** The last successful caption placement - fields, so the pass allocates nothing. */
@@ -3088,6 +3114,7 @@ export class KnowledgeMapEngine {
     const focus = this.emphasis.selectedId ?? this.hoveredId
     const { selectedId, pathFrom } = this.emphasis
     this.placedLabelBoxes.length = 0
+    this.reserveOverlayBoxes()
     this.discCount = 0
 
     // Every node's screen disc first, so a label can be tested against ALL

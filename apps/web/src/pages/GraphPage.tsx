@@ -1495,14 +1495,14 @@ export function GraphPage() {
               {/* Reopen affordance when the navigator is hidden. */}
               {!railOpen
                 ? (
-                  <button
-                    type='button'
+                  <IconButton
+                    data-graph-overlay
+                    label={ui('Browse')}
+                    icon={LayoutList}
+                    variant='outline'
                     onClick={() => setRailOpen(true)}
-                    className='rp-btn rp-btn-outline rp-shadow-md absolute left-3 top-3 z-20'
-                  >
-                    <LayoutList size='sm' />
-                    {ui('Browse')}
-                  </button>
+                    className='rp-shadow-md absolute left-3 top-3 z-20'
+                  />
                 )
                 : (
                   <NavigatorRail
