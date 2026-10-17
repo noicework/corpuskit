@@ -231,6 +231,9 @@ Deno.test('analyst creates and synthesises, exports independently and cancels no
     await page.waitForFunction(() =>
       document.querySelector('h1')?.textContent === 'Signed research'
     )
+    // Let the page's own reads of A settle before taking the baseline, so the
+    // assertion below measures only what the released callback causes.
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 800)))
     // The server already saved the artefact before delaying its response. A new
     // authorised read may show it, but the obsolete callback must not refetch A.
     // Let the reads the navigation itself caused land first: only a read that
