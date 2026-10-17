@@ -78,7 +78,7 @@ function Coverage({ done, total }: { done: number; total: number }) {
         </span>
       </div>
       <div
-        className='mt-1.5 h-2 overflow-hidden rounded-full bg-surface-2'
+        className='mt-1.5 h-2 overflow-hidden rounded-full border border-line bg-paper'
         role='progressbar'
         aria-label={ui('Coverage')}
         aria-valuenow={pct}
@@ -87,7 +87,7 @@ function Coverage({ done, total }: { done: number; total: number }) {
       >
         <div
           className='h-full rounded-full transition-[width] duration-150 motion-reduce:transition-none'
-          style={{ width: `${pct}%`, background: 'var(--rp-accent)' }}
+          style={{ width: `${pct}%`, background: 'var(--rp-control)' }}
         />
       </div>
     </div>
@@ -313,7 +313,7 @@ function AgentCard(
       {running && progress && progress.total > 0
         ? (
           <div
-            className='mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2'
+            className='mt-3 h-1.5 overflow-hidden rounded-full border border-line bg-paper'
             role='progressbar'
             aria-label={ui('Enrichment progress')}
             aria-valuemin={0}
@@ -324,7 +324,7 @@ function AgentCard(
               className='h-full rounded-full transition-[width] duration-150 motion-reduce:transition-none'
               style={{
                 width: `${Math.round((progress.done / progress.total) * 100)}%`,
-                background: 'var(--rp-accent)',
+                background: 'var(--rp-control)',
               }}
             />
           </div>

@@ -190,7 +190,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
       )}
       {isLoading && (
         <div className='space-y-3'>
-          <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+          <div className='grid grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))] gap-3'>
             <Skeleton className='h-16 w-full' />
             <Skeleton className='h-16 w-full' />
             <Skeleton className='h-16 w-full' />
@@ -213,7 +213,7 @@ function InsightsPanelContent({ slug }: { slug: string }) {
 
       {data && data.totalAsks > 0 && (
         <>
-          <dl className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+          <dl className='grid grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))] gap-3'>
             <StatTile label={ui('Questions asked')} value={String(data.totalAsks)} />
             <StatTile label={ui('Answered')} value={String(data.answered)} />
             <StatTile label={ui('Unanswered')} value={String(data.unanswered)} />

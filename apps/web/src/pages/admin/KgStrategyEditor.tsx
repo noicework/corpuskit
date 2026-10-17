@@ -11,7 +11,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { KgImplementEvent } from '@research-portal/core'
 import { getGraphStrategy, type GraphStrategy, saveGraphStrategy } from '../../api/client.ts'
 import { Button, EmptyState, ErrorCard, SectionHeader, Skeleton } from '../../components/ui.tsx'
-import { ArrowRight, Bookmark, Plus, RotateCw, Trash } from '../../components/icons.tsx'
+import { ArrowRight, Plus, RotateCw, Trash } from '../../components/icons.tsx'
 import { ConfirmActionDialog } from '../../components/ConfirmActionDialog.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -806,7 +806,6 @@ function KgStrategyEditorContent({ slug }: { slug: string }) {
             </label>
             <Button
               variant='primary'
-              leadingIcon={Bookmark}
               type='button'
               disabled={!canSave}
               onClick={() => void onSave()}

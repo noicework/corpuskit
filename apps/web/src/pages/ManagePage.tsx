@@ -111,9 +111,9 @@ function ManageContent() {
     }
     const reveal = () => {
       if (nav.scrollWidth > nav.clientWidth) {
-        const container = nav.getBoundingClientRect()
+        const container = nav.parentElement?.getBoundingClientRect() ?? nav.getBoundingClientRect()
         const item = active.getBoundingClientRect()
-        const inset = 24
+        const inset = Number.parseFloat(getComputedStyle(nav).scrollPaddingInlineStart) || 0
         if (item.left < container.left + inset) {
           nav.scrollLeft += item.left - container.left - inset
         } else if (item.right > container.right - inset) {
@@ -206,7 +206,8 @@ function ManageContent() {
         <section aria-label={ui('Portal status')} className='rp-card mt-6 min-w-0 p-5 lg:p-6'>
           <SectionHeader
             className='rp-manage-section-head'
-            title={
+            title={ui('Portal status')}
+            description={
               <span className='flex items-start gap-2' data-manage-status>
                 {status.isSuccess && !status.isFetching && status.data.status === 'connected' && (
                   <span
@@ -273,7 +274,7 @@ function ManageContent() {
             <nav
               ref={navigation}
               aria-label={ui('Manage sections')}
-              className='rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
+              className='rp-manage-nav rp-no-scrollbar -mx-1 flex min-w-0 gap-1 overflow-x-auto whitespace-nowrap px-1 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0'
             >
               {allowedTabs.map((item) => (
                 <button

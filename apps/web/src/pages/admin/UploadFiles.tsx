@@ -71,7 +71,7 @@ function UploadProgressBar({ row }: { row: UploadRow }) {
   const percent = row.progress === null ? null : Math.round(row.progress * 100)
   return (
     <div
-      className='mt-2 h-1.5 overflow-hidden rounded-full bg-surface-3'
+      className='mt-2 h-1.5 overflow-hidden rounded-full border border-line bg-paper'
       role='progressbar'
       aria-label={ui('Uploading {name}', { name: row.name })}
       aria-valuemin={0}
