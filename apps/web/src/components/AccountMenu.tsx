@@ -7,6 +7,8 @@ import {
   accountTriggerAttributes,
   nextAccountMenuIndex,
 } from './account-menu-behaviour.ts'
+import { Database, History, type IconComponent, Settings, User, Users } from './icons.tsx'
+import { IconButton } from './ui.tsx'
 
 const MENU_ITEM_SELECTOR = '[role="menuitem"]'
 const PAGE_TAB_STOP_SELECTOR =
@@ -25,22 +27,11 @@ type AccountMenuProps = {
   onTabOut?: (direction: AccountMenuTabDirection) => void
 }
 
-function AccountIcon({ className }: { className: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.6'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className={className}
-      aria-hidden='true'
-    >
-      <circle cx='12' cy='8.5' r='3.75' />
-      <path d='M4.5 20a7.5 7.5 0 0115 0' />
-    </svg>
-  )
+function entryIcon(entry: AccountEntry): IconComponent {
+  if (entry.href.endsWith('/manage')) return Settings
+  if (entry.href === '/admin/people') return Users
+  if (entry.href === '/admin/audit') return History
+  return Database
 }
 
 function visibleTabStops(): HTMLElement[] {
@@ -187,34 +178,36 @@ export function AccountMenu({
     items[nextAccountMenuIndex(current, items.length, direction)]?.focus()
   }
 
-  const buttonClass = variant === 'header'
-    ? `rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150 ${
-      hasEntries ? 'hover:bg-[var(--rp-surface-2)]' : ''
-    }`
-    : 'rp-navsheet-action rp-focus-inverse w-full'
-
-  const button = (
-    <button
-      ref={triggerRef}
-      id={triggerId}
-      type='button'
-      onClick={() => hasEntries ? openAndFocus('first') : onProfile()}
-      onKeyDown={onTriggerKeyDown}
-      aria-label={label}
-      title={label}
-      {...triggerAttributes}
-      className={buttonClass}
-      style={variant === 'header'
-        ? {
-          borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-          color: 'var(--rp-brand-fg)',
-        }
-        : undefined}
-    >
-      <AccountIcon className={variant === 'header' ? 'h-6 w-6' : 'h-5 w-5 shrink-0'} />
-      {variant === 'mobile' ? label : null}
-    </button>
-  )
+  const button = variant === 'header'
+    ? (
+      <IconButton
+        ref={triggerRef}
+        id={triggerId}
+        label={label}
+        icon={User}
+        size='lg'
+        onClick={() => hasEntries ? openAndFocus('first') : onProfile()}
+        onKeyDown={onTriggerKeyDown}
+        {...triggerAttributes}
+        className='rp-chrome-header-control shrink-0 rounded-full border'
+      />
+    )
+    : (
+      <button
+        ref={triggerRef}
+        id={triggerId}
+        type='button'
+        onClick={() => hasEntries ? openAndFocus('first') : onProfile()}
+        onKeyDown={onTriggerKeyDown}
+        aria-label={label}
+        title={label}
+        {...triggerAttributes}
+        className='rp-navsheet-action rp-focus-inverse w-full'
+      >
+        <User size='md' className='shrink-0' />
+        {label}
+      </button>
+    )
 
   if (!hasEntries) return button
 
@@ -225,7 +218,7 @@ export function AccountMenu({
       role='menu'
       aria-labelledby={triggerId}
       onKeyDown={onMenuKeyDown}
-      className={`rp-anim-fade rp-shadow-lg w-[min(12rem,calc(100vw-1rem))] rounded-[var(--rp-radius)] border border-line bg-surface p-1.5 ${
+      className={`rp-chrome-menu rp-card rp-shadow-lg rp-anim-fade w-[min(12rem,calc(100vw-1rem))] p-1.5 ${
         variant === 'mobile' ? 'shrink-0' : ''
       }`}
     >
@@ -239,18 +232,22 @@ export function AccountMenu({
           {platformRole && <p>{ui('Platform')}: {ui(platformRole)}</p>}
         </div>
       )}
-      {entries.map((entry) => (
-        <Link
-          key={entry.href}
-          to={entry.href}
-          role='menuitem'
-          tabIndex={-1}
-          onClick={() => setOpen(false)}
-          className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
-        >
-          {ui(entry.label)}
-        </Link>
-      ))}
+      {entries.map((entry) => {
+        const EntryIcon = entryIcon(entry)
+        return (
+          <Link
+            key={entry.href}
+            to={entry.href}
+            role='menuitem'
+            tabIndex={-1}
+            onClick={() => setOpen(false)}
+            className='rp-chrome-menu-item rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+          >
+            <EntryIcon size='sm' className='shrink-0 text-ink-2' />
+            <span className='min-w-0 break-words'>{ui(entry.label)}</span>
+          </Link>
+        )
+      })}
       <button
         type='button'
         role='menuitem'
@@ -262,9 +259,10 @@ export function AccountMenu({
           setOpen(false)
           onProfile()
         }}
-        className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-left text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+        className='rp-chrome-menu-item rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-left text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
       >
-        {ui('Profile')}
+        <User size='sm' className='shrink-0 text-ink-2' />
+        <span className='min-w-0 break-words'>{ui('Profile')}</span>
       </button>
     </div>
   )

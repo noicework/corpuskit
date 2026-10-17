@@ -3,56 +3,22 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 import { nextAccountMenuIndex } from './account-menu-behaviour.ts'
 import { HELP_MENU_LABEL, type HelpMenuItem, helpMenuItems } from './help-menu-items.ts'
+import { HelpCircle, type IconSize, Workflow } from './icons.tsx'
+import { IconButton } from './ui.tsx'
 
 const MENU_ITEM_SELECTOR = '[role="menuitem"]'
 const PAGE_TAB_STOP_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-export function HelpIcon({ className }: { className: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.6'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className={className}
-      aria-hidden='true'
-    >
-      <circle cx='12' cy='12' r='9' />
-      <path d='M9.4 9.2a2.7 2.7 0 015.2.9c0 1.8-2.6 2.4-2.6 4' />
-      <path d='M12 17.4h.01' />
-    </svg>
-  )
-}
-
-/** Three linked steps: the flow the How-this-works page explains. */
-export function FlowIcon({ className }: { className: string }) {
-  return (
-    <svg
-      viewBox='0 0 24 24'
-      fill='none'
-      stroke='currentColor'
-      strokeWidth='1.6'
-      strokeLinecap='round'
-      strokeLinejoin='round'
-      className={className}
-      aria-hidden='true'
-    >
-      <rect x='3' y='4' width='6' height='5' rx='1.2' />
-      <rect x='15' y='4' width='6' height='5' rx='1.2' />
-      <rect x='9' y='15' width='6' height='5' rx='1.2' />
-      <path d='M6 9v2.5a2 2 0 002 2h8a2 2 0 002-2V9M12 13.5V15' />
-    </svg>
-  )
-}
-
 /** The icon for one help destination, shared by the menu and the phone sheet. */
-export function HelpItemIcon({ item, className }: { item: HelpMenuItem; className: string }) {
+export function HelpItemIcon({
+  item,
+  className,
+  size = 'md',
+}: { item: HelpMenuItem; className?: string; size?: IconSize }) {
   return item.key === 'how'
-    ? <FlowIcon className={className} />
-    : <HelpIcon className={className} />
+    ? <Workflow size={size} className={className} />
+    : <HelpCircle size={size} className={className} />
 }
 
 function visibleTabStops(): HTMLElement[] {
@@ -187,25 +153,19 @@ export function HelpMenu({ slug }: { slug: string }) {
         if (event.pointerType === 'mouse') setOpen(true)
       }}
     >
-      <button
+      <IconButton
         ref={triggerRef}
         id={triggerId}
-        type='button'
+        label={ui(HELP_MENU_LABEL)}
+        icon={HelpCircle}
+        size='lg'
         onClick={() => open ? setOpen(false) : openAndFocus('first')}
         onKeyDown={onTriggerKeyDown}
-        aria-label={ui(HELP_MENU_LABEL)}
-        title={ui(HELP_MENU_LABEL)}
         aria-haspopup='menu'
         aria-expanded={open}
         aria-controls={menuId}
-        className='rp-focus flex h-[calc(2.75rem*var(--rp-density-ctl,1))] w-[calc(2.75rem*var(--rp-density-ctl,1))] shrink-0 items-center justify-center rounded-full border transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
-        style={{
-          borderColor: 'color-mix(in srgb, var(--rp-brand-fg) 25%, transparent)',
-          color: 'var(--rp-brand-fg)',
-        }}
-      >
-        <HelpIcon className='h-6 w-6' />
-      </button>
+        className='rp-chrome-header-control shrink-0 rounded-full border'
+      />
       {open
         ? (
           <div className='absolute right-0 top-full z-50 pt-1'>
@@ -215,7 +175,7 @@ export function HelpMenu({ slug }: { slug: string }) {
               role='menu'
               aria-labelledby={triggerId}
               onKeyDown={onMenuKeyDown}
-              className='rp-anim-fade rp-shadow-lg w-[min(16rem,calc(100vw-1rem))] rounded-[var(--rp-radius)] border border-line bg-surface p-1.5'
+              className='rp-chrome-menu rp-card rp-shadow-lg rp-anim-fade w-[min(16rem,calc(100vw-1rem))] p-1.5'
             >
               {items.map((item) => (
                 <Link
@@ -224,10 +184,10 @@ export function HelpMenu({ slug }: { slug: string }) {
                   role='menuitem'
                   tabIndex={-1}
                   onClick={() => setOpen(false)}
-                  className='rp-focus flex min-h-[calc(2.25rem*var(--rp-density-ctl,1))] w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+                  className='rp-chrome-menu-item rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-[var(--rp-btn-px)] py-2 text-sm font-medium text-ink transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
                 >
-                  <HelpItemIcon item={item} className='h-4.5 w-4.5 shrink-0 text-ink-2' />
-                  {ui(item.label)}
+                  <HelpItemIcon item={item} size='sm' className='shrink-0 text-ink-2' />
+                  <span className='min-w-0 break-words'>{ui(item.label)}</span>
                 </Link>
               ))}
             </div>

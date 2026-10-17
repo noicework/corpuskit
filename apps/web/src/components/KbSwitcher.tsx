@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -6,6 +6,13 @@ import type { KnowledgeBoxStatus, TenantConfig, TenantSummary } from '@research-
 import { getKnowledgeBoxStatus, getTenants } from '../api/client.ts'
 import { portalHref } from '../lib/portal-url.ts'
 import { useAccess } from './AccessProvider.tsx'
+import { nextAccountMenuIndex } from './account-menu-behaviour.ts'
+import { Check, ChevronDown, Database, Plus, Settings } from './icons.tsx'
+import { IconButton } from './ui.tsx'
+
+const MENU_ITEM_SELECTOR = '[role="menuitem"]'
+const PAGE_TAB_STOP_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
   const { ui } = usePortalLocale()
@@ -43,9 +50,13 @@ function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
 export function KbSwitcher({ config }: { config: TenantConfig }) {
   const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
+  const generatedId = useId()
+  const triggerId = `kb-trigger-${generatedId}`
+  const menuId = `kb-menu-${generatedId}`
   const wrapRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const focusOnOpen = useRef<'first' | 'last'>('first')
   const navigate = useNavigate()
   const access = useAccess()
   const canCreate = access.can('portal.create', { kind: 'platform' })
@@ -83,7 +94,7 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
 
   useEffect(() => {
     if (!open) return
-    const onDown = (event: MouseEvent) => {
+    const onDown = (event: PointerEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) setOpen(false)
     }
     const onEsc = (event: globalThis.KeyboardEvent) => {
@@ -92,33 +103,75 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
         triggerRef.current?.focus()
       }
     }
-    document.addEventListener('mousedown', onDown)
+    document.addEventListener('pointerdown', onDown)
     document.addEventListener('keydown', onEsc)
     return () => {
-      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('pointerdown', onDown)
       document.removeEventListener('keydown', onEsc)
     }
   }, [open])
 
-  // Focus the first menu item on open, then let arrow keys walk the list.
+  // Match the opening arrow key, then let the menu keys walk the list.
   useEffect(() => {
     if (!open) return
-    const items = panelRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]')
-    items?.[0]?.focus()
+    const items = panelRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR)
+    const target = focusOnOpen.current === 'last' ? items?.[items.length - 1] : items?.[0]
+    target?.focus()
   }, [open])
 
+  function openAndFocus(position: 'first' | 'last') {
+    focusOnOpen.current = position
+    const items = panelRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR)
+    const target = position === 'last' ? items?.[items.length - 1] : items?.[0]
+    if (target) {
+      target.focus()
+      return
+    }
+    setOpen(true)
+  }
+
+  function onTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      openAndFocus(event.key === 'ArrowUp' ? 'last' : 'first')
+    }
+    if (event.key === 'Tab' && open) setOpen(false)
+  }
+
   function onMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      setOpen(false)
+      const trigger = triggerRef.current
+      if (!trigger) return
+      const stops = Array.from(document.querySelectorAll<HTMLElement>(PAGE_TAB_STOP_SELECTOR))
+        .filter(
+          (element) =>
+            !panelRef.current?.contains(element) && element.getClientRects().length > 0 &&
+            getComputedStyle(element).visibility !== 'hidden',
+        )
+      const current = stops.indexOf(trigger)
+      const target = event.shiftKey ? stops[current - 1] : stops[current + 1]
+      ;(target ?? trigger).focus()
+      return
+    }
+    const direction = event.key === 'ArrowDown'
+      ? 'next'
+      : event.key === 'ArrowUp'
+      ? 'previous'
+      : event.key === 'Home'
+      ? 'first'
+      : event.key === 'End'
+      ? 'last'
+      : null
+    if (!direction) return
     const items = Array.from(
-      panelRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+      panelRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR) ?? [],
     )
     if (items.length === 0) return
     event.preventDefault()
     const current = items.indexOf(document.activeElement as HTMLElement)
-    const next = event.key === 'ArrowDown'
-      ? (current + 1) % items.length
-      : (current <= 0 ? items.length - 1 : current - 1)
-    items[next]?.focus()
+    items[nextAccountMenuIndex(current, items.length, direction)]?.focus()
   }
 
   const switchTo = (target: TenantSummary) => {
@@ -139,43 +192,28 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
 
   return (
     <div ref={wrapRef} className='relative shrink-0'>
-      <button
+      <IconButton
         ref={triggerRef}
-        type='button'
-        onClick={() => setOpen((prev) => !prev)}
+        id={triggerId}
+        label={ui('Switch portal - currently {name}', { name: config.branding.productName })}
+        icon={ChevronDown}
+        size='lg'
+        onClick={() => open ? setOpen(false) : openAndFocus('first')}
+        onKeyDown={onTriggerKeyDown}
         aria-haspopup='menu'
         aria-expanded={open}
-        aria-label={ui('Switch portal - currently {name}', { name: config.branding.productName })}
-        title={ui('Switch portal')}
-        className='rp-focus ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--rp-radius-btn)] text-ink-3 transition-colors duration-150 hover:bg-[var(--rp-surface-2)] hover:text-ink'
-      >
-        {
-          /* The header already shows this portal's logo, so the trigger is just
-          * the disclosure - a second mark here would double up. */
-        }
-        <span className='sr-only'>{config.branding.productName}</span>
-        <svg
-          className={`h-4 w-4 shrink-0 text-ink-3 transition-transform duration-200 ${
-            open ? 'rotate-180' : ''
-          }`}
-          viewBox='0 0 20 20'
-          fill='currentColor'
-          aria-hidden='true'
-        >
-          <path
-            fillRule='evenodd'
-            d='M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.23 8.29a.75.75 0 010-1.08z'
-            clipRule='evenodd'
-          />
-        </svg>
-      </button>
+        aria-controls={menuId}
+        className='rp-chrome-switcher ml-1 shrink-0'
+      />
 
       {open && (
         <div
           ref={panelRef}
+          id={menuId}
           role='menu'
+          aria-labelledby={triggerId}
           onKeyDown={onMenuKeyDown}
-          className='rp-shadow-lg rp-anim-fade fixed left-4 right-4 top-[var(--rp-header-h)] z-50 mt-2 rounded-[var(--rp-radius)] border border-line bg-surface p-1.5 sm:absolute sm:left-0 sm:right-auto sm:top-full sm:w-[18.5rem]'
+          className='rp-chrome-menu rp-card rp-shadow-lg rp-anim-fade fixed left-4 right-4 top-[var(--rp-header-h)] z-50 mt-2 p-1.5 sm:absolute sm:left-0 sm:right-auto sm:top-full sm:w-[18.5rem]'
         >
           <p className='rp-eyebrow px-2.5 pb-1.5 pt-2 text-ink-3'>
             {ui('Knowledge boxes')}
@@ -190,11 +228,11 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
                   role='menuitem'
                   tabIndex={-1}
                   onClick={() => switchTo(t)}
-                  className={`rp-focus flex w-full items-center gap-3 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-left transition-colors duration-150 hover:bg-[var(--rp-surface-2)] ${
+                  className={`rp-chrome-menu-item rp-focus flex w-full items-center gap-3 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-left transition-colors duration-150 hover:bg-[var(--rp-surface-2)] ${
                     current ? 'bg-surface-2' : ''
                   }`}
                 >
-                  <StatusDot status={statuses?.[t.slug]?.status} />
+                  <Database size='sm' className='shrink-0 text-ink-2' />
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate text-sm font-medium text-ink'>
                       {t.productName}
@@ -203,21 +241,8 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
                       {t.organisation}
                     </span>
                   </span>
-                  {current && (
-                    <svg
-                      viewBox='0 0 20 20'
-                      fill='currentColor'
-                      aria-hidden='true'
-                      className='h-4 w-4 shrink-0'
-                      style={{ color: 'var(--rp-accent-fg)' }}
-                    >
-                      <path
-                        fillRule='evenodd'
-                        d='M16.7 5.3a1 1 0 010 1.4l-7.5 7.5a1 1 0 01-1.4 0L3.3 9.7a1 1 0 111.4-1.4l3.8 3.8 6.8-6.8a1 1 0 011.4 0z'
-                        clipRule='evenodd'
-                      />
-                    </svg>
-                  )}
+                  <StatusDot status={statuses?.[t.slug]?.status} />
+                  {current && <Check size='sm' className='shrink-0 text-[var(--rp-accent-fg)]' />}
                 </button>
               )
             })}
@@ -230,16 +255,9 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
                 role='menuitem'
                 tabIndex={-1}
                 onClick={() => setOpen(false)}
-                className='rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+                className='rp-chrome-menu-item rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
               >
-                <svg
-                  viewBox='0 0 20 20'
-                  fill='currentColor'
-                  aria-hidden='true'
-                  className='h-4 w-4 shrink-0 text-ink-3'
-                >
-                  <path d='M10 4a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 0110 4z' />
-                </svg>
+                <Plus size='sm' className='shrink-0 text-ink-3' />
                 {ui('Add a portal')}
               </Link>
               <Link
@@ -247,20 +265,9 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
                 role='menuitem'
                 tabIndex={-1}
                 onClick={() => setOpen(false)}
-                className='rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
+                className='rp-chrome-menu-item rp-focus flex w-full items-center gap-2.5 rounded-[var(--rp-radius-btn)] px-2.5 py-2 text-sm font-medium text-ink-2 transition-colors duration-150 hover:bg-[var(--rp-surface-2)]'
               >
-                <svg
-                  viewBox='0 0 20 20'
-                  fill='currentColor'
-                  aria-hidden='true'
-                  className='h-4 w-4 shrink-0 text-ink-3'
-                >
-                  <path
-                    fillRule='evenodd'
-                    d='M8.34 2.6a1 1 0 01.99-.85h1.34a1 1 0 01.99.85l.16 1.06c.36.14.7.34 1 .58l1-.4a1 1 0 011.22.44l.67 1.16a1 1 0 01-.23 1.28l-.84.66c.04.19.06.39.06.62s-.02.43-.06.62l.84.66a1 1 0 01.23 1.28l-.67 1.16a1 1 0 01-1.22.44l-1-.4c-.3.24-.64.44-1 .58l-.16 1.06a1 1 0 01-.99.85H9.33a1 1 0 01-.99-.85l-.16-1.06c-.36-.14-.7-.34-1-.58l-1 .4a1 1 0 01-1.22-.44l-.67-1.16a1 1 0 01.23-1.28l.84-.66A3.6 3.6 0 013.3 10c0-.23.02-.43.06-.62l-.84-.66a1 1 0 01-.23-1.28l.67-1.16a1 1 0 011.22-.44l1 .4c.3-.24.64-.44 1-.58zM10 12a2 2 0 100-4 2 2 0 000 4z'
-                    clipRule='evenodd'
-                  />
-                </svg>
+                <Settings size='sm' className='shrink-0 text-ink-3' />
                 {ui('Manage portals')}
               </Link>
             </>

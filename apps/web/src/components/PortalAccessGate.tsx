@@ -7,6 +7,8 @@ import { externalLoginUrl, microsoftLoginUrl } from '../api/auth.ts'
 import { tenantThemeVars, useBodyTheme, useViewerScheme } from '../lib/theme.ts'
 import { AppLanguageSwitch, usePortalLocale } from '../lib/portal-locale.tsx'
 import { readSafePortalMetadata } from '../api/portal-metadata.ts'
+import { ArrowLeft, LogOut, RotateCcw, User } from './icons.tsx'
+import { Button } from './ui.tsx'
 
 const housePalette = DEFAULT_PALETTES.corpuskit.palette
 export const platformBranding: Branding = {
@@ -94,24 +96,30 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
     >
       <header className='border-b border-line bg-surface'>
         <div className='rp-shell flex min-w-0 flex-wrap items-center justify-between gap-4 py-4'>
-          <a className='rp-focus rp-display text-xl' href='/'>CorpusKit</a>
+          <a
+            className='rp-focus rp-display inline-flex min-h-[2.75rem] items-center text-xl'
+            href='/'
+          >
+            CorpusKit
+          </a>
           <AppLanguageSwitch />
           {state.session?.user
             ? (
               <div className='flex flex-wrap gap-3'>
-                <button
-                  type='button'
-                  className='rp-btn rp-btn-ghost'
+                <Button
+                  variant='ghost'
+                  leadingIcon={User}
                   onClick={() => setProfile(!profile)}
                   aria-expanded={profile}
                 >
                   {ui('Profile')}
-                </button>
+                </Button>
                 <a
                   href='/auth/logout'
                   className='rp-btn rp-btn-ghost'
                   onClick={() => controller.invalidate('sign out')}
                 >
+                  <LogOut size='sm' />
                   {ui('Sign out')}
                 </a>
               </div>
@@ -149,15 +157,14 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
         <div className='mt-6 flex flex-wrap gap-3'>
           {failed
             ? (
-              <button
-                type='button'
-                className='rp-btn rp-btn-primary'
+              <Button
+                leadingIcon={RotateCcw}
                 onClick={() => {
                   void refresh().catch(() => {})
                 }}
               >
                 {ui('Try again')}
-              </button>
+              </Button>
             )
             : null}
           {!loading && !failed && !paused && anonymous && slug &&
@@ -182,7 +189,10 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
               </a>
             )
             : null}
-          <Link className='rp-btn rp-btn-outline' to='/'>{ui('Back to portals')}</Link>
+          <Link className='rp-btn rp-btn-outline' to='/'>
+            <ArrowLeft size='sm' />
+            {ui('Back to portals')}
+          </Link>
         </div>
       </main>
     </div>

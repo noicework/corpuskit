@@ -169,7 +169,7 @@ function LanguageChoices({ languages, locale }: {
     <div
       role='group'
       aria-label={locale.ui('Display language')}
-      className='inline-flex shrink-0 rounded-[var(--rp-radius-btn)] border border-line bg-surface p-0.5'
+      className='rp-seg shrink-0'
     >
       {languages.map((language) => (
         <button
@@ -179,10 +179,7 @@ function LanguageChoices({ languages, locale }: {
           aria-pressed={locale.language === language}
           aria-label={language === 'ja' ? '日本語' : 'English'}
           onClick={() => locale.setLanguage(language)}
-          className='rp-focus min-h-10 min-w-10 rounded-[var(--rp-radius-btn)] px-2 text-sm font-semibold text-ink-2'
-          style={locale.language === language
-            ? { backgroundColor: 'var(--rp-primary)', color: 'var(--rp-on-primary)' }
-            : undefined}
+          className='rp-seg-item min-w-[2.75rem] text-sm font-semibold'
         >
           {language.toUpperCase()}
         </button>
