@@ -124,7 +124,7 @@ export function Hero({
       >
         <div className='min-w-0'>
           {isAcmd && <p className='rp-acmd-demo-label'>{ui('ACMD Research Portal · Demo')}</p>}
-          <h1 className='rp-display rp-anim-rise text-2xl text-[var(--rp-on-hero)] sm:text-3xl'>
+          <h1 className='rp-display rp-anim-rise text-4xl text-[var(--rp-on-hero)] sm:text-5xl lg:text-6xl'>
             {isAcmd
               ? config.branding.tagline
               : hero?.heading ?? ui('What would you like to explore?')}
