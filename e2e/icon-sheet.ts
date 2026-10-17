@@ -3,18 +3,15 @@
 //   deno run <runner permissions> e2e/icon-sheet.ts --out .shots/p0b
 //     [--chrome /path/to/chrome]
 //
-// Requires read access, writes to .shots and the temp directory, localhost network access,
-// and permission to run Chrome. No environment or system permissions are needed.
+// Uses the design-shots runner's read, .shots/temp write, localhost network and Chrome
+// launch permissions, including Astral's default cache discovery unless --chrome is given.
 import { type Browser, launch } from '@astral/astral'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import * as Icons from '../apps/web/src/components/icons.tsx'
 
 const usage = 'Usage: deno run e2e/icon-sheet.ts --out .shots/<name> [--chrome /path/to/chrome]'
-const options = {
-  out: '.shots/p0b',
-  chrome: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-}
+const options: { out: string; chrome?: string } = { out: '.shots/p0b' }
 for (let i = 0; i < Deno.args.length; i++) {
   const argument = Deno.args[i]
   if (argument === '--help') {
@@ -118,7 +115,7 @@ function html(scheme: 'light' | 'dark') {
 }
 
 await Deno.mkdir(directory, { recursive: true })
-// Supplying the binary and profile explicitly avoids Astral's environment-based cache discovery.
+// Keep the temporary browser profile separate from the screenshot runner's other captures.
 const profile = await Deno.makeTempDir({ prefix: 'corpuskit-icons-' })
 let browser: Browser | undefined
 const captures = []
