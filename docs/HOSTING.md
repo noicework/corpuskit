@@ -422,6 +422,7 @@ A layout for a user group's portal might be:
 | `nav.hide` | Built-in items left out of the navigation: `graph`, `tools`, `investigations`, `generate`, `assessment`. Their pages still open from a link. Library and Ask always stay | 5 |
 | `footer.columns` | Link columns, each with a `heading` and its `links` | 4 columns of 1 to 8 links |
 | `footer.note` | One line of plain text under the columns, such as a trademark line | 240 characters |
+| `footer.credits` | Links in the closing row beside the note, each a `label` and `href`, such as "Powered by Progress Agentic RAG". Use it for a credit the plain-text `note` cannot link | 2 |
 | `footer.poweredBy` | `true` adds "Powered by CorpusKit", linking to corpuskit.org | |
 | `home.hero` | Optional `heading` (120 characters), `body` (400), `image` and `questions` shown as chips under the ask box (6, of 200 characters each). Without `questions`, the chips are the portal's suggested questions | |
 | `home.sections` | The sections under the hero, in order | 10 |

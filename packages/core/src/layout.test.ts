@@ -18,6 +18,7 @@ const full: PortalLayout = {
   footer: {
     columns: [{ heading: 'Community', links: [link('Meetups', 'https://example.org/meetups')] }],
     note: 'Example User Group is an independent community.',
+    credits: [link('Powered by Example Platform', 'https://example.org/platform')],
     poweredBy: true,
   },
   home: {
@@ -131,6 +132,14 @@ Deno.test('every list has a maximum count', () => {
     Array.from({ length: n }, (_, i) => item(i))
   const cases: [string, unknown][] = [
     ['nav.links', { nav: { links: many(LAYOUT_LIMITS.navLinks + 1, (i) => link(`L${i}`)) } }],
+    [
+      'footer.credits',
+      {
+        footer: {
+          credits: many(LAYOUT_LIMITS.footerCredits + 1, (i) => link(`Credit ${i}`)),
+        },
+      },
+    ],
     [
       'footer.columns',
       {

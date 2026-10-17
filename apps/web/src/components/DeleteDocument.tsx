@@ -5,6 +5,8 @@ import { ApiError, deleteAdminResource } from '../api/client.ts'
 import { useAccess } from './AccessProvider.tsx'
 import { ConfirmActionDialog } from './ConfirmActionDialog.tsx'
 import { usePermissionAdminAccess } from './EmergencyAccess.tsx'
+import { Trash } from './icons.tsx'
+import { Button } from './ui.tsx'
 
 export interface DeletableDocument {
   id: string
@@ -93,6 +95,7 @@ export function DeleteDocumentButton({
   className,
   label = 'Delete',
   onDocumentPage = false,
+  icon = false,
 }: {
   slug: string
   document: DeletableDocument
@@ -102,6 +105,8 @@ export function DeleteDocumentButton({
   label?: string
   /** Shown on the document's own page, which leaves once the delete is done. */
   onDocumentPage?: boolean
+  /** A trash glyph before the label, where the button sits beside Save and its bookmark. */
+  icon?: boolean
 }) {
   const { ui } = usePortalLocale()
   const { runExplicit } = usePermissionAdminAccess('content.write', { kind: 'portal', slug })
@@ -164,23 +169,41 @@ export function DeleteDocumentButton({
     }
   }
 
+  const triggerProps = {
+    'aria-haspopup': 'dialog' as const,
+    'aria-label': ui('{action} “{title}”', { action: ui(label), title: document.title }),
+    'data-delete-document': document.id,
+    disabled: busy,
+    onClick: () => {
+      setError(null)
+      setOpen(true)
+    },
+  }
+
   return (
     <>
-      <button
-        type='button'
-        aria-haspopup='dialog'
-        aria-label={ui('{action} “{title}”', { action: ui(label), title: document.title })}
-        data-delete-document={document.id}
-        disabled={busy}
-        onClick={() => {
-          setError(null)
-          setOpen(true)
-        }}
-        className={className ??
-          'rp-focus min-h-[44px] min-w-[44px] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-bad-ink)]'}
-      >
-        {ui(label)}
-      </button>
+      {onDocumentPage
+        ? (
+          <Button
+            {...triggerProps}
+            variant='danger-outline'
+            leadingIcon={Trash}
+            className={className}
+          >
+            {ui(label)}
+          </Button>
+        )
+        : (
+          <button
+            {...triggerProps}
+            type='button'
+            className={className ??
+              'rp-focus min-h-[2.75rem] min-w-[2.75rem] text-xs font-medium text-ink-3 transition-colors duration-150 hover:text-[var(--rp-bad-ink)]'}
+          >
+            {icon ? <Trash size='sm' /> : null}
+            {ui(label)}
+          </button>
+        )}
       {open && (
         <ConfirmActionDialog
           title={ui('Delete document')}

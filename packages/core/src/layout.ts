@@ -12,6 +12,8 @@ export const LAYOUT_LIMITS = {
   navLinks: 6,
   footerColumns: 4,
   footerColumnLinks: 8,
+  /** Credit links in the footer's closing row, such as the platform the portal runs on. */
+  footerCredits: 2,
   heroQuestions: 6,
   sections: 10,
   cards: 12,
@@ -222,6 +224,8 @@ export const PortalLayoutSchema = z.object({
       'columns',
     ).optional(),
     note: line(LAYOUT_LIMITS.footerNote).optional(),
+    /** Links in the closing row, beside the note: a credit that `note` cannot carry as text. */
+    credits: list(LayoutLinkSchema, LAYOUT_LIMITS.footerCredits, 'credits').optional(),
     poweredBy: z.boolean().optional(),
   }).strict().optional(),
   home: z.object({
