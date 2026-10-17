@@ -102,7 +102,7 @@ Deno.test('footnotes: code, escaped brackets and Markdown links remain literal',
     .toBe('See [7](https://example.test):')
 })
 
-Deno.test('footnotes: missing, conflicting and malformed mappings fail closed', () => {
+Deno.test('footnotes: missing, conflicting and malformed mappings drop their markers, never guess', () => {
   for (
     const raw of [
       'Claim[6].',
@@ -110,19 +110,61 @@ Deno.test('footnotes: missing, conflicting and malformed mappings fail closed', 
       'Claim[6].\n[6]: block-AA\n[6]: block-BB\n',
       'Claim[6].\n[6]: https://evil.test\n',
     ]
-  ) expect(() => finish([raw])).toThrow(FootnoteError)
+  ) {
+    const result = finish([raw])
+    expect(result.anchors).toEqual([])
+    expect(result.unresolved).toBe(1)
+    expect(result.text.trim()).toBe('Claim.')
+  }
+  // A block the platform maps two ways binds nothing; a malformed mapping maps nothing.
   const stream = new FootnoteStream()
   stream.consume(mapping)
-  expect(() =>
-    stream.consume({
-      type: 'footnote_citations',
-      footnote_to_context: {
-        'block-AA': 'different/f/pdf/0-5',
-      },
-    })
-  ).toThrow(FootnoteError)
-  expect(() => stream.consume({ type: 'footnote_citations', footnote_to_context: [] }))
-    .toThrow(FootnoteError)
+  expect(stream.consume({
+    type: 'footnote_citations',
+    footnote_to_context: { 'block-AA': 'different/f/pdf/0-5' },
+  })).toBe('')
+  stream.consume({ type: 'footnote_citations', footnote_to_context: [] })
+  stream.consume({ type: 'footnote_citations' })
+  stream.consume({ type: 'answer', text: answer })
+  const result = stream.finish()
+  expect(result.anchors.map((a) => a.id)).toEqual(['other/f/pdf/5-10'])
+  expect(result.unresolved).toBe(2)
+})
+
+Deno.test('footnotes: definitions are read leniently but only exact block ids resolve', () => {
+  const contexts = {
+    type: 'footnote_citations',
+    footnote_to_context: {
+      'block-AA': 'doc/f/pdf/0-5',
+      'block-BB': 'other/f/pdf/5-10',
+      'block-CC': 'third/f/pdf/0-9',
+    },
+  }
+  for (
+    const defs of [
+      '- [1]: block-AA\n- [2]: block-BB.\n',
+      '1. [1]: block-AA\n2. [2]: block-BB,\n',
+      '**[1]**: block-AA\n**[2]:** block-BB\n',
+      '[^1]: block-AA (Report title)\n[2]: see block-BB\n',
+    ]
+  ) {
+    const stream = new FootnoteStream()
+    let streamed = ''
+    for (const ch of `First claim [1].\n\nSecond claim [2].\n\n${defs}`) {
+      streamed += stream.consume({ type: 'answer', text: ch })
+    }
+    stream.consume(contexts)
+    const result = stream.finish()
+    expect(streamed + result.tail).toBe(result.text)
+    expect(result.text).toBe('First claim.\n\nSecond claim.\n\n')
+    expect(result.anchors.map((a) => a.id)).toEqual(['doc/f/pdf/0-5', 'other/f/pdf/5-10'])
+    expect(result.unresolved).toBe(0)
+  }
+  // One definition may name several blocks; each binds at the same place.
+  const stream = new FootnoteStream()
+  stream.consume({ type: 'answer', text: 'Claim [1].\n\n[1]: block-AA, block-CC\n' })
+  stream.consume(contexts)
+  expect(stream.finish().anchors.map((a) => a.id)).toEqual(['doc/f/pdf/0-5', 'third/f/pdf/0-9'])
 })
 
 Deno.test('footnotes: canonical numbering follows claims, not wire numbers or headings', () => {
@@ -143,18 +185,23 @@ Deno.test('footnotes: resource numbering stays compatible with CorpusKit evidenc
   expect(bound.text).not.toContain('[1][1]')
 })
 
-Deno.test('footnotes: excluded and anonymous extra-context references cannot bind', () => {
-  for (
-    const id of [
-      'excluded/f/pdf/0-5',
-      'USER_CONTEXT_0',
-      'javascript:alert(1)',
-    ]
-  ) {
+Deno.test('footnotes: excluded references fail; anonymous ones never bind', () => {
+  const excluded = finish([answer])
+  excluded.anchors[0]!.id = 'excluded/f/pdf/0-5'
+  expect(() => bindFootnotes(excluded, (rid) => rid !== 'excluded', () => 'Report'))
+    .toThrow(FootnoteError)
+  for (const id of ['USER_CONTEXT_0', 'javascript:alert(1)']) {
     const parsed = finish([answer])
     parsed.anchors[0]!.id = id
-    expect(() => bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report'))
-      .toThrow(FootnoteError)
+    const bound = bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')
+    // The other markers keep their verified sources, numbered by first use.
+    expect(bound.citations.map((c) => c.resourceId)).toEqual(['other', 'doc'])
+    expect(bound.unresolved).toBe(1)
+    expect(JSON.stringify(bound)).not.toContain(id)
+    // Under a pin, nothing proves an unverifiable reference stayed inside it.
+    expect(() =>
+      bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report', new Map(), true)
+    ).toThrow(FootnoteError)
   }
 })
 
@@ -167,36 +214,22 @@ Deno.test('footnotes: mapping can arrive before, after or between answer chunks'
   expect(stream.finish()).toEqual(finish([answer]))
 })
 
-Deno.test('footnotes: validation diagnostics distinguish definitions from mappings', () => {
+Deno.test('footnotes: each kind of unusable definition resolves nothing', () => {
   for (
-    const [raw, reason] of [
-      ['Claim[6].', 'missing_definition'],
-      ['Claim[6].\n[6]: block-MISSING\n', 'missing_mapping'],
-      ['Claim[6].\n[6]: block-AA\n[6]: block-BB\n', 'conflicting_definition'],
-      ['Claim[6].\n[6]: invalid-private-value\n', 'invalid_definition'],
-      ['Claim[6].\n[6]: block-AA another-value\n', 'invalid_definition'],
+    const raw of [
+      'Claim[6].',
+      'Claim[6].\n[6]: block-MISSING\n',
+      'Claim[6].\n[6]: block-AA\n[6]: block-BB\n',
+      'Claim[6].\n[6]: invalid-private-value\n',
     ]
-  ) expect(failureReason(() => finish([raw!]))).toBe(reason)
-
-  const stream = new FootnoteStream()
-  stream.consume(mapping)
-  expect(failureReason(() => stream.consume({ type: 'footnote_citations' })))
-    .toBe('invalid_mapping')
-  expect(failureReason(() =>
-    stream.consume({
-      type: 'footnote_citations',
-      footnote_to_context: { 'block-AA': { secret: 'private-value' } },
-    })
-  )).toBe('invalid_mapping')
-  expect(failureReason(() =>
-    stream.consume({
-      type: 'footnote_citations',
-      footnote_to_context: { 'block-AA': 'private-source/f/pdf/0-5' },
-    })
-  )).toBe('conflicting_mapping')
+  ) {
+    const result = finish([raw!])
+    expect([result.anchors.length, result.unresolved]).toEqual([0, 1])
+    expect(result.text).not.toMatch(/block-|invalid-private-value|\[6\]/)
+  }
 })
 
-Deno.test('footnotes: context failure classifications do not loosen citation validation', () => {
+Deno.test('footnotes: out-of-scope references always fail; others fail only under a pin', () => {
   for (
     const [id, reason] of [
       ['USER_CONTEXT_0', 'anonymous_context'],
@@ -206,19 +239,30 @@ Deno.test('footnotes: context failure classifications do not loosen citation val
       ['private-unsupported-context', 'unsupported_context'],
     ]
   ) {
-    const parsed = finish([answer])
-    parsed.anchors[0]!.id = id!
-    expect(failureReason(() => bindFootnotes(parsed, (rid) => rid !== 'excluded', () => 'Report')))
-      .toBe(reason)
+    const strict = finish([answer])
+    strict.anchors[0]!.id = id!
+    expect(
+      failureReason(() =>
+        bindFootnotes(strict, (rid) => rid !== 'excluded', () => 'Report', new Map(), true)
+      ),
+    ).toBe(reason)
+    const open = finish([answer])
+    open.anchors[0]!.id = id!
+    if (reason === 'out_of_scope') {
+      expect(failureReason(() => bindFootnotes(open, (rid) => rid !== 'excluded', () => 'Report')))
+        .toBe(reason)
+    } else {
+      expect(bindFootnotes(open, (rid) => rid !== 'excluded', () => 'Report').unresolved).toBe(1)
+    }
     // A generated-summary reference elsewhere in the same answer, bound or
-    // dropped, never masks the failure.
+    // dropped, never masks an out-of-scope failure.
     for (const generated of ['other/t/da-summary/0-5', 'excluded/t/da-summary/0-5']) {
       const mixed = finish([answer])
-      mixed.anchors[0]!.id = id!
+      mixed.anchors[0]!.id = 'excluded/f/pdf/0-5'
       mixed.anchors[1]!.id = generated
       expect(
         failureReason(() => bindFootnotes(mixed, (rid) => rid !== 'excluded', () => 'Report')),
-      ).toBe(reason)
+      ).toBe('out_of_scope')
     }
   }
 })

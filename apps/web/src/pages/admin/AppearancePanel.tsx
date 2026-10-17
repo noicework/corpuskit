@@ -48,7 +48,7 @@ function useAppearanceSave(slug: string) {
 }
 
 type Branding = TenantConfig['branding']
-type ImageKind = 'logo' | 'hero'
+type ImageKind = 'logo' | 'logo-dark' | 'hero'
 type FontKind = 'font-heading' | 'font-body'
 
 const CHECKERBOARD_STYLE = {
@@ -134,7 +134,7 @@ function UploadCard({
       <div
         style={CHECKERBOARD_STYLE}
         className={`mt-3 overflow-hidden rounded-[var(--rp-radius)] border border-line ${
-          kind === 'logo' ? 'flex h-16 items-center justify-center p-2' : 'aspect-[16/6]'
+          kind === 'hero' ? 'aspect-[16/6]' : 'flex h-16 items-center justify-center p-2'
         }`}
       >
         {missing
@@ -149,9 +149,9 @@ function UploadCard({
               src={brandingUrl(slug, kind, version)}
               alt={ui('{title} preview', { title: title })}
               onError={() => setMissing(true)}
-              className={kind === 'logo'
-                ? 'h-full w-auto object-contain'
-                : 'h-full w-full object-cover'}
+              className={kind === 'hero'
+                ? 'h-full w-full object-cover'
+                : 'h-full w-auto object-contain'}
             />
           )}
       </div>
@@ -1099,6 +1099,15 @@ function AppearancePanelContent({
             title={ui('Logo')}
             guidance={ui(
               'PNG or WebP with transparency works best - shown in the header at 28px tall.',
+            )}
+            onUploaded={onUploaded}
+          />
+          <UploadCard
+            slug={slug}
+            kind='logo-dark'
+            title={ui('Logo for dark mode')}
+            guidance={ui(
+              'Optional. A light version of the logo for dark backgrounds; without one the logo above is used.',
             )}
             onUploaded={onUploaded}
           />

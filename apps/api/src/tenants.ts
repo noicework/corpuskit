@@ -252,13 +252,20 @@ export interface TenantPatch {
   /** Whether Explore shows the regional discovery band (opt-in). */
   regionalDiscovery?: boolean
   branding?: TenantConfig['branding']
-  /** Portal-managed behaviour settings (system prompt, image grounding). */
-  prompts?: { ask?: string; images?: boolean }
+  /**
+   * Portal-managed behaviour settings (system prompt, image grounding). `uncitedAnswers`: what an
+   * answer whose citations could not be tied to any passage does - `show` (the default) keeps
+   * the prose, marked unlinked, with the sources consulted; `refuse` declines instead.
+   */
+  prompts?: { ask?: string; images?: boolean; uncitedAnswers?: UncitedAnswers }
   /** Extraction routing rules (docs/EXTRACTION-LAB.md). */
   extraction?: TenantConfig['extraction']
   /** Intent-routed configurations (docs/INTENT-ROUTING.md), when a portal tunes its own. */
   intents?: TenantConfig['intents']
 }
+
+/** What a portal does with an answer none of whose citations could be tied to a passage. */
+export type UncitedAnswers = 'show' | 'refuse'
 
 /** Never interpret malformed persisted policy as a missing legacy field. */
 export function tenantRecord(value: unknown): Record<string, unknown> {
@@ -506,7 +513,7 @@ export class TenantStore {
   }
 
   /** App-side settings that never reach the public config payload. */
-  promptsFor(slug: string): { ask?: string; images?: boolean } {
+  promptsFor(slug: string): { ask?: string; images?: boolean; uncitedAnswers?: UncitedAnswers } {
     this.get(slug)
     return Object.hasOwn(this.overrides, slug)
       ? validateTenantPatch(this.overrides[slug]).prompts ?? {}

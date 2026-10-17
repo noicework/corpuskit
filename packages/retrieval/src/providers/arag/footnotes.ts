@@ -28,7 +28,10 @@ export class FootnoteError extends Error {
 /**
  * Preserve CorpusKit's resource-level numbering contract while taking anchor
  * positions from the model's verified block references, not offset attribution.
- * Validate every referenced block before emitting any citation.
+ * Validate every referenced block before emitting any citation. A marker that cannot be tied to
+ * a verified document passage is dropped (counted in `unresolved`), never guessed. A reference to
+ * a resource outside the ask's scope still fails the whole answer: the generator read material
+ * the portal must not show. Under `strictScope` an unverifiable reference fails it too.
  *
  * A reference to a data-augmentation field (`<rid>/t/da-...`, a generated
  * summary rather than the document) is the one exception to failing closed:
@@ -42,21 +45,40 @@ export function bindFootnotes(
   citable: (resourceId: string) => boolean,
   resolveTitle: (resourceId: string) => string,
   extraContextSources: ReadonlyMap<string, string> = new Map(),
-): { text: string; citations: Citation[]; generated: GeneratedCitations } {
+  /**
+   * A pinned or documentation-scoped ask: an unverifiable reference fails the answer, because
+   * nothing then proves the prose stayed inside the pin.
+   */
+  strictScope = false,
+): {
+  text: string
+  citations: Citation[]
+  generated: GeneratedCitations
+  /** Markers that could not be tied to a verifiable document passage, dropped from the text. */
+  unresolved: number
+} {
   const citations: Citation[] = []
   const byResource = new Map<string, number>()
   const inserts = new Map<number, Set<number>>()
   const generated: GeneratedCitations = { remapped: 0, dropped: 0 }
+  let unresolved = parsed.unresolved
   for (const anchor of parsed.anchors) {
     const suppliedResource = extraContextSources.get(anchor.id)
     const match = /^([^/]+)\/(t|f|l|c)\/([^/]+)(?:\/(?:[^/]+\/)?\d+-\d+)?$/.exec(anchor.id)
     if (!match && !suppliedResource) {
-      const reason = /^USER_CONTEXT_/.test(anchor.id)
-        ? 'anonymous_context'
-        : /^[^/]+\/a\//.test(anchor.id)
-        ? 'metadata_context'
-        : 'unsupported_context'
-      throw new FootnoteError(reason)
+      // Anonymous context, resource metadata or an unknown shape is not a document passage:
+      // its marker goes, and the rest of the answer keeps its verified citations.
+      if (strictScope) {
+        throw new FootnoteError(
+          /^USER_CONTEXT_/.test(anchor.id)
+            ? 'anonymous_context'
+            : /^[^/]+\/a\//.test(anchor.id)
+            ? 'metadata_context'
+            : 'unsupported_context',
+        )
+      }
+      unresolved += 1
+      continue
     }
     // Supplied context has a verified resource identity, not a fabricated
     // native paragraph ID. Both paths retain the same scope validation.
@@ -83,7 +105,7 @@ export function bindFootnotes(
     const markers = [...indices].sort((a, b) => a - b).map((n) => `[${n}]`).join('')
     text = text.slice(0, pos) + markers + text.slice(pos)
   }
-  return { text, citations, generated }
+  return { text, citations, generated, unresolved }
 }
 export interface FootnoteReference {
   number: string
@@ -126,8 +148,19 @@ function tidyFootnotes(text: string, references: FootnoteReference[]) {
   return { text: out, references: shifted }
 }
 
+// A definition line, leniently: an optional list bullet or number, optional bold around the
+// marker, then the blocks it names. `[1]: block-AA`, `- [1]: block-AA.`, `**[1]:** block-AA,
+// block-AB` all define [1]. A line whose value names no block defines nothing usable.
+const DEFINITION =
+  /^ {0,3}(?:[-*+]\s+|\d{1,3}[.)]\s+)?(?:\*\*|__)?\[\^?(\d+)\](?:\*\*|__)?:(?:\*\*|__)?\s*(.*?)\s*$/
+// While a line is still arriving, anything that could become a definition is held back.
+const PARTIAL_DEFINITION =
+  /^\s*(?:[-*+]\s*|\d{1,3}[.)]?\s*)?(?:\*{1,2}|_{1,2})?\[?\^?\d*\]?(?:\*{1,2}|_{1,2})?(?::.*)?$/
+const BLOCK = /\bblock-[A-Za-z0-9_-]+/g
+
 export function parseFootnoteAnswer(raw: string, final = true) {
-  const definitions = new Map<string, string>()
+  /** Marker number -> the blocks it names. An empty list is a definition that resolves nothing. */
+  const definitions = new Map<string, string[]>()
   const references: FootnoteReference[] = []
   let text = ''
   let fence = ''
@@ -149,20 +182,19 @@ export function parseFootnoteAnswer(raw: string, final = true) {
     }
     // Hold a possible definition while its line is still arriving. Never leak
     // block IDs into a draft, including when every character arrives separately.
-    if (!complete && (/^\s*$/.test(line) || /^\s*\[\^?\d*\]?(?::.*)?$/.test(line))) continue
-    const definition = /^ {0,3}\[\^?(\d+)\]:\s*(\S+)\s*$/.exec(line)
+    if (!complete && (/^\s*$/.test(line) || PARTIAL_DEFINITION.test(line))) continue
+    const definition = complete ? DEFINITION.exec(line.replace(/\r?\n$/, '')) : null
     if (definition) {
-      if (!/^block-[A-Za-z0-9_-]+$/.test(definition[2]!)) {
-        throw new FootnoteError('invalid_definition')
-      }
-      if (definitions.has(definition[1]!) && definitions.get(definition[1]!) !== definition[2]!) {
-        throw new FootnoteError('conflicting_definition')
-      }
-      definitions.set(definition[1]!, definition[2]!)
+      // Only exact block identifiers count; anything else on the line (a URL, a title) is
+      // ignored, and a value naming no block leaves its marker unresolved.
+      const blocks = [...new Set(definition[2]!.match(BLOCK) ?? [])]
+      const previous = definitions.get(definition[1]!)
+      // Two definitions of one marker that disagree resolve nothing rather than either one.
+      definitions.set(
+        definition[1]!,
+        previous && previous.join() !== blocks.join() ? [] : blocks,
+      )
       continue
-    }
-    if (complete && /^ {0,3}\[\^?\d+\]:/.test(line)) {
-      throw new FootnoteError('invalid_definition')
     }
     if (!complete) line = line.replace(/\[\^?\d*\]?$/, '')
     for (let i = 0; i < line.length;) {
@@ -201,18 +233,21 @@ export class FootnoteStream {
   private raw = ''
   private emitted = ''
   private contexts = new Map<string, string>()
+  /** Blocks the platform mapped inconsistently: they bind nothing. */
+  private conflicted = new Set<string>()
   consume(item: { type?: string; text?: unknown; footnote_to_context?: unknown }): string {
     if (item.type === 'footnote_citations') {
+      // A malformed mapping maps nothing; an inconsistent block maps nothing. The markers that
+      // relied on them are dropped at finish, never bound to a guess.
       const mapping = item.footnote_to_context
-      if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
-        throw new FootnoteError('invalid_mapping')
-      }
-      for (const [block, id] of Object.entries(mapping)) {
-        if (typeof id !== 'string') throw new FootnoteError('invalid_mapping')
-        if (this.contexts.has(block) && this.contexts.get(block) !== id) {
-          throw new FootnoteError('conflicting_mapping')
+      if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {
+        for (const [block, id] of Object.entries(mapping)) {
+          if (typeof id !== 'string') continue
+          if (this.contexts.has(block) && this.contexts.get(block) !== id) {
+            this.conflicted.add(block)
+          }
+          this.contexts.set(block, id)
         }
-        this.contexts.set(block, id)
       }
     }
     if (item.type !== 'answer' || typeof item.text !== 'string') return ''
@@ -225,15 +260,23 @@ export class FootnoteStream {
     this.emitted = text
     return delta
   }
+  /**
+   * The final text with every marker removed, and an anchor for each marker that resolves through
+   * its definition and the platform's mapping. A marker with no definition, an unusable definition
+   * or an unmapped block is counted in `unresolved` and simply not re-inserted.
+   */
   finish() {
     const { text, references, definitions } = parseFootnoteAnswer(this.raw)
-    const anchors = references.map((ref) => {
-      const block = definitions.get(ref.number)
-      if (!block) throw new FootnoteError('missing_definition')
-      const id = this.contexts.get(block)
-      if (!id) throw new FootnoteError('missing_mapping')
-      return { id, pos: ref.pos }
-    })
-    return { text, tail: this.delta(text), anchors }
+    const anchors: { id: string; pos: number }[] = []
+    let unresolved = 0
+    for (const ref of references) {
+      const ids = (definitions.get(ref.number) ?? [])
+        .filter((block) => !this.conflicted.has(block))
+        .map((block) => this.contexts.get(block))
+        .filter((id): id is string => !!id)
+      if (!ids.length) unresolved += 1
+      for (const id of ids) anchors.push({ id, pos: ref.pos })
+    }
+    return { text, tail: this.delta(text), anchors, unresolved, references: references.length }
   }
 }

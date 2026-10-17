@@ -793,8 +793,10 @@ export function HowItWorksPage() {
           <Section id='limits'>
             <ul className='space-y-2 pl-1'>
               <Bullet>
-                It never answers without a source. An answer with nothing to cite is not shown: it
-                is replaced by the portal's own decline and the closest passages it found.
+                It never answers without a source. When nothing relevant is found, the answer is
+                replaced by the portal's own decline and the closest passages it found. When an
+                answer draws on relevant sources but cannot be linked to specific passages, it says
+                so and lists the sources it consulted, unless this portal declines such answers.
               </Bullet>
               <Bullet>
                 It says plainly when the collection does not hold something, and shows the closest

@@ -205,12 +205,19 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
   'From portal': 'コピー元のポータル',
   'Generate page summaries': 'ページ要約を生成',
   'Ground answers on page and table images': 'ページや表の画像を回答の根拠に使用',
+  'Show answers that cannot be linked to specific passages':
+    '特定の箇所に結び付けられない回答も表示',
+  'Such an answer carries a note and lists the sources consulted. Turn this off to decline instead. An answer is always declined when nothing relevant was found.':
+    'その回答には注記と参照した資料の一覧が付きます。オフにすると回答を控えます。関連する資料が見つからない場合は、常に回答を控えます。',
   'Grounded': '根拠あり',
   'Heading & body': '見出しと本文',
   'Heading font': '見出しフォント',
   'Health results are a snapshot. Each scan and visibility change needs its own confirmation.':
     '結果は確認時点の状態です。検査と表示設定の変更には、それぞれ確認が必要です。',
   'Hero image': 'メイン画像',
+  'Logo for dark mode': 'ダークモード用ロゴ',
+  'Optional. A light version of the logo for dark backgrounds; without one the logo above is used.':
+    '任意。暗い背景用の明るいロゴです。未設定の場合は上のロゴを使用します。',
   'Hidden': '非表示',
   'Hide': '非表示にする',
   'Hide this portal from the switcher and portal list':

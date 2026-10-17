@@ -17,7 +17,13 @@ import {
   isPlatformHostname,
 } from '../../../packages/core/src/platform-domain.ts'
 import { platformShellResponse } from '../../api/src/platform-shell.ts'
-import { llmsTxt, robotsTag, robotsTxt, sitemapXml } from '../../api/src/search-files.ts'
+import {
+  llmsTxt,
+  robotsTag,
+  robotsTxt,
+  sitemapXml,
+  withRobotsMeta,
+} from '../../api/src/search-files.ts'
 import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
 import { initialiseAcmdDemo } from './acmd-demo.ts'
@@ -787,8 +793,10 @@ async function pageRoute(
   const response = secureAssetResponse(asset, unknownShell ? 404 : asset.status)
   // PORTAL_INDEXING=deny keeps a portal's pages out of search; the apex's own pages stay in.
   const tag = robotsTag(platformDomain, url.hostname, url.pathname, stringEnv(env).PORTAL_INDEXING)
-  if (tag) response.headers.set('x-robots-tag', tag)
-  return response
+  if (!tag) return response
+  response.headers.set('x-robots-tag', tag)
+  // And in the page itself, for crawlers that read only the markup.
+  return await withRobotsMeta(response, tag)
 }
 
 /**

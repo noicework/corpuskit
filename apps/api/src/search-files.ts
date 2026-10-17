@@ -58,6 +58,35 @@ export function robotsTag(
 }
 
 /**
+ * The same robots directive written into an HTML page's head, for crawlers that read only the
+ * markup. Anything that is not an HTML page is returned unchanged.
+ */
+export async function withRobotsMeta(response: Response, tag: string): Promise<Response> {
+  if (!(response.headers.get('content-type') ?? '').includes('text/html') || !response.body) {
+    return response
+  }
+  const html = await response.text()
+  const meta = `<meta name="robots" content="${tag}">`
+  let body = html
+  if (!html.includes(meta)) {
+    const head = /<head(?:\s[^>]*)?>/i.exec(html)
+    const title = /<title[\s>]/i.exec(html)
+    const doctype = /^\s*<!doctype[^>]*>/i.exec(html)
+    const at = head
+      ? head.index + head[0].length
+      : title
+      ? title.index
+      : doctype
+      ? doctype[0].length
+      : 0
+    body = html.slice(0, at) + meta + html.slice(at)
+  }
+  const headers = new Headers(response.headers)
+  headers.delete('content-length')
+  return new Response(body, { status: response.status, statusText: response.statusText, headers })
+}
+
+/**
  * robots.txt. Research content is open to crawlers; the API, sign-in and administration are not
  * pages. Only the platform apex names the sitemap, since only the apex serves it. With
  * `PORTAL_INDEXING=deny`, every other host (a portal's subdomain or its own hostname) asks

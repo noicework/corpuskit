@@ -1058,7 +1058,7 @@ export function thumbnailUrl(slug: string, id: string): string {
   return `/api/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}/thumbnail`
 }
 
-export type BrandingUploadKind = 'logo' | 'hero' | 'font-heading' | 'font-body'
+export type BrandingUploadKind = 'logo' | 'logo-dark' | 'hero' | 'font-heading' | 'font-body'
 
 const FONT_MIME_BY_EXT: Record<string, string> = {
   woff2: 'font/woff2',
@@ -1096,14 +1096,14 @@ export function getTypeahead(
 export function getPrompts(
   slug: string,
   passcode: AdminRequestAccess,
-): Promise<{ ask?: string; images?: boolean }> {
+): Promise<{ ask?: string; images?: boolean; uncitedAnswers?: 'show' | 'refuse' }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode)
 }
 
 export function savePrompts(
   slug: string,
   passcode: AdminRequestAccess,
-  prompts: { ask?: string; images?: boolean },
+  prompts: { ask?: string; images?: boolean; uncitedAnswers?: 'show' | 'refuse' },
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode, {
     method: 'PUT',

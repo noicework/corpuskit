@@ -340,10 +340,15 @@ Deno.test('PORTAL_INDEXING=deny keeps portals out of search and the apex pages i
   ) {
     const response = await get(url)
     expect([url, response.headers.get('x-robots-tag')]).toEqual([url, 'noindex'])
+    // The page itself says so too, for crawlers that read only the markup.
+    expect(await response.text()).toBe(
+      '<!doctype html><meta name="robots" content="noindex"><title>shell</title>',
+    )
   }
   for (const path of ['/', '/about', '/docs', '/docs/search']) {
     const response = await get(`https://research.example.org${path}`)
     expect([path, response.status, response.headers.get('x-robots-tag')]).toEqual([path, 200, null])
+    expect(await response.text()).not.toContain('name="robots"')
   }
 })
 

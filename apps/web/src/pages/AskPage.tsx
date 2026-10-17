@@ -95,6 +95,8 @@ type ChatMessage = {
   interpretedQuery?: string
   /** The routed intent found nothing usable and the general configuration answered instead. */
   fallback?: { from: string; to: string | null; reason: string }
+  /** No citation could be tied to a passage; the sources are the ones consulted (D8-01). */
+  unlinked?: boolean
   /** Platform learning id for this answer - target for feedback. */
   learningId?: string
   feedbackGood?: boolean
@@ -1454,6 +1456,7 @@ function AnswerCard({
                       verdicts={message.verdicts}
                       judging={judging}
                       citations={message.citations}
+                      unlinked={message.unlinked}
                       anchorPrefix={message.id}
                       collapsible={false}
                     />
@@ -3179,6 +3182,7 @@ export function AskPage() {
                   question={railQuestion}
                   sources={railSources}
                   citations={railAnswer.citations}
+                  unlinked={railAnswer.unlinked}
                   verdicts={railAnswer.verdicts}
                   anchorPrefix={`rail-${railAnswer.id}`}
                   collapsible={false}

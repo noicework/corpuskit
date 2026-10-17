@@ -872,6 +872,7 @@ const newTenantSchema = z.object({
 const promptsSchema = z.object({
   ask: z.string().max(4000).optional(),
   images: z.boolean().optional(),
+  uncitedAnswers: z.enum(['show', 'refuse']).optional(),
 })
 const labelDefinitionSchema = z.object({
   title: z.string().trim().min(1).max(60),
@@ -959,7 +960,13 @@ const sourceIsKnown = (source: string, knownTitles: string[]): boolean => {
 /** A layout image's slot in the branding store: `image-<name>`, the name an admin uploaded it as. */
 export type LayoutImageKind = `image-${string}`
 
-export type BrandingKind = 'logo' | 'hero' | 'font-heading' | 'font-body' | LayoutImageKind
+export type BrandingKind =
+  | 'logo'
+  | 'logo-dark'
+  | 'hero'
+  | 'font-heading'
+  | 'font-body'
+  | LayoutImageKind
 
 export interface BrandingAsset {
   bytes: Uint8Array<ArrayBuffer>
@@ -2382,9 +2389,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const BRANDING_FONT_EXTS = ['woff2', 'woff', 'ttf', 'otf'] as const
   type FixedBrandingKind = Exclude<BrandingKind, LayoutImageKind>
   const isBrandingKind = (kind: string): kind is FixedBrandingKind =>
-    kind === 'logo' || kind === 'hero' || kind === 'font-heading' || kind === 'font-body'
+    kind === 'logo' || kind === 'logo-dark' || kind === 'hero' || kind === 'font-heading' ||
+    kind === 'font-body'
   const brandingExts = (kind: FixedBrandingKind): readonly string[] =>
-    kind === 'logo' || kind === 'hero' ? BRANDING_IMAGE_EXTS : BRANDING_FONT_EXTS
+    kind === 'logo' || kind === 'logo-dark' || kind === 'hero'
+      ? BRANDING_IMAGE_EXTS
+      : BRANDING_FONT_EXTS
   const brandingFile = (slug: string, kind: FixedBrandingKind): string | null => {
     for (const ext of brandingExts(kind)) {
       const path = `${brandingDir}/${slug}-${kind}.${ext}`
@@ -2439,7 +2449,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const eraseBrandingFiles = (slug: string): number => {
     if (!KeyPortalSlugSchema.safeParse(slug).success) return 0
     let erased = 0
-    for (const kind of ['logo', 'hero', 'font-heading', 'font-body'] as const) {
+    for (const kind of ['logo', 'logo-dark', 'hero', 'font-heading', 'font-body'] as const) {
       for (const ext of brandingExts(kind)) {
         try {
           Deno.removeSync(`${brandingDir}/${slug}-${kind}.${ext}`)
@@ -2490,6 +2500,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   }
   const withBrandingUrls = (config: TenantConfig): TenantConfig => {
     const logo = brandingUrl(config.slug, 'logo')
+    // The logo for the dark colour scheme, when one is uploaded.
+    const logoDark = brandingUrl(config.slug, 'logo-dark')
     const hero = brandingUrl(config.slug, 'hero')
     const headingFont = brandingUrl(config.slug, 'font-heading')
     const bodyFont = brandingUrl(config.slug, 'font-body')
@@ -2499,6 +2511,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       branding: {
         ...config.branding,
         ...(logo ? { logoUrl: logo } : {}),
+        ...(logoDark ? { logoDarkUrl: logoDark } : {}),
         ...(hero ? { heroImageUrl: hero } : {}),
         ...(headingFont ? { headingFontUrl: headingFont } : {}),
         ...(bodyFont ? { bodyFontUrl: bodyFont } : {}),
@@ -5778,7 +5791,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = promptsSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    tenants.patch(config.slug, { prompts: { ask: parsed.data.ask?.trim() || undefined } })
+    // An absent uncited-answers choice keeps the portal's current one.
+    const uncitedAnswers = parsed.data.uncitedAnswers ??
+      tenants.promptsFor(config.slug).uncitedAnswers
+    tenants.patch(config.slug, {
+      prompts: {
+        ask: parsed.data.ask?.trim() || undefined,
+        ...(uncitedAnswers ? { uncitedAnswers } : {}),
+      },
+    })
     return c.json({ ok: true })
   })
 
@@ -7217,6 +7238,25 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // surface as not used - or nothing, when none is close.
         await sendDecline(lastSources)
       }
+      // An answer none of whose citations could be tied to a passage (D8-01, 17 Oct 2026): the
+      // prose stands without any inline marker, under a plain note, beside the sources the
+      // platform retrieved for this ask. The surface lists them as the sources consulted.
+      const finishUnlinked = async (text: string, consulted: ScoredResource[]) => {
+        finished = true
+        record.citations = 0
+        const japanese = !!config.languagePolicy && /[\u3040-\u30ff\u4e00-\u9fff]/.test(query)
+        const note = japanese
+          ? 'この回答は資料の特定の箇所に結び付けられませんでした。参照した資料を一覧で示します。'
+          : 'This answer could not be linked to specific passages. The sources consulted are listed with it.'
+        const prose = text.replace(/[ \t]?\[\d{1,3}\](?!\()/g, '').trimEnd()
+        await send({ type: 'sources', resources: consulted })
+        await send({
+          type: 'done',
+          refused: false,
+          text: `${prose}\n\n*${note}*`,
+          citationPresentation: 'unlinked',
+        })
+      }
       const finishAnswered = async (
         doneText: string | undefined,
         citationPresentation?: 'authored_blocks',
@@ -7412,6 +7452,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
           // source at all). A figure in the text was the only trigger
           // before, so a prose assertion sailed through.
           if (asserts) {
+            // D8-01: unless this portal refuses uncited answers, the prose stands, marked
+            // unlinked, when retrieval found sources worth consulting. With none (nothing
+            // relevant was retrieved) the decline stands: no answer without sources.
+            const consulted = lastSources.filter((s) =>
+              !s.referenceChunk && (pinnedIds.includes(s.id) || s.relevance >= GROUNDING_FLOOR)
+            )
+            if (settings.uncitedAnswers !== 'refuse' && consulted.length > 0) {
+              await finishUnlinked(text, consulted)
+              return
+            }
             await finishRefused()
             return
           }
@@ -7867,7 +7917,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 }
                 await finishRefused()
               } else {
-                await finishAnswered(event.text, event.citationPresentation)
+                await finishAnswered(
+                  event.text,
+                  event.citationPresentation === 'authored_blocks' ? 'authored_blocks' : undefined,
+                )
                 if (retry) break
               }
               continue

@@ -1257,8 +1257,12 @@ export const AskEventSchema = z.discriminatedUnion('type', [
     type: z.literal('done'),
     /** True when the corpus could not answer and guidance was shown instead. */
     refused: z.boolean().optional(),
-    /** Provider-verified authored citation placement; absence keeps sentence-level presentation. */
-    citationPresentation: z.literal('authored_blocks').optional(),
+    /**
+     * Provider-verified authored citation placement; absence keeps sentence-level presentation.
+     * `unlinked`: no citation could be tied to a passage, so the answer carries no markers and
+     * the `sources` sent with it are the sources consulted (D8-01).
+     */
+    citationPresentation: z.enum(['authored_blocks', 'unlinked']).optional(),
     /**
      * The complete answer text with deterministic citation binding applied -
      * the model's own inline `[n]` markers stripped and replaced with
