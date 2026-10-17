@@ -26,74 +26,7 @@ const child = view === 'members'
 createRoot(document.getElementById('root')).render(<BrowserRouter><AccessProvider slug="marine">{child}</AccessProvider></BrowserRouter>)
 `
 
-const prebuiltDirectory = '.shots/external-signin-fixture'
-const prebuildHelp =
-  'Prebuild the external sign-in fixture with the exported prebuildFixture() before using the Chrome-only runner.'
-
-async function sha256(bytes: Uint8Array): Promise<string> {
-  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))]
-    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-async function fixtureFingerprint(): Promise<string> {
-  const files = [
-    'deno.json',
-    'deno.lock',
-    'apps/web/dist/build.json',
-    'e2e/external-signin.test.ts',
-  ]
-  const collect = async (directory: string): Promise<void> => {
-    for await (const entry of Deno.readDir(directory)) {
-      const path = `${directory}/${entry.name}`
-      if (entry.isDirectory) await collect(path)
-      else if (entry.isFile) files.push(path)
-    }
-  }
-  await Promise.all(['apps/web/src', 'packages/core/src'].map(collect))
-  const hashes = await Promise.all(
-    files.sort().map(async (path) => [path, await sha256(await Deno.readFile(path))]),
-  )
-  return sha256(new TextEncoder().encode(JSON.stringify({ entrySource, hashes })))
-}
-
-/** The Chrome-only runner cannot spawn Deno, so it consumes a verified local prebuild. */
-export async function prebuildFixture(): Promise<void> {
-  if ((await Deno.permissions.query({ name: 'run', command: 'deno' })).state !== 'granted') {
-    throw new Error('Prebuilding the external sign-in fixture requires run access to deno.')
-  }
-  const inputs = await fixtureFingerprint()
-  const fixture = await buildFixture()
-  try {
-    if (inputs !== await fixtureFingerprint()) {
-      throw new Error('External sign-in fixture inputs changed during bundling. Prebuild again.')
-    }
-    await Deno.mkdir(prebuiltDirectory, { recursive: true })
-    const bundle = await Deno.readFile(`${fixture.directory}/entry.js`)
-    await Deno.writeFile(`${prebuiltDirectory}/entry.js`, bundle)
-    await Deno.writeTextFile(
-      `${prebuiltDirectory}/manifest.json`,
-      JSON.stringify({ inputs, bundle: await sha256(bundle) }),
-    )
-  } finally {
-    await fixture.close()
-  }
-}
-
-export async function buildFixture() {
-  if ((await Deno.permissions.query({ name: 'run', command: 'deno' })).state !== 'granted') {
-    try {
-      const manifest = JSON.parse(await Deno.readTextFile(`${prebuiltDirectory}/manifest.json`))
-      if (
-        manifest.inputs !== await fixtureFingerprint() ||
-        manifest.bundle !== await sha256(await Deno.readFile(`${prebuiltDirectory}/entry.js`))
-      ) throw new Error('The external sign-in fixture prebuild is stale or corrupt.')
-      return { directory: prebuiltDirectory, close: () => Promise.resolve() }
-    } catch (error) {
-      throw new Error(`External sign-in fixture prebuild unavailable. ${prebuildHelp}`, {
-        cause: error,
-      })
-    }
-  }
+async function buildFixture() {
   const directory = await Deno.makeTempDir({ prefix: 'external-signin-ui-' })
   const entry = `${directory}/entry.tsx`
   await Deno.writeTextFile(entry, entrySource)
