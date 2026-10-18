@@ -2549,6 +2549,7 @@ async function assertEntraParity() {
           iss: 'https://parity-idp.test',
           tid: 'entra-tenant-id',
           oid: 'parity-person',
+          name: 'Parity Person',
           email: 'person@example.test',
           roles: ['CorpusKit.PlatformAdmin'],
           nonce,
@@ -2607,7 +2608,7 @@ async function assertEntraParity() {
           authenticated: true,
           sessionProvenance: 'entra',
           entraEnabled: true,
-          user: { id: 'parity-person', provenance: 'entra' },
+          user: { id: 'parity-person', name: 'Parity Person', provenance: 'entra' },
           effectiveRoles: { platformRole: 'platform-admin' },
         })
       }

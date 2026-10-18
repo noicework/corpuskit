@@ -33,6 +33,9 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- The Deno IndexNow fallback is registered as infrastructure, so static handling cannot make
+  API operation matching ambiguous or refuse public health requests.
+
 - Single-process Deno hosting now audits every declared local store mutation, including branding,
   and restores synchronous file mutations when their required audit cannot commit.
 - Deno hosting supports Microsoft Entra sign-in through the same handler as the Worker. Set

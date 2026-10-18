@@ -241,6 +241,7 @@ export class LocalIngress {
     // bucket for requests with no reported address.
     const limitKey = addressKey(clientIp)
     let operator: { id: string } | undefined
+    let sessionName = ''
     const actor = (): AuditActor =>
       operator ? { kind: 'operator', id: `operator:${operator.id}` } : { kind: 'anonymous' }
     const denial = (status: 401 | 403, code = status === 401 ? 'unauthorised' : 'forbidden') =>
@@ -385,6 +386,7 @@ export class LocalIngress {
             )
           })
           session = user?.sessionFacts ?? null
+          sessionName = user?.name ?? ''
         }
       }
       if (session) {
@@ -405,7 +407,7 @@ export class LocalIngress {
               tid: session.tenantId,
               oid: session.oid,
               email: session.email ?? '',
-              name: '',
+              name: sessionName,
               roles: session.roles,
               groups: session.groups,
               iat: Math.floor(Date.now() / 1000),

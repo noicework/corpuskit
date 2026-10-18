@@ -214,17 +214,20 @@ app.get(
   }),
 )
 // The IndexNow key file, on the apex, when INDEXNOW_KEY is set (search-files.ts).
-app.get('*', async (c, next) => {
-  const url = new URL(c.req.url)
-  const key = indexNowKeyFile(
-    process.env.PLATFORM_DOMAIN ?? 'corpuskit.org',
-    url.hostname,
-    url.pathname,
-    process.env.INDEXNOW_KEY,
-  )
-  if (!key) return await next()
-  return c.text(key)
-})
+app.get(
+  '*',
+  infrastructureHandler(async (c, next) => {
+    const url = new URL(c.req.url)
+    const key = indexNowKeyFile(
+      process.env.PLATFORM_DOMAIN ?? 'corpuskit.org',
+      url.hostname,
+      url.pathname,
+      process.env.INDEXNOW_KEY,
+    )
+    if (!key) return await next()
+    return c.text(key)
+  }),
+)
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
 // The same answers the Worker gives: probes are refused, and an unknown path
 // still renders the shell (the app has its own not-found page) but as a 404.
