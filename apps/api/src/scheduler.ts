@@ -229,7 +229,7 @@ function scopedSystemAction<T>(
   }).finally(async () => {
     // executeAudited records cancellation promptly; shutdown also waits for the producer
     // to save its final checkpoint before closing the connection.
-    await running?.catch(() => {})
+    if (context.signal) await running?.catch(() => {})
   })
 }
 
