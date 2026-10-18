@@ -276,6 +276,31 @@ Deno.test('Worker answers llms.txt on the apex alone', async () => {
   expect(portal.status).toBe(404)
 })
 
+Deno.test('Worker answers the IndexNow key file on the apex, only when INDEXNOW_KEY is set', async () => {
+  const key = 'cccb3b644d644cae90bf12a876750730'
+  const harness = workerHarness()
+  Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org', INDEXNOW_KEY: key })
+  const file = await worker.fetch(
+    new Request(`https://research.example.org/${key}.txt`),
+    harness.env,
+  )
+  expect(file.status).toBe(200)
+  expect(file.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+  expect(await file.text()).toBe(key)
+  // Not read from the asset bundle, and never on a portal's host.
+  expect(harness.assetRequests).toHaveLength(0)
+  const portal = await worker.fetch(
+    new Request(`https://marine.research.example.org/${key}.txt`),
+    harness.env,
+  )
+  expect(await portal.text()).not.toBe(key)
+  // Without a key there is no key file.
+  const unset = workerHarness()
+  Object.assign(unset.env, { PLATFORM_DOMAIN: 'research.example.org' })
+  const none = await worker.fetch(new Request(`https://research.example.org/${key}.txt`), unset.env)
+  expect(await none.text()).not.toBe(key)
+})
+
 Deno.test('Worker answers robots.txt on every host and the sitemap on the apex alone', async () => {
   const harness = workerHarness()
   Object.assign(harness.env, { PLATFORM_DOMAIN: 'research.example.org' })

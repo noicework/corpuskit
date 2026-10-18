@@ -18,6 +18,7 @@ import {
 } from '../../../packages/core/src/platform-domain.ts'
 import { platformShellResponse } from '../../api/src/platform-shell.ts'
 import {
+  indexNowKeyFile,
   llmsTxt,
   robotsTag,
   robotsTxt,
@@ -772,6 +773,14 @@ async function pageRoute(
       ? plain(llmsTxt(platformDomain), 200)
       : plain('Not found', 404)
   }
+  // The IndexNow key file, on the apex, when INDEXNOW_KEY is set.
+  const indexNow = indexNowKeyFile(
+    platformDomain,
+    url.hostname,
+    url.pathname,
+    stringEnv(env).INDEXNOW_KEY,
+  )
+  if (indexNow) return plain(indexNow, 200)
 
   // The internet's routine search for secrets and server-side scripts is
   // refused before any asset lookup. The router's own paths are exempt.
