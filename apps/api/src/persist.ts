@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { platform } from 'node:os'
 
 // ---------------------------------------------------------------------------
@@ -74,6 +74,20 @@ export function syncDirectory(path: string, io = {
 /** JSON-serialise `value` and write it atomically to `path`. */
 export function writeJsonAtomic(path: string, value: unknown): void {
   writeFileAtomic(path, JSON.stringify(value, null, 2))
+}
+
+/** Report a failed rollback without exposing paths, error messages or stored bytes. */
+export function reportRestoreFailure(path: string, error: unknown): void {
+  try {
+    const code = (error as NodeJS.ErrnoException | null)?.code
+    console.error(JSON.stringify({
+      event: 'storage.restore_failed',
+      file: basename(path),
+      code: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'UNKNOWN',
+    }))
+  } catch {
+    // A broken diagnostic sink must not stop later restores or replace the audit failure.
+  }
 }
 
 /** Commit a branding slot before removing older formats, so interruption never empties it. */

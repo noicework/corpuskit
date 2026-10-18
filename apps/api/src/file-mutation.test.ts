@@ -5,18 +5,21 @@ import { writeFileAtomic } from './persist.ts'
 import { AuditWriteError } from './audit.ts'
 import { ownedMutation } from './stores.ts'
 
-Deno.test('rollback continues after the first restore fails and preserves cache and audit failure', async (t) => {
+Deno.test('failed restores log basename and code while preserving later paths, cache and audit failure', async (t) => {
   for (const adapter of ['file', 'owned']) {
     for (const failure of ['audit', 'commit']) {
       await t.step(`${adapter}, ${failure} failure`, () => {
         const directory = Deno.makeTempDirSync()
         const first = `${directory}/first.json`
+        const blocked = `${directory}/blocked.json`
         const second = `${directory}/second.json`
         const original = new Uint8Array([0, 255, 10, 83])
         let cache = 'original'
         const breakRestore = () => {
-          Deno.removeSync(first)
-          Deno.mkdirSync(first)
+          for (const path of [first, blocked]) {
+            Deno.removeSync(path)
+            Deno.mkdirSync(path)
+          }
         }
         const boundary = {
           database: {
@@ -36,30 +39,47 @@ Deno.test('rollback continues after the first restore fails and preserves cache 
             }
           },
         }
+        const logs: string[] = []
+        const report = console.error
+        console.error = (line) => {
+          logs.push(String(line))
+        }
         try {
-          Deno.writeFileSync(first, original)
-          Deno.writeFileSync(second, original)
+          for (const path of [first, blocked, second]) Deno.writeFileSync(path, original)
           expect(() => {
             if (adapter === 'file') {
-              fileMutation([first, second], boundary, () => {
-                writeFileAtomic(first, 'changed')
-                writeFileAtomic(second, 'changed')
+              fileMutation([first, blocked, second], boundary, () => {
+                for (const path of [first, blocked, second]) writeFileAtomic(path, 'changed')
                 cache = 'changed'
               }, () => {
                 cache = 'original'
               })
             } else {
-              // ownedMutation restores in reverse order, so first still fails before second.
+              // ownedMutation restores in reverse order; the blocked files still precede second.
               ownedMutation([
                 { path: second, value: 'changed' },
+                { path: blocked, value: 'changed' },
                 { path: first, value: 'changed' },
               ], boundary)
             }
           }).toThrow(AuditWriteError)
           expect(Deno.statSync(first).isDirectory).toBe(true)
+          expect(Deno.statSync(blocked).isDirectory).toBe(true)
           expect(Deno.readFileSync(second)).toEqual(original)
           expect(cache).toBe('original')
+          expect(logs.map((line) => JSON.parse(line))).toEqual(
+            ['first.json', 'blocked.json'].map((file) => ({
+              event: 'storage.restore_failed',
+              file,
+              code: expect.stringMatching(/^(EISDIR|EPERM|EACCES)$/),
+            })),
+          )
+          for (const line of logs) {
+            expect(line).not.toContain(directory)
+            expect(line).not.toContain('changed')
+          }
         } finally {
+          console.error = report
           Deno.removeSync(directory, { recursive: true })
         }
       })
