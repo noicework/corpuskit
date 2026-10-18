@@ -15,6 +15,7 @@ import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
+import { acquireWriterLock, installShutdown, secondsSetting } from './local-runtime.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
@@ -41,6 +42,23 @@ if (showcaseWarning) console.warn(showcaseWarning)
 
 const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
+
+const shutdownGrace = secondsSetting(
+  process.env.SHUTDOWN_GRACE_SECONDS,
+  100,
+  'SHUTDOWN_GRACE_SECONDS',
+)
+const releaseWriter = await acquireWriterLock(
+  process.env.DATA_DIR ?? './data',
+  secondsSetting(process.env.WRITER_LOCK_WAIT_SECONDS, 60, 'WRITER_LOCK_WAIT_SECONDS'),
+).catch((error) => {
+  console.error(
+    JSON.stringify({ event: 'server.writer_lock', outcome: 'failure', message: error.message }),
+  )
+  Deno.exit(1)
+})
+console.log(JSON.stringify({ event: 'server.writer_lock', outcome: 'acquired' }))
+const shutdownController = new AbortController()
 
 const bindings = new BindingStore()
 await bindings.initialize()
@@ -115,7 +133,7 @@ const app = buildApp({
   webBuild,
 })
 
-startScheduler(
+const stopScheduler = startScheduler(
   provider,
   tenants,
   sources,
@@ -127,7 +145,7 @@ startScheduler(
   bindings,
 )
 // Off the listen path: the probe is a live retrieval call per portal.
-setTimeout(() => void docsHealth.check(), 3_000)
+const docsProbe = setTimeout(() => void docsHealth.check(), 3_000)
 
 // Serve the built SPA (deno task build:web) alongside the API - one origin, no proxy.
 // Cache-bust the entry bundle so a deploy is never masked by a stale copy in the
@@ -242,25 +260,43 @@ app.get(
 )
 
 const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
-Deno.serve({ port, hostname: process.env.HOST ?? '0.0.0.0' }, async (request, info) => {
-  const url = new URL(request.url)
-  const response = platformShellResponse(
-    await ingress.handle(request, (clean) => app.fetch(clean), info),
-    platformDomain,
-    ingress.hostPortal(request),
-    url.hostname,
-  )
-  // As in the Worker: PORTAL_INDEXING=deny keeps a portal's pages out of search.
-  const tag = robotsTag(platformDomain, url.hostname, url.pathname, process.env.PORTAL_INDEXING)
-  if (!tag || response.headers.has('x-robots-tag')) return response
-  const headers = new Headers(response.headers)
-  headers.set('x-robots-tag', tag)
-  return await withRobotsMeta(
-    new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    }),
-    tag,
-  )
+const server = Deno.serve(
+  { port, hostname: process.env.HOST ?? '0.0.0.0' },
+  async (request, info) => {
+    request = new Request(request, {
+      signal: AbortSignal.any([request.signal, shutdownController.signal]),
+    })
+    const url = new URL(request.url)
+    const response = platformShellResponse(
+      await ingress.handle(request, (clean) => app.fetch(clean), info),
+      platformDomain,
+      ingress.hostPortal(request),
+      url.hostname,
+    )
+    // As in the Worker: PORTAL_INDEXING=deny keeps a portal's pages out of search.
+    const tag = robotsTag(platformDomain, url.hostname, url.pathname, process.env.PORTAL_INDEXING)
+    if (!tag || response.headers.has('x-robots-tag')) return response
+    const headers = new Headers(response.headers)
+    headers.set('x-robots-tag', tag)
+    return await withRobotsMeta(
+      new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      }),
+      tag,
+    )
+  },
+)
+
+installShutdown({
+  graceSeconds: shutdownGrace,
+  stopScheduler: () => {
+    clearTimeout(docsProbe)
+    return stopScheduler()
+  },
+  abort: () => shutdownController.abort(),
+  shutdownServer: () => server.shutdown(),
+  closeDatabase: () => database.close(),
+  releaseLock: releaseWriter,
 })
