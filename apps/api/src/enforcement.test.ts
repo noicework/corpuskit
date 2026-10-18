@@ -205,6 +205,7 @@ Deno.test('global gate has no legacy, coarse context, missing state or OPTIONS a
     f.assertNoProtectedDispatch(before)
     const missing = buildApp({
       provider: f.provider,
+      webAvailable: true,
       tenants: f.stores.tenants,
       audit: f.rbac.audit,
       requestContext: () => ({

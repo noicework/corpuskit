@@ -394,6 +394,7 @@ Deno.test('concurrent valid sessions survive a newer login on public routes and 
       const ingress = new LocalIngress({ rbac, tenants, env })
       const app = buildApp({
         provider: new DoubleProvider(),
+        webAvailable: true,
         tenants,
         mcpKeys,
         rbac,
