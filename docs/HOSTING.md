@@ -56,7 +56,9 @@ remove those only while the deployment is stopped. Never treat a temporary file 
 SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling, cancels active
 maintenance units and HTTP work, drains the HTTP server, closes SQLite and releases the writer
 lock. Each phase emits one JSON `server.shutdown` line. Syncs checkpoint progress every five
-pages and when interrupted; a later run skips the pages already recorded. An upstream write
+pages; scheduled syncs also save their last partial batch when interrupted. An interrupted HTTP
+sync may retry its last partial batch because its request audit boundary refuses further writes
+after cancellation. A later run skips the pages already recorded. An upstream write
 whose reply is lost can still have happened, so these checkpoints do not promise exactly-once
 remote ingestion. Shutdown waits for active producers to finish their checkpoint. If they exceed
 the grace period, the process exits non-zero and the operating system releases its lock.
@@ -69,7 +71,7 @@ the grace period, the process exits non-zero and the operating system releases i
 | `SHUTDOWN_GRACE_SECONDS` | `100` | Maximum shutdown time before a forced non-zero exit. |
 | `MAINTENANCE_AT_UTC` | `15:17` | Daily maintenance time, exactly `HH:MM` in UTC, matching the Worker cron. Invalid values fail startup. |
 | `LOCAL_SCHEDULER_ENABLED` | enabled | Set exactly `false` to register no maintenance timers. |
-| `AUTO_ENRICH_CADENCE_HOURS` | `24` | Separate enrichment and suggested-question cadence, clamped from one hour to 31 days. |
+| `AUTO_ENRICH_CADENCE_HOURS` | `24` | Separate enrichment and suggested-question cadence. Finite positive values are clamped to 1 through 744 hours (31 days); zero, negative and non-finite values fail startup. |
 
 Timing settings for lock wait and shutdown accept seconds from 0 to 86400; invalid values fail
 startup. Daily maintenance follows the UTC wall clock rather than the time the container started.
@@ -78,6 +80,8 @@ but is skipped when `DATA_DIR/maintenance-state.json` records a successful daily
 20 hours ago. The state file records `lastStart`, `lastSuccess` as ISO timestamps and
 `consecutiveFailures`. An interrupted or failed daily pass does not advance `lastSuccess`.
 Enrichment-only runs keep their separate cadence and do not advance the daily success timestamp.
+Long waits, including the 720-hour and 744-hour cadences, are split into chunks no larger than
+2,147,483,647 milliseconds. Chunk wake-ups start no maintenance work until the target is due.
 
 Every executed pass emits one structured heartbeat line with the token `maintenance.heartbeat`,
 its `kind` (`daily` or `enrichment`), `outcome` (`success`, `failure` or `aborted`) and `durationMs`:
@@ -86,7 +90,9 @@ its `kind` (`daily` or `enrichment`), `outcome` (`success`, `failure` or `aborte
 {"event":"maintenance.heartbeat","kind":"daily","outcome":"success","durationMs":1234}
 ```
 
-Monitor failures and the age of the last daily success. A skipped boot pass emits no heartbeat.
+Failed passes may include `error`, a safe maintenance summary naming jobs, portals and unit
+kinds; raw upstream error details are withheld. Monitor failures and the age of the last daily
+success. A skipped boot pass emits no heartbeat.
 
 Back up all of `DATA_DIR`, including SQLite, source checkpoints, maintenance state and uploaded
 branding, plus any store path overrides. Stop the container first for a consistent snapshot of
@@ -94,6 +100,15 @@ SQLite and the file-backed stores, then take a volume snapshot or copy. Preserve
 secrets such as `BINDING_KEY` separately in protected backup storage so sealed credentials can be
 restored. Test restoration into an isolated directory with one writer before relying on backups.
 The writer lock does not replace backups or coordinate processes that bypass it.
+
+### Upgrade notes
+
+- The container now listens on **8787 by default**, matching its exposed port. Previously it listened on 8791 unless `PORT` was set. Update container routing and health checks to 8787, or set `PORT=8791` explicitly to retain the previous listener. Direct Deno runs still default to 8791.
+- New settings are `WRITER_LOCK_WAIT_SECONDS=60`, `SHUTDOWN_GRACE_SECONDS=100` and `MAINTENANCE_AT_UTC=15:17`. Lock and shutdown settings accept seconds from 0 to 86400, and maintenance requires `HH:MM` UTC; invalid values fail startup. Use a 120-second container stop timeout. `LOCAL_SCHEDULER_ENABLED=false` still disables all maintenance timers. `AUTO_ENRICH_CADENCE_HOURS` still defaults to 24 and caps finite positive values at 744 hours (31 days), but now rejects zero, negative and non-finite values instead of silently using the default.
+- Daily upkeep now runs at a fixed UTC time, 15:17 by default, rather than every 24 hours from boot. Review overnight schedules and set `MAINTENANCE_AT_UTC` if needed. The 90-second boot pass is skipped after a daily success less than 20 hours old. Enrichment retains its separate cadence.
+- Use a **stop-then-start (recreate) deployment strategy** on a shared volume. The new container cannot write or listen until the old process releases `.writer.lock`; it waits up to 60 seconds by default, then exits non-zero. Start-before-stop deployment strategies cannot overlap writers on the same data directory.
+- Atomic replacements now create files with mode **0600**, readable and writable only by their owner. Existing files acquire this mode when replaced. Backup and sidecar tooling using a different user must be adjusted to read as the file owner; preserve the deployment's user identity when restoring data.
+- Rollback of these durability changes is safe with one process under the same file owner: stop the new process before starting the older binary, preserve the port configuration, and keep the deployment's data and credential backups. Older binaries ignore `.writer.lock` and `maintenance-state.json`, so they do not enforce the new writer fence. File permissions remain 0600 until another write or an explicit permission change.
 
 ## Knowledge box credential encryption
 
