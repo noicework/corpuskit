@@ -2487,6 +2487,15 @@ async function assertEdgeParity() {
       await compare(path, 404, 'public, max-age=300', `marine.${h.domain}`)
       await compare(path, 404, 'public, max-age=300', 'unregistered.example.net')
     }
+    for (
+      const path of ['/docs', '/docs/', '/docs/hosting', '/docs/index.html', '/docs/hosting.html']
+    ) {
+      await compare(path, 200, 'no-store')
+      await compare(path, 404, 'public, max-age=300', `marine.${h.domain}`)
+      await compare(path, 404, 'public, max-age=300', 'unregistered.example.net')
+    }
+    await compare('/docs/', 200, 'no-store', h.domain, 'HEAD')
+    await compare('/docs/hosting', 404, 'public, max-age=300', `marine.${h.domain}`, 'HEAD')
     await compare('/?q=one', 308, null, `marine.${h.domain}`, 'GET', '/t/marine?q=one')
     await compare('/?q=two', 308, null, `marine.${h.domain}`, 'HEAD', '/t/marine?q=two')
     await compare(
@@ -2592,6 +2601,9 @@ async function assertEntraParity() {
       const callback = await send(new Request(callbackUrl, { headers: { cookie: stateCookie } }))
       expect(callback.status).toBe(302)
       expect(callback.headers.get('location')).toBe(`https://${h.domain}/t/marine`)
+      expect(callback.headers.getSetCookie()).toContain(
+        '__Secure-corpuskit_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0',
+      )
       const setCookie = callback.headers.getSetCookie().find((s) =>
         s.startsWith('__Secure-corpuskit_session=')
       )!

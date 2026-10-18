@@ -32,7 +32,18 @@ point; `deno lint`; `deno fmt --check`; and the full test suite (`deno task test
 what CI runs on every push and PR - if it does not pass locally, it will not pass in CI.
 
 Formatting and lint rules live in `deno.json` (`fmt` and `lint` keys). Run `deno fmt` to
-auto-format, and `deno lint` to see lint issues directly.
+auto-format, and `deno lint` to see lint issues directly. `deno task fmt` only checks formatting; it
+does not rewrite files.
+
+The real-server parity e2e uses port 8796 by default. Override it when another worktree is using
+that port, for example:
+
+```sh
+PARITY_E2E_PORT=8896 deno test --allow-net --allow-env --allow-read --allow-write \
+  --allow-run --allow-sys e2e/local-server-parity.test.ts
+```
+
+Run `deno task build:web` first so that the parity journey can serve the built pages and assets.
 
 ## Conventions
 

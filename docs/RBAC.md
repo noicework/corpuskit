@@ -72,11 +72,11 @@ no-store` so a cached copy cannot outlive a change of mode.
 
 ## Where identity comes from
 
-1. **Sign-in.** The Worker and single-process Deno server share OpenID Connect against Microsoft Entra and seals the verified
-   claims into an encrypted cookie scoped to the platform domain. Sessions last up to eight
-   hours. If a token carries so many group ids that the cookie would exceed the browser limit,
-   the groups are dropped and the session records `groupStatus: overage`, which disables group
-   mappings for that session rather than truncating the list.
+1. **Sign-in.** The Worker and single-process Deno server share OpenID Connect against Microsoft
+   Entra and seal the verified claims into an encrypted cookie scoped to the platform domain.
+   Sessions last up to eight hours. If a token carries so many group ids that the cookie would
+   exceed the browser limit, the groups are dropped and the session records `groupStatus: overage`,
+   which disables group mappings for that session rather than truncating the list.
 2. **Principal envelope.** For every request the Worker forwards to the Durable Object it strips
    any identity headers the caller supplied and, when there is a session, adds one signed header,
    `x-corpuskit-principal`: `{ v, aud, tid, oid, email, name, roles, groups, iat }` plus an

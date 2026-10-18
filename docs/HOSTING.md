@@ -1455,6 +1455,12 @@ Worker configurations in this repository set it.
 
 ## Configurable platform domain
 
+**Deno upgrade:** Sessions on platform hosts now use `Domain=<PLATFORM_DOMAIN>` instead of a
+host-only cookie. With a company apex such as `example.com`, the browser sends the session cookie
+to that apex and all its subdomains, including unrelated services. Choose a dedicated hostname
+such as `research.example.com` when other company services must not receive CorpusKit cookies.
+Sign-in and logout clear the old host-only cookie on the host issuing the response.
+
 Set the runtime `PLATFORM_DOMAIN` variable to the deployment's platform hostname, such as
 `research.example`. It defaults to `corpuskit.org`. Use a DNS hostname without a scheme, path or
 port. Explicitly malformed values return HTTP 503 `platform_domain_invalid` at the Worker
@@ -1510,7 +1516,7 @@ removed (`domain_removal_failed`) until that hostname is detached or moved.
 ### Shared HTTP edge rules
 
 The Worker and Deno ingress both use `apps/api/src/edge.ts` for security headers, static-response
-caching, platform-host redirects and the About-page boundary:
+caching, platform-host redirects and the About-page and documentation boundaries:
 
 - Every response has a content security policy, Permissions Policy, Referrer Policy, HSTS,
   `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`. A stricter policy supplied by an
@@ -1524,6 +1530,8 @@ caching, platform-host redirects and the About-page boundary:
   Operator credential checks run before these redirects.
 - `/about`, `/about/` and `/about.html` are served only on the platform apex. Every other host,
   including localhost, answers 404 for them. Use the configured apex host to preview About.
+- `/docs` and every path under `/docs/`, including raw HTML asset URLs, also answer 404 off the
+  platform apex. Documentation remains available on the configured apex.
 
 ## Search engines
 
