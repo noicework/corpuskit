@@ -87,6 +87,23 @@ const tcpPeer = (info?: PeerInfo) =>
 class InvalidLocalPrincipal extends Error {}
 class InvalidOperatorCredential extends Error {}
 
+function entraRedirectUri(env: LocalIngressOptions['env']): string | undefined {
+  const uri = env.ENTRA_REDIRECT_URI?.trim()
+  if (!env.ENTRA_TENANT_ID && !uri) return undefined
+  try {
+    const url = new URL(uri ?? '')
+    if (
+      url.protocol === 'https:' ||
+      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+    ) return uri
+  } catch {
+    // Report a configuration error without including a potentially sensitive URL.
+  }
+  throw new Error(
+    'Deno Entra sign-in requires ENTRA_REDIRECT_URI to be an absolute HTTPS URL (HTTP is allowed only on localhost)',
+  )
+}
+
 /** Trusted local adapter. Session fixtures are in-process arguments, never HTTP input. */
 export class LocalIngress {
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
@@ -126,11 +143,7 @@ export class LocalIngress {
     } catch {
       // An unreadable registry fails its own requests; it never stops the server starting.
     }
-    if (env.ENTRA_TENANT_ID && !env.ENTRA_REDIRECT_URI?.trim()) {
-      throw new Error(
-        'Deno Entra sign-in requires ENTRA_REDIRECT_URI with the public HTTPS callback URL',
-      )
-    }
+    const redirectUri = entraRedirectUri(env)
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -152,7 +165,7 @@ export class LocalIngress {
       clientSecret: env.ENTRA_CLIENT_SECRET ?? '',
       tenantId: env.ENTRA_TENANT_ID ?? '',
       sessionSecret: this.secret,
-      redirectUri: env.ENTRA_REDIRECT_URI,
+      redirectUri,
       adminEmails: env.ENTRA_ADMIN_EMAILS,
       externalLogin: { ...externalLoginConfig(env), audience: this.audience },
     }

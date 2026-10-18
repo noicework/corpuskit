@@ -39,12 +39,21 @@ function command(directory: string, entra: Record<string, string> = {}) {
   })
 }
 
-Deno.test('actual Deno server fails before listening when Entra has no explicit callback URI', async () => {
+Deno.test('actual Deno server fails before listening when the Entra callback URI is missing or invalid', async () => {
   const directory = await Deno.makeTempDir()
   try {
-    const result = await command(directory, { ENTRA_TENANT_ID: 'fixture-directory' }).output()
-    expect(result.success).toBe(false)
-    expect(new TextDecoder().decode(result.stderr)).toContain('requires ENTRA_REDIRECT_URI')
+    for (
+      const uri of ['', '/auth/callback', 'not a URL', 'http://research.example/auth/callback']
+    ) {
+      const result = await command(directory, {
+        ENTRA_TENANT_ID: 'fixture-directory',
+        ENTRA_REDIRECT_URI: uri,
+      }).output()
+      expect(result.success, uri).toBe(false)
+      expect(new TextDecoder().decode(result.stderr)).toContain(
+        'requires ENTRA_REDIRECT_URI to be an absolute HTTPS URL',
+      )
+    }
   } finally {
     await Deno.remove(directory, { recursive: true })
   }

@@ -157,13 +157,13 @@ export async function handleAuthRequest(
     return json({ authenticated: Boolean(user), user }, 200)
   }
   if (url.pathname === '/auth/logout' && (request.method === 'GET' || request.method === 'POST')) {
+    const headers = new Headers({ location: '/', 'cache-control': 'no-store' })
+    headers.append('set-cookie', clearCookie(SESSION_COOKIE, config.cookieDomain))
+    // Earlier Deno sessions used a host-only cookie, which survives a domain-scoped deletion.
+    if (config.cookieDomain) headers.append('set-cookie', clearCookie(SESSION_COOKIE))
     return new Response(null, {
       status: 302,
-      headers: {
-        location: '/',
-        'cache-control': 'no-store',
-        'set-cookie': clearCookie(SESSION_COOKIE, config.cookieDomain),
-      },
+      headers,
     })
   }
   if (url.pathname.startsWith('/auth/')) return json({ error: 'not_found' }, 404)

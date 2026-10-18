@@ -1087,13 +1087,15 @@ Set these variables in the single-process server's environment:
 | `SESSION_SECRET` | Random secret of at least 32 bytes. Required in production; keep it stable across restarts. |
 | `ENTRA_REDIRECT_URI` | Explicit public callback URL, for example `https://research.example/auth/callback`. Register exactly this URL with Entra. |
 
-When `ENTRA_TENANT_ID` is set, the Deno server refuses to start without a non-empty
-`ENTRA_REDIRECT_URI`, even if the other Entra settings are incomplete. A TLS-terminating proxy
-forwards an HTTP request to Deno, so deriving the callback from that request would use the wrong
-origin. Keep the public host in the forwarded request. The handler uses the explicit callback
-URL for the token exchange, and its scheme for the post-login return URL; forwarded scheme
-headers are not trusted. Use HTTPS for a hosted deployment. Entra sign-in stays unavailable until
-all credentials are configured. External-only deployments do not need `ENTRA_REDIRECT_URI`.
+When `ENTRA_TENANT_ID` is set, the Deno server refuses to start without an absolute HTTPS
+`ENTRA_REDIRECT_URI`, even if the other Entra settings are incomplete. HTTP is allowed only for
+local development on `localhost`, `127.0.0.1` or `[::1]`. Any supplied callback URL is validated
+at startup. A TLS-terminating proxy forwards an HTTP request to Deno, so deriving the callback
+from that request would use the wrong origin. Keep the public host in the forwarded request.
+The handler uses the explicit callback URL for the token exchange, and its scheme for the
+post-login return URL; forwarded scheme headers are not trusted. Use HTTPS for a hosted
+deployment. Entra sign-in stays unavailable until all credentials are configured. External-only
+deployments do not need `ENTRA_REDIRECT_URI`.
 
 ## Single-process mutation audit
 
