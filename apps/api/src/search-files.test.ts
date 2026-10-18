@@ -5,6 +5,8 @@ import {
   RELEASE_NOTES_PAGE_ID,
 } from '../../../packages/core/src/docs.ts'
 import {
+  indexNowKey,
+  indexNowKeyFile,
   isPortalPage,
   llmsTxt,
   portalIndexingMode,
@@ -144,4 +146,26 @@ Deno.test('withRobotsMeta writes the directive into an HTML head once, and leave
   expect(await again.text()).toBe('<head><meta name="robots" content="noindex"></head>')
   const json = page('{"a":1}', 'application/json')
   expect(await withRobotsMeta(json, 'noindex')).toBe(json)
+})
+
+Deno.test('INDEXNOW_KEY: only 8 to 128 letters, digits or hyphens make a key', () => {
+  expect(indexNowKey('cccb3b644d644cae90bf12a876750730')).toBe('cccb3b644d644cae90bf12a876750730')
+  expect(indexNowKey('  abc-1234  ')).toBe('abc-1234')
+  for (const value of [undefined, '', 'short', 'has space in it', 'a/b/c/d/e', 'x'.repeat(129)]) {
+    expect(indexNowKey(value)).toBe(null)
+  }
+})
+
+Deno.test('the IndexNow key file answers on the apex only, at /<key>.txt, and only with a key', () => {
+  const key = 'cccb3b644d644cae90bf12a876750730'
+  const file = (host: string, path: string, value: string | undefined = key) =>
+    indexNowKeyFile('research.example.org', host, path, value)
+  expect(file('research.example.org', `/${key}.txt`)).toBe(key)
+  expect(file('Research.Example.org', `/${key}.txt`)).toBe(key)
+  expect(file('marine.research.example.org', `/${key}.txt`)).toBe(null)
+  expect(file('research.example.org', '/other.txt')).toBe(null)
+  expect(file('research.example.org', `/t/${key}.txt`)).toBe(null)
+  expect(indexNowKeyFile('research.example.org', 'research.example.org', `/${key}.txt`, undefined))
+    .toBe(null)
+  expect(file('research.example.org', '/short.txt', 'short')).toBe(null)
 })

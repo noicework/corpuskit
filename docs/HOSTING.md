@@ -1395,6 +1395,18 @@ Set `PORTAL_INDEXING=deny` on a deployment that hosts portals for other organisa
 and content should not reach search results just because someone linked to a portal. A deployment
 whose public portals should be found keeps the default.
 
+To have Bing and the other [IndexNow](https://www.indexnow.org) search engines crawl new and
+changed pages within days, set a key on the Worker and send the sitemap after each deploy that
+changes the home page, About or the documentation:
+
+| Variable | Meaning |
+|---|---|
+| `INDEXNOW_KEY` | 8 to 128 letters, digits or hyphens, for example 32 random hex characters. With it set, the platform domain answers `/<key>.txt` with the key, which the search engines fetch to confirm a submission is yours. Without it there is no key file. Set it as a secret (`wrangler secret put INDEXNOW_KEY`). |
+
+Then run `INDEXNOW_KEY=<key> deno task indexnow <platform domain>`. It reads the live sitemap,
+checks the key file answers, and sends every page the sitemap lists; `--dry-run` prints the
+submission instead.
+
 ## Portal host aliases
 
 A hosting operator can serve a portal on hostnames outside the platform domain, such as

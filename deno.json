@@ -79,6 +79,7 @@
     "shots": "deno run -A e2e/design-shots.ts",
     "enrich": "deno run --allow-net --allow-env --allow-read apps/api/scripts/enrich-labels.ts",
     "provision": "deno run --allow-net --allow-env --allow-read --allow-write=.env apps/api/scripts/provision.ts",
-    "release:notes": "deno run --allow-read=CHANGELOG.md apps/web/scripts/release-notes.ts"
+    "release:notes": "deno run --allow-read=CHANGELOG.md apps/web/scripts/release-notes.ts",
+    "indexnow": "deno run --allow-net --allow-env=INDEXNOW_KEY apps/api/scripts/indexnow.ts"
   }
 }
