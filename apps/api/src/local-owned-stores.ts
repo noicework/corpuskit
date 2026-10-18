@@ -187,12 +187,12 @@ export function localOwnedStores(
   const attach = (
     shared: { bindings: BindingStore; sources: SourceStore; enrichments: EnrichmentStore },
   ) => {
-    shared.bindings.setMutationBoundary((change, write) => {
+    shared.bindings.setMutationBoundary((change, path, write) => {
       if (change.operation === 'bindings.migrate') return write()
       guard()
       return operations.run({ name: change.operation, args: [change.slug] }, () => {
         try {
-          return fileMutation([env.BINDINGS_PATH ?? './data/bindings.json'], boundary, write)
+          return fileMutation([path], boundary, write)
         } catch (error) {
           if (error instanceof AuditWriteError) {
             for (let context = requests.getStore(); context; context = context.parent) {
@@ -235,10 +235,16 @@ export function localOwnedStores(
     feedback: wrap('feedback', new FeedbackStore(dataDir), files('feedback')),
     routing: wrap('routing', new RoutingLog(dataDir), files('routing', 'jsonl')),
     suggestions: wrap('suggestions', new SuggestionStore(dataDir), files('suggestions')),
-    kgProposals: wrap('kgProposals', new KgProposalStore(env, boundary)),
+    kgProposals: wrap(
+      'kgProposals',
+      new KgProposalStore({
+        ...env,
+        KG_PROPOSALS_PATH: env.KG_PROPOSALS_PATH ?? join(dataDir, 'kg-proposals.json'),
+      }, boundary),
+    ),
     branding: wrap(
       'branding',
-      new FileBrandingStore(env.BRANDING_PATH ?? './data/branding', boundary),
+      new FileBrandingStore(env.BRANDING_PATH ?? join(dataDir, 'branding'), boundary),
     ),
     lifecycle: wrap('lifecycle', new FileLifecycleStore(dataDir, boundary)),
     ...(tenantEnv ? { tenants: wrap('tenants', new TenantStore(tenantEnv, boundary)) } : {}),

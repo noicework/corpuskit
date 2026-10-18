@@ -308,10 +308,12 @@ export class SealedBindingStore {
 
 /** File-backed server-only credentials; encrypted deployments initialize before serving requests. */
 export class BindingStore extends SealedBindingStore {
-  private readonly mutation: { run?: (change: BindingChange, write: () => void) => void }
+  private readonly mutation: {
+    run?: (change: BindingChange, path: string, write: () => void) => void
+  }
 
   /** Install the runtime's audit boundary at the synchronous persistence point, after sealing. */
-  setMutationBoundary(run: (change: BindingChange, write: () => void) => void): void {
+  setMutationBoundary(run: (change: BindingChange, path: string, write: () => void) => void): void {
     this.mutation.run = run
   }
 
@@ -330,8 +332,9 @@ export class BindingStore extends SealedBindingStore {
         },
         write: (records, change) => {
           const write = () => writeJsonAtomic(path, records)
-          if (mutation.run && change.operation !== 'bindings.migrate') mutation.run(change, write)
-          else write()
+          if (mutation.run && change.operation !== 'bindings.migrate') {
+            mutation.run(change, path, write)
+          } else write()
         },
       },
       env,
