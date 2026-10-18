@@ -65,13 +65,18 @@ function assertPublicHttpUrl(raw: string): URL {
   return url
 }
 
-async function fetchText(url: string): Promise<{ body: string; contentType: string }> {
+async function fetchText(
+  url: string,
+  signal?: AbortSignal,
+): Promise<{ body: string; contentType: string }> {
   let res: Response
   try {
     res = await fetch(url, {
       redirect: 'follow',
       headers: { 'user-agent': CRAWLER_USER_AGENT },
-      signal: AbortSignal.timeout(20_000),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(20_000)])
+        : AbortSignal.timeout(20_000),
     })
   } catch (err) {
     // Deno surfaces a reset/DNS/TLS failure as a bare "fetch failed", which
@@ -93,9 +98,10 @@ const extractLocs = (xml: string): string[] =>
 export async function discoverLinks(
   target: string,
   cap: number,
+  signal?: AbortSignal,
 ): Promise<{ source: string; count: number; links: string[] }> {
   const origin = assertPublicHttpUrl(target)
-  const { body, contentType } = await fetchText(origin.href)
+  const { body, contentType } = await fetchText(origin.href, signal)
   const seen = new Set<string>()
   const links: string[] = []
   const push = (raw: string) => {
@@ -120,13 +126,14 @@ export async function discoverLinks(
     const pages = locs.filter((l) => !/\.xml(\?|$)/i.test(l))
     pages.forEach(push)
     for (const child of childSitemaps) {
+      signal?.throwIfAborted()
       if (links.length >= cap) break
       try {
         // Child sitemap URLs come from remote content - hold them to the same
         // public-host, same-origin standard as the entry URL.
         const childUrl = assertPublicHttpUrl(child)
         if (childUrl.origin !== origin.origin) continue
-        const { body: childBody } = await fetchText(childUrl.href)
+        const { body: childBody } = await fetchText(childUrl.href, signal)
         extractLocs(childBody)
           .filter((l) => !/\.xml(\?|$)/i.test(l))
           .forEach(push)
@@ -139,6 +146,7 @@ export async function discoverLinks(
       push(match[1] ?? '')
     }
   }
+  signal?.throwIfAborted()
   return { source: isXml ? 'sitemap' : 'page', count: links.length, links }
 }
 
