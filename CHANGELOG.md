@@ -36,6 +36,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- A provider read that throws before returning a promise clears its timeout, so it cannot leave an orphaned timeout error after the request ends. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - Audited replacement rollback uses flushed atomic writes, and the first branding replacement after upgrade commits its new record before retiring legacy files. A crash before that commit leaves the legacy asset readable. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - The Deno IndexNow fallback is registered as infrastructure, so static handling cannot make API operation matching ambiguous or refuse public health requests.
 - Single-process Deno hosting now audits every declared local store mutation, including branding, and restores synchronous file mutations when their required audit cannot commit.

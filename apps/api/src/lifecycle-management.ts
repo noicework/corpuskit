@@ -329,7 +329,7 @@ function dueDeleteReadings(
  * Run a read that is given up after `ms`: its signal is aborted and the answer is a
  * `TimeoutError`, even when the read itself ignores the signal and never settles.
  */
-export function withinTimeout<T>(
+export async function withinTimeout<T>(
   read: (signal: AbortSignal) => Promise<T>,
   ms: number,
 ): Promise<T> {
@@ -342,7 +342,12 @@ export function withinTimeout<T>(
       reject(reason)
     }, ms)
   })
-  return Promise.race([read(abort.signal), timedOut]).finally(() => clearTimeout(timer))
+  try {
+    return await Promise.race([read(abort.signal), timedOut])
+  } finally {
+    // A provider can throw before returning a promise; its timeout still belongs to this read.
+    clearTimeout(timer)
+  }
 }
 
 /**
