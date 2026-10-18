@@ -31,10 +31,12 @@ export function fileMutation<T>(
     })
   } catch (error) {
     for (const [index, path] of paths.entries()) {
-      const bytes = before[index]
-      if (bytes === undefined) rmSync(path, { force: true })
-      else if (typeof bytes === 'number') truncateSync(path, bytes)
-      else writeFileAtomic(path, bytes)
+      try {
+        const bytes = before[index]
+        if (bytes === undefined) rmSync(path, { force: true })
+        else if (typeof bytes === 'number') truncateSync(path, bytes)
+        else writeFileAtomic(path, bytes)
+      } catch { /* Restore the remaining paths and cache, preserving the original failure. */ }
     }
     restoreCache?.()
     throw completed ? new AuditWriteError() : error

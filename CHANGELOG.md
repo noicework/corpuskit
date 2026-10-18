@@ -36,6 +36,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Failed audited mutations try every file restore even when an earlier restore fails, restore adapter caches and preserve the required audit error.
 - Source sync checkpoints keep progress saved by newer runs on Deno and the Worker, merging their URL ledgers before the 5,000-page cap and counting newly saved pages once.
 - Deno enrichment ignores a saved run time in the future, so a clock correction cannot postpone its first pass beyond boot.
 - Deno boot maintenance queues daily upkeep before its first enrichment pass regardless of timer order, and shutdown before boot safely cancels both passes.
