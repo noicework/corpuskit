@@ -16,6 +16,7 @@ import { DocsHealth } from './docs-health.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
 import { acquireWriterLock, installShutdown, secondsSetting } from './local-runtime.ts'
+import { scheduleAfter } from './local-timers.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
@@ -144,7 +145,7 @@ const stopScheduler = startScheduler(
   bindings,
 )
 // Off the listen path: the probe is a live retrieval call per portal.
-const docsProbe = setTimeout(() => void docsHealth.check(), 3_000)
+const cancelDocsProbe = scheduleAfter(3_000, () => void docsHealth.check())
 
 // Serve the built SPA (deno task build:web) alongside the API - one origin, no proxy.
 // Cache-bust the entry bundle so a deploy is never masked by a stale copy in the
@@ -291,7 +292,7 @@ const server = Deno.serve(
 installShutdown({
   graceSeconds: shutdownGrace,
   stopScheduler: () => {
-    clearTimeout(docsProbe)
+    cancelDocsProbe()
     return stopScheduler()
   },
   abort: () => shutdownController.abort(),

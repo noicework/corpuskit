@@ -31,8 +31,7 @@ const pages = Array.from({ length: 12 }, (_, index) => `https://example.org/page
 const bytes = new Uint8Array(256 * 1024).fill(83)
 
 function directory() {
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  return Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  return Deno.makeTempDirSync()
 }
 
 function child(mode: string, dataDir: string) {
@@ -45,8 +44,12 @@ function child(mode: string, dataDir: string) {
   }).spawn()
 }
 
-async function untilLine(process: Deno.ChildProcess, token: string) {
-  const reader = process.stdout.getReader()
+async function untilLine(
+  process: Deno.ChildProcess,
+  token: string,
+  stream: 'stdout' | 'stderr' = 'stdout',
+) {
+  const reader = process[stream].getReader()
   const decoder = new TextDecoder()
   let log = ''
   const timer = setTimeout(() => process.kill('SIGKILL'), 20_000)
@@ -56,6 +59,7 @@ async function untilLine(process: Deno.ChildProcess, token: string) {
       if (part.done) throw new Error(`Process ended before ${token}: ${log}`)
       log += decoder.decode(part.value, { stream: true })
     }
+    return log
   } finally {
     clearTimeout(timer)
     reader.releaseLock()
@@ -132,7 +136,7 @@ async function fixtureMain(mode: string, dir: string) {
   const releaseLock = await acquireWriterLock(dir, 0)
   const { database, rbac } = openLocalRbac({ DATA_DIR: dir })
   const server = Deno.serve(
-    { hostname: '127.0.0.1', port: 8795, onListen: () => {} },
+    { hostname: '127.0.0.1', port: 0, onListen: () => {} },
     () => new Response('ok'),
   )
   const running = runSystemMaintenance(
@@ -172,7 +176,8 @@ if (import.meta.main) {
       DATA_DIR: dir,
       BINDINGS_PATH: `${dir}/bindings.json`,
       TENANTS_PATH: `${dir}/tenants.json`,
-      PORT: '8795',
+      PORT: '0',
+      HOST: '127.0.0.1',
       LOCAL_SCHEDULER_ENABLED: 'false',
       SHUTDOWN_GRACE_SECONDS: '2',
       WRITER_LOCK_WAIT_SECONDS: '0.2',
@@ -190,18 +195,12 @@ if (import.meta.main) {
     let alive = true
     try {
       await untilLine(first, '"outcome":"acquired"')
-      // Wait for the actual listening socket before sending a signal.
-      for (let attempt = 0;; attempt++) {
-        try {
-          const response = await fetch('http://127.0.0.1:8795/auth/me')
-          expect(response.status).toBe(200)
-          await response.text()
-          break
-        } catch (error) {
-          if (attempt > 100) throw error
-          await new Promise((resolve) => setTimeout(resolve, 20))
-        }
-      }
+      const listening = await untilLine(first, 'Listening on http://', 'stderr')
+      const port = /Listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(listening)?.[1]
+      expect(port).toBeDefined()
+      const response = await fetch(`http://127.0.0.1:${port}/auth/me`)
+      expect(response.status).toBe(200)
+      await response.text()
       const start = performance.now()
       const second = await command().output()
       expect(second.success).toBe(false)
@@ -214,6 +213,7 @@ if (import.meta.main) {
       const log = new TextDecoder().decode(result.stdout)
       for (
         const phase of [
+          'scheduler_stopping',
           'scheduler_stopped',
           'units_aborted',
           'http_drained',
@@ -224,6 +224,10 @@ if (import.meta.main) {
       ) {
         expect(log).toContain(`"phase":"${phase}"`)
       }
+      expect(log.indexOf('"phase":"scheduler_stopping"'))
+        .toBeLessThan(log.indexOf('"phase":"scheduler_stopped"'))
+      expect(log.indexOf('"phase":"units_aborted"'))
+        .toBeLessThan(log.indexOf('"phase":"scheduler_stopped"'))
       const release = await acquireWriterLock(dir, 0)
       release()
     } finally {

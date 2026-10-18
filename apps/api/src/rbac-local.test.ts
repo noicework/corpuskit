@@ -89,8 +89,7 @@ Deno.test('local transactions roll back errors, forbid async work and remain reu
 })
 
 Deno.test('local SQLite enforces rollback journals, full durability and a bounded busy wait', () => {
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  const dir = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const dir = Deno.makeTempDirSync()
   const db = new LocalRbacDatabase(`${dir}/rbac.sqlite`)
   try {
     expect(db.all('PRAGMA journal_mode')).toEqual([{ journal_mode: 'delete' }])
@@ -104,8 +103,7 @@ Deno.test('local SQLite enforces rollback journals, full durability and a bounde
 
 Deno.test('local SQLite refuses an existing WAL database without converting it', async () => {
   const { DatabaseSync } = await import('node:sqlite')
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  const dir = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const dir = Deno.makeTempDirSync()
   const path = `${dir}/rbac.sqlite`
   const seed = new DatabaseSync(path)
   seed.exec('PRAGMA journal_mode=WAL; CREATE TABLE fixture (value TEXT)')

@@ -4,8 +4,7 @@ import { SuggestionStore } from './interrogate.ts'
 import { ownedMutation } from './stores.ts'
 
 Deno.test('atomic writer replaces JSON and binary bytes and cleans up after rename failure', () => {
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  const directory = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const directory = Deno.makeTempDirSync()
   try {
     const path = `${directory}/file`
     writeFileAtomic(path, 'previous')
@@ -23,8 +22,7 @@ Deno.test('atomic writer replaces JSON and binary bytes and cleans up after rena
 })
 
 Deno.test('branding replacement commits before retiring another format; rollback preserves exact bytes', () => {
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  const directory = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const directory = Deno.makeTempDirSync()
   try {
     const base = `${directory}/logo`
     writeAssetAtomic(base, 'png', ['png', 'jpg'], new Uint8Array([1, 2]))
@@ -47,8 +45,7 @@ Deno.test('branding replacement commits before retiring another format; rollback
 })
 
 Deno.test('suggestion decisions persist atomically and corrupt JSON is reported and quarantined', () => {
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  const directory = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const directory = Deno.makeTempDirSync()
   const errors: unknown[][] = []
   const original = console.error
   console.error = (...args) => {

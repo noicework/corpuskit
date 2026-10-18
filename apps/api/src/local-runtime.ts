@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { scheduleAfter } from './local-timers.ts'
 
 /** Invalid timing settings fail startup rather than creating unbounded waits. */
 export function secondsSetting(raw: string | undefined, fallback: number, name: string): number {
@@ -25,7 +26,7 @@ export async function acquireWriterLock(dataDir: string, waitSeconds = 60): Prom
       if (remaining <= 0) {
         throw new Error(`DATA_DIR writer lock is still held after ${waitSeconds} seconds`)
       }
-      await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)))
+      await new Promise<void>((resolve) => scheduleAfter(Math.min(100, remaining), resolve))
     }
   } catch (error) {
     file.close()
@@ -62,36 +63,41 @@ export function installShutdown(options: {
   const shutdown = (signal: string) =>
     closing ??= (async () => {
       log(JSON.stringify({ event: 'server.shutdown', phase: 'received', signal }))
-      const deadline = setTimeout(() => {
+      const cancelDeadline = scheduleAfter(options.graceSeconds * 1000, () => {
         phase('deadline', 'timeout')
         // Exit closes the SQLite connection and OS lock together. Never release the fence while
         // an uncooperative producer can still write; the next process must wait for our exit.
         exit(1)
-      }, options.graceSeconds * 1000)
+      })
       try {
         const stopped = options.stopScheduler()
-        phase('scheduler_stopped')
+        phase('scheduler_stopping')
         options.abort()
         phase('units_aborted')
         // Stop admitting connections immediately, while active units save their checkpoints.
-        await Promise.all([stopped, options.shutdownServer()])
+        await Promise.all([
+          stopped.then(() => phase('scheduler_stopped')),
+          options.shutdownServer(),
+        ])
         phase('http_drained')
         options.closeDatabase()
         phase('database_closed')
         options.releaseLock()
         phase('writer_released')
-        clearTimeout(deadline)
+        cancelDeadline()
         phase('complete')
         exit(0)
       } catch {
-        clearTimeout(deadline)
+        cancelDeadline()
         phase('cleanup', 'failure')
         exit(1)
       }
     })()
-  Deno.addSignalListener('SIGTERM', () => {
-    void shutdown('SIGTERM')
-  })
+  if (Deno.build.os !== 'windows') {
+    Deno.addSignalListener('SIGTERM', () => {
+      void shutdown('SIGTERM')
+    })
+  }
   Deno.addSignalListener('SIGINT', () => {
     void shutdown('SIGINT')
   })
