@@ -3,13 +3,15 @@ import type { TenantConfig } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
 import { acquireWriterLock, installShutdown } from '../apps/api/src/local-runtime.ts'
 import { runSystemMaintenance, syncSource } from '../apps/api/src/scheduler.ts'
-import { SourceStore, WatchStore } from '../apps/api/src/stores.ts'
+import { SourceStore } from '../apps/api/src/stores.ts'
 import { SuggestionStore } from '../apps/api/src/interrogate.ts'
 import { EnrichmentStore } from '../apps/api/src/enrichments.ts'
 import { readJsonSafe, writeJsonAtomic } from '../apps/api/src/persist.ts'
 import { FileBrandingStore } from '../apps/api/src/branding-store.ts'
 import { openLocalRbac } from '../apps/api/src/rbac-local.ts'
 import type { TenantStoreApi } from '../apps/api/src/tenants.ts'
+import { localOwnedStores } from '../apps/api/src/local-owned-stores.ts'
+import { BindingStore } from '../apps/api/src/bindings.ts'
 
 const ROOT = new URL('../', import.meta.url).pathname
 const SCRIPT = new URL(import.meta.url).pathname
@@ -157,6 +159,14 @@ async function fixtureMain(mode: string, dir: string) {
   }
   const releaseLock = await acquireWriterLock(dir, 0)
   const { database, rbac } = openLocalRbac({ DATA_DIR: dir })
+  const enrichments = new EnrichmentStore(dir)
+  const owned = localOwnedStores(dir, database, rbac.audit)
+  // Match server.ts: #102 attaches audited mutation wrappers to the shared scheduler stores.
+  owned.attach({
+    bindings: new BindingStore({ BINDINGS_PATH: `${dir}/bindings.json` }),
+    sources,
+    enrichments,
+  })
   const server = Deno.serve(
     { hostname: '127.0.0.1', port: 0, onListen: () => {} },
     () => new Response('ok'),
@@ -166,8 +176,8 @@ async function fixtureMain(mode: string, dir: string) {
     {
       rbac,
       sources,
-      watches: new WatchStore(),
-      enrichments: new EnrichmentStore(dir),
+      watches: owned.watches,
+      enrichments,
       tenants: { list: () => [{ slug: 'portal' }], get: () => tenant } as unknown as TenantStoreApi,
     },
     undefined,
