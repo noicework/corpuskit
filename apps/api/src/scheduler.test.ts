@@ -597,8 +597,9 @@ Deno.test('provider failures in watches and enrichment reach the system failure 
 Deno.test('auto-enrichment cadence is daily by default and safely configurable in hours', () => {
   expect(autoEnrichmentCadenceMs(undefined)).toBe(DEFAULT_AUTO_ENRICH_CADENCE_MS)
   expect(autoEnrichmentCadenceMs('6')).toBe(6 * 3600 * 1000)
-  expect(autoEnrichmentCadenceMs('0')).toBe(DEFAULT_AUTO_ENRICH_CADENCE_MS)
-  expect(autoEnrichmentCadenceMs('not-a-number')).toBe(DEFAULT_AUTO_ENRICH_CADENCE_MS)
+  for (const value of ['0', '-1', 'not-a-number', 'Infinity', '-Infinity', 'NaN']) {
+    expect(() => autoEnrichmentCadenceMs(value)).toThrow('AUTO_ENRICH_CADENCE_HOURS')
+  }
   // Operational mistakes cannot create a hot loop or a timer beyond one month.
   expect(autoEnrichmentCadenceMs('0.1')).toBe(3600 * 1000)
   expect(autoEnrichmentCadenceMs('10000')).toBe(24 * 31 * 3600 * 1000)
