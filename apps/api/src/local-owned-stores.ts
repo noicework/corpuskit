@@ -145,7 +145,7 @@ export function localOwnedStores(
     name: string,
     store: T,
     files?: (args: unknown[]) => string[],
-    checkpoint?: () => () => void,
+    checkpoint?: (args: unknown[]) => () => void,
   ): T =>
     new Proxy(store, {
       get(target, property, receiver) {
@@ -161,7 +161,15 @@ export function localOwnedStores(
             return operations.run({ name: operation, args }, () => {
               const work = () => value.apply(target, args)
               return files && requests.getStore()
-                ? fileMutation(files(args), boundary, work, checkpoint?.())
+                ? fileMutation(
+                  files(args),
+                  boundary,
+                  work,
+                  checkpoint?.(args),
+                  operation === 'insights.record' || operation === 'routing.record'
+                    ? 'append'
+                    : 'replace',
+                )
                 : work()
             })
           } catch (error) {
@@ -205,7 +213,11 @@ export function localOwnedStores(
     })
     // Keep the very same instances in the HTTP app and scheduler. Capture each wrapped
     // method before installing it so the proxy cannot recurse through the decorated instance.
-    const install = <T extends object>(name: string, store: T, checkpoint?: () => () => void) => {
+    const install = <T extends object>(
+      name: string,
+      store: T,
+      checkpoint?: (args: unknown[]) => () => void,
+    ) => {
       const proxy = wrap(name, store, files(name), checkpoint)
       const methods = DECLARATIONS.filter((d) =>
         d.kind === 'local' && d.path.startsWith(`${name}.`)
@@ -218,7 +230,11 @@ export function localOwnedStores(
       }
     }
     install('sources', shared.sources)
-    install('enrichments', shared.enrichments, () => EnrichmentStore.checkpoint(shared.enrichments))
+    install(
+      'enrichments',
+      shared.enrichments,
+      (args) => EnrichmentStore.checkpoint(shared.enrichments, String(args[0])),
+    )
   }
   const erasure = wrap('erasure', {
     erase: (_slug: string, work: () => unknown) => {

@@ -66,6 +66,23 @@ describe('EnrichmentStore', () => {
     new EnrichmentStore(dir).put('marine', 'r1', enrichment())
     expect(new EnrichmentStore(dir).get('marine', 'r1')?.data.title).toContain('Echo-sounder')
   })
+
+  it('rolls back only the affected portal cache', () => {
+    const directory = tmp()
+    try {
+      const store = new EnrichmentStore(directory)
+      store.put('marine', 'r1', enrichment())
+      store.put('grains', 'r1', enrichment())
+      const restore = EnrichmentStore.checkpoint(store, 'marine')
+      store.put('marine', 'r1', { ...enrichment(), data: { title: 'Rolled back' } })
+      store.put('grains', 'r1', { ...enrichment(), data: { title: 'Kept' } })
+      restore()
+      expect(store.get('marine', 'r1')).toEqual(enrichment())
+      expect(store.get('grains', 'r1')?.data.title).toBe('Kept')
+    } finally {
+      Deno.removeSync(directory, { recursive: true })
+    }
+  })
 })
 
 describe('merchandising overlays', () => {

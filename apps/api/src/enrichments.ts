@@ -48,10 +48,11 @@ export class EnrichmentStore {
   private readonly dataDir: string
 
   /** Capture the in-memory half of a synchronous file/audit mutation for rollback. */
-  static checkpoint(store: EnrichmentStore): () => void {
-    const before = structuredClone(store.cache)
+  static checkpoint(store: EnrichmentStore, slug: string): () => void {
+    const before = structuredClone(store.cache.get(slug))
     return () => {
-      store.cache = before
+      if (before === undefined) store.cache.delete(slug)
+      else store.cache.set(slug, before)
     }
   }
 

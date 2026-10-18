@@ -779,6 +779,28 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
           data: { title: 'Private title' },
         }
         shared.enrichments.put(slug, 'r', enrichment)
+        // Existing multibyte logs exercise append rollback by byte length, not character count.
+        owned.insights.record(slug, {
+          ts: new Date(now).toISOString(),
+          question: 'Earlier fish 🐟 question',
+          answered: true,
+          citations: 1,
+          durationSec: null,
+          answerRelevance: null,
+          groundedness: null,
+          contextRelevance: null,
+        })
+        owned.routing.record(slug, {
+          ts: new Date(now).toISOString(),
+          questionHash: 'earlier',
+          questionLength: 23,
+          intent: 'general',
+          stage: 'default',
+          confidence: 1,
+          rationale: 'Earlier fish 🐟 question',
+          configuration: 'portal-ask',
+          latencyMs: 0,
+        })
         const suggestion = {
           id: 'suggestion',
           kind: 'entity-type',
