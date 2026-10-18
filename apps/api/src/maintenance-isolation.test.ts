@@ -12,6 +12,16 @@ import { SourceStore, WatchStore } from './stores.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { TenantStore } from './tenants.ts'
 import { AUDIT_TIMEOUT_MS } from './audit-execution.ts'
+import { checkLateSourceCheckpoint } from './sync-checkpoint-fixture.ts'
+
+Deno.test('Deno late checkpoints preserve newer source progress after deadline release', async (t) => {
+  const directory = Deno.makeTempDirSync()
+  try {
+    await checkLateSourceCheckpoint(t, new SourceStore(directory))
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
 
 // Scheduled maintenance is one pass over every portal. These tests pin down that one portal, one
 // source or one job failing never costs the other portals their sync, watches or enrichment, and
