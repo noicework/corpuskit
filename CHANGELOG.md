@@ -33,6 +33,13 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Single-process Deno hosting now audits every declared local store mutation, including branding,
+  and restores synchronous file mutations when their required audit cannot commit.
+- Deno hosting supports Microsoft Entra sign-in through the same handler as the Worker. Set
+  `ENTRA_REDIRECT_URI` to the public callback URL before starting with `ENTRA_TENANT_ID`.
+- Worker and Deno hosting share security headers, static cache rules, platform-domain redirects
+  and apex-only About pages. HTML is not stored; other static assets cache for five minutes.
+
 - A production deploy no longer rolls back a good release because its Durable Object is slow to move to the new code. After a deploy, the workflow now waits up to ten minutes for `/api/health` to report the new version, not one, and logs each version health reports on the way, so a run shows how long the switch took and a failure names the version it last saw. Four releases had rolled back on this alone, and one switch has taken five minutes. ([#80](https://github.com/noicework/corpuskit/pull/80), [#81](https://github.com/noicework/corpuskit/pull/81))
 - Appearance changes to a portal created in the app now show after an update that changed its search prompt or regional discovery band together with its appearance. Before, every later change to its name, tagline or look was accepted and never shown. ([#78](https://github.com/noicework/corpuskit/pull/78))
 - A resource card's type badge on Explore's topic rows is no longer hidden behind the thumbnail once the thumbnail loads. ([#78](https://github.com/noicework/corpuskit/pull/78))
@@ -42,6 +49,13 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 - Link previews of a portal on its own subdomain or hostname show the CorpusKit share image, which the page now names on the host that served it rather than on the platform domain. ([#74](https://github.com/noicework/corpuskit/pull/74))
 
 ### Upgrade notes
+
+- Single-process Entra deployments must set `ENTRA_REDIRECT_URI` explicitly before starting.
+  Existing external-only deployments need no additional sign-in setting.
+- New Deno branding writes use `BRANDING_PATH/assets/<slug>/<kind>.json`. Older binaries cannot
+  serve these slots; re-upload them after a rollback, or retain a backup of the old branding files.
+  Existing assets remain readable without migration. HTML now uses `no-store`, and About is
+  served only on the configured platform apex, including during local development.
 
 - Stored data: a portal's branding can now hold `colourScheme`. Nothing is migrated and no setting is added; a portal without it follows each viewer as before. The sign-in projection (`GET /api/t/:slug/config` before access is decided) gains `branding.colourScheme`, `null` when unset. **Rollback is safe, with effects:** an earlier release ignores a stored `colourScheme`, so a light-only portal offers dark again, its `PATCH` refuses a body with `colourScheme`, and its next appearance change drops the setting. ([#79](https://github.com/noicework/corpuskit/pull/79))
 - **Before rolling back past this release, take `cardArrows` out of every layout that sets it** (send the layout again without it). An earlier release checks a stored layout strictly and cannot read a portal whose layout holds a field it does not know. ([#79](https://github.com/noicework/corpuskit/pull/79))
