@@ -1,6 +1,6 @@
 import { checkOwnedStores, ownedMutationCases, seedOwned } from './owned-store-fixture.ts'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { expect } from '@std/expect'
 import { migrateLegacyKeyRecord } from './scoped-key-record.ts'
 import { openLocalRbac } from './rbac-local.ts'
@@ -350,6 +350,19 @@ Deno.test('local key reads reject malformed UTF-8 without replacing original byt
   }
 })
 
+/** Force exclusive temporary-file creation to fail for one target, without truncating it. */
+function blockAtomicWrite(path: string): () => void {
+  const randomUUID = crypto.randomUUID
+  const fixed = '00000000-0000-4000-8000-000000000000' as const
+  crypto.randomUUID = () => fixed
+  const reserved = `${path}.tmp-${fixed.slice(0, 12)}`
+  Deno.mkdirSync(reserved)
+  return () => {
+    crypto.randomUUID = randomUUID
+    Deno.removeSync(reserved)
+  }
+}
+
 Deno.test('local key migration restores original bytes on write, append and commit failure', () => {
   for (const failure of ['write', 'append', 'commit']) {
     const dataDir = Deno.makeTempDirSync()
@@ -357,8 +370,9 @@ Deno.test('local key migration restores original bytes on write, append and comm
     const original = JSON.stringify([oldKey], null, 4)
     writeFileAtomic(path, original)
     const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+    let unblock: (() => void) | undefined
     try {
-      if (failure === 'write') Deno.mkdirSync(`${path}.tmp`)
+      if (failure === 'write') unblock = blockAtomicWrite(path)
       if (failure === 'commit') {
         database.exec(
           'PRAGMA foreign_keys=ON; CREATE TABLE parent_key (id INTEGER PRIMARY KEY); CREATE TABLE child_key (id INTEGER REFERENCES parent_key(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER fail_keys AFTER INSERT ON audit_events BEGIN INSERT INTO child_key VALUES (1); END',
@@ -377,13 +391,15 @@ Deno.test('local key migration restores original bytes on write, append and comm
       expect(() => new McpKeyStore(dataDir, migration)).toThrow()
       expect(readFileSync(path, 'utf8')).toBe(original)
       expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
-      if (failure === 'write') Deno.removeSync(`${path}.tmp`)
+      unblock?.()
+      unblock = undefined
       if (failure === 'commit') database.exec('DROP TRIGGER fail_keys')
       expect(new McpKeyStore(dataDir, { database, audit: rbac.audit }).list('marine')).toEqual([
         migrateLegacyKeyRecord(oldKey),
       ])
       expect(rbac.audit.read({ scope: { kind: 'platform' } })).toHaveLength(1)
     } finally {
+      unblock?.()
       database.close()
       Deno.removeSync(dataDir, { recursive: true })
     }
@@ -422,14 +438,17 @@ Deno.test('local key migration restores earlier portal files when a later write 
   const originals = ['grains', 'marine'].map((tenant) => JSON.stringify([{ ...oldKey, tenant }]))
   paths.forEach((path, index) => writeFileAtomic(path, originals[index]!))
   const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir })
+  let unblock: (() => void) | undefined
   try {
-    Deno.mkdirSync(`${paths[1]}.tmp`)
+    unblock = blockAtomicWrite(paths[1]!)
     expect(() => new McpKeyStore(dataDir, { database, audit: rbac.audit })).toThrow()
     paths.forEach((path, index) => expect(readFileSync(path, 'utf8')).toBe(originals[index]))
     expect(rbac.audit.read({ scope: { kind: 'platform' } })).toEqual([])
-    Deno.removeSync(`${paths[1]}.tmp`)
+    unblock()
+    unblock = undefined
     new McpKeyStore(dataDir, { database, audit: rbac.audit })
   } finally {
+    unblock?.()
     database.close()
   }
   const reopened = openLocalRbac({ DATA_DIR: dataDir })
@@ -564,7 +583,7 @@ Deno.test('writeFileAtomic writes the exact content and leaves no .tmp file behi
   const target = join(await Deno.makeTempDir(), 'nested', 'file.json')
   writeFileAtomic(target, '{"ok":true}')
   expect(readFileSync(target, 'utf8')).toEqual('{"ok":true}')
-  expect(existsSync(`${target}.tmp`)).toEqual(false)
+  expect(readdirSync(dirname(target)).some((name) => name.includes('.tmp'))).toEqual(false)
 })
 
 Deno.test('writeJsonAtomic round-trips through readJsonSafe', async () => {
