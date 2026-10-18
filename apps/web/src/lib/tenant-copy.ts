@@ -19,6 +19,18 @@ type CopySource = Pick<TenantConfig, 'suggestedQuestions' | 'topics'> & {
   copy?: TenantConfig['copy']
 }
 
+/** Use localised authored starters for portals with custom interface copy. */
+export function portalStarterQuestions<T extends { id: string; text: string }>(
+  config: Pick<TenantConfig, 'suggestedQuestions' | 'copy'>,
+  suggestions: T[],
+): T[] {
+  if (!config.copy?.interfaceMessages) return suggestions
+  return suggestions.map((question) => {
+    const authored = config.suggestedQuestions.find((item) => item.id === question.id)
+    return authored ? { ...question, text: authored.text } : question
+  })
+}
+
 /**
  * A topic label as it reads mid-sentence: "Epilepsy Research" and "Genetics
  * and genomics" both become lower case; an initialism ("EEG", "GABA") keeps

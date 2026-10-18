@@ -3,6 +3,7 @@ import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { portalStarterQuestions } from '../lib/tenant-copy.ts'
 import {
   createResearchStorageContext,
   readResearchDraft,
@@ -1979,10 +1980,11 @@ export function AskPage() {
     }
   }, [])
 
-  const { data: suggestions } = useQuery({
+  const { data: storedSuggestions } = useQuery({
     queryKey: ['suggested-questions', config.slug],
     queryFn: () => getSuggestedQuestions(config.slug),
   })
+  const suggestions = storedSuggestions && portalStarterQuestions(config, storedSuggestions)
 
   /**
    * Fire-and-forget push of one session to the server, debounced so a burst
