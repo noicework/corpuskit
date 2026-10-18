@@ -32,7 +32,14 @@ covers. `GET /api/health` reports the `release` and `buildSha` a deployment is s
 The Deno server supports one process with a persistent volume mounted at `DATA_DIR` (by default
 `./data`, or `/app/data` in the image). The image listens on port 8787 by default; `PORT` overrides
 it. Build with `--build-arg BUILD_SHA=<commit>` to retain that commit in the runtime environment,
-the web build stamp and `/api/health`.
+the web build stamp and `/api/health`. The pinned web tooling uses Linux x64 binaries, so build
+for `linux/amd64`, including on an ARM development machine:
+
+```sh
+docker build --platform linux/amd64 --build-arg BUILD_SHA=YOUR_COMMIT_SHA -t corpuskit .
+```
+
+CI checks the Docker COPY list and local runtime import coverage without building an image.
 
 Before opening stores, the process takes an exclusive operating-system lock on
 `DATA_DIR/.writer.lock`. A second process waits at most `WRITER_LOCK_WAIT_SECONDS`, then logs a
@@ -40,14 +47,14 @@ Before opening stores, the process takes an exclusive operating-system lock on
 operating system when the process dies. Do not delete the lock file: its inode is the fence, and
 an empty lock file after exit is normal. Each development server also needs its own `DATA_DIR`
 as well as its own port: the lock refuses a second server on the same directory even if its
-port differs. Run only one writer per data directory. Store path
-overrides must remain on that deployment's volume. The server also locks the directories
+port differs. Run only one writer per data directory. Store path overrides must remain on that deployment's volume. The server also locks the directories
 holding `TENANTS_PATH`, `BINDINGS_PATH`, `KG_PROPOSALS_PATH` and `BRANDING_PATH`, so another
 server cannot share those directories even with a different `DATA_DIR`. Paths and existing data
 stay in place. `TENANTS_PATH` and `BINDINGS_PATH` still default to `./data/tenants.json` and
 `./data/bindings.json`; knowledge graph proposals and branding default inside `DATA_DIR`.
 For isolated dev servers with custom data directories, also set `TENANTS_PATH` and `BINDINGS_PATH`
-inside each server's own directory. A network file system must support cross-client advisory locks and atomic rename;
+inside each server's own directory. A network file system must support cross-client advisory
+locks and atomic rename;
 configure NFS locking on the server and clients, without local-only locking, and verify contention
 between containers on the actual mounted volume before using it.
 
@@ -57,7 +64,9 @@ database, take a backup, checkpoint its WAL and convert it to DELETE mode with S
 starting this build. WAL is unsuitable for this network-file-system deployment model. The
 filesystem must also honour SQLite's locking and flush operations. JSON files, suggestions and
 branding replacements flush a unique sibling temporary file before an atomic rename, then flush
-the containing directory where supported. After taking every writer lock at boot, the server
+the containing directory where supported. Windows directory-open or flush `EPERM` and `EACCES`
+errors are treated as unsupported directory flushing; file writes still flush before rename, and
+other I/O failures still fail the write. After taking every writer lock at boot, the server
 sweeps orphaned atomic-write `.tmp-*` siblings from `DATA_DIR` and `BRANDING_PATH`, and the named
 siblings of external JSON store overrides. It matches only the writer's UUID suffix, removes
 regular files only and never follows symlinks. Unrelated files and directories stay untouched.
@@ -67,7 +76,8 @@ SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling
 new HTTP connections immediately. In-flight requests get up to three seconds to finish (at most
 half the configured grace period), then remaining HTTP work is aborted. Maintenance cancellation
 and checkpoints share the same overall grace period. The process drains HTTP work, closes SQLite
-and releases the writer lock. A second SIGINT forces an immediate non-zero exit. Each phase emits one JSON `server.shutdown` line. Syncs checkpoint progress every five
+and releases the writer lock. A second SIGINT forces an immediate non-zero exit. Each phase emits
+one JSON `server.shutdown` line. Syncs checkpoint progress every five
 pages; scheduled syncs also save their last partial batch when interrupted. An interrupted HTTP
 sync may retry its last partial batch because its request audit boundary refuses further writes
 after cancellation. A later run skips the pages already recorded. An upstream write

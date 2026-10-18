@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname } from 'node:path'
+import { platform } from 'node:os'
 
 // ---------------------------------------------------------------------------
 // Shared crash-safe persistence for the volume-backed stores (stores.ts,
@@ -49,16 +50,24 @@ export function writeFileAtomic(path: string, data: string | Uint8Array): void {
 }
 
 /** Some filesystems do not support directory fsync; real I/O failures still fail the write. */
-function syncDirectory(path: string): void {
+export function syncDirectory(path: string, io = {
+  open: openSync,
+  sync: fsyncSync,
+  close: closeSync,
+  windows: platform() === 'win32',
+}): void {
   let file: number | undefined
   try {
-    file = openSync(path, 'r')
-    fsyncSync(file)
+    file = io.open(path, 'r')
+    io.sync(file)
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
-    if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EBADF'].includes(code ?? '')) throw error
+    // Windows can refuse opening/flushing a directory even when file replacement succeeded.
+    const unsupported = ['EINVAL', 'ENOTSUP', 'EISDIR', 'EBADF']
+    if (io.windows) unsupported.push('EPERM', 'EACCES')
+    if (!unsupported.includes(code ?? '')) throw error
   } finally {
-    if (file !== undefined) closeSync(file)
+    if (file !== undefined) io.close(file)
   }
 }
 
