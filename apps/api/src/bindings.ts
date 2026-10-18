@@ -308,8 +308,16 @@ export class SealedBindingStore {
 
 /** File-backed server-only credentials; encrypted deployments initialize before serving requests. */
 export class BindingStore extends SealedBindingStore {
+  private readonly mutation: { run?: (change: BindingChange, write: () => void) => void }
+
+  /** Install the runtime's audit boundary at the synchronous persistence point, after sealing. */
+  setMutationBoundary(run: (change: BindingChange, write: () => void) => void): void {
+    this.mutation.run = run
+  }
+
   constructor(env: Record<string, string | undefined> = process.env) {
     const path = env.BINDINGS_PATH ?? './data/bindings.json'
+    const mutation: BindingStore['mutation'] = {}
     super(
       {
         read: () => {
@@ -320,11 +328,16 @@ export class BindingStore extends SealedBindingStore {
             throw new BindingCryptoError('binding_storage_invalid')
           }
         },
-        write: (records) => writeJsonAtomic(path, records),
+        write: (records, change) => {
+          const write = () => writeJsonAtomic(path, records)
+          if (mutation.run && change.operation !== 'bindings.migrate') mutation.run(change, write)
+          else write()
+        },
       },
       env,
       false,
     )
+    this.mutation = mutation
     if (!env.BINDING_KEY) {
       console.warn(
         '[bindings] BINDING_KEY is missing; local binding credentials use plaintext storage',

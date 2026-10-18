@@ -57,6 +57,7 @@ const sources = new SourceStore()
 const enrichments = new EnrichmentStore()
 const { database, rbac } = openLocalRbac(process.env)
 const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
+owned.attach({ bindings, sources, enrichments })
 const tenants = owned.tenants!
 const { watches } = owned
 const ingress = new LocalIngress({

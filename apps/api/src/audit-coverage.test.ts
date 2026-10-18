@@ -1,3 +1,9 @@
+import { localOwnedStores } from './local-owned-stores.ts'
+import { BindingStore } from './bindings.ts'
+import { FeedbackStore, InsightsStore, RoutingLog, SourceStore } from './stores.ts'
+import { SuggestionStore } from './interrogate.ts'
+import { KgProposalStore } from './kg.ts'
+import { seedOwned } from './owned-store-fixture.ts'
 import { expect } from '@std/expect'
 import { operatorRequestContext } from './operator.ts'
 import { Hono } from 'hono'
@@ -691,4 +697,287 @@ Deno.test('privileged and mixed route declarations are explicit without enforcem
     'appearance.write',
     'behaviour.write',
   ])
+})
+
+Deno.test('every declared local write on Deno appends exactly one local.mutation and rolls back on audit failure', async (t) => {
+  for (const declaration of DECLARATIONS.filter((d) => d.kind === 'local')) {
+    await t.step(declaration.path, async () => {
+      const directory = Deno.makeTempDirSync()
+      const env = {
+        DATA_DIR: directory,
+        TENANTS_PATH: `${directory}/tenants.json`,
+        BINDINGS_PATH: `${directory}/bindings.json`,
+        KG_PROPOSALS_PATH: `${directory}/kg.json`,
+        BRANDING_PATH: `${directory}/branding`,
+        SHOWCASE_PORTALS: 'marine,grains',
+      }
+      const database = new LocalRbacDatabase(':memory:')
+      const events: AuditEvent[] = []
+      let fail = false
+      const audit = {
+        append: (event: AuditEvent) => {
+          if (fail) throw new Error('fixture audit unavailable')
+          events.push(event)
+        },
+      }
+      try {
+        const owned = localOwnedStores(directory, database, audit, env)
+        const shared = {
+          bindings: new BindingStore(env),
+          sources: new SourceStore(directory),
+          enrichments: new EnrichmentStore(directory),
+        }
+        // Compatibility with the baseline is deliberate: the regression test must exercise its
+        // real unaudited adapters too, rather than failing to typecheck on a new helper import.
+        const attach = Reflect.get(owned, 'attach')
+        if (typeof attach === 'function') attach(shared)
+        const stores: Record<string, object> = Object.assign(
+          {
+            insights: new InsightsStore(directory),
+            feedback: new FeedbackStore(directory),
+            routing: new RoutingLog(directory),
+            suggestions: new SuggestionStore(directory),
+            kgProposals: new KgProposalStore(env),
+          },
+          owned,
+          shared,
+          {
+            erasure: {
+              erase: (slug: string, work: () => unknown) => {
+                const transaction = Reflect.get(owned, 'erasureTransaction')
+                return typeof transaction === 'function' ? transaction(slug, work) : work()
+              },
+            },
+          },
+        )
+        const call = (path: string, ...args: unknown[]): unknown => {
+          const [name, method] = path.split('.')
+          const store = stores[name!]
+          expect(store, path).toBeDefined()
+          const fn = store && Reflect.get(store, method!)
+          expect(typeof fn, path).toBe('function')
+          return fn.apply(store, args)
+        }
+        const slug = 'marine'
+        const now = Date.now()
+        const owner = { kind: 'user' as const, tenantId: 'one', oid: 'same' }
+        const seeded = seedOwned(owned)
+        const custom = owned.tenants!.add({ name: 'Audit portal' })
+        owned.tenants!.setAlias(slug, 'reader.example.org', true, 5)
+        owned.lifecycle.set(slug, { status: 'active', limits: null })
+        owned.lifecycle.consumeAsk(slug, 'UTC', now)
+        const admitted = owned.lifecycle.reserveAdd(slug, { bytes: 1, observed: 0 })
+        const token = 'admitted' in admitted ? admitted.admitted : null
+        owned.lifecycle.settleAdd(slug, token, { created: true, id: 'r' })
+        owned.lifecycle.beginDelete(slug, 'r')
+        const next = owned.lifecycle.reserveAdd(slug, { bytes: 2, observed: 1 })
+        const nextToken = 'admitted' in next ? next.admitted : null
+        const source = shared.sources.add(slug, 'https://source.example.org', false)
+        const enrichment = {
+          schemaId: 'research',
+          generatedAt: new Date(now).toISOString(),
+          data: { title: 'Private title' },
+        }
+        shared.enrichments.put(slug, 'r', enrichment)
+        const suggestion = {
+          id: 'suggestion',
+          kind: 'entity-type',
+          title: 'Private title',
+          detail: 'Private content',
+          status: 'pending',
+          createdAt: new Date(now).toISOString(),
+          entityType: { label: 'Topic', description: 'Private description' },
+        }
+        call('suggestions.replacePending', slug, [suggestion])
+        const proposal = {
+          rationale: 'Private rationale',
+          entityTypes: [],
+          resourceLabels: [],
+          chunkLabels: [],
+          examples: [],
+          generatedAt: new Date(now).toISOString(),
+        }
+        const key = {
+          id: 'key-1',
+          tenant: slug,
+          issuerUserId: 'owner',
+          label: 'Client',
+          prefix: 'ck_fixture',
+          hash: 'a'.repeat(64),
+          createdAt: new Date(now).toISOString(),
+          revokedAt: null,
+        }
+        owned.mcpKeys.add(key)
+        await shared.bindings.initialize()
+        await shared.bindings.set(slug, {
+          baseUrl: 'https://box.example.org',
+          kbId: 'box',
+          token: 'private-token',
+        })
+        const asset = {
+          bytes: new Uint8Array([1, 2, 3]),
+          contentType: 'image/png',
+          version: 'fixture-v1',
+        }
+        if (stores.branding) call('branding.put', slug, 'image-hero', asset)
+        const args: Record<string, unknown[]> = {
+          'lifecycle.set': [slug, { status: 'read_only', limits: null }],
+          'lifecycle.remove': [slug],
+          'lifecycle.erase': [slug],
+          'lifecycle.consumeAsk': [slug],
+          'lifecycle.refundAsk': [slug, now],
+          'lifecycle.touch': [slug],
+          'lifecycle.reserveAdd': [slug, { bytes: 1, observed: 1 }],
+          'lifecycle.settleAdd': [slug, nextToken, { created: true, id: 'r2' }],
+          'lifecycle.beginDelete': [slug, 'r'],
+          'lifecycle.abandonDelete': [slug, 'r'],
+          'lifecycle.forgetResource': [slug, 'r'],
+          'lifecycle.dropResource': [slug, 'r'],
+          'lifecycle.resetCapacity': [slug],
+          'bindings.set': [slug, {
+            baseUrl: 'https://other.example.org',
+            kbId: 'other-box',
+            token: 'private-token',
+          }],
+          'bindings.remove': [slug],
+          'tenants.add': [{ name: 'Another portal' }],
+          'tenants.remove': [custom.slug],
+          'tenants.setAlias': [slug, 'another.example.org', true, 5],
+          'tenants.removeAlias': [slug, 'reader.example.org'],
+          'tenants.setDisabled': [slug, true],
+          'tenants.patch': [slug, { searchPlaceholder: 'A new question' }],
+          'tenants.patchBranding': [slug, { tagline: 'Updated portal' }],
+          'tenants.erase': ['retired'],
+          'erasure.erase': [slug, () => 'erased'],
+          'sessions.put': [slug, owner, {
+            id: 's',
+            title: 'Updated',
+            updatedAt: 'now',
+            messages: [],
+          }],
+          'sessions.remove': [slug, owner, 's'],
+          'insights.record': [slug, {
+            ts: new Date(now).toISOString(),
+            question: 'Private question',
+            answered: true,
+          }],
+          'feedback.record': [slug, {
+            learningId: 'answer-1',
+            good: true,
+            text: 'Private comment',
+            ts: new Date(now).toISOString(),
+          }],
+          'routing.record': [slug, {
+            ts: new Date(now).toISOString(),
+            questionHash: 'abcd',
+            intent: 'general',
+          }],
+          'watches.add': [slug, owner, 'another query'],
+          'watches.update': [slug, seeded.watch.id, { changed: true }, owner],
+          'watches.remove': [slug, owner, seeded.watch.id],
+          'sources.add': [slug, 'https://another.example.org', false],
+          'sources.update': [slug, source.id, { auto: true }],
+          'sources.remove': [slug, source.id],
+          'investigations.create': [slug, owner, { name: 'New' }],
+          'investigations.update': [slug, owner, seeded.investigation.id, { notes: 'Updated' }],
+          'investigations.remove': [slug, owner, seeded.investigation.id],
+          'investigations.addEvidence': [slug, owner, seeded.investigation.id, {
+            ...seeded.evidence,
+            passage: 'Other passage',
+            resourceId: 'r2',
+          }],
+          'investigations.updateEvidence': [
+            slug,
+            owner,
+            seeded.investigation.id,
+            seeded.evidence.id,
+            { note: 'Updated' },
+          ],
+          'investigations.removeEvidence': [
+            slug,
+            owner,
+            seeded.investigation.id,
+            seeded.evidence.id,
+          ],
+          'investigations.addArtefact': [slug, owner, seeded.investigation.id, {
+            kind: 'brief',
+            title: 'Brief',
+            data: {},
+          }],
+          'suggestions.replacePending': [slug, []],
+          'suggestions.setStatus': [slug, 'suggestion', 'ignored'],
+          'enrichments.put': [slug, 'r', { ...enrichment, data: { title: 'Updated' } }],
+          'enrichments.importRecords': [slug, { research: { r2: enrichment } }, 'overwrite'],
+          'enrichments.forgetResource': [slug, 'r'],
+          'kgProposals.set': [slug, proposal],
+          'branding.put': [slug, 'image-hero', { ...asset, version: 'fixture-v2' }],
+          'branding.remove': [slug, 'image-hero'],
+          'mcpKeys.add': [{ ...key, id: 'key-2', prefix: 'ck_other', hash: 'b'.repeat(64) }],
+          'mcpKeys.revoke': [slug, 'key-1', new Date(now).toISOString()],
+        }
+        const input = {
+          requestId: 'deno-inventory',
+          actor: { kind: 'user' as const, id: 'owner' },
+          action: 'request.privileged' as const,
+          scope: { kind: 'portal' as const, slug },
+          target: { kind: 'portal', id: slug },
+        }
+        // These declarations describe Worker-only writes. Deno's tenant seed is a pure read;
+        // its enrichment JSON already is the format that the DO migration imports into SQLite.
+        if (
+          declaration.path === 'tenants.seed' || declaration.path === 'enrichments.migrateLegacy'
+        ) {
+          events.length = 0
+          await owned.localMutations.run(input, new AbortController().signal, async () => {
+            owned.tenants!.get(slug)
+            shared.enrichments.get(slug, 'r', 'research')
+          })
+          expect(events.filter((e) => e.action === 'local.mutation')).toHaveLength(0)
+          return
+        }
+        expect(args[declaration.path], `Missing inventory case: ${declaration.path}`).toBeDefined()
+        // Erase requires a retired slug with stored data.
+        if (declaration.path === 'tenants.erase') {
+          owned.tenants!.setDisabled('retired', true)
+        }
+        // Snapshot the actual files after seeding. An audit refusal must restore their bytes.
+        const snapshot = (): Record<string, string> => {
+          const result: Record<string, string> = {}
+          const visit = (dir: string) => {
+            for (const entry of Deno.readDirSync(dir)) {
+              const path = `${dir}/${entry.name}`
+              if (entry.isDirectory) visit(path)
+              else result[path.slice(directory.length)] = [...Deno.readFileSync(path)].join(',')
+            }
+          }
+          visit(directory)
+          return result
+        }
+        const before = snapshot()
+        fail = true
+        await expect(owned.localMutations.run(input, new AbortController().signal, async () => {
+          await call(declaration.path, ...args[declaration.path]!)
+        })).rejects.toThrow()
+        expect(snapshot()).toEqual(before)
+        expect(shared.enrichments.get(slug, 'r', 'research')).toEqual(enrichment)
+        fail = false
+        events.length = 0
+        await owned.localMutations.run(input, new AbortController().signal, async () => {
+          await call(declaration.path, ...args[declaration.path]!)
+        })
+        const records = events.filter((event) => event.action === 'local.mutation')
+        expect(records, declaration.path).toHaveLength(1)
+        expect(records[0]!.request_id).toBe('deno-inventory')
+        expect(JSON.parse(records[0]!.detail_json)).toMatchObject({
+          mutation: declaration.path,
+          permission: declaration.permission,
+        })
+        expect(JSON.stringify(records)).not.toContain('Private')
+        expect(JSON.stringify(records)).not.toContain('private-token')
+      } finally {
+        database.close()
+        Deno.removeSync(directory, { recursive: true })
+      }
+    })
+  }
 })
