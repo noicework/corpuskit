@@ -1,4 +1,4 @@
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { acquireLockFile } from './local-runtime.ts'
 
 /** Preserve existing paths, including the legacy defaults outside a custom DATA_DIR. */
@@ -13,7 +13,7 @@ export function localStoragePaths(env: Record<string, string | undefined>, cwd =
   }
 }
 
-/** Fence owned directories and external files. Sort canonical locks to avoid lock-order cycles. */
+/** Fence every store independently of DATA_DIR. Sort canonical locks to avoid lock-order cycles. */
 export async function acquireStorageLocks(
   paths: ReturnType<typeof localStoragePaths>,
   waitSeconds: number,
@@ -23,17 +23,13 @@ export async function acquireStorageLocks(
     return Deno.realPathSync(directory)
   }
   const dataDir = canonicalDirectory(paths.DATA_DIR)
-  const covered = (path: string) => {
-    const fromData = relative(dataDir, path)
-    return !isAbsolute(fromData) && fromData !== '..' && !fromData.startsWith(`..${sep}`)
-  }
   const locks = new Set([join(dataDir, '.writer.lock')])
   for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
     const canonical = join(canonicalDirectory(dirname(path)), basename(path))
-    if (!covered(canonical)) locks.add(`${canonical}.writer.lock`)
+    locks.add(`${canonical}.writer.lock`)
   }
   const branding = canonicalDirectory(paths.BRANDING_PATH)
-  if (!covered(branding)) locks.add(join(branding, '.writer.lock'))
+  locks.add(join(branding, '.writer.lock'))
   const releases: (() => void)[] = []
   const release = () => {
     for (const unlock of releases.splice(0).reverse()) unlock()

@@ -68,7 +68,7 @@ Deno.test('explicit storage overrides keep their paths and fence each owned file
   }
 })
 
-Deno.test('stores under DATA_DIR need only its directory writer lock', async () => {
+Deno.test('stores under DATA_DIR also hold their own file and branding writer locks', async () => {
   const root = Deno.realPathSync(Deno.makeTempDirSync())
   const paths = localStoragePaths({
     DATA_DIR: 'private',
@@ -83,9 +83,10 @@ Deno.test('stores under DATA_DIR need only its directory writer lock', async () 
       `${paths.DATA_DIR}/.writer.lock`,
     )
     for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
-      expect(() => Deno.statSync(`${path}.writer.lock`)).toThrow(Deno.errors.NotFound)
+      await expect(acquireLockFile(`${path}.writer.lock`, 0)).rejects.toThrow(`${path}.writer.lock`)
     }
-    expect(() => Deno.statSync(`${paths.BRANDING_PATH}/.writer.lock`)).toThrow(Deno.errors.NotFound)
+    await expect(acquireWriterLock(paths.BRANDING_PATH, 0))
+      .rejects.toThrow(`${paths.BRANDING_PATH}/.writer.lock`)
   } finally {
     release()
     Deno.removeSync(root, { recursive: true })
@@ -98,7 +99,6 @@ Deno.test('file and directory writer locks are acquired in sorted canonical path
     DATA_DIR: 'middle',
     TENANTS_PATH: 'shared/z-tenants.json',
     BINDINGS_PATH: 'shared/a-bindings.json',
-    // A matching string prefix is not a descendant of DATA_DIR.
     KG_PROPOSALS_PATH: 'middle-neighbour/kg.json',
     BRANDING_PATH: 'first/branding',
   }, root)
@@ -120,6 +120,25 @@ Deno.test('file and directory writer locks are acquired in sorted canonical path
     ].sort())
   } finally {
     Deno.openSync = open
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('branding at DATA_DIR deduplicates the canonical directory lock', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  const paths = localStoragePaths({
+    DATA_DIR: 'private',
+    TENANTS_PATH: 'private/tenants.json',
+    BINDINGS_PATH: 'private/bindings.json',
+    BRANDING_PATH: 'private/.',
+  }, root)
+  const release = await acquireStorageLocks(paths, 0)
+  try {
+    await expect(acquireWriterLock(paths.DATA_DIR, 0)).rejects.toThrow(
+      `${paths.DATA_DIR}/.writer.lock`,
+    )
+  } finally {
     release()
     Deno.removeSync(root, { recursive: true })
   }

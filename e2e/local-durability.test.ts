@@ -49,7 +49,7 @@ function child(mode: string, dataDir: string) {
 
 async function untilLine(
   process: Deno.ChildProcess,
-  token: string,
+  token: string | RegExp,
   stream: 'stdout' | 'stderr' = 'stdout',
 ) {
   const reader = process[stream].getReader()
@@ -57,7 +57,7 @@ async function untilLine(
   let log = ''
   const timer = setTimeout(() => process.kill('SIGKILL'), 20_000)
   try {
-    while (!log.includes(token)) {
+    while (typeof token === 'string' ? !log.includes(token) : !token.test(log)) {
       const part = await reader.read()
       if (part.done) throw new Error(`Process ended before ${token}: ${log}`)
       log += decoder.decode(part.value, { stream: true })
@@ -285,6 +285,101 @@ if (import.meta.main) {
         }
       },
     )
+  }
+
+  for (const store of ['tenants', 'branding']) {
+    Deno.test(`real servers with different DATA_DIR roots fence shared ${store} and name the held path`, async (t) => {
+      for (const firstRole of ['custom', 'default']) {
+        await t.step(`${firstRole} root starts first`, async () => {
+          const root = Deno.realPathSync(directory())
+          const running = new Set<Deno.ChildProcess>()
+          const inherited = Deno.env.toObject()
+          for (
+            const key of [
+              'DATA_DIR',
+              'TENANTS_PATH',
+              'BINDINGS_PATH',
+              'KG_PROPOSALS_PATH',
+              'BRANDING_PATH',
+            ]
+          ) {
+            delete inherited[key]
+          }
+          const launch = (role: string) => {
+            const child = new Deno.Command(Deno.execPath(), {
+              args: [
+                'run',
+                `--config=${ROOT}deno.json`,
+                '--allow-net',
+                '--allow-env',
+                '--allow-read',
+                '--allow-write',
+                '--allow-run',
+                '--allow-sys',
+                // Keep the actual path defaults, unaffected by a developer's repo-root .env.
+                `--deny-read=${ROOT}.env`,
+                `${ROOT}apps/api/src/server.ts`,
+              ],
+              cwd: root,
+              clearEnv: true,
+              env: {
+                ...inherited,
+                PORT: '0',
+                HOST: '127.0.0.1',
+                LOCAL_SCHEDULER_ENABLED: 'false',
+                SHUTDOWN_GRACE_SECONDS: '2',
+                WRITER_LOCK_WAIT_SECONDS: '0.2',
+                SHOWCASE_PORTALS: '',
+                BINDINGS_PATH: `./${role}/bindings.json`,
+                ...(role === 'custom' ? { DATA_DIR: './a' } : {}),
+                ...(store === 'branding'
+                  ? {
+                    TENANTS_PATH: `./${role}/tenants.json`,
+                    ...(role === 'custom' ? { BRANDING_PATH: './data/branding' } : {}),
+                  }
+                  : {}),
+              },
+              stdout: 'piped',
+              stderr: 'piped',
+            }).spawn()
+            running.add(child)
+            return child
+          }
+          try {
+            const first = launch(firstRole)
+            await untilLine(first, 'Listening on http://', 'stderr')
+            const second = launch(firstRole === 'custom' ? 'default' : 'custom')
+            const startup = await untilLine(
+              second,
+              /server.writer_lock|Listening on http:/,
+              'stderr',
+            )
+            const held = store === 'tenants'
+              ? `${root}/data/tenants.json.writer.lock`
+              : `${root}/data/branding/.writer.lock`
+            expect(startup).toContain(`${held} writer lock is still held`)
+            expect(startup).not.toContain('Listening on http:')
+            const refused = await second.output()
+            running.delete(second)
+            expect(refused.success).toBe(false)
+            first.kill('SIGINT')
+            const stopped = await first.output()
+            running.delete(first)
+            expect(stopped.success, new TextDecoder().decode(stopped.stderr)).toBe(true)
+          } finally {
+            for (const child of running) {
+              try {
+                child.kill('SIGKILL')
+              } catch {
+                // A failed startup may already have exited.
+              }
+              await child.output()
+            }
+            Deno.removeSync(root, { recursive: true })
+          }
+        })
+      }
+    })
   }
 
   Deno.test('a second real server fails its writer wait; SIGINT releases the persistent fence', async () => {

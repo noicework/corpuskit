@@ -48,13 +48,14 @@ operating system when the process dies. Do not delete the lock file: its inode i
 an empty lock file after exit is normal. Each development server also needs its own `DATA_DIR`
 as well as its own port: the lock refuses a second server on the same directory even if its
 port differs. Run only one writer per data directory. Store path overrides must remain on that
-deployment's volume. Stores at or under `DATA_DIR` are covered by its directory lock. An external
-`TENANTS_PATH`, `BINDINGS_PATH` or `KG_PROPOSALS_PATH` file gets a persistent sibling lock named
-`<file>.writer.lock`. Different files in one shared folder can be used by separate servers; the
-same file cannot. An external `BRANDING_PATH` keeps its own `.writer.lock` directory lock. Lock
-paths are canonicalised and acquired in sorted order; a timeout names the held lock path. Paths
-and existing data stay in place. `TENANTS_PATH` and `BINDINGS_PATH` still default to `./data/tenants.json` and
-`./data/bindings.json`; knowledge graph proposals and branding default inside `DATA_DIR`.
+deployment's volume. Every `TENANTS_PATH`, `BINDINGS_PATH` and `KG_PROPOSALS_PATH` file gets a
+persistent sibling lock named `<file>.writer.lock`, and `BRANDING_PATH` gets its own directory
+lock at `BRANDING_PATH/.writer.lock`. These store locks are always taken, including inside
+`DATA_DIR`, so servers with different data roots still exclude each other when they share a
+store. Different files in one shared folder can be used by separate servers. Identical canonical
+lock paths are deduplicated and acquired in sorted order; a timeout names the held lock path.
+Paths and existing data stay in place. `TENANTS_PATH` and `BINDINGS_PATH` still default to
+`./data/tenants.json` and `./data/bindings.json`; knowledge graph proposals and branding default inside `DATA_DIR`.
 For isolated dev servers with custom data directories, also set `TENANTS_PATH` and `BINDINGS_PATH`
 inside each server's own directory. A network file system must support cross-client advisory
 locks and atomic rename;
@@ -135,7 +136,7 @@ The writer lock does not replace backups or coordinate processes that bypass it.
 
 ### Upgrade notes
 
-- `DATA_DIR` and external branding directories use `.writer.lock`; external JSON stores use `<file>.writer.lock` beside each file. Stores inside `DATA_DIR` need no additional lock. Legacy defaults and explicit overrides stay unchanged, and distinct external files can share a parent directory. Grant write access for the lock files and never delete them.
+- Every deployment takes `DATA_DIR/.writer.lock`, `<file>.writer.lock` beside each of `TENANTS_PATH`, `BINDINGS_PATH` and `KG_PROPOSALS_PATH`, and `BRANDING_PATH/.writer.lock`, even when the stores are inside `DATA_DIR`. Identical canonical lock paths are deduplicated. Legacy defaults and explicit overrides stay unchanged, and distinct files can share a parent directory. Grant write access for all lock files and never delete them.
 
 - The container now listens on **8787 by default**, matching its exposed port. Previously it listened on 8791 unless `PORT` was set. Update container routing and health checks to 8787, or set `PORT=8791` explicitly to retain the previous listener. Direct Deno runs still default to 8791.
 - New settings are `WRITER_LOCK_WAIT_SECONDS=60`, `SHUTDOWN_GRACE_SECONDS=100` and `MAINTENANCE_AT_UTC=15:17`. Lock and shutdown settings accept seconds from 0 to 86400, and maintenance requires `HH:MM` UTC; invalid values fail startup. Use a 120-second container stop timeout. `LOCAL_SCHEDULER_ENABLED=false` still disables all maintenance timers. `AUTO_ENRICH_CADENCE_HOURS` still defaults to 24 and caps finite positive values at 744 hours (31 days), but now rejects zero, negative and non-finite values instead of silently using the default.
