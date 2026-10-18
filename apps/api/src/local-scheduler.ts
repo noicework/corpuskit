@@ -97,16 +97,20 @@ export function startMaintenanceTimers(options: {
     })
     return queue
   }
+  // Attempts spend the UTC day's page budget even if interrupted or failed part-way.
+  const dailyAttemptedToday = () =>
+    Math.floor(Date.parse(state.lastStart ?? '') / 86400_000) ===
+      Math.floor(clock.now() / 86400_000)
   let dailyDueAt = nextMaintenanceAt(clock.now(), options.atUtc)
   let cancelDaily: () => void
   const scheduleDaily = () => {
     cancelDaily = scheduleAt(clock, dailyDueAt, () => {
       if (stopped) return
-      enqueue('daily', options.runDaily)
+      enqueue('daily', options.runDaily, dailyAttemptedToday)
       // Never repeat the previous target if the wall clock moves backwards during a pass.
       dailyDueAt = nextMaintenanceAt(Math.max(dailyDueAt, clock.now()), options.atUtc)
       scheduleDaily()
-    })
+    }, 60_000)
   }
   const bootReadyAt = clock.now() + 90_000
   let enrichmentBlockedUntil = 0
@@ -144,7 +148,7 @@ export function startMaintenanceTimers(options: {
         }
         throw error
       }
-    }, recentSuccess)
+    }, () => dailyAttemptedToday() || recentSuccess())
     scheduleEnrichment()
   })
   scheduleDaily()
