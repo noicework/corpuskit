@@ -1,12 +1,4 @@
-import {
-  appendFileSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import type { Enrichment } from '@research-portal/core'
@@ -134,7 +126,7 @@ export function ownedMutation(
   } catch (error) {
     for (const [index, { path }] of [...changes.entries()].reverse()) {
       const before = originals[index]
-      if (before !== undefined) writeFileSync(path, before)
+      if (before !== undefined) writeFileAtomic(path, before)
       else removeIfPresent(path)
     }
     // The writes and their audit record were made, and committing them failed: the record was

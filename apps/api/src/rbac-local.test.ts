@@ -87,3 +87,38 @@ Deno.test('local transactions roll back errors, forbid async work and remain reu
   }
   expect(() => db.all('SELECT 1')).toThrow()
 })
+
+Deno.test('local SQLite enforces rollback journals, full durability and a bounded busy wait', () => {
+  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
+  const dir = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const db = new LocalRbacDatabase(`${dir}/rbac.sqlite`)
+  try {
+    expect(db.all('PRAGMA journal_mode')).toEqual([{ journal_mode: 'delete' }])
+    expect(db.all('PRAGMA synchronous')).toEqual([{ synchronous: 2 }])
+    expect(db.all('PRAGMA busy_timeout')).toEqual([{ timeout: 5000 }])
+  } finally {
+    db.close()
+    Deno.removeSync(dir, { recursive: true })
+  }
+})
+
+Deno.test('local SQLite refuses an existing WAL database without converting it', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
+  const dir = Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  const path = `${dir}/rbac.sqlite`
+  const seed = new DatabaseSync(path)
+  seed.exec('PRAGMA journal_mode=WAL; CREATE TABLE fixture (value TEXT)')
+  seed.close()
+  try {
+    expect(() => new LocalRbacDatabase(path)).toThrow('WAL')
+    const check = new DatabaseSync(path)
+    try {
+      expect(check.prepare('PRAGMA journal_mode').all()).toEqual([{ journal_mode: 'wal' }])
+    } finally {
+      check.close()
+    }
+  } finally {
+    Deno.removeSync(dir, { recursive: true })
+  }
+})
