@@ -57,8 +57,11 @@ database, take a backup, checkpoint its WAL and convert it to DELETE mode with S
 starting this build. WAL is unsuitable for this network-file-system deployment model. The
 filesystem must also honour SQLite's locking and flush operations. JSON files, suggestions and
 branding replacements flush a unique sibling temporary file before an atomic rename, then flush
-the containing directory where supported. A killed process can leave an unused `.tmp-*` file;
-remove those only while the deployment is stopped. Never treat a temporary file as a backup.
+the containing directory where supported. After taking every writer lock at boot, the server
+sweeps orphaned atomic-write `.tmp-*` siblings from `DATA_DIR` and `BRANDING_PATH`, and the named
+siblings of external JSON store overrides. It matches only the writer's UUID suffix, removes
+regular files only and never follows symlinks. Unrelated files and directories stay untouched.
+Never treat a temporary file as a backup.
 
 SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling and accepting
 new HTTP connections immediately. In-flight requests get up to three seconds to finish (at most

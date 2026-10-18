@@ -1,5 +1,6 @@
+import { join, parse } from 'node:path'
 import { expect } from '@std/expect'
-import { acquireStorageLocks, localStoragePaths } from './local-storage.ts'
+import { acquireStorageLocks, localStoragePaths, sweepAtomicTemps } from './local-storage.ts'
 import { acquireWriterLock } from './local-runtime.ts'
 
 Deno.test('fresh storage fences legacy defaults even with a separate DATA_DIR', async () => {
@@ -62,5 +63,94 @@ Deno.test('explicit storage overrides keep their paths and each directory is fen
     release()
     release()
     Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('boot sweep removes only atomic temp files in owned directories or named override siblings', async () => {
+  const root = Deno.makeTempDirSync()
+  const paths = localStoragePaths({
+    DATA_DIR: 'private',
+    TENANTS_PATH: 'external/tenants.json',
+    BINDINGS_PATH: 'external/bindings.json',
+    KG_PROPOSALS_PATH: 'external/kg.json',
+    BRANDING_PATH: 'branding',
+  }, root)
+  const release = await acquireStorageLocks(paths, 0)
+  const suffix = '.tmp-01234567-abc'
+  const removed = [
+    `private/checkpoint.json${suffix}`,
+    `private/sources/portal.json${suffix}`,
+    `branding/assets/portal/logo.json${suffix}`,
+    ...['tenants.json', 'bindings.json', 'kg.json'].map((name) => `external/${name}${suffix}`),
+  ]
+  const kept = [
+    'private/checkpoint.json',
+    'private/notes.tmp-keep',
+    'private/notes.tmp-01234567-abcd',
+    'private/notes.tmp-01234567-ABC',
+    `outside/portal.json${suffix}`,
+    `external/unrelated.json${suffix}`,
+    `external/nested/tenants.json${suffix}`,
+  ]
+  try {
+    for (const name of [...removed, ...kept]) {
+      const file = `${root}/${name}`
+      Deno.mkdirSync(file.slice(0, file.lastIndexOf('/')), { recursive: true })
+      Deno.writeTextFileSync(file, 'preserved bytes')
+    }
+    Deno.mkdirSync(`${paths.DATA_DIR}/directory${suffix}`)
+    if (Deno.build.os !== 'windows') {
+      Deno.symlinkSync(`${root}/outside`, `${paths.DATA_DIR}/linked-directory`)
+      Deno.symlinkSync(`${root}/${kept[4]}`, `${paths.DATA_DIR}/linked-file${suffix}`)
+    }
+    sweepAtomicTemps(paths)
+    sweepAtomicTemps(paths)
+    for (const name of removed) {
+      expect(() => Deno.statSync(`${root}/${name}`)).toThrow(Deno.errors.NotFound)
+    }
+    for (const name of kept) {
+      expect(Deno.readTextFileSync(`${root}/${name}`)).toBe('preserved bytes')
+    }
+    expect(Deno.statSync(`${paths.DATA_DIR}/directory${suffix}`).isDirectory).toBe(true)
+    if (Deno.build.os !== 'windows') {
+      expect(Deno.lstatSync(`${paths.DATA_DIR}/linked-file${suffix}`).isSymlink).toBe(true)
+    }
+  } finally {
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('boot sweep recognises named store overrides directly in a filesystem root', () => {
+  const root = parse(Deno.cwd()).root
+  const suffix = '.tmp-01234567-abc'
+  const names = ['tenants.json', 'bindings.json', 'kg-proposals.json']
+  const paths = localStoragePaths({
+    DATA_DIR: join(root, 'private'),
+    TENANTS_PATH: join(root, names[0]!),
+    BINDINGS_PATH: join(root, names[1]!),
+    KG_PROPOSALS_PATH: join(root, names[2]!),
+    BRANDING_PATH: join(root, 'branding'),
+  })
+  const readDir = Deno.readDirSync
+  const remove = Deno.removeSync
+  const removed: string[] = []
+  // Model a volume root without requiring permission to create files in the host's root.
+  Deno.readDirSync = function* (directory) {
+    if (directory === root) {
+      for (const name of [...names, 'unrelated.json']) {
+        yield { name: `${name}${suffix}`, isFile: true, isDirectory: false, isSymlink: false }
+      }
+    }
+  }
+  Deno.removeSync = (path) => {
+    removed.push(String(path))
+  }
+  try {
+    sweepAtomicTemps(paths)
+    expect(removed.sort()).toEqual(names.map((name) => join(root, `${name}${suffix}`)).sort())
+  } finally {
+    Deno.readDirSync = readDir
+    Deno.removeSync = remove
   }
 })

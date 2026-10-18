@@ -16,7 +16,7 @@ import { DocsHealth } from './docs-health.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
 import { installShutdown, secondsSetting } from './local-runtime.ts'
-import { acquireStorageLocks, localStoragePaths } from './local-storage.ts'
+import { acquireStorageLocks, localStoragePaths, sweepAtomicTemps } from './local-storage.ts'
 import { scheduleAfter } from './local-timers.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
@@ -62,6 +62,7 @@ const releaseWriter = await acquireStorageLocks(
   Deno.exit(1)
 })
 console.log(JSON.stringify({ event: 'server.writer_lock', outcome: 'acquired' }))
+sweepAtomicTemps(storagePaths)
 const shutdownController = new AbortController()
 
 const bindings = new BindingStore(storageEnv)

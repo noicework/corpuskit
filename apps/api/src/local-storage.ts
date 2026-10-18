@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { acquireWriterLock } from './local-runtime.ts'
 
 /** Preserve existing paths, including the legacy defaults outside a custom DATA_DIR. */
@@ -45,5 +45,38 @@ export async function acquireStorageLocks(
   } catch (error) {
     release()
     throw error
+  }
+}
+
+/** Remove only this atomic writer's orphan files, after all storage locks have been acquired. */
+export function sweepAtomicTemps(paths: ReturnType<typeof localStoragePaths>): void {
+  // crypto.randomUUID().slice(0, 12) is eight hex digits, a hyphen and three hex digits.
+  const suffix = /\.tmp-[0-9a-f]{8}-[0-9a-f]{3}$/
+  const visit = (directory: string, target?: string) => {
+    let entries: Deno.DirEntry[]
+    try {
+      entries = [...Deno.readDirSync(directory)]
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return
+      throw error
+    }
+    for (const entry of entries) {
+      const path = resolve(directory, entry.name)
+      if (
+        entry.isFile && suffix.test(entry.name) && entry.name.replace(suffix, '') &&
+        (target === undefined || entry.name.replace(suffix, '') === target)
+      ) {
+        Deno.removeSync(path)
+      } else if (entry.isDirectory && target === undefined) {
+        visit(path)
+      }
+      // Never follow symlinks into directories or files outside this deployment's ownership.
+    }
+  }
+  visit(paths.DATA_DIR)
+  visit(paths.BRANDING_PATH)
+  // An external file override owns its named siblings, not everything in its parent directory.
+  for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+    visit(dirname(path), basename(path))
   }
 }
