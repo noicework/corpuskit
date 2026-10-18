@@ -143,6 +143,42 @@ Deno.test('daily restarts preserve enrichment cadence even when the boot daily p
   }
 })
 
+Deno.test('a future enrichment timestamp runs after boot and then keeps its cadence', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  const start = clock.now()
+  const attempts: number[] = []
+  writeJsonAtomic(`${directory}/maintenance-state.json`, {
+    lastStart: null,
+    lastSuccess: new Date(start).toISOString(),
+    lastEnrichmentRun: new Date(start + 7 * 86400_000).toISOString(),
+    consecutiveFailures: 0,
+  })
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 3600_000,
+    log: () => {},
+    runDaily: async () => {},
+    runEnrichments: async () => {
+      attempts.push(clock.now())
+    },
+  })
+  try {
+    await clock.advance(90_000 - 1)
+    expect(attempts).toEqual([])
+    await clock.advance(1)
+    expect(attempts).toEqual([start + 90_000])
+    await clock.advance(3600_000 - 1)
+    expect(attempts).toHaveLength(1)
+    await clock.advance(1)
+    expect(attempts).toEqual([start + 90_000, start + 90_000 + 3600_000])
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
 Deno.test('legacy state enriches after boot and a failed attempt keeps its due time after restart', async () => {
   const directory = fixture()
   const clock = new Clock()
