@@ -46,6 +46,126 @@ function fixture() {
   return Deno.makeTempDirSync()
 }
 
+Deno.test('daily restarts preserve enrichment cadence even when the boot daily pass is skipped', async () => {
+  const directory = fixture()
+  const clock = new Clock(Date.parse('2026-10-18T10:00:00Z'))
+  const enrichmentStarts: number[] = []
+  let dailyRuns = 0
+  let stop = async () => {}
+  try {
+    for (let day = 0; day < 14; day++) {
+      stop = startMaintenanceTimers({
+        dataDir: directory,
+        clock,
+        cadenceMs: 86400_000,
+        log: () => {},
+        runDaily: async () => {
+          dailyRuns++
+        },
+        runEnrichments: async () => {
+          enrichmentStarts.push(clock.now())
+        },
+      })
+      await clock.advance(86400_000 - 1)
+      await stop()
+      expect(clock.timers.size).toBe(0)
+      await clock.advance(1)
+    }
+    expect(dailyRuns).toBe(15)
+    expect(enrichmentStarts).toEqual(Array.from(
+      { length: 14 },
+      (_, day) => Date.parse('2026-10-18T10:01:30Z') + day * 86400_000,
+    ))
+    const state = JSON.parse(Deno.readTextFileSync(`${directory}/maintenance-state.json`))
+    expect(state.lastEnrichmentRun).toBe('2026-10-31T10:01:30.000Z')
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('legacy state enriches after boot and a failed attempt keeps its due time after restart', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  const attempts: number[] = []
+  const heartbeats: string[] = []
+  let dailyRuns = 0
+  writeJsonAtomic(`${directory}/maintenance-state.json`, {
+    lastStart: null,
+    lastSuccess: new Date(clock.now()).toISOString(),
+    consecutiveFailures: 0,
+  })
+  const start = () =>
+    startMaintenanceTimers({
+      dataDir: directory,
+      clock,
+      cadenceMs: 3600_000,
+      log: (line) => heartbeats.push(line),
+      runDaily: async () => {
+        dailyRuns++
+      },
+      runEnrichments: async () => {
+        // The checkpoint must exist before dispatch, including when the attempt fails.
+        const state = JSON.parse(Deno.readTextFileSync(`${directory}/maintenance-state.json`))
+        expect(state.lastEnrichmentRun).toBe(new Date(clock.now()).toISOString())
+        attempts.push(clock.now())
+        if (attempts.length === 1) throw new Error('fixture failure')
+      },
+    })
+  let stop = start()
+  try {
+    await clock.advance(90_000)
+    expect(dailyRuns).toBe(0)
+    expect(attempts).toEqual([Date.parse('2026-10-18T14:01:30Z')])
+    expect(JSON.parse(heartbeats[0]!)).toMatchObject({ kind: 'enrichment', outcome: 'failure' })
+    await stop()
+    await clock.advance(5 * 60_000)
+    stop = start()
+    await clock.advance(3600_000 - 5 * 60_000 - 1)
+    expect(attempts).toHaveLength(1)
+    await clock.advance(1)
+    expect(attempts).toEqual([
+      Date.parse('2026-10-18T14:01:30Z'),
+      Date.parse('2026-10-18T15:01:30Z'),
+    ])
+    expect(dailyRuns).toBe(0)
+    expect(JSON.parse(heartbeats[1]!)).toMatchObject({ kind: 'enrichment', outcome: 'success' })
+  } finally {
+    await stop()
+    expect(clock.timers.size).toBe(0)
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('shared account back-pressure still defers the companion boot enrichment', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  let runs = 0
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 3600_000,
+    log: () => {},
+    runDaily: async () => {
+      throw new MaintenanceError([], true)
+    },
+    runEnrichments: async () => {
+      runs++
+    },
+  })
+  try {
+    await clock.advance(90_000)
+    expect(runs).toBe(0)
+    await clock.advance(3600_000 - 1)
+    expect(runs).toBe(0)
+    await clock.advance(1)
+    expect(runs).toBe(1)
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
 Deno.test('maintenance UTC time validates HH:MM and crosses midnight and month boundaries', () => {
   expect(new Date(nextMaintenanceAt(Date.parse('2026-10-18T14:00Z'))).toISOString())
     .toBe('2026-10-18T15:17:00.000Z')
@@ -66,6 +186,7 @@ Deno.test('maintenance uses wall clock, skips a recent boot success and preserve
   writeJsonAtomic(`${directory}/maintenance-state.json`, {
     lastStart: null,
     lastSuccess: '2026-10-18T13:00:00Z',
+    lastEnrichmentRun: '2026-10-18T14:00:00Z',
     consecutiveFailures: 0,
   })
   const stop = startMaintenanceTimers({
@@ -95,6 +216,7 @@ Deno.test('maintenance uses wall clock, skips a recent boot success and preserve
     const state = JSON.parse(Deno.readTextFileSync(`${directory}/maintenance-state.json`))
     expect(state.lastStart).toBe('2026-10-18T15:17:00.000Z')
     expect(state.lastSuccess).toBe(state.lastStart)
+    expect(state.lastEnrichmentRun).toBe('2026-10-18T15:00:00.000Z')
     expect(state.consecutiveFailures).toBe(0)
     await stop()
     await clock.advance(3 * 86400_000)
@@ -199,6 +321,7 @@ Deno.test('720-hour and 744-hour cadences use bounded chunks and never run early
     writeJsonAtomic(`${directory}/maintenance-state.json`, {
       lastStart: null,
       lastSuccess: new Date(clock.now()).toISOString(),
+      lastEnrichmentRun: new Date(clock.now()).toISOString(),
       consecutiveFailures: 0,
     })
     const cadenceMs = autoEnrichmentCadenceMs(String(hours))
@@ -282,6 +405,12 @@ Deno.test('a boot pass queued behind successful daily work is skipped without a 
   let dailyRuns = 0
   let enrichmentRuns = 0
   const logs: string[] = []
+  writeJsonAtomic(`${directory}/maintenance-state.json`, {
+    lastStart: null,
+    lastSuccess: null,
+    lastEnrichmentRun: new Date(clock.now()).toISOString(),
+    consecutiveFailures: 0,
+  })
   const stop = startMaintenanceTimers({
     dataDir: directory,
     clock,

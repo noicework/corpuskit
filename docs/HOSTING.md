@@ -77,9 +77,13 @@ Timing settings for lock wait and shutdown accept seconds from 0 to 86400; inval
 startup. Daily maintenance follows the UTC wall clock rather than the time the container started.
 The daily pass and enrichment runs are serialised. A boot pass normally runs after 90 seconds,
 but is skipped when `DATA_DIR/maintenance-state.json` records a successful daily pass less than
-20 hours ago. The state file records `lastStart`, `lastSuccess` as ISO timestamps and
-`consecutiveFailures`. An interrupted or failed daily pass does not advance `lastSuccess`.
-Enrichment-only runs keep their separate cadence and do not advance the daily success timestamp.
+20 hours ago. The state file records `lastStart`, `lastSuccess` and `lastEnrichmentRun` as ISO
+timestamps, plus `consecutiveFailures`. An interrupted or failed daily pass does not advance
+`lastSuccess`. Enrichment keeps its separate cadence across restarts, even when the daily boot
+pass is skipped. Its first attempt is due at the later of 90 seconds after boot or
+`lastEnrichmentRun` plus the cadence; older state without that field starts enrichment after
+90 seconds. Each attempted enrichment pass records its start before dispatch, including failed
+or interrupted attempts, and does not advance the daily success timestamp.
 Long waits, including the 720-hour and 744-hour cadences, are split into chunks no larger than
 2,147,483,647 milliseconds. Chunk wake-ups start no maintenance work until the target is due.
 

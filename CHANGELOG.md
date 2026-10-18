@@ -36,6 +36,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Deno enrichment persists its last attempted run independently of daily upkeep, so frequent restarts and skipped boot passes preserve its cadence. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - Deno maintenance keeps its 120-second unit deadline when a provider write stalls; only shutdown waits for the producer to finish saving progress. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - A provider read that throws before returning a promise clears its timeout, so it cannot leave an orphaned timeout error after the request ends. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - Audited replacement rollback uses flushed atomic writes, and the first branding replacement after upgrade commits its new record before retiring legacy files. A crash before that commit leaves the legacy asset readable. ([#103](https://github.com/noicework/corpuskit/pull/103))

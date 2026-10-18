@@ -5,6 +5,8 @@ import { scheduleAt, type TimerClock } from './local-timers.ts'
 export interface MaintenanceState {
   lastStart: string | null
   lastSuccess: string | null
+  /** Last attempted enrichment pass; absent in state written by older binaries. */
+  lastEnrichmentRun?: string | null
   consecutiveFailures: number
 }
 
@@ -22,7 +24,7 @@ export function nextMaintenanceAt(now: number, atUtc = '15:17'): number {
   return next.getTime()
 }
 
-/** Serialised, cancellable local timers. State describes daily upkeep, not enrichment-only runs. */
+/** Serialised, cancellable local timers with daily success and enrichment cadence checkpoints. */
 export function startMaintenanceTimers(options: {
   dataDir: string
   atUtc?: string
@@ -45,6 +47,7 @@ export function startMaintenanceTimers(options: {
   const state = readJsonSafe<MaintenanceState>(path, {
     lastStart: null,
     lastSuccess: null,
+    lastEnrichmentRun: null,
     consecutiveFailures: 0,
   })
   const controller = new AbortController()
@@ -63,8 +66,9 @@ export function startMaintenanceTimers(options: {
       try {
         if (kind === 'daily') {
           state.lastStart = new Date(start).toISOString()
-          writeJsonAtomic(path, state)
-        }
+        } else state.lastEnrichmentRun = new Date(start).toISOString()
+        // Record attempts before dispatch, so even a failed or interrupted run keeps its cadence.
+        writeJsonAtomic(path, state)
         await work(controller.signal)
         controller.signal.throwIfAborted()
       } catch (error) {
@@ -91,6 +95,7 @@ export function startMaintenanceTimers(options: {
         }))
       }
     })
+    return queue
   }
   let dailyDueAt = nextMaintenanceAt(clock.now(), options.atUtc)
   let cancelDaily: () => void
@@ -103,12 +108,22 @@ export function startMaintenanceTimers(options: {
       scheduleDaily()
     })
   }
+  const bootReadyAt = clock.now() + 90_000
+  let enrichmentBlockedUntil = 0
   let cancelEnrichment: () => void
   const scheduleEnrichment = () => {
-    cancelEnrichment = scheduleAt(clock, clock.now() + options.cadenceMs, () => {
+    if (stopped) return
+    const lastRun = Date.parse(state.lastEnrichmentRun ?? '')
+    const dueAt = Math.max(
+      bootReadyAt,
+      enrichmentBlockedUntil,
+      Number.isFinite(lastRun) ? lastRun + options.cadenceMs : clock.now(),
+    )
+    cancelEnrichment = scheduleAt(clock, dueAt, () => {
       if (stopped) return
-      enqueue('enrichment', options.runEnrichments)
-      scheduleEnrichment()
+      // Re-arm only after the queued attempt has checkpointed, rather than stacking overdue work.
+      void enqueue('enrichment', options.runEnrichments, () => clock.now() < enrichmentBlockedUntil)
+        .then(scheduleEnrichment)
     })
   }
   // Check recency when the queued boot work starts: a daily pass ahead of it may still be running.
@@ -116,20 +131,17 @@ export function startMaintenanceTimers(options: {
     const age = clock.now() - Date.parse(state.lastSuccess ?? '')
     return age >= 0 && age < 20 * 3600 * 1000
   }
-  const cancelBoot = scheduleAt(clock, clock.now() + 90_000, () => {
+  const cancelBoot = scheduleAt(clock, bootReadyAt, () => {
     enqueue('daily', async (signal) => {
-      let failure: unknown
       try {
         await options.runDaily(signal)
       } catch (error) {
-        failure = error
+        // Account back-pressure suppresses the companion boot enrichment on the shared account.
+        if (error && typeof error === 'object' && 'halted' in error && error.halted) {
+          enrichmentBlockedUntil = clock.now() + options.cadenceMs
+        }
+        throw error
       }
-      signal.throwIfAborted()
-      // Account back-pressure suppresses additional work on the shared account.
-      if (!(failure && typeof failure === 'object' && 'halted' in failure && failure.halted)) {
-        await options.runEnrichments(signal)
-      }
-      if (failure) throw failure
     }, recentSuccess)
   })
   scheduleDaily()
