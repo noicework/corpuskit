@@ -115,17 +115,28 @@ export class FileBrandingStore implements BrandingAssetStore {
   }
 
   erase(slug: string): number {
-    const paths = [...fixed, ...this.images(slug).map(({ name }) => `image-${name}` as const)]
-      .flatMap((kind) => [this.path(slug, kind), ...this.legacy(slug, kind)])
-      .filter((path) => {
-        try {
-          return statSync(path).isFile()
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-          throw error
-        }
-      })
-    ownedMutation(paths.map((path) => ({ path, value: undefined })))
-    return paths.length
+    this.path(slug, 'logo')
+    // Erasure must also remove malformed records without trying to decode their bytes/version.
+    const paths = fixed.flatMap((kind) => this.legacy(slug, kind))
+    for (const dir of [join(this.root, 'assets', slug), join(this.root, 'images', slug)]) {
+      try {
+        paths.push(
+          ...readdirSync(dir, { withFileTypes: true })
+            .filter((entry) => entry.isFile()).map((entry) => join(dir, entry.name)),
+        )
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    const present = paths.filter((path) => {
+      try {
+        return statSync(path).isFile()
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+        throw error
+      }
+    })
+    ownedMutation(present.map((path) => ({ path, value: undefined })))
+    return present.length
   }
 }

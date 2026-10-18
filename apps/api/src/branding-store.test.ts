@@ -21,6 +21,9 @@ Deno.test('file branding keeps legacy slots readable and replaces or removes eve
     expect(store.erase('marine')).toBe(1)
     expect(store.get('marine', 'logo')).toBeNull()
     expect(store.erase('marine')).toBe(0)
+    Deno.writeTextFileSync(`${directory}/assets/marine/logo.json`, '{malformed')
+    expect(store.erase('marine')).toBe(1)
+    expect(store.get('marine', 'logo')).toBeNull()
   } finally {
     Deno.removeSync(directory, { recursive: true })
   }
