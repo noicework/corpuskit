@@ -3,6 +3,11 @@
 .env.*
 data/
 docs/
+!docs/
+docs/*
+!docs/ARCHITECTURE.md
+!docs/HOSTING.md
+!docs/ARAG-DEV.md
 content/
 node_modules/
 *.zip
