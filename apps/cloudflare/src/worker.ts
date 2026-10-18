@@ -82,31 +82,25 @@ import {
   maxPortalAliases,
   narrowRolesToPortal,
   normaliseHostname,
-  OFF_PLATFORM_TRANSPORT_SECURITY,
   reservedHostnames,
   SESSION_HOST_MISMATCH,
   SESSION_HOST_MISMATCH_AUDITS_PER_MIN,
-  transportSecurityFor,
   unknownHostsMode,
 } from '../../api/src/portal-aliases.ts'
 import { addressKey, SlidingWindowLimiter } from '../../api/src/rate-limit.ts'
 import { documentPath, probePath } from '../../api/src/public-paths.ts'
+import { createCloudflareDomainProvisioner } from '../../api/src/cloudflare-domains.ts'
+
 import {
-  createCloudflareDomainProvisioner,
-  portalHostnameForSlug,
-} from '../../api/src/cloudflare-domains.ts'
+  apexOnlyAbout,
+  hostTransportSecurity,
+  platformHostnameLocation,
+  secureAssetResponse,
+  withSecurityHeaders,
+} from '../../api/src/edge.ts'
+export { platformHostnameLocation } from '../../api/src/edge.ts'
 
 const PORTAL_OBJECT_NAME = 'production'
-// The same set the API's own middleware sends; here it reaches the app shell,
-// static assets and every response the Worker composes itself.
-const SECURITY_HEADERS: Record<string, string> = {
-  'content-security-policy': "frame-ancestors 'none'",
-  'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=()',
-  'referrer-policy': 'strict-origin-when-cross-origin',
-  'strict-transport-security': 'max-age=63072000; includeSubDomains',
-  'x-content-type-options': 'nosniff',
-  'x-frame-options': 'DENY',
-}
 
 export interface TrustedRequestContext {
   session?: TrustedSessionFacts | null
@@ -573,7 +567,9 @@ export class PortalDurableObject extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    return withSecurityHeaders(hostTransportSecurity(request, env, await route(request, env)))
+    return withSecurityHeaders(
+      hostTransportSecurity(request, stringEnv(env).PLATFORM_DOMAIN, await route(request, env)),
+    )
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -739,9 +735,8 @@ async function pageRoute(
   // The shared asset bundle is also bound to tenant hosts. Keep the marketing
   // documents (including raw asset aliases) on the platform apex only.
   if (
-    (['/about', '/about/', '/about.html'].includes(url.pathname) ||
-      isPublicDocsPath(url.pathname)) &&
-    url.hostname !== platformDomain
+    apexOnlyAbout(url, platformDomain) ||
+    (isPublicDocsPath(url.pathname) && url.hostname !== platformDomain)
   ) {
     return plain('Not found', 404)
   }
@@ -806,31 +801,6 @@ async function pageRoute(
   response.headers.set('x-robots-tag', tag)
   // And in the page itself, for crawlers that read only the markup.
   return await withRobotsMeta(response, tag)
-}
-
-/**
- * `includeSubDomains` only inside the platform domain. Every other host (an alias, a reserved or
- * unknown host, or one whose lookup failed) may be a customer's apex domain, so its answers never
- * force HTTPS on every subdomain of it.
- */
-function hostTransportSecurity(request: Request, env: Env, response: Response): Response {
-  let value = OFF_PLATFORM_TRANSPORT_SECURITY
-  try {
-    value = transportSecurityFor(
-      new URL(request.url).hostname,
-      getPlatformDomain(stringEnv(env).PLATFORM_DOMAIN),
-    )
-  } catch {
-    // Without a valid platform domain no host is inside it.
-  }
-  if (response.headers.get('strict-transport-security') === value) return response
-  const headers = new Headers(response.headers)
-  headers.set('strict-transport-security', value)
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  })
 }
 
 /** The sign-in routes that issue a session cookie. */
@@ -1086,47 +1056,10 @@ function authConfig(
   }
 }
 
-/**
- * Give every safely provisioned portal hostname a stable root redirect while
- * the SPA retains its existing tenant-prefixed routes. A hostname can only
- * reach this Worker after Cloudflare has attached its exact Custom Domain.
- */
-export function platformHostnameLocation(
-  request: Pick<Request, 'method' | 'url'>,
-  domain: string,
-): string | null {
-  const platformDomain = getPlatformDomain(domain)
-  if (request.method !== 'GET' && request.method !== 'HEAD') return null
-  const url = new URL(request.url)
-  const hostname = url.hostname.toLowerCase()
-
-  if (hostname === `www.${platformDomain}`) {
-    return `https://${platformDomain}${url.pathname}${url.search}`
-  }
-
-  const suffix = `.${platformDomain}`
-  if (!hostname.endsWith(suffix)) return null
-  const slug = hostname.slice(0, -suffix.length)
-  if (portalHostnameForSlug(slug, platformDomain) !== hostname || url.pathname !== '/') return null
-  return `/t/${slug}${url.search}`
-}
-
 function numberBinding(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
-}
-
-function secureAssetResponse(response: Response, status = response.status): Response {
-  const headers = new Headers(response.headers)
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value)
-  const type = headers.get('content-type') ?? ''
-  headers.set('cache-control', type.includes('text/html') ? 'no-store' : 'public, max-age=300')
-  return new Response(response.body, {
-    status,
-    statusText: status === response.status ? response.statusText : '',
-    headers,
-  })
 }
 
 /** A short text answer with the asset headers, for refusals the Worker makes itself. */
@@ -1137,23 +1070,6 @@ function plain(body: string, status: number, extra: Record<string, string> = {})
       headers: { 'content-type': 'text/plain; charset=utf-8', ...extra },
     }),
   )
-}
-
-/**
- * Every response leaves with the baseline headers. API responses already
- * carry the ones the Hono middleware sets; redirects, auth answers and the
- * Worker's own JSON gain them here without disturbing a streamed body.
- */
-function withSecurityHeaders(response: Response): Response {
-  const missing = Object.entries(SECURITY_HEADERS).filter(([name]) => !response.headers.has(name))
-  if (missing.length === 0) return response
-  const headers = new Headers(response.headers)
-  for (const [name, value] of missing) headers.set(name, value)
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  })
 }
 
 function json(value: unknown, status: number, headers: Record<string, string> = {}): Response {

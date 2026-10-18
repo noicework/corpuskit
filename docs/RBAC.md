@@ -72,7 +72,7 @@ no-store` so a cached copy cannot outlive a change of mode.
 
 ## Where identity comes from
 
-1. **Sign-in.** The Worker runs OpenID Connect against Microsoft Entra and seals the verified
+1. **Sign-in.** The Worker and single-process Deno server share OpenID Connect against Microsoft Entra and seals the verified
    claims into an encrypted cookie scoped to the platform domain. Sessions last up to eight
    hours. If a token carries so many group ids that the cookie would exceed the browser limit,
    the groups are dropped and the session records `groupStatus: overage`, which disables group
@@ -150,6 +150,11 @@ part of the request: if the write fails the request fails with 500. For a privil
 whose response is built in memory, the completion record is written before the response is
 released; streaming responses are buffered up to a fixed cap for the same reason.
 
+Every declared local store mutation on either runtime also records `local.mutation`, including
+sources, generated enrichments, suggestions, answer feedback, insights, routing, knowledge graph
+proposals and branding. On Deno, the synchronous file write and its required audit completion
+form one rollback boundary. See [single-process hosting](HOSTING.md#single-process-mutation-audit).
+
 Read at `GET /api/admin/t/:slug/audit` (portal `audit.read`) or `GET /api/admin/audit` (platform
 `audit.read`), export as CSV or JSON from the `/export` siblings (`audit.export`). Retention is
 `AUDIT_RETENTION_DAYS` (default 400), applied by the maintenance cron, and the purge is itself
@@ -172,6 +177,7 @@ address in ten minutes lock the path for ten minutes.
 | `SESSION_SECRET` | Worker secret | Cookie sealing and, via HKDF, principal signing. At least 32 bytes. |
 | `WORKER_NAME` | `wrangler.jsonc` var | Signing audience: `corpuskit`, `corpuskit-demo`, or the name of another deployment. |
 | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | Worker | Sign-in. Without them sign-in is unconfigured and every visitor is anonymous. |
+| `ENTRA_REDIRECT_URI` | Worker or Deno environment | Public callback URL; required on Deno whenever `ENTRA_TENANT_ID` is set. |
 | `ENTRA_ADMIN_EMAILS` | Worker secret | Migrated once, on first boot, into owner assignments. |
 | `ADMIN_PASSCODE`, `ADMIN_BREAK_GLASS` | Worker | Break-glass, above. |
 | `AUDIT_RETENTION_DAYS` | Worker var | Default 400. |

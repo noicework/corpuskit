@@ -57,6 +57,7 @@ const sources = new SourceStore()
 const enrichments = new EnrichmentStore()
 const { database, rbac } = openLocalRbac(process.env)
 const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
+owned.attach({ bindings, sources, enrichments })
 const tenants = owned.tenants!
 const { watches } = owned
 const ingress = new LocalIngress({
@@ -170,7 +171,6 @@ app.get(
   '/',
   infrastructureHandler(async (c) => {
     if (!homeHtml) return c.text('The web build is not available.', 503)
-    c.header('Cache-Control', 'no-cache')
     return c.html(homeHtml)
   }),
 )
@@ -180,7 +180,6 @@ for (const path of ['/about', '/about/']) {
     path,
     infrastructureHandler(async (c) => {
       if (!aboutHtml) return c.text('The web build is not available.', 503)
-      c.header('Cache-Control', 'no-cache')
       return c.html(aboutHtml)
     }),
   )
@@ -215,17 +214,20 @@ app.get(
   }),
 )
 // The IndexNow key file, on the apex, when INDEXNOW_KEY is set (search-files.ts).
-app.get('*', async (c, next) => {
-  const url = new URL(c.req.url)
-  const key = indexNowKeyFile(
-    process.env.PLATFORM_DOMAIN ?? 'corpuskit.org',
-    url.hostname,
-    url.pathname,
-    process.env.INDEXNOW_KEY,
-  )
-  if (!key) return await next()
-  return c.text(key)
-})
+app.get(
+  '*',
+  infrastructureHandler(async (c, next) => {
+    const url = new URL(c.req.url)
+    const key = indexNowKeyFile(
+      process.env.PLATFORM_DOMAIN ?? 'corpuskit.org',
+      url.hostname,
+      url.pathname,
+      process.env.INDEXNOW_KEY,
+    )
+    if (!key) return await next()
+    return c.text(key)
+  }),
+)
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
 // The same answers the Worker gives: probes are refused, and an unknown path
 // still renders the shell (the app has its own not-found page) but as a 404.
@@ -235,7 +237,6 @@ app.get(
     if (!indexHtml) return c.text('The web build is not available.', 503)
     const path = new URL(c.req.url).pathname
     if (!documentPath(path) && probePath(path)) return c.text('Not found', 404)
-    c.header('Cache-Control', 'no-cache')
     return c.html(indexHtml, documentPath(path) ? 200 : 404)
   }),
 )

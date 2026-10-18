@@ -3,6 +3,7 @@ import type { KgImplementEvent, KgProposal, TenantConfig } from '@research-porta
 import { KgProposalSchema } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
 import { readJsonSafe, writeJsonAtomic } from './persist.ts'
+import { type OwnedMutationBoundary, ownedWrite } from './stores.ts'
 
 /**
  * Knowledge-graph strategy: interrogate the corpus, have the box's own model
@@ -90,7 +91,10 @@ export class KgProposalStore {
   private proposals: Record<string, KgProposal> = {}
   private readonly path: string
 
-  constructor(env: Record<string, string | undefined> = process.env) {
+  constructor(
+    env: Record<string, string | undefined> = process.env,
+    private readonly boundary?: OwnedMutationBoundary,
+  ) {
     this.path = env.KG_PROPOSALS_PATH ?? './data/kg-proposals.json'
     const raw = readJsonSafe<Record<string, unknown>>(this.path, {})
     for (const [slug, value] of Object.entries(raw)) {
@@ -104,8 +108,9 @@ export class KgProposalStore {
   }
 
   set(slug: string, proposal: KgProposal): void {
-    this.proposals[slug] = proposal
-    writeJsonAtomic(this.path, this.proposals)
+    const next = { ...this.proposals, [slug]: proposal }
+    ownedWrite(this.path, next, this.boundary)
+    this.proposals = next
   }
 
   /** Remove the portal's proposal, including one stored in a shape this store cannot read. */

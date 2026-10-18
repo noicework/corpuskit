@@ -47,6 +47,15 @@ export class EnrichmentStore {
   private cache = new Map<string, TenantEnrichments>()
   private readonly dataDir: string
 
+  /** Capture the in-memory half of a synchronous file/audit mutation for rollback. */
+  static checkpoint(store: EnrichmentStore, slug: string): () => void {
+    const before = structuredClone(store.cache.get(slug))
+    return () => {
+      if (before === undefined) store.cache.delete(slug)
+      else store.cache.set(slug, before)
+    }
+  }
+
   /** `dataDir` defaults to $DATA_DIR (or ./data); overridable for tests. */
   constructor(dataDir: string = process.env.DATA_DIR ?? './data') {
     this.dataDir = dataDir

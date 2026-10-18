@@ -20,7 +20,11 @@ const session = (): TrustedSessionFacts => ({
   createdAt: Date.now(),
   expiresAt: Date.now() + 3600_000,
 })
-const env = { ENTRA_TENANT_ID: 'tenant-1', ADMIN_PASSCODE: 'fixture' }
+const env = {
+  ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+  ENTRA_TENANT_ID: 'tenant-1',
+  ADMIN_PASSCODE: 'fixture',
+}
 const peer = { remoteAddr: { transport: 'tcp' as const, hostname: '127.0.0.1', port: 1234 } }
 
 Deno.test('local selected snapshots use current policy and assignments with safe unavailable states', async () => {
@@ -390,6 +394,7 @@ Deno.test('concurrent valid sessions survive a newer login on public routes and 
       const ingress = new LocalIngress({ rbac, tenants, env })
       const app = buildApp({
         provider: new DoubleProvider(),
+        webAvailable: true,
         tenants,
         mcpKeys,
         rbac,
@@ -494,5 +499,87 @@ Deno.test('the local server turns break-glass on only for ADMIN_BREAK_GLASS=true
     expect(warnings.join('\n')).not.toContain('fixture')
   } finally {
     console.warn = warn
+  }
+})
+
+Deno.test('local Entra startup validates an absolute HTTPS callback URI with HTTP only on localhost', () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const create = (redirect: string | undefined) =>
+      new LocalIngress({
+        rbac,
+        tenants: { list: () => [] },
+        env: { ENTRA_TENANT_ID: 'tenant-1', ENTRA_REDIRECT_URI: redirect },
+      })
+    for (
+      const redirect of [
+        undefined,
+        '',
+        '   ',
+        '/auth/callback',
+        '//research.example/auth/callback',
+        'not a URL',
+        'https://',
+        'http://research.example/auth/callback',
+        'http://localhost.example/auth/callback',
+        'ftp://research.example/auth/callback',
+        'javascript:alert(1)',
+      ]
+    ) {
+      expect(() => create(redirect), String(redirect)).toThrow(
+        'ENTRA_REDIRECT_URI to be an absolute HTTPS URL (HTTP is allowed only on localhost)',
+      )
+    }
+    for (
+      const redirect of [
+        'https://research.example/auth/callback',
+        'http://localhost:8796/auth/callback',
+        'http://127.0.0.1:8796/auth/callback',
+        'http://[::1]:8796/auth/callback',
+      ]
+    ) {
+      expect(() => create(redirect), redirect).not.toThrow()
+    }
+    expect(() => new LocalIngress({ rbac, tenants: { list: () => [] }, env: {} })).not.toThrow()
+  } finally {
+    db.close()
+  }
+})
+
+Deno.test('local logout expires both platform and pre-upgrade host-only cookies', async () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    const ingress = new LocalIngress({
+      rbac,
+      tenants: { list: () => [] },
+      env: { PLATFORM_DOMAIN: 'research.example' },
+    })
+    for (const method of ['GET', 'POST']) {
+      for (const host of ['research.example', 'marine.research.example', 'other.example']) {
+        const response = await ingress.handle(
+          new Request(`https://${host}/auth/logout`, { method }),
+          () => new Response('unexpected', { status: 500 }),
+        )
+        expect(response.status).toBe(302)
+        const cookies = response.headers.getSetCookie()
+        const platform = host === 'research.example' || host.endsWith('.research.example')
+        expect(cookies).toHaveLength(platform ? 2 : 1)
+        expect(cookies.filter((cookie) => !cookie.includes('Domain='))).toHaveLength(1)
+        if (platform) {
+          expect(cookies.filter((cookie) => cookie.includes('Domain=research.example')))
+            .toHaveLength(1)
+        }
+        for (const cookie of cookies) {
+          expect(cookie).toContain('__Secure-corpuskit_session=; Path=/;')
+          expect(cookie).toContain('Max-Age=0')
+        }
+      }
+    }
+  } finally {
+    db.close()
   }
 })

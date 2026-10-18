@@ -668,6 +668,7 @@ export function createEnforcementFixture(
   } = options
   const app = buildApp({
     ...stores,
+    webAvailable: true,
     ...appOptions,
     configuredTenantId: options.identityConfigured === false ? undefined : tenantId,
     audience,

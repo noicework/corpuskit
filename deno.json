@@ -61,6 +61,8 @@
     }
   },
   "tasks": {
+    "lint": "deno lint",
+    "fmt": "deno fmt --check",
     "dev": "deno task build:web && deno run --watch --allow-net --allow-env --allow-read --allow-write=data --allow-run=pdfinfo,pdftotext,pdffonts apps/api/src/server.ts",
     "build:css": "tailwindcss -i apps/web/src/styles.css -o apps/web/dist/styles.css --minify",
     "build:js": "esbuild apps/web/src/main.tsx --bundle --format=esm --minify --jsx=automatic --outfile=apps/web/dist/app.js --alias:@research-portal/core=./packages/core/src/index.ts --external:react --external:react/jsx-runtime --external:react-dom --external:react-dom/client --external:react-router-dom --external:@tanstack/react-query --external:zod --external:d3-force --external:three --external:pdfjs-dist",

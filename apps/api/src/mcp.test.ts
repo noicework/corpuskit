@@ -168,7 +168,11 @@ function harness(
   overrides: Partial<BuildAppOptions> = {},
 ): McpHarness {
   const dataDir = Deno.makeTempDirSync()
-  const { database, rbac } = openLocalRbac({ DATA_DIR: dataDir, ENTRA_TENANT_ID: 'tenant-1' })
+  const { database, rbac } = openLocalRbac({
+    DATA_DIR: dataDir,
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+    ENTRA_TENANT_ID: 'tenant-1',
+  })
   const audit = overrides.audit ?? rbac.audit
   const owned = localOwnedStores(dataDir, database, audit)
   const keys = owned.mcpKeys
@@ -1140,6 +1144,7 @@ Deno.test('real local MCP ingress strips forged and foreign-audience principal h
   const directory = Deno.makeTempDirSync({ prefix: 'mcp-principal-' })
   const env = {
     DATA_DIR: directory,
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     SESSION_SECRET: 'fixture-secret-only-not-a-real-secret-32',
   }
@@ -1251,6 +1256,7 @@ Deno.test('real local key HTTP commits restore exact bytes on append and SQL COM
   const directory = Deno.makeTempDirSync({ prefix: 'keys-ingress-' })
   const env = {
     DATA_DIR: directory,
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     ENVIRONMENT: 'development',
     ADMIN_PASSCODE: 'fixture',

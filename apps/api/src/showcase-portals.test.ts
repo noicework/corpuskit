@@ -28,7 +28,11 @@ function localServer(env: Record<string, string>) {
   const ingress = new LocalIngress({
     rbac,
     tenants,
-    env: { ENTRA_TENANT_ID: 'tenant-1', ...settings },
+    env: {
+      ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+      ENTRA_TENANT_ID: 'tenant-1',
+      ...settings,
+    },
   })
   const app = buildApp({
     ...owned,

@@ -12,6 +12,7 @@ install.
 | Stored knowledge box tokens sealed with a deployment key | [Knowledge box credential encryption](#knowledge-box-credential-encryption) |
 | A separate credential for hosting automation | [Operator credential](#operator-credential) |
 | Per-portal status, limits and usage | [Portal lifecycle, limits and usage](#portal-lifecycle-limits-and-usage) |
+| Microsoft Entra sign-in on the single-process server | [Entra sign-in on single-process hosting](#entra-sign-in-on-single-process-hosting) |
 | Sign-in through a trusted outside identity issuer | [External sign-in handoff](#external-sign-in-handoff) |
 | The hostname portals and sessions live under | [Configurable platform domain](#configurable-platform-domain) |
 | Serving a portal on hostnames outside the platform domain | [Portal host aliases](#portal-host-aliases) |
@@ -1070,6 +1071,53 @@ unit. One failing unit never stops the others:
 - The pass starts at a different portal each day, so a portal late in the list is not always the
   one a short pass leaves out.
 
+## Entra sign-in on single-process hosting
+
+The Deno server and Worker use the same OpenID Connect handler for `/auth/login` and
+`/auth/callback`, including state, nonce, PKCE, token verification and sealed session cookies.
+The Deno ingress accepts both Entra and external sessions, with the same role and host boundaries.
+Entra sign-in is unavailable on a portal's alias host.
+
+Set these variables in the single-process server's environment:
+
+| Variable | Meaning |
+|---|---|
+| `ENTRA_TENANT_ID` | Microsoft Entra directory tenant identifier. |
+| `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | The app registration's client identifier and secret. |
+| `SESSION_SECRET` | Random secret of at least 32 bytes. Required in production; keep it stable across restarts. |
+| `ENTRA_REDIRECT_URI` | Explicit public callback URL, for example `https://research.example/auth/callback`. Register exactly this URL with Entra. |
+
+When `ENTRA_TENANT_ID` is set, the Deno server refuses to start without an absolute HTTPS
+`ENTRA_REDIRECT_URI`, even if the other Entra settings are incomplete. HTTP is allowed only for
+local development on `localhost`, `127.0.0.1` or `[::1]`. Any supplied callback URL is validated
+at startup. A TLS-terminating proxy forwards an HTTP request to Deno, so deriving the callback
+from that request would use the wrong origin. Keep the public host in the forwarded request.
+The handler uses the explicit callback URL for the token exchange, and its scheme for the
+post-login return URL; forwarded scheme headers are not trusted. Use HTTPS for a hosted
+deployment. Entra sign-in stays unavailable until all credentials are configured. External-only
+deployments do not need `ENTRA_REDIRECT_URI`.
+
+## Single-process mutation audit
+
+Every file-store write declared `local` in `apps/api/src/permissions.ts` participates in the
+same request audit boundary as the Worker. Each declared mutation records one `local.mutation`
+with its permission, actor, scope and request identifier, including sources, enrichments,
+suggestions, feedback, insights, routing, knowledge graph proposals and branding. Nested file
+writes within one method do not duplicate that record. Failed required audit appends fail the
+request, restore that synchronous mutation's file bytes and cached state, and block later writes
+in the same request. Earlier committed mutations remain committed. Portal erasure retains its
+existing retry-to-complete behaviour described below.
+
+The Worker-only tenant seeding and enrichment migration declarations create no equivalent Deno
+write: the local tenant seed is read from code, and enrichment records are already stored in the
+JSON format the Worker imports. Scheduled jobs retain their system audit boundaries. See
+[RBAC](RBAC.md#audit-log) for the redacted audit fields and retention rules.
+
+New branding writes are stored under `BRANDING_PATH/assets/<slug>/<kind>.json`, with binary
+bytes encoded as base64 beside the content type and version. Existing fixed branding files and
+layout images remain readable. Replacing a slot removes its old files within the same audited
+mutation; removing or erasing an asset also removes those legacy files.
+
 ## External sign-in handoff
 
 A deployment can accept a short-lived, signed identity assertion from a trusted external issuer,
@@ -1091,8 +1139,8 @@ Configure the same values in the Worker environment or the local server's `.env`
 The Worker and a production local server require `SESSION_SECRET`. For local development only,
 an omitted secret uses a randomly generated process key, so sessions end on restart. Replay
 identifiers still persist independently in SQLite; restarting does not make an assertion reusable.
-The local server serves only `/auth/external` and `/auth/logout` from the `/auth/*` boundary and
-reads only external session cookies; its Entra behaviour is unchanged.
+The local server also serves `/auth/login` and `/auth/callback` through the shared Entra handler
+and reads both kinds of session cookie (see [Entra sign-in](#entra-sign-in-on-single-process-hosting)).
 
 External sign-in is off unless both issuer and public JWK are set. Invalid configuration fails
 closed. Entra credentials are not required for an external-only deployment. When Entra is also
@@ -1370,6 +1418,24 @@ for the account. `WORKER_NAME` is also the signing audience, so it must equal th
 name. Before changing it on a deployment that already attached hostnames, list the account's
 Worker custom domains: a portal whose hostname is attached to the previous script cannot be
 removed (`domain_removal_failed`) until that hostname is detached or moved.
+
+### Shared HTTP edge rules
+
+The Worker and Deno ingress both use `apps/api/src/edge.ts` for security headers, static-response
+caching, platform-host redirects and the About-page boundary:
+
+- Every response has a content security policy, Permissions Policy, Referrer Policy, HSTS,
+  `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`. A stricter policy supplied by an
+  API or stored-file response is preserved. HSTS includes subdomains only on platform hosts.
+- HTML is served with `Cache-Control: no-store`. Other static responses use
+  `Cache-Control: public, max-age=300`. API and authentication responses keep their existing
+  cache rules, including `private, no-store` for identity-dependent portal data.
+- GET and HEAD on `www.<PLATFORM_DOMAIN>` redirect permanently (308) to the HTTPS apex with the
+  path and query preserved. GET and HEAD on a valid `<slug>.<PLATFORM_DOMAIN>/` redirect (308)
+  to `/t/<slug>` with the query preserved. Reserved or invalid portal labels do not redirect.
+  Operator credential checks run before these redirects.
+- `/about`, `/about/` and `/about.html` are served only on the platform apex. Every other host,
+  including localhost, answers 404 for them. Use the configured apex host to preview About.
 
 ## Search engines
 
