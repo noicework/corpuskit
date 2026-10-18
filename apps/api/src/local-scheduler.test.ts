@@ -179,6 +179,35 @@ Deno.test('a future enrichment timestamp runs after boot and then keeps its cade
   }
 })
 
+Deno.test('an enrichment stamp written here keeps its cadence after a backwards clock step', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  const start = clock.now()
+  const attempts: number[] = []
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 3600_000,
+    log: () => {},
+    runDaily: async () => {},
+    runEnrichments: async () => {
+      attempts.push(clock.now())
+      if (attempts.length === 1) clock.stepWall(-1000)
+    },
+  })
+  try {
+    await clock.advance(90_000)
+    expect(attempts).toEqual([start + 90_000])
+    await clock.advance(3600_000 + 1000 - 1)
+    expect(attempts).toHaveLength(1)
+    await clock.advance(1)
+    expect(attempts).toEqual([start + 90_000, start + 90_000 + 3600_000])
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
 Deno.test('legacy state enriches after boot and a failed attempt keeps its due time after restart', async () => {
   const directory = fixture()
   const clock = new Clock()

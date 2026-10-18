@@ -52,6 +52,7 @@ export function startMaintenanceTimers(options: {
   })
   const controller = new AbortController()
   let stopped = false
+  let enrichmentStampWrittenHere = false
   let queue = Promise.resolve()
   const enqueue = (
     kind: 'daily' | 'enrichment',
@@ -66,7 +67,10 @@ export function startMaintenanceTimers(options: {
       try {
         if (kind === 'daily') {
           state.lastStart = new Date(start).toISOString()
-        } else state.lastEnrichmentRun = new Date(start).toISOString()
+        } else {
+          state.lastEnrichmentRun = new Date(start).toISOString()
+          enrichmentStampWrittenHere = true
+        }
         // Record attempts before dispatch, so even a failed or interrupted run keeps its cadence.
         writeJsonAtomic(path, state)
         await work(controller.signal)
@@ -121,7 +125,7 @@ export function startMaintenanceTimers(options: {
     const dueAt = Math.max(
       bootReadyAt,
       enrichmentBlockedUntil,
-      Number.isFinite(lastRun) && lastRun <= clock.now()
+      Number.isFinite(lastRun) && (enrichmentStampWrittenHere || lastRun <= clock.now())
         ? lastRun + options.cadenceMs
         : clock.now(),
     )
