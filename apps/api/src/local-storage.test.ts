@@ -1,10 +1,10 @@
 import { join, parse } from 'node:path'
 import { expect } from '@std/expect'
 import { acquireStorageLocks, localStoragePaths, sweepAtomicTemps } from './local-storage.ts'
-import { acquireWriterLock } from './local-runtime.ts'
+import { acquireLockFile, acquireWriterLock } from './local-runtime.ts'
 
 Deno.test('fresh storage fences legacy defaults even with a separate DATA_DIR', async () => {
-  const root = Deno.makeTempDirSync()
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
   const paths = localStoragePaths({ DATA_DIR: 'private' }, root)
   const release = await acquireStorageLocks(paths, 0)
   try {
@@ -13,7 +13,7 @@ Deno.test('fresh storage fences legacy defaults even with a separate DATA_DIR', 
     expect(paths.KG_PROPOSALS_PATH).toBe(`${root}/private/kg-proposals.json`)
     expect(paths.BRANDING_PATH).toBe(`${root}/private/branding`)
     await expect(acquireStorageLocks(localStoragePaths({ DATA_DIR: 'aaa-other' }, root), 0))
-      .rejects.toThrow('writer lock is still held')
+      .rejects.toThrow(`${root}/data/bindings.json.writer.lock`)
     // A failed multi-lock acquisition releases everything it acquired.
     const unlock = await acquireWriterLock(`${root}/aaa-other`, 0)
     unlock()
@@ -24,7 +24,7 @@ Deno.test('fresh storage fences legacy defaults even with a separate DATA_DIR', 
 })
 
 Deno.test('existing legacy storage stays in place and is fenced without changing its bytes', async () => {
-  const root = Deno.makeTempDirSync()
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
   Deno.mkdirSync(`${root}/data`)
   const previous = '{"custom":{},"overrides":{}}'
   Deno.writeTextFileSync(`${root}/data/tenants.json`, previous)
@@ -32,15 +32,16 @@ Deno.test('existing legacy storage stays in place and is fenced without changing
   const release = await acquireStorageLocks(paths, 0)
   try {
     expect(Deno.readTextFileSync(paths.TENANTS_PATH)).toBe(previous)
-    await expect(acquireWriterLock(`${root}/data`, 0)).rejects.toThrow('writer lock is still held')
+    await expect(acquireLockFile(`${paths.TENANTS_PATH}.writer.lock`, 0))
+      .rejects.toThrow(`${paths.TENANTS_PATH}.writer.lock`)
   } finally {
     release()
     Deno.removeSync(root, { recursive: true })
   }
 })
 
-Deno.test('explicit storage overrides keep their paths and each directory is fenced', async () => {
-  const root = Deno.makeTempDirSync()
+Deno.test('explicit storage overrides keep their paths and fence each owned file or directory', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
   const env = {
     DATA_DIR: 'private',
     TENANTS_PATH: 'tenants/custom.json',
@@ -54,10 +55,11 @@ Deno.test('explicit storage overrides keep their paths and each directory is fen
     for (const [name, value] of Object.entries(env)) {
       expect(paths[name as keyof typeof paths]).toBe(`${root}/${value}`)
     }
-    for (const name of ['private', 'tenants', 'bindings', 'proposals', 'assets']) {
-      await expect(acquireWriterLock(`${root}/${name}`, 0)).rejects.toThrow(
-        'writer lock is still held',
-      )
+    for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+      await expect(acquireLockFile(`${path}.writer.lock`, 0)).rejects.toThrow(`${path}.writer.lock`)
+    }
+    for (const directory of [paths.DATA_DIR, paths.BRANDING_PATH]) {
+      await expect(acquireWriterLock(directory, 0)).rejects.toThrow(`${directory}/.writer.lock`)
     }
   } finally {
     release()
@@ -66,8 +68,65 @@ Deno.test('explicit storage overrides keep their paths and each directory is fen
   }
 })
 
+Deno.test('stores under DATA_DIR need only its directory writer lock', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  const paths = localStoragePaths({
+    DATA_DIR: 'private',
+    TENANTS_PATH: 'private/tenants.json',
+    BINDINGS_PATH: 'private/nested/bindings.json',
+    KG_PROPOSALS_PATH: 'private/nested/kg.json',
+    BRANDING_PATH: 'private/branding',
+  }, root)
+  const release = await acquireStorageLocks(paths, 0)
+  try {
+    await expect(acquireWriterLock(paths.DATA_DIR, 0)).rejects.toThrow(
+      `${paths.DATA_DIR}/.writer.lock`,
+    )
+    for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+      expect(() => Deno.statSync(`${path}.writer.lock`)).toThrow(Deno.errors.NotFound)
+    }
+    expect(() => Deno.statSync(`${paths.BRANDING_PATH}/.writer.lock`)).toThrow(Deno.errors.NotFound)
+  } finally {
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('file and directory writer locks are acquired in sorted canonical path order', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  const paths = localStoragePaths({
+    DATA_DIR: 'middle',
+    TENANTS_PATH: 'shared/z-tenants.json',
+    BINDINGS_PATH: 'shared/a-bindings.json',
+    // A matching string prefix is not a descendant of DATA_DIR.
+    KG_PROPOSALS_PATH: 'middle-neighbour/kg.json',
+    BRANDING_PATH: 'first/branding',
+  }, root)
+  const open = Deno.openSync
+  const opened: string[] = []
+  let release = () => {}
+  Deno.openSync = (path, options) => {
+    opened.push(String(path))
+    return open(path, options)
+  }
+  try {
+    release = await acquireStorageLocks(paths, 0)
+    expect(opened).toEqual([
+      `${paths.DATA_DIR}/.writer.lock`,
+      `${paths.TENANTS_PATH}.writer.lock`,
+      `${paths.BINDINGS_PATH}.writer.lock`,
+      `${paths.KG_PROPOSALS_PATH}.writer.lock`,
+      `${paths.BRANDING_PATH}/.writer.lock`,
+    ].sort())
+  } finally {
+    Deno.openSync = open
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
 Deno.test('boot sweep removes only atomic temp files in owned directories or named override siblings', async () => {
-  const root = Deno.makeTempDirSync()
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
   const paths = localStoragePaths({
     DATA_DIR: 'private',
     TENANTS_PATH: 'external/tenants.json',

@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { scheduleAfter } from './local-timers.ts'
 
 /** Invalid timing settings fail startup rather than creating unbounded waits. */
@@ -12,9 +12,14 @@ export function secondsSetting(raw: string | undefined, fallback: number, name: 
 
 /** Keep the same inode for the deployment's lifetime. Never unlink a lock file on release. */
 export async function acquireWriterLock(dataDir: string, waitSeconds = 60): Promise<() => void> {
-  Deno.mkdirSync(dataDir, { recursive: true })
+  return await acquireLockFile(join(dataDir, '.writer.lock'), waitSeconds)
+}
+
+/** Lock a persistent sibling or directory lock file without replacing its inode. */
+export async function acquireLockFile(path: string, waitSeconds = 60): Promise<() => void> {
+  Deno.mkdirSync(dirname(path), { recursive: true })
   // Open read/write: exclusive locks on NFS need a writable descriptor.
-  const file = Deno.openSync(join(dataDir, '.writer.lock'), {
+  const file = Deno.openSync(path, {
     read: true,
     write: true,
     create: true,
@@ -24,7 +29,7 @@ export async function acquireWriterLock(dataDir: string, waitSeconds = 60): Prom
     while (!file.tryLockSync(true)) {
       const remaining = deadline - performance.now()
       if (remaining <= 0) {
-        throw new Error(`DATA_DIR writer lock is still held after ${waitSeconds} seconds`)
+        throw new Error(`${path} writer lock is still held after ${waitSeconds} seconds`)
       }
       await new Promise<void>((resolve) => scheduleAfter(Math.min(100, remaining), resolve))
     }

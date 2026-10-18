@@ -202,6 +202,91 @@ async function fixtureMain(mode: string, dir: string) {
 if (import.meta.main) {
   await fixtureMain(Deno.args[0]!, Deno.args[1]!)
 } else {
+  for (const shareFile of [false, true]) {
+    Deno.test(
+      shareFile
+        ? 'real servers sharing one external file exclude each other and name the held path'
+        : 'real servers with distinct external files in one shared folder both start',
+      async () => {
+        const root = Deno.realPathSync(directory())
+        const running = new Set<Deno.ChildProcess>()
+        const tenants = (name: string) =>
+          `${root}/shared/${shareFile ? 'shared' : name}-tenants.json`
+        const launch = (name: string) => {
+          const child = new Deno.Command(Deno.execPath(), {
+            args: ['run', '-A', 'apps/api/src/server.ts'],
+            cwd: ROOT,
+            env: {
+              DATA_DIR: `${root}/${name}`,
+              TENANTS_PATH: tenants(name),
+              BINDINGS_PATH: `${root}/shared/${name}-bindings.json`,
+              KG_PROPOSALS_PATH: `${root}/shared/${name}-kg.json`,
+              BRANDING_PATH: `${root}/${name}/branding`,
+              PORT: '0',
+              HOST: '127.0.0.1',
+              LOCAL_SCHEDULER_ENABLED: 'false',
+              SHUTDOWN_GRACE_SECONDS: '2',
+              WRITER_LOCK_WAIT_SECONDS: '0.2',
+              SHOWCASE_PORTALS: '',
+            },
+            stdout: 'piped',
+            stderr: 'piped',
+          }).spawn()
+          running.add(child)
+          return child
+        }
+        const listeningPort = async (child: Deno.ChildProcess) => {
+          const log = await untilLine(child, 'Listening on http://', 'stderr')
+          const port = /Listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(log)?.[1]
+          expect(port).toBeDefined()
+          return port!
+        }
+        try {
+          const first = launch('a')
+          const firstPort = await listeningPort(first)
+          const second = launch('b')
+          if (shareFile) {
+            // A missing fence would start the second server; fail promptly rather than hang.
+            const deadline = setTimeout(() => second.kill('SIGKILL'), 10_000)
+            let result: Deno.CommandOutput
+            try {
+              result = await second.output()
+              running.delete(second)
+            } finally {
+              clearTimeout(deadline)
+            }
+            expect(result.success).toBe(false)
+            expect(new TextDecoder().decode(result.stderr))
+              .toContain(`${tenants('b')}.writer.lock writer lock is still held`)
+          } else {
+            const secondPort = await listeningPort(second)
+            for (const port of [firstPort, secondPort]) {
+              const response = await fetch(`http://127.0.0.1:${port}/auth/me`)
+              expect(response.status).toBe(200)
+              await response.text()
+            }
+          }
+          for (const child of running) {
+            child.kill('SIGINT')
+            const result = await child.output()
+            running.delete(child)
+            expect(result.success, new TextDecoder().decode(result.stderr)).toBe(true)
+          }
+        } finally {
+          for (const child of running) {
+            try {
+              child.kill('SIGKILL')
+            } catch {
+              // A failed startup may already have exited.
+            }
+            await child.output()
+          }
+          Deno.removeSync(root, { recursive: true })
+        }
+      },
+    )
+  }
+
   Deno.test('a second real server fails its writer wait; SIGINT releases the persistent fence', async () => {
     const dir = directory()
     const env = {
