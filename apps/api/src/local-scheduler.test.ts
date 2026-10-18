@@ -13,7 +13,10 @@ class Clock implements SchedulerClock {
   private wallOffset = 0
   readonly delays: number[] = []
   readonly timers = new Map<number, { at: number; callback: () => void }>()
-  constructor(private time = Date.parse('2026-10-18T14:00:00Z')) {}
+  constructor(
+    private time = Date.parse('2026-10-18T14:00:00Z'),
+    private readonly reverseTies = false,
+  ) {}
   now = () => this.time + this.wallOffset
   stepWall(ms: number) {
     this.wallOffset += ms
@@ -31,7 +34,7 @@ class Clock implements SchedulerClock {
     const target = this.time + ms
     while (true) {
       const due = [...this.timers].filter(([, timer]) => timer.at <= target)
-        .sort((a, b) => a[1].at - b[1].at)[0]
+        .sort((a, b) => a[1].at - b[1].at || (this.reverseTies ? b[0] - a[0] : a[0] - b[0]))[0]
       if (!due) break
       this.time = due[1].at
       this.timers.delete(due[0])
@@ -45,6 +48,62 @@ class Clock implements SchedulerClock {
 function fixture() {
   return Deno.makeTempDirSync()
 }
+
+Deno.test('boot daily is enqueued before enrichment regardless of timer tie order', async (t) => {
+  for (const reverseTies of [false, true]) {
+    await t.step(reverseTies ? 'newest timer first' : 'oldest timer first', async () => {
+      const directory = fixture()
+      const clock = new Clock(undefined, reverseTies)
+      const calls: string[] = []
+      const stop = startMaintenanceTimers({
+        dataDir: directory,
+        clock,
+        cadenceMs: 3600_000,
+        log: () => {},
+        runDaily: async () => {
+          calls.push('daily')
+        },
+        runEnrichments: async () => {
+          calls.push('enrichment')
+        },
+      })
+      try {
+        await clock.advance(90_000)
+        expect(calls).toEqual(['daily', 'enrichment'])
+      } finally {
+        await stop()
+        Deno.removeSync(directory, { recursive: true })
+      }
+    })
+  }
+})
+
+Deno.test('shutdown before boot cancels maintenance without running either pass', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  const calls: string[] = []
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 3600_000,
+    log: () => {},
+    runDaily: async () => {
+      calls.push('daily')
+    },
+    runEnrichments: async () => {
+      calls.push('enrichment')
+    },
+  })
+  try {
+    await stop()
+    expect(clock.timers.size).toBe(0)
+    await clock.advance(86400_000)
+    expect(calls).toEqual([])
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
 
 Deno.test('daily restarts preserve enrichment cadence even when the boot daily pass is skipped', async () => {
   const directory = fixture()

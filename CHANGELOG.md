@@ -36,6 +36,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Deno boot maintenance queues daily upkeep before its first enrichment pass regardless of timer order, and shutdown before boot safely cancels both passes.
 - Deno enrichment persists its last attempted run independently of daily upkeep, so frequent restarts and skipped boot passes preserve its cadence. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - Deno maintenance keeps its 120-second unit deadline when a provider write stalls; only shutdown waits for the producer to finish saving progress. ([#103](https://github.com/noicework/corpuskit/pull/103))
 - A provider read that throws before returning a promise clears its timeout, so it cannot leave an orphaned timeout error after the request ends. ([#103](https://github.com/noicework/corpuskit/pull/103))

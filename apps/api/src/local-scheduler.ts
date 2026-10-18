@@ -110,7 +110,7 @@ export function startMaintenanceTimers(options: {
   }
   const bootReadyAt = clock.now() + 90_000
   let enrichmentBlockedUntil = 0
-  let cancelEnrichment: () => void
+  let cancelEnrichment = () => {}
   const scheduleEnrichment = () => {
     if (stopped) return
     const lastRun = Date.parse(state.lastEnrichmentRun ?? '')
@@ -143,9 +143,9 @@ export function startMaintenanceTimers(options: {
         throw error
       }
     }, recentSuccess)
+    scheduleEnrichment()
   })
   scheduleDaily()
-  scheduleEnrichment()
   return () => {
     stopped = true
     cancelBoot()
