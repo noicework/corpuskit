@@ -5,13 +5,22 @@ import {
   startMaintenanceTimers,
 } from './local-scheduler.ts'
 import { writeJsonAtomic } from './persist.ts'
+import { MAX_TIMER_DELAY_MS, scheduleAt } from './local-timers.ts'
+import { autoEnrichmentCadenceMs, MaintenanceError } from './scheduler.ts'
 
 class Clock implements SchedulerClock {
   private id = 0
+  private wallOffset = 0
+  readonly delays: number[] = []
   readonly timers = new Map<number, { at: number; callback: () => void }>()
   constructor(private time = Date.parse('2026-10-18T14:00:00Z')) {}
-  now = () => this.time
+  now = () => this.time + this.wallOffset
+  stepWall(ms: number) {
+    this.wallOffset += ms
+  }
   setTimeout = (callback: () => void, delay: number) => {
+    expect(Number.isFinite(delay) && delay >= 0 && delay <= MAX_TIMER_DELAY_MS).toBe(true)
+    this.delays.push(delay)
     this.timers.set(++this.id, { at: this.time + delay, callback })
     return this.id
   }
@@ -34,8 +43,7 @@ class Clock implements SchedulerClock {
 }
 
 function fixture() {
-  Deno.mkdirSync('/tmp/ck-l2a', { recursive: true })
-  return Deno.makeTempDirSync({ dir: '/tmp/ck-l2a' })
+  return Deno.makeTempDirSync()
 }
 
 Deno.test('maintenance UTC time validates HH:MM and crosses midnight and month boundaries', () => {
@@ -176,6 +184,190 @@ Deno.test('boot recency excludes exactly twenty hours, missing success and futur
     try {
       await clock.advance(90_000)
       expect(runs).toBe(expected)
+    } finally {
+      await stop()
+      Deno.removeSync(directory, { recursive: true })
+    }
+  }
+})
+
+Deno.test('720-hour and 744-hour cadences use bounded chunks and never run early', async () => {
+  for (const hours of [720, 744]) {
+    const directory = fixture()
+    const clock = new Clock()
+    let runs = 0
+    writeJsonAtomic(`${directory}/maintenance-state.json`, {
+      lastStart: null,
+      lastSuccess: new Date(clock.now()).toISOString(),
+      consecutiveFailures: 0,
+    })
+    const cadenceMs = autoEnrichmentCadenceMs(String(hours))
+    const stop = startMaintenanceTimers({
+      dataDir: directory,
+      clock,
+      cadenceMs,
+      log: () => {},
+      runDaily: async () => {},
+      runEnrichments: async () => {
+        runs++
+      },
+    })
+    try {
+      await clock.advance(86400_000)
+      expect(runs).toBe(0)
+      await clock.advance(cadenceMs - 86400_000 - 1)
+      expect(runs).toBe(0)
+      await clock.advance(1)
+      expect(runs).toBe(1)
+      expect(clock.delays).toContain(MAX_TIMER_DELAY_MS)
+      await stop()
+      await clock.advance(cadenceMs)
+      expect(runs).toBe(1)
+      expect(clock.timers.size).toBe(0)
+    } finally {
+      await stop()
+      Deno.removeSync(directory, { recursive: true })
+    }
+  }
+})
+
+Deno.test('timer cap boundaries, cancellation and a backwards wall clock keep absolute targets', async () => {
+  for (const delay of [MAX_TIMER_DELAY_MS, MAX_TIMER_DELAY_MS + 1]) {
+    const clock = new Clock(0)
+    let runs = 0
+    const cancel = scheduleAt(clock, delay, () => {
+      runs++
+    })
+    await clock.advance(delay - 1)
+    expect(runs).toBe(0)
+    await clock.advance(1)
+    expect(runs).toBe(1)
+    cancel()
+  }
+  const clock = new Clock(0)
+  let runs = 0
+  const cancel = scheduleAt(clock, MAX_TIMER_DELAY_MS + 10, () => {
+    runs++
+  })
+  await clock.advance(MAX_TIMER_DELAY_MS - 1)
+  clock.stepWall(-3600_000)
+  await clock.advance(11)
+  expect(runs).toBe(0)
+  cancel()
+  await clock.advance(2 * MAX_TIMER_DELAY_MS)
+  expect(runs).toBe(0)
+  expect(clock.timers.size).toBe(0)
+})
+
+Deno.test('invalid cadence values fail before any timer is registered', () => {
+  for (const cadenceMs of [0, -1, NaN, Infinity, -Infinity]) {
+    const clock = new Clock()
+    expect(() =>
+      startMaintenanceTimers({
+        dataDir: '/unused',
+        clock,
+        cadenceMs,
+        runDaily: async () => {},
+        runEnrichments: async () => {},
+      })
+    ).toThrow('AUTO_ENRICH_CADENCE_HOURS')
+    expect(clock.timers.size).toBe(0)
+  }
+})
+
+Deno.test('a boot pass queued behind successful daily work is skipped without a heartbeat', async () => {
+  const directory = fixture()
+  const clock = new Clock(Date.parse('2026-10-18T15:16:00Z'))
+  const pending = Promise.withResolvers<void>()
+  let dailyRuns = 0
+  let enrichmentRuns = 0
+  const logs: string[] = []
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 86400_000,
+    log: (line) => logs.push(line),
+    runDaily: async () => {
+      dailyRuns++
+      await pending.promise
+    },
+    runEnrichments: async () => {
+      enrichmentRuns++
+    },
+  })
+  try {
+    await clock.advance(90_000)
+    expect(dailyRuns).toBe(1)
+    pending.resolve()
+    for (let i = 0; i < 30; i++) await Promise.resolve()
+    expect(dailyRuns).toBe(1)
+    expect(enrichmentRuns).toBe(0)
+    expect(logs.length).toBe(1)
+  } finally {
+    pending.resolve()
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('daily targets do not repeat when the wall clock steps backwards during a pass', async () => {
+  const directory = fixture()
+  const clock = new Clock(Date.parse('2026-10-18T15:16:59Z'))
+  let runs = 0
+  writeJsonAtomic(`${directory}/maintenance-state.json`, {
+    lastStart: null,
+    lastSuccess: new Date(clock.now()).toISOString(),
+    consecutiveFailures: 0,
+  })
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 31 * 86400_000,
+    log: () => {},
+    runDaily: async () => {
+      runs++
+      if (runs === 1) clock.stepWall(-60_000)
+    },
+    runEnrichments: async () => {},
+  })
+  try {
+    await clock.advance(1000)
+    expect(runs).toBe(1)
+    await clock.advance(60_000)
+    expect(runs).toBe(1)
+    await clock.advance(86400_000)
+    expect(runs).toBe(2)
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('failed heartbeat retains a safe maintenance summary and withholds raw upstream detail', async () => {
+  for (const safe of [true, false]) {
+    const directory = fixture()
+    const clock = new Clock()
+    const logs: string[] = []
+    const failure = safe
+      ? new MaintenanceError([{ job: 'sync', slug: 'portal', target: 'source' }])
+      : new Error('private upstream detail')
+    const stop = startMaintenanceTimers({
+      dataDir: directory,
+      clock,
+      cadenceMs: 86400_000,
+      log: (line) => logs.push(line),
+      failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,
+      runDaily: async () => {
+        throw failure
+      },
+      runEnrichments: async () => {},
+    })
+    try {
+      await clock.advance(90_000)
+      const heartbeat = JSON.parse(logs[0]!)
+      expect(heartbeat.outcome).toBe('failure')
+      expect(heartbeat.error).toBe(safe ? failure.message : undefined)
+      expect(logs.join()).not.toContain('private upstream detail')
     } finally {
       await stop()
       Deno.removeSync(directory, { recursive: true })

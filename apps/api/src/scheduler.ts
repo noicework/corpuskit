@@ -720,7 +720,9 @@ const MAX_AUTO_ENRICH_CADENCE_HOURS = 24 * 31
 export function autoEnrichmentCadenceMs(raw: string | undefined): number {
   if (raw == null || raw.trim() === '') return DEFAULT_AUTO_ENRICH_CADENCE_MS
   const requested = Number(raw)
-  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_AUTO_ENRICH_CADENCE_MS
+  if (!Number.isFinite(requested) || requested <= 0) {
+    throw new Error('AUTO_ENRICH_CADENCE_HOURS must be finite and positive')
+  }
   const hours = Math.min(
     Math.max(requested, MIN_AUTO_ENRICH_CADENCE_HOURS),
     MAX_AUTO_ENRICH_CADENCE_HOURS,
@@ -963,6 +965,7 @@ export function startScheduler(
     dataDir: env.DATA_DIR ?? './data',
     atUtc: env.MAINTENANCE_AT_UTC,
     cadenceMs: autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS),
+    failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,
     runDaily: (signal) =>
       runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'], true, {
         signal,

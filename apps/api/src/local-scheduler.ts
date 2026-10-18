@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { readJsonSafe, writeJsonAtomic } from './persist.ts'
+import { scheduleAt, type TimerClock } from './local-timers.ts'
 
 export interface MaintenanceState {
   lastStart: string | null
@@ -7,11 +8,7 @@ export interface MaintenanceState {
   consecutiveFailures: number
 }
 
-export interface SchedulerClock {
-  now(): number
-  setTimeout(callback: () => void, delay: number): number
-  clearTimeout(timer: number): void
-}
+export type SchedulerClock = TimerClock
 
 /** The next strictly future occurrence of HH:MM UTC, independent of the process start time. */
 export function nextMaintenanceAt(now: number, atUtc = '15:17'): number {
@@ -34,10 +31,15 @@ export function startMaintenanceTimers(options: {
   runEnrichments(signal: AbortSignal): Promise<void>
   clock?: SchedulerClock
   log?: (line: string) => void
+  /** Only safe maintenance summaries, never raw provider error messages. */
+  failureMessage?: (error: unknown) => string | undefined
 }): () => Promise<void> {
   const clock = options.clock ?? { now: Date.now, setTimeout, clearTimeout }
   const log = options.log ?? console.log
   // Validate before registering any timer.
+  if (!Number.isFinite(options.cadenceMs) || options.cadenceMs <= 0) {
+    throw new Error('AUTO_ENRICH_CADENCE_HOURS must be finite and positive')
+  }
   nextMaintenanceAt(clock.now(), options.atUtc)
   const path = join(options.dataDir, 'maintenance-state.json')
   const state = readJsonSafe<MaintenanceState>(path, {
@@ -48,11 +50,16 @@ export function startMaintenanceTimers(options: {
   const controller = new AbortController()
   let stopped = false
   let queue = Promise.resolve()
-  const enqueue = (kind: 'daily' | 'enrichment', work: (signal: AbortSignal) => Promise<void>) => {
+  const enqueue = (
+    kind: 'daily' | 'enrichment',
+    work: (signal: AbortSignal) => Promise<void>,
+    skip?: () => boolean,
+  ) => {
     queue = queue.then(async () => {
-      if (stopped) return
+      if (stopped || skip?.()) return
       const start = clock.now()
       let outcome = 'success'
+      let diagnostic: string | undefined
       try {
         if (kind === 'daily') {
           state.lastStart = new Date(start).toISOString()
@@ -60,7 +67,8 @@ export function startMaintenanceTimers(options: {
         }
         await work(controller.signal)
         controller.signal.throwIfAborted()
-      } catch {
+      } catch (error) {
+        diagnostic = options.failureMessage?.(error)
         outcome = controller.signal.aborted ? 'aborted' : 'failure'
       } finally {
         try {
@@ -79,30 +87,36 @@ export function startMaintenanceTimers(options: {
           kind,
           outcome,
           durationMs: clock.now() - start,
+          ...(diagnostic === undefined ? {} : { error: diagnostic }),
         }))
       }
     })
   }
-  let daily: number
+  let dailyDueAt = nextMaintenanceAt(clock.now(), options.atUtc)
+  let cancelDaily: () => void
   const scheduleDaily = () => {
-    daily = clock.setTimeout(() => {
+    cancelDaily = scheduleAt(clock, dailyDueAt, () => {
       if (stopped) return
       enqueue('daily', options.runDaily)
+      // Never repeat the previous target if the wall clock moves backwards during a pass.
+      dailyDueAt = nextMaintenanceAt(Math.max(dailyDueAt, clock.now()), options.atUtc)
       scheduleDaily()
-    }, nextMaintenanceAt(clock.now(), options.atUtc) - clock.now())
+    })
   }
-  let enrichment: number
+  let cancelEnrichment: () => void
   const scheduleEnrichment = () => {
-    enrichment = clock.setTimeout(() => {
+    cancelEnrichment = scheduleAt(clock, clock.now() + options.cadenceMs, () => {
       if (stopped) return
       enqueue('enrichment', options.runEnrichments)
       scheduleEnrichment()
-    }, options.cadenceMs)
+    })
   }
-  // A recent successful daily pass survives a restart. A future timestamp is not recent.
-  const boot = clock.setTimeout(() => {
+  // Check recency when the queued boot work starts: a daily pass ahead of it may still be running.
+  const recentSuccess = () => {
     const age = clock.now() - Date.parse(state.lastSuccess ?? '')
-    if (age >= 0 && age < 20 * 3600 * 1000) return
+    return age >= 0 && age < 20 * 3600 * 1000
+  }
+  const cancelBoot = scheduleAt(clock, clock.now() + 90_000, () => {
     enqueue('daily', async (signal) => {
       let failure: unknown
       try {
@@ -116,15 +130,15 @@ export function startMaintenanceTimers(options: {
         await options.runEnrichments(signal)
       }
       if (failure) throw failure
-    })
-  }, 90_000)
+    }, recentSuccess)
+  })
   scheduleDaily()
   scheduleEnrichment()
   return () => {
     stopped = true
-    clock.clearTimeout(boot)
-    clock.clearTimeout(daily)
-    clock.clearTimeout(enrichment)
+    cancelBoot()
+    cancelDaily()
+    cancelEnrichment()
     controller.abort(new DOMException('Server shutting down', 'AbortError'))
     return queue
   }
