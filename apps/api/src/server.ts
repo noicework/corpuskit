@@ -171,7 +171,6 @@ app.get(
   '/',
   infrastructureHandler(async (c) => {
     if (!homeHtml) return c.text('The web build is not available.', 503)
-    c.header('Cache-Control', 'no-cache')
     return c.html(homeHtml)
   }),
 )
@@ -181,7 +180,6 @@ for (const path of ['/about', '/about/']) {
     path,
     infrastructureHandler(async (c) => {
       if (!aboutHtml) return c.text('The web build is not available.', 503)
-      c.header('Cache-Control', 'no-cache')
       return c.html(aboutHtml)
     }),
   )
@@ -236,7 +234,6 @@ app.get(
     if (!indexHtml) return c.text('The web build is not available.', 503)
     const path = new URL(c.req.url).pathname
     if (!documentPath(path) && probePath(path)) return c.text('Not found', 404)
-    c.header('Cache-Control', 'no-cache')
     return c.html(indexHtml, documentPath(path) ? 200 : 404)
   }),
 )

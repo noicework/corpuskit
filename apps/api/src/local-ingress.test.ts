@@ -20,7 +20,11 @@ const session = (): TrustedSessionFacts => ({
   createdAt: Date.now(),
   expiresAt: Date.now() + 3600_000,
 })
-const env = { ENTRA_TENANT_ID: 'tenant-1', ADMIN_PASSCODE: 'fixture' }
+const env = {
+  ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+  ENTRA_TENANT_ID: 'tenant-1',
+  ADMIN_PASSCODE: 'fixture',
+}
 const peer = { remoteAddr: { transport: 'tcp' as const, hostname: '127.0.0.1', port: 1234 } }
 
 Deno.test('local selected snapshots use current policy and assignments with safe unavailable states', async () => {
@@ -494,5 +498,38 @@ Deno.test('the local server turns break-glass on only for ADMIN_BREAK_GLASS=true
     expect(warnings.join('\n')).not.toContain('fixture')
   } finally {
     console.warn = warn
+  }
+})
+
+Deno.test('local Entra startup requires an explicit public callback URI', () => {
+  const db = new LocalRbacDatabase(':memory:')
+  try {
+    const rbac = new RbacState(db)
+    rbac.migrate()
+    for (const redirect of [undefined, '', '   ']) {
+      expect(() =>
+        new LocalIngress({
+          rbac,
+          tenants: { list: () => [] },
+          env: {
+            ENTRA_TENANT_ID: 'tenant-1',
+            ENTRA_REDIRECT_URI: redirect,
+          },
+        })
+      ).toThrow('ENTRA_REDIRECT_URI')
+    }
+    expect(() =>
+      new LocalIngress({
+        rbac,
+        tenants: { list: () => [] },
+        env: {
+          ENTRA_TENANT_ID: 'tenant-1',
+          ENTRA_REDIRECT_URI: 'https://research.example/auth/callback',
+        },
+      })
+    ).not.toThrow()
+    expect(() => new LocalIngress({ rbac, tenants: { list: () => [] }, env: {} })).not.toThrow()
+  } finally {
+    db.close()
   }
 })

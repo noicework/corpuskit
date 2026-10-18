@@ -100,6 +100,7 @@ export function startTestServer(options: {
     SHOWCASE_PORTALS: 'marine,grains',
     DATA_DIR: directory,
     TENANTS_PATH: `${directory}/tenants.json`,
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     WORKER_NAME: 'corpuskit',
     ENVIRONMENT: 'test',

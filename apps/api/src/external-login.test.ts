@@ -615,13 +615,14 @@ Deno.test('local ingress exchanges, reads and logs out external sessions using d
       provenance: 'external',
       roles: [],
     })
-    // The Entra flow is not served locally, so its paths still reach the application.
+    // Entra routes share the Worker handler and refuse sign-in when it is not configured.
     for (const path of ['/auth/login', '/auth/callback']) {
       const passed = await ingress.handle(
         new Request(`https://portal.example${path}`),
         () => new Response('application'),
       )
-      expect(await passed.text()).toBe('application')
+      expect(passed.status).toBe(503)
+      expect(await passed.json()).toEqual({ error: 'microsoft_sign_in_not_configured' })
     }
     const logout = await ingress.handle(
       new Request('https://portal.example/auth/logout', { headers: { cookie } }),

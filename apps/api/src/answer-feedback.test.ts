@@ -95,6 +95,7 @@ function localStack(management: AragProvider): Stack {
     DATA_DIR: directory,
     TENANTS_PATH: join(directory, 'tenants.json'),
     SHOWCASE_PORTALS: 'marine,grains',
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     WORKER_NAME: 'corpuskit',
   }

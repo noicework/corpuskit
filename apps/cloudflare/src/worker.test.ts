@@ -4,7 +4,8 @@
 import { expect } from '@std/expect'
 import { DOC_PAGES, RELEASE_NOTES_PAGE_ID } from '../../../packages/core/src/docs.ts'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
-import { DurableState } from './state.ts'
+import { DurableState, stringEnv } from './state.ts'
+import { buildApp } from '../../api/src/app.ts'
 import { BindingCipher } from '../../api/src/binding-crypto.ts'
 import {
   type SessionEnvelope,
@@ -20,14 +21,20 @@ import { LocalIngress } from '../../api/src/local-ingress.ts'
 import { ROLES } from '@research-portal/core'
 import type { DurableStores } from './state.ts'
 
-Deno.test('Worker and local ingress return identical current selected-scope capabilities', async () => {
+Deno.test('Worker and local ingress return identical capabilities, edge rules and Entra sign-in', async (t) => {
+  await t.step('shared edge behaviour', assertEdgeParity)
+  await t.step('Entra login and callback without network', assertEntraParity)
   const h = await realHarness()
   try {
     const stores = (h.object as unknown as { stores: DurableStores }).stores
     const local = new LocalIngress({
       rbac: stores.rbac,
       tenants: stores.tenants,
-      env: { ENTRA_TENANT_ID: 'entra-tenant-id', SESSION_SECRET: secret },
+      env: {
+        ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+        ENTRA_TENANT_ID: 'entra-tenant-id',
+        SESSION_SECRET: secret,
+      },
     })
     const project = (body: Record<string, unknown>) => ({
       platformPermissions: body.platformPermissions,
@@ -2387,3 +2394,227 @@ Deno.test('Worker Entra sign-in is unchanged beside external sign-in and the ope
     h.database.close()
   }
 })
+
+async function parityHarness() {
+  const domain = 'research.example.org'
+  const h = await realHarness({
+    PLATFORM_DOMAIN: domain,
+    ENTRA_REDIRECT_URI: `https://${domain}/auth/callback`,
+  })
+  const stores = (h.object as unknown as { stores: DurableStores }).stores
+  const local = new LocalIngress({
+    rbac: stores.rbac,
+    tenants: stores.tenants,
+    env: stringEnv(h.env),
+  })
+  const app = buildApp({
+    ...stores,
+    provider: new DoubleProvider(),
+    configuredTenantId: 'entra-tenant-id',
+    audience: 'corpuskit',
+    platformDomain: domain,
+    requestContext: local.requestContext,
+    breakGlass: local.breakGlass,
+  })
+  const asset = (request: Request) =>
+    new Response(
+      new URL(request.url).pathname === '/app.js'
+        ? 'export {}'
+        : '<!doctype html><title>CorpusKit</title>',
+      {
+        headers: {
+          'content-type': new URL(request.url).pathname === '/app.js'
+            ? 'text/javascript'
+            : 'text/html',
+        },
+      },
+    )
+  h.env.ASSETS = { fetch: (request) => Promise.resolve(asset(request)) }
+  return {
+    ...h,
+    domain,
+    remote: (request: Request) => worker.fetch(request, h.env),
+    // HTTP origin models the request after TLS termination. Redirects and cookies still use
+    // the explicit public HTTPS callback and platform domain.
+    own: (request: Request) =>
+      local.handle(
+        new Request(request.url.replace('https:', 'http:'), request),
+        (clean) =>
+          new URL(clean.url).pathname.startsWith('/api/') ? app.fetch(clean) : asset(clean),
+      ),
+  }
+}
+
+async function assertEdgeParity() {
+  const h = await parityHarness()
+  try {
+    const compare = async (
+      path: string,
+      status: number,
+      cache: string | null,
+      host = h.domain,
+      method = 'GET',
+      location?: string,
+    ) => {
+      const request = new Request(`https://${host}${path}`, { method })
+      const responses = await Promise.all([h.remote(request.clone()), h.own(request.clone())])
+      for (const response of responses) {
+        expect([method, host, path, response.status]).toEqual([method, host, path, status])
+        expect(response.headers.get('cache-control')).toBe(cache)
+        if (location) expect(response.headers.get('location')).toBe(location)
+        expect(response.headers.get('permissions-policy')).toBe(
+          'camera=(), microphone=(), geolocation=(), payment=()',
+        )
+        expect(response.headers.get('x-frame-options')).toBe('DENY')
+        expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+        expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'")
+        expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin')
+        expect(response.headers.get('strict-transport-security')).toBe(
+          host.endsWith(h.domain) ? 'max-age=63072000; includeSubDomains' : 'max-age=63072000',
+        )
+        await response.arrayBuffer()
+      }
+    }
+    await compare('/t/marine', 200, 'no-store')
+    await compare('/api/t/marine/config', 200, 'private, no-store')
+    await compare('/app.js?v=release', 200, 'public, max-age=300')
+    await compare('/t/marine', 200, 'no-store', h.domain, 'HEAD')
+    await compare('/app.js', 200, 'public, max-age=300', h.domain, 'HEAD')
+    await compare('/about', 200, 'no-store')
+    await compare('/about/', 200, 'no-store')
+    await compare('/about.html', 200, 'no-store')
+    for (const path of ['/about', '/about/', '/about.html']) {
+      await compare(path, 404, 'public, max-age=300', `marine.${h.domain}`)
+      await compare(path, 404, 'public, max-age=300', 'unregistered.example.net')
+    }
+    await compare('/?q=one', 308, null, `marine.${h.domain}`, 'GET', '/t/marine?q=one')
+    await compare('/?q=two', 308, null, `marine.${h.domain}`, 'HEAD', '/t/marine?q=two')
+    await compare(
+      '/t/marine?q=three',
+      308,
+      null,
+      `www.${h.domain}`,
+      'GET',
+      `https://${h.domain}/t/marine?q=three`,
+    )
+    await compare('/', 200, 'no-store', `api.${h.domain}`)
+    const invalid = await h.own(new Request(`https://${h.domain}/auth/not-a-route`))
+    expect(invalid.status).toBe(404)
+    expect(invalid.headers.get('cache-control')).toBe('no-store')
+  } finally {
+    h.database.close()
+  }
+}
+
+async function assertEntraParity() {
+  const h = await parityHarness()
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['sign', 'verify'],
+  )
+  const publicKey = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  const encode = (bytes: Uint8Array) =>
+    btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const json = (value: unknown) => encode(new TextEncoder().encode(JSON.stringify(value)))
+  const original = globalThis.fetch
+  let nonce = ''
+  let calls = 0
+  globalThis.fetch = async (input, init) => {
+    const url = String(input instanceof Request ? input.url : input)
+    calls++
+    if (url.endsWith('openid-configuration')) {
+      return Response.json({
+        issuer: 'https://parity-idp.test',
+        jwks_uri: 'https://parity-idp.test/keys',
+        token_endpoint: 'https://parity-idp.test/token',
+        authorization_endpoint: 'https://parity-idp.test/authorize',
+      })
+    }
+    if (url === 'https://parity-idp.test/keys') {
+      return Response.json({ keys: [{ ...publicKey, kid: 'parity' }] })
+    }
+    if (url === 'https://parity-idp.test/token') {
+      const body = new URLSearchParams(String(init?.body))
+      expect(body.get('redirect_uri')).toBe(`https://${h.domain}/auth/callback`)
+      expect(body.get('code_verifier')!.length).toBeGreaterThan(32)
+      const content = `${json({ alg: 'RS256', kid: 'parity' })}.${
+        json({
+          aud: h.env.ENTRA_CLIENT_ID,
+          iss: 'https://parity-idp.test',
+          tid: 'entra-tenant-id',
+          oid: 'parity-person',
+          email: 'person@example.test',
+          roles: ['CorpusKit.PlatformAdmin'],
+          nonce,
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        })
+      }`
+      const signed = await crypto.subtle.sign(
+        'RSASSA-PKCS1-v1_5',
+        pair.privateKey,
+        new TextEncoder().encode(content),
+      )
+      return Response.json({ id_token: `${content}.${encode(new Uint8Array(signed))}` })
+    }
+    throw new Error(`Unexpected fake identity provider request: ${url}`)
+  }
+  try {
+    for (const send of [h.remote, h.own]) {
+      const login = await send(new Request(`https://${h.domain}/auth/login?returnTo=/t/marine`))
+      expect(login.status).toBe(302)
+      expect(login.headers.get('cache-control')).toBe('no-store')
+      const location = new URL(login.headers.get('location')!)
+      expect(location.origin + location.pathname).toBe('https://parity-idp.test/authorize')
+      expect(location.searchParams.get('redirect_uri')).toBe(`https://${h.domain}/auth/callback`)
+      expect(location.searchParams.get('code_challenge_method')).toBe('S256')
+      nonce = location.searchParams.get('nonce')!
+      const stateCookie = login.headers.getSetCookie()[0]!.split(';')[0]!
+      const callbackUrl = `https://${h.domain}/auth/callback?code=fake&state=${
+        location.searchParams.get('state')
+      }`
+      const invalid = await send(
+        new Request(callbackUrl.replace('state=', 'state=wrong'), {
+          headers: { cookie: stateCookie },
+        }),
+      )
+      expect(invalid.status).toBe(400)
+      expect(
+        invalid.headers.getSetCookie().some((s) => s.startsWith('__Secure-corpuskit_session=')),
+      ).toBe(false)
+      const callback = await send(new Request(callbackUrl, { headers: { cookie: stateCookie } }))
+      expect(callback.status).toBe(302)
+      expect(callback.headers.get('location')).toBe(`https://${h.domain}/t/marine`)
+      const setCookie = callback.headers.getSetCookie().find((s) =>
+        s.startsWith('__Secure-corpuskit_session=')
+      )!
+      expect(setCookie).toContain(`Domain=${h.domain}`)
+      expect(setCookie).toContain('Secure')
+      expect(setCookie).toContain('HttpOnly')
+      const cookie = setCookie.split(';')[0]!
+      for (const reader of [h.remote, h.own]) {
+        const me = await reader(
+          new Request(`https://${h.domain}/auth/me?portal=marine`, { headers: { cookie } }),
+        )
+        expect(me.headers.get('cache-control')).toBe('no-store')
+        expect(await me.json()).toMatchObject({
+          authenticated: true,
+          sessionProvenance: 'entra',
+          entraEnabled: true,
+          user: { id: 'parity-person', provenance: 'entra' },
+          effectiveRoles: { platformRole: 'platform-admin' },
+        })
+      }
+    }
+    expect(calls).toBeGreaterThan(0)
+  } finally {
+    globalThis.fetch = original
+    h.database.close()
+  }
+}

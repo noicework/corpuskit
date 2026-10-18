@@ -225,7 +225,15 @@ function localServer(env: Record<string, string>) {
     TENANTS_PATH: `${directory}/tenants.json`,
     SHOWCASE_PORTALS: 'marine,grains',
   })
-  const ingress = new LocalIngress({ rbac, tenants, env: { ENTRA_TENANT_ID: 'tenant-1', ...env } })
+  const ingress = new LocalIngress({
+    rbac,
+    tenants,
+    env: {
+      ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+      ENTRA_TENANT_ID: 'tenant-1',
+      ...env,
+    },
+  })
   const app = buildApp({
     provider: new DoubleProvider(),
     tenants,
