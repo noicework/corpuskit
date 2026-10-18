@@ -92,8 +92,9 @@ import { documentPath, probePath } from '../../api/src/public-paths.ts'
 import { createCloudflareDomainProvisioner } from '../../api/src/cloudflare-domains.ts'
 
 import {
-  apexOnlyAbout,
+  apexOnlyDocument,
   hostTransportSecurity,
+  isPublicDocsPath,
   platformHostnameLocation,
   secureAssetResponse,
   withSecurityHeaders,
@@ -734,10 +735,7 @@ async function pageRoute(
   const url = new URL(request.url)
   // The shared asset bundle is also bound to tenant hosts. Keep the marketing
   // documents (including raw asset aliases) on the platform apex only.
-  if (
-    apexOnlyAbout(url, platformDomain) ||
-    (isPublicDocsPath(url.pathname) && url.hostname !== platformDomain)
-  ) {
+  if (apexOnlyDocument(url, platformDomain)) {
     return plain('Not found', 404)
   }
 
@@ -863,10 +861,6 @@ function warnUnregistered(hostname: string): void {
     `[portal-aliases] ${hostname} reached this deployment but is neither a registered alias nor ` +
       "reserved. List the deployment's own custom domains in RESERVED_HOSTNAMES.",
   )
-}
-
-function isPublicDocsPath(pathname: string): boolean {
-  return pathname === '/docs' || pathname.startsWith('/docs/')
 }
 
 /** Select marketing documents without leaking the Assets pretty-URL redirects. */
