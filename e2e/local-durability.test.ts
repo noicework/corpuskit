@@ -6,7 +6,8 @@ import { runSystemMaintenance, syncSource } from '../apps/api/src/scheduler.ts'
 import { SourceStore, WatchStore } from '../apps/api/src/stores.ts'
 import { SuggestionStore } from '../apps/api/src/interrogate.ts'
 import { EnrichmentStore } from '../apps/api/src/enrichments.ts'
-import { readJsonSafe, writeAssetAtomic, writeJsonAtomic } from '../apps/api/src/persist.ts'
+import { readJsonSafe, writeJsonAtomic } from '../apps/api/src/persist.ts'
+import { FileBrandingStore } from '../apps/api/src/branding-store.ts'
 import { openLocalRbac } from '../apps/api/src/rbac-local.ts'
 import type { TenantStoreApi } from '../apps/api/src/tenants.ts'
 
@@ -67,6 +68,22 @@ async function untilLine(
 }
 
 async function fixtureMain(mode: string, dir: string) {
+  if (mode === 'branding-upgrade') {
+    const randomUUID = crypto.randomUUID.bind(crypto)
+    crypto.randomUUID = () => {
+      // Stop at the first atomic file allocation, before a replacement can commit. This is
+      // deliberately after any earlier legacy removals in the production put() sequence.
+      Deno.stdout.writeSync(new TextEncoder().encode('branding.before-commit\n'))
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0)
+      return randomUUID()
+    }
+    new FileBrandingStore(`${dir}/branding`).put('portal', 'logo', {
+      bytes,
+      contentType: 'image/webp',
+      version: 'new',
+    })
+    return
+  }
   if (mode === 'timeout') {
     const releaseLock = await acquireWriterLock(dir, 0)
     const { database } = openLocalRbac({ DATA_DIR: dir })
@@ -84,6 +101,7 @@ async function fixtureMain(mode: string, dir: string) {
   const suggestions = new SuggestionStore(dir)
   if (mode === 'crash') {
     let generation = 0
+    const branding = new FileBrandingStore(`${dir}/branding`)
     console.log('crash.ready')
     while (true) {
       suggestions.replacePending('portal', [{
@@ -94,7 +112,11 @@ async function fixtureMain(mode: string, dir: string) {
         status: 'pending',
         createdAt: new Date(0).toISOString(),
       }])
-      writeAssetAtomic(`${dir}/logo`, generation % 2 ? 'png' : 'jpg', ['png', 'jpg'], bytes)
+      branding.put('portal', 'logo', {
+        bytes,
+        contentType: generation % 2 ? 'image/png' : 'image/jpeg',
+        version: String(generation),
+      })
     }
   }
   const sources = new SourceStore(dir)
@@ -296,6 +318,41 @@ if (import.meta.main) {
     }
   })
 
+  Deno.test('SIGKILL during the first branding replacement preserves the legacy logo until commit', async () => {
+    const dir = directory()
+    const root = `${dir}/branding`
+    Deno.mkdirSync(root)
+    Deno.writeFileSync(`${root}/portal-logo.png`, bytes)
+    const process = child('branding-upgrade', dir)
+    let alive = true
+    try {
+      await untilLine(process, 'branding.before-commit')
+      process.kill('SIGKILL')
+      await process.output()
+      alive = false
+      const asset = new FileBrandingStore(root).get('portal', 'logo')
+      expect(asset).not.toBeNull()
+      expect(asset!.bytes).toEqual(bytes)
+      expect(asset!.contentType).toBe('image/png')
+      expect(() => Deno.statSync(`${root}/assets/portal/logo.json`)).toThrow(Deno.errors.NotFound)
+      new FileBrandingStore(root).put('portal', 'logo', {
+        bytes: new Uint8Array([9, 8, 7]),
+        contentType: 'image/webp',
+        version: 'resumed',
+      })
+      expect(new FileBrandingStore(root).get('portal', 'logo')?.bytes).toEqual(
+        new Uint8Array([9, 8, 7]),
+      )
+      expect(() => Deno.statSync(`${root}/portal-logo.png`)).toThrow(Deno.errors.NotFound)
+    } finally {
+      if (alive) {
+        process.kill('SIGKILL')
+        await process.output()
+      }
+      Deno.removeSync(dir, { recursive: true })
+    }
+  })
+
   Deno.test('repeated SIGKILL during suggestion and branding writes preserves complete committed files', async () => {
     const dir = directory()
     const store = new SuggestionStore(dir)
@@ -307,7 +364,8 @@ if (import.meta.main) {
       status: 'pending',
       createdAt: new Date(0).toISOString(),
     }])
-    writeAssetAtomic(`${dir}/logo`, 'png', ['png', 'jpg'], bytes)
+    Deno.mkdirSync(`${dir}/branding`)
+    Deno.writeFileSync(`${dir}/branding/portal-logo.png`, bytes)
     try {
       for (let attempt = 0; attempt < 12; attempt++) {
         const process = child('crash', dir)
@@ -316,15 +374,10 @@ if (import.meta.main) {
         process.kill('SIGKILL')
         await process.output()
         expect(store.list('portal').length).toBe(1)
-        const assets = [...Deno.readDirSync(dir)].filter((entry) =>
-          /^logo\.(png|jpg)$/.test(entry.name)
-        )
-        expect(assets.length).toBeGreaterThan(0)
-        for (const asset of assets) {
-          const committed = Deno.readFileSync(`${dir}/${asset.name}`)
-          expect(committed.length).toBe(bytes.length)
-          expect(committed.every((byte) => byte === 83)).toBe(true)
-        }
+        const asset = new FileBrandingStore(`${dir}/branding`).get('portal', 'logo')
+        expect(asset).not.toBeNull()
+        expect(asset!.bytes.length).toBe(bytes.length)
+        expect(asset!.bytes.every((byte) => byte === 83)).toBe(true)
         const suggestions = [...Deno.readDirSync(`${dir}/suggestions`)]
         expect(suggestions.some((entry) => entry.name.includes('.corrupt-'))).toBe(false)
       }

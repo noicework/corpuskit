@@ -1198,8 +1198,9 @@ JSON format the Worker imports. Scheduled jobs retain their system audit boundar
 
 New branding writes are stored under `BRANDING_PATH/assets/<slug>/<kind>.json`, with binary
 bytes encoded as base64 beside the content type and version. Existing fixed branding files and
-layout images remain readable. Replacing a slot removes its old files within the same audited
-mutation; removing or erasing an asset also removes those legacy files.
+layout images remain readable. Replacing a slot commits its new record before removing the old
+files within the same audited mutation, so a crash before that commit leaves the legacy asset
+readable. Removing or erasing an asset also removes those legacy files.
 
 ## External sign-in handoff
 
