@@ -70,11 +70,13 @@ export class FileBrandingStore implements BrandingAssetStore {
 
   put(slug: string, kind: BrandingKind, asset: BrandingAsset): void {
     ownedMutation([
-      ...this.legacy(slug, kind).map((path) => ({ path, value: undefined })),
+      // Commit the replacement before retiring legacy formats. A crash before this write
+      // finishes must leave the old slot readable; get() prefers the new record once it exists.
       {
         path: this.path(slug, kind),
         value: { ...asset, bytes: Buffer.from(asset.bytes).toString('base64') },
       },
+      ...this.legacy(slug, kind).map((path) => ({ path, value: undefined })),
     ], this.boundary)
   }
 

@@ -173,7 +173,8 @@ import {
   replaceGraphStrategy,
   validateGraphStrategy,
 } from './kg.ts'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { writeAssetAtomic } from './persist.ts'
 import process from 'node:process'
 import {
   CRAWLER_USER_AGENT,
@@ -5708,19 +5709,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       })
       return c.json({ ok: true, url: `/api/t/${config.slug}/branding/${kind}` })
     }
-    mkdirSync(brandingDir, { recursive: true })
-    // Drop any previous file for this slot so only one extension exists.
-    for (const old of brandingExts(kind)) {
-      const p = `${brandingDir}/${config.slug}-${kind}.${old}`
-      if (existsSync(p)) {
-        try {
-          Deno.removeSync(p)
-        } catch {
-          // ignore
-        }
-      }
-    }
-    writeFileSync(`${brandingDir}/${config.slug}-${kind}.${ext}`, bytes)
+    writeAssetAtomic(`${brandingDir}/${config.slug}-${kind}`, ext, brandingExts(kind), bytes)
     return c.json({ ok: true, url: `/api/t/${config.slug}/branding/${kind}` })
   })
 
@@ -5761,10 +5750,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       })
       return c.json({ ok: true, url })
     }
-    mkdirSync(layoutImageDir(config.slug), { recursive: true })
-    // Replacing an image under another type leaves only the new file.
-    removeLayoutImageFile(config.slug, name)
-    writeFileSync(`${layoutImageDir(config.slug)}/${name}.${ext}`, bytes)
+    writeAssetAtomic(`${layoutImageDir(config.slug)}/${name}`, ext, LAYOUT_IMAGE_EXTS, bytes)
     return c.json({ ok: true, url })
   })
 

@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Pinned build tooling for the web bundle. Versions must match the CI gate
 # (.github/workflows/deploy.yml) and local dev tooling (brew) - bump all
-# three together. Fly's remote builder is linux/amd64, so these fetch the
+# three together. The container build targets linux/amd64, so these fetch the
 # linux-x64 binaries directly rather than relying on `npm`/`npx` (neither is
 # available in this image, and none of these calls go through the npm CLI).
 ARG ESBUILD_VERSION=0.28.2
@@ -33,6 +33,7 @@ RUN chmod +x /usr/local/bin/esbuild \
 
 COPY deno.json ./
 COPY CHANGELOG.md ./
+COPY docs/ARCHITECTURE.md docs/HOSTING.md docs/ARAG-DEV.md ./docs/
 COPY packages ./packages
 COPY apps ./apps
 
@@ -40,8 +41,11 @@ RUN deno cache apps/api/src/server.ts
 
 # Build the SPA into apps/web/dist so server.ts (`./apps/web/dist`) has
 # something to serve - this is the fix for the site 404ing in production.
+ARG BUILD_SHA=dev
+ENV BUILD_SHA=${BUILD_SHA}
 RUN deno task build:web
 
 EXPOSE 8787
+ENV PORT=8787
 
 CMD ["run", "--allow-net", "--allow-env", "--allow-read", "--allow-write=/app/data", "--allow-run=pdfinfo,pdftotext,pdffonts", "apps/api/src/server.ts"]

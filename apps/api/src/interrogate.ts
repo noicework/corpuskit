@@ -1,10 +1,10 @@
 import { join } from 'node:path'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { rmSync } from 'node:fs'
 import process from 'node:process'
 import type { TenantConfig } from '@research-portal/core'
 import type { AragProvider } from '@research-portal/retrieval'
 import { type GraphStrategyInput, replaceGraphStrategy } from './kg.ts'
+import { readJsonSafe, writeJsonAtomic } from './persist.ts'
 
 // ---------------------------------------------------------------------------
 // Knowledge-box interrogation: examine what the box holds and how it is set
@@ -54,11 +54,7 @@ export class SuggestionStore {
   }
 
   list(slug: string): Suggestion[] {
-    try {
-      return JSON.parse(readFileSync(this.pathFor(slug), 'utf8')) as Suggestion[]
-    } catch {
-      return []
-    }
+    return readJsonSafe<Suggestion[]>(this.pathFor(slug), [])
   }
 
   replacePending(slug: string, fresh: Suggestion[]): Suggestion[] {
@@ -80,9 +76,7 @@ export class SuggestionStore {
   }
 
   private persist(slug: string, all: Suggestion[]): void {
-    const path = this.pathFor(slug)
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(all, null, 2))
+    writeJsonAtomic(this.pathFor(slug), all)
   }
 }
 

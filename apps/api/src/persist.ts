@@ -1,10 +1,19 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname } from 'node:path'
 
 // ---------------------------------------------------------------------------
 // Shared crash-safe persistence for the volume-backed stores (stores.ts,
 // bindings.ts, tenants.ts, kg.ts). All of this app's durable state is plain
-// JSON on a Fly volume, which a bare writeFileSync leaves exposed to two
+// files in single-process deployments, which a bare writeFileSync exposes to two
 // failure modes:
 //   - a crash or OOM mid-write truncates the file (partial JSON on disk)
 //   - a read of that truncated file throws, and a silent catch-and-fallback
@@ -15,23 +24,61 @@ import { dirname } from 'node:path'
 // ---------------------------------------------------------------------------
 
 /**
- * Write `data` to `path` atomically: write to `<path>.tmp` in the same
- * directory, then renameSync over the target. A rename within one
- * filesystem is atomic, so a reader never observes a partially-written
- * file - either the old content is still there, or the new content is
- * there in full. fsync is deliberately not performed (not required for
- * this app's durability bar; the volume survives ordinary process crashes).
+ * Flush a unique sibling file before replacing the target, then flush the directory entry.
+ * A reader sees either the previous complete file or the new complete file, including binary
+ * assets. A process killed before rename may leave an unused temporary file.
  */
-export function writeFileAtomic(path: string, data: string): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmpPath = `${path}.tmp`
-  writeFileSync(tmpPath, data)
-  renameSync(tmpPath, path)
+export function writeFileAtomic(path: string, data: string | Uint8Array): void {
+  const directory = dirname(path)
+  mkdirSync(directory, { recursive: true })
+  // Keep the suffix below the 24 bytes reserved by checkedOwnedPath.
+  const tmpPath = `${path}.tmp-${crypto.randomUUID().slice(0, 12)}`
+  const file = openSync(tmpPath, 'wx', 0o600)
+  try {
+    try {
+      writeFileSync(file, data)
+      fsyncSync(file)
+    } finally {
+      closeSync(file)
+    }
+    renameSync(tmpPath, path)
+    syncDirectory(directory)
+  } finally {
+    rmSync(tmpPath, { force: true })
+  }
+}
+
+/** Some filesystems do not support directory fsync; real I/O failures still fail the write. */
+function syncDirectory(path: string): void {
+  let file: number | undefined
+  try {
+    file = openSync(path, 'r')
+    fsyncSync(file)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EBADF'].includes(code ?? '')) throw error
+  } finally {
+    if (file !== undefined) closeSync(file)
+  }
 }
 
 /** JSON-serialise `value` and write it atomically to `path`. */
 export function writeJsonAtomic(path: string, value: unknown): void {
   writeFileAtomic(path, JSON.stringify(value, null, 2))
+}
+
+/** Commit a branding slot before removing older formats, so interruption never empties it. */
+export function writeAssetAtomic(
+  base: string,
+  extension: string,
+  extensions: readonly string[],
+  bytes: Uint8Array,
+): void {
+  writeFileAtomic(`${base}.${extension}`, bytes)
+  for (const old of extensions) {
+    if (old !== extension) rmSync(`${base}.${old}`, { force: true })
+  }
+  syncDirectory(dirname(base))
 }
 
 function isEnoent(err: unknown): boolean {
