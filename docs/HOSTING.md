@@ -38,7 +38,9 @@ Before opening stores, the process takes an exclusive operating-system lock on
 `DATA_DIR/.writer.lock`. A second process waits at most `WRITER_LOCK_WAIT_SECONDS`, then logs a
 `server.writer_lock` failure and exits non-zero. The lock is released on clean shutdown or by the
 operating system when the process dies. Do not delete the lock file: its inode is the fence, and
-an empty lock file after exit is normal. Run only one writer per data directory. Store path
+an empty lock file after exit is normal. Each development server also needs its own `DATA_DIR`
+as well as its own port: the lock refuses a second server on the same directory even if its
+port differs. Run only one writer per data directory. Store path
 overrides must remain on that deployment's volume and must not share files with another data
 directory. A network file system must support cross-client advisory locks and atomic rename;
 configure NFS locking on the server and clients, without local-only locking, and verify contention

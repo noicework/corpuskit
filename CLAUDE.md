@@ -64,6 +64,8 @@ standing principles and `docs/ARCHITECTURE.md` for the layering.
     taken down five agents at once. A dead server renders blank or half-loaded
     pages that look exactly like layout defects, so anything measured around an
     unexplained restart has to be measured again.
+  - **Each dev server needs its own `DATA_DIR` as well as its own port.** The writer
+    lock refuses a second server using the same data directory, even on another port.
   - Write scratch files and logs to a path unique to your agent. Agents have
     overwritten each other's shared log paths and lost their own output.
 
