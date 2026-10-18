@@ -60,9 +60,11 @@ branding replacements flush a unique sibling temporary file before an atomic ren
 the containing directory where supported. A killed process can leave an unused `.tmp-*` file;
 remove those only while the deployment is stopped. Never treat a temporary file as a backup.
 
-SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling, cancels active
-maintenance units and HTTP work, drains the HTTP server, closes SQLite and releases the writer
-lock. Each phase emits one JSON `server.shutdown` line. Syncs checkpoint progress every five
+SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling and accepting
+new HTTP connections immediately. In-flight requests get up to three seconds to finish (at most
+half the configured grace period), then remaining HTTP work is aborted. Maintenance cancellation
+and checkpoints share the same overall grace period. The process drains HTTP work, closes SQLite
+and releases the writer lock. A second SIGINT forces an immediate non-zero exit. Each phase emits one JSON `server.shutdown` line. Syncs checkpoint progress every five
 pages; scheduled syncs also save their last partial batch when interrupted. An interrupted HTTP
 sync may retry its last partial batch because its request audit boundary refuses further writes
 after cancellation. A later run skips the pages already recorded. An upstream write
