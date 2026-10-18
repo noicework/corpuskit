@@ -1170,3 +1170,15 @@ Deno.test('a purge starts no wave once its request has ended or its time is up',
   expect(second.seen.sent).toHaveLength(10)
   expect(capped).toMatchObject({ eligible: 12, deleted: 10, notAttempted: 2 })
 })
+
+Deno.test('a synchronous read failure clears its timeout and rejects without a later abort', async () => {
+  let seen: AbortSignal | undefined
+  const failure = new Error('fixture synchronous read failure')
+  const pending = withinTimeout((signal) => {
+    seen = signal
+    throw failure
+  }, 10)
+  await expect(pending).rejects.toBe(failure)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(seen?.aborted).toBe(false)
+})

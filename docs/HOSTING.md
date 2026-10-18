@@ -27,6 +27,93 @@ behaviour that changes, stored data that changes, and whether rolling back is sa
 covers. `GET /api/health` reports the `release` and `buildSha` a deployment is serving (see
 [Readiness signals](#readiness-signals)).
 
+## Single-process container hosting
+
+The Deno server supports one process with a persistent volume mounted at `DATA_DIR` (by default
+`./data`, or `/app/data` in the image). The image listens on port 8787 by default; `PORT` overrides
+it. Build with `--build-arg BUILD_SHA=<commit>` to retain that commit in the runtime environment,
+the web build stamp and `/api/health`.
+
+Before opening stores, the process takes an exclusive operating-system lock on
+`DATA_DIR/.writer.lock`. A second process waits at most `WRITER_LOCK_WAIT_SECONDS`, then logs a
+`server.writer_lock` failure and exits non-zero. The lock is released on clean shutdown or by the
+operating system when the process dies. Do not delete the lock file: its inode is the fence, and
+an empty lock file after exit is normal. Run only one writer per data directory. Store path
+overrides must remain on that deployment's volume and must not share files with another data
+directory. A network file system must support cross-client advisory locks and atomic rename;
+configure NFS locking on the server and clients, without local-only locking, and verify contention
+between containers on the actual mounted volume before using it.
+
+Local SQLite uses `journal_mode=DELETE`, `synchronous=FULL` and `busy_timeout=5000`. Startup
+refuses an existing WAL database before migrations or writes. Stop every process using such a
+database, take a backup, checkpoint its WAL and convert it to DELETE mode with SQLite before
+starting this build. WAL is unsuitable for this network-file-system deployment model. The
+filesystem must also honour SQLite's locking and flush operations. JSON files, suggestions and
+branding replacements flush a unique sibling temporary file before an atomic rename, then flush
+the containing directory where supported. A killed process can leave an unused `.tmp-*` file;
+remove those only while the deployment is stopped. Never treat a temporary file as a backup.
+
+SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling, cancels active
+maintenance units and HTTP work, drains the HTTP server, closes SQLite and releases the writer
+lock. Each phase emits one JSON `server.shutdown` line. Syncs checkpoint progress every five
+pages; scheduled syncs also save their last partial batch when interrupted. An interrupted HTTP
+sync may retry its last partial batch because its request audit boundary refuses further writes
+after cancellation. A later run skips the pages already recorded. An upstream write
+whose reply is lost can still have happened, so these checkpoints do not promise exactly-once
+remote ingestion. Shutdown waits for active producers to finish their checkpoint. If they exceed
+the grace period, the process exits non-zero and the operating system releases its lock.
+**Configure a container stop timeout of 120 seconds**, longer than the default 100-second grace.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATA_DIR` | `./data` | Persistent local state; mount `/app/data` when using the image. |
+| `WRITER_LOCK_WAIT_SECONDS` | `60` | Maximum time to wait for the exclusive writer lock. |
+| `SHUTDOWN_GRACE_SECONDS` | `100` | Maximum shutdown time before a forced non-zero exit. |
+| `MAINTENANCE_AT_UTC` | `15:17` | Daily maintenance time, exactly `HH:MM` in UTC, matching the Worker cron. Invalid values fail startup. |
+| `LOCAL_SCHEDULER_ENABLED` | enabled | Set exactly `false` to register no maintenance timers. |
+| `AUTO_ENRICH_CADENCE_HOURS` | `24` | Separate enrichment and suggested-question cadence. Finite positive values are clamped to 1 through 744 hours (31 days); zero, negative and non-finite values fail startup. |
+
+Timing settings for lock wait and shutdown accept seconds from 0 to 86400; invalid values fail
+startup. Daily maintenance follows the UTC wall clock rather than the time the container started.
+The daily pass and enrichment runs are serialised. A boot pass normally runs after 90 seconds,
+but is skipped when `DATA_DIR/maintenance-state.json` records a successful daily pass less than
+20 hours ago. The state file records `lastStart`, `lastSuccess` and `lastEnrichmentRun` as ISO
+timestamps, plus `consecutiveFailures`. An interrupted or failed daily pass does not advance
+`lastSuccess`. Enrichment keeps its separate cadence across restarts, even when the daily boot
+pass is skipped. Its first attempt is due at the later of 90 seconds after boot or
+`lastEnrichmentRun` plus the cadence; older state without that field starts enrichment after
+90 seconds. Each attempted enrichment pass records its start before dispatch, including failed
+or interrupted attempts, and does not advance the daily success timestamp.
+Long waits, including the 720-hour and 744-hour cadences, are split into chunks no larger than
+2,147,483,647 milliseconds. Chunk wake-ups start no maintenance work until the target is due.
+
+Every executed pass emits one structured heartbeat line with the token `maintenance.heartbeat`,
+its `kind` (`daily` or `enrichment`), `outcome` (`success`, `failure` or `aborted`) and `durationMs`:
+
+```json
+{"event":"maintenance.heartbeat","kind":"daily","outcome":"success","durationMs":1234}
+```
+
+Failed passes may include `error`, a safe maintenance summary naming jobs, portals and unit
+kinds; raw upstream error details are withheld. Monitor failures and the age of the last daily
+success. A skipped boot pass emits no heartbeat.
+
+Back up all of `DATA_DIR`, including SQLite, source checkpoints, maintenance state and uploaded
+branding, plus any store path overrides. Stop the container first for a consistent snapshot of
+SQLite and the file-backed stores, then take a volume snapshot or copy. Preserve deployment
+secrets such as `BINDING_KEY` separately in protected backup storage so sealed credentials can be
+restored. Test restoration into an isolated directory with one writer before relying on backups.
+The writer lock does not replace backups or coordinate processes that bypass it.
+
+### Upgrade notes
+
+- The container now listens on **8787 by default**, matching its exposed port. Previously it listened on 8791 unless `PORT` was set. Update container routing and health checks to 8787, or set `PORT=8791` explicitly to retain the previous listener. Direct Deno runs still default to 8791.
+- New settings are `WRITER_LOCK_WAIT_SECONDS=60`, `SHUTDOWN_GRACE_SECONDS=100` and `MAINTENANCE_AT_UTC=15:17`. Lock and shutdown settings accept seconds from 0 to 86400, and maintenance requires `HH:MM` UTC; invalid values fail startup. Use a 120-second container stop timeout. `LOCAL_SCHEDULER_ENABLED=false` still disables all maintenance timers. `AUTO_ENRICH_CADENCE_HOURS` still defaults to 24 and caps finite positive values at 744 hours (31 days), but now rejects zero, negative and non-finite values instead of silently using the default.
+- Daily upkeep now runs at a fixed UTC time, 15:17 by default, rather than every 24 hours from boot. Review overnight schedules and set `MAINTENANCE_AT_UTC` if needed. The 90-second boot pass is skipped after a daily success less than 20 hours old. Enrichment retains its separate cadence.
+- Use a **stop-then-start (recreate) deployment strategy** on a shared volume. The new container cannot write or listen until the old process releases `.writer.lock`; it waits up to 60 seconds by default, then exits non-zero. Start-before-stop deployment strategies cannot overlap writers on the same data directory.
+- Atomic replacements now create files with mode **0600**, readable and writable only by their owner. Existing files acquire this mode when replaced. Backup and sidecar tooling using a different user must be adjusted to read as the file owner; preserve the deployment's user identity when restoring data.
+- Rollback of these durability changes is safe with one process under the same file owner: stop the new process before starting the older binary, preserve the port configuration, and keep the deployment's data and credential backups. Older binaries ignore `.writer.lock` and `maintenance-state.json`, so they do not enforce the new writer fence. File permissions remain 0600 until another write or an explicit permission change.
+
 ## Knowledge box credential encryption
 
 Set `BINDING_KEY` to the standard base64 encoding of 32 cryptographically random bytes. The
@@ -1115,8 +1202,9 @@ JSON format the Worker imports. Scheduled jobs retain their system audit boundar
 
 New branding writes are stored under `BRANDING_PATH/assets/<slug>/<kind>.json`, with binary
 bytes encoded as base64 beside the content type and version. Existing fixed branding files and
-layout images remain readable. Replacing a slot removes its old files within the same audited
-mutation; removing or erasing an asset also removes those legacy files.
+layout images remain readable. Replacing a slot commits its new record before removing the old
+files within the same audited mutation, so a crash before that commit leaves the legacy asset
+readable. Removing or erasing an asset also removes those legacy files.
 
 ## External sign-in handoff
 
