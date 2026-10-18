@@ -204,7 +204,7 @@ Deno.test('/auth/logout clears platform and pre-upgrade host-only sessions', asy
   }
 })
 
-Deno.test('login cookies and cross-portal returns use only the configured platform domain', async () => {
+Deno.test('login clears legacy host-only cookies and keeps cross-portal returns on the configured platform domain', async () => {
   const settings = { ...config, cookieDomain: 'research.example.org' }
   for (
     const [returnTo, expected] of [
@@ -226,7 +226,12 @@ Deno.test('login cookies and cross-portal returns use only the configured platfo
     expect(login.headers.get('set-cookie')).toContain('Domain=research.example.org')
     expect(callback.status).toBe(302)
     expect(callback.headers.get('location')).toBe(expected)
-    for (const cookie of callback.headers.getSetCookie()) {
+    const cookies = callback.headers.getSetCookie()
+    const hostOnlyClear =
+      '__Secure-corpuskit_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0'
+    expect(cookies).toContain(hostOnlyClear)
+    // Only the legacy host-only deletion lacks the configured domain.
+    for (const cookie of cookies.filter((value) => value !== hostOnlyClear)) {
       expect(cookie).toContain('Domain=research.example.org')
       expect(cookie).not.toContain('Domain=corpuskit.org')
     }

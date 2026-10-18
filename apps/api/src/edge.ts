@@ -13,6 +13,11 @@ const SECURITY_HEADERS: Record<string, string> = {
   'x-frame-options': 'DENY',
 }
 
+/**
+ * Give every safely provisioned portal hostname a stable root redirect while
+ * the SPA retains its existing tenant-prefixed routes. A hostname can only
+ * reach the Worker after Cloudflare has attached its exact Custom Domain.
+ */
 export function platformHostnameLocation(
   request: Pick<Request, 'method' | 'url'>,
   domain: string,
@@ -33,6 +38,7 @@ export function platformHostnameLocation(
   return `/t/${slug}${url.search}`
 }
 
+/** Static HTML is never stored; other assets and plain refusals cache for five minutes. */
 export function secureAssetResponse(response: Response, status = response.status): Response {
   const headers = new Headers(response.headers)
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value)
@@ -45,6 +51,11 @@ export function secureAssetResponse(response: Response, status = response.status
   })
 }
 
+/**
+ * Every response leaves with the baseline headers. API responses already
+ * carry the ones the Hono middleware sets; redirects, auth answers and the
+ * ingress's own JSON gain them here without disturbing a streamed body.
+ */
 export function withSecurityHeaders(response: Response): Response {
   const missing = Object.entries(SECURITY_HEADERS).filter(([name]) => !response.headers.has(name))
   if (missing.length === 0) return response
@@ -57,6 +68,11 @@ export function withSecurityHeaders(response: Response): Response {
   })
 }
 
+/**
+ * `includeSubDomains` only inside the platform domain. Every other host (an alias, a reserved or
+ * unknown host, or one whose lookup failed) may be a customer's apex domain, so its answers never
+ * force HTTPS on every subdomain of it.
+ */
 export function hostTransportSecurity(
   request: Request,
   domain: string | undefined,
@@ -81,8 +97,13 @@ export function hostTransportSecurity(
   })
 }
 
-/** Marketing About documents are served only on the platform apex, including raw asset URLs. */
-export function apexOnlyAbout(url: URL, platformDomain: string): boolean {
-  return ['/about', '/about/', '/about.html'].includes(url.pathname) &&
+export function isPublicDocsPath(pathname: string): boolean {
+  return pathname === '/docs' || pathname.startsWith('/docs/')
+}
+
+/** Marketing About and documentation pages stay on the apex, including raw asset URLs. */
+export function apexOnlyDocument(url: URL, platformDomain: string): boolean {
+  return (['/about', '/about/', '/about.html'].includes(url.pathname) ||
+    isPublicDocsPath(url.pathname)) &&
     url.hostname !== platformDomain
 }

@@ -1,5 +1,5 @@
 import {
-  apexOnlyAbout,
+  apexOnlyDocument,
   hostTransportSecurity,
   platformHostnameLocation,
   secureAssetResponse,
@@ -559,7 +559,7 @@ export class LocalIngress {
       if (hostPortal !== undefined) principal.hostPortal = hostPortal
       this.contexts.set(forwarded, principal)
       try {
-        const response = apexOnlyAbout(new URL(request.url), platformDomain)
+        const response = apexOnlyDocument(new URL(request.url), platformDomain)
           ? secureAssetResponse(
             new Response('Not found', {
               status: 404,

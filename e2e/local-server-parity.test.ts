@@ -1,6 +1,7 @@
 import { expect } from '@std/expect'
 
 const serverPath = new URL('../apps/api/src/server.ts', import.meta.url)
+const port = Number(Deno.env.get('PARITY_E2E_PORT') ?? 8796)
 
 function command(directory: string, entra: Record<string, string> = {}) {
   return new Deno.Command(Deno.execPath(), {
@@ -14,7 +15,7 @@ function command(directory: string, entra: Record<string, string> = {}) {
     ],
     env: {
       HOST: '127.0.0.1',
-      PORT: '8796',
+      PORT: String(port),
       ENVIRONMENT: 'test',
       DATA_DIR: directory,
       TENANTS_PATH: `${directory}/tenants.json`,
@@ -72,7 +73,7 @@ Deno.test('actual Deno server keeps API operations separate from static handlers
     // harness would miss an unmarked wildcard being classified as a second API operation.
     const request = async (host: string, path: string, method = 'GET') => {
       // Use the wire Host header. Fetch can replace Host with the connection URL's hostname.
-      const connection = await Deno.connect({ hostname: '127.0.0.1', port: 8796 })
+      const connection = await Deno.connect({ hostname: '127.0.0.1', port })
       try {
         const bytes = new TextEncoder().encode(
           `${method} ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`,
@@ -118,6 +119,14 @@ Deno.test('actual Deno server keeps API operations separate from static handlers
       ['research.example.org', '/about', 200, 'no-store'],
       ['research.example.org', '/about.html', 200, 'no-store'],
       ['marine.research.example.org', '/about', 404, 'public, max-age=300'],
+      ['research.example.org', '/docs', 200, 'no-store'],
+      ['research.example.org', '/docs/', 200, 'no-store'],
+      ['research.example.org', '/docs/hosting', 200, 'no-store'],
+      ['marine.research.example.org', '/docs', 404, 'public, max-age=300'],
+      ['marine.research.example.org', '/docs/', 404, 'public, max-age=300'],
+      ['marine.research.example.org', '/docs/hosting', 404, 'public, max-age=300'],
+      ['marine.research.example.org', '/docs/index.html', 404, 'public, max-age=300'],
+      ['marine.research.example.org', '/docs/hosting.html', 404, 'public, max-age=300'],
       ['marine.research.example.org', '/?q=one', 308, null, '/t/marine?q=one'],
       [
         'www.research.example.org',
@@ -144,6 +153,8 @@ Deno.test('actual Deno server keeps API operations separate from static handlers
     }
     expect((await request('research.example.org', '/app.js', 'HEAD')).headers.get('cache-control'))
       .toBe('public, max-age=300')
+    expect((await request('research.example.org', '/docs/', 'HEAD')).status).toBe(200)
+    expect((await request('marine.research.example.org', '/docs/hosting', 'HEAD')).status).toBe(404)
     expect(exited).toBe(false)
   } finally {
     if (!exited) child.kill('SIGTERM')
