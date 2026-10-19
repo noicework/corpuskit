@@ -296,11 +296,14 @@ Deno.test('boot sweep recognises named store overrides directly in a filesystem 
   }
 })
 
-Deno.test('boot sweep logs unreadable directories and undeletable orphans and continues cleanup', async () => {
+Deno.test('boot sweep logs unreadable directories without their names, orphans by temp basename, and continues', async () => {
   const root = Deno.realPathSync(Deno.makeTempDirSync())
   const paths = localStoragePaths({ DATA_DIR: 'private' }, root)
   const release = await acquireStorageLocks(paths, 0)
   const blockedDirectory = `${paths.DATA_DIR}/lost+found`
+  // Research owner directories are encoded identities; an unreadable one must not log its name.
+  const encodedOwner = 'WzIsInVzZXIiLCJ0ZW5hbnQiLCJvaWQiXQ'
+  const ownerDirectory = `${paths.DATA_DIR}/research-v2/${encodedOwner}`
   const blockedFile = `${paths.DATA_DIR}/busy.json.tmp-01234567-abc`
   const healthy = [
     `${paths.DATA_DIR}/sources/portal.json.tmp-01234567-abc`,
@@ -308,6 +311,7 @@ Deno.test('boot sweep logs unreadable directories and undeletable orphans and co
     `${paths.TENANTS_PATH}.tmp-01234567-abc`,
   ]
   Deno.mkdirSync(blockedDirectory)
+  Deno.mkdirSync(ownerDirectory, { recursive: true })
   for (const path of [blockedFile, ...healthy]) {
     Deno.mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true })
     Deno.writeTextFileSync(path, 'private contents')
@@ -317,7 +321,9 @@ Deno.test('boot sweep logs unreadable directories and undeletable orphans and co
   const log = console.error
   const lines: string[] = []
   Deno.readDirSync = (path) => {
-    if (path === blockedDirectory) throw new Deno.errors.PermissionDenied(`private ${root}`)
+    if (path === blockedDirectory || path === ownerDirectory) {
+      throw new Deno.errors.PermissionDenied(`private ${root}`)
+    }
     return readDir(path)
   }
   Deno.removeSync = (path, options) => {
@@ -328,10 +334,17 @@ Deno.test('boot sweep logs unreadable directories and undeletable orphans and co
   try {
     sweepAtomicTemps(paths, release.paths)
     expect(lines.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
-      { event: 'storage.sweep_failed', file: 'lost+found', code: 'EACCES' },
-      { event: 'storage.sweep_failed', file: 'busy.json.tmp-01234567-abc', code: 'EBUSY' },
+      { event: 'storage.sweep_failed', kind: 'directory', code: 'EACCES' },
+      {
+        event: 'storage.sweep_failed',
+        kind: 'temp',
+        file: 'busy.json.tmp-01234567-abc',
+        code: 'EBUSY',
+      },
     ]))
-    expect(lines).toHaveLength(2)
+    expect(lines).toHaveLength(3)
+    expect(lines.join()).not.toContain(encodedOwner)
+    expect(lines.join()).not.toContain('lost+found')
     expect(lines.join()).not.toContain(root)
     expect(lines.join()).not.toContain('private contents')
     expect(Deno.readTextFileSync(blockedFile)).toBe('private contents')

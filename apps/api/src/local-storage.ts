@@ -60,12 +60,14 @@ export async function acquireStorageLocks(
 }
 
 /** Remove only this atomic writer's orphan files, after all storage locks have been acquired. */
+// crypto.randomUUID().slice(0, 12) is eight hex digits, a hyphen and three hex digits.
+const ATOMIC_TEMP_SUFFIX = /\.tmp-[0-9a-f]{8}-[0-9a-f]{3}$/
+
 export function sweepAtomicTemps(
   paths: ReturnType<typeof localStoragePaths>,
   ownedLocks: ReadonlySet<string> = new Set(),
 ): void {
-  // crypto.randomUUID().slice(0, 12) is eight hex digits, a hyphen and three hex digits.
-  const suffix = /\.tmp-[0-9a-f]{8}-[0-9a-f]{3}$/
+  const suffix = ATOMIC_TEMP_SUFFIX
   const foreignLock = (path: string) => {
     if (ownedLocks.has(path)) return false
     try {
@@ -86,7 +88,7 @@ export function sweepAtomicTemps(
       entries = [...Deno.readDirSync(directory)]
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return
-      reportSweepFailure(directory, error)
+      reportSweepFailure(undefined, error)
       return
     }
     for (const entry of entries) {
@@ -121,7 +123,8 @@ export function sweepAtomicTemps(
 }
 
 /** Cleanup is best effort, including its diagnostics. Never log paths or error messages. */
-function reportSweepFailure(path: string, error: unknown): void {
+/** Directory names can encode research owners or client ids, so only temp file names are logged. */
+function reportSweepFailure(path: string | undefined, error: unknown): void {
   try {
     const code = (error as { code?: unknown } | null)?.code
     const fallback = error instanceof Deno.errors.PermissionDenied
@@ -133,7 +136,9 @@ function reportSweepFailure(path: string, error: unknown): void {
       : 'UNKNOWN'
     console.error(JSON.stringify({
       event: 'storage.sweep_failed',
-      file: basename(path),
+      ...(path !== undefined && ATOMIC_TEMP_SUFFIX.test(basename(path))
+        ? { kind: 'temp', file: basename(path) }
+        : { kind: path === undefined ? 'directory' : 'entry' }),
       code: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : fallback,
     }))
   } catch {

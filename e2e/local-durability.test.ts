@@ -323,8 +323,13 @@ if (import.meta.main) {
         .map((line) => JSON.parse(line))
         .filter((entry) => entry.event === 'storage.sweep_failed')
       expect(diagnostics).toEqual(expect.arrayContaining([
-        { event: 'storage.sweep_failed', file: 'lost+found', code: 'ENOTCAPABLE' },
-        { event: 'storage.sweep_failed', file: 'busy.json.tmp-01234567-abc', code: 'ENOTCAPABLE' },
+        { event: 'storage.sweep_failed', kind: 'directory', code: 'ENOTCAPABLE' },
+        {
+          event: 'storage.sweep_failed',
+          kind: 'temp',
+          file: 'busy.json.tmp-01234567-abc',
+          code: 'ENOTCAPABLE',
+        },
       ]))
       expect(diagnostics).toHaveLength(2)
       expect(JSON.stringify(diagnostics)).not.toContain(root)
