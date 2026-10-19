@@ -6,13 +6,21 @@ type StorageLocks = (() => void) & { readonly paths: ReadonlySet<string> }
 /** Preserve existing paths, including the legacy defaults outside a custom DATA_DIR. */
 export function localStoragePaths(env: Record<string, string | undefined>, cwd = Deno.cwd()) {
   const dataDir = resolve(cwd, env.DATA_DIR ?? './data')
+  const rbac = env.RBAC_PATH ?? `${dataDir}/rbac.sqlite`
   return {
     DATA_DIR: dataDir,
     TENANTS_PATH: resolve(cwd, env.TENANTS_PATH ?? './data/tenants.json'),
     BINDINGS_PATH: resolve(cwd, env.BINDINGS_PATH ?? './data/bindings.json'),
     KG_PROPOSALS_PATH: resolve(cwd, env.KG_PROPOSALS_PATH ?? `${dataDir}/kg-proposals.json`),
     BRANDING_PATH: resolve(cwd, env.BRANDING_PATH ?? `${dataDir}/branding`),
+    // SQLite's in-memory and temporary databases have no shared file to fence.
+    RBAC_PATH: rbac === ':memory:' || rbac === '' ? rbac : resolve(cwd, rbac),
   }
+}
+
+function fileStorePaths(paths: ReturnType<typeof localStoragePaths>) {
+  return [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH, paths.RBAC_PATH]
+    .filter((path) => path !== ':memory:' && path !== '')
 }
 
 /** Fence every store independently of DATA_DIR. Sort canonical locks to avoid lock-order cycles. */
@@ -26,7 +34,7 @@ export async function acquireStorageLocks(
   }
   const dataDir = canonicalDirectory(paths.DATA_DIR)
   const locks = new Set([join(dataDir, '.writer.lock')])
-  for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+  for (const path of fileStorePaths(paths)) {
     const canonical = join(canonicalDirectory(dirname(path)), basename(path))
     locks.add(`${canonical}.writer.lock`)
   }
@@ -107,7 +115,7 @@ export function sweepAtomicTemps(
   visit(paths.DATA_DIR)
   visit(paths.BRANDING_PATH)
   // An external file override owns its named siblings, not everything in its parent directory.
-  for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+  for (const path of fileStorePaths(paths)) {
     visit(dirname(path), basename(path))
   }
 }

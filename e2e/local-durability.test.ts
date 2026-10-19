@@ -433,7 +433,7 @@ if (import.meta.main) {
     )
   }
 
-  for (const store of ['tenants', 'branding']) {
+  for (const store of ['tenants', 'branding', 'rbac']) {
     Deno.test(`real servers with different DATA_DIR roots fence shared ${store} and name the held path`, async (t) => {
       for (const firstRole of ['custom', 'default']) {
         await t.step(`${firstRole} root starts first`, async () => {
@@ -447,6 +447,7 @@ if (import.meta.main) {
               'BINDINGS_PATH',
               'KG_PROPOSALS_PATH',
               'BRANDING_PATH',
+              'RBAC_PATH',
             ]
           ) {
             delete inherited[key]
@@ -478,11 +479,14 @@ if (import.meta.main) {
                 SHOWCASE_PORTALS: '',
                 BINDINGS_PATH: `./${role}/bindings.json`,
                 ...(role === 'custom' ? { DATA_DIR: './a' } : {}),
+                ...(store !== 'tenants' ? { TENANTS_PATH: `./${role}/tenants.json` } : {}),
                 ...(store === 'branding'
                   ? {
-                    TENANTS_PATH: `./${role}/tenants.json`,
                     ...(role === 'custom' ? { BRANDING_PATH: './data/branding' } : {}),
                   }
+                  : {}),
+                ...(store === 'rbac' && role === 'custom'
+                  ? { RBAC_PATH: './data/rbac.sqlite' }
                   : {}),
               },
               stdout: 'piped',
@@ -502,7 +506,9 @@ if (import.meta.main) {
             )
             const held = store === 'tenants'
               ? `${root}/data/tenants.json.writer.lock`
-              : `${root}/data/branding/.writer.lock`
+              : store === 'branding'
+              ? `${root}/data/branding/.writer.lock`
+              : `${root}/data/rbac.sqlite.writer.lock`
             expect(startup).toContain(`${held} writer lock is still held`)
             expect(startup).not.toContain('Listening on http:')
             const refused = await second.output()

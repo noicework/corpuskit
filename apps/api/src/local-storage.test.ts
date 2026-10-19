@@ -12,6 +12,7 @@ Deno.test('fresh storage fences legacy defaults even with a separate DATA_DIR', 
     expect(paths.BINDINGS_PATH).toBe(`${root}/data/bindings.json`)
     expect(paths.KG_PROPOSALS_PATH).toBe(`${root}/private/kg-proposals.json`)
     expect(paths.BRANDING_PATH).toBe(`${root}/private/branding`)
+    expect(paths.RBAC_PATH).toBe(`${root}/private/rbac.sqlite`)
     await expect(acquireStorageLocks(localStoragePaths({ DATA_DIR: 'aaa-other' }, root), 0))
       .rejects.toThrow(`${root}/data/bindings.json.writer.lock`)
     // A failed multi-lock acquisition releases everything it acquired.
@@ -48,6 +49,7 @@ Deno.test('explicit storage overrides keep their paths and fence each owned file
     BINDINGS_PATH: 'bindings/custom.json',
     KG_PROPOSALS_PATH: 'proposals/custom.json',
     BRANDING_PATH: 'assets',
+    RBAC_PATH: 'rbac/custom.sqlite',
   }
   const paths = localStoragePaths(env, root)
   const release = await acquireStorageLocks(paths, 0)
@@ -55,7 +57,14 @@ Deno.test('explicit storage overrides keep their paths and fence each owned file
     for (const [name, value] of Object.entries(env)) {
       expect(paths[name as keyof typeof paths]).toBe(`${root}/${value}`)
     }
-    for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+    for (
+      const path of [
+        paths.TENANTS_PATH,
+        paths.BINDINGS_PATH,
+        paths.KG_PROPOSALS_PATH,
+        paths.RBAC_PATH,
+      ]
+    ) {
       await expect(acquireLockFile(`${path}.writer.lock`, 0)).rejects.toThrow(`${path}.writer.lock`)
     }
     for (const directory of [paths.DATA_DIR, paths.BRANDING_PATH]) {
@@ -82,7 +91,14 @@ Deno.test('stores under DATA_DIR also hold their own file and branding writer lo
     await expect(acquireWriterLock(paths.DATA_DIR, 0)).rejects.toThrow(
       `${paths.DATA_DIR}/.writer.lock`,
     )
-    for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
+    for (
+      const path of [
+        paths.TENANTS_PATH,
+        paths.BINDINGS_PATH,
+        paths.KG_PROPOSALS_PATH,
+        paths.RBAC_PATH,
+      ]
+    ) {
       await expect(acquireLockFile(`${path}.writer.lock`, 0)).rejects.toThrow(`${path}.writer.lock`)
     }
     await expect(acquireWriterLock(paths.BRANDING_PATH, 0))
@@ -101,6 +117,7 @@ Deno.test('file and directory writer locks are acquired in sorted canonical path
     BINDINGS_PATH: 'shared/a-bindings.json',
     KG_PROPOSALS_PATH: 'middle-neighbour/kg.json',
     BRANDING_PATH: 'first/branding',
+    RBAC_PATH: 'shared/b-rbac.sqlite',
   }, root)
   const open = Deno.openSync
   const opened: string[] = []
@@ -117,6 +134,7 @@ Deno.test('file and directory writer locks are acquired in sorted canonical path
       `${paths.BINDINGS_PATH}.writer.lock`,
       `${paths.KG_PROPOSALS_PATH}.writer.lock`,
       `${paths.BRANDING_PATH}/.writer.lock`,
+      `${paths.RBAC_PATH}.writer.lock`,
     ].sort())
   } finally {
     Deno.openSync = open
@@ -140,6 +158,51 @@ Deno.test('branding at DATA_DIR deduplicates the canonical directory lock', asyn
     )
   } finally {
     release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('external RBAC overrides fence a shared database while distinct files share a folder', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  const pathsFor = (name: string, database: string) =>
+    localStoragePaths({
+      DATA_DIR: name,
+      TENANTS_PATH: `${name}/tenants.json`,
+      BINDINGS_PATH: `${name}/bindings.json`,
+      RBAC_PATH: `shared/${database}.sqlite`,
+    }, root)
+  const first = pathsFor('a', 'shared')
+  const release = await acquireStorageLocks(first, 0)
+  try {
+    await expect(acquireStorageLocks(pathsFor('b', 'shared'), 0))
+      .rejects.toThrow(`${first.RBAC_PATH}.writer.lock writer lock is still held`)
+    const releaseDistinct = await acquireStorageLocks(pathsFor('b', 'distinct'), 0)
+    releaseDistinct()
+  } finally {
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('SQLite memory and temporary database overrides keep their meaning without file locks', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  try {
+    for (const override of [':memory:', '']) {
+      const paths = localStoragePaths({ DATA_DIR: 'private', RBAC_PATH: override }, root)
+      const release = await acquireStorageLocks(paths, 0)
+      try {
+        expect(paths.RBAC_PATH).toBe(override)
+        expect([...release.paths].some((path) => path.endsWith('rbac.sqlite.writer.lock'))).toBe(
+          false,
+        )
+        expect([...Deno.readDirSync(root)].some((entry) => entry.name.includes(':memory:'))).toBe(
+          false,
+        )
+      } finally {
+        release()
+      }
+    }
+  } finally {
     Deno.removeSync(root, { recursive: true })
   }
 })

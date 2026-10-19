@@ -78,7 +78,7 @@ const provider = new AragProvider({
 // read-modify-write the same file (see the note on startScheduler).
 const sources = new SourceStore()
 const enrichments = new EnrichmentStore()
-const { database, rbac } = openLocalRbac(process.env)
+const { database, rbac } = openLocalRbac(storageEnv)
 const owned = localOwnedStores(storagePaths.DATA_DIR, database, rbac.audit, storageEnv)
 owned.attach({ bindings, sources, enrichments })
 const tenants = owned.tenants!
