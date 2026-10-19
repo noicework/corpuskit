@@ -27,9 +27,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Changed
 
-- Deno fences `DATA_DIR`, each portal, binding and knowledge graph proposal file, and the branding directory, keeping existing paths and explicit overrides unchanged.
-- Deno JSON stores use per-file sibling writer locks so distinct files can share a folder, and lock timeouts name the held path.
-- Deno always takes each store's own writer lock, including inside `DATA_DIR`, so servers with different data roots cannot write a shared file or branding directory concurrently.
+- Deno fences `DATA_DIR` and every store it writes, each with its own writer lock: a sibling lock for each portal, binding and knowledge graph proposal file, and one for the branding directory, including stores inside `DATA_DIR`. Servers with different data roots cannot write a shared file concurrently, distinct files can still share a folder, existing paths and explicit overrides are unchanged, and lock timeouts name the held path.
 - Development and self-hosting instructions now require one `DATA_DIR` per server as well as one port, because the writer lock refuses a second server on the same directory.
 - The figure check no longer accepts a document's generated summary or key takeaways as evidence. A figure only the summary carries is removed like any other unverified figure, and an emptied answer is never rescued with a sentence from a summary. ([#76](https://github.com/noicework/corpuskit/pull/76))
 - The home page, About, the README and the structured data describe the project in one line: CorpusKit, the open source research portal for Progress Agentic RAG. The structured data names the repository and corpuskit.cloud as the same project and Noice's LinkedIn page as the same organisation, and the home page and About link CorpusKit Cloud, the hosted service. ([#75](https://github.com/noicework/corpuskit/pull/75))
