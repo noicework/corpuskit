@@ -36,6 +36,10 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Failed audited mutations try every file restore even when an earlier restore fails, restore adapter caches and preserve the required audit error. ([#107](https://github.com/noicework/corpuskit/pull/107))
+- Source sync checkpoints keep progress saved by newer runs on Deno and the Worker, merging their URL ledgers before the 5,000-page cap and counting newly saved pages once. ([#107](https://github.com/noicework/corpuskit/pull/107))
+- Deno enrichment ignores a saved run time in the future, so a clock correction cannot postpone its first pass beyond boot. ([#107](https://github.com/noicework/corpuskit/pull/107))
+- Deno boot maintenance queues daily upkeep before its first enrichment pass regardless of timer order. ([#107](https://github.com/noicework/corpuskit/pull/107))
 - Signing in on a platform host clears any older host-only session cookie, so it cannot shadow the new session after a Deno upgrade. This applies to both Microsoft Entra and external sign-in. ([#104](https://github.com/noicework/corpuskit/pull/104))
 - Deno hosting serves public documentation only on the platform apex, matching the Worker, including raw documentation asset URLs. ([#104](https://github.com/noicework/corpuskit/pull/104))
 - Deno enrichment persists its last attempted run independently of daily upkeep, so frequent restarts and skipped boot passes preserve its cadence. ([#105](https://github.com/noicework/corpuskit/pull/105))

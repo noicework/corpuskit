@@ -125,9 +125,11 @@ export function ownedMutation(
     else work()
   } catch (error) {
     for (const [index, { path }] of [...changes.entries()].reverse()) {
-      const before = originals[index]
-      if (before !== undefined) writeFileAtomic(path, before)
-      else removeIfPresent(path)
+      try {
+        const before = originals[index]
+        if (before !== undefined) writeFileAtomic(path, before)
+        else removeIfPresent(path)
+      } catch { /* Restore the remaining paths, preserving the original failure. */ }
     }
     // The writes and their audit record were made, and committing them failed: the record was
     // never kept, which is an audit failure like any other.

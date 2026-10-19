@@ -429,13 +429,21 @@ export async function syncSource(
       (freshAll.length > fresh.length ? ` (ingesting ${fresh.length} this run)` : ''),
   )
   let added = 0
+  const pending = new Set<string>()
   let checkpointed = known.size
   const checkpoint = () => {
     if (checkpointed === known.size) return
+    const stored = sources.list(config.slug).find((entry) => entry.id === source.id) ?? progress
+    const synced = new Set(stored.synced ?? [])
+    const itemCount = (stored.itemCount ?? synced.size) +
+      [...pending].filter((url) => !synced.has(url)).length
+    // A producer released at its deadline can finish after a newer run saved progress.
+    for (const url of synced) known.add(url)
     sources.update(config.slug, source.id, {
       synced: [...known].slice(-5000),
-      itemCount: (progress.itemCount ?? progress.synced?.length ?? 0) + added,
+      itemCount,
     })
+    pending.clear()
     checkpointed = known.size
   }
   let rejected = 0
@@ -541,6 +549,7 @@ export async function syncSource(
           continue
         }
         known.add(url)
+        pending.add(url)
         added += 1
         if (added % 5 === 0) await emit(`Ingested ${added} of ${fresh.length} new pages...`)
       } catch (err) {
@@ -606,19 +615,10 @@ export async function syncSource(
     )
   }
   signal?.throwIfAborted()
-  if (refusal) {
-    // Keep what this run got through, so the next sync neither re-adds nor re-reads it.
-    sources.update(config.slug, source.id, {
-      synced: [...known].slice(-5000),
-      itemCount: (progress.itemCount ?? progress.synced?.length ?? 0) + added,
-    })
-    throw refusal
-  }
+  if (refusal) throw refusal
   sources.update(config.slug, source.id, {
     lastSync: new Date().toISOString(),
     lastAdded: added,
-    synced: [...known].slice(-5000),
-    itemCount: (progress.itemCount ?? progress.synced?.length ?? 0) + added,
     lastStatus: 'ok',
     lastError: null,
   })

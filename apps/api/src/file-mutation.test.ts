@@ -2,6 +2,70 @@ import { appendFileSync } from 'node:fs'
 import { expect } from '@std/expect'
 import { fileMutation } from './file-mutation.ts'
 import { writeFileAtomic } from './persist.ts'
+import { AuditWriteError } from './audit.ts'
+import { ownedMutation } from './stores.ts'
+
+Deno.test('rollback continues after the first restore fails and preserves cache and audit failure', async (t) => {
+  for (const adapter of ['file', 'owned']) {
+    for (const failure of ['audit', 'commit']) {
+      await t.step(`${adapter}, ${failure} failure`, () => {
+        const directory = Deno.makeTempDirSync()
+        const first = `${directory}/first.json`
+        const second = `${directory}/second.json`
+        const original = new Uint8Array([0, 255, 10, 83])
+        let cache = 'original'
+        const breakRestore = () => {
+          Deno.removeSync(first)
+          Deno.mkdirSync(first)
+        }
+        const boundary = {
+          database: {
+            transactionSync: <T>(work: () => T): T => {
+              const result = work()
+              if (failure === 'commit') {
+                breakRestore()
+                throw new Error('commit failed')
+              }
+              return result
+            },
+          },
+          complete: () => {
+            if (failure === 'audit') {
+              breakRestore()
+              throw new AuditWriteError()
+            }
+          },
+        }
+        try {
+          Deno.writeFileSync(first, original)
+          Deno.writeFileSync(second, original)
+          expect(() => {
+            if (adapter === 'file') {
+              fileMutation([first, second], boundary, () => {
+                writeFileAtomic(first, 'changed')
+                writeFileAtomic(second, 'changed')
+                cache = 'changed'
+              }, () => {
+                cache = 'original'
+              })
+            } else {
+              // ownedMutation restores in reverse order, so first still fails before second.
+              ownedMutation([
+                { path: second, value: 'changed' },
+                { path: first, value: 'changed' },
+              ], boundary)
+            }
+          }).toThrow(AuditWriteError)
+          expect(Deno.statSync(first).isDirectory).toBe(true)
+          expect(Deno.readFileSync(second)).toEqual(original)
+          expect(cache).toBe('original')
+        } finally {
+          Deno.removeSync(directory, { recursive: true })
+        }
+      })
+    }
+  }
+})
 
 Deno.test('append checkpoints restore exact byte lengths after a partial append or audit failure', async (t) => {
   for (const existing of [undefined, '', 'A fish 🐟\npartial trailing row']) {

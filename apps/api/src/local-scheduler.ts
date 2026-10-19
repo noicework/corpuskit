@@ -110,14 +110,16 @@ export function startMaintenanceTimers(options: {
   }
   const bootReadyAt = clock.now() + 90_000
   let enrichmentBlockedUntil = 0
-  let cancelEnrichment: () => void
+  let cancelEnrichment = () => {}
   const scheduleEnrichment = () => {
     if (stopped) return
     const lastRun = Date.parse(state.lastEnrichmentRun ?? '')
     const dueAt = Math.max(
       bootReadyAt,
       enrichmentBlockedUntil,
-      Number.isFinite(lastRun) ? lastRun + options.cadenceMs : clock.now(),
+      Number.isFinite(lastRun) && lastRun <= clock.now()
+        ? lastRun + options.cadenceMs
+        : clock.now(),
     )
     cancelEnrichment = scheduleAt(clock, dueAt, () => {
       if (stopped) return
@@ -143,9 +145,9 @@ export function startMaintenanceTimers(options: {
         throw error
       }
     }, recentSuccess)
+    scheduleEnrichment()
   })
   scheduleDaily()
-  scheduleEnrichment()
   return () => {
     stopped = true
     cancelBoot()

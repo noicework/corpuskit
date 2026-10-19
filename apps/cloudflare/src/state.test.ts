@@ -10,6 +10,7 @@ import {
 import {
   DurableEnrichmentStore,
   DurableRoutingLog,
+  DurableSourceStore,
   DurableState,
   durableStores,
   DurableTenantStore,
@@ -35,6 +36,18 @@ import {
 } from '../../api/src/owned-store-fixture.ts'
 import { ACMD_DEMO_TENANT, initialiseAcmdDemo } from './acmd-demo.ts'
 import { checkAliasRegistry } from '../../api/src/alias-store-fixture.ts'
+import { checkLateSourceCheckpoint } from '../../api/src/sync-checkpoint-fixture.ts'
+
+Deno.test('Worker late checkpoints preserve newer source progress after deadline release', async (t) => {
+  const sql = new TestSqlStorage()
+  try {
+    const state = new DurableState(sql, sql)
+    state.migrate()
+    await checkLateSourceCheckpoint(t, new DurableSourceStore(state))
+  } finally {
+    sql.database.close()
+  }
+})
 
 Deno.test('Durable owned mutations roll back authoritative append and real SQL commit failures', async () => {
   for (const failure of ['append', 'commit']) {
