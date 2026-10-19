@@ -52,6 +52,7 @@ export function startMaintenanceTimers(options: {
   })
   const controller = new AbortController()
   let stopped = false
+  let enrichmentStampWrittenHere = false
   let queue = Promise.resolve()
   const enqueue = (
     kind: 'daily' | 'enrichment',
@@ -66,7 +67,10 @@ export function startMaintenanceTimers(options: {
       try {
         if (kind === 'daily') {
           state.lastStart = new Date(start).toISOString()
-        } else state.lastEnrichmentRun = new Date(start).toISOString()
+        } else {
+          state.lastEnrichmentRun = new Date(start).toISOString()
+          enrichmentStampWrittenHere = true
+        }
         // Record attempts before dispatch, so even a failed or interrupted run keeps its cadence.
         writeJsonAtomic(path, state)
         await work(controller.signal)
@@ -97,16 +101,20 @@ export function startMaintenanceTimers(options: {
     })
     return queue
   }
+  // Attempts spend the UTC day's page budget even if interrupted or failed part-way.
+  const dailyAttemptedToday = () =>
+    Math.floor(Date.parse(state.lastStart ?? '') / 86400_000) ===
+      Math.floor(clock.now() / 86400_000)
   let dailyDueAt = nextMaintenanceAt(clock.now(), options.atUtc)
   let cancelDaily: () => void
   const scheduleDaily = () => {
     cancelDaily = scheduleAt(clock, dailyDueAt, () => {
       if (stopped) return
-      enqueue('daily', options.runDaily)
+      enqueue('daily', options.runDaily, dailyAttemptedToday)
       // Never repeat the previous target if the wall clock moves backwards during a pass.
       dailyDueAt = nextMaintenanceAt(Math.max(dailyDueAt, clock.now()), options.atUtc)
       scheduleDaily()
-    })
+    }, 60_000)
   }
   const bootReadyAt = clock.now() + 90_000
   let enrichmentBlockedUntil = 0
@@ -117,7 +125,7 @@ export function startMaintenanceTimers(options: {
     const dueAt = Math.max(
       bootReadyAt,
       enrichmentBlockedUntil,
-      Number.isFinite(lastRun) && lastRun <= clock.now()
+      Number.isFinite(lastRun) && (enrichmentStampWrittenHere || lastRun <= clock.now())
         ? lastRun + options.cadenceMs
         : clock.now(),
     )
@@ -144,7 +152,7 @@ export function startMaintenanceTimers(options: {
         }
         throw error
       }
-    }, recentSuccess)
+    }, () => dailyAttemptedToday() || recentSuccess())
     scheduleEnrichment()
   })
   scheduleDaily()

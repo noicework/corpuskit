@@ -64,6 +64,11 @@ standing principles and `docs/ARCHITECTURE.md` for the layering.
     taken down five agents at once. A dead server renders blank or half-loaded
     pages that look exactly like layout defects, so anything measured around an
     unexplained restart has to be measured again.
+  - **Each dev server needs its own port and isolated storage.** Give it its own
+    `DATA_DIR` and store paths, or a separate working directory. `TENANTS_PATH` and
+    `BINDINGS_PATH` still default to `./data/tenants.json` and `./data/bindings.json`
+    when `DATA_DIR` changes; override both and any other shared store paths. Writer
+    locks refuse servers sharing a data directory or store file, even on different ports.
   - Write scratch files and logs to a path unique to your agent. Agents have
     overwritten each other's shared log paths and lost their own output.
 
@@ -122,4 +127,3 @@ generator and the RAO `/session/ephemeral` agent-session are both broken - don't
 rediscovering them). Read it before writing any retrieval or provisioning code, and put ARAG
 behind the `RetrievalProvider` interface so a stub covers local dev. When you hit something it
 doesn't cover, ask rather than probing the live platform blindly.
-

@@ -12,8 +12,12 @@ export function scheduleAt(
   clock: TimerClock,
   dueAt: number,
   callback: () => void,
+  maxDelayMs = MAX_TIMER_DELAY_MS,
 ): () => void {
   if (!Number.isFinite(dueAt)) throw new Error('Timer target must be finite')
+  if (!Number.isFinite(maxDelayMs) || maxDelayMs <= 0) {
+    throw new Error('Timer chunk must be finite and positive')
+  }
   let timer: number
   let cancelled = false
   const arm = () => {
@@ -23,7 +27,7 @@ export function scheduleAt(
       // Recheck the wall clock as well as long waits, so a clock step cannot fire early.
       if (clock.now() < dueAt) arm()
       else callback()
-    }, Math.min(MAX_TIMER_DELAY_MS, Math.max(0, remaining)))
+    }, Math.min(MAX_TIMER_DELAY_MS, maxDelayMs, Math.max(0, remaining)))
   }
   arm()
   return () => {

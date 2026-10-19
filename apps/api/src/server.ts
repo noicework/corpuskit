@@ -15,7 +15,8 @@ import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
-import { acquireWriterLock, installShutdown, secondsSetting } from './local-runtime.ts'
+import { installShutdown, secondsSetting } from './local-runtime.ts'
+import { acquireStorageLocks, localStoragePaths, sweepAtomicTemps } from './local-storage.ts'
 import { scheduleAfter } from './local-timers.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
@@ -49,8 +50,10 @@ const shutdownGrace = secondsSetting(
   100,
   'SHUTDOWN_GRACE_SECONDS',
 )
-const releaseWriter = await acquireWriterLock(
-  process.env.DATA_DIR ?? './data',
+const storagePaths = localStoragePaths(process.env)
+const storageEnv = { ...process.env, ...storagePaths }
+const releaseWriter = await acquireStorageLocks(
+  storagePaths,
   secondsSetting(process.env.WRITER_LOCK_WAIT_SECONDS, 60, 'WRITER_LOCK_WAIT_SECONDS'),
 ).catch((error) => {
   console.error(
@@ -59,9 +62,10 @@ const releaseWriter = await acquireWriterLock(
   Deno.exit(1)
 })
 console.log(JSON.stringify({ event: 'server.writer_lock', outcome: 'acquired' }))
+sweepAtomicTemps(storagePaths, releaseWriter.paths)
 const shutdownController = new AbortController()
 
-const bindings = new BindingStore()
+const bindings = new BindingStore(storageEnv)
 await bindings.initialize()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
@@ -74,8 +78,8 @@ const provider = new AragProvider({
 // read-modify-write the same file (see the note on startScheduler).
 const sources = new SourceStore()
 const enrichments = new EnrichmentStore()
-const { database, rbac } = openLocalRbac(process.env)
-const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
+const { database, rbac } = openLocalRbac(storageEnv)
+const owned = localOwnedStores(storagePaths.DATA_DIR, database, rbac.audit, storageEnv)
 owned.attach({ bindings, sources, enrichments })
 const tenants = owned.tenants!
 const { watches } = owned

@@ -1,7 +1,7 @@
 import { readFileSync, rmSync, statSync, truncateSync } from 'node:fs'
 import { AuditWriteError } from './audit.ts'
 import type { OwnedMutationBoundary } from './stores.ts'
-import { writeFileAtomic } from './persist.ts'
+import { reportRestoreFailure, writeFileAtomic } from './persist.ts'
 
 /** Synchronous file adapters: restore exact bytes if their required audit cannot commit. */
 export function fileMutation<T>(
@@ -36,7 +36,9 @@ export function fileMutation<T>(
         if (bytes === undefined) rmSync(path, { force: true })
         else if (typeof bytes === 'number') truncateSync(path, bytes)
         else writeFileAtomic(path, bytes)
-      } catch { /* Restore the remaining paths and cache, preserving the original failure. */ }
+      } catch (restoreError) {
+        reportRestoreFailure(path, restoreError)
+      }
     }
     restoreCache?.()
     throw completed ? new AuditWriteError() : error

@@ -130,7 +130,7 @@ Deno.test('daily restarts preserve enrichment cadence even when the boot daily p
       expect(clock.timers.size).toBe(0)
       await clock.advance(1)
     }
-    expect(dailyRuns).toBe(15)
+    expect(dailyRuns).toBe(14)
     expect(enrichmentStarts).toEqual(Array.from(
       { length: 14 },
       (_, day) => Date.parse('2026-10-18T10:01:30Z') + day * 86400_000,
@@ -170,6 +170,35 @@ Deno.test('a future enrichment timestamp runs after boot and then keeps its cade
     await clock.advance(1)
     expect(attempts).toEqual([start + 90_000])
     await clock.advance(3600_000 - 1)
+    expect(attempts).toHaveLength(1)
+    await clock.advance(1)
+    expect(attempts).toEqual([start + 90_000, start + 90_000 + 3600_000])
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('an enrichment stamp written here keeps its cadence after a backwards clock step', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  const start = clock.now()
+  const attempts: number[] = []
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 3600_000,
+    log: () => {},
+    runDaily: async () => {},
+    runEnrichments: async () => {
+      attempts.push(clock.now())
+      if (attempts.length === 1) clock.stepWall(-1000)
+    },
+  })
+  try {
+    await clock.advance(90_000)
+    expect(attempts).toEqual([start + 90_000])
+    await clock.advance(3600_000 + 1000 - 1)
     expect(attempts).toHaveLength(1)
     await clock.advance(1)
     expect(attempts).toEqual([start + 90_000, start + 90_000 + 3600_000])
@@ -356,9 +385,12 @@ Deno.test('maintenance boots with stale state, persists failures, recovers and a
     expect(JSON.parse(logs[0]!).outcome).toBe('failure')
     fail = false
     await clock.advance(75.5 * 60_000)
+    expect(JSON.parse(Deno.readTextFileSync(`${directory}/maintenance-state.json`)).lastSuccess)
+      .toBe(null)
+    await clock.advance(86400_000)
     state = JSON.parse(Deno.readTextFileSync(`${directory}/maintenance-state.json`))
     expect(state.consecutiveFailures).toBe(0)
-    expect(state.lastSuccess).toBe('2026-10-18T15:17:00.000Z')
+    expect(state.lastSuccess).toBe('2026-10-19T15:17:00.000Z')
     await clock.advance(86400_000)
     await stop()
     expect(cancelled).toBe(true)
@@ -596,5 +628,72 @@ Deno.test('failed heartbeat retains a safe maintenance summary and withholds raw
       await stop()
       Deno.removeSync(directory, { recursive: true })
     }
+  }
+})
+
+Deno.test('a boot attempt spends the UTC daily budget across the scheduled pass and a restart', async () => {
+  for (const fail of [false, true]) {
+    const directory = fixture()
+    const clock = new Clock()
+    const starts: string[] = []
+    const options = {
+      dataDir: directory,
+      clock,
+      cadenceMs: 86400_000,
+      log: () => {},
+      runDaily: async () => {
+        starts.push(new Date(clock.now()).toISOString())
+        if (fail) throw new Error('partial pass')
+      },
+      runEnrichments: async () => {},
+    }
+    let stop = startMaintenanceTimers(options)
+    try {
+      await clock.advance(90_000)
+      expect(starts).toEqual(['2026-10-18T14:01:30.000Z'])
+      await stop()
+      stop = startMaintenanceTimers(options)
+      await clock.advance(2 * 3600_000)
+      expect(starts.length).toBe(1)
+      await clock.advance(24 * 3600_000)
+      expect(starts).toEqual(['2026-10-18T14:01:30.000Z', '2026-10-19T15:17:00.000Z'])
+    } finally {
+      await stop()
+      Deno.removeSync(directory, { recursive: true })
+    }
+  }
+})
+
+Deno.test('daily scheduling notices a forward wall-clock step within one minute', async () => {
+  const directory = fixture()
+  const clock = new Clock()
+  const starts: number[] = []
+  writeJsonAtomic(`${directory}/maintenance-state.json`, {
+    lastStart: '2026-10-17T15:17:00Z',
+    lastSuccess: '2026-10-18T13:00:00Z',
+    consecutiveFailures: 0,
+  })
+  const stop = startMaintenanceTimers({
+    dataDir: directory,
+    clock,
+    cadenceMs: 86400_000,
+    log: () => {},
+    runDaily: async () => {
+      starts.push(clock.now())
+    },
+    runEnrichments: async () => {},
+  })
+  try {
+    await clock.advance(90_000)
+    expect(starts.length).toBe(0)
+    clock.stepWall(3 * 3600_000)
+    await clock.advance(60_000)
+    expect(starts.length).toBe(1)
+    expect(new Date(starts[0]!).toISOString()).toBe('2026-10-18T17:02:00.000Z')
+    await clock.advance(60_000)
+    expect(starts.length).toBe(1)
+  } finally {
+    await stop()
+    Deno.removeSync(directory, { recursive: true })
   }
 })

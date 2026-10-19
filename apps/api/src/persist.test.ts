@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { readJsonSafe, writeAssetAtomic, writeFileAtomic } from './persist.ts'
+import { readJsonSafe, syncDirectory, writeAssetAtomic, writeFileAtomic } from './persist.ts'
 import { SuggestionStore } from './interrogate.ts'
 import { ownedMutation } from './stores.ts'
 
@@ -73,5 +73,36 @@ Deno.test('suggestion decisions persist atomically and corrupt JSON is reported 
   } finally {
     console.error = original
     Deno.removeSync(directory, { recursive: true })
+  }
+})
+
+Deno.test('directory sync tolerates Windows EPERM/EACCES but preserves real and non-Windows failures', () => {
+  for (const windows of [true, false]) {
+    for (const stage of ['open', 'sync']) {
+      for (const code of ['EPERM', 'EACCES', 'EIO', 'ENOSPC', 'EINVAL', 'ENOTSUP']) {
+        const error = Object.assign(new Error('injected directory error'), { code })
+        const closed: number[] = []
+        const io = {
+          windows,
+          open: () => {
+            if (stage === 'open') throw error
+            return 42
+          },
+          sync: () => {
+            if (stage === 'sync') throw error
+          },
+          close: (fd: number) => {
+            closed.push(fd)
+          },
+        }
+        const run = () => syncDirectory('/unused', io)
+        if (['EINVAL', 'ENOTSUP'].includes(code) || windows && ['EPERM', 'EACCES'].includes(code)) {
+          expect(run).not.toThrow()
+        } else {
+          expect(run).toThrow(error)
+        }
+        expect(closed).toEqual(stage === 'sync' ? [42] : [])
+      }
+    }
   }
 })
