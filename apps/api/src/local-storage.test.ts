@@ -232,3 +232,73 @@ Deno.test('boot sweep recognises named store overrides directly in a filesystem 
     Deno.removeSync = remove
   }
 })
+
+Deno.test('boot sweep logs unreadable directories and undeletable orphans and continues cleanup', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  const paths = localStoragePaths({ DATA_DIR: 'private' }, root)
+  const release = await acquireStorageLocks(paths, 0)
+  const blockedDirectory = `${paths.DATA_DIR}/lost+found`
+  const blockedFile = `${paths.DATA_DIR}/busy.json.tmp-01234567-abc`
+  const healthy = [
+    `${paths.DATA_DIR}/sources/portal.json.tmp-01234567-abc`,
+    `${paths.BRANDING_PATH}/logo.json.tmp-01234567-abc`,
+    `${paths.TENANTS_PATH}.tmp-01234567-abc`,
+  ]
+  Deno.mkdirSync(blockedDirectory)
+  for (const path of [blockedFile, ...healthy]) {
+    Deno.mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true })
+    Deno.writeTextFileSync(path, 'private contents')
+  }
+  const readDir = Deno.readDirSync
+  const remove = Deno.removeSync
+  const log = console.error
+  const lines: string[] = []
+  Deno.readDirSync = (path) => {
+    if (path === blockedDirectory) throw new Deno.errors.PermissionDenied(`private ${root}`)
+    return readDir(path)
+  }
+  Deno.removeSync = (path, options) => {
+    if (path === blockedFile) throw new Deno.errors.Busy(`private ${root}`)
+    remove(path, options)
+  }
+  console.error = (line: string) => void lines.push(line)
+  try {
+    sweepAtomicTemps(paths)
+    expect(lines.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      { event: 'storage.sweep_failed', file: 'lost+found', code: 'EACCES' },
+      { event: 'storage.sweep_failed', file: 'busy.json.tmp-01234567-abc', code: 'EBUSY' },
+    ]))
+    expect(lines).toHaveLength(2)
+    expect(lines.join()).not.toContain(root)
+    expect(lines.join()).not.toContain('private contents')
+    expect(Deno.readTextFileSync(blockedFile)).toBe('private contents')
+    for (const path of healthy) {
+      expect(() => Deno.statSync(path)).toThrow(Deno.errors.NotFound)
+    }
+  } finally {
+    Deno.readDirSync = readDir
+    Deno.removeSync = remove
+    console.error = log
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test('boot sweep still continues when its diagnostic sink throws', () => {
+  const root = Deno.makeTempDirSync()
+  const readDir = Deno.readDirSync
+  const log = console.error
+  Deno.readDirSync = () => {
+    throw new Deno.errors.PermissionDenied('private path and contents')
+  }
+  console.error = () => {
+    throw new Error('log sink unavailable')
+  }
+  try {
+    expect(() => sweepAtomicTemps(localStoragePaths({ DATA_DIR: root }, root))).not.toThrow()
+  } finally {
+    Deno.readDirSync = readDir
+    console.error = log
+    Deno.removeSync(root, { recursive: true })
+  }
+})

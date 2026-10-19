@@ -47,6 +47,36 @@ function child(mode: string, dataDir: string) {
   }).spawn()
 }
 
+function realServer(dataDir: string, env: Record<string, string> = {}, permissions: string[] = []) {
+  return new Deno.Command(Deno.execPath(), {
+    args: [
+      'run',
+      '-A',
+      `--deny-read=${ROOT}.env`,
+      ...permissions,
+      `${ROOT}apps/api/src/server.ts`,
+    ],
+    cwd: ROOT,
+    env: {
+      DATA_DIR: dataDir,
+      TENANTS_PATH: `${dataDir}/tenants.json`,
+      BINDINGS_PATH: `${dataDir}/bindings.json`,
+      KG_PROPOSALS_PATH: `${dataDir}/kg-proposals.json`,
+      BRANDING_PATH: `${dataDir}/branding`,
+      RBAC_PATH: `${dataDir}/rbac.sqlite`,
+      PORT: '0',
+      HOST: '127.0.0.1',
+      LOCAL_SCHEDULER_ENABLED: 'false',
+      SHUTDOWN_GRACE_SECONDS: '2',
+      WRITER_LOCK_WAIT_SECONDS: '0.2',
+      SHOWCASE_PORTALS: '',
+      ...env,
+    },
+    stdout: 'piped',
+    stderr: 'piped',
+  }).spawn()
+}
+
 async function untilLine(
   process: Deno.ChildProcess,
   token: string | RegExp,
@@ -202,6 +232,50 @@ async function fixtureMain(mode: string, dir: string) {
 if (import.meta.main) {
   await fixtureMain(Deno.args[0]!, Deno.args[1]!)
 } else {
+  Deno.test('real server boots through unreadable sweep directories and undeletable orphan files', async () => {
+    const root = Deno.realPathSync(directory())
+    const unreadable = `${root}/lost+found`
+    const undeletable = `${root}/busy.json.tmp-01234567-abc`
+    const healthy = `${root}/healthy.json.tmp-01234567-abc`
+    Deno.mkdirSync(unreadable)
+    Deno.writeTextFileSync(undeletable, 'private contents')
+    Deno.writeTextFileSync(healthy, 'orphan')
+    const process = realServer(root, {}, [
+      `--deny-read=${unreadable}`,
+      `--deny-write=${undeletable}`,
+    ])
+    let stopped = false
+    try {
+      const startup = await untilLine(process, 'Listening on http://', 'stderr')
+      const diagnostics = startup.split('\n').filter((line) => line.startsWith('{'))
+        .map((line) => JSON.parse(line))
+        .filter((entry) => entry.event === 'storage.sweep_failed')
+      expect(diagnostics).toEqual(expect.arrayContaining([
+        { event: 'storage.sweep_failed', file: 'lost+found', code: 'ENOTCAPABLE' },
+        { event: 'storage.sweep_failed', file: 'busy.json.tmp-01234567-abc', code: 'ENOTCAPABLE' },
+      ]))
+      expect(diagnostics).toHaveLength(2)
+      expect(JSON.stringify(diagnostics)).not.toContain(root)
+      expect(JSON.stringify(diagnostics)).not.toContain('private contents')
+      expect(Deno.readTextFileSync(undeletable)).toBe('private contents')
+      expect(() => Deno.statSync(healthy)).toThrow(Deno.errors.NotFound)
+      process.kill('SIGINT')
+      const result = await process.output()
+      stopped = true
+      expect(result.success, new TextDecoder().decode(result.stderr)).toBe(true)
+    } finally {
+      if (!stopped) {
+        try {
+          process.kill('SIGKILL')
+        } catch {
+          // A failed startup may already have exited.
+        }
+        await process.output()
+      }
+      Deno.removeSync(root, { recursive: true })
+    }
+  })
+
   for (const shareFile of [false, true]) {
     Deno.test(
       shareFile

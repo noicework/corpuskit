@@ -58,17 +58,22 @@ export function sweepAtomicTemps(paths: ReturnType<typeof localStoragePaths>): v
       entries = [...Deno.readDirSync(directory)]
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return
-      throw error
+      reportSweepFailure(directory, error)
+      return
     }
     for (const entry of entries) {
       const path = resolve(directory, entry.name)
-      if (
-        entry.isFile && suffix.test(entry.name) && entry.name.replace(suffix, '') &&
-        (target === undefined || entry.name.replace(suffix, '') === target)
-      ) {
-        Deno.removeSync(path)
-      } else if (entry.isDirectory && target === undefined) {
-        visit(path)
+      try {
+        if (
+          entry.isFile && suffix.test(entry.name) && entry.name.replace(suffix, '') &&
+          (target === undefined || entry.name.replace(suffix, '') === target)
+        ) {
+          Deno.removeSync(path)
+        } else if (entry.isDirectory && target === undefined) {
+          visit(path)
+        }
+      } catch (error) {
+        reportSweepFailure(path, error)
       }
       // Never follow symlinks into directories or files outside this deployment's ownership.
     }
@@ -78,5 +83,26 @@ export function sweepAtomicTemps(paths: ReturnType<typeof localStoragePaths>): v
   // An external file override owns its named siblings, not everything in its parent directory.
   for (const path of [paths.TENANTS_PATH, paths.BINDINGS_PATH, paths.KG_PROPOSALS_PATH]) {
     visit(dirname(path), basename(path))
+  }
+}
+
+/** Cleanup is best effort, including its diagnostics. Never log paths or error messages. */
+function reportSweepFailure(path: string, error: unknown): void {
+  try {
+    const code = (error as { code?: unknown } | null)?.code
+    const fallback = error instanceof Deno.errors.PermissionDenied
+      ? 'EACCES'
+      : error instanceof Deno.errors.NotCapable
+      ? 'ENOTCAPABLE'
+      : error instanceof Deno.errors.Busy
+      ? 'EBUSY'
+      : 'UNKNOWN'
+    console.error(JSON.stringify({
+      event: 'storage.sweep_failed',
+      file: basename(path),
+      code: typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : fallback,
+    }))
+  } catch {
+    // A failed log sink must not turn an orphan cleanup failure into a boot failure.
   }
 }
