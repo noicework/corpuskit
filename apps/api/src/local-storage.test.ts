@@ -181,8 +181,8 @@ Deno.test('boot sweep removes only atomic temp files in owned directories or nam
       Deno.symlinkSync(`${root}/outside`, `${paths.DATA_DIR}/linked-directory`)
       Deno.symlinkSync(`${root}/${kept[4]}`, `${paths.DATA_DIR}/linked-file${suffix}`)
     }
-    sweepAtomicTemps(paths)
-    sweepAtomicTemps(paths)
+    sweepAtomicTemps(paths, release.paths)
+    sweepAtomicTemps(paths, release.paths)
     for (const name of removed) {
       expect(() => Deno.statSync(`${root}/${name}`)).toThrow(Deno.errors.NotFound)
     }
@@ -263,7 +263,7 @@ Deno.test('boot sweep logs unreadable directories and undeletable orphans and co
   }
   console.error = (line: string) => void lines.push(line)
   try {
-    sweepAtomicTemps(paths)
+    sweepAtomicTemps(paths, release.paths)
     expect(lines.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
       { event: 'storage.sweep_failed', file: 'lost+found', code: 'EACCES' },
       { event: 'storage.sweep_failed', file: 'busy.json.tmp-01234567-abc', code: 'EBUSY' },
@@ -301,4 +301,56 @@ Deno.test('boot sweep still continues when its diagnostic sink throws', () => {
     console.error = log
     Deno.removeSync(root, { recursive: true })
   }
+})
+
+Deno.test('boot sweep respects foreign directory and sibling locks even when their files are idle', async () => {
+  const root = Deno.realPathSync(Deno.makeTempDirSync())
+  const paths = localStoragePaths(
+    { DATA_DIR: 'private', TENANTS_PATH: 'external/tenants.json' },
+    root,
+  )
+  const release = await acquireStorageLocks(paths, 0)
+  const suffix = '.tmp-01234567-abc'
+  const kept = [
+    `${paths.DATA_DIR}/nested/sources/portal.json${suffix}`,
+    `${paths.DATA_DIR}/other.json${suffix}`,
+    `${paths.TENANTS_PATH}${suffix}`,
+  ]
+  const removed = `${paths.DATA_DIR}/own.json${suffix}`
+  try {
+    for (const path of [...kept, removed]) {
+      Deno.mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true })
+      Deno.writeTextFileSync(path, 'complete bytes')
+    }
+    Deno.writeTextFileSync(`${paths.DATA_DIR}/nested/.writer.lock`, '')
+    Deno.writeTextFileSync(`${paths.DATA_DIR}/other.json.writer.lock`, '')
+    Deno.writeTextFileSync(`${root}/external/.writer.lock`, '')
+    sweepAtomicTemps(paths, release.paths)
+    for (const path of kept) expect(Deno.readTextFileSync(path)).toBe('complete bytes')
+    expect(() => Deno.statSync(removed)).toThrow(Deno.errors.NotFound)
+  } finally {
+    release()
+    Deno.removeSync(root, { recursive: true })
+  }
+})
+
+Deno.test({
+  name: 'boot sweep recognises owned locks through canonical directory aliases',
+  ignore: Deno.build.os === 'windows',
+  async fn() {
+    const root = Deno.realPathSync(Deno.makeTempDirSync())
+    Deno.mkdirSync(`${root}/actual`)
+    Deno.symlinkSync(`${root}/actual`, `${root}/alias`)
+    const paths = localStoragePaths({ DATA_DIR: 'alias' }, root)
+    const release = await acquireStorageLocks(paths, 0)
+    const orphan = `${paths.BRANDING_PATH}/logo.json.tmp-01234567-abc`
+    try {
+      Deno.writeTextFileSync(orphan, 'orphan')
+      sweepAtomicTemps(paths, release.paths)
+      expect(() => Deno.statSync(orphan)).toThrow(Deno.errors.NotFound)
+    } finally {
+      release()
+      Deno.removeSync(root, { recursive: true })
+    }
+  },
 })

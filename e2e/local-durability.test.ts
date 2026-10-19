@@ -12,6 +12,7 @@ import { openLocalRbac } from '../apps/api/src/rbac-local.ts'
 import type { TenantStoreApi } from '../apps/api/src/tenants.ts'
 import { localOwnedStores } from '../apps/api/src/local-owned-stores.ts'
 import { BindingStore } from '../apps/api/src/bindings.ts'
+import { acquireStorageLocks, localStoragePaths } from '../apps/api/src/local-storage.ts'
 
 const ROOT = new URL('../', import.meta.url).pathname
 const SCRIPT = new URL(import.meta.url).pathname
@@ -42,6 +43,7 @@ function child(mode: string, dataDir: string) {
     args: ['run', '-A', SCRIPT, mode, dataDir],
     cwd: ROOT,
     env: { DATA_DIR: dataDir },
+    stdin: mode === 'nested-writer' ? 'piped' : 'inherit',
     stdout: 'piped',
     stderr: 'piped',
   }).spawn()
@@ -100,6 +102,25 @@ async function untilLine(
 }
 
 async function fixtureMain(mode: string, dir: string) {
+  if (mode === 'nested-writer') {
+    const paths = localStoragePaths({
+      DATA_DIR: dir,
+      TENANTS_PATH: `${dir}/../external-tenants.json`,
+      BINDINGS_PATH: `${dir}/bindings.json`,
+    })
+    const release = await acquireStorageLocks(paths, 0)
+    const targets = [`${paths.DATA_DIR}/sources/portal.json`, paths.TENANTS_PATH]
+    for (const path of targets) {
+      Deno.mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true })
+      Deno.writeTextFileSync(`${path}.tmp-01234567-abc`, 'in-flight bytes')
+    }
+    console.log('nested-writer.ready')
+    // Let the parent server boot while this process holds its locks before committing.
+    await new Response(Deno.stdin.readable).text()
+    for (const path of targets) Deno.renameSync(`${path}.tmp-01234567-abc`, path)
+    release()
+    return
+  }
   if (mode === 'branding-upgrade') {
     const randomUUID = crypto.randomUUID.bind(crypto)
     crypto.randomUUID = () => {
@@ -232,6 +253,57 @@ async function fixtureMain(mode: string, dir: string) {
 if (import.meta.main) {
   await fixtureMain(Deno.args[0]!, Deno.args[1]!)
 } else {
+  Deno.test("real server boot preserves a nested writer's in-flight files and external sibling", async () => {
+    const root = Deno.realPathSync(directory())
+    const nested = `${root}/agent-b`
+    const writer = child('nested-writer', nested)
+    let server: Deno.ChildProcess | undefined
+    let writerStopped = false
+    let serverStopped = false
+    let inputClosed = false
+    try {
+      await untilLine(writer, 'nested-writer.ready')
+      const orphan = `${root}/orphan.json.tmp-01234567-abc`
+      Deno.writeTextFileSync(orphan, 'orphan')
+      server = realServer(root)
+      await untilLine(server, 'Listening on http://', 'stderr')
+      const targets = [`${nested}/sources/portal.json`, `${root}/external-tenants.json`]
+      for (const path of targets) {
+        expect(Deno.readTextFileSync(`${path}.tmp-01234567-abc`)).toBe('in-flight bytes')
+      }
+      expect(() => Deno.statSync(orphan)).toThrow(Deno.errors.NotFound)
+      await writer.stdin.close()
+      inputClosed = true
+      const committed = await writer.output()
+      writerStopped = true
+      expect(committed.success, new TextDecoder().decode(committed.stderr)).toBe(true)
+      for (const path of targets) expect(Deno.readTextFileSync(path)).toBe('in-flight bytes')
+      server.kill('SIGINT')
+      const stopped = await server.output()
+      serverStopped = true
+      expect(stopped.success, new TextDecoder().decode(stopped.stderr)).toBe(true)
+    } finally {
+      if (!writerStopped) {
+        try {
+          writer.kill('SIGKILL')
+        } catch {
+          // The writer may already have exited after a failed rename.
+        }
+        if (!inputClosed) await writer.stdin.close().catch(() => {})
+        await writer.output()
+      }
+      if (server && !serverStopped) {
+        try {
+          server.kill('SIGKILL')
+        } catch {
+          // A failed startup may already have exited.
+        }
+        await server.output()
+      }
+      Deno.removeSync(root, { recursive: true })
+    }
+  })
+
   Deno.test('real server boots through unreadable sweep directories and undeletable orphan files', async () => {
     const root = Deno.realPathSync(directory())
     const unreadable = `${root}/lost+found`

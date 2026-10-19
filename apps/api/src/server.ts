@@ -62,7 +62,7 @@ const releaseWriter = await acquireStorageLocks(
   Deno.exit(1)
 })
 console.log(JSON.stringify({ event: 'server.writer_lock', outcome: 'acquired' }))
-sweepAtomicTemps(storagePaths)
+sweepAtomicTemps(storagePaths, releaseWriter.paths)
 const shutdownController = new AbortController()
 
 const bindings = new BindingStore(storageEnv)

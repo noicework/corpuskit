@@ -38,6 +38,7 @@ Each release groups its changes under Added, Changed, Fixed and Security, then c
 
 ### Fixed
 
+- Deno orphan cleanup skips other deployments' directory and file writer locks, preserving in-flight temporary files even inside a nested data directory. ([#108](https://github.com/noicework/corpuskit/pull/108))
 - Deno boot continues after an unreadable sweep directory or undeletable orphan, logging only the affected basename and error code while cleaning the remaining storage. ([#108](https://github.com/noicework/corpuskit/pull/108))
 - Failed Deno file restores emit one structured `storage.restore_failed` line with only the basename and error code, while later restores, cache recovery and required audit failures are preserved.
 - Deno enrichment trusts run times written by the current process after a backwards clock step while still ignoring future times read at boot.

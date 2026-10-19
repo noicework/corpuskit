@@ -74,6 +74,10 @@ other I/O failures still fail the write. After taking every writer lock at boot,
 sweeps orphaned atomic-write `.tmp-*` siblings from `DATA_DIR` and `BRANDING_PATH`, and the named
 siblings of external JSON store overrides. It matches only the writer's UUID suffix, removes
 regular files only and never follows symlinks. Unrelated files and directories stay untouched.
+It skips any directory with a writer lock it does not own, and temporary siblings of files
+with another deployment's writer lock. Unreadable directories and undeletable orphans log
+`storage.sweep_failed` with only the basename and error code; cleanup continues without
+blocking boot.
 Never treat a temporary file as a backup.
 
 SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling and accepting

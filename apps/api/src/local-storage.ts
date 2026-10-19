@@ -1,6 +1,8 @@
 import { basename, dirname, join, resolve } from 'node:path'
 import { acquireLockFile } from './local-runtime.ts'
 
+type StorageLocks = (() => void) & { readonly paths: ReadonlySet<string> }
+
 /** Preserve existing paths, including the legacy defaults outside a custom DATA_DIR. */
 export function localStoragePaths(env: Record<string, string | undefined>, cwd = Deno.cwd()) {
   const dataDir = resolve(cwd, env.DATA_DIR ?? './data')
@@ -17,7 +19,7 @@ export function localStoragePaths(env: Record<string, string | undefined>, cwd =
 export async function acquireStorageLocks(
   paths: ReturnType<typeof localStoragePaths>,
   waitSeconds: number,
-): Promise<() => void> {
+): Promise<StorageLocks> {
   const canonicalDirectory = (directory: string) => {
     Deno.mkdirSync(directory, { recursive: true })
     return Deno.realPathSync(directory)
@@ -33,6 +35,7 @@ export async function acquireStorageLocks(
   const releases: (() => void)[] = []
   const release = () => {
     for (const unlock of releases.splice(0).reverse()) unlock()
+    locks.clear()
   }
   const deadline = performance.now() + waitSeconds * 1000
   try {
@@ -41,7 +44,7 @@ export async function acquireStorageLocks(
         await acquireLockFile(path, Math.max(0, deadline - performance.now()) / 1000),
       )
     }
-    return release
+    return Object.assign(release, { paths: locks })
   } catch (error) {
     release()
     throw error
@@ -49,12 +52,29 @@ export async function acquireStorageLocks(
 }
 
 /** Remove only this atomic writer's orphan files, after all storage locks have been acquired. */
-export function sweepAtomicTemps(paths: ReturnType<typeof localStoragePaths>): void {
+export function sweepAtomicTemps(
+  paths: ReturnType<typeof localStoragePaths>,
+  ownedLocks: ReadonlySet<string> = new Set(),
+): void {
   // crypto.randomUUID().slice(0, 12) is eight hex digits, a hyphen and three hex digits.
   const suffix = /\.tmp-[0-9a-f]{8}-[0-9a-f]{3}$/
+  const foreignLock = (path: string) => {
+    if (ownedLocks.has(path)) return false
+    try {
+      Deno.lstatSync(path)
+      return true
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return false
+      throw error
+    }
+  }
   const visit = (directory: string, target?: string) => {
     let entries: Deno.DirEntry[]
+    let canonical: string
     try {
+      canonical = Deno.realPathSync(directory)
+      // Even an idle lock file marks another deployment's tree. Do not enter it.
+      if (foreignLock(join(canonical, '.writer.lock'))) return
       entries = [...Deno.readDirSync(directory)]
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return
@@ -68,6 +88,12 @@ export function sweepAtomicTemps(paths: ReturnType<typeof localStoragePaths>): v
           entry.isFile && suffix.test(entry.name) && entry.name.replace(suffix, '') &&
           (target === undefined || entry.name.replace(suffix, '') === target)
         ) {
+          // A file override can belong to another server even inside this DATA_DIR.
+          const file = entry.name.replace(suffix, '')
+          if (
+            foreignLock(join(canonical, '.writer.lock')) ||
+            foreignLock(join(canonical, `${file}.writer.lock`))
+          ) continue
           Deno.removeSync(path)
         } else if (entry.isDirectory && target === undefined) {
           visit(path)
