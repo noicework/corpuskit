@@ -1,3 +1,4 @@
+import { ResourceProvenanceLabel } from '../components/ResourceProvenanceLabel.tsx'
 import { type FormEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
@@ -406,6 +407,7 @@ function ResourceCard({ slug, resource }: { slug: string; resource: ResourceSumm
         </span>
       </div>
       <div className='flex flex-1 flex-col gap-1.5 border-t border-line p-3.5'>
+        <ResourceProvenanceLabel resourceId={resource.id} />
         <h3 className='rp-clamp-2 text-[0.9375rem] font-semibold leading-snug tracking-[-0.01em] text-ink'>
           {resource.title}
         </h3>
