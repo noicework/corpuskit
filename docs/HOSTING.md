@@ -369,7 +369,9 @@ it continues to exclude portal topics, questions and private configuration.
 `branding.logoMaxWidth` optionally caps a logo at an integer pixel width from 80 through 640.
 The rendered logo also fits the available header space and a 170px phone / 640px desktop cap.
 Omitting the field keeps existing logo sizing. `branding.showPortalSwitcher: false` hides the
-switcher beside the logo; omitted or `true` keeps it. The logo remains a link to the portal home.
+switcher beside the logo; omitted or `true` keeps it, and it then shows only when the viewer's
+portal list holds another portal or they can create portals (see
+[Portal list](RBAC.md#portal-list)). The logo remains a link to the portal home.
 Both fields are accepted by the strict configuration import. The safe pre-auth projection includes
 only the logo width; it has no portal switcher.
 
@@ -1780,9 +1782,10 @@ The SPA calls the API with relative URLs, so it works unchanged on an alias host
 a `corpuskit-host-portal` shell setting with the portal's slug on its alias hosts and leaves it
 empty on every other host. On an alias host the SPA keeps links to its own portal on that host,
 and sends links to any other portal to that portal's canonical hostname, or to the platform domain
-when it has none. The portal switcher lists only the alias host's portal, because the portal list
-does. Platform administration links, which only platform administrators see, lead to the platform
-pages, which are not served on an alias host.
+when it has none. The portal switcher is not shown, because the portal list holds only the alias
+host's portal and platform authority, which could create portals, does not apply there. Platform
+administration links, which only platform administrators see, lead to the platform pages, which
+are not served on an alias host.
 
 ### Alias and candidate hosts
 

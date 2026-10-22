@@ -729,6 +729,22 @@ export function createEnforcementFixture(
         contexts.delete(request)
       }
     },
+    /** As `requestAs`, on the given host rather than localhost. */
+    async requestAt(
+      host: string,
+      session: TrustedSessionFacts | null,
+      path: string,
+      init?: RequestInit,
+    ) {
+      await stores.bindings.initialize()
+      const request = new Request(`https://${host}${path}`, init)
+      contexts.set(request, await contextFor(session))
+      try {
+        return await app.fetch(request)
+      } finally {
+        contexts.delete(request)
+      }
+    },
     /** As `requestAs`, from the client address the runtime reported for the request. */
     async requestFrom(
       clientIp: string,

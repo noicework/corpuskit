@@ -973,15 +973,19 @@ describe('exact admin gate', () => {
 })
 
 describe('GET /api/tenants', () => {
-  it('returns the seeded tenants', async () => {
+  it('lists an anonymous caller the request host portal alone', async () => {
     const app = makeApp()
-    const response = await app.request('/api/tenants')
+    const response = await app.request('https://marine.corpuskit.org/api/tenants')
 
     expect(response.status).toBe(200)
     const body = await response.json() as Array<{ slug: string }>
-    const slugs = body.map((tenant) => tenant.slug)
-    expect(slugs).toContain('marine')
-    expect(slugs).toContain('grains')
+    expect(body.map((tenant) => tenant.slug)).toEqual(['marine'])
+    // Anywhere else an anonymous caller holds no portal, so public ones are not listed.
+    for (const url of ['https://corpuskit.org/api/tenants', '/api/tenants']) {
+      const elsewhere = await app.request(url)
+      expect(elsewhere.status).toBe(200)
+      expect(await elsewhere.json()).toEqual([])
+    }
   })
 })
 
@@ -2660,7 +2664,7 @@ describe('POST /api/ask-estate', () => {
     }
 
     const app = buildApp({ provider: new FailingProvider(), tenants: freshTenants() })
-    const response = await app.request('/api/ask-estate', {
+    const response = await app.request('https://marine.corpuskit.org/api/ask-estate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
@@ -2738,7 +2742,7 @@ describe('rate limiting on anonymous LLM-spend routes', () => {
       rateLimitEstatePerMin: 1,
     })
     const askEstate = () =>
-      app.request('/api/ask-estate', {
+      app.request('https://marine.corpuskit.org/api/ask-estate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: 'What is known about abalone stock health?' }),

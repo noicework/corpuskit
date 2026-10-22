@@ -1,6 +1,7 @@
 import { expect } from '@std/expect'
 import { launch } from '@astral/astral'
 import { startTestServer } from './support/test-server.ts'
+import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 
 Deno.test('logo width and hidden switcher preserve the home link without enlarged-text overflow', async () => {
   const server = startTestServer()
@@ -89,7 +90,10 @@ Deno.test('logo width and hidden switcher preserve the home link without enlarge
         }
       }
     }
-    // Both omitted and explicit true retain the existing switcher and image styling.
+    // Both omitted and explicit true retain the existing switcher and image styling. The switcher
+    // is drawn only with another portal to go to, so a reader of both portals is signed in.
+    server.setAssignment({ kind: 'portal', slug: 'grains' }, 'fixture-viewer', 'viewer')
+    server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
     for (const showPortalSwitcher of [undefined, true]) {
       server.tenants.patch('marine', { branding: { ...branding, showPortalSwitcher } })
       await page.goto(`${server.url}/t/marine/library`)

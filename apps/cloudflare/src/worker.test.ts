@@ -1208,22 +1208,28 @@ Deno.test('a Worker serves the showcase portals only when SHOWCASE_PORTALS names
   const warn = console.warn
   console.warn = () => {}
   try {
-    const read = async (h: Awaited<ReturnType<typeof realHarness>>, path: string) => {
-      const response = await worker.fetch(new Request(`https://corpuskit.test${path}`), h.env)
+    const read = async (h: Awaited<ReturnType<typeof realHarness>>, path: string, cookie = '') => {
+      const response = await worker.fetch(
+        new Request(`https://corpuskit.test${path}`, cookie ? { headers: { cookie } } : {}),
+        h.env,
+      )
       return { status: response.status, text: await response.text() }
     }
     const slugs = (text: string) => (JSON.parse(text) as { slug: string }[]).map((t) => t.slug)
+    // A platform administrator's portal list holds every portal the deployment serves.
+    const admin = await sessionCookie(facts())
     const off = await realHarness({ SHOWCASE_PORTALS: undefined })
     try {
       const stores = (off.object as unknown as { stores: DurableStores }).stores
       // No portal at all: an empty list, not a refusal.
       expect(await read(off, '/api/tenants')).toEqual({ status: 200, text: '[]' })
+      expect(await read(off, '/api/tenants', admin)).toEqual({ status: 200, text: '[]' })
       const acme = stores.tenants.add({ name: 'Acme Research' })
       // A stray record under a showcase slug is not served either.
       const raw = off.state.get<{ custom: Record<string, unknown> }>('tenants', { custom: {} })
       raw.custom.marine = { ...acme, slug: 'marine' }
       off.state.put('tenants', raw)
-      expect(slugs((await read(off, '/api/tenants')).text)).toEqual(['acme-research'])
+      expect(slugs((await read(off, '/api/tenants', admin)).text)).toEqual(['acme-research'])
       for (const path of ['/api/t/%s/config', '/api/t/%s/resources']) {
         expect(await read(off, path.replace('%s', 'marine')))
           .toEqual(await read(off, path.replace('%s', 'no-such-portal')))
@@ -1235,7 +1241,10 @@ Deno.test('a Worker serves the showcase portals only when SHOWCASE_PORTALS names
     }
     const on = await realHarness()
     try {
-      expect(slugs((await read(on, '/api/tenants')).text).sort()).toEqual(['grains', 'marine'])
+      expect(slugs((await read(on, '/api/tenants', admin)).text).sort()).toEqual([
+        'grains',
+        'marine',
+      ])
       expect((await read(on, '/api/t/marine/config')).status).toBe(200)
     } finally {
       on.database.close()
