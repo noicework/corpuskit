@@ -204,18 +204,11 @@ for (const adapter of ['durable', 'local'] as const) {
       adapter,
     )
     try {
+      const estate = (from: string) =>
+        status(g.requestFrom(from, null, '/api/ask-estate', post({}, ESTATE)))
       // Each cross-portal ask takes a turn on both portals, from whichever address it comes.
-      for (let i = 1; i <= 3; i++) {
-        expect(
-          await status(
-            g.requestFrom(`198.51.100.${40 + i}`, null, '/api/ask-estate', post({}, ESTATE)),
-          ),
-        ).toBe(200)
-      }
-      expect(
-        await status(g.requestFrom('198.51.100.44', null, '/api/ask-estate', post({}, ESTATE))),
-      )
-        .toBe(429)
+      for (let i = 1; i <= 3; i++) expect(await estate(`198.51.100.${40 + i}`)).toBe(200)
+      expect(await estate('198.51.100.44')).toBe(429)
       expect(await status(g.requestFrom('198.51.100.45', null, '/api/t/public-b/ask', post())))
         .toBe(429)
       // A refused cross-portal ask costs no portal its daily quota.

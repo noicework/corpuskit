@@ -127,7 +127,7 @@ can be restored by hand.
 ## API surface (Deno + Hono + Zod, all typed end-to-end)
 
 ```
-GET  /api/tenants                      tenant list (picker)
+GET  /api/tenants                      the caller's portal list (switcher); see RBAC.md
 GET  /api/t/:slug/config               TenantConfig (public)
 POST /api/t/:slug/ask                  SSE stream of AskEvent
 GET  /api/t/:slug/search               search + passages + scores
