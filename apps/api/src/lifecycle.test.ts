@@ -410,7 +410,9 @@ Deno.test('suspension denies anonymous and portal roles, exposes only safe statu
         } else expect(Object.keys(body)).toEqual(['error'])
       }
     }
-    const list = await (await f.requestAs(null, '/api/tenants')).json()
+    // The portal list still shows a suspended portal, with its status, to its members.
+    const list = await (await f.requestAs(f.sessionFor('viewer', 'public-a'), '/api/tenants'))
+      .json()
     expect(list.find((row: { slug: string }) => row.slug === 'public-a').status).toBe('suspended')
     // A cross-portal ask leaves the suspended portal out for non-platform callers.
     const estate = await f.requestAs(
@@ -1514,13 +1516,14 @@ Deno.test('portals with any addressable slug work, and one unreadable lifecycle 
         json('PUT', { status: 'read_only', limits: { asksPerDay: 3 } }),
       )).status,
     ).toBe(200)
-    const listed = await (await f.requestAs(null, '/api/tenants')).json()
+    // Platform authority's portal list holds every portal.
+    const listed = await (await f.requestAs(platform, '/api/tenants')).json()
     expect(listed.find((row: { slug: string }) => row.slug === 'Research_A')?.status).toBe(
       'read_only',
     )
     // A corrupt record fails its own portal closed and leaves every other portal working.
     f.state.put('portal-lifecycle:public-b', { broken: true })
-    const tenants = await f.requestAs(null, '/api/tenants')
+    const tenants = await f.requestAs(platform, '/api/tenants')
     expect(tenants.status).toBe(200)
     const rows = (await tenants.json()) as { slug: string }[]
     expect(rows.some((row) => row.slug === 'public-b')).toBe(false)
