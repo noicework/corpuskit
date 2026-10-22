@@ -191,8 +191,9 @@ Deno.test('operators register, list, promote and remove portal host aliases', as
     const aliases = `/api/admin/t/${slug}/aliases`
     const config = async () =>
       (await (await f.request('corpuskit.org', `/api/t/${slug}/config`)).json()).hostname
+    // The portal list as platform authority, which lists every portal on any host.
     const summary = async () =>
-      ((await (await f.request('corpuskit.org', '/api/tenants')).json()) as {
+      ((await (await f.request('corpuskit.org', '/api/tenants', passcode)).json()) as {
         slug: string
         hostname?: string
       }[]).find((row) => row.slug === slug)?.hostname

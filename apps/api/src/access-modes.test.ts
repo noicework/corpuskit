@@ -22,29 +22,52 @@ const eventSlugs = (text: string) =>
     ),
   ].sort()
 
+const listedSlugs = async (response: Response) => {
+  expect(response.status).toBe(200)
+  return (await response.json()).map((row: { slug: string }) => row.slug).sort()
+}
+const askedSlugs = (calls: readonly { method: string; args: unknown[] }[]) =>
+  calls.filter((call) => call.method === 'ask').map((call) => (call.args[0] as TenantConfig).slug)
+    .sort()
+// Every portal the enforcement fixture serves, leaving out the disabled and corrupt ones.
+const everyPortal = [
+  'a',
+  'authenticated-a',
+  'authenticated-b',
+  'b',
+  'grains',
+  'marine',
+  'public-a',
+  'public-b',
+]
+
 Deno.test('aggregate persona matrix returns only exact visible sets before stream consumption', async () => {
   const f = createEnforcementFixture()
-  const publicSlugs = ['grains', 'marine', 'public-a', 'public-b']
   try {
+    // On a portal's own host the directory is that portal and the caller's own portals.
     for (
-      const [session, extra] of [
-        [null, []],
-        [f.otherTenant, []],
-        [f.unassigned, ['authenticated-a', 'authenticated-b']],
-        [f.sessionFor('viewer'), ['a', 'authenticated-a', 'authenticated-b']],
-        [f.sessionFor('viewer', 'b'), ['b', 'authenticated-a', 'authenticated-b']],
-        [f.sessionFor('platform-admin'), ['a', 'b', 'authenticated-a', 'authenticated-b']],
+      const [session, expected] of [
+        [null, ['marine']],
+        [f.otherTenant, ['marine']],
+        [f.unassigned, ['marine']],
+        [f.sessionFor('viewer'), ['a', 'marine']],
+        [f.sessionFor('viewer', 'b'), ['b', 'marine']],
+        [f.sessionFor('platform-admin'), everyPortal],
       ] as [TrustedSessionFacts | null, string[]][]
     ) {
-      const expected = [...publicSlugs, ...extra].sort()
-      const directory = await f.requestAs(session, '/api/tenants')
+      const directory = await f.requestAt('marine.corpuskit.org', session, '/api/tenants')
       expect(directory.status).toBe(200)
       expect(directory.headers.get('cache-control')).toBe('private, no-store')
       expect((await directory.json()).map((row: { slug: string }) => row.slug).sort()).toEqual(
         expected,
       )
       f.providerCalls.length = 0
-      const estate = await f.requestAs(session, '/api/ask-estate', estateInit())
+      const estate = await f.requestAt(
+        'marine.corpuskit.org',
+        session,
+        '/api/ask-estate',
+        estateInit(),
+      )
       expect(estate.status).toBe(200)
       // Calls already begun before a consumer reads the stream must also be scoped.
       expect(
@@ -257,7 +280,8 @@ Deno.test('estate cancellation closes the selected provider iterator without con
 Deno.test('directory and estate fan-out exclude every hidden portal without poisoning visible targets', async () => {
   const f = createEnforcementFixture()
   try {
-    const response = await f.requestAs(null, '/api/tenants')
+    f.stores.tenants.patch('public-a', { hostname: 'public-a.example.org' })
+    const response = await f.requestAt('public-a.example.org', null, '/api/tenants')
     const slugs = (await response.json()).map((row: { slug: string }) => row.slug)
     expect(slugs).toContain('public-a')
     expect(slugs).not.toContain('a')
@@ -276,6 +300,172 @@ Deno.test('directory and estate fan-out exclude every hidden portal without pois
         (call.args[0] as { slug: string }).slug
       ),
     ).toEqual(['public-a'])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('an anonymous portal list holds the request host portal alone, never every public portal', async () => {
+  const f = createEnforcementFixture()
+  const denials = () =>
+    f.database.all("SELECT id FROM audit_events WHERE action='request.denied'").length
+  try {
+    f.stores.tenants.patch('public-a', { hostname: 'public-a.example.org' })
+    f.stores.tenants.patch('a', { hostname: 'a.example.org' })
+    for (
+      const [host, expected] of [
+        // A portal's own host, including the showcase portals' compatibility hostnames, compared
+        // without regard to case or port.
+        ['marine.corpuskit.org', ['marine']],
+        ['grains.corpuskit.org', ['grains']],
+        ['PUBLIC-A.Example.org:8443', ['public-a']],
+        // The platform apex and hosts that are no portal's list nothing.
+        ['corpuskit.org', []],
+        ['localhost', []],
+        ['other.example.org', []],
+        // Its own host does not make a portal readable.
+        ['a.example.org', []],
+      ] as const
+    ) {
+      const before = denials()
+      expect(await listedSlugs(await f.requestAt(host, null, '/api/tenants')), host).toEqual(
+        expected,
+      )
+      // An empty list is not a refusal, so nothing is audited.
+      expect(denials()).toBe(before)
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a signed-in portal list holds the portals the caller has a role on, directly or by group', async () => {
+  const f = createEnforcementFixture()
+  try {
+    f.database.exec(
+      "INSERT OR REPLACE INTO rbac_group_capabilities VALUES ('corpuskit','verified-supported',0)",
+    )
+    const granted = f.rbac.assignmentService(f.tenantId, f.audience).create({
+      subjectKind: 'group',
+      subjectId: 'readers',
+      scope: { kind: 'portal', slug: 'public-b' },
+      role: 'viewer',
+    }, { requestId: 'seed', actor: { kind: 'system' } })
+    expect(granted.ok).toBe(true)
+    // A viewer of `a` by direct assignment, and of `public-b` through a group. `public-a`,
+    // `marine`, `grains` and the `authenticated` portals are readable to them, but they hold no
+    // role on any of them.
+    const member: TrustedSessionFacts = {
+      ...f.sessionFor('viewer'),
+      groups: ['readers'],
+      groupStatus: 'complete',
+    }
+    expect(await listedSlugs(await f.requestAt('localhost', member, '/api/tenants'))).toEqual([
+      'a',
+      'public-b',
+    ])
+    expect(await listedSlugs(await f.requestAt('corpuskit.org', member, '/api/tenants')))
+      .toEqual(['a', 'public-b'])
+    // On a portal's own host, that portal joins them.
+    expect(await listedSlugs(await f.requestAt('marine.corpuskit.org', member, '/api/tenants')))
+      .toEqual(['a', 'marine', 'public-b'])
+    // Without the group, only the direct assignment.
+    expect(
+      await listedSlugs(await f.requestAt('localhost', f.sessionFor('viewer'), '/api/tenants')),
+    ).toEqual(['a'])
+    // Platform authority keeps the whole list, on any host.
+    for (const session of [f.sessionFor('platform-admin'), f.sessionFor('owner')]) {
+      for (const host of ['localhost', 'corpuskit.org', 'marine.corpuskit.org']) {
+        expect(await listedSlugs(await f.requestAt(host, session, '/api/tenants'))).toEqual(
+          everyPortal,
+        )
+      }
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('an alias host still lists its own portal alone, whoever asks', async () => {
+  const f = createEnforcementFixture()
+  try {
+    // research.example.org is not the canonical hostname of either portal, so this is the
+    // alias host's own rule at work and not the request-host rule.
+    for (
+      const [session, hostPortal, expected] of [
+        [null, 'public-a', ['public-a']],
+        [f.sessionFor('viewer', 'b'), 'public-a', ['public-a']],
+        [null, 'a', []],
+        [f.sessionFor('viewer'), 'a', ['a']],
+      ] as [TrustedSessionFacts | null, string, string[]][]
+    ) {
+      const context = await f.contextFor(session)
+      const app = buildApp({
+        ...f.stores,
+        provider: f.provider,
+        configuredTenantId: f.tenantId,
+        audience: f.audience,
+        now: f.now,
+        requestContext: () => ({ ...context, hostPortal, requestId: crypto.randomUUID() }),
+        breakGlass: f.rbac.breakGlassService({}),
+      })
+      expect(
+        await listedSlugs(await app.request('https://research.example.org/api/tenants')),
+      ).toEqual(expected)
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a cross-portal ask naming no portals reaches only the directory, and named portals as before', async () => {
+  const f = createEnforcementFixture()
+  try {
+    // Anonymous on a portal's own host: that portal alone.
+    let response = await f.requestAt('marine.corpuskit.org', null, '/api/ask-estate', estateInit())
+    expect(response.status).toBe(200)
+    expect(askedSlugs(f.providerCalls)).toEqual(['marine'])
+    expect(eventSlugs(await response.text())).toEqual(['marine'])
+    // Anonymous on the platform apex has nowhere to ask, and is refused as before.
+    for (const host of ['corpuskit.org', 'localhost']) {
+      f.providerCalls.length = 0
+      response = await f.requestAt(host, null, '/api/ask-estate', estateInit())
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({ error: 'unauthorised' })
+      f.assertNoProtectedDispatch()
+    }
+    // A member asks their own portals; platform authority asks every portal.
+    f.providerCalls.length = 0
+    response = await f.requestAt(
+      'localhost',
+      f.sessionFor('viewer'),
+      '/api/ask-estate',
+      estateInit(),
+    )
+    expect(eventSlugs(await response.text())).toEqual(['a'])
+    expect(askedSlugs(f.providerCalls)).toEqual(['a'])
+    f.providerCalls.length = 0
+    response = await f.requestAt(
+      'localhost',
+      f.sessionFor('platform-admin'),
+      '/api/ask-estate',
+      estateInit(),
+    )
+    expect(eventSlugs(await response.text())).toEqual(everyPortal)
+    // Named portals are authorised as they always were: every named portal the caller may read,
+    // whichever host asks.
+    for (const host of ['localhost', 'marine.corpuskit.org']) {
+      f.providerCalls.length = 0
+      response = await f.requestAt(
+        host,
+        null,
+        '/api/ask-estate',
+        estateInit(['public-a', 'public-b', 'a']),
+      )
+      expect(response.status).toBe(200)
+      expect(eventSlugs(await response.text())).toEqual(['public-a', 'public-b'])
+      expect(askedSlugs(f.providerCalls)).toEqual(['public-a', 'public-b'])
+    }
   } finally {
     f.close()
   }

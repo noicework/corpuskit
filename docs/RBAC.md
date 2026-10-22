@@ -70,6 +70,30 @@ Only `PATCH /api/admin/t/:slug/access` changes the mode. It needs `behaviour.wri
 and takes effect on the next request; identity-dependent responses are served `private,
 no-store` so a cached copy cannot outlive a change of mode.
 
+## Portal list
+
+The portal list (`GET /api/tenants`), which the switcher beside a portal's logo shows, holds the
+portals a caller is entitled to, not every portal they could read. A portal is listed when the
+caller can read it and one of these holds:
+
+- the caller has platform authority (an owner or platform administrator, or break-glass access),
+  which lists every portal;
+- the caller holds a role on the portal, assigned to them directly or through a group mapping;
+- the portal's canonical hostname is the request's host, compared without regard to case or port.
+
+So a public portal is not listed to an anonymous visitor on the platform domain or on another
+portal's host, and on its own hostname it lists itself. A signed-in user of the configured tenant
+who holds no role on an `authenticated` portal can still open it, but it is listed to them only on
+its own hostname. A list with nothing in it is `200 []`, not a refusal, and is not audited. On a
+portal's alias host the list holds that portal alone, as it always has.
+
+A cross-portal ask (`POST /api/ask-estate`) that names no portals reaches the portals in the same
+list, and is refused when the list is empty. One that names portals reaches every named portal the
+caller may read.
+
+The switcher beside the logo draws nothing, neither its button nor its menu, unless the list holds
+a portal other than the current one or the caller can create portals.
+
 ## Where identity comes from
 
 1. **Sign-in.** The Worker runs OpenID Connect against Microsoft Entra and seals the verified

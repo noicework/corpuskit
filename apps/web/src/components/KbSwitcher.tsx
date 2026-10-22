@@ -7,6 +7,7 @@ import { getKnowledgeBoxStatus, getTenants } from '../api/client.ts'
 import { portalHref } from '../lib/portal-url.ts'
 import { useAccess } from './AccessProvider.tsx'
 import { nextAccountMenuIndex } from './account-menu-behaviour.ts'
+import { showsPortalSwitcher } from './kb-switcher-behaviour.ts'
 import { Check, ChevronDown, Database, Plus, Settings } from './icons.tsx'
 import { IconButton } from './ui.tsx'
 
@@ -44,8 +45,9 @@ function StatusDot({ status }: { status?: KnowledgeBoxStatus['status'] }) {
 
 /**
  * The knowledge box switcher: the portal wordmark (with its logo, when the
- * tenant has one) doubles as a dropdown that switches between every portal -
- * each backed by its own knowledge box - and links to the management screen.
+ * tenant has one) doubles as a dropdown that switches between the portals in the
+ * caller's directory - each backed by its own knowledge box - and links to the
+ * management screen. With nowhere else to go it renders nothing.
  */
 export function KbSwitcher({ config }: { config: TenantConfig }) {
   const { ui } = usePortalLocale()
@@ -189,6 +191,8 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
     }
     navigate(destination)
   }
+
+  if (!showsPortalSwitcher(tenants, config.slug, canCreate)) return null
 
   return (
     <div ref={wrapRef} className='relative shrink-0'>
