@@ -2,7 +2,7 @@
 export const AGENT_JA: Readonly<Record<string, string>> = {
   'Agent ask': 'エージェントに質問',
   'Ask across the collections': 'コレクションを横断して質問',
-  'Ask a question across every collection this portal can search. Each step, and what each collection returned, is shown while the answer is written. Answers take one to two minutes.':
+  "Ask a question across all of this portal's collections. Each step, and what each collection returned, is shown while the answer is written. Answers take one to two minutes.":
     'このポータルが検索できるすべてのコレクションに質問します。各ステップと、各コレクションが返した内容は、回答が書かれる間に表示されます。回答には1〜2分かかります。',
   'Ask one question across every collection': 'すべてのコレクションに対してひとつの質問をする',
   'Enter sends; Shift+Enter starts a new line. Up to 2,000 characters.':
