@@ -1,6 +1,7 @@
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { AnswerRecordStore, FileAnswerRecordState } from './answer-record-store.ts'
 import { EvaluationStore } from './evaluation-store.ts'
+import { LinkHealthStore } from './link-health-store.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   appendAudit,
@@ -97,7 +98,7 @@ export function localOwnedStores(
         ? (method === 'remove' ? args[2] : method === 'update' ? args[1] : undefined)
         : method === 'updateEvidence' || method === 'removeEvidence'
         ? args[3]
-        : ['sources', 'enrichments', 'branding', 'suggestions'].includes(store!)
+        : ['sources', 'linkHealth', 'enrichments', 'branding', 'suggestions'].includes(store!)
         ? args[1]
         : store === 'investigations'
         ? args[2]
@@ -269,6 +270,7 @@ export function localOwnedStores(
           return result
         })),
     ),
+    linkHealth: wrap('linkHealth', new LinkHealthStore(database, boundary)),
     attach,
     erasureTransaction: <T>(slug: string, work: () => T): T => erasure.erase(slug, work) as T,
     answerRecords: wrap(

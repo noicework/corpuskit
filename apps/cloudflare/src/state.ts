@@ -1,6 +1,7 @@
 import { DuplicateReviewStore } from '../../api/src/duplicate-store.ts'
 import { AnswerRecordStore } from '../../api/src/answer-record-store.ts'
 import { EvaluationStore } from '../../api/src/evaluation-store.ts'
+import type { LinkCheck, LinkHealthStoreApi } from '../../api/src/link-health.ts'
 import {
   DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -216,7 +217,9 @@ export class DurableState {
           ? (method === 'updateEvidence' || method === 'removeEvidence' ? args[3] : args[2])
           : store === 'watches'
           ? (method === 'remove' ? args[2] : method === 'update' ? args[1] : undefined)
-          : ['sources', 'mcpKeys', 'enrichments', 'branding', 'suggestions'].includes(store!)
+          : ['sources', 'linkHealth', 'mcpKeys', 'enrichments', 'branding', 'suggestions'].includes(
+              store!,
+            )
           ? args[1]
           : typeof first === 'string'
           ? first
@@ -1760,6 +1763,24 @@ export class DurableWatchStore implements WatchStoreApi {
   }
 }
 
+export class DurableLinkHealthStore implements LinkHealthStoreApi {
+  constructor(private readonly state: DurableState) {}
+  list(slug: string): LinkCheck[] {
+    return this.state.get(key('linkHealth', slug), [])
+  }
+  put(slug: string, entry: LinkCheck): void {
+    const rows = this.list(slug).filter((row) => row.id !== entry.id)
+    if (rows.length >= 10_000) throw new Error('Link review storage limit reached')
+    this.state.put(key('linkHealth', slug), [...rows, entry])
+  }
+  remove(slug: string, id: string): void {
+    this.state.put(key('linkHealth', slug), this.list(slug).filter((row) => row.id !== id))
+  }
+  erase(slug: string): number {
+    return this.state.eraseKeys([key('linkHealth', slug)])
+  }
+}
+
 export class DurableSourceStore implements SourceStoreApi {
   constructor(private readonly state: DurableState) {}
 
@@ -1772,7 +1793,7 @@ export class DurableSourceStore implements SourceStoreApi {
   }
 
   summaries(slug: string): SourceSummary[] {
-    return this.list(slug).map(({ synced, ...rest }) => ({
+    return this.list(slug).map(({ synced, pages: _pages, ...rest }) => ({
       ...rest,
       itemCount: rest.itemCount ?? synced?.length ?? 0,
     }))
@@ -2320,6 +2341,7 @@ export interface DurableStores extends RbacStores {
   siteFeedback: DurableSiteFeedbackStore
   sessions: DurableSessionsStore
   watches: DurableWatchStore
+  linkHealth: DurableLinkHealthStore
   sources: DurableSourceStore
   investigations: DurableInvestigationStore
   suggestions: DurableSuggestionStore
@@ -2360,6 +2382,7 @@ export function durableStores(
     siteFeedback: state.auditedStore('siteFeedback', new DurableSiteFeedbackStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
     watches: state.auditedStore('watches', new DurableWatchStore(state)),
+    linkHealth: state.auditedStore('linkHealth', new DurableLinkHealthStore(state)),
     sources: state.auditedStore('sources', new DurableSourceStore(state)),
     investigations: state.auditedStore('investigations', new DurableInvestigationStore(state)),
     suggestions: state.auditedStore('suggestions', new DurableSuggestionStore(state)),

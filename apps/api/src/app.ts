@@ -5,6 +5,10 @@ import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
 import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
 import { registerPortalEvaluations } from './evaluation-integration.ts'
 import type { EvaluationStore } from './evaluation-store.ts'
+import type { PublicHttpClient } from './public-http.ts'
+import { LinkHealthStore } from './link-health-store.ts'
+import type { LinkHealthStoreApi } from './link-health.ts'
+import { registerLinkHealthRoutes } from './link-health-routes.ts'
 import { PortalLifecycleStore } from './lifecycle-store.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
@@ -1071,6 +1075,8 @@ export interface BuildAppOptions {
   sessions?: SessionsStoreApi
   /** Source registry; shared with startScheduler in server.ts so a scheduled sync and a
    *  concurrent HTTP write don't clobber each other. A fresh store when omitted (tests). */
+  linkHttp?: PublicHttpClient
+  linkHealth?: LinkHealthStoreApi
   sources?: SourceStoreApi
   /** Watch registry; same sharing rationale as `sources`. */
   watches?: WatchStoreApi
@@ -1234,6 +1240,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const routing = opts.routing ?? new RoutingLog()
   const sessions = opts.sessions ?? new SessionsStore()
   const watches = opts.watches ?? new WatchStore()
+  const linkHealth = guardPortalWrites(
+    opts.linkHealth ?? new LinkHealthStore(),
+    lifecycle,
+    { platformRequests: true },
+  )
   const sources = opts.sources ?? new SourceStore()
   const investigations = opts.investigations ?? new InvestigationStore()
   const mcpKeys = opts.mcpKeys ?? new McpKeyStore()
@@ -2252,6 +2263,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     requestContext,
     requestContexts,
     notFound: adminNotFound,
+  })
+
+  registerLinkHealthRoutes(app, {
+    tenants,
+    provider,
+    sources,
+    store: linkHealth,
+    client: opts.linkHttp,
+    notFound: adminNotFound,
+    signal: (request) => operationSignals.get(request) ?? request.signal,
   })
 
   registerLifecycleRoutes(app, {
@@ -4911,6 +4932,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const erasureStores = {
     duplicates,
     evaluations: opts.evaluations,
+    linkHealth,
     tenants,
     bindings,
     lifecycle,
@@ -6423,6 +6445,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           // was deleting the document goes too.
           try {
             enrichments.forgetResource(slug, id)
+            for (const row of linkHealth.list(slug).filter((row) => row.resourceId === id)) {
+              linkHealth.remove(slug, row.id)
+            }
           } catch {
             complete = false
           }
@@ -6550,7 +6575,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return streamSSE(c, async (stream) => {
       const emit = (event: unknown) => stream.writeSSE({ data: JSON.stringify(event) })
       try {
-        const { added, deferred } = await syncSource(
+        const { added, deferred, summary } = await syncSource(
           management,
           sources,
           config,
@@ -6558,7 +6583,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           (label) => emit({ type: 'item', label }),
           operationSignals.get(c.req.raw),
         )
-        await emit({ type: 'done', added, deferred })
+        await emit({ type: 'done', added, deferred, summary })
       } catch (err) {
         // Persist the failure against the source as well as streaming it, so
         // it is still visible after the log panel is closed - and identical

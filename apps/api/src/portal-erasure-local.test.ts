@@ -46,6 +46,8 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   answerRecords: { erasedBy: 'answerRecords' },
   sessions: { erasedBy: 'sessions' },
   sources: { erasedBy: 'sources' },
+  linkHealth: { erasedBy: 'linkHealth' },
+  linkHttp: { noPortalRecords: 'outbound HTTP transport; no portal records' },
   watches: { erasedBy: 'watches' },
   investigations: { erasedBy: 'investigations' },
   mcpKeys: { erasedBy: 'mcpKeys' },
@@ -101,6 +103,7 @@ const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
   investigations: true,
   watches: true,
   sources: true,
+  linkHealth: true,
   insights: true,
   feedback: true,
   siteFeedback: true,
@@ -308,6 +311,16 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       Deno.mkdirSync(join(s.directory, path, '..'), { recursive: true })
       Deno.writeTextFileSync(join(s.directory, path), JSON.stringify(value))
     }
+    s.owned.linkHealth.put(SLUG, {
+      id: 'erasure-link',
+      url: 'https://example.test/gone',
+      title: 'Research',
+      status: 'broken',
+      firstFailed: null,
+      lastChecked: '2026-10-01T00:00:00Z',
+      attempts: 1,
+      ignored: true,
+    })
     s.stores.sources.add(SLUG, 'https://first-customer.example/news', true)
     s.stores.insights.record(SLUG, {
       ts: new Date(s.now()).toISOString(),
@@ -382,6 +395,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
     })
     expect(deleted.status).toBe(200)
     const body = await deleted.json()
+    expect(s.owned.linkHealth.list(SLUG)).toEqual([])
     expect(body.domain).toEqual({ status: 'not_configured' })
     for (
       const kind of [
@@ -390,6 +404,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
         'investigations',
         'watches',
         'sources',
+        'linkHealth',
         'insights',
         'feedback',
         'siteFeedback',

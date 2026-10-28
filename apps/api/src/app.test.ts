@@ -453,6 +453,10 @@ describe('independent admin route permission matrix', () => {
     ['GET', 'site-feedback', 'content.write'],
     ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
     ['DELETE', 'resources/:id', 'content.write'],
+    ['GET', 'link-health', 'content.write'],
+    ['POST', 'link-health/check', 'content.write', {}],
+    ['POST', 'link-health/:id/recheck', 'content.write', {}],
+    ['POST', 'link-health/:id/ignore', 'content.write', {}],
     ['GET', 'sources', 'content.write'],
     ['POST', 'sources', 'content.write', { url: 'https://example.test/new' }],
     ['PATCH', 'sources/:id', 'content.write', { auto: false }],
@@ -707,6 +711,16 @@ describe('independent admin route permission matrix', () => {
           if (suffix.startsWith('answer-records')) {
             fixture.stores.answerRecords.record('a', answerRecord)
           }
+          fixture.stores.linkHealth.put('a', {
+            id: 'res-1',
+            url: 'https://example.test/gone',
+            title: 'Research',
+            status: 'broken',
+            firstFailed: '2026-10-01T00:00:00Z',
+            lastChecked: '2026-10-02T00:00:00Z',
+            attempts: 1,
+            ignored: false,
+          })
           const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
           fixture.stores.enrichments.put('a', 'seeded-record', {
             schemaId: 'research',
@@ -844,7 +858,14 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'answer-records/retention') {
                 expect(JSON.parse(result)).toEqual({ days: 90 })
               } else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
-              else if (suffix === 'suggestions') {
+              else if (suffix === 'link-health') {
+                expect(JSON.parse(result)).toMatchObject([{
+                  id: 'res-1',
+                  status: 'broken',
+                  attempts: 1,
+                  ignored: false,
+                }])
+              } else if (suffix === 'suggestions') {
                 expect(JSON.parse(result)[0].id).toBe('suggestion-a')
               } else if (suffix === 'enrichments/export') {
                 expect(result).toContain('Seeded research')

@@ -207,6 +207,14 @@ function SourceRow({
               })
               : ui(' - never checked')}
           </p>
+          {source.lastSummary && (
+            <p className='mt-2 text-xs text-ink-2'>
+              {ui(
+                'Last run: {new} new, {changed} changed, {unchanged} unchanged, {failed} failed.',
+                source.lastSummary,
+              )}
+            </p>
+          )}
           {failed && source.lastError && (
             <p className='mt-1.5 text-xs' style={{ color: 'var(--rp-bad-ink)' }}>
               {source.lastError}
@@ -422,7 +430,7 @@ function SourcesPanelContent({ slug }: { slug: string }) {
           <span ref={heading} className='rp-focus' tabIndex={-1}>{ui('Website sources')}</span>
         }
         description={ui(
-          'Register a website or sitemap once. Each source is re-checked daily, and pages published since the last check are ingested automatically. Pages already taken from a source are never ingested twice.',
+          'Register a website or sitemap once. Daily syncs add new pages and refresh changed pages. Unchanged pages are left as they are.',
         )}
         actions={
           <Button

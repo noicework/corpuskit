@@ -1,5 +1,6 @@
 import { DuplicatesPanel } from './admin/DuplicatesPanel.tsx'
 import { EvaluationsPanel } from './admin/EvaluationsPanel.tsx'
+import { LinkHealthPanel } from './admin/LinkHealthPanel.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -326,6 +327,7 @@ function ManageContent() {
                   </div>
                 )}
                 {can('content.write') && reachable && <SourcesPanel slug={slug} />}
+                {can('content.write') && reachable && <LinkHealthPanel slug={slug} />}
                 {can('content.write') && (
                   <div className='rp-card p-5 lg:p-6'>
                     <RecentList slug={slug} />
