@@ -178,6 +178,17 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
     f.stores.watches.add(slug, researcher, 'abalone decline')
     f.state.put(`watches:${slug}`, [])
   },
+  linkHealth: (f, slug) =>
+    f.stores.linkHealth.put(slug, {
+      id: 'erasure-link',
+      url: 'https://example.test/gone',
+      title: 'Research',
+      status: 'broken',
+      firstFailed: '2026-10-01T00:00:00Z',
+      lastChecked: '2026-10-02T00:00:00Z',
+      attempts: 1,
+      ignored: true,
+    }),
   sources: (f, slug) => f.stores.sources.add(slug, 'https://first-customer.example/news', true),
   investigations: (f, slug) => {
     const investigation = f.stores.investigations.create(slug, researcher, { name: 'Private' })

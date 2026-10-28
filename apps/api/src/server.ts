@@ -148,6 +148,8 @@ const stopScheduler = startScheduler(
   process.env,
   owned.lifecycle,
   bindings,
+  owned.linkHealth,
+  owned.localMutations,
 )
 // Off the listen path: the probe is a live retrieval call per portal.
 const cancelDocsProbe = scheduleAfter(3_000, () => void docsHealth.check())

@@ -1,4 +1,13 @@
-import type { EnrichmentRunEvent, TenantConfig } from '@research-portal/core'
+import type { PublicHttpClient } from './public-http.ts'
+import {
+  conditionalHeaders,
+  pageChanged,
+  pageFingerprint,
+  replaceWebsitePage,
+  type SyncSummary,
+} from './website-refresh.ts'
+import { type LinkHealthStoreApi, linkTargets, runLinkChecks } from './link-health.ts'
+import type { EnrichmentRunEvent, ResourceSummary, TenantConfig } from '@research-portal/core'
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import {
   CRAWLER_USER_AGENT,
@@ -44,7 +53,7 @@ interface SystemJobContext {
   now?: () => number
 }
 
-type MaintenanceJob = 'sync' | 'watch' | 'enrichment'
+type MaintenanceJob = 'links' | 'sync' | 'watch' | 'enrichment'
 
 /**
  * One unit of scheduled work that failed: which job, and the portal and the kind of thing it was
@@ -197,6 +206,7 @@ function* scheduledPortals(
   }
 }
 type SystemAction =
+  | 'maintenance.link.check'
   | 'maintenance.source.sync'
   | 'maintenance.watch.run'
   | 'maintenance.enrichment.run'
@@ -292,6 +302,8 @@ export async function runSystemJob(
 }
 
 interface MaintenanceStores {
+  linkHttp?: PublicHttpClient
+  linkHealth?: LinkHealthStoreApi
   localMutations?: LocalMutationScope
   rbac: RbacState
   tenants: TenantStoreApi
@@ -327,7 +339,7 @@ export async function runSystemMaintenance(
   management: AragProvider,
   stores: MaintenanceStores,
   retentionDays: string | undefined,
-  jobs: readonly MaintenanceJob[] = ['sync', 'watch', 'enrichment'],
+  jobs: readonly MaintenanceJob[] = ['sync', 'links', 'watch', 'enrichment'],
   retain = true,
   options: { now?: () => number; signal?: AbortSignal } = {},
 ): Promise<void> {
@@ -345,6 +357,7 @@ export async function runSystemMaintenance(
   }
   let halted = false
   for (const job of jobs) {
+    if (job === 'links' && !stores.linkHealth) continue
     options.signal?.throwIfAborted()
     try {
       await runSystemJob(stores.rbac.audit, job, (context) => {
@@ -353,6 +366,7 @@ export async function runSystemMaintenance(
         context.bindings = stores.bindings
         context.now = options.now
         context.signal = options.signal
+        if (job === 'links') return runScheduledLinkChecks(guarded, stores, context)
         if (job === 'sync') return runAutoSyncs(guarded, stores.tenants, sources, context)
         if (job === 'watch') return runWatches(guarded, stores.tenants, stores.watches, context)
         return runAutoEnrichments(guarded, stores.tenants, enrichments, context)
@@ -416,14 +430,24 @@ export async function syncSource(
   emit: (label: string) => void | Promise<void>,
   signal?: AbortSignal,
   stopTaking?: () => boolean,
-): Promise<{ added: number; deferred: number; backpressure: boolean; boxBusy: boolean }> {
+): Promise<
+  { added: number; deferred: number; backpressure: boolean; boxBusy: boolean; summary: SyncSummary }
+> {
   const perRun = pagesPerRun(source)
   signal?.throwIfAborted()
   const discovered = await discoverLinks(source.url, DISCOVER_CAP, signal)
   const progress = sources.list(config.slug).find((entry) => entry.id === source.id) ?? source
   const known = new Set(progress.synced ?? [])
   const freshAll = discovered.links.filter((l) => !known.has(l))
-  const fresh = freshAll.slice(0, perRun)
+  const old = discovered.links.filter((url) => known.has(url))
+  const cursor = (progress.refreshCursor ?? 0) % Math.max(1, old.length)
+  const rotated = [...old.slice(cursor), ...old.slice(0, cursor)]
+  const fresh = [...freshAll, ...rotated].slice(0, perRun)
+  const summary: SyncSummary = { new: 0, changed: 0, unchanged: 0, failed: 0 }
+  const pages = { ...progress.pages }
+  let pagesDirty = false
+  let refreshed = 0
+  let legacyResources: ResourceSummary[] | undefined
   await emit(
     `Found ${discovered.links.length} pages via ${discovered.source} - ${freshAll.length} new` +
       (freshAll.length > fresh.length ? ` (ingesting ${fresh.length} this run)` : ''),
@@ -432,7 +456,7 @@ export async function syncSource(
   const pending = new Set<string>()
   let checkpointed = known.size
   const checkpoint = () => {
-    if (checkpointed === known.size) return
+    if (checkpointed === known.size && !pagesDirty) return
     const stored = sources.list(config.slug).find((entry) => entry.id === source.id) ?? progress
     const synced = new Set(stored.synced ?? [])
     const itemCount = (stored.itemCount ?? synced.size) +
@@ -441,9 +465,16 @@ export async function syncSource(
     for (const url of synced) known.add(url)
     sources.update(config.slug, source.id, {
       synced: [...known].slice(-5000),
+      pages: Object.fromEntries(
+        [...known].slice(-5000).flatMap((url) => {
+          const page = pages[url] ?? stored.pages?.[url]
+          return page ? [[url, page]] : []
+        }),
+      ),
       itemCount,
     })
     pending.clear()
+    pagesDirty = false
     checkpointed = known.size
   }
   let rejected = 0
@@ -471,17 +502,23 @@ export async function syncSource(
         )
         break
       }
+      const previous = pages[url]
+      if (known.has(url)) refreshed++
       try {
         // Fetch and clean the page ourselves so the index holds body content,
         // not nav chrome - and so bot walls never enter the corpus.
         let ingested = false
         try {
           const res = await fetch(url, {
-            headers: { 'user-agent': CRAWLER_USER_AGENT },
+            headers: { 'user-agent': CRAWLER_USER_AGENT, ...conditionalHeaders(previous) },
             signal: signal
               ? AbortSignal.any([signal, AbortSignal.timeout(25_000)])
               : AbortSignal.timeout(25_000),
           })
+          if (res.status === 304 && previous) {
+            summary.unchanged++
+            continue
+          }
           if (!res.ok) {
             // A refusal (typically a bot wall answering 403) used to fall
             // through to createLink, handing the same blocked URL to the
@@ -490,6 +527,7 @@ export async function syncSource(
             const body = await res.text().catch(() => '')
             rejectedReason ??= describeFetchFailure(res.status, body)
             rejected += 1
+            summary.failed++
             known.add(url)
             continue
           }
@@ -501,18 +539,55 @@ export async function syncSource(
               // word floor and would otherwise be ingested as real content.
               rejectedReason ??= describeFetchFailure(res.status, html)
               rejected += 1
+              summary.failed++
               known.add(url)
               continue
             }
             const cleaned = extractMainContent(html)
             if (cleaned) {
               signal?.throwIfAborted()
-              await management.createText(config, {
-                title: cleaned.title,
-                body: cleaned.body,
-                format: 'MARKDOWN',
-                originUrl: url,
-              })
+              const next = await pageFingerprint(res.headers, cleaned)
+              if (previous && !pageChanged(previous, next)) {
+                pages[url] = { ...next, resourceId: previous.resourceId }
+                pagesDirty = true
+                summary.unchanged++
+                continue
+              }
+              // Pre-upgrade ledgers have no resource ids. Resolve their existing origin before
+              // refreshing so the first scheduled pass cannot duplicate a whole collection.
+              let existingId = previous?.resourceId
+              if (!existingId && known.has(url)) {
+                if (!legacyResources && typeof management.listResources === 'function') {
+                  legacyResources = await management.listResources(config, {
+                    includeHidden: true,
+                    signal,
+                  })
+                }
+                const existing = legacyResources?.find((r) => r.originUrl === url)
+                existingId = existing?.id
+                if (existingId) {
+                  pages[url] = { ...next, resourceId: existingId }
+                  pagesDirty = true
+                  summary.unchanged++
+                  continue
+                }
+                summary.failed++
+                continue
+              }
+              const id = existingId
+                ? await replaceWebsitePage(management, config, existingId, cleaned, signal)
+                : (await management.createText(config, {
+                  title: cleaned.title,
+                  body: cleaned.body,
+                  format: 'MARKDOWN',
+                  originUrl: url,
+                })).id
+              pages[url] = { ...next, resourceId: id }
+              pagesDirty = true
+              if (existingId) {
+                summary.changed++
+                continue
+              }
               ingested = true
             }
           }
@@ -545,12 +620,14 @@ export async function syncSource(
           // so one stubborn url cannot starve every later page of the run, and
           // an administrator can still force it in from Add content > Add link.
           skipped += 1
+          summary.failed++
           known.add(url)
           continue
         }
         known.add(url)
         pending.add(url)
         added += 1
+        summary.new++
         if (added % 5 === 0) await emit(`Ingested ${added} of ${fresh.length} new pages...`)
       } catch (err) {
         if (err instanceof PortalLifecycleError) {
@@ -578,6 +655,7 @@ export async function syncSource(
         if (err instanceof AragApiError && (err.status === 408 || err.status >= 500)) {
           // A fault on the platform's side: this page is left for the next sync, not skipped.
           retry += 1
+          summary.failed++
           continue
         }
         // A 401/403 from the platform is a credential problem, not a bad page:
@@ -587,6 +665,7 @@ export async function syncSource(
           throw new Error(READ_ONLY_BOX_MESSAGE)
         }
         signal?.throwIfAborted()
+        summary.failed++
         await emit(`Skipped ${url} - the platform rejected it`)
       } finally {
         if (known.size - checkpointed >= 5) checkpoint()
@@ -619,11 +698,15 @@ export async function syncSource(
   sources.update(config.slug, source.id, {
     lastSync: new Date().toISOString(),
     lastAdded: added,
+    lastSummary: summary,
+    refreshCursor: (cursor + refreshed) % Math.max(1, old.length),
     lastStatus: 'ok',
     lastError: null,
   })
-  await emit(added > 0 ? `Sync complete - ${added} pages added` : 'Sync complete - nothing new')
-  return { added, deferred, backpressure, boxBusy }
+  await emit(
+    `Sync complete - ${summary.new} new, ${summary.changed} changed, ${summary.unchanged} unchanged, ${summary.failed} failed`,
+  )
+  return { added, deferred, backpressure, boxBusy, summary }
 }
 
 /**
@@ -946,12 +1029,16 @@ export function startScheduler(
   env: Record<string, string | undefined>,
   lifecycle?: PortalLifecycleStore,
   bindings?: Pick<BindingStoreApi, 'status'>,
+  linkHealth?: LinkHealthStoreApi,
+  localMutations?: LocalMutationScope,
 ): () => Promise<void> {
   // Local, explicitly operated demos may allow manual agents while scheduling no upkeep.
   // Unset or any value other than the exact string 'false' keeps the existing timers.
   if (env.LOCAL_SCHEDULER_ENABLED === 'false') return async () => {}
   // The feedback files `buildApp` keeps by default, under the same DATA_DIR.
   const stores = {
+    linkHealth,
+    localMutations,
     rbac,
     tenants,
     sources,
@@ -967,12 +1054,58 @@ export function startScheduler(
     cadenceMs: autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS),
     failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,
     runDaily: (signal) =>
-      runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'], true, {
-        signal,
-      }),
+      runSystemMaintenance(
+        management,
+        stores,
+        env.AUDIT_RETENTION_DAYS,
+        ['sync', 'links', 'watch'],
+        true,
+        {
+          signal,
+        },
+      ),
     runEnrichments: (signal) =>
       runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false, {
         signal,
       }),
   })
+}
+
+async function runScheduledLinkChecks(
+  provider: AragProvider,
+  stores: MaintenanceStores,
+  context: SystemJobContext,
+): Promise<void> {
+  if (!stores.linkHealth) return
+  const ledger = new MaintenanceLedger('links')
+  const store = guardPortalWrites(stores.linkHealth, stores.lifecycle)
+  for (const config of scheduledPortals(stores.tenants, context, ledger)) {
+    const status = stores.lifecycle
+      ? readLifecycle(stores.lifecycle, config.slug)?.status
+      : 'active'
+    if (status !== 'active' || !hasKnowledgeBox(context, config.slug)) continue
+    await ledger.unit(
+      { slug: config.slug, target: 'portal' },
+      (observe) =>
+        scopedSystemAction(
+          context,
+          'maintenance.link.check',
+          config.slug,
+          { kind: 'portal', id: config.slug },
+          observe(async (signal) => {
+            const stopTaking = unitBudget(context)
+            const targets = await linkTargets(provider, config, stores.sources, signal)
+            return runLinkChecks(
+              store,
+              config.slug,
+              targets,
+              signal,
+              stores.linkHttp,
+              stopTaking,
+            )
+          }),
+        ),
+    )
+  }
+  ledger.settle()
 }

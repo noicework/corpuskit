@@ -1,3 +1,4 @@
+import type { PageFingerprint, SyncSummary } from './website-refresh.ts'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -887,6 +888,9 @@ export interface Source {
   auto: boolean
   /** Urls already ingested from this source (dedupe across syncs). */
   synced?: string[]
+  pages?: Record<string, PageFingerprint>
+  refreshCursor?: number
+  lastSummary?: SyncSummary
   /**
    * Running total of pages ingested from this source. Kept as its own counter
    * rather than read off `synced.length`, because `synced` is trimmed to the
@@ -910,7 +914,7 @@ export interface Source {
  * holds up to 5000 urls, which is pure weight on every poll of the sources
  * list, and the browser only ever needs the count.
  */
-export type SourceSummary = Omit<Source, 'synced'> & { itemCount: number }
+export type SourceSummary = Omit<Source, 'synced' | 'pages'> & { itemCount: number }
 
 export class SourceStore {
   constructor(private readonly dataDir = DATA_DIR) {}
@@ -931,7 +935,7 @@ export class SourceStore {
 
   /** The list as the admin API exposes it - no url ledger, count always present. */
   summaries(slug: string): SourceSummary[] {
-    return this.list(slug).map(({ synced, ...rest }) => ({
+    return this.list(slug).map(({ synced, pages: _pages, ...rest }) => ({
       ...rest,
       itemCount: rest.itemCount ?? synced?.length ?? 0,
     }))

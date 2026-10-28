@@ -1,3 +1,4 @@
+import type { LinkHealthStoreApi } from './link-health.ts'
 import { appendAudit, type AuditActor, type AuditStore, createAuditEvent } from './audit.ts'
 import type { BindingStoreApi } from './bindings.ts'
 import type { EnrichmentStoreApi } from './enrichments.ts'
@@ -37,6 +38,7 @@ export interface PortalErasureStores {
   sessions: Pick<SessionsStoreApi, 'erase'>
   investigations: Pick<InvestigationStoreApi, 'erase'>
   watches: Pick<WatchStoreApi, 'erase'>
+  linkHealth: Pick<LinkHealthStoreApi, 'erase'>
   sources: Pick<SourceStoreApi, 'erase'>
   insights: Pick<InsightsStoreApi, 'erase'>
   feedback: Pick<FeedbackStoreApi, 'erase'>
@@ -81,6 +83,7 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   investigations: 'erasedInvestigations',
   watches: 'erasedWatches',
   sources: 'erasedSources',
+  linkHealth: 'erasedLinkHealth',
   insights: 'erasedInsights',
   feedback: 'erasedFeedback',
   suggestions: 'erasedSuggestions',
@@ -131,6 +134,7 @@ export function erasePortal(
     erased.sessions = stores.sessions.erase(slug)
     erased.investigations = stores.investigations.erase(slug)
     erased.watches = stores.watches.erase(slug)
+    erased.linkHealth = stores.linkHealth.erase(slug)
     erased.sources = stores.sources.erase(slug)
     erased.insights = stores.insights.erase(slug)
     erased.feedback = stores.feedback.erase(slug)

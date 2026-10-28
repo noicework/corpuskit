@@ -15,6 +15,7 @@ export const ERASED_RECORD_KINDS = [
   'investigations',
   'watches',
   'sources',
+  'linkHealth',
   'insights',
   /** Readers' ratings of answers and their comments. */
   'feedback',

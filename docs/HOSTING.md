@@ -1154,10 +1154,42 @@ anonymous limit, and it is admitted on all of them or on none. A request over an
 answered `429 {"error":"rate_limited"}` with a `Retry-After` header, and an ask it had counted
 toward `asksPerDay` is given back.
 
+## Link review and changed website pages
+
+Manage > Content > Link health lists failed website-source and document-origin checks for the
+portal, including drafts and failed ingests. Administrative enumeration never enters the reader catalogue cache. A curator can check links on demand, re-check one result, remember an ignore decision,
+or confirm retirement through the existing resource-delete route. Retiring removes the document
+and its link-review records. Restricted access (401/403), temporary faults and timeouts are
+reported separately from missing pages (404/410); no result automatically deletes a document.
+Every management action uses `content.write` and the normal privileged-request audit. Queue
+writes use `local.mutation`; scheduled portal checks use `maintenance.link.check`.
+
+The daily pass and on-demand checks share a 100-link cap and a 65-second work budget, visiting
+unchecked and oldest-checked targets first. Ignored targets are skipped until explicitly
+re-checked. Each request has a 10-second deadline, starts at least 500 ms after the previous
+request to that host, uses HEAD with GET fallback, and follows at most three redirects manually.
+HTTP and HTTPS only, public IP addresses and public DNS answers are required before every hop;
+credentials and local hostnames are refused. These limits are fixed, with no new environment
+settings. The queue is kept in the managed SQLite Durable Object or the local server's SQLite
+connection under `DATA_DIR`. Ignore decisions remain until re-check or portal erasure; the
+10,000-record ceiling fails visibly instead of dropping decisions.
+
+Website-source syncs now check both new and previously ingested pages within `maxPages` per run
+(default 60, hard ceiling 200). Existing pages rotate across runs. ETag or Last-Modified requests
+avoid unchanged downloads where supported; a SHA-256 hash of extracted title and content catches
+changes without validators. Changed pages use clean-text ingestion and replacement, preserving
+the original title, topic labels and draft visibility. A failed fetch leaves existing content and
+its fingerprint intact. Source summaries report new, changed, unchanged and failed pages; the
+fingerprint ledger stays server-side and is erased with the source registry. A pre-upgrade URL
+ledger establishes its first fingerprint by matching the existing origin, then detects subsequent
+changes. Refresh is bounded by the existing 500-page discovery and 5,000-page ledger limits.
+Replacement uses the provider's existing create/copy-labels/delete sequence, so remote writes
+are not a single transaction and replacement requires capacity for the new resource.
+
 ## Scheduled maintenance
 
 Once a day (the Worker's cron trigger, or a timer in the local server) the deployment runs one
-maintenance pass over every portal: auto-sync sources are synced, saved-search watches are re-run,
+maintenance pass over every portal: auto-sync sources are synced, website and origin links are checked, saved-search watches are re-run,
 and missing enrichments and suggested questions are generated. The local server runs the
 enrichment part on its own cadence (`AUTO_ENRICH_CADENCE_HOURS`, daily by default).
 
@@ -1165,7 +1197,7 @@ Each source sync, each watch and each portal's enrichment and suggested-question
 unit. One failing unit never stops the others:
 
 - A unit that fails is recorded against its portal in the audit log, as a `maintenance.*` action
-  (`maintenance.source.sync`, `maintenance.watch.run`, `maintenance.enrichment.run` or
+  (`maintenance.source.sync`, `maintenance.link.check`, `maintenance.watch.run`, `maintenance.enrichment.run` or
   `maintenance.questions.run`) with outcome `failure` or `uncertain`, which the portal's
   administrators and the platform both see. A failed source sync also records its reason on the
   source, where Manage shows it. The pass then moves on.
@@ -1999,7 +2031,8 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `sessions` | Every member's and visitor's saved research sessions, including pre-owner-scope records | `research-v2:…:sessions:` and `session:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/sessions/<slug>/` |
 | `investigations` | Investigations with their evidence, notes and artefacts | `research-v2:…:investigations:` and `investigation:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/investigations/<slug>/` |
 | `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |
-| `sources` | The source registry | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
+| `sources` | The source registry, page fingerprints and refresh cursor | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
+| `linkHealth` | Link review results and remembered ignore decisions | `linkHealth:<slug>` row | `link_health` table in `DATA_DIR/rbac.sqlite` (or `RBAC_PATH`) |
 | `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |

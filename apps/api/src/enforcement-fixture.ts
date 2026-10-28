@@ -925,6 +925,10 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['GET', 'insights', 'content.write'],
   ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
   ['DELETE', 'resources/:id', 'content.write'],
+  ['GET', 'link-health', 'content.write'],
+  ['POST', 'link-health/check', 'content.write', {}],
+  ['POST', 'link-health/:id/recheck', 'content.write', {}],
+  ['POST', 'link-health/:id/ignore', 'content.write', {}],
   ['GET', 'sources', 'content.write'],
   ['POST', 'sources', 'content.write', { url: 'https://example.test/new' }],
   ['PATCH', 'sources/:id', 'content.write', { auto: false }],
@@ -1111,6 +1115,16 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
     const originalFetch = globalThis.fetch
     const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
     try {
+      fixture.stores.linkHealth.put('a', {
+        id: 'res-1',
+        url: 'https://example.test/gone',
+        title: 'Research',
+        status: 'broken',
+        firstFailed: '2026-10-01T00:00:00Z',
+        lastChecked: '2026-10-02T00:00:00Z',
+        attempts: 1,
+        ignored: false,
+      })
       const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
       fixture.stores.enrichments.put('a', 'seeded-record', {
         schemaId: 'research',

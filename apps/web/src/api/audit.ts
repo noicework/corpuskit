@@ -53,6 +53,7 @@ export const AUDIT_ACTIONS = [
   'break_glass.locked',
   'audit.retention',
   'maintenance.run',
+  'maintenance.link.check',
   'maintenance.source.sync',
   'maintenance.watch.run',
   'maintenance.enrichment.run',
