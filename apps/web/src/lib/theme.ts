@@ -350,6 +350,10 @@ export function secondaryInk(foreground: string, grounds: readonly string[]): st
  * - `--rp-hero-field-edge`: the hero ask field's border. The house field edge while the field's
  *   fill or that edge stands out from both hero endpoints at 3:1; the hero's text colour when
  *   neither does, as on a mid-tone hero where a white field and a grey edge blend into it.
+ * - `--rp-hero-chip-edge`: the hero question chips' border, set only where the field's edge falls
+ *   back to the hero's text colour on a hero tinted by the accent. There the accent, deepened
+ *   until it reaches 3:1 on both hero endpoints, is a lighter edge than near-black; where no
+ *   step of it does, the chips keep the field's edge.
  *
  * Colours this cannot measure (a seed may use any CSS colour) keep the accent and the house edge.
  */
@@ -382,9 +386,55 @@ export function accentMarkVars(
     const shows = (hero as string[]).every((ground) =>
       contrastRatio(fill, ground) >= 3 || contrastRatio(edge, ground) >= 3
     )
-    if (!shows) vars['--rp-hero-field-edge'] = onHero
+    if (!shows) {
+      vars['--rp-hero-field-edge'] = onHero
+      const chip = accent ? accentHeroEdge(accent, hero as string[], ink) : null
+      if (chip) vars['--rp-hero-chip-edge'] = chip
+    }
   }
   return vars
+}
+
+/** Hue in degrees and chroma (0 to 1) of a hex colour. */
+function hueAndChroma(hex: string): { hue: number; chroma: number } {
+  const [r, g, b] = (hexToRgb(hex) ?? [0, 0, 0]).map((c) => c / 255) as [number, number, number]
+  const max = Math.max(r, g, b)
+  const chroma = max - Math.min(r, g, b)
+  if (chroma === 0) return { hue: 0, chroma }
+  const hue = max === r
+    ? ((g - b) / chroma) % 6
+    : max === g
+    ? (b - r) / chroma + 2
+    : (r - g) / chroma + 4
+  return { hue: (hue * 60 + 360) % 360, chroma }
+}
+
+/** How far apart two hues sit on the colour wheel, in degrees. */
+function hueDistance(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360
+  return d > 180 ? 360 - d : d
+}
+
+/**
+ * The accent, stepped toward the ink until it reads at 3:1 on every hero endpoint, when the hero
+ * is tinted by it (a hero end within 30 degrees of the accent's hue, both of them coloured rather
+ * than grey). Null when the hero is not accent-tinted, or when only the ink itself would do.
+ */
+export function accentHeroEdge(
+  accent: string,
+  heroEnds: readonly string[],
+  ink: string,
+): string | null {
+  const tint = hueAndChroma(accent)
+  if (tint.chroma < 0.15) return null
+  const tinted = heroEnds.some((end) => {
+    const ground = hueAndChroma(end)
+    return ground.chroma >= 0.1 && hueDistance(ground.hue, tint.hue) <= 30
+  })
+  if (!tinted) return null
+  const edge = deepenForContrast(accent, heroEnds, 3, ink)
+  const reads = heroEnds.every((end) => contrastRatio(edge, end) >= 3)
+  return reads && edge !== normaliseHex(ink) ? edge : null
 }
 
 /** Derived roles run after the scheme swap, so they measure the actual grounds. */

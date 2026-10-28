@@ -1,5 +1,4 @@
-import { IconButton } from './ui.tsx'
-import { Maximize, Minus, Plus } from './icons.tsx'
+import { MapCameraControls } from './MapCameraControls.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -63,6 +62,9 @@ export function KnowledgeMap3D({
   insets,
   hint,
   onReady,
+  initiallyPlaying = true,
+  onMotionChange,
+  controlsTarget,
 }: {
   nodes: MapNode[]
   edges: MapEdge[]
@@ -81,6 +83,10 @@ export function KnowledgeMap3D({
   hint: string
   /** Called after the settled scene has rendered and crossed a paint boundary. */
   onReady?: () => void
+  /** Retain the reader's pause choice when changing between the map and list. */
+  initiallyPlaying?: boolean
+  onMotionChange?: (playing: boolean) => void
+  controlsTarget?: HTMLElement | null
 }) {
   const { ui } = usePortalLocale()
   const [supported] = useState(webglAvailable)
@@ -99,13 +105,24 @@ export function KnowledgeMap3D({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const labelsRef = useRef<HTMLDivElement | null>(null)
   const engineRef = useRef<KnowledgeMapEngine | null>(null)
-  const controlsRef = useRef<HTMLDivElement | null>(null)
-  const [controlGutter, setControlGutter] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [reduced, setReduced] = useState(() =>
+    globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  )
+  useEffect(() => {
+    const query = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')
+    if (!query) return
+    const changed = () => setReduced(query.matches)
+    query.addEventListener('change', changed)
+    return () => query.removeEventListener('change', changed)
+  }, [])
   const onSelectRef = useRef(onSelect)
   const onReadyRef = useRef(onReady)
+  const onMotionChangeRef = useRef(onMotionChange)
   const uiRef = useRef(ui)
   onSelectRef.current = onSelect
   onReadyRef.current = onReady
+  onMotionChangeRef.current = onMotionChange
   uiRef.current = ui
 
   const [size, setSize] = useState({ w: 0, h: 0 })
@@ -125,34 +142,10 @@ export function KnowledgeMap3D({
     return () => observer.disconnect()
   }, [])
 
-  // Keep the phone's overview clear of the measured zoom-control column,
-  // including when the reader enlarges the root font.
-  useEffect(() => {
-    const controls = controlsRef.current
-    const container = containerRef.current
-    if (!controls || !container) return
-    const update = () => {
-      const box = container.getBoundingClientRect()
-      const toolbar = controls.getBoundingClientRect()
-      setControlGutter(
-        box.width < 768 && insets.bottom === 0 ? Math.ceil(box.right - toolbar.left + 8) : 0,
-      )
-    }
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(controls)
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [insets.bottom])
-  const mapInsets = useMemo(() => ({
-    ...insets,
-    right: Math.max(insets.right, controlGutter),
-  }), [insets, controlGutter])
-
   const hasSize = size.w > 0 && size.h > 0
 
   // Coarse buckets follow the usable shape without rebuilding on every pixel.
-  const aspect = size.w < 1 || size.h < 1 ? 1.5 : (size.w - controlGutter) / size.h
+  const aspect = size.w < 1 || size.h < 1 ? 1.5 : size.w / size.h
   const aspectBucket = aspect < 1
     ? Math.max(0.35, Math.round(aspect * 10) / 10)
     : aspect < 1.45
@@ -162,6 +155,25 @@ export function KnowledgeMap3D({
   // A lost WebGL context leaves a frozen canvas; the 2D map takes over.
   const [contextLost, setContextLost] = useState(false)
   const usable = supported && !contextLost
+
+  const [controlInset, setControlInset] = useState(64)
+  useEffect(() => {
+    const container = containerRef.current
+    const controls = container?.querySelector('.rp-map-camera')
+    if (!container || !controls) return
+    const measure = () =>
+      setControlInset(Math.ceil(
+        controls.getBoundingClientRect().bottom - container.getBoundingClientRect().top + 12,
+      ))
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(controls)
+    return () => observer.disconnect()
+  }, [supported, contextLost])
+  const mapInsets = useMemo(() => ({
+    ...insets,
+    top: controlsTarget ? insets.top : Math.max(insets.top, controlInset),
+  }), [insets, controlInset, controlsTarget])
 
   // Mirrors the 2D map's fit signature: the view is re-framed when the
   // visible set or the layout changes shape, never merely because the
@@ -183,6 +195,11 @@ export function KnowledgeMap3D({
       (id) => onSelectRef.current(id),
       () => setContextLost(true),
       uiRef.current,
+      (playing) => {
+        setPlaying(playing)
+        onMotionChangeRef.current?.(playing)
+      },
+      initiallyPlaying,
     )
     engineRef.current = engine
     return () => {
@@ -210,7 +227,7 @@ export function KnowledgeMap3D({
     }
     engine.setInsets(mapInsets)
     engine.setData(data)
-    const sig = `${layout}|${aspectBucket}|${controlGutter}|${
+    const sig = `${layout}|${aspectBucket}|${controlInset}|${
       visibleNodes.map((n) => n.id).join('|')
     }`
     if (sig !== fitSigRef.current) {
@@ -240,7 +257,7 @@ export function KnowledgeMap3D({
     measure,
     layout,
     aspectBucket,
-    controlGutter,
+    controlInset,
     hasSize,
   ])
 
@@ -318,8 +335,9 @@ export function KnowledgeMap3D({
           pathFrom={pathFrom}
           onSelect={onSelect}
           focusId={focusId}
-          insets={insets}
+          insets={mapInsets}
           hint={ui('Drag to pan · scroll to zoom · click a node to explore it')}
+          controlsTarget={controlsTarget}
         />
       </div>
     )
@@ -331,7 +349,7 @@ export function KnowledgeMap3D({
         ref={canvasRef}
         role='application'
         aria-label={ui(
-          'Knowledge map - drag to orbit, pinch or scroll to zoom, click a node to explore it. With the keyboard: arrows orbit, plus and minus zoom, Enter selects the entity nearest the middle. The navigator list and the find field reach any entity by name.',
+          'Knowledge map. Focus here to use arrows to rotate, Shift + arrows to pan, plus and minus to zoom, Home to fit and Enter to select. Tab leaves the map. Map controls provide buttons for each camera action. The list view provides all topics and relationships.',
         )}
         tabIndex={0}
         className='rp-focus block h-full w-full cursor-grab touch-none select-none'
@@ -347,51 +365,15 @@ export function KnowledgeMap3D({
         {hint}
       </p>
 
-      {
-        /* Zoom controls. A panel that covers the bottom of the canvas would
-          bury them, so they ride above it - and lie down into a row while
-          they are there. The row form reorders the DOM rather than using
-          flex-row-reverse, so the tab order always follows the visual one. */
-      }
-      <div
-        ref={controlsRef}
-        data-graph-overlay
-        className={`absolute right-4 flex gap-1 ${insets.bottom > 0 ? 'flex-row' : 'flex-col'}`}
-        style={{ bottom: insets.bottom + 16 }}
-      >
-        {(() => {
-          const zoomIn = (
-            <IconButton
-              key='in'
-              label={ui('Zoom in')}
-              variant='outline'
-              icon={Plus}
-              onClick={() => engineRef.current?.zoomBy(1.3)}
-              className='rp-shadow-sm'
-            />
-          )
-          const zoomOut = (
-            <IconButton
-              key='out'
-              label={ui('Zoom out')}
-              variant='outline'
-              icon={Minus}
-              onClick={() => engineRef.current?.zoomBy(1 / 1.3)}
-              className='rp-shadow-sm'
-            />
-          )
-          const fit = (
-            <IconButton
-              key='fit'
-              label={ui('Fit the whole map to view')}
-              variant='outline'
-              icon={Maximize}
-              onClick={() => engineRef.current?.fit(true)}
-              className='rp-shadow-sm'
-            />
-          )
-          return insets.bottom > 0 ? [fit, zoomOut, zoomIn] : [zoomIn, zoomOut, fit]
-        })()}
+      <div>
+        <MapCameraControls
+          target={controlsTarget}
+          zoom={(factor) => engineRef.current?.zoomBy(factor)}
+          fit={() => engineRef.current?.fit(true)}
+          pan={(x, y) => engineRef.current?.pan(x, y)}
+          rotate={(x, y) => engineRef.current?.rotate(x, y)}
+          motion={{ playing, reduced, toggle: () => engineRef.current?.setMotionPlaying(!playing) }}
+        />
       </div>
     </div>
   )

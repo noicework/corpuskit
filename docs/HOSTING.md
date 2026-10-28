@@ -864,7 +864,7 @@ saving changes. Every route or tool that makes a paid model call for its caller 
 
 - These count as one ask each: research asks (`POST /api/t/:slug/ask`), help-assistant asks
   (`POST /api/t/:slug/docs/ask`), cross-portal asks (`POST /api/ask-estate`), the MCP
-  `answer_question` tool, briefings (`POST /api/t/:slug/generate`), multi-document summaries
+  `answer_question` and `answer_estate` tools, briefings (`POST /api/t/:slug/generate`), multi-document summaries
   (`POST /api/t/:slug/summarize`) and investigation syntheses
   (`POST /api/t/:slug/investigations/:id/synthesise`).
 - These accompany an ask that has already counted, so they do not count themselves, but they
@@ -874,7 +874,11 @@ saving changes. Every route or tool that makes a paid model call for its caller 
   The last ask of the day therefore gets no verdicts or follow-up suggestions.
 
 A cross-portal ask counts once on each portal it reaches, and is admitted on every selected
-portal or on none. An ask is counted when it is admitted, before its answer streams, so a
+portal or on none. The estate MCP `answer_estate` tool also counts once on each portal it
+reaches, but each portal is admitted on its own: a portal whose asks are spent is named in the
+call's `failed_sources` as `unavailable` and the others still answer (see
+[the estate MCP endpoint](RBAC.md#estate-mcp-endpoint)). `ESTATE_SOURCE_TIMEOUT_MS`, 25000 by
+default, is how long each portal may take in such a call before it is named there as `timeout`. An ask is counted when it is admitted, before its answer streams, so a
 refused ask costs nothing upstream. A request that is refused after it was counted, for
 example by the per-minute rate limit or because its input is invalid, is given its ask back.
 A refused MCP call returns the same body as a tool error.
@@ -1152,7 +1156,8 @@ The limits, each per minute, with `0` turning one off:
 A paid-answer route covers asks, help-assistant asks, briefings, summaries, syntheses, routing,
 sub-questions, verdicts and follow-ups. A cross-portal ask is one answer on every portal it
 reaches, so it counts once per portal against the first two limits and against each portal's
-anonymous limit, and it is admitted on all of them or on none. A request over any limit is
+anonymous limit, and it is admitted on all of them or on none. An estate MCP `answer_estate` call
+counts the same way, and a refused one is a tool error with the same body. A request over any limit is
 answered `429 {"error":"rate_limited"}` with a `Retry-After` header, and an ask it had counted
 toward `asksPerDay` is given back.
 
@@ -1252,10 +1257,42 @@ the audit log.
 On the Durable Object they are rows of the `site_feedback` table; on the local server,
 `DATA_DIR/site-feedback/<slug>.json`.
 
+## Link review and changed website pages
+
+Manage > Content > Link health lists failed website-source and document-origin checks for the
+portal, including drafts and failed ingests. Administrative enumeration never enters the reader catalogue cache. A curator can check links on demand, re-check one result, remember an ignore decision,
+or confirm retirement through the existing resource-delete route. Retiring removes the document
+and its link-review records. Restricted access (401/403), temporary faults and timeouts are
+reported separately from missing pages (404/410); no result automatically deletes a document.
+Every management action uses `content.write` and the normal privileged-request audit. Queue
+writes use `local.mutation`; scheduled portal checks use `maintenance.link.check`.
+
+The daily pass and on-demand checks share a 100-link cap and a 65-second work budget, visiting
+unchecked and oldest-checked targets first. Ignored targets are skipped until explicitly
+re-checked. Each request has a 10-second deadline, starts at least 500 ms after the previous
+request to that host, uses HEAD with GET fallback, and follows at most three redirects manually.
+HTTP and HTTPS only, public IP addresses and public DNS answers are required before every hop;
+credentials and local hostnames are refused. These limits are fixed, with no new environment
+settings. The queue is kept in the managed SQLite Durable Object or the local server's SQLite
+connection under `DATA_DIR`. Ignore decisions remain until re-check or portal erasure; the
+10,000-record ceiling fails visibly instead of dropping decisions.
+
+Website-source syncs now check both new and previously ingested pages within `maxPages` per run
+(default 60, hard ceiling 200). Existing pages rotate across runs. ETag or Last-Modified requests
+avoid unchanged downloads where supported; a SHA-256 hash of extracted title and content catches
+changes without validators. Changed pages use clean-text ingestion and replacement, preserving
+the original title, topic labels and draft visibility. A failed fetch leaves existing content and
+its fingerprint intact. Source summaries report new, changed, unchanged and failed pages; the
+fingerprint ledger stays server-side and is erased with the source registry. A pre-upgrade URL
+ledger establishes its first fingerprint by matching the existing origin, then detects subsequent
+changes. Refresh is bounded by the existing 500-page discovery and 5,000-page ledger limits.
+Replacement uses the provider's existing create/copy-labels/delete sequence, so remote writes
+are not a single transaction and replacement requires capacity for the new resource.
+
 ## Scheduled maintenance
 
 Once a day (the Worker's cron trigger, or a timer in the local server) the deployment runs one
-maintenance pass over every portal: auto-sync sources are synced, saved-search watches are re-run,
+maintenance pass over every portal: auto-sync sources are synced, website and origin links are checked, saved-search watches are re-run,
 and missing enrichments and suggested questions are generated. The local server runs the
 enrichment part on its own cadence (`AUTO_ENRICH_CADENCE_HOURS`, daily by default).
 
@@ -1263,7 +1300,7 @@ Each source sync, each watch and each portal's enrichment and suggested-question
 unit. One failing unit never stops the others:
 
 - A unit that fails is recorded against its portal in the audit log, as a `maintenance.*` action
-  (`maintenance.source.sync`, `maintenance.watch.run`, `maintenance.enrichment.run` or
+  (`maintenance.source.sync`, `maintenance.link.check`, `maintenance.watch.run`, `maintenance.enrichment.run` or
   `maintenance.questions.run`) with outcome `failure` or `uncertain`, which the portal's
   administrators and the platform both see. A failed source sync also records its reason on the
   source, where Manage shows it. The pass then moves on.
@@ -2094,15 +2131,19 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `aliases` | Host alias records | `tenants` row | `TENANTS_PATH` |
 | `bindings` | The knowledge box endpoint and sealed service account token | `bindings` row | `BINDINGS_PATH` |
 | `lifecycle` | Status, limits, ask counts, capacity ledger, pending delete records and suspension start | `portal-*:<slug>` rows | `DATA_DIR/lifecycle/` |
+| `evaluations` | Evaluation definitions, retained runs with question results, and scheduling delegations | `evaluation_sets`, `evaluation_runs`, `evaluation_schedules` | `DATA_DIR/rbac.sqlite` |
 | `sessions` | Every member's and visitor's saved research sessions, including pre-owner-scope records | `research-v2:…:sessions:` and `session:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/sessions/<slug>/` |
 | `investigations` | Investigations with their evidence, notes and artefacts | `research-v2:…:investigations:` and `investigation:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/investigations/<slug>/` |
 | `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |
-| `sources` | The source registry | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
+| `sources` | The source registry, page fingerprints and refresh cursor | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
+| `linkHealth` | Link review results and remembered ignore decisions | `linkHealth:<slug>` row | `link_health` table in `DATA_DIR/rbac.sqlite` (or `RBAC_PATH`) |
 | `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
 | `siteFeedback` | [Reader feedback](#reader-feedback): readers' messages to the portal team and any reply address they gave (at most 500, kept 90 days) | `site_feedback` rows | `DATA_DIR/site-feedback/<slug>.json` |
+| `answerRecords` | Generated answer evidence, question text and per-portal retention setting; default 90 days, configurable 1 to 365 | `answer-records:<slug>:record:<id>` and `answer-records:<slug>:retention` rows | `DATA_DIR/answer-records/<slug>/` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
 | `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
+| `duplicates` | Remembered duplicate review decisions | `duplicate_reviews` rows | `DATA_DIR/rbac.sqlite`, `duplicate_reviews` rows |
 | `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |
 | `branding` | Uploaded logo, hero image and fonts | `branding_assets` rows | `BRANDING_PATH/<slug>-<kind>.<ext>` |
 | `routing` | Question routing decisions | `routing_records` rows | `DATA_DIR/routing/<slug>.jsonl` |
@@ -2115,13 +2156,18 @@ Durable Object's SQLite database, not in R2 or another blob store, and locally i
 `BRANDING_PATH`. Stores that cache records in memory (bindings, enrichments, knowledge graph
 proposals and the local portal registry) drop them too.
 
+Evaluation runs retain the latest 100 per set (at most 50 sets per portal); definitions and
+scheduling delegations remain until set deletion or portal erasure. See [portal evaluations](EVALUATIONS.md)
+for scoring, ask-cost consent and the optional daily or weekly schedule. The `evaluations` erased
+record kind is part of the hosting contract.
+
 Answer feedback and reader feedback also leave a live portal on their own: the daily maintenance
 pass (the one that applies `AUDIT_RETENTION_DAYS`) removes every rating, comment included, and
 every reader's message older than 90 days, on every portal.
 
 ```json
 200 { "ok": true, "slug": "acme",
-      "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0,
+      "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0, "evaluations": 0,
                   "sessions": 12, "investigations": 3, "watches": 1, "sources": 1,
                   "insights": 1, "feedback": 3, "siteFeedback": 2, "suggestions": 1,
                   "enrichments": 214, "kgProposals": 1, "branding": 2, "routing": 1,
@@ -2170,6 +2216,10 @@ line; call it again to finish.
 Nothing else about the portal is kept. Audit events of other portals, and platform events that do
 not target this one, are untouched. All audit records, erasure lines included, still age out under
 `AUDIT_RETENTION_DAYS` (see [RBAC](RBAC.md)).
+
+The [portal export bundle](PORTAL-EXPORT.md) creates no stored export copy. Its audit
+events and query snapshots use the existing audit inventory above; downloaded bundles are
+outside deployment erasure and must follow the recipient's retention policy.
 
 ### What erasure cannot reach
 
@@ -2232,3 +2282,5 @@ Embeddings, indexing, ordinary document parsing and reranking remain platform se
 The operator is responsible for restricting upstream model access and credentials on the KB,
 including its automatic summary model, and for stopping legacy agents and extraction strategies
 with unrelated model configurations. The request restriction complements those upstream controls.
+
+See [Answer records](ANSWER-RECORDS.md) for curator exports, retention and the server-only recorder API. The hosting control plane must add `answerRecords` to its strict erased-kind contract in the same release.

@@ -1,3 +1,5 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
+import { summariseEvaluation } from './evaluation-scoring.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { BindingStore } from './bindings.ts'
 import { FeedbackStore, InsightsStore, RoutingLog, SourceStore } from './stores.ts'
@@ -842,7 +844,51 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
           version: 'fixture-v1',
         }
         if (stores.branding) call('branding.put', slug, 'image-hero', asset)
+        const evaluation = {
+          name: 'Private evaluation bank',
+          topK: 5,
+          questions: [{
+            query: 'Private evaluation question?',
+            expectedSources: ['r'],
+            expectedFacts: [],
+            shouldDecline: false,
+          }],
+        }
+        const definition = owned.evaluations.put(slug, 'checks', evaluation, now)
+        const evaluationRun = {
+          id: 'run-1',
+          slug,
+          setId: 'checks',
+          definition,
+          startedAt: definition.updatedAt,
+          completedAt: null,
+          status: 'running' as const,
+          results: [],
+          summary: summariseEvaluation([]),
+        }
+        if (declaration.path !== 'evaluations.start') owned.evaluations.start(slug, evaluationRun)
+        const schedule = {
+          slug,
+          setId: 'checks',
+          everyDays: 1 as const,
+          nextAt: now,
+          confirmedAsks: 1,
+          updatedAt: definition.updatedAt,
+          owner: { tenantId: 'one', oid: 'same' },
+        }
+        owned.evaluations.schedule(slug, 'checks', schedule)
         const args: Record<string, unknown[]> = {
+          'duplicates.decide': [slug, 'res-1~res-2', 'keep-both'],
+          'duplicates.erase': [slug],
+          'answerRecords.record': [slug, answerRecordFixture(slug)],
+          'answerRecords.setRetention': [slug, 30],
+          'evaluations.put': [slug, 'checks', { ...evaluation, name: 'Updated bank' }],
+          'evaluations.remove': [slug, 'checks'],
+          'evaluations.start': [slug, evaluationRun],
+          'evaluations.finish': [slug, { ...evaluationRun, status: 'completed' }],
+          'evaluations.schedule': [slug, 'checks', { ...schedule, everyDays: 7 }],
+          'evaluations.claimSchedule': [slug, 'checks', now],
+          'evaluations.erase': [slug],
           'lifecycle.set': [slug, { status: 'read_only', limits: null }],
           'lifecycle.remove': [slug],
           'lifecycle.erase': [slug],
@@ -907,6 +953,17 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
           'watches.add': [slug, owner, 'another query'],
           'watches.update': [slug, seeded.watch.id, { changed: true }, owner],
           'watches.remove': [slug, owner, seeded.watch.id],
+          'linkHealth.remove': [slug, 'link-1'],
+          'linkHealth.put': [slug, {
+            id: 'link-1',
+            url: 'https://example.test/gone',
+            title: 'Research',
+            status: 'broken',
+            firstFailed: null,
+            lastChecked: '2026-10-01T00:00:00Z',
+            attempts: 1,
+            ignored: false,
+          }],
           'sources.add': [slug, 'https://another.example.org', false],
           'sources.update': [slug, source.id, { auto: true }],
           'sources.remove': [slug, source.id],
@@ -983,6 +1040,9 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
             }
           }
           visit(directory)
+          for (const table of ['evaluation_sets', 'evaluation_runs', 'evaluation_schedules']) {
+            result[`sqlite:${table}`] = JSON.stringify(database.all(`SELECT * FROM ${table}`))
+          }
           return result
         }
         const before = snapshot()

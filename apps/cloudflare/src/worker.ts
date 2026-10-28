@@ -1,6 +1,7 @@
 /// <reference path="./runtime.d.ts" />
 /// <reference path="../../../worker-configuration.d.ts" />
 
+import { runScheduledEvaluations } from '../../api/src/evaluation-schedule.ts'
 import { DurableObject } from 'cloudflare:workers'
 import {
   ExternalFailureAudit,
@@ -203,6 +204,7 @@ export class PortalDurableObject extends DurableObject<Env> {
     // on a forwarding header, so `TRUST_PROXY_HOPS` has no meaning here.
     const askPerMin = numberBinding(bindings.RATE_LIMIT_ASK_PER_MIN, 20)
     this.app = buildApp({
+      evaluations: this.stores.evaluations,
       rbac: this.stores.rbac,
       configuredTenantId: bindings.ENTRA_TENANT_ID ||
         (externalLoginConfigured(externalLoginConfig(bindings)) ? 'external' : undefined),
@@ -213,14 +215,17 @@ export class PortalDurableObject extends DurableObject<Env> {
       bindings: this.stores.bindings,
       platformDomain: bindings.PLATFORM_DOMAIN,
       tenants: this.stores.tenants,
+      duplicates: this.stores.duplicates,
       lifecycle: this.stores.lifecycle,
       insights: this.stores.insights,
       feedback: this.stores.feedback,
       siteFeedback: this.stores.siteFeedback,
       siteFeedbackNotifier: siteFeedbackNotifier(env, bindings),
+      answerRecords: this.stores.answerRecords,
       sessions: this.stores.sessions,
       watches: this.stores.watches,
       sources: this.stores.sources,
+      linkHealth: this.stores.linkHealth,
       investigations: this.stores.investigations,
       suggestions: this.stores.suggestions,
       enrichments: this.stores.enrichments,
@@ -576,7 +581,11 @@ export class PortalDurableObject extends DurableObject<Env> {
   }
 
   async maintenance(): Promise<void> {
-    await runSystemMaintenance(this.provider, this.stores, this.bindings.AUDIT_RETENTION_DAYS)
+    try {
+      await runSystemMaintenance(this.provider, this.stores, this.bindings.AUDIT_RETENTION_DAYS)
+    } finally {
+      await runScheduledEvaluations(this.app)
+    }
   }
 }
 

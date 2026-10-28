@@ -1,3 +1,7 @@
+import { DuplicateReviewStore } from './duplicate-store.ts'
+import { AnswerRecordStore, FileAnswerRecordState } from './answer-record-store.ts'
+import { EvaluationStore } from './evaluation-store.ts'
+import { LinkHealthStore } from './link-health-store.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   appendAudit,
@@ -41,7 +45,7 @@ interface RequestMutation {
 /** One runtime's shared stores, using its existing SQL connection and request audit context. */
 export function localOwnedStores(
   dataDir: string,
-  database: Pick<RbacDatabase, 'transactionSync'>,
+  database: RbacDatabase,
   audit: Pick<AuditStore, 'append'>,
   tenantEnv?: Record<string, string | undefined>,
 ) {
@@ -94,7 +98,7 @@ export function localOwnedStores(
         ? (method === 'remove' ? args[2] : method === 'update' ? args[1] : undefined)
         : method === 'updateEvidence' || method === 'removeEvidence'
         ? args[3]
-        : ['sources', 'enrichments', 'branding', 'suggestions'].includes(store!)
+        : ['sources', 'linkHealth', 'enrichments', 'branding', 'suggestions'].includes(store!)
         ? args[1]
         : store === 'investigations'
         ? args[2]
@@ -133,6 +137,7 @@ export function localOwnedStores(
       if (
         (operation.name === 'tenants.patch' &&
           ['tenant.access.update', 'tenant.configuration.update'].includes(context.input.action)) ||
+        (operation.name === 'duplicates.decide' && context.input.action === 'duplicate.review') ||
         (operation.name === 'lifecycle.set' &&
           context.input.action === 'portal.lifecycle.update') ||
         (operation.name === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
@@ -237,6 +242,7 @@ export function localOwnedStores(
       (args) => EnrichmentStore.checkpoint(shared.enrichments, String(args[0])),
     )
   }
+  const answerRecordState = new FileAnswerRecordState(dataDir)
   const erasure = wrap('erasure', {
     erase: (_slug: string, work: () => unknown) => {
       const result = work()
@@ -246,8 +252,32 @@ export function localOwnedStores(
   })
   return {
     localMutations,
+    duplicates: wrap(
+      'duplicates',
+      new DuplicateReviewStore(database, (work) =>
+        database.transactionSync(() => {
+          const result = work()
+          boundary.complete()
+          return result
+        })),
+    ),
+    evaluations: wrap(
+      'evaluations',
+      new EvaluationStore(database, (work) =>
+        database.transactionSync(() => {
+          const result = work()
+          boundary.complete()
+          return result
+        })),
+    ),
+    linkHealth: wrap('linkHealth', new LinkHealthStore(database, boundary)),
     attach,
     erasureTransaction: <T>(slug: string, work: () => T): T => erasure.erase(slug, work) as T,
+    answerRecords: wrap(
+      'answerRecords',
+      new AnswerRecordStore(answerRecordState),
+      (args) => answerRecordState.mutationPaths(args),
+    ),
     insights: wrap('insights', new InsightsStore(dataDir), files('insights', 'jsonl')),
     feedback: wrap('feedback', new FeedbackStore(dataDir), files('feedback')),
     siteFeedback: wrap('siteFeedback', new SiteFeedbackStore(dataDir), files('site-feedback')),

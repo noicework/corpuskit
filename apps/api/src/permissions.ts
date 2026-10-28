@@ -75,6 +75,12 @@ function entry(
   })
 }
 
+/**
+ * The estate MCP endpoint: one credential reaches several portals. A key is accepted here as well
+ * as on its own portal's routes, so authority selection needs this path before any route matches.
+ */
+export const ESTATE_MCP_ROUTE = '/api/estate/mcp'
+
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 /**
  * Turning on the knowledge box's hidden resources, which adding a draft or hiding a resource does
@@ -87,6 +93,23 @@ const HIDDEN_RESOURCES_ENABLE = {
 } as const
 
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'GET', '/api/admin/t/:slug/duplicates', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/duplicates/refresh', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/duplicates/review', 'content.write', 'portal', {
+    subActions: [{ action: 'duplicate.review', permission: 'content.write', scope: 'portal' }],
+  }),
+  entry('http', 'GET', '/api/admin/overlap', 'portal.create', 'platform'),
+  entry('http', 'POST', '/api/admin/overlap/refresh', 'portal.create', 'platform'),
+  entry('http', 'GET', '/api/admin/overlap/export', 'portal.create', 'platform'),
+  ...[
+    ['GET', '/api/admin/t/:slug/evaluations'],
+    ['PUT', '/api/admin/t/:slug/evaluations/:id'],
+    ['PUT', '/api/admin/t/:slug/evaluations/:id/schedule'],
+    ['DELETE', '/api/admin/t/:slug/evaluations/:id'],
+    ['GET', '/api/admin/t/:slug/evaluations/:id/runs'],
+    ['POST', '/api/admin/t/:slug/evaluations/:id/runs'],
+    ['GET', '/api/admin/t/:slug/evaluations/:id/runs/:runId/csv'],
+  ].map(([method, path]) => entry('http', method!, path!, 'behaviour.write', 'portal')),
   entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
     operator: true,
   }),
@@ -122,8 +145,15 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       scope: 'portal',
     }],
   }),
+  ...['/records/:id', '/records/:id/export', '/export', '/retention'].map((suffix) =>
+    entry('http', 'GET', '/api/admin/t/:slug/answer-records' + suffix, 'content.write', 'portal')
+  ),
+  entry('http', 'PUT', '/api/admin/t/:slug/answer-records/retention', 'behaviour.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/export', 'audit.export', 'portal', {
+    subActions: [{ action: 'portal.export.bundle', permission: 'audit.export', scope: 'portal' }],
+  }),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
   entry('http', 'GET', '/api/admin/audit/export', 'audit.export', 'platform'),
   ...['people', 'groups'].flatMap((family) => [
@@ -147,6 +177,15 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ),
   ]),
   ...([
+    ['duplicates', ['decide'], 'content.write', 'portal'],
+    ['duplicates', ['erase'], 'portal.create', 'platform'],
+    [
+      'evaluations',
+      ['put', 'remove', 'start', 'finish', 'schedule', 'claimSchedule'],
+      'behaviour.write',
+      'portal',
+    ],
+    ['evaluations', ['erase'], 'portal.create', 'platform'],
     ['lifecycle', ['set'], 'portal.create', 'platform'],
     ['lifecycle', ['remove'], 'portal.delete', 'platform'],
     ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],
@@ -177,11 +216,14 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['tenants', ['patchBranding'], 'appearance.write', 'portal'],
     ['sessions', ['put', 'remove'], 'portal.ask', 'portal'],
     ['insights', ['record'], 'portal.ask', 'portal'],
+    ['answerRecords', ['record'], 'portal.ask', 'portal'],
+    ['answerRecords', ['setRetention'], 'behaviour.write', 'portal'],
     ['feedback', ['record'], 'portal.ask', 'portal'],
     ['siteFeedback', ['save'], 'portal.ask', 'portal'],
     ['routing', ['record'], 'portal.ask', 'portal'],
     ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],
     ['sources', ['add', 'update', 'remove'], 'content.write', 'portal'],
+    ['linkHealth', ['put', 'remove'], 'content.write', 'portal'],
     [
       'investigations',
       [
@@ -214,6 +256,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       )
     )
   ),
+  entry('internal', 'SYSTEM', 'maintenance.evaluation.run', 'behaviour.write', 'portal'),
+  entry('internal', 'SYSTEM', 'maintenance.link.check', 'content.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.source.sync', 'content.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.watch.run', 'portal.watch', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.enrichment.run', 'enrichments.write', 'portal'),
@@ -246,6 +290,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/labelsets', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/suggest', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources', 'portal.read', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/titles', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/questions', 'portal.read', 'portal', {
     subActions: [
@@ -505,6 +550,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'DELETE', '/api/admin/t/:slug/resources/:id', 'content.write', 'portal', {
     subActions: [{ action: 'resource.delete', permission: 'content.write', scope: 'portal' }],
   }),
+  entry('http', 'GET', '/api/admin/t/:slug/link-health', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/link-health/check', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/link-health/:id/recheck', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/link-health/:id/ignore', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'PATCH', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),
@@ -542,6 +591,16 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('mcp', 'MCP', 'get_document', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'browse_catalogue', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'answer_question', 'portal.ask', 'portal'),
+  // The estate MCP endpoint reaches every portal its caller may use, as a cross-portal ask does.
+  entry('http', 'ALL', ESTATE_MCP_ROUTE, 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('mcp', 'MCP', 'search_estate', 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('mcp', 'MCP', 'answer_estate', 'portal.ask', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
   entry('http', 'ALL', '/t/*', 'portal.read', 'public', {
     reason: 'Application shell bookmark redirects only; no research data is returned.',
   }),
@@ -750,8 +809,14 @@ export function assertRouteInventory(
     throw new Error('Route permission inventory mismatch')
   }
 }
-export function assertToolInventory(names: readonly string[]): void {
-  const expected = DECLARATIONS.filter((item) => item.kind === 'mcp').map((item) => item.path)
+/** A portal's MCP endpoint lists the portal tools; the estate endpoint lists the aggregate ones. */
+export function assertToolInventory(
+  names: readonly string[],
+  endpoint: 'portal' | 'estate' = 'portal',
+): void {
+  const expected = DECLARATIONS.filter((item) =>
+    item.kind === 'mcp' && (item.aggregate === 'authorised-portals') === (endpoint === 'estate')
+  ).map((item) => item.path)
   if (
     new Set(names).size !== names.length || expected.length !== names.length ||
     names.some((name) => !expected.includes(name))
