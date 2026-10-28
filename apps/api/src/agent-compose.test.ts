@@ -117,6 +117,99 @@ const answerOf = (events: AgentAskEvent[]) =>
   ofType(events, 'delta').map((event) => event.text).join('')
 
 describe('composeAcross', () => {
+  it('keeps all 14 supported markers on an attributed host and two-peer answer', async () => {
+    const host = portal('host', 'Knowledge Hub research portal')
+    const collections = [
+      {
+        id: 'host',
+        label: host.branding.productName,
+        facts: [
+          'pest monitoring covered 65% of trial farms.',
+          'monitoring teams completed 67 surveys.',
+          'the sector contributed $12.9 billion in economic value.',
+          'regional trials measured irrigation water use.',
+          'local observers recorded seasonal rainfall patterns.',
+        ],
+      },
+      {
+        id: 'fish',
+        label: 'Fisheries research (demonstration)',
+        facts: [
+          'oyster mortality events clustered after warm days.',
+          'shellfish movement controls followed water temperature thresholds.',
+          'water quality monitoring identified estuary oxygen changes.',
+          'coastal sampling measured nutrient movement.',
+          'habitat surveys recorded juvenile fish abundance.',
+        ],
+      },
+      {
+        id: 'grain',
+        label: 'Grains RDC (demonstration)',
+        facts: [
+          'wet springs brought stripe rust infections forward.',
+          'crop rotation reduced fungal disease pressure.',
+          'soil moisture monitoring guided planting decisions.',
+          'resistant varieties reduced crop losses.',
+        ],
+      },
+    ]
+    const body = (facts: string[]) =>
+      facts.join(' ').replace('65%', '65 per cent')
+        .replace('$12.9 billion', '12.9 billion dollars')
+    const draft = collections.flatMap((collection, i) =>
+      collection.facts.map((fact) => `According to ${collection.label}, ${fact} [${i + 1}]`)
+    ).join('\n\n')
+    const provider = Object.assign(
+      new ComposeProvider({
+        host: async () => ({
+          query: 'q',
+          relatedQuestions: [],
+          resources: [{
+            id: 'survey',
+            title: 'Regional monitoring',
+            summary: body(collections[0]!.facts),
+            type: 'pdf',
+            topicIds: [],
+            keyFacts: [],
+            citedCount: 0,
+            relevance: 0.9,
+            matchedPassage: body(collections[0]!.facts),
+          }],
+        }),
+      }),
+      {
+        composeStream: async function* () {
+          yield draft
+        },
+      },
+    )
+    const events = await collect(composeAcross({
+      provider,
+      host,
+      portals: [host],
+      question: 'What do the collections report?',
+      peers: collections.slice(1).map((collection) => ({
+        source: { id: collection.id, label: collection.label, kind: 'peer' },
+        search: async () => [{
+          id: collection.id,
+          title: 'Trial findings',
+          text: body(collection.facts),
+        }],
+      })),
+    }))
+    const done = ofType(events, 'done')[0]!
+    expect(done.text?.match(/\[\d+\]/g)).toHaveLength(14)
+    expect(ofType(events, 'citation').map((c) => c.sourceId)).toEqual(['host', 'fish', 'grain'])
+    expect(done.text).toContain('65%')
+    expect(done.text).toContain('67 surveys')
+    expect(done.text).toContain('$12.9 billion')
+    expect(
+      ofType(events, 'agent-step').find((e) => e.id === 'verify' && e.status === 'completed')
+        ?.reason,
+    )
+      .toBeUndefined()
+  })
+
   it('starts hosted and peer searches together, including their deadlines before stream backpressure', async () => {
     using time = new FakeTime()
     const started: string[] = []
@@ -428,9 +521,32 @@ describe('composeAcross', () => {
     const events = await run(
       new ComposeProvider({}, () => Promise.resolve('Nothing here matches a passage. [1]')),
     )
-    expect(answerOf(events)).toBe(NO_SUPPORTED_ANSWER)
+    expect(answerOf(events)).toContain(NO_SUPPORTED_ANSWER)
+    expect(answerOf(events)).toContain('Closest sources:')
+    expect(answerOf(events)).toContain('Fisheries collection: Oyster mortality review')
     expect(ofType(events, 'citation')).toEqual([])
     expect(events.at(-1)?.type).toBe('done')
+  })
+
+  it('replaces a long unsupported streamed draft with the existing decline and closest sources', async () => {
+    const draft = 'A wholly unsupported inference about unrelated machinery. [1] '.repeat(24)
+    expect(draft.length).toBeGreaterThan(1107)
+    const provider = Object.assign(new ComposeProvider(), {
+      composeStream: async function* () {
+        yield draft.slice(0, 1107)
+        yield draft.slice(1107)
+      },
+    })
+    const events = await run(provider)
+    expect(answerOf(events)).toBe(draft)
+    expect(ofType(events, 'citation')).toEqual([])
+    const done = ofType(events, 'done')[0]!
+    expect(done.text).toContain(NO_SUPPORTED_ANSWER)
+    expect(done.text).toContain('Closest sources:')
+    expect(done.text).toContain('Fisheries collection: Oyster mortality review')
+    expect(done.text).toContain('Grains collection: Early rust epidemics')
+    expect(done.text).toContain('Rural collection: Heat stress in livestock')
+    expect(done.text).not.toContain('unsupported inference')
   })
 
   it('says so when no portal has a passage, without composing', async () => {

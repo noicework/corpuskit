@@ -84,8 +84,24 @@ PUT /api/admin/t/:slug/federation/peers/:peerId/key
 - Every peer call is audited on the host as `federation.peer.call`, with the peer's id, kind,
   duration and, when it failed, why. Never the key.
 - **Citations.** `linkOrigins` (default false): off, a partner citation shows its title, label and
-  passage with no link, so a public portal does not name the partner's site. On, it links the
-  passage's origin URL when the box has one (`arag-kb` only; the MCP results carry none).
+  passage with no URL in either `citation` or `agent-sources`. The peer parser also withholds
+  origin URLs. Off, titles lose their final spaced ` | suffix` or ` - suffix`, a generic
+  site-name convention; this can also remove a final subtitle. No site is treated specially.
+  On, titles keep their suffix and citations can link the origin URL returned by either peer
+  transport (including MCP URL metadata or an embedded resource URI).
+- **Passage quality.** MCP accepts text only with a paragraph id or parent resource in `_meta`,
+  or an embedded text resource with a URI. Generated summaries without this provenance are
+  discarded, including summaries carrying their own footnotes and document-id lists. Filename
+  titles fall back to `_meta.resource_title`, then the first meaningful passage line.
+  KB applies the host composition floor of **at least 0.3** to the paragraph's retrieval `score`,
+  without normalising against the best hit. MCP results normally carry no score: their returned
+  order is the server's ranking, so keep that order and take up to four eligible passages.
+  If MCP reports `_meta.score` or a content item's `score`, apply the same floor; invalid
+  reported scores are rejected. If every eligible MCP passage has a score, rank by score before
+  the four-passage cap; otherwise preserve server order, including when scored and unscored
+  passages are mixed. Missing MCP scores never disqualify a passage, but missing provenance
+  always does. One qualifying passage is enough to keep a source represented; no explicitly
+  weak passage is promoted just to fill a source slot.
 
 ## Participation
 
@@ -172,7 +188,14 @@ Composing (`mode: "orchestrated"`):
 4. Step `verify` runs the Ask answer's deterministic binding over it: each sentence keeps only
    the markers whose passage carries its words, figures and names, a sentence stating a figure
    no passage supports is removed, and the markers are renumbered by first appearance. The step's
-   `reason` says what was removed. An answer left with no supported citation is declined.
+   `reason` says what was removed. Collection labels and their words are allowed attribution
+   terms, so they are not required to appear in the cited passage as claim entities. Figures
+   remain independently checked, including `%` and `per cent` spellings. Allowing a collection
+   label never exempts its claim's figures: `12.9 billion dollars` can support `$12.9 billion`,
+   while a changed value such as `12.8` is rejected. An answer left with no
+   supported citation is declined using the existing wording, followed by one closest retrieved
+   title per collection. `done.text` contains that complete decline even after a long provisional
+   answer has already streamed; these closest sources are not emitted as verified citations.
 5. Verified citations follow the provisional deltas, then `done.text` supplies the complete, checked
    answer. Consumers MUST replace the accumulated text with `done.text` when it is present. This
    removes unsupported markers and figures, applies the final numbering, or replaces the draft

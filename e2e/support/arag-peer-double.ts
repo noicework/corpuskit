@@ -12,6 +12,8 @@ export interface PeerDocument {
   title: string
   text: string
   originUrl?: string
+  /** Raw /find score; MCP deliberately returns no scores. */
+  score?: number
   /** Labelled `federation/exclude` in the box. */
   excluded?: boolean
 }
@@ -86,7 +88,7 @@ export function aragPeerFetch(boxes: PeerBox[]): typeof fetch & { calls: PeerCal
             'f/file': {
               paragraphs: {
                 [`${document.resourceId}/f/file/0-${document.text.length}`]: {
-                  score: 0.9 - rank * 0.05,
+                  score: document.score ?? 0.9 - rank * 0.05,
                   text: document.text,
                 },
               },
@@ -126,6 +128,8 @@ export function aragPeerFetch(boxes: PeerBox[]): typeof fetch & { calls: PeerCal
             paragraph_id: `block-${String.fromCharCode(65 + index)}A`,
             resource_title: document.title,
             parent: document.resourceId,
+            // The MCP transport returns server-ranked passages without retrieval scores.
+            ...(document.originUrl ? { url: document.originUrl } : {}),
             field_type: 'f',
             field: 'file',
             resource_labels: [{

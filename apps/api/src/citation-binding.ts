@@ -227,7 +227,11 @@ export interface SentenceFeatures {
 }
 
 /** Named entities a claim hangs on: lexicon terms, gene symbols and capitalised names mid-sentence. */
-export function namedEntities(sentence: string, lexicon: readonly string[]): string[] {
+export function namedEntities(
+  sentence: string,
+  lexicon: readonly string[],
+  allowedTerms: readonly string[] = [],
+): string[] {
   const found = new Set<string>()
   const lower = sentence.toLowerCase()
   for (const term of lexicon) {
@@ -245,16 +249,33 @@ export function namedEntities(sentence: string, lexicon: readonly string[]): str
     const word = m[1]!
     if (!STOPWORDS.has(word.toLowerCase())) found.add(word.toLowerCase())
   }
-  return [...found]
+  const allowed = allowedEntityTerms(allowedTerms)
+  return [...found].filter((term) => !allowed.has(term))
+}
+
+/** Collection attribution is provenance, not a name the passage must independently state. */
+function allowedEntityTerms(terms: readonly string[]): Set<string> {
+  return new Set(terms.flatMap((term) => [
+    term.trim().toLowerCase(),
+    ...(term.toLowerCase().match(/[a-z][a-z0-9-]*/g) ?? []),
+  ]))
 }
 
 export function sentenceFeatures(
   sentence: string,
   lexicon: readonly string[],
   questionEntities: readonly string[] = [],
+  allowedTerms: readonly string[] = [],
 ): SentenceFeatures {
   const plain = sentence.replace(/\[\d{1,3}\]/g, ' ')
-  const words = contentWords(plain)
+  const allowed = allowedEntityTerms(allowedTerms)
+  // Do not let attribution dilute vocabulary overlap or become a figure's cohort anchor.
+  // Keep every numeric token: an allowed collection name never exempts a stated figure.
+  const evidence = plain.replace(
+    /\b[a-z][a-z0-9-]*\b/gi,
+    (word) => allowed.has(word.toLowerCase()) && !/\d/.test(word) ? ' ' : word,
+  )
+  const words = contentWords(evidence)
   const bigrams: string[] = []
   for (let i = 1; i < words.length; i++) bigrams.push(`${words[i - 1]} ${words[i]}`)
   return {
@@ -262,9 +283,13 @@ export function sentenceFeatures(
     words,
     bigrams,
     numbers: extractNumbers(normaliseFigures(plain)),
-    entities: namedEntities(plain, lexicon),
+    entities: namedEntities(plain, lexicon, allowedTerms),
     designs: designTerms(plain),
-    claim: claimFeatures(plain, lexicon, questionEntities),
+    claim: claimFeatures(
+      evidence,
+      lexicon.filter((term) => !allowed.has(term.toLowerCase())),
+      questionEntities.filter((term) => !allowed.has(term.toLowerCase())),
+    ),
   }
 }
 
@@ -625,6 +650,8 @@ export interface BindInput {
   /** Extracted text per citation index (the provider's numbering), reference list already removed. */
   texts: ReadonlyMap<number, string>
   lexicon?: readonly string[]
+  /** Source labels and their words are attribution, never unsupported claim entities. */
+  allowedTerms?: readonly string[]
   /** Citation indices that failed the display floor: their markers are dropped outright. */
   belowFloor?: ReadonlySet<number>
   /** Names the question uses (lower-cased): a sentence naming one binds only to a text that carries it. */
@@ -743,7 +770,12 @@ export function bindSentences(input: BindInput): BindResult {
         ? ownAll.slice(0, ownAll.length - tailMarkers.length)
         : ownAll
       const plain = sentence.replace(/\s*\[\d{1,3}\]/g, '').trim()
-      const features = sentenceFeatures(plain, lexicon, input.questionEntities ?? [])
+      const features = sentenceFeatures(
+        plain,
+        lexicon,
+        input.questionEntities ?? [],
+        input.allowedTerms ?? [],
+      )
       const rare = rareWords(features.words, allPrepared)
       const rarePairs = rareBigrams(features.bigrams, allPrepared)
       const candidates = BOILERPLATE.test(plain)

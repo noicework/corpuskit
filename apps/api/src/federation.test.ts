@@ -189,7 +189,9 @@ describe('the federation peer client', () => {
 
   it('searches a knowledge box through /find only, never returning a withheld resource', async () => {
     const peerFetch = aragPeerFetch(boxes())
-    const passages = await searchPeer(KB_PEER, KB_KEY, 'soil carbon', { fetchImpl: peerFetch })
+    const passages = await searchPeer({ ...KB_PEER, linkOrigins: true }, KB_KEY, 'soil carbon', {
+      fetchImpl: peerFetch,
+    })
     expect(passages).toEqual([{
       resourceId: 'kb-r1',
       title: 'Soil carbon in mixed farms',
@@ -260,6 +262,31 @@ describe('federation peers in a composed answer', () => {
       ofType(events, 'agent-sources').find((e) => e.source.id === 'peer:kb-partner')
         ?.chunks[0]?.url,
     ).toBe('https://partner.example.org/reports/kb-r1.pdf')
+  })
+
+  it('withholds origin URLs and site suffixes in both peer events, with explicit link opt-in', async () => {
+    const peerBoxes = boxes()
+    peerBoxes[0]!.documents[0]!.title += ' | Estuary research site'
+    peerBoxes[1]!.documents[0]!.title += ' - Field research site'
+    peerBoxes[1]!.documents[0]!.originUrl = 'https://partner.example.org/water'
+    const f = setup({ peerBoxes })
+    for (const linkOrigins of [false, true]) {
+      await withPeers(f, [
+        { ...KB_PEER, linkOrigins },
+        { ...MCP_PEER, linkOrigins },
+      ])
+      const { events } = await f.ask('marine', 'Why? #compose')
+      const chunks = ofType(events, 'agent-sources').filter((e) => e.source.kind === 'peer')
+        .flatMap((e) => e.chunks)
+      const citations = ofType(events, 'citation').filter((e) => e.sourceId.startsWith('peer:'))
+      expect(chunks).toHaveLength(2)
+      expect(citations).toHaveLength(2)
+      for (const item of [...chunks, ...citations]) {
+        expect(Boolean(item.url)).toBe(linkOrigins)
+        expect(item.title.includes('research site')).toBe(linkOrigins)
+      }
+      if (!linkOrigins) expect(JSON.stringify(events)).not.toContain('partner.example.org')
+    }
   })
 
   it('names a peer that runs past its time limit, and answers from the rest', async () => {
