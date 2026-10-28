@@ -743,10 +743,12 @@ function OriginalFileActions(
  * document itself.
  */
 function OfficeBody(
-  { slug, content, fileUrl }: {
+  { slug, content, fileUrl, passage }: {
     slug: string
     content: ResourceContent
     fileUrl: string | undefined
+    /** The cited passage, found and highlighted in the rendition's own text. */
+    passage: string | null
   },
 ) {
   const { ui } = usePortalLocale()
@@ -754,12 +756,19 @@ function OfficeBody(
   const previewUrl = preview ? resourceFileUrl(slug, content.id, preview.fieldId) : undefined
 
   if (previewUrl && preview?.contentType === 'application/pdf') {
+    // The platform's page numbers count the original's pages, which a
+    // rendition need not share, so the reader finds the cited passage instead.
     return (
       <div className='space-y-4'>
         <p className='text-xs text-ink-3'>
           {ui('Showing a PDF rendition of the original document.')}
         </p>
-        <PdfReader fileUrl={previewUrl} title={content.title} initialPage={null} />
+        <PdfReader
+          fileUrl={previewUrl}
+          title={content.title}
+          initialPage={null}
+          highlight={passage}
+        />
         {fileUrl ? <OriginalFileActions fileUrl={fileUrl} label={ui('Download original')} /> : null}
       </div>
     )
@@ -798,6 +807,12 @@ function OfficeBody(
       </div>
     </div>
   )
+}
+
+/** Whether the resource opens in the PDF reader, so a citation's page has somewhere to land. */
+function opensInPdfReader(content: ResourceContent | undefined): boolean {
+  return content !== undefined && selectViewerVariant(content.kind) === 'pdf' &&
+    content.files.length > 0
 }
 
 /** Dispatches to the type-aware primary viewer for the resource's content. */
@@ -956,7 +971,7 @@ function ResourceViewer(
         )
         : <EmptyState title={ui('This image is not available')} />
     case 'office':
-      return <OfficeBody slug={slug} content={content} fileUrl={fileUrl} />
+      return <OfficeBody slug={slug} content={content} fileUrl={fileUrl} passage={passage} />
     default:
       // web / text / file - the structured reading pane. A downloadable file
       // (a non-office attachment) gets a download action above the reader.
@@ -1273,7 +1288,7 @@ function DocumentChat(
      * whether the passage was found and scrolled to; false lets the marker
      * fall through to its ordinary deep link.
      */
-    onCitationJump?: (citation: Citation, passage: string | undefined) => boolean
+    onCitationJump?: (citation: Citation, passage: string | undefined, page?: number) => boolean
   },
 ) {
   const access = useAccess()
@@ -1879,7 +1894,12 @@ export function ResourceDetailPage() {
                     slug={config.slug}
                     resource={resource}
                     onFocus={revealRail}
-                    onCitationJump={(_citation, passage) => jumpToPassage(passage)}
+                    onCitationJump={(_citation, passage, page) =>
+                      // A citation that names its page opens the PDF there, through its own
+                      // link; the extracted text is the jump for everything else.
+                      page !== undefined && opensInPdfReader(content)
+                        ? false
+                        : jumpToPassage(passage)}
                   />
                   <ResourceContext resource={resource} />
                   <RecommendationsRail

@@ -46,7 +46,12 @@ export interface AnswerStreamProps {
    * return false to let the marker follow its deep link as usual. Absent, the
    * marker is a plain deep link.
    */
-  onCitationJump?: (citation: Citation, passage: string | undefined) => boolean
+  onCitationJump?: (
+    citation: Citation,
+    passage: string | undefined,
+    /** The page the marker's link opens at, when it names one. */
+    page?: number,
+  ) => boolean
 }
 
 /**
@@ -65,6 +70,37 @@ export function citationHref(
   if (matchedPassage) params.push(`passage=${encodeURIComponent(matchedPassage.slice(0, 300))}`)
   if (page && matchedPassage) params.push(`page=${page}`)
   return `/t/${slug}/library/${resourceId}${params.length > 0 ? `?${params.join('&')}` : ''}`
+}
+
+/**
+ * Where a citation opens: the paragraph the answer cited and its page, when
+ * the platform named that paragraph; otherwise the source's own matched
+ * passage and page. Passage and page always come from one paragraph, so the
+ * reader lands on a page that carries the highlight. A source matched only
+ * on its generated summary has no place in the document to open at.
+ */
+export function citationTarget(
+  citation: Citation,
+  source: ScoredResource | undefined,
+): { passage?: string; page?: number } {
+  if (citation.passage) {
+    return { passage: citation.passage, ...(citation.page ? { page: citation.page } : {}) }
+  }
+  if (!source?.matchedPassage || source.matchedField === 'summary') return {}
+  return {
+    passage: source.matchedPassage,
+    ...(source.matchedPage ? { page: source.matchedPage } : {}),
+  }
+}
+
+/** The deep link a citation opens, at its cited passage and page (see `citationTarget`). */
+export function citationLink(
+  slug: string,
+  citation: Citation,
+  source: ScoredResource | undefined,
+): string {
+  const target = citationTarget(citation, source)
+  return citationHref(slug, citation.resourceId, target.passage, target.page)
 }
 
 /**
@@ -584,15 +620,17 @@ function PermittedAnswerStream(
   const renderMarker: MarkerRenderer = (label, index, key) => {
     const citation = citations.find((item) => item.index === index)
     if (!citation) return null
-    const passage = citation.passage ??
-      sources.find((source) => source.id === citation.resourceId)?.matchedPassage
+    const { passage, page } = citationTarget(
+      citation,
+      sources.find((source) => source.id === citation.resourceId),
+    )
     return (
       <sup key={key}>
         <Link
-          to={citationHref(slug, citation.resourceId, passage)}
+          to={citationHref(slug, citation.resourceId, passage, page)}
           onClick={(event) => {
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-            if (onCitationJump?.(citation, passage)) event.preventDefault()
+            if (onCitationJump?.(citation, passage, page)) event.preventDefault()
           }}
           onKeyDown={(event) => {
             if (event.key !== ' ') return
@@ -679,16 +717,14 @@ function PermittedAnswerStream(
           <>
             <div className='mt-4 flex flex-wrap items-center gap-2'>
               {citations.map((citation) => {
-                const matchedPassage = sources.find((resource) =>
-                  resource.id === citation.resourceId
-                )?.matchedPassage
+                const source = sources.find((resource) => resource.id === citation.resourceId)
                 return (
                   <div
                     key={citation.index}
                     className='inline-flex min-w-0 max-w-full items-center gap-1'
                   >
                     <Link
-                      to={citationHref(slug, citation.resourceId, matchedPassage)}
+                      to={citationLink(slug, citation, source)}
                       className='rp-btn rp-btn-ghost rp-btn-sm min-w-0 max-w-full gap-1.5 border border-line bg-surface-2'
                     >
                       <span

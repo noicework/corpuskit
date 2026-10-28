@@ -1190,7 +1190,13 @@ export const CitationSchema = z.object({
   title: z.string().min(1),
   /** The generated headline, when it differs from the title - shown as a subtitle. */
   headline: z.string().optional(),
+  /** The text of the first paragraph the answer cited in this resource, when known. */
   passage: z.string().optional(),
+  /**
+   * The page (counted from one) that `passage` sits on in the stored file, when the platform
+   * reported one, so the citation opens the PDF there. Absent for a passage outside a paged file.
+   */
+  page: z.number().int().positive().optional(),
 })
 
 export const AskStageSchema = z.enum([

@@ -18,7 +18,7 @@ import {
   unsupportedFigurePattern,
 } from '../lib/answer-marks.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
-import { citationHref, InferenceMark } from './AnswerStream.tsx'
+import { citationLink, InferenceMark } from './AnswerStream.tsx'
 
 export interface InlineOptions {
   /** Matches the figures the audit could not find beside their claim (`unsupportedFigurePattern`). */
@@ -84,11 +84,10 @@ export function renderCitationMarkers(
       : citations.find((item) => item.index === citationIndex)
     if (citation) {
       const source = sources.find((s) => s.id === citation.resourceId)
-      const matchedPassage = source?.matchedField === 'summary' ? undefined : source?.matchedPassage
       return (
         <sup key={key}>
           <Link
-            to={citationHref(slug, citation.resourceId, matchedPassage, source?.matchedPage)}
+            to={citationLink(slug, citation, source)}
             className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
             aria-label={ui('Source {index}, {title}', {

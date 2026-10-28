@@ -42,7 +42,7 @@ import {
 } from '../api/client.ts'
 import { secondsUntilRetry } from '../lib/ask-budget.ts'
 import { answerHtml, escapeHtml, referenceListHtml } from '../lib/answer-export.ts'
-import { citationHref, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
+import { citationLink, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
 import { CompareConfigurations } from '../components/CompareConfigurations.tsx'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
 import { RouteChip } from '../components/RouteChip.tsx'
@@ -1492,18 +1492,10 @@ function AnswerCard({
                           const source = message.sources.find((source) =>
                             source.id === citation.resourceId
                           )
-                          const matchedPassage = source?.matchedField === 'summary'
-                            ? undefined
-                            : source?.matchedPassage
                           return (
                             <Link
                               key={citation.index}
-                              to={citationHref(
-                                slug,
-                                citation.resourceId,
-                                matchedPassage,
-                                source?.matchedPage,
-                              )}
+                              to={citationLink(slug, citation, source)}
                               title={citation.headline
                                 ? `${citation.title} - ${citation.headline}`
                                 : citation.title}
