@@ -128,4 +128,60 @@ export const USAGE_JA: Readonly<Record<string, string>> = {
   'Evidence coverage by topic': 'トピック別の根拠の網羅状況',
   "Not available: the ask log keeps each question's text but not its topic, and an unanswered question has no cited source to take a topic from.":
     '利用できません。質問ログには質問文は残りますがトピックは記録されず、未回答の質問にはトピックを判断できる引用元もありません。',
+  'Top topics': 'よく参照されたトピック',
+  'Questions counted by the topics of their cited documents. A question counts once in each cited topic. Unanswered questions have no citation topic.':
+    '引用された資料のトピック別に質問を数えます。1つの質問は引用した各トピックで1回ずつ数えます。未回答の質問には引用トピックがありません。',
+  'No citation topics recorded in this period.': 'この期間に引用トピックの記録はありません。',
+  'Distinct currently held documents cited at least once in this period, out of all documents the topic currently holds. This measures use of the collection, not answer quality or coverage of unanswered questions.':
+    'トピックに現在ある全資料のうち、この期間に1回以上引用された資料の件数です。資料集の利用状況を示し、回答の品質や未回答の質問への対応範囲を示すものではありません。',
+  'Catalogue unavailable': '目録を利用できません',
+  '{cited} of {total} documents': '資料{total}件中{cited}件',
+  'Records not held for this period.': 'この期間の記録は保持されていません。',
+  'Reader opens': '読者による資料の閲覧',
+  'Open rate is the share of cited answers and searches with results that received an open in this period. Opens count interactions, not unique readers.':
+    '閲覧率は、この期間の引用付き回答と結果のある検索のうち、資料が開かれた割合です。閲覧件数は操作の回数であり、読者数ではありません。',
+  'Opens': '閲覧件数',
+  'Open rate': '閲覧率',
+  'Mean rank opened': '閲覧された順位の平均',
+  'Answer consumption and search latency': '回答のトークン使用量と検索応答時間',
+  'Tokens reported by the provider for this portal’s research answers, including reported retries. Shared platform overhead and other operations are excluded. No prices are applied.':
+    'このポータルの研究回答についてプロバイダーが報告したトークン数です。報告された再試行を含みます。共通基盤の稼働分や他の操作は含みません。料金への換算は行いません。',
+  'Input tokens': '入力トークン',
+  'Output tokens': '出力トークン',
+  'Answers with token usage': 'トークン使用量が報告された回答',
+  'Search time p50 / p90 / p95': '検索時間 p50 / p90 / p95',
+  'Search times run from server receipt to response preparation and exclude the reader’s network. These metrics are recorded from this release onwards.':
+    '検索時間はサーバーでのリクエスト受信から応答の準備までを測定し、読者側のネットワーク時間は含みません。これらの指標はこのリリース以降に記録されます。',
+  'Not reported': '報告なし',
+  'This month’s usage': '今月の利用状況',
+  'Search time': '検索時間',
+  'Searches': '検索件数',
+  'Search time p50': '検索時間 p50',
+  'Search time p90': '検索時間 p90',
+  'Search time p95': '検索時間 p95',
+  'Topics and evidence coverage': 'トピックと資料利用率',
+  'Successful search requests timed by the portal server':
+    'ポータルサーバーが時間を測定した成功した検索の件数',
+  'Median seconds from receiving a search to preparing its response; excludes the reader network':
+    '検索リクエスト受信から応答準備までの秒数の中央値。読者側のネットワーク時間を除く',
+  'The 90th percentile of search response time in seconds': '検索応答時間の90パーセンタイル（秒）',
+  'The 95th percentile of search response time in seconds': '検索応答時間の95パーセンタイル（秒）',
+  'Accepted citation and search result open events in the period':
+    '期間内に受理された引用資料と検索結果の閲覧操作の件数',
+  'Share of answers with citations and searches with results in the period that received at least one open in the period; not a unique reader count':
+    '期間内の引用付き回答と結果のある検索のうち、期間内に1回以上資料が開かれた割合。読者数ではない',
+  'Mean one-based citation or search result rank across accepted opens':
+    '受理された閲覧操作における引用または検索結果の順位の平均（1から始まる）',
+  'Questions with provider-reported consumption; includes failed attempts and retries when reported':
+    'プロバイダーが使用量を報告した質問の件数。報告された失敗や再試行も含む',
+  'Provider-reported input tokens for research answers; blank when none were reported; excludes shared platform overhead and other operations':
+    '研究回答についてプロバイダーが報告した入力トークン数。報告がなければ空欄。共通基盤と他の操作を除く',
+  'Provider-reported output tokens for research answers; blank when none were reported; tokens have no price in this report':
+    '研究回答についてプロバイダーが報告した出力トークン数。報告がなければ空欄。このレポートでは料金に換算しない',
+  'JSON by topic: questions count once per topic of cited documents; citedDocuments are distinct currently held documents cited in the period; totalDocuments is the current topic document count; null means unavailable':
+    'トピック別JSON。questionsは引用資料のトピックごとに質問を1回ずつ数える。citedDocumentsは期間内に引用され現在も保持されている資料の件数。totalDocumentsはトピックの現在の資料数。nullは利用不可を示す',
+  "Percentiles over the month's answered questions. The portal server measures time to first token and answer time from receiving each question; answers from before it measured them have none. Generation time is the knowledge box's own report. Search times run from server receipt to response preparation and exclude the reader’s network.":
+    '月内の回答時間のパーセンタイルです。ポータルサーバーは質問の受信から最初のトークンと回答完了までを測定します。測定開始前の回答には記録がありません。生成時間はナレッジボックスの報告値です。検索時間はサーバー受信から応答準備までで、読者側のネットワーク時間は除きます。',
+  'Questions, citation topics, evidence coverage, reader opens, response times and answer tokens for one month, by day in the portal’s timezone. Download CSV or view and print the report.':
+    '1か月分の質問、引用トピック、資料利用率、読者の閲覧、応答時間、回答のトークン数をポータルのタイムゾーンの日ごとに集計します。CSVのダウンロード、レポートの閲覧・印刷ができます。',
 }

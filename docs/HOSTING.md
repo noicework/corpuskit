@@ -2207,7 +2207,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |
 | `sources` | The source registry, page fingerprints and refresh cursor | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
 | `linkHealth` | Link review results and remembered ignore decisions | `linkHealth:<slug>` row | `link_health` table in `DATA_DIR/rbac.sqlite` (or `RBAC_PATH`) |
-| `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
+| `insights` | The research usage log: questions, final cited resource/topic metadata, reported answer tokens, anonymous search timings and reader opens. Search/open rows contain no question text, user id or IP. All records share the log retention boundary (unbounded locally; newest 50,000 records per portal on the Durable Object) | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
 | `siteFeedback` | [Reader feedback](#reader-feedback): readers' messages to the portal team and any reply address they gave (at most 500, kept 90 days) | `site_feedback` rows | `DATA_DIR/site-feedback/<slug>.json` |
 | `answerRecords` | Generated answer evidence, question text and per-portal retention setting; default 90 days, configurable 1 to 365 | `answer-records:<slug>:record:<id>` and `answer-records:<slug>:retention` rows | `DATA_DIR/answer-records/<slug>/` |

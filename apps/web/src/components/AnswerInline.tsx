@@ -1,3 +1,4 @@
+import { recordOpen } from '../api/usage-events.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 /**
@@ -30,6 +31,7 @@ export interface InlineOptions {
    */
   streaming: boolean
   /** Added to a marker's tooltip, to say where else the reader finds the source. */
+  answerId?: string
   citationHint?: string
   /** Application-copy translator; source text and citation titles remain verbatim. */
   ui?: ResearchUi
@@ -88,6 +90,18 @@ export function renderCitationMarkers(
         <sup key={key}>
           <Link
             to={citationLink(slug, citation, source)}
+            onClick={() =>
+              recordOpen(slug, { answerId: options.answerId }, citation.resourceId, citation.index)}
+            onAuxClick={(e) => {
+              if (e.button === 1) {
+                recordOpen(
+                  slug,
+                  { answerId: options.answerId },
+                  citation.resourceId,
+                  citation.index,
+                )
+              }
+            }}
             className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
             aria-label={ui('Source {index}, {title}', {
@@ -160,6 +174,7 @@ export function AnswerText({
   audit,
   streaming,
   citationHint,
+  answerId,
   bodyClassName,
 }: {
   text: string
@@ -168,12 +183,14 @@ export function AnswerText({
   slug: string
   audit?: AnswerAudit
   streaming: boolean
+  answerId?: string
   citationHint?: string
   bodyClassName?: string
 }) {
   const { ui } = usePortalLocale()
   const options: InlineOptions = {
     ui,
+    answerId,
     unsupported: unsupportedFigurePattern(audit),
     streaming,
     ...(citationHint ? { citationHint } : {}),

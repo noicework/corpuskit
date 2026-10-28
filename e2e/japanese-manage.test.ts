@@ -166,6 +166,8 @@ async function pickArchive(page: Page, text: string) {
 Deno.test('Japanese Manage covers every panel, retains source values and switches retained import results', async () => {
   const server = startTestServer({ identity: { role: 'owner' }, management })
   const config = server.tenants.get('marine')!
+  // Topic labels are portal-authored catalogue data, retained unless the portal translates them.
+  const portalAuthoredEnglish = new Set([...retainedEnglish, ...config.topics.map((t) => t.label)])
   server.tenants.patch('marine', {
     branding: {
       ...config.branding,
@@ -252,7 +254,7 @@ Deno.test('Japanese Manage covers every panel, retains source values and switche
         return [...candidates].sort()
       })
       inventory.push({ tab, english })
-      expect(english.filter((text) => !retainedEnglish.has(text))).toEqual([])
+      expect(english.filter((text) => !portalAuthoredEnglish.has(text))).toEqual([])
       await assertButtonBounds(page)
       if (tab === 'behaviour') {
         expect(

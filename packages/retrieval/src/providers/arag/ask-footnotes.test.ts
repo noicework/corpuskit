@@ -31,8 +31,13 @@ function fixture(opts: {
   answer?: string
   /** The zero-based page the platform reports for the retrieved paragraph. */
   page?: number
+  metadata?: {
+    tokens?: { input?: number; output?: number } | null
+    timings?: { generative_total: number }
+  }
 } = {}) {
   const bodies: Record<string, unknown>[] = []
+  const headers: Headers[] = []
   const resource = {
     title: 'Original report',
     metadata: { status: 'PROCESSED' },
@@ -64,6 +69,7 @@ function fixture(opts: {
       if (url.includes('/predict/remi')) return Promise.resolve(Response.json({}))
       if (!url.endsWith('/ask')) throw new Error('Unexpected endpoint')
       bodies.push(JSON.parse(String(init?.body)))
+      headers.push(new Headers(init?.headers))
       const failure = opts.failures?.[bodies.length - 1]
       if (failure) {
         return Promise.resolve(
@@ -83,6 +89,7 @@ function fixture(opts: {
         : opts.answer ?? '## Findings\n\nStocks recovered [7] .\n\n[7]: block-AA\n'
       const items: unknown[] = [
         { type: 'retrieval', results: { resources: { report: resource } } },
+        ...(opts.metadata ? [{ type: 'metadata', ...opts.metadata }] : []),
         ...Array.from(raw).map((text) => ({ type: 'answer', text })),
         opts.mode === 'standard'
           ? { type: 'citations', citations: { [opts.id ?? 'report/f/pdf/0-16']: [[0, 17]] } }
@@ -96,7 +103,7 @@ function fixture(opts: {
       )
     },
   })
-  return { provider, bodies }
+  return { provider, bodies, headers }
 }
 async function collect(provider: AragProvider, opts: AskOptions = {}, config = tenant) {
   const events: AskEvent[] = []
@@ -661,4 +668,20 @@ Deno.test('a later capability fallback keeps resource scope, answer settings and
     ),
   ).toBe(true)
   expect(events.some((e) => e.type === 'done' && !e.refused)).toBe(true)
+})
+
+Deno.test('ask requests consumption and distinguishes reported tokens from timing-only metadata', async () => {
+  for (const tokens of [{ input: 120, output: 30 }, { input: 0, output: 0 }, null, undefined]) {
+    const f = fixture({ metadata: { tokens, timings: { generative_total: 2 } } })
+    const events = await collect(f.provider)
+    expect(f.headers[0]!.get('x-show-consumption')).toBe('true')
+    expect(events.find((e) => e.type === 'usage')).toEqual({
+      type: 'usage',
+      tokensReported: tokens != null,
+      inputTokens: tokens?.input ?? 0,
+      outputTokens: tokens?.output ?? 0,
+      firstChunkSec: undefined,
+      totalSec: 2,
+    })
+  }
 })
