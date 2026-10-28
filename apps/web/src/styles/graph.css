@@ -48,8 +48,8 @@
   }
 }
 
-/* Caption text uses the palette's validated ink/surface pair at full opacity.
- * A solid ground preserves that pair over category marks and links. */
+/* Labels retain a solid ground over marks and links. The engine may soften node
+ * ink towards this ground, bounded by the palette's computed 4.5:1 fade floor. */
 .rp-map3d .rp-map3d-label,
 .rp-map3d .rp-map3d-territory,
 .rp-map3d .rp-map3d-edge-label {
@@ -94,6 +94,24 @@ svg.rp-map.rp-focus:focus-visible {
   max-height: min(28rem, 55dvh);
   overflow: auto;
   background: var(--rp-surface);
+}
+
+.rp-map-camera-panel[data-row] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  width: min(44rem, calc(100vw - 1.5rem));
+}
+
+.rp-map-camera-panel[data-row] > p {
+  flex-basis: 100%;
+  margin-bottom: 0;
+}
+
+.rp-map-camera-panel[data-row] > [role='group'],
+.rp-map-camera-panel[data-row] > .rp-map-camera-zoom {
+  margin-block: 0;
 }
 
 /* The page toolbar keeps camera controls clear of both floating detail panels. */
@@ -151,6 +169,30 @@ svg.rp-map.rp-focus:focus-visible {
 
 /* Short landscape viewports can scroll to the map instead of squeezing it away. */
 @media (max-height: 600px) {
+  [data-graph-masthead='desktop'] {
+    display: none;
+  }
+
+  [data-graph-masthead='mobile'] {
+    display: block;
+  }
+
+  .rp-graph-mobile-chrome {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .rp-graph-mobile-heading {
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+
+  .rp-graph-mobile-views {
+    margin-top: 0;
+  }
+
   [data-graph-page][data-graph-view='map'] {
     height: auto;
     overflow: visible;

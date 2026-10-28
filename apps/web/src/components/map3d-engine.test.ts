@@ -1,9 +1,93 @@
 import { expect } from '@std/expect'
 import * as THREE from 'three'
-import { findMapCaptionBox, KnowledgeMapEngine, observeMapAppearance } from './map3d-engine.ts'
+import {
+  findMapCaptionBox,
+  KnowledgeMapEngine,
+  legibleOpacity,
+  observeMapAppearance,
+} from './map3d-engine.ts'
 import { clusterCentres3D } from '../lib/force3d.ts'
+import { DEFAULT_PALETTES } from '@research-portal/core'
 
 const plate = { x1: 6, y1: 6, x2: 384, y2: 584 }
+
+Deno.test('fading ink stays at 4.5:1 over light, dark and every tenant palette surface', () => {
+  const rgb = (hex: string) =>
+    [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255) as [
+      number,
+      number,
+      number,
+    ]
+  const luminance = (channels: number[]) => {
+    const linear = channels.map((channel) =>
+      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    )
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!
+  }
+  const pairs: [string, string][] = [
+    ['#5b5851', '#ffffff'],
+    ['#cfd2d8', '#1a1c20'],
+    ...Object.values(DEFAULT_PALETTES).flatMap(({ palette }) =>
+      [palette.ink, palette.ink2].map((ink): [string, string] => [ink, palette.surface])
+    ),
+  ]
+  for (const [inkHex, groundHex] of pairs) {
+    const ink = rgb(inkHex), ground = rgb(groundHex)
+    const floor = legibleOpacity(ink, ground, 4.5)
+    const at = (alpha: number, quantise = false) => {
+      const composite = ink.map((channel, index) => {
+        const value = channel * alpha + ground[index]! * (1 - alpha)
+        return quantise ? Math.round(value * 255) / 255 : value
+      })
+      const foreground = luminance(composite), background = luminance(ground)
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+    }
+    if (at(1) < 4.5) {
+      expect(floor).toBe(1)
+      continue
+    }
+    expect(at(floor)).toBeGreaterThanOrEqual(4.5)
+    expect(at(floor, true)).toBeGreaterThanOrEqual(4.5)
+    expect(at(floor - 0.011)).toBeLessThan(4.5)
+  }
+  expect(legibleOpacity(rgb('#bbbbbb'), rgb('#ffffff'))).toBe(1)
+  expect(legibleOpacity(rgb('#000000'), rgb('#ffffff'), 1)).toBe(0)
+  expect(legibleOpacity(rgb('#5b5851'), rgb('#ffffff'))).toBeCloseTo(0.83, 1)
+})
+
+Deno.test('resume anchors its sway at the paused camera and reduced motion blocks playback', () => {
+  const reports: boolean[] = []
+  let cooled = 0
+  const engine = Object.assign(Object.create(KnowledgeMapEngine.prototype), {
+    view: { theta: 1.2, dist: 640 },
+    distGoal: 900,
+    idleAnchor: -0.5,
+    idlePhase: 20,
+    idleSpin: false,
+    motionPaused: true,
+    reduced: false,
+    tween: {},
+    sim: { cool: () => cooled++ },
+    onMotionChange: (playing: boolean) => reports.push(playing),
+  }) as {
+    setMotionPlaying(playing: boolean): void
+    idleAnchor: number
+    idlePhase: number
+    distGoal: number
+    tween: unknown
+    reduced: boolean
+  }
+  engine.setMotionPlaying(true)
+  expect(engine.idleAnchor).toBe(1.2)
+  expect(engine.idlePhase).toBe(0)
+  engine.setMotionPlaying(false)
+  expect(engine.distGoal).toBe(640)
+  expect(engine.tween).toBeNull()
+  expect(cooled).toBe(1)
+  engine.reduced = true
+  engine.setMotionPlaying(true)
+  expect(reports).toEqual([true, false, false])
+})
 
 Deno.test('category captions move away from neighbouring marks and previous captions', () => {
   const anchor = { x: 195, y: 220, r: 20 }
