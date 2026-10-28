@@ -2,10 +2,13 @@ import { expect } from '@std/expect'
 import {
   DEFAULT_SCENE_IDS,
   federatedAsk,
+  forgetTourProgress,
   graphKinds,
   needsFirstPdf,
+  rememberTourProgress,
   resolveScenes,
   startsOnArrival,
+  tourProgress,
 } from './demo-tour.ts'
 
 const english = (text: string, values?: Readonly<Record<string, string | number>>) =>
@@ -121,4 +124,12 @@ Deno.test('the welcome names research partners only where the portal takes part 
   expect(federatedAsk({ ...config, federation: { participates: false, peers: [peer] } })).toBe(
     false,
   )
+})
+
+Deno.test('an open tour is remembered for the tab by step, and forgotten when it closes', () => {
+  // Deno has tab storage only under a location; without one the helpers must simply do nothing.
+  expect(tourProgress('example')).toBe(null)
+  rememberTourProgress('example', 2)
+  forgetTourProgress('example')
+  expect(tourProgress('example')).toBe(null)
 })

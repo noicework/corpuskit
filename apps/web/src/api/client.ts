@@ -510,7 +510,7 @@ export function streamAgentAsk(
   body: AgentAskRequest,
   onEvent: (event: AgentAskEvent) => void,
   signal?: AbortSignal,
-  options: RequestContext = {},
+  options: AgentAskStreamOptions = {},
 ): Promise<void> {
   return agentAskStream(
     `/api/t/${encodeURIComponent(slug)}/ask-agent`,
@@ -530,24 +530,35 @@ export function streamAgentAskAcross(
   body: AgentAskRequest & { slugs?: string[] },
   onEvent: (event: AgentAskEvent) => void,
   signal?: AbortSignal,
-  options: RequestContext = {},
+  options: AgentAskStreamOptions = {},
 ): Promise<void> {
   return agentAskStream('/api/ask-agent', body, onEvent, signal, options)
 }
+
+/**
+ * `durable`: the stream is read outside the access generation, so a return to the window (which
+ * withdraws authority, re-reads the session and starts a new generation) does not cut a
+ * two-minute answer short. The caller takes on what the generation would have done: it must end
+ * the stream itself if the signed-in identity changes. The server authorises every event as it
+ * is sent regardless.
+ */
+export type AgentAskStreamOptions = RequestContext & { durable?: boolean }
 
 async function agentAskStream(
   path: string,
   body: unknown,
   onEvent: (event: AgentAskEvent) => void,
   signal: AbortSignal | undefined,
-  options: RequestContext,
+  options: AgentAskStreamOptions,
 ): Promise<void> {
-  const res = await transportFetch(path, {
+  const init: RequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
     body: JSON.stringify(body),
     signal,
-  }, options)
+  }
+  const { durable, ...context } = options
+  const res = durable ? await fetch(path, init) : await transportFetch(path, init, context)
   assertResponseCurrent(res)
   noteAskBudget(res)
   if (!res.ok || !res.body) throw await askError(res, 'The agent is unavailable')

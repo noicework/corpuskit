@@ -105,7 +105,7 @@ first day it holds in full (`from`), or null when it holds the whole month.
 
 | Source | Columns | What it keeps |
 |---|---|---|
-| Ask log | `questions` to `average_groundedness` | Asks, search measurements and opens share the insights log. The local server keeps every record. The Durable Object keeps the newest 50,000 records per portal; once it is full, days up to and including the day of its oldest kept ask are blank. |
+| Ask log | `questions` to `average_groundedness` | Asks, search measurements and opens share the insights log. The local server keeps every record. The Durable Object keeps the newest 50,000 records per portal; once it is full, days up to and including the day of its oldest kept record are blank. |
 | Answer ratings | `ratings`, `unhelpful_ratings` | Ratings are kept for 90 days, at most 500 per portal (see [Hosting](HOSTING.md)). A day the window has passed is blank, and once a portal holds 500, so is every day up to its oldest kept rating. A rating counts only while the ask log still holds the answer it rates, as in Insights. |
 | Knowledge box | `documents_added` | Read live, newest first: up to 50 pages of 200 documents added since the month began, for at most 20 seconds. A read that stops short leaves the days before it reached blank, and a box that cannot be read leaves the whole column blank. Documents deleted since are not counted. |
 
