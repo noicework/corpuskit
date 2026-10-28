@@ -1026,6 +1026,9 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
     multiple: true,
   }],
   ['POST', 'reingest', 'content.write', { resourceId: 'res-1', html }],
+  ['GET', 'federation', 'bindings.write'],
+  ['GET', 'federation/documents', 'content.write'],
+  ['PUT', 'resources/:id/federation-exclusion', 'content.write', { excluded: true }],
   ['GET', 'corpus-health', 'content.write'],
   ['POST', 'purge-failed', 'content.write', { dryRun: false }],
   ['GET', 'insights', 'content.write'],
@@ -1092,6 +1095,7 @@ const expectedDispatch: Record<string, string> = {
   'insights/usage': 'addedBetween',
   'purge-failed': 'purgeFailedResources',
   'resources/:id/hidden': 'setResourceHidden',
+  'resources/:id/federation-exclusion': 'setResourceFederationExcluded',
   'DELETE resources/:id': 'deleteResource',
   sources: 'fetch',
   'sources/:id/sync': 'fetch',
@@ -1166,6 +1170,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       deleteResource: () => undefined,
       patchResourceClassifications: () => undefined,
       setResourceHidden: () => undefined,
+      setResourceFederationExcluded: () => true,
       invalidate: () => undefined,
       listSearchConfigs: () => ['portal-search'],
       ensureSearchConfigs: () => ['portal-search'],
@@ -1419,7 +1424,13 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             JSON.parse(result).some((row: { tenant: { slug: string } }) => row.tenant.slug === 'a'),
           ).toBe(true)
         } else if (method === 'GET') {
-          if (suffix === 'evaluations') expect(JSON.parse(result).sets).toEqual([])
+          if (suffix === 'federation') {
+            expect(JSON.parse(result)).toMatchObject({ participates: true, agentAsk: true })
+            expect(JSON.parse(result).peers[0].id).toBe('fixture-peer')
+          } else if (suffix === 'federation/documents') {
+            expect(JSON.parse(result).items[0].id).toBe('res-1')
+            expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(true)
+          } else if (suffix === 'evaluations') expect(JSON.parse(result).sets).toEqual([])
           else if (suffix === 'evaluations/:id/runs') expect(JSON.parse(result)).toEqual([])
           else if (suffix === 'evaluations/:id/runs/:runId/csv') expect(result).toContain('run_id')
           else if (suffix === 'answer-records/records/:id') {

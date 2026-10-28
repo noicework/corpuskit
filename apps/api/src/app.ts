@@ -1,3 +1,4 @@
+import { registerFederationManagement } from './federation-management.ts'
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
@@ -5487,6 +5488,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
     })
   })
+
+  registerFederationManagement(app, { tenant, bindings, provider, management })
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/configuration'), (c) => {
     const config = tenant(c.req.param('slug'))

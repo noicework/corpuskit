@@ -3496,6 +3496,32 @@ export class AragProvider implements RetrievalProvider {
     }
   }
 
+  /** Edit only the reserved manual exclusion label, keeping every other user metadata field. */
+  async setResourceFederationExcluded(
+    tenant: TenantConfig,
+    id: string,
+    excluded: boolean,
+  ): Promise<boolean> {
+    const raw = await this.client(tenant).getJson<RawResource>(`/resource/${id}?show=basic`)
+    const label = FEDERATION_EXCLUDE_LABEL
+    // A computed exclusion remains authoritative. Removing the manual label cannot undo it.
+    if (
+      !excluded &&
+      classificationLabels({ ...raw, usermetadata: undefined }, label.labelset).includes(
+        label.label,
+      )
+    ) return false
+    const classifications = (raw.usermetadata?.classifications ?? []).filter((entry) =>
+      entry.labelset !== label.labelset || entry.label !== label.label
+    )
+    if (excluded) classifications.push({ ...label })
+    await this.client(tenant).patchJson(`/resource/${id}`, {
+      usermetadata: { ...raw.usermetadata, classifications },
+    })
+    this.invalidateCatalogue(tenant.slug)
+    return true
+  }
+
   /** Show or hide a resource from searchers (draft/publish workflow). */
   async setResourceHidden(tenant: TenantConfig, id: string, hidden: boolean): Promise<void> {
     await this.client(tenant).patchJson(`/resource/${id}`, { hidden })

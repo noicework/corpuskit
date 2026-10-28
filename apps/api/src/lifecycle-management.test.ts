@@ -79,6 +79,7 @@ Deno.test('management guards every content and configuration writer before dispa
     'patchResourceMeta',
     'deleteResource',
     'setResourceHidden',
+    'setResourceFederationExcluded',
     'purgeFailedResources',
     'ensureSearchConfigs',
     'ingestDocumentation',

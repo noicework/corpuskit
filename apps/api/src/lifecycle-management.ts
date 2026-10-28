@@ -63,6 +63,7 @@ const MUTATIONS = new Set([
   'patchResourceMeta',
   'deleteResource',
   'setResourceHidden',
+  'setResourceFederationExcluded',
   'purgeFailedResources',
   'ensureSearchConfigs',
   'ingestDocumentation',
