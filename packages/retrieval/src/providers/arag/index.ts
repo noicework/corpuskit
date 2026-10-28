@@ -50,6 +50,8 @@ import {
   findPageSummaryFieldId,
 } from '../../merchandise.ts'
 import { appendAnswerInstructions, variantPreamble } from '../../prompts.ts'
+import { COMPOSE_MAX_PASSAGES, COMPOSE_PASSAGE_CHARS, COMPOSE_PROMPT_CHARS } from '../../compose.ts'
+import { StructuredRefusals } from './structured-refusals.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
 import { scopeCitationsMap, spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
 import {
@@ -498,17 +500,6 @@ function parseJsonObject(text: string): unknown {
   }
 }
 
-/** The structured answer `compose` asks for: the composed text, citations inline. */
-const COMPOSE_SCHEMA = {
-  name: 'composed_answer',
-  description: 'One answer composed strictly from numbered passages, citing them inline as [n]',
-  parameters: {
-    type: 'object',
-    additionalProperties: false,
-    properties: { answer: { type: 'string' } },
-    required: ['answer'],
-  },
-}
 const COMPOSE_INSTRUCTIONS =
   'Answer the question in `answer` STRICTLY from the numbered passages, never from outside ' +
   'knowledge. The passages come from several collections: say which collection each point ' +
@@ -1322,6 +1313,7 @@ export class AragProvider implements RetrievalProvider {
    */
   private readonly pageSummaryCache = new Map<string, string | null>()
   private readonly augmentationModelId: string
+  private readonly structuredRefusals = new StructuredRefusals()
 
   constructor(private readonly opts: AragProviderOptions) {
     const configured = opts.augmentationModel === undefined
@@ -1348,6 +1340,7 @@ export class AragProvider implements RetrievalProvider {
 
   /** Drop cached clients and catalogue entries for a tenant (call after rebinding). */
   invalidate(slug: string): void {
+    this.structuredRefusals.forget(slug)
     for (const key of this.clients.keys()) {
       if (key.startsWith(`${slug}:`)) this.clients.delete(key)
     }
@@ -1989,7 +1982,9 @@ export class AragProvider implements RetrievalProvider {
     // loads in three minutes. A short per-query cache makes an identical
     // query return the identical list for a few minutes, which is what a
     // reader comparing two tabs expects.
-    const cacheKey = `${tenant.slug}|${trimmed.toLowerCase()}|${JSON.stringify(opts)}`
+    opts.signal?.throwIfAborted()
+    const { signal: _signal, ...cacheOptions } = opts
+    const cacheKey = `${tenant.slug}|${trimmed.toLowerCase()}|${JSON.stringify(cacheOptions)}`
     const cached = this.searchCache.get(cacheKey)
     let listing: { results: SearchResults; rawById: Map<string, RawResource> }
     if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
@@ -2011,6 +2006,8 @@ export class AragProvider implements RetrievalProvider {
         })
       }
     }
+    opts.signal?.throwIfAborted()
+    if (opts.passagesOnly) return listing.results
     return {
       ...listing.results,
       resources: await this.fillPlatformSummaries(
@@ -2091,7 +2088,7 @@ export class AragProvider implements RetrievalProvider {
     const needsCatalogue = wantedDoi !== undefined || (opts.kindIds?.length ?? 0) > 0
     const catalogued = needsCatalogue || this.catalogCache.has(tenant.slug)
     const [found, all] = await Promise.all([
-      this.findWithFallback(client, body),
+      this.findWithFallback(client, body, opts.signal),
       needsCatalogue
         ? this.listResources(tenant, { bounded: true })
         : Promise.resolve(this.catalogCache.get(tenant.slug)?.resources ?? []),
@@ -2219,19 +2216,21 @@ export class AragProvider implements RetrievalProvider {
   private async findWithFallback(
     client: KbClient,
     body: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<FindResponse> {
     try {
-      const first = await client.postJson<FindResponse>('/find', body)
+      const first = await client.postJson<FindResponse>('/find', body, undefined, { signal })
       if (body.search_configuration && Object.keys(first.resources ?? {}).length === 0) {
         delete body.search_configuration
-        return await client.postJson<FindResponse>('/find', body)
+        return await client.postJson<FindResponse>('/find', body, undefined, { signal })
       }
       return first
     } catch (err) {
+      signal?.throwIfAborted()
       if (err instanceof AragApiError && err.status >= 400 && err.status < 500) {
         delete body.search_configuration
         delete body.reranker
-        return await client.postJson<FindResponse>('/find', body)
+        return await client.postJson<FindResponse>('/find', body, undefined, { signal })
       }
       throw err
     }
@@ -2803,10 +2802,9 @@ export class AragProvider implements RetrievalProvider {
     passagesByResource: Record<string, string[]>
   }> {
     const client = this.client(tenant)
-    const catalogue = await this.listResources(tenant, { bounded: true }).catch(() =>
+    const cataloguePromise = this.listResources(tenant, { bounded: true }).catch(() =>
       [] as ResourceSummary[]
     )
-    const byId = new Map(catalogue.map((r) => [r.id, r]))
     const request: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
@@ -2841,19 +2839,25 @@ export class AragProvider implements RetrievalProvider {
       // large payloads like comparison matrices.
       max_tokens: 4096,
     }
-    let res: Response
-    let asText = false
-    try {
-      res = await client.postStream('/ask', request)
-    } catch (err) {
-      if (!refusesStructuredOutput(err)) throw err
-      // Some models refuse the forced tool call structured output rides on, and the platform
-      // answers 412. Ask for the same object as JSON text and parse it from the answer.
+    // Hints are scoped to the portal and effective model; rebinding drops them.
+    const bindingModel = this.opts.resolveBinding(tenant.slug)?.inferenceModel
+    const model = bindingModel ?? opts.model ?? ''
+    const plainRequest = () => {
       const { answer_json_schema: _schema, ...plain } = request
       const system = [opts.instructions?.trim(), jsonReplyInstruction(schema)].filter(Boolean)
-      res = await client.postStream('/ask', { ...plain, prompt: { system: system.join('\n\n') } })
+      return { ...plain, prompt: { system: system.join('\n\n') } }
+    }
+    let asText = this.structuredRefusals.refused(tenant.slug, model)
+    let res: Response
+    try {
+      res = await client.postStream('/ask', asText ? plainRequest() : request)
+    } catch (err) {
+      if (asText || !refusesStructuredOutput(err)) throw err
+      this.structuredRefusals.remember(tenant.slug, model)
+      res = await client.postStream('/ask', plainRequest())
       asText = true
     }
+    const byId = new Map((await cataloguePromise).map((r) => [r.id, r]))
     let object: unknown = null
     let answerText = ''
     let sources: ScoredResource[] = []
@@ -4201,73 +4205,76 @@ export class AragProvider implements RetrievalProvider {
     throw new AgentAskError('not_configured', 'No retrieval agent is configured for this portal')
   }
 
-  /**
-   * One answer composed from passages gathered across collections, on the structured generation
-   * path the investigation synthesis uses (this box's model and the binding's inference model).
-   * The passages ride the prompt, numbered; the platform's own retrieval is held to one paragraph
-   * so the answer is written from them, and the caller checks every `[n]` against its passage.
-   */
+  /** Collect the streaming composer for callers that need a complete string. */
   async compose(
     tenant: TenantConfig,
     question: string,
     passages: readonly ComposePassage[],
-    opts: Pick<AgentAskOptions, 'context'> & { answerInstructions?: string } = {},
+    opts: Pick<AgentAskOptions, 'context' | 'signal'> & { answerInstructions?: string } = {},
   ): Promise<string> {
+    let answer = ''
+    for await (const delta of this.composeStream(tenant, question, passages, opts)) answer += delta
+    return answer.trim()
+  }
+
+  /**
+   * One plain /ask streams `answer` items immediately. No catalogue walk, schema attempt or
+   * JSON-text retry: the supplied passages are the evidence and the caller checks the final text.
+   */
+  async *composeStream(
+    tenant: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts: Pick<AgentAskOptions, 'context' | 'signal'> & { answerInstructions?: string } = {},
+  ): AsyncIterable<string> {
+    if (passages.length > COMPOSE_MAX_PASSAGES) throw new Error('Too many composition passages')
     const earlier = (opts.context ?? []).slice(-4).map((turn) =>
       `${turn.author === 'USER' ? 'Earlier question' : 'Earlier answer'}: ${
         turn.text.slice(0, 600)
       }`
     )
     const prompt = [
-      `Question: ${question}`,
+      `Question: ${question.slice(0, 2000)}`,
       ...(earlier.length > 0 ? ['', ...earlier] : []),
       '',
       ...passages.map((passage, index) =>
-        `[${index + 1}] ${passage.source} | ${passage.title}\n${passage.text.slice(0, 1200)}`
+        `[${index + 1}] ${passage.source.slice(0, 120)} | ${passage.title.slice(0, 160)}\n${
+          passage.text.slice(0, COMPOSE_PASSAGE_CHARS)
+        }`
       ),
     ].join('\n')
     const instructions = appendAnswerInstructions(
-      COMPOSE_INSTRUCTIONS +
+      COMPOSE_INSTRUCTIONS.replace('in `answer` ', '') +
         (tenant.languagePolicy ? '' : ' Use Australian English.'),
       opts.answerInstructions,
     )
-    let answer: unknown
-    try {
-      const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
-        instructions,
-        topK: 1,
-      })
-      answer = (result.object as { answer?: unknown } | null)?.answer
-    } catch {
-      // Some models refuse the forced tool call structured output rides on, and the platform
-      // answers 412. The same prompt as a plain answer still composes.
-      answer = await this.composePlain(tenant, prompt, instructions.replace('in `answer` ', ''))
+    if (prompt.length + instructions.length > COMPOSE_PROMPT_CHARS) {
+      throw new Error('Composition prompt is too large')
     }
-    if (typeof answer !== 'string' || !answer.trim()) {
-      throw new Error('The platform returned no composed answer')
-    }
-    return answer.trim()
-  }
-
-  /** `compose` without a schema: the same prompt and instructions, the answer read as text. */
-  private async composePlain(
-    tenant: TenantConfig,
-    prompt: string,
-    instructions: string,
-  ): Promise<string> {
-    const res = await this.client(tenant).postStream('/ask', {
-      query: prompt,
-      features: ['keyword', 'semantic'],
-      prompt: { system: instructions },
-      top_k: 1,
-      max_tokens: 4096,
-    })
-    let text = ''
+    opts.signal?.throwIfAborted()
+    const res = await this.client(tenant).postStream(
+      '/ask',
+      {
+        query: prompt,
+        features: ['keyword', 'semantic'],
+        prompt: { system: instructions },
+        top_k: 1,
+        max_tokens: 4096,
+      },
+      undefined,
+      { signal: opts.signal },
+    )
+    let hasText = false
     for await (const line of ndjson(res)) {
+      opts.signal?.throwIfAborted()
       const item = (line as { item?: { type?: string; text?: unknown } }).item
-      if (item?.type === 'answer' && typeof item.text === 'string') text += item.text
+      if (item?.type === 'error') throw new Error('The platform could not compose an answer')
+      if (item?.type === 'answer' && typeof item.text === 'string') {
+        hasText ||= Boolean(item.text.trim())
+        if (item.text) yield item.text
+      }
     }
-    return text
+    if (!hasText) throw new Error('The platform returned no composed answer')
   }
 
   async *ask(

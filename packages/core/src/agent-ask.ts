@@ -61,7 +61,7 @@ export const AgentAskErrorCodeSchema = z.enum([
 ])
 
 export const AgentAskEventSchema = z.discriminatedUnion('type', [
-  /** First on every stream, before anything is searched: who answers, and its sources. */
+  /** First on every stream: who answers, and its sources. */
   z.object({
     type: z.literal('agent-start'),
     mode: AgentAskModeSchema,
@@ -79,6 +79,8 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
     status: AgentStepStatusSchema,
     /** How long the step took, on its closing event. */
     elapsedMs: z.number().int().nonnegative().optional(),
+    /** Composition start to its first generation delta, on the completed compose step. */
+    firstTokenMs: z.number().int().nonnegative().optional(),
     /** The agent's own reason for the step, when it gives one. */
     reason: z.string().optional(),
   }),
@@ -102,7 +104,7 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
   }),
   /** The agent thinking aloud. `last` closes the current run of reasoning. */
   z.object({ type: z.literal('reasoning'), text: z.string(), last: z.boolean() }),
-  /** The next piece of the answer text. Citation markers appear in it as `[marker]`. */
+  /** Provisional answer text. Citation markers appear as `[marker]`; done.text finalises it. */
   z.object({ type: z.literal('delta'), text: z.string() }),
   /** What a `[marker]` in the answer cites: a passage from one source. */
   z.object({
@@ -113,7 +115,12 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
     title: z.string(),
     url: HttpUrlSchema.optional(),
   }),
-  z.object({ type: z.literal('done'), elapsedMs: z.number().int().nonnegative() }),
+  z.object({
+    type: z.literal('done'),
+    elapsedMs: z.number().int().nonnegative(),
+    /** Authoritative citation-checked text, replacing provisional generation deltas. */
+    text: z.string().optional(),
+  }),
   /** The stream's last event when it ends without an answer. */
   z.object({
     type: z.literal('error'),

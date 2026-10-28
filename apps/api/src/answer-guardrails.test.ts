@@ -221,6 +221,26 @@ Deno.test('MCP and estate provider boundary applies the same preflight and answe
   }
 })
 
+Deno.test('agent policy checks final streamed text and replaces terminal text without exposing raw chunks', async () => {
+  const actions: string[] = []
+  const policy = new AnswerGuardrail({
+    guardrails: AnswerGuardrailsSchema.parse({
+      blockedTerms: ['restricted phrase'],
+      withheldMessage: 'Answer withheld.',
+    }),
+  }, (a) => actions.push(a))
+  const run = async function* (): AsyncIterable<import('@research-portal/core').AgentAskEvent> {
+    yield { type: 'delta', text: 'Preliminary answer.' }
+    yield { type: 'done', elapsedMs: 100, text: 'A restricted phrase in final text.' }
+  }
+  const events = []
+  for await (const event of guardAgentAnswer(policy, 'Research?', run)) events.push(event)
+  expect(JSON.stringify(events)).not.toContain('restricted phrase')
+  expect(JSON.stringify(events)).not.toContain('Preliminary answer')
+  expect(events.at(-1)).toEqual({ type: 'done', elapsedMs: 100, text: 'Answer withheld.' })
+  expect(actions).toEqual(['answer-withheld'])
+})
+
 class InstructionsDouble extends DoubleProvider {
   calls: { slug: string; instructions?: string }[] = []
   override async *ask(
@@ -239,6 +259,15 @@ class InstructionsDouble extends DoubleProvider {
   ): Promise<string> {
     this.calls.push({ slug: tenant.slug, instructions: options?.answerInstructions })
     return Promise.resolve('Grounded answer. [1]')
+  }
+  async *composeStream(
+    tenant: TenantConfig,
+    _query: string,
+    _passages: readonly ComposePassage[],
+    opts?: { answerInstructions?: string },
+  ) {
+    this.calls.push({ slug: tenant.slug, instructions: opts?.answerInstructions })
+    yield 'Grounded answer. [1]'
   }
 }
 
@@ -315,10 +344,15 @@ for (const adapter of ['local', 'durable'] as const) {
           const tenant = f.stores.tenants.get(slug)!
           for await (const _event of wrapped.ask(tenant, 'Stock health?')) { /* Collect. */ }
           await wrapped.compose!(tenant, 'Stock health?', [])
+          for await (
+            const _delta of wrapped.composeStream!(tenant, 'Stock health?', [])
+          ) { /* Collect. */ }
         }
         expect(provider.calls).toEqual([
           { slug: 'a', instructions: 'Use plain language.' },
           { slug: 'a', instructions: 'Use plain language.' },
+          { slug: 'a', instructions: 'Use plain language.' },
+          { slug: 'b', instructions: undefined },
           { slug: 'b', instructions: undefined },
           { slug: 'b', instructions: undefined },
         ])

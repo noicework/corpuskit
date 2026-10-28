@@ -26,6 +26,16 @@ class PolicyDouble extends DoubleProvider {
     this.instructions.push({ slug: tenant.slug, text: opts?.answerInstructions })
     return super.compose(tenant, query, passages)
   }
+  async *composeStream(
+    tenant: TenantConfig,
+    query: string,
+    passages: readonly ComposePassage[],
+    opts?: { answerInstructions?: string },
+  ) {
+    this.instructions.push({ slug: tenant.slug, text: opts?.answerInstructions })
+    const text = await super.compose(tenant, query, passages)
+    for (const chunk of text.split(/(?<=\s)/)) yield chunk
+  }
 }
 
 async function fill(page: Page, selector: string, value: string) {

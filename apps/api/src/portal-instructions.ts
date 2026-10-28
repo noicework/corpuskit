@@ -29,6 +29,19 @@ export function withPortalInstructions(
           })
         return compose
       }
+      if (name === 'composeStream' && target.composeStream) {
+        const composeStream: NonNullable<RetrievalProvider['composeStream']> = (
+          tenant,
+          query,
+          passages,
+          opts,
+        ) =>
+          target.composeStream!(tenant, query, passages, {
+            ...opts,
+            answerInstructions: settings(tenant.slug).ask,
+          })
+        return composeStream
+      }
       const value = Reflect.get(target, name, target)
       return typeof value === 'function' ? value.bind(target) : value
     },

@@ -226,7 +226,8 @@ export async function* guardAgentAnswer(
     held.push(event)
     if (event.type === 'delta') text += event.text
   }
-  if (!held.some((event) => event.type === 'done')) {
+  const terminal = held.find((event) => event.type === 'done')
+  if (!terminal || terminal.type !== 'done') {
     yield held.find((event) => event.type === 'error') ?? {
       type: 'error',
       code: 'upstream',
@@ -235,11 +236,19 @@ export async function* guardAgentAnswer(
     }
     return
   }
-  const withheld = policy.answer(text)
+  const finalText = terminal.text ?? text
+  const withheld = policy.answer(finalText) ??
+    (matchesPolicyPhrase(text, policy.settings.guardrails!.blockedTerms)
+      ? policy.answer(text)
+      : null)
   if (withheld) {
     yield { type: 'delta', text: withheld }
-    yield held.find((event) => event.type === 'done')!
+    yield { ...terminal, text: withheld }
   } else {
-    yield* held
+    for (const event of held) {
+      if (event.type === 'delta') continue
+      if (event.type === 'done' && finalText) yield { type: 'delta', text: finalText }
+      yield event
+    }
   }
 }
