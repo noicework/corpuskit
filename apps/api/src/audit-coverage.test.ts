@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { summariseEvaluation } from './evaluation-scoring.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { BindingStore } from './bindings.ts'
@@ -879,6 +880,8 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
         const args: Record<string, unknown[]> = {
           'duplicates.decide': [slug, 'res-1~res-2', 'keep-both'],
           'duplicates.erase': [slug],
+          'answerRecords.record': [slug, answerRecordFixture(slug)],
+          'answerRecords.setRetention': [slug, 30],
           'evaluations.put': [slug, 'checks', { ...evaluation, name: 'Updated bank' }],
           'evaluations.remove': [slug, 'checks'],
           'evaluations.start': [slug, evaluationRun],

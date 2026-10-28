@@ -22,6 +22,8 @@ export const ERASED_RECORD_KINDS = [
   'feedback',
   /** Readers' messages to the portal team, with any reply address they gave. */
   'siteFeedback',
+  /** Generated answer evidence and per-portal retention settings. */
+  'answerRecords',
   'suggestions',
   /** Generated enrichments and cached suggested questions. */
   'enrichments',

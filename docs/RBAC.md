@@ -311,3 +311,10 @@ mappings need `groupMembershipClaims` set on the registration.
   whitelisted per action.
 - Denial of service through audit growth: safe-metadata fetches and ordinary reads are not
   audited; MCP credential failures are rate limited before they are verified.
+
+## Answer evidence records
+
+Answer record reads and JSON/CSV exports use `content.write` (curator and above), scoped to the
+portal in the route. These are privileged reads and refuse keys. Retention settings use
+`behaviour.write` (portal administrator and above). See [Answer records](ANSWER-RECORDS.md) for the
+route inventory, personal-data handling and per-portal retention.

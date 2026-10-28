@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { expect } from '@std/expect'
 import type { KgProposal } from '@research-portal/core'
 import type { DurableStores } from '../../cloudflare/src/state.ts'
@@ -73,6 +74,8 @@ const anonymous: ResearchOwner = { kind: 'anonymous', clientId: 'visitor-1' }
  */
 const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string) => unknown> = {
   duplicates: (f, slug) => f.stores.duplicates.decide(slug, 'res-1~res-2', 'keep-both'),
+  answerRecords: (f, slug) =>
+    f.stores.answerRecords.record(slug, answerRecordFixture(slug, f.now())),
   evaluations: (f, slug) => {
     const definition = f.stores.evaluations.put(slug, 'checks', {
       name: 'Evidence checks',

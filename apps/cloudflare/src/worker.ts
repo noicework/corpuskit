@@ -221,6 +221,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       feedback: this.stores.feedback,
       siteFeedback: this.stores.siteFeedback,
       siteFeedbackNotifier: siteFeedbackNotifier(env, bindings),
+      answerRecords: this.stores.answerRecords,
       sessions: this.stores.sessions,
       watches: this.stores.watches,
       sources: this.stores.sources,

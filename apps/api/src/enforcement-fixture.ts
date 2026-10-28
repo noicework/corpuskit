@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { summariseEvaluation } from './evaluation-scoring.ts'
 import { expect } from '@std/expect'
 import { type Permission, type Role, ROLES, type Scope } from '@research-portal/core'
@@ -899,6 +900,11 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['GET', '/api/admin/overlap', 'portal.create'],
   ['POST', '/api/admin/overlap/refresh', 'portal.create'],
   ['GET', '/api/admin/overlap/export', 'portal.create'],
+  ['GET', 'answer-records/records/:id', 'content.write'],
+  ['GET', 'answer-records/records/:id/export', 'content.write'],
+  ['GET', 'answer-records/export', 'content.write'],
+  ['GET', 'answer-records/retention', 'content.write'],
+  ['PUT', 'answer-records/retention', 'behaviour.write', { days: 90 }],
   ['GET', 'evaluations', 'behaviour.write'],
   ['PUT', 'evaluations/:id', 'behaviour.write', {
     name: 'Evidence checks',
@@ -1188,6 +1194,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
     const originalFetch = globalThis.fetch
     const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
     try {
+      const answerRecord = answerRecordFixture('a', fixture.now())
+      fixture.stores.answerRecords.record('a', answerRecord)
       if (suffix.startsWith('evaluations/')) {
         const definition = fixture.stores.evaluations.put('a', 'res-1', {
           name: 'Evidence checks',
@@ -1314,7 +1322,9 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           .replace(':hostname', 'research.example.org')
           .replace(
             ':id',
-            suffix.startsWith('sources')
+            suffix.startsWith('answer-records')
+              ? answerRecord.answerId
+              : suffix.startsWith('sources')
               ? source.id
               : suffix.includes('suggestions')
               ? 'suggestion-a'
@@ -1364,7 +1374,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           if (suffix === 'evaluations') expect(JSON.parse(result).sets).toEqual([])
           else if (suffix === 'evaluations/:id/runs') expect(JSON.parse(result)).toEqual([])
           else if (suffix === 'evaluations/:id/runs/:runId/csv') expect(result).toContain('run_id')
-          else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+          else if (suffix === 'answer-records/records/:id') {
+            expect(JSON.parse(result)).toEqual(answerRecord)
+          } else if (
+            suffix === 'answer-records/records/:id/export' || suffix === 'answer-records/export'
+          ) {
+            expect(JSON.parse(result).records).toEqual([answerRecord])
+          } else if (suffix === 'answer-records/retention') {
+            expect(JSON.parse(result)).toEqual({ days: 90 })
+          } else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
           else if (suffix === 'suggestions') {
             expect(JSON.parse(result)[0].id).toBe('suggestion-a')
           } else if (suffix === 'enrichments/export') {
