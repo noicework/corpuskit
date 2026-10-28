@@ -6,11 +6,14 @@ import { demoTourMode, type TenantConfig } from '@research-portal/core'
 import { getCatalog } from '../api/client.ts'
 import {
   federatedAsk,
+  forgetTourProgress,
   isTourDone,
   markTourDone,
   needsFirstPdf,
+  rememberTourProgress,
   resolveScenes,
   startsOnArrival,
+  tourProgress,
 } from '../lib/demo-tour.ts'
 import { DemoTourDialog } from './DemoTourDialog.tsx'
 
@@ -26,7 +29,9 @@ export function DemoTour({ config }: { config: TenantConfig }) {
   const slug = config.slug
   const location = useLocation()
   const [, setSearchParams] = useSearchParams()
-  const [open, setOpen] = useState(false)
+  // Open again, at the same step, when the page has remounted under an open tour.
+  const resumed = useRef<number | null>(mode === 'off' ? null : tourProgress(slug))
+  const [open, setOpen] = useState(resumed.current !== null)
   const arrived = useRef(false)
   const copy = config.copy?.demoTour
 
@@ -36,7 +41,10 @@ export function DemoTour({ config }: { config: TenantConfig }) {
     if (mode === 'off') return
     const forced = new URLSearchParams(location.search).has('tour')
     if (!arrived.current || forced) {
-      if (startsOnArrival(mode, location.search, arrived.current || isTourDone())) setOpen(true)
+      if (startsOnArrival(mode, location.search, arrived.current || isTourDone())) {
+        setOpen(true)
+        rememberTourProgress(slug, 0)
+      }
     }
     arrived.current = true
     if (forced) {
@@ -46,7 +54,7 @@ export function DemoTour({ config }: { config: TenantConfig }) {
         return next
       }, { replace: true })
     }
-  }, [mode, location.search, setSearchParams])
+  }, [mode, slug, location.search, setSearchParams])
 
   // The cited-page scene opens the collection's first PDF unless the portal names a document.
   const wantsPdf = mode !== 'off' && needsFirstPdf(config)
@@ -73,12 +81,16 @@ export function DemoTour({ config }: { config: TenantConfig }) {
 
   function closeTour() {
     markTourDone()
+    forgetTourProgress(slug)
+    resumed.current = null
     setOpen(false)
   }
 
   return (
     <DemoTourDialog
       onClose={closeTour}
+      onStep={(step) => rememberTourProgress(slug, step)}
+      initialStep={resumed.current ?? 0}
       slug={slug}
       productName={portal}
       heading={heading}
