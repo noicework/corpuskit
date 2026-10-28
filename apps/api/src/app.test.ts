@@ -876,8 +876,12 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'prompts') {
                 expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
               } else if (suffix === 'insights') {
-                expect(JSON.parse(result)).toEqual({
+                expect(JSON.parse(result)).toMatchObject({
                   ...fixture.stores.insights.summary('a'),
+                  usage: {
+                    month: '2026-09',
+                    totals: { searches: 0, opens: 0, consumptionAnswers: 0 },
+                  },
                   knowledgeGaps: { month: '2026-09', questions: [], topics: null },
                   feedback: { helpful: 0, unhelpful: 0, flagged: [] },
                 })

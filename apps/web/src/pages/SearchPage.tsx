@@ -6,6 +6,7 @@ import {
   SearchSourceFacet,
 } from '../components/FederatedSearch.tsx'
 import { ResourceProvenanceLabel } from '../components/ResourceProvenanceLabel.tsx'
+import { recordOpen } from '../api/usage-events.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
@@ -162,8 +163,10 @@ function resourceLink(slug: string, resource: ScoredResource): string {
  * switches the AI answer off.
  */
 function ResultCard(
-  { resource, slug, query, kindLabel, citedIndex, lookup = false }: {
+  { resource, slug, query, kindLabel, citedIndex, searchId, rank, lookup = false }: {
     resource: ScoredResource
+    searchId?: string
+    rank: number
     slug: string
     query: string
     kindLabel: (id: string) => string
@@ -231,6 +234,10 @@ function ResultCard(
           <h3 className='mt-2.5 text-base font-semibold tracking-[-0.01em] text-ink'>
             <Link
               to={resourceLink(slug, resource)}
+              onClick={() => recordOpen(slug, { searchId }, resource.id, rank)}
+              onAuxClick={(e) => {
+                if (e.button === 1) recordOpen(slug, { searchId }, resource.id, rank)
+              }}
               className='rp-focus inline-block min-h-6 rounded-[var(--rp-radius-btn)] max-lg:min-h-11'
             >
               <span className='rp-clamp-2'>{title}</span>
@@ -1575,6 +1582,9 @@ export function SearchPage() {
                                     slug={config.slug}
                                     query={trimmedQuery}
                                     kindLabel={kindLabel}
+                                    searchId={results.searchId}
+                                    rank={results.resources.findIndex((r) => r.id === resource.id) +
+                                      1}
                                     citedIndex={citationIndexByResource.get(resource.id)}
                                     lookup={lookupOnly}
                                   />

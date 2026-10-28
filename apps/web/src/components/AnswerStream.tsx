@@ -1,3 +1,4 @@
+import { recordOpen } from '../api/usage-events.ts'
 import { ResourceProvenanceLabel } from './ResourceProvenanceLabel.tsx'
 import { AnswerRecordLink } from './AnswerRecordLink.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
@@ -456,6 +457,7 @@ function PermittedAnswerStream(
   const canAsk = () =>
     access.controller.context === context &&
     access.controller.can('portal.ask', { kind: 'portal', slug })
+  const [usageAnswerId, setUsageAnswerId] = useState<string | undefined>()
   const [answerRecordId, setAnswerRecordId] = useState<string | null>(null)
   const [status, setStatus] = useState<Status>('idle')
   const [text, setText] = useState('')
@@ -512,6 +514,7 @@ function PermittedAnswerStream(
     }
 
     setAnswerRecordId(null)
+    setUsageAnswerId(undefined)
     const controller = new AbortController()
     abortRef.current = controller
     setStatus('streaming')
@@ -553,6 +556,7 @@ function PermittedAnswerStream(
           setAnswerRecordId(event.answerId)
           break
         case 'done':
+          setUsageAnswerId(event.answerId)
           // The deterministically citation-bound text replaces the streamed
           // accumulation: the platform strips the model's own inline markers
           // and splices `[n]` at its citation char-offsets, numbered to match
@@ -635,7 +639,18 @@ function PermittedAnswerStream(
       <sup key={key}>
         <Link
           to={citationHref(slug, citation.resourceId, passage, page)}
+          onAuxClick={(e) => {
+            if (e.button === 1) {
+              recordOpen(
+                slug,
+                { answerId: usageAnswerId },
+                citation.resourceId,
+                citation.index,
+              )
+            }
+          }}
           onClick={(event) => {
+            recordOpen(slug, { answerId: usageAnswerId }, citation.resourceId, citation.index)
             if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
             if (onCitationJump?.(citation, passage, page)) event.preventDefault()
           }}
@@ -733,6 +748,23 @@ function PermittedAnswerStream(
                   >
                     <Link
                       to={citationLink(slug, citation, source)}
+                      onClick={() =>
+                        recordOpen(
+                          slug,
+                          { answerId: usageAnswerId },
+                          citation.resourceId,
+                          citation.index,
+                        )}
+                      onAuxClick={(e) => {
+                        if (e.button === 1) {
+                          recordOpen(
+                            slug,
+                            { answerId: usageAnswerId },
+                            citation.resourceId,
+                            citation.index,
+                          )
+                        }
+                      }}
                       className='rp-btn rp-btn-ghost rp-btn-sm min-w-0 max-w-full gap-1.5 border border-line bg-surface-2'
                     >
                       <span

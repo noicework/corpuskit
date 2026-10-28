@@ -1,3 +1,4 @@
+import { recordOpen } from '../api/usage-events.ts'
 import { ResourceProvenanceLabel } from './ResourceProvenanceLabel.tsx'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
@@ -181,6 +182,7 @@ function EvidenceRow({
   citationIndices,
   citationsKnown,
   anchorId,
+  answerId,
 }: {
   slug: string
   question: string
@@ -193,6 +195,7 @@ function EvidenceRow({
   citationIndices: number[]
   /** Whether the caller supplied `citations` at all - without it "not cited" can't be claimed. */
   citationsKnown: boolean
+  answerId?: string
   anchorId?: string
 }) {
   const { ui } = usePortalLocale()
@@ -259,6 +262,19 @@ function EvidenceRow({
           <SourceGlyph type={source.type} />
           <Link
             to={href}
+            onClick={() => {
+              if (citationIndices[0]) recordOpen(slug, { answerId }, source.id, citationIndices[0])
+            }}
+            onAuxClick={(e) => {
+              if (e.button === 1 && citationIndices[0]) {
+                recordOpen(
+                  slug,
+                  { answerId },
+                  source.id,
+                  citationIndices[0],
+                )
+              }
+            }}
             className='rp-answer-source-title rp-link-standalone min-w-0 flex-1 text-sm font-medium text-ink underline-offset-2 hover:underline'
           >
             <span className='rp-clamp-2'>{source.title}</span>
@@ -358,6 +374,19 @@ function EvidenceRow({
         <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
           <Link
             to={href}
+            onClick={() => {
+              if (citationIndices[0]) recordOpen(slug, { answerId }, source.id, citationIndices[0])
+            }}
+            onAuxClick={(e) => {
+              if (e.button === 1 && citationIndices[0]) {
+                recordOpen(
+                  slug,
+                  { answerId },
+                  source.id,
+                  citationIndices[0],
+                )
+              }
+            }}
             aria-label={`${
               openLabel(source.type, source.matchedPage, summaryMatch, ui)
             }: ${source.title}`}
@@ -405,6 +434,7 @@ function EvidenceRow({
 }
 
 export interface EvidenceTableProps {
+  answerId?: string
   slug: string
   question: string
   sources: EvidenceSource[]
@@ -457,6 +487,7 @@ export interface EvidenceTableProps {
  * 3 cited · 1980-2010") so the raw passages never bury the answer above them.
  */
 export function EvidenceTable({
+  answerId,
   slug,
   question,
   sources,
@@ -504,6 +535,7 @@ export function EvidenceTable({
     return (
       <EvidenceRow
         key={source.id}
+        answerId={answerId}
         slug={slug}
         question={question}
         source={source}

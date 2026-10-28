@@ -215,8 +215,10 @@ export class AnswerRecorder {
       Object.assign(this.value.timing, {
         providerTotalSec: event.totalSec ?? null,
         firstChunkSec: event.firstChunkSec ?? null,
-        inputTokens: event.inputTokens,
-        outputTokens: event.outputTokens,
+        ...(event.tokensReported === false ? {} : {
+          inputTokens: (this.value.timing.inputTokens ?? 0) + event.inputTokens,
+          outputTokens: (this.value.timing.outputTokens ?? 0) + event.outputTokens,
+        }),
       })
     }
   }

@@ -175,6 +175,7 @@ import {
   searchPeer,
   type SourceContext,
 } from '@research-portal/retrieval'
+import { answerUsageTracker, usageAnalytics } from './usage-events.ts'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { type ComposeSource } from './agent-compose.ts'
 import { federatedMcpTools } from './federated-mcp.ts'
@@ -193,7 +194,7 @@ import {
   withLayout,
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
-import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
+import { buildUsageReport, usageOverview, usagePeriod, usageReportCsv } from './usage-report.ts'
 import { knowledgeGaps } from './knowledge-gaps.ts'
 import { BindingStore, type BindingStoreApi, peerKeyName } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
@@ -917,6 +918,7 @@ const renameTenantSchema = z.object({
   federation: FederationSettingsSchema.optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback: z.boolean().optional(),
+  analyticsEnabled: z.boolean().optional(),
   /** The guided tour on the home page: off, request or auto (see TenantConfigSchema). */
   demoTour: DemoTourModeSchema.optional(),
   /**
@@ -932,6 +934,7 @@ const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'regionalDiscovery',
   'agentAsk',
   'siteFeedback',
+  'analyticsEnabled',
   'demoTour',
   'federation',
 ])
@@ -1288,6 +1291,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const answerRecords = opts.answerRecords ?? transientAnswerRecordStore(opts.now)
   const insights = opts.insights ?? new InsightsStore()
   const answerPolicy = portalAnswerPolicy(tenants, insights)
+  const analytics = usageAnalytics({
+    insights,
+    tenant: (slug) => tenants.get(slug),
+    context: (c) => requestContext(c.req.raw),
+    address: (c) => addressKey(requestContext(c.req.raw).clientIp),
+    localMutations: opts.localMutations,
+    now: opts.now,
+  })
   const feedback = opts.feedback ?? new FeedbackStore()
   const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
   const routing = opts.routing ?? new RoutingLog()
@@ -1941,6 +1952,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Copying out of a read-only portal is a read; copying into one is refused up front.
     if (name === 'migration.destination' && tenants.get(slug)) enforceReadOnly(lifecycle, slug)
   }
+  registerInfrastructure(app, '*', analytics.receive)
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
     // Portal modes and assignments are mutable, even for currently public bytes.
@@ -2908,6 +2920,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     headers.set('content-security-policy', STORED_FILE_POLICY)
     return new Response(upstream.body, { status: 200, headers })
   })
+
+  registerInfrastructure(app, '/api/t/:slug/search', analytics.search)
+  app.post(declaredRoute('POST', '/api/t/:slug/events/open'), analytics.open)
 
   app.get(declaredRoute('GET', '/api/t/:slug/search'), async (c) => {
     const config = tenant(c.req.param('slug'))
@@ -4319,6 +4334,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       await Promise.all(targets.map(async (config) => {
         if (stream.aborted || c.req.raw.signal.aborted) return
         const record = { citations: 0, groundedness: null as number | null, failed: false }
+        const usage = answerUsageTracker(config.analyticsEnabled !== false)
         try {
           for await (
             const event of recordComposedSource(
@@ -4341,6 +4357,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
             if (stream.aborted || c.req.raw.signal.aborted) return
             const current = tenant(config.slug)
             if (!current || !participatesInFederation(current)) return
+            usage.observe(event)
+            if (event.type === 'usage') usage.consume(event)
             if (event.type === 'citation') record.citations += 1
             if (event.type === 'quality') record.groundedness = event.groundedness
             if (event.type === 'error') record.failed = true
@@ -4361,17 +4379,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
         }
         try {
           // Estate asks count in each portal's insights too - same signal.
-          insights.record(config.slug, {
-            ts: new Date().toISOString(),
-            question: parsed.data.query.slice(0, 500),
-            policyRequestId: requestContext(c.req.raw).requestId,
-            answered: !record.failed && record.citations > 0,
-            citations: record.citations,
-            durationSec: null,
-            answerRelevance: null,
-            groundedness: record.groundedness,
-            contextRelevance: null,
-          })
+          if (config.analyticsEnabled !== false) {
+            insights.record(config.slug, {
+              ts: new Date(opts.now?.() ?? Date.now()).toISOString(),
+              question: parsed.data.query.slice(0, 500),
+              policyRequestId: requestContext(c.req.raw).requestId,
+              answered: !record.failed && record.citations > 0,
+              citations: record.citations,
+              durationSec: null,
+              answerRelevance: null,
+              groundedness: record.groundedness,
+              contextRelevance: null,
+              ...usage.snapshot(),
+            })
+          }
         } catch {
           // best-effort
         }
@@ -5654,6 +5675,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       agentAsk,
       federation,
       siteFeedback: siteFeedbackSetting,
+      analyticsEnabled,
       demoTour,
       layout: _layout,
       ...branding
@@ -5666,6 +5688,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }
         : {}),
       ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
+      ...(analyticsEnabled !== undefined ? { analyticsEnabled } : {}),
       ...(demoTour !== undefined ? { demoTour } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
@@ -6436,7 +6459,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     siteFeedbackHistoryHandler(siteFeedbackRoutes),
   )
 
-  app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const now = opts.now?.() ?? Date.now()
@@ -6447,6 +6470,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )!
     return c.json({
       ...insights.summary(config.slug),
+      usage: usageOverview(buildUsageReport(config.slug, month, {
+        asks: insights.asksBetween(config.slug, month.from, month.to),
+        events: insights.eventsBetween(config.slug, month.from, month.to),
+        catalogue: await provider.listResources(config, { requireComplete: true }).catch(() =>
+          null
+        ),
+        topics: config.topics,
+        ratings: { records: [], matched: new Set() },
+        documents: null,
+      }, now)),
       // This month's questions the collection could not answer well: curators' eyes only.
       knowledgeGaps: knowledgeGaps(
         insights.asksBetween(config.slug, month.from, month.to).asks,
@@ -6501,6 +6534,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     const report = buildUsageReport(config.slug, period, {
       asks: insights.asksBetween(config.slug, period.from, period.to),
+      events: insights.eventsBetween(config.slug, period.from, period.to),
+      catalogue: await provider.listResources(config, { requireComplete: true }).catch(() => null),
+      topics: config.topics,
       ratings: { records: ratings, matched: new Set(Object.keys(asked)) },
       documents,
     }, now)
@@ -6949,12 +6985,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // The answer's learning id, as the reader receives it: the ask log keeps it so a rating
       // of this answer can be joined back to its question.
       let learningId: string | undefined
+      const usage = answerUsageTracker(config.analyticsEnabled !== false)
       // Response times as this server sees them (docs/USAGE-REPORTS.md): from receiving the
       // question to the first words of the answer reaching the stream, and to its end.
       const received = performance.now()
       let firstWordsAt: number | undefined
       const send = (event: unknown) => {
         if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
+        event = usage.observe(event)
         const learning = event as { type?: unknown; id?: unknown; text?: unknown } | null
         if (learning?.type === 'learning' && typeof learning.id === 'string') {
           learningId = learning.id
@@ -7417,16 +7455,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
           return
         }
         try {
-          insights.record(config.slug, {
-            ts: new Date().toISOString(),
-            question: query.slice(0, 500),
-            answered: false,
-            citations: 0,
-            durationSec: null,
-            answerRelevance: null,
-            groundedness: null,
-            contextRelevance: null,
-          })
+          if (config.analyticsEnabled !== false) {
+            insights.record(config.slug, {
+              ts: new Date(opts.now?.() ?? Date.now()).toISOString(),
+              question: query.slice(0, 500),
+              answered: false,
+              citations: 0,
+              durationSec: null,
+              answerRelevance: null,
+              groundedness: null,
+              contextRelevance: null,
+            })
+          }
         } catch {
           // insights are best-effort
         }
@@ -8189,8 +8229,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 else if (event.type === 'done') {
                   refused = Boolean(event.refused)
                   if (event.text) text = event.text
-                } else if (event.type === 'usage') record.durationSec = event.totalSec ?? null
-                else if (event.type === 'quality') {
+                } else if (event.type === 'usage') {
+                  usage.consume(event)
+                  record.durationSec = event.totalSec ?? null
+                } else if (event.type === 'quality') {
                   record.answerRelevance = event.answerRelevance
                   record.groundedness = event.groundedness
                   record.contextRelevance = event.contextRelevance
@@ -8420,7 +8462,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
               }
               continue
             }
-            if (event.type === 'usage') record.durationSec = event.totalSec ?? null
+            if (event.type === 'usage') {
+              usage.consume(event)
+              record.durationSec = event.totalSec ?? null
+            }
             if (event.type === 'quality') {
               record.answerRelevance = event.answerRelevance
               record.groundedness = event.groundedness
@@ -8487,22 +8532,25 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (cancelled()) return
       if (!finished && !record.failed && heldDecline) await finishRefused()
       try {
-        insights.record(config.slug, {
-          ts: new Date().toISOString(),
-          question: query.slice(0, 500),
-          policyRequestId: requestContext(c.req.raw).requestId,
-          answered: !record.failed && !record.refused && record.citations > 0,
-          citations: record.citations,
-          durationSec: record.durationSec,
-          answerRelevance: record.answerRelevance,
-          groundedness: record.groundedness,
-          contextRelevance: record.contextRelevance,
-          ...(learningId ? { learningId } : {}),
-          firstTokenSec: firstWordsAt === undefined
-            ? null
-            : Math.round(firstWordsAt - received) / 1000,
-          answerSec: Math.round(performance.now() - received) / 1000,
-        })
+        if (config.analyticsEnabled !== false) {
+          insights.record(config.slug, {
+            ts: new Date(opts.now?.() ?? Date.now()).toISOString(),
+            question: query.slice(0, 500),
+            policyRequestId: requestContext(c.req.raw).requestId,
+            answered: !record.failed && !record.refused && record.citations > 0,
+            citations: record.citations,
+            durationSec: record.durationSec,
+            answerRelevance: record.answerRelevance,
+            groundedness: record.groundedness,
+            contextRelevance: record.contextRelevance,
+            ...(learningId ? { learningId } : {}),
+            ...usage.snapshot(),
+            firstTokenSec: firstWordsAt === undefined
+              ? null
+              : Math.round(firstWordsAt - received) / 1000,
+            answerSec: Math.round(performance.now() - received) / 1000,
+          })
+        }
       } catch {
         // insights are best-effort - never fail the answer over them
       }

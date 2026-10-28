@@ -36,6 +36,7 @@ import {
   type AskWindow,
   type FeedbackRating,
   type FeedbackStoreApi,
+  isAskInsight,
   keptRatings,
   LEARNING_ID_PATTERN,
   type MatchedAnswers,
@@ -54,6 +55,7 @@ import type {
   EnrichmentImportResult,
   EnrichmentRecords,
   EvidenceItem,
+  InsightRecord,
   InsightsStoreApi,
   InsightsSummary,
   Investigation,
@@ -68,6 +70,8 @@ import type {
   SourceStoreApi,
   SourceSummary,
   StoredSession,
+  UsageEvent,
+  UsageEventWindow,
   Watch,
   WatchStoreApi,
 } from '../../api/src/stores.ts'
@@ -1424,14 +1428,28 @@ export class DurableTenantStore implements TenantStoreApi {
   }
 }
 
-/** Asks the Durable Object keeps per portal; past it, the oldest go first. */
+/** Usage records the Durable Object keeps per portal; past it, the oldest go first. */
 export const DURABLE_ASKS_KEPT = 50_000
 
 export class DurableInsightsStore implements InsightsStoreApi {
   constructor(private readonly state: DurableState) {}
 
-  private all(slug: string): AskInsight[] {
+  private records(slug: string): InsightRecord[] {
     return this.state.get(key('insights', slug), [])
+  }
+
+  private all(slug: string): AskInsight[] {
+    return this.records(slug).filter(isAskInsight)
+  }
+
+  eventsBetween(slug: string, from: number, to: number): UsageEventWindow {
+    const all = this.records(slug)
+    return {
+      events: all.filter((r): r is UsageEvent =>
+        !isAskInsight(r) && Date.parse(r.ts) >= from && Date.parse(r.ts) < to
+      ),
+      keptSince: all.length >= DURABLE_ASKS_KEPT ? all[0]!.ts : null,
+    }
   }
 
   erase(slug: string): number {
@@ -1439,8 +1457,8 @@ export class DurableInsightsStore implements InsightsStoreApi {
     return this.state.eraseKeys([plain && key('insights', plain)])
   }
 
-  record(slug: string, insight: AskInsight): void {
-    const all = this.all(slug)
+  record(slug: string, insight: InsightRecord): void {
+    const all = this.records(slug)
     all.push(insight)
     this.state.put(key('insights', slug), all.slice(-DURABLE_ASKS_KEPT))
   }
@@ -1510,7 +1528,7 @@ export class DurableInsightsStore implements InsightsStoreApi {
     const all = this.all(slug)
     return {
       asks: asksIn(all, from, to),
-      keptSince: all.length >= DURABLE_ASKS_KEPT ? all[0]!.ts : null,
+      keptSince: this.records(slug).length >= DURABLE_ASKS_KEPT ? this.records(slug)[0]!.ts : null,
     }
   }
 }

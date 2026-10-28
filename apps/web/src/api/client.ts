@@ -1598,6 +1598,7 @@ export interface KnowledgeGapQuestion {
 
 export interface InsightsSummary {
   guardrails?: { questionsRefused: number; answersWithheld: number; lengthWithheld: number }
+  usage?: import('@research-portal/core').UsageOverview
   /** Absent from a server that does not keep answer feedback. */
   feedback?: AnswerFeedbackSummary
   /**

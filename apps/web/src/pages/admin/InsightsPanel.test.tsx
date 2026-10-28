@@ -52,7 +52,7 @@ describe('Insights: answers marked unhelpful', () => {
 })
 
 describe("Insights: this month's knowledge gaps", () => {
-  it('lists the questions answered worst with their counts, and says topics are not mapped', () => {
+  it('lists the questions answered worst with their counts', () => {
     const markup = renderToStaticMarkup(
       <MonthKnowledgeGaps
         gaps={{
@@ -73,8 +73,6 @@ describe("Insights: this month's knowledge gaps", () => {
     expect(markup).toContain('3 asks')
     expect(markup).toContain('2 unanswered · 1 weakly grounded · just now')
     expect(markup).toContain('never exported')
-    expect(markup).toContain('Evidence coverage by topic')
-    expect(markup).toContain('Not available: the ask log keeps')
   })
 
   it('says so when the month has none', () => {

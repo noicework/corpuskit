@@ -132,6 +132,7 @@ Deno.test('lifecycle and usage require platform authority including explicit-key
 
 // Independently authored: the only portal writes a read-only portal still accepts.
 const READ_ONLY_EXEMPT = new Set([
+  'POST /api/t/:slug/events/open',
   'PUT /api/t/:slug/sessions/:id',
   'DELETE /api/t/:slug/sessions/:id',
   'POST /api/t/:slug/watches',
