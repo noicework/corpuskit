@@ -1,3 +1,4 @@
+import { runScheduledEvaluations } from './evaluation-schedule.ts'
 import {
   externalLoginConfig,
   externalLoginConfigured,
@@ -148,6 +149,7 @@ const stopScheduler = startScheduler(
   process.env,
   owned.lifecycle,
   bindings,
+  () => runScheduledEvaluations(app),
 )
 // Off the listen path: the probe is a live retrieval call per portal.
 const cancelDocsProbe = scheduleAfter(3_000, () => void docsHealth.check())

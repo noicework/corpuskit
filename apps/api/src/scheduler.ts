@@ -970,6 +970,7 @@ export function startScheduler(
   env: Record<string, string | undefined>,
   lifecycle?: PortalLifecycleStore,
   bindings?: Pick<BindingStoreApi, 'status'>,
+  runEvaluations?: () => Promise<void>,
 ): () => Promise<void> {
   // Local, explicitly operated demos may allow manual agents while scheduling no upkeep.
   // Unset or any value other than the exact string 'false' keeps the existing timers.
@@ -993,10 +994,21 @@ export function startScheduler(
     atUtc: env.MAINTENANCE_AT_UTC,
     cadenceMs: autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS),
     failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,
-    runDaily: (signal) =>
-      runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'], true, {
-        signal,
-      }),
+    runDaily: async (signal) => {
+      try {
+        await runSystemMaintenance(
+          management,
+          stores,
+          env.AUDIT_RETENTION_DAYS,
+          ['sync', 'watch'],
+          true,
+          { signal },
+        )
+      } finally {
+        signal.throwIfAborted()
+        await runEvaluations?.()
+      }
+    },
     runEnrichments: (signal) =>
       runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false, {
         signal,
