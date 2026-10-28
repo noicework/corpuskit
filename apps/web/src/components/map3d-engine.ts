@@ -127,6 +127,8 @@ const PALETTE_TOKENS = [
   '--rp-cat-4-ink',
   '--rp-cat-5-ink',
   '--rp-cat-6-ink',
+  // Node labels are drawn in the secondary ink; their distance fade is floored by its contrast.
+  '--rp-ink-2',
 ] as const
 
 type Palette3D = {
@@ -134,6 +136,37 @@ type Palette3D = {
   surface: THREE.Color
   accent: THREE.Color
   inks: THREE.Color[]
+  labelInk: THREE.Color
+}
+
+/**
+ * The lowest opacity at which `ink`, composited over `ground`, still reads at `minimum` against
+ * it (WCAG 1.4.3): the floor for a label's distance fade. An ink that falls short even at full
+ * strength gets 1, so it is never faded further. Channels are sRGB 0..1, composited as the
+ * browser composites opacity.
+ */
+export function legibleOpacity(
+  ink: readonly [number, number, number],
+  ground: readonly [number, number, number],
+  minimum = 4.5,
+): number {
+  const lin = (c: number) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  const lum = (c: readonly number[]) =>
+    0.2126 * lin(c[0]!) + 0.7152 * lin(c[1]!) + 0.0722 * lin(c[2]!)
+  const contrast = (a: readonly number[], b: readonly number[]) => {
+    const [x, y] = [lum(a), lum(b)]
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+  }
+  const at = (alpha: number) => ink.map((c, i) => c * alpha + ground[i]! * (1 - alpha))
+  if (contrast(at(1), ground) < minimum) return 1
+  let low = 0
+  let high = 1
+  for (let step = 0; step < 20; step++) {
+    const mid = (low + high) / 2
+    if (contrast(at(mid), ground) >= minimum) high = mid
+    else low = mid
+  }
+  return Math.ceil(high * 100) / 100
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +536,16 @@ export function webglAvailable(): boolean {
  * read back through a probe element's computed colour, which the browser has
  * already resolved to rgb().
  */
+/** The fade floor for this palette's label ink over its surface (sRGB, as the page paints it). */
+function labelFloorFor(palette: Palette3D): number {
+  const srgb = (colour: THREE.Color) => {
+    const out = { r: 0, g: 0, b: 0 }
+    colour.getRGB(out, THREE.SRGBColorSpace)
+    return [out.r, out.g, out.b] as const
+  }
+  return legibleOpacity(srgb(palette.labelInk), srgb(palette.surface))
+}
+
 function resolvePalette(probe: HTMLElement): Palette3D {
   const read = (token: string): THREE.Color => {
     probe.style.color = `var(${token})`
@@ -526,6 +569,7 @@ function resolvePalette(probe: HTMLElement): Palette3D {
     surface: values[6] ?? new THREE.Color('#ffffff'),
     accent: values[7] ?? new THREE.Color('#2a78d6'),
     inks: values.slice(8, 14),
+    labelInk: values[14] ?? new THREE.Color('#5b5851'),
   }
 }
 
@@ -565,6 +609,8 @@ export class KnowledgeMapEngine {
   private traceRingMaterial: THREE.MeshBasicMaterial
 
   private palette: Palette3D
+  /** The lowest opacity a node label's fade may reach and still read at 4.5:1. */
+  private labelFloor = 0.85
   private paletteObserver: MutationObserver
   private probe: HTMLSpanElement
   private popup: HTMLDivElement
@@ -615,8 +661,18 @@ export class KnowledgeMapEngine {
   private view: View
   private distGoal: number
   private tween: ViewTween | null = null
-  private idleSpin: boolean
+  private idleSpinOn = false
   private reduced: boolean
+  private motionListeners = new Set<(moving: boolean) => void>()
+  /** The idle sway. Every change is reported, so the shell's pause control stays truthful. */
+  private get idleSpin(): boolean {
+    return this.idleSpinOn
+  }
+  private set idleSpin(on: boolean) {
+    if (on === this.idleSpinOn) return
+    this.idleSpinOn = on
+    for (const listener of this.motionListeners) listener(on)
+  }
   private reducedQuery: MediaQueryList | null = null
   private onContextLost: ((event: Event) => void) | null = null
 
@@ -712,6 +768,7 @@ export class KnowledgeMapEngine {
     this.probe.style.display = 'none'
     labelLayer.appendChild(this.probe)
     this.palette = resolvePalette(this.probe)
+    this.labelFloor = labelFloorFor(this.palette)
 
     this.camera = new THREE.PerspectiveCamera(FOV, 1.5, 2, 9000)
     this.fog = new THREE.Fog(this.palette.surface.clone(), 600, 2400)
@@ -778,6 +835,7 @@ export class KnowledgeMapEngine {
   refreshPalette() {
     if (this.disposed) return
     this.palette = resolvePalette(this.probe)
+    this.labelFloor = labelFloorFor(this.palette)
     this.applyPaletteToScene()
     for (const visual of this.nodeVisuals.values()) this.applyNodeColour(visual)
     for (const visual of this.edgeVisuals) this.applyEdgeColour(visual)
@@ -2036,6 +2094,38 @@ export class KnowledgeMapEngine {
     this.distGoal = Math.max(this.minDist(), Math.min(this.maxDist(), this.distGoal / factor))
   }
 
+  /** Turn the camera about the map, as a drag or the arrow keys do: the buttons' way to orbit. */
+  orbitBy(dTheta: number, dPhi = 0) {
+    this.claimView()
+    this.view.theta += dTheta
+    this.view.phi = Math.max(PHI_MIN, Math.min(PHI_MAX, this.view.phi + dPhi))
+    this.renderDirty = true
+  }
+
+  /** Whether the idle sway is running. */
+  get moving(): boolean {
+    return this.idleSpin
+  }
+
+  /**
+   * Pause or resume the idle sway (WCAG 2.2.2). Resuming swings about where the camera is now,
+   * so the view does not jump back to where it landed.
+   */
+  setMoving(on: boolean) {
+    if (on && !this.idleSpin) {
+      this.idleAnchor = this.view.theta
+      this.idlePhase = 0
+    }
+    this.idleSpin = on
+    this.renderDirty = true
+  }
+
+  /** Hear every start and stop of the idle sway; returns the unsubscribe. */
+  onMotionChange(listener: (moving: boolean) => void): () => void {
+    this.motionListeners.add(listener)
+    return () => this.motionListeners.delete(listener)
+  }
+
   private minDist(): number {
     return Math.max(60, this.fitDist * MIN_DIST_FACTOR)
   }
@@ -3285,7 +3375,8 @@ export class KnowledgeMapEngine {
       }
       let fadeIn = 1
       if (!inNeighbourhood) {
-        fadeIn = Math.max(0, Math.min(1, budget - kept))
+        // Whole labels only: a fractional budget used to leave its last label at part strength.
+        fadeIn = budget - kept >= 0.5 ? 1 : 0
         kept += 1
       }
       // Distance fade matches the scene fog, so a label never floats at full
@@ -3294,8 +3385,12 @@ export class KnowledgeMapEngine {
         0,
         Math.min(1, (camDist - this.fog.near) / Math.max(1, this.fog.far - this.fog.near)),
       )
-      const opacity = Math.max(0.35, (1 - fogT * 0.5) * Math.min(1, visual.opacity.current + 0.1)) *
-        fadeIn * (1 - lod / 0.35)
+      // The fade stops where the secondary ink would drop under 4.5:1 on the paper (1.4.3); a
+      // label is shown legibly or, past the budget, not at all.
+      const opacity = Math.max(
+        this.labelFloor,
+        (1 - fogT * 0.5) * Math.min(1, visual.opacity.current + 0.1),
+      ) * fadeIn * (1 - lod / 0.35)
       show(visual, this.capX, this.capBaseline - 2, opacity)
     }
     this.positionPopup()

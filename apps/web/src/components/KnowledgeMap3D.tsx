@@ -1,5 +1,5 @@
 import { IconButton } from './ui.tsx'
-import { Maximize, Minus, Plus } from './icons.tsx'
+import { Maximize, Minus, Pause, Play, Plus, RotateCcw, RotateCw } from './icons.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -26,6 +26,9 @@ import { type EngineData, KnowledgeMapEngine, webglAvailable } from './map3d-eng
 // ---------------------------------------------------------------------------
 
 type FrameScheduler = (callback: FrameRequestCallback) => number
+
+/** Six 2.75rem controls, their gaps and the 1rem inset, at the default root size. */
+const CONTROL_COLUMN_HEIGHT = 6 * 48 + 32
 
 /**
  * Wait until a prepared scene has crossed a paint boundary before revealing it.
@@ -108,6 +111,9 @@ export function KnowledgeMap3D({
   onReadyRef.current = onReady
   uiRef.current = ui
 
+  // The idle sway, as the engine reports it - interaction and reduced motion stop it too.
+  const [moving, setMoving] = useState(false)
+
   const [size, setSize] = useState({ w: 0, h: 0 })
   useEffect(() => {
     const el = containerRef.current
@@ -150,6 +156,10 @@ export function KnowledgeMap3D({
   }), [insets, controlGutter])
 
   const hasSize = size.w > 0 && size.h > 0
+  // The six controls stand in a column; they lie down into a row when a bottom panel takes the
+  // space under them, or when the stage is too short for the column (a phone held sideways), so
+  // none of them rises out of the map under the masthead.
+  const rowControls = insets.bottom > 0 || (hasSize && size.h < CONTROL_COLUMN_HEIGHT)
 
   // Coarse buckets follow the usable shape without rebuilding on every pixel.
   const aspect = size.w < 1 || size.h < 1 ? 1.5 : (size.w - controlGutter) / size.h
@@ -185,7 +195,10 @@ export function KnowledgeMap3D({
       uiRef.current,
     )
     engineRef.current = engine
+    setMoving(engine.moving)
+    const unsubscribe = engine.onMotionChange(setMoving)
     return () => {
+      unsubscribe()
       engineRef.current = null
       engine.dispose()
     }
@@ -356,7 +369,7 @@ export function KnowledgeMap3D({
       <div
         ref={controlsRef}
         data-graph-overlay
-        className={`absolute right-4 flex gap-1 ${insets.bottom > 0 ? 'flex-row' : 'flex-col'}`}
+        className={`absolute right-4 flex gap-1 ${rowControls ? 'flex-row' : 'flex-col'}`}
         style={{ bottom: insets.bottom + 16 }}
       >
         {(() => {
@@ -390,7 +403,40 @@ export function KnowledgeMap3D({
               className='rp-shadow-sm'
             />
           )
-          return insets.bottom > 0 ? [fit, zoomOut, zoomIn] : [zoomIn, zoomOut, fit]
+          // Orbiting is otherwise a drag; these turn the map with a single press (WCAG 2.5.7).
+          const turnLeft = (
+            <IconButton
+              key='left'
+              label={ui('Turn the map left')}
+              variant='outline'
+              icon={RotateCcw}
+              onClick={() => engineRef.current?.orbitBy(0.3)}
+              className='rp-shadow-sm'
+            />
+          )
+          const turnRight = (
+            <IconButton
+              key='right'
+              label={ui('Turn the map right')}
+              variant='outline'
+              icon={RotateCw}
+              onClick={() => engineRef.current?.orbitBy(-0.3)}
+              className='rp-shadow-sm'
+            />
+          )
+          // The idle sway runs past five seconds, so it can be stopped (WCAG 2.2.2).
+          const motion = (
+            <IconButton
+              key='motion'
+              label={ui(moving ? 'Pause map motion' : 'Resume map motion')}
+              variant='outline'
+              icon={moving ? Pause : Play}
+              onClick={() => engineRef.current?.setMoving(!moving)}
+              className='rp-shadow-sm'
+            />
+          )
+          const column = [zoomIn, zoomOut, fit, turnLeft, turnRight, motion]
+          return rowControls ? column.reverse() : column
         })()}
       </div>
     </div>
