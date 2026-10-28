@@ -473,6 +473,31 @@ export function isPurgeEligible(raw: DisplayabilityInput): boolean {
  */
 export const MIN_GENERATE_GROUNDING = 0.1
 
+/** A 412 the platform gives when the model refuses the forced tool call behind structured output. */
+function refusesStructuredOutput(err: unknown): boolean {
+  return err instanceof AragApiError && err.status === 412 &&
+    /LLM exception|error received from LLM/i.test(err.message)
+}
+
+/** The system-prompt line that asks for the structured answer as JSON text instead. */
+function jsonReplyInstruction(schema: { name: string; description: string; parameters: unknown }) {
+  return `Reply with only one JSON object and no other text: ${schema.name}, ${schema.description}. ` +
+    `It must match this JSON Schema: ${JSON.stringify(schema.parameters)}`
+}
+
+/** The JSON object in a text answer, with or without a code fence; null when there is none. */
+function parseJsonObject(text: string): unknown {
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  try {
+    const value = JSON.parse(text.slice(start, end + 1))
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
 /** The structured answer `compose` asks for: the composed text, citations inline. */
 const COMPOSE_SCHEMA = {
   name: 'composed_answer',
@@ -2782,7 +2807,7 @@ export class AragProvider implements RetrievalProvider {
       [] as ResourceSummary[]
     )
     const byId = new Map(catalogue.map((r) => [r.id, r]))
-    const res = await client.postStream('/ask', {
+    const request: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
       answer_json_schema: schema,
@@ -2815,8 +2840,22 @@ export class AragProvider implements RetrievalProvider {
       // The default cap triggers 412 "Error generating json: max_tokens" on
       // large payloads like comparison matrices.
       max_tokens: 4096,
-    })
+    }
+    let res: Response
+    let asText = false
+    try {
+      res = await client.postStream('/ask', request)
+    } catch (err) {
+      if (!refusesStructuredOutput(err)) throw err
+      // Some models refuse the forced tool call structured output rides on, and the platform
+      // answers 412. Ask for the same object as JSON text and parse it from the answer.
+      const { answer_json_schema: _schema, ...plain } = request
+      const system = [opts.instructions?.trim(), jsonReplyInstruction(schema)].filter(Boolean)
+      res = await client.postStream('/ask', { ...plain, prompt: { system: system.join('\n\n') } })
+      asText = true
+    }
     let object: unknown = null
+    let answerText = ''
     let sources: ScoredResource[] = []
     const passagesByResource: Record<string, string[]> = {}
     for await (const line of ndjson(res)) {
@@ -2859,8 +2898,11 @@ export class AragProvider implements RetrievalProvider {
           .slice(0, 12)
       } else if (item.type === 'answer_json' && item.object !== undefined) {
         object = item.object
+      } else if (asText && item.type === 'answer' && typeof item.text === 'string') {
+        answerText += item.text
       }
     }
+    if (asText && object === null) object = parseJsonObject(answerText)
     const grounded = sources.filter((s) => s.relevance >= MIN_GENERATE_GROUNDING)
     if (opts.requireGrounding && grounded.length === 0) {
       return { object: null, sources: grounded, insufficientGrounding: true, passagesByResource }
