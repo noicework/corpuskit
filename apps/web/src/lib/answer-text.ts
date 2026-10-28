@@ -41,3 +41,16 @@ export function stripRefusalTemplate(text: string): string {
 export function normaliseAnswerBullets(text: string): string {
   return text.replace(/([.:;!?\]"”)*]) \* (?=\S)/g, '$1\n* ')
 }
+
+/**
+ * Citation markers sit after the punctuation they follow, not before it: `ten days [1].`
+ * reads as `ten days.[1]`, and the space the model put before a marker goes. A run of
+ * markers moves together (`[1][2].` becomes `.[1][2]`), and a marker with no punctuation
+ * after it only loses the space. Markers are `[n]` or an agent's `[block-AA]`.
+ */
+export function placeMarkersAfterPunctuation(text: string): string {
+  return text.replace(
+    /[ \t]*((?:\[(?:block-[A-Za-z0-9]+|\d+)\])+)(?:[ \t]*([.,;:!?]+))?/g,
+    (_whole, markers: string, punctuation: string | undefined) => `${punctuation ?? ''}${markers}`,
+  )
+}
