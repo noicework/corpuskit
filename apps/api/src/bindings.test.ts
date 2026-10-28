@@ -1,10 +1,67 @@
 import { expect } from '@std/expect'
 import { BindingCipher } from './binding-crypto.ts'
-import { BindingStore } from './bindings.ts'
+import { BindingStore, peerKeyName, SealedBindingStore } from './bindings.ts'
 
 const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(17)))
 const TOKEN = 'test-only-local-binding-token'
 const binding = { baseUrl: 'https://kb.example.test/api/v1/kb/example', token: TOKEN }
+
+for (const existing of [false, true]) {
+  Deno.test(`peer removal cancels a key still being sealed${existing ? ' for replacement' : ''}`, async () => {
+    let stored: Record<string, unknown> = {}
+    const persistence = {
+      read: () => stored,
+      write: (next: Record<string, unknown>) => {
+        stored = next
+      },
+    }
+    const store = new SealedBindingStore(persistence, { BINDING_KEY: KEY }, true)
+    await store.initialize()
+    const name = peerKeyName('soil', 'partner')
+    if (existing) await store.set(name, binding)
+    const pending = store.set(name, { ...binding, token: 'synthetic-replacement-key' })
+    expect(store.removePeers('soil', ['partner'])).toBe(existing ? 1 : 0)
+    await expect(pending).rejects.toThrow('binding_unavailable')
+    expect(store.get(name)).toBeUndefined()
+    expect(Object.hasOwn(stored, name)).toBe(false)
+    // A later deliberate key save still works.
+    await store.set(name, binding)
+    expect(store.get(name)?.token).toBe(TOKEN)
+  })
+}
+
+Deno.test('selected peer key deletion keeps storage and cache unchanged when persistence fails', async () => {
+  let fail = false
+  let stored: Record<string, unknown> = {}
+  const store = new SealedBindingStore(
+    {
+      read: () => stored,
+      write: (next) => {
+        if (fail) throw new Error('storage failure')
+        stored = next
+      },
+    },
+    { BINDING_KEY: KEY },
+    true,
+  )
+  await store.initialize()
+  for (const id of ['first', 'second']) await store.set(peerKeyName('soil', id), binding)
+  const before = structuredClone(stored)
+  fail = true
+  expect(() => store.removePeers('soil', ['first'])).toThrow('storage failure')
+  expect(stored).toEqual(before)
+  expect(store.get(peerKeyName('soil', 'first'))?.token).toBe(TOKEN)
+  fail = false
+  expect(store.removePeers('soil', ['first'])).toBe(1)
+  expect(store.get(peerKeyName('soil', 'first'))).toBeUndefined()
+  expect(store.get(peerKeyName('soil', 'second'))?.token).toBe(TOKEN)
+  const restarted = new SealedBindingStore({ read: () => stored, write: () => {} }, {
+    BINDING_KEY: KEY,
+  }, true)
+  await restarted.initialize()
+  expect(restarted.get(peerKeyName('soil', 'first'))).toBeUndefined()
+  expect(restarted.get(peerKeyName('soil', 'second'))?.token).toBe(TOKEN)
+})
 
 function fixture() {
   const directory = Deno.makeTempDirSync()

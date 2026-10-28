@@ -111,6 +111,7 @@ export class SealedBindingStore {
   private stored: Record<string, unknown> = {}
   private storageInvalid = false
   private readonly connected = new Map<string, StoredBinding>()
+  private readonly pendingWrites = new Set<{ name: string; removed: boolean }>()
   private readonly unavailable = new Map<string, KnowledgeBoxStatus>()
   private pendingOpen: [string, StoredBinding][] = []
   private pendingSeal: string[] = []
@@ -273,19 +274,26 @@ export class SealedBindingStore {
   /** Store a new or replacement binding, sealing it when a key is configured. */
   async set(slug: string, binding: KbBinding): Promise<void> {
     this.assertWritable()
-    const entry: StoredBinding = { ...binding, connectedAt: new Date().toISOString() }
-    const token = this.keyState === 'valid'
-      ? await this.cipher.seal(slug, entry.token)
-      : entry.token
-    // Merge after sealing so concurrent writes each keep the other's record.
-    this.commit({ ...this.stored, [slug]: { ...entry, token } }, {
-      operation: 'bindings.set',
-      slug: portalOf(slug),
-    })
-    this.connected.set(slug, entry)
-    this.unavailable.delete(slug)
-    if (this.keyState === 'valid') this.plaintext.delete(slug)
-    else this.plaintext.add(slug)
+    const pending = { name: slug, removed: false }
+    this.pendingWrites.add(pending)
+    try {
+      const entry: StoredBinding = { ...binding, connectedAt: new Date().toISOString() }
+      const token = this.keyState === 'valid'
+        ? await this.cipher.seal(slug, entry.token)
+        : entry.token
+      if (pending.removed) throw new BindingCryptoError('binding_unavailable')
+      // Merge after sealing so concurrent writes each keep the other's record.
+      this.commit({ ...this.stored, [slug]: { ...entry, token } }, {
+        operation: 'bindings.set',
+        slug: portalOf(slug),
+      })
+      this.connected.set(slug, entry)
+      this.unavailable.delete(slug)
+      if (this.keyState === 'valid') this.plaintext.delete(slug)
+      else this.plaintext.add(slug)
+    } finally {
+      this.pendingWrites.delete(pending)
+    }
   }
 
   /** Remove a stored binding, including a withheld one; the environment box then applies. */
@@ -295,26 +303,39 @@ export class SealedBindingStore {
     const next = { ...this.stored }
     delete next[slug]
     this.commit(next, { operation: 'bindings.remove', slug: portalOf(slug) })
+    for (const pending of this.pendingWrites) {
+      if (pending.name === slug) pending.removed = true
+    }
     this.connected.delete(slug)
     this.unavailable.delete(slug)
     this.plaintext.delete(slug)
   }
 
-  /** Remove every federation peer key the portal holds; how many there were. */
-  removePeers(slug: string): number {
+  /** Remove all or selected federation peer keys in one write; how many there were. */
+  removePeers(slug: string, peerIds?: readonly string[]): number {
     this.assertInitialized()
     if (this.storageInvalid) throw new BindingCryptoError('binding_storage_invalid')
     const prefix = peerKeyName(slug, '')
-    const names = Object.keys(this.stored).filter((name) => name.startsWith(prefix))
-    if (names.length === 0) return 0
-    const next = { ...this.stored }
+    const selected = peerIds && new Set(peerIds.map((id) => peerKeyName(slug, id)))
+    const names = Object.keys(this.stored).filter((name) =>
+      name.startsWith(prefix) && (!selected || selected.has(name))
+    )
+    if (names.length) {
+      const next = { ...this.stored }
+      for (const name of names) delete next[name]
+      this.commit(next, { operation: 'bindings.remove', slug })
+    }
+    // Sealing yields: an earlier key PUT must not recreate a removed peer's record afterwards.
+    for (const pending of this.pendingWrites) {
+      if (pending.name.startsWith(prefix) && (!selected || selected.has(pending.name))) {
+        pending.removed = true
+      }
+    }
     for (const name of names) {
-      delete next[name]
       this.connected.delete(name)
       this.unavailable.delete(name)
       this.plaintext.delete(name)
     }
-    this.commit(next, { operation: 'bindings.remove', slug })
     return names.length
   }
 

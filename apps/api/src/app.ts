@@ -1,4 +1,8 @@
-import { registerFederationManagement } from './federation-management.ts'
+import {
+  patchTenantWithFederationKeys,
+  registerFederationManagement,
+  removedPeerIds,
+} from './federation-management.ts'
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
@@ -5594,10 +5598,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ...(demoTour !== undefined ? { demoTour } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
+    const removedPeers = removedPeerIds(config, behaviour)
     // A participation change is recorded with its before and after (who and when are the
     // audit event's own).
     const behaviourDetail = {
       changedFields: behaviourFields.join(','),
+      ...(removedPeers.length ? { removedPeerIds: removedPeers.join(',') } : {}),
       ...(federation?.participates !== undefined
         ? {
           participates: federation.participates,
@@ -5609,7 +5615,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (behaviourFields.length && appearanceFields.length) {
       await subAction(c, '/api/admin/tenants/:slug', 'tenant.appearance.update', () =>
         subAction(c, '/api/admin/tenants/:slug', 'tenant.behaviour.update', () =>
-          tenants.patch(config.slug, {
+          patchTenantWithFederationKeys({ tenants, bindings }, config, {
             ...behaviour,
             branding: withLayout(
               { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
@@ -5626,7 +5632,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         '/api/admin/tenants/:slug',
         'tenant.behaviour.update',
         () =>
-          tenants.patch(config.slug, behaviour),
+          patchTenantWithFederationKeys({ tenants, bindings }, config, behaviour),
         behaviourDetail,
       )
     }

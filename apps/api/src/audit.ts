@@ -288,6 +288,9 @@ const fields = {
   // Whether the portal takes part in federated answers, after and before the change.
   participates: flag,
   previousParticipates: flag,
+  removedPeerIds: (value: unknown): value is string =>
+    typeof value === 'string' &&
+    /^[a-z0-9][a-z0-9-]{0,39}(?:,[a-z0-9][a-z0-9-]{0,39}){0,5}$/.test(value),
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
@@ -405,6 +408,7 @@ const actionFields = {
     'sessionTenantId',
     'participates',
     'previousParticipates',
+    'removedPeerIds',
   ],
   'tenant.access.update': [
     'previousAccessMode',

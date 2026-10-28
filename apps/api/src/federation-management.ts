@@ -9,6 +9,29 @@ import type { SealedBindingStore } from './bindings.ts'
 import { peerKeyName } from './bindings.ts'
 import { declaredRoute } from './permissions.ts'
 import { type EnrichmentStoreApi, merchandiseSummaries } from './enrichments.ts'
+import type { TenantPatch, TenantStoreApi } from './tenants.ts'
+
+export function removedPeerIds(config: TenantConfig, patch: TenantPatch): string[] {
+  const peers = patch.federation?.peers
+  if (peers === undefined) return []
+  const retained = new Set(peers.map((peer) => peer.id))
+  return (config.federation?.peers ?? []).filter((peer) => !retained.has(peer.id))
+    .map((peer) => peer.id)
+}
+
+/** Delete credentials before dropping peers, so a failed deletion cannot leave a reusable key. */
+export function patchTenantWithFederationKeys(
+  services: {
+    tenants: Pick<TenantStoreApi, 'patch'>
+    bindings: Pick<SealedBindingStore, 'removePeers'>
+  },
+  config: TenantConfig,
+  patch: TenantPatch,
+) {
+  const removed = removedPeerIds(config, patch)
+  if (removed.length) services.bindings.removePeers(config.slug, removed)
+  services.tenants.patch(config.slug, patch)
+}
 
 const kindSamples = {
   'arag-kb': { zone: 'test-zone', kbId: 'fixture-box' },
