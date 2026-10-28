@@ -127,6 +127,7 @@ const PALETTE_TOKENS = [
   '--rp-cat-4-ink',
   '--rp-cat-5-ink',
   '--rp-cat-6-ink',
+  '--rp-ink',
 ] as const
 
 type Palette3D = {
@@ -134,6 +135,48 @@ type Palette3D = {
   surface: THREE.Color
   accent: THREE.Color
   inks: THREE.Color[]
+  labelInk: THREE.Color
+}
+
+/** Minimum opacity for sRGB ink composited on its ground at the requested contrast. */
+export function legibleOpacity(
+  ink: readonly [number, number, number],
+  ground: readonly [number, number, number],
+  minimum = 4.5,
+): number {
+  const linear = (channel: number) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  const luminance = (channels: readonly number[]) =>
+    0.2126 * linear(channels[0]!) + 0.7152 * linear(channels[1]!) +
+    0.0722 * linear(channels[2]!)
+  const background = luminance(ground)
+  const contrastAt = (alpha: number) => {
+    const foreground = luminance(
+      ink.map((channel, index) => channel * alpha + ground[index]! * (1 - alpha)),
+    )
+    return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+  }
+  if (minimum <= 1) return 0
+  // An inaccessible ink is never faded further; the palette contract owns that pair.
+  if (contrastAt(1) < minimum) return 1
+  let low = 0
+  let high = 1
+  for (let step = 0; step < 24; step++) {
+    const middle = (low + high) / 2
+    if (contrastAt(middle) >= minimum) high = middle
+    else low = middle
+  }
+  // Round towards stronger ink, leaving room for painted channel quantisation.
+  return Math.ceil(high * 100) / 100
+}
+
+function labelFloorFor(palette: Palette3D): number {
+  const srgb = (colour: THREE.Color) => {
+    const channels = { r: 0, g: 0, b: 0 }
+    colour.getRGB(channels, THREE.SRGBColorSpace)
+    return [channels.r, channels.g, channels.b] as const
+  }
+  return legibleOpacity(srgb(palette.labelInk), srgb(palette.surface), 4.5)
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +569,7 @@ function resolvePalette(probe: HTMLElement): Palette3D {
     surface: values[6] ?? new THREE.Color('#ffffff'),
     accent: values[7] ?? new THREE.Color('#2a78d6'),
     inks: values.slice(8, 14),
+    labelInk: values[14]!,
   }
 }
 
@@ -565,6 +609,7 @@ export class KnowledgeMapEngine {
   private traceRingMaterial: THREE.MeshBasicMaterial
 
   private palette: Palette3D
+  private labelFloor = 1
   private paletteObserver: MutationObserver
   private probe: HTMLSpanElement
   private popup: HTMLDivElement
@@ -616,7 +661,11 @@ export class KnowledgeMapEngine {
   private distGoal: number
   private tween: ViewTween | null = null
   private idleSpin = false
+  private motionPaused = false
   private reduced: boolean
+  private get instantMotion(): boolean {
+    return this.reduced || this.motionPaused
+  }
   private reducedQuery: MediaQueryList | null = null
   private onContextLost: ((event: Event) => void) | null = null
 
@@ -696,6 +745,7 @@ export class KnowledgeMapEngine {
       : null
     this.reduced = this.reducedQuery?.matches ?? false
     this.idleSpin = initiallyPlaying && !this.reduced
+    this.motionPaused = !this.idleSpin
     this.onMotionChange(this.idleSpin)
     this.reducedQuery?.addEventListener('change', this.onReducedChange)
 
@@ -723,6 +773,7 @@ export class KnowledgeMapEngine {
     this.probe.style.display = 'none'
     labelLayer.appendChild(this.probe)
     this.palette = resolvePalette(this.probe)
+    this.labelFloor = labelFloorFor(this.palette)
 
     this.camera = new THREE.PerspectiveCamera(FOV, 1.5, 2, 9000)
     this.fog = new THREE.Fog(this.palette.surface.clone(), 600, 2400)
@@ -789,6 +840,7 @@ export class KnowledgeMapEngine {
   refreshPalette() {
     if (this.disposed) return
     this.palette = resolvePalette(this.probe)
+    this.labelFloor = labelFloorFor(this.palette)
     this.applyPaletteToScene()
     for (const visual of this.nodeVisuals.values()) this.applyNodeColour(visual)
     for (const visual of this.edgeVisuals) this.applyEdgeColour(visual)
@@ -1036,12 +1088,14 @@ export class KnowledgeMapEngine {
         opacity: { current: 1, target: 1 },
         shellOpacity: { current: hollow ? 0.95 : 0, target: hollow ? 0.95 : 0 },
         scale: {
-          current: firstBuild && !this.reduced ? 0.001 : 1,
+          current: firstBuild && !this.instantMotion ? 0.001 : 1,
           target: 1,
         },
         lift: { current: 0, target: 0 },
         degree,
-        bornAt: firstBuild && !this.reduced ? performance.now() + Math.min(index * 9, 900) : 0,
+        bornAt: firstBuild && !this.instantMotion
+          ? performance.now() + Math.min(index * 9, 900)
+          : 0,
         label,
         labelW: 0,
         territory: null,
@@ -1195,8 +1249,8 @@ export class KnowledgeMapEngine {
           lodStarted: kept?.lodStarted ?? -1,
           dived: kept?.dived ?? false,
           opacity: { current: 1, target: 1 },
-          scale: { current: firstBuild && !this.reduced ? 0.001 : 1, target: 1 },
-          bornAt: firstBuild && !this.reduced ? now + 240 + Math.min(hubIndex * 45, 600) : 0,
+          scale: { current: firstBuild && !this.instantMotion ? 0.001 : 1, target: 1 },
+          bornAt: firstBuild && !this.instantMotion ? now + 240 + Math.min(hubIndex * 45, 600) : 0,
         }
         this.applyHubColour(hub, style.slot)
         hubIndex += 1
@@ -1709,7 +1763,7 @@ export class KnowledgeMapEngine {
     this.tween = null
     this.viewOwnedFlag = true
     this.focusOwnedFlag = false
-    this.setMotionPlaying(false)
+    this.stopIdleMotion()
   }
 
   /**
@@ -2036,7 +2090,7 @@ export class KnowledgeMapEngine {
     )
     this.viewOwnedFlag = true
     this.focusOwnedFlag = true
-    this.setMotionPlaying(false)
+    this.stopIdleMotion()
     return dist
   }
 
@@ -2072,7 +2126,7 @@ export class KnowledgeMapEngine {
   }
 
   private moveView(to: View, duration: number) {
-    if (this.reduced || duration <= 0) {
+    if (this.instantMotion || duration <= 0) {
       this.view = { ...to, target: to.target.clone() }
       this.distGoal = to.dist
       this.tween = null
@@ -2259,7 +2313,7 @@ export class KnowledgeMapEngine {
       // A drag plane fixed at pointerdown under a still-drifting camera makes
       // the held node crawl away from the pointer - the drift stops here,
       // without claiming the whole view the way a pan or zoom does.
-      this.setMotionPlaying(false)
+      this.stopIdleMotion()
       this.sim.reheat()
       return
     }
@@ -2311,7 +2365,7 @@ export class KnowledgeMapEngine {
       const hitPoint = new THREE.Vector3()
       if (this.raycaster.ray.intersectPlane(drag.plane, hitPoint)) {
         this.sim.pin(drag.id, hitPoint.x, hitPoint.y, hitPoint.z)
-        if (this.reduced) {
+        if (this.instantMotion) {
           // Direct manipulation updates once per input, without spring motion afterwards.
           this.sim.tick(1)
           this.updateTerritories()
@@ -2478,12 +2532,25 @@ export class KnowledgeMapEngine {
   /** Explicit playback of the automatic camera drift, always off under reduced motion. */
   setMotionPlaying(playing: boolean) {
     const next = playing && !this.reduced
-    this.idleSpin = next
-    if (next) {
+    if (next && !this.idleSpin) {
       this.idleAnchor = this.view.theta
       this.idlePhase = 0
     }
+    this.idleSpin = next
+    this.motionPaused = !next
+    if (!next) {
+      this.tween = null
+      this.distGoal = this.view.dist
+      this.sim?.cool()
+    }
+    this.renderDirty = true
     this.onMotionChange(next)
+  }
+
+  /** A requested camera action ends the idle sway without pausing that action. */
+  private stopIdleMotion() {
+    this.idleSpin = false
+    this.onMotionChange(false)
   }
 
   rotate(x: number, y: number) {
@@ -2564,9 +2631,14 @@ export class KnowledgeMapEngine {
   private stepFades(dt: number): boolean {
     // Exponential approach: reads as the same cross-fade the 2D map does with
     // its 180ms opacity transition.
-    const rate = this.reduced ? 1 : 1 - Math.exp(-dt / 110)
+    const instant = this.instantMotion
+    const rate = 1 - Math.exp(-dt / 110)
     let active = false
     const step = (fade: Fade): number => {
+      if (instant) {
+        fade.current = fade.target
+        return fade.current
+      }
       const delta = fade.target - fade.current
       if (Math.abs(delta) < 0.004) {
         fade.current = fade.target
@@ -2578,7 +2650,7 @@ export class KnowledgeMapEngine {
     }
     const now = performance.now()
     for (const visual of this.nodeVisuals.values()) {
-      if (visual.bornAt > 0 && now < visual.bornAt) {
+      if (!instant && visual.bornAt > 0 && now < visual.bornAt) {
         active = true
       } else {
         visual.bornAt = 0
@@ -2591,7 +2663,7 @@ export class KnowledgeMapEngine {
     for (const visual of this.edgeVisuals) step(visual.opacity)
     for (const visual of this.flowVisuals) step(visual.opacity)
     for (const hub of this.hubs.values()) {
-      if (hub.bornAt > 0 && now < hub.bornAt) {
+      if (!instant && hub.bornAt > 0 && now < hub.bornAt) {
         active = true
       } else {
         hub.bornAt = 0
@@ -2609,7 +2681,7 @@ export class KnowledgeMapEngine {
     this.lastFrame = now
     this.frameCount += 1
 
-    const simWarm = !this.reduced && this.sim !== null &&
+    const simWarm = !this.instantMotion && this.sim !== null &&
       (this.sim.alpha() > 0.02 || this.drag !== null)
     if (simWarm) {
       this.sim?.tick(1)
@@ -2630,7 +2702,7 @@ export class KnowledgeMapEngine {
     } else {
       const distDelta = this.distGoal - this.view.dist
       if (Math.abs(distDelta) > 0.5) {
-        this.view.dist += distDelta * (this.reduced ? 1 : Math.min(1, dt / 90))
+        this.view.dist += distDelta * (this.instantMotion ? 1 : Math.min(1, dt / 90))
         this.renderDirty = true
       }
       if (this.idleSpin && this.nodeVisuals.size > 0) {
@@ -2946,7 +3018,7 @@ export class KnowledgeMapEngine {
       }
       if (want !== hub.lodTarget) this.setLod(hub, want, now)
       if (hub.lod !== hub.lodTarget) {
-        if (this.reduced) {
+        if (this.instantMotion) {
           hub.lod = hub.lodTarget
         } else {
           const t = Math.min(1, (now - hub.lodStarted) / LOD_MS)
@@ -3001,7 +3073,7 @@ export class KnowledgeMapEngine {
     this.setLod(hub, 0, performance.now())
     this.viewOwnedFlag = true
     this.focusOwnedFlag = true
-    this.setMotionPlaying(false)
+    this.stopIdleMotion()
     this.setHoveredHub(null)
   }
 
@@ -3208,13 +3280,19 @@ export class KnowledgeMapEngine {
     const isEmphasised = (id: string) =>
       id === focus || id === this.hoveredId || id === pathFrom ||
       (this.pathNodeIds?.has(id) ?? false)
-    const show = (visual: NodeVisual, sx: number, y: number) => {
+    const show = (visual: NodeVisual, sx: number, y: number, inkOpacity = 1) => {
       const label = visual.label
       label.style.display = 'block'
       label.style.transform = `translate(-50%, -100%) translate(${sx.toFixed(1)}px, ${
         y.toFixed(1)
       }px)`
       label.style.opacity = '1'
+      // Fade only the ink over the retained solid surface, never the whole label box.
+      label.style.color = inkOpacity === 1
+        ? 'var(--rp-ink)'
+        : `color-mix(in srgb, var(--rp-ink) ${
+          Math.round(inkOpacity * 10000) / 100
+        }%, var(--rp-surface))`
     }
 
     // 1. The emphasised few - the selection and its path are always named,
@@ -3311,8 +3389,10 @@ export class KnowledgeMapEngine {
     }
 
     // 3. The rest. The budget grows as the camera comes closer, like the 2D
-    // zoom; it is continuous so the last name in fades rather than pops.
-    const budget = Math.max(10, Math.min(48, 24 * (this.fitDist / Math.max(1, this.view.dist))))
+    // zoom. Admit only whole labels, including at a fractional camera distance.
+    const budget = Math.floor(
+      Math.max(10, Math.min(48, 24 * (this.fitDist / Math.max(1, this.view.dist)))),
+    )
     let kept = 0
     for (let rank = 0; rank < this.paintRank.length; rank++) {
       const visual = this.paintRank[rank]
@@ -3345,8 +3425,19 @@ export class KnowledgeMapEngine {
         continue
       }
       if (!inNeighbourhood) kept += 1
-      // Labels stay opaque even when their marks recede into the scene fog.
-      show(visual, this.capX, this.capBaseline - 2)
+      const fog = Math.max(
+        0,
+        Math.min(
+          1,
+          (visual.pos.distanceTo(cam.position) - this.fog.near) /
+            Math.max(1, this.fog.far - this.fog.near),
+        ),
+      )
+      const inkOpacity = Math.max(
+        this.labelFloor,
+        (1 - fog * 0.5) * Math.min(1, visual.opacity.current + 0.1) * (1 - lod / 0.35),
+      )
+      show(visual, this.capX, this.capBaseline - 2, inkOpacity)
     }
     this.positionPopup()
     this.projectEdgeLabels()
