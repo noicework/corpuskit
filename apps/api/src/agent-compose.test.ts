@@ -121,9 +121,9 @@ describe('composeAcross', () => {
       type: 'agent-start',
       mode: 'orchestrated',
       sources: [
-        { id: 'fisheries', label: 'Fisheries collection', portal: 'fisheries' },
-        { id: 'grains-col', label: 'Grains collection', portal: 'grains-col' },
-        { id: 'rural', label: 'Rural collection', portal: 'rural' },
+        { id: 'fisheries', label: 'Fisheries collection', portal: 'fisheries', kind: 'hosted' },
+        { id: 'grains-col', label: 'Grains collection', portal: 'grains-col', kind: 'hosted' },
+        { id: 'rural', label: 'Rural collection', portal: 'rural', kind: 'hosted' },
       ],
     })
     expect(ofType(events, 'agent-sources').map((e) => [e.stepId, e.source.portal, e.chunks.length]))
@@ -201,6 +201,7 @@ describe('composeAcross', () => {
         id: 'grains-col',
         label: 'Grains collection',
         portal: 'grains-col',
+        kind: 'hosted',
         reason: 'error',
       }],
     }])
@@ -225,7 +226,13 @@ describe('composeAcross', () => {
       reason: 'No answer within 80 milliseconds.',
     })
     expect(ofType(events, 'sources-failed')[0]?.sources).toEqual([
-      { id: 'rural', label: 'Rural collection', portal: 'rural', reason: 'timeout' },
+      {
+        id: 'rural',
+        label: 'Rural collection',
+        portal: 'rural',
+        kind: 'hosted',
+        reason: 'timeout',
+      },
     ])
     expect(ofType(events, 'citation').length).toBe(3)
     expect(events.at(-1)?.type).toBe('done')
@@ -298,6 +305,22 @@ describe('composeAcross', () => {
       composeTimeoutMs: 50,
     })
     expect(slow.at(-1)).toMatchObject({ type: 'error', code: 'timeout', retryable: true })
+  })
+
+  it('leaves out a portal that stopped taking part while its search ran', async () => {
+    let grainsParticipates = true
+    const provider = new ComposeProvider({
+      'grains-col': async (config) => {
+        const results = await new ComposeProvider().search(config, 'q')
+        grainsParticipates = false
+        return results
+      },
+    })
+    const events = await run(provider, {
+      stillParticipates: (slug) => slug !== 'grains-col' || grainsParticipates,
+    })
+    expect(provider.composed[0]!.passages.map((p) => p.source)).not.toContain('Grains collection')
+    expect(ofType(events, 'citation').some((c) => c.sourceId === 'grains-col')).toBe(false)
   })
 
   it('stops as soon as the reader goes away', async () => {

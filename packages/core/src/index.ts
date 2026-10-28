@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
+import { FederationConfigSchema } from './agent-ask.ts'
 
 // ---------------------------------------------------------------------------
 // Tenant configuration - the single document that drives the whole portal UI.
@@ -444,6 +445,12 @@ export const TenantConfigSchema = z.object({
    */
   agentAsk: z.boolean().optional(),
   /**
+   * Federation (docs/AGENT-ASK.md): the partner collections the portal's composed answers also
+   * search, and whether the portal takes part in federated answers. Set through
+   * `PATCH /api/admin/tenants/:slug`; peer keys go through their own operator route.
+   */
+  federation: FederationConfigSchema.optional(),
+  /**
    * Whether readers can send the portal team feedback from the header. Opt-in: only true turns
    * it on, through `PATCH /api/admin/tenants/:slug`. The control shows, and the route answers,
    * only where the deployment also has somewhere to deliver it (`siteFeedbackNotifier`); readers
@@ -709,6 +716,8 @@ export const ResourceSummarySchema = z.object({
    * a route that recreates the resource keeps it hidden.
    */
   hidden: z.literal(true).optional(),
+  /** Labelled `federation/exclude`: never leaves its portal in a federated answer. */
+  federationExcluded: z.literal(true).optional(),
 })
 
 // ---------------------------------------------------------------------------

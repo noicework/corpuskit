@@ -33,7 +33,7 @@ export { ERASED_RECORD_KINDS, type ErasedCounts, type ErasedRecordKind }
  */
 export interface PortalErasureStores {
   tenants: Pick<TenantStoreApi, 'erase'>
-  bindings: Pick<BindingStoreApi, 'status' | 'remove'>
+  bindings: Pick<BindingStoreApi, 'status' | 'remove' | 'removePeers'>
   lifecycle: Pick<PortalLifecycleStore, 'erase'>
   sessions: Pick<SessionsStoreApi, 'erase'>
   investigations: Pick<InvestigationStoreApi, 'erase'>
@@ -130,6 +130,8 @@ export function erasePortal(
       stores.bindings.remove(slug)
       erased.bindings = 1
     }
+    // Federation peer keys are kept beside the binding, under the portal's slug.
+    erased.bindings += stores.bindings.removePeers(slug)
     erased.lifecycle = stores.lifecycle.erase(slug)
     erased.sessions = stores.sessions.erase(slug)
     erased.investigations = stores.investigations.erase(slug)

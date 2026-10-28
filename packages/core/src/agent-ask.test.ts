@@ -4,7 +4,9 @@ import {
   type AgentAskEvent,
   AgentAskEventSchema,
   AgentAskRequestSchema,
+  FederationSettingsSchema,
   offersAgentAsk,
+  participatesInFederation,
   TenantConfigSchema,
 } from './index.ts'
 
@@ -69,7 +71,22 @@ describe('AgentAskEventSchema', () => {
       },
       {
         type: 'sources-failed',
-        sources: [{ id: 'portal-b', label: 'Portal B', portal: 'portal-b', reason: 'timeout' }],
+        sources: [
+          {
+            id: 'portal-b',
+            label: 'Portal B',
+            portal: 'portal-b',
+            kind: 'hosted',
+            reason: 'timeout',
+          },
+          {
+            id: 'peer:p',
+            label: 'Partner',
+            kind: 'peer',
+            transport: 'mcp',
+            reason: 'unauthorised',
+          },
+        ],
       },
       {
         type: 'agent-sources',
@@ -162,5 +179,32 @@ describe('the agentAsk portal setting', () => {
     for (const agentAsk of ['true', 1, null]) {
       expect(TenantConfigSchema.safeParse({ ...config, agentAsk }).success).toBe(false)
     }
+  })
+})
+
+describe('FederationSettingsSchema', () => {
+  const peer = { id: 'partner', label: 'Partner', kind: 'arag-kb', zone: 'zone-1', kbId: 'box-1' }
+  it('takes participation and peers addressed by zone and box only', () => {
+    expect(FederationSettingsSchema.parse({ participates: false })).toEqual({ participates: false })
+    expect(FederationSettingsSchema.parse({ peers: [{ ...peer, linkOrigins: true }] }).peers)
+      .toEqual([{ ...peer, linkOrigins: true }])
+    for (
+      const bad of [
+        { peers: [{ ...peer, zone: 'a.b' }] },
+        { peers: [{ ...peer, zone: '127.0.0.1' }] },
+        { peers: [{ ...peer, kbId: '../x' }] },
+        { peers: [{ ...peer, kind: 'corpuskit-mcp' }] },
+        { peers: [{ ...peer, token: 'secret' }] },
+        { peers: [{ ...peer, mcpUrl: 'https://evil.example' }] },
+        { peers: [peer, peer] },
+        { participates: 'no' },
+      ]
+    ) expect(FederationSettingsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
+  })
+
+  it('treats a portal as taking part unless it opts out', () => {
+    expect(participatesInFederation({})).toBe(true)
+    expect(participatesInFederation({ federation: {} })).toBe(true)
+    expect(participatesInFederation({ federation: { participates: false } })).toBe(false)
   })
 })

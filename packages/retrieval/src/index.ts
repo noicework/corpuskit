@@ -7,6 +7,18 @@ export type {
 } from './provider.ts'
 export { AgentAskError } from './provider.ts'
 export {
+  PEER_MCP_METHODS,
+  PEER_MCP_TOOLS,
+  PEER_PASSAGES,
+  PEER_PATHS,
+  peerEndpoint,
+  PeerError,
+  type PeerFailure,
+  PeerMcpSession,
+  type PeerPassage,
+  searchPeer,
+} from './providers/arag/peers.ts'
+export {
   AgentStreamNormaliser,
   type AgentStreamOptions,
   normaliseAgentStream,
