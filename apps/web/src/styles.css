@@ -42,6 +42,10 @@
   --rp-on-hero-2: #cfcfd1;
   --rp-wash: color-mix(in srgb, #52525b 12%, #ffffff);
   --rp-wash-strong: color-mix(in srgb, #52525b 22%, #ffffff);
+  /* The accent where it marks a state and must read at 3:1: on the page and on the brand
+   * ground (lib/theme.ts accentMarkVars). */
+  --rp-accent-line: #52525b;
+  --rp-accent-on-primary: #52525b;
 
   /* Typography hooks - TenantLayout overrides these from branding.typography.
    * The house faces (Manrope body, Inter headings) are the defaults, so
@@ -1595,7 +1599,7 @@ label.rp-btn:has(input:focus-visible) {
   bottom: 0;
   height: 3px;
   border-radius: 0;
-  background-color: var(--rp-accent);
+  background-color: var(--rp-accent-on-primary);
 }
 
 /* Component classes - the single source of shape. */
@@ -1757,7 +1761,8 @@ label.rp-btn:has(input:focus-visible) {
   transition: transform 150ms var(--rp-ease), background-color 150ms var(--rp-ease);
 }
 .rp-switch[data-on='true'] {
-  border-color: var(--rp-accent);
+  /* The fill stays the brand accent; the edge carries the 3:1 the on state needs (1.4.11). */
+  border-color: var(--rp-accent-line);
   background: var(--rp-accent);
 }
 .rp-switch[data-on='true'] .rp-switch-knob {
@@ -1879,6 +1884,13 @@ label.rp-btn:has(input:focus-visible) {
   outline: 2px solid transparent;
   outline-offset: 2px;
   box-shadow: var(--rp-ring);
+}
+/* The hero's ask field sits on the hero (a brand gradient, a photo, the CorpusKit blue), not on
+ * the surface the house ring's halo assumes, and a ring in the brand's own tone vanishes there.
+ * It takes the two-tone ring the hero's chips and links use: one of its bands reads at 3:1
+ * whatever is behind it. */
+.rp-field.rp-hero-field:focus-within {
+  box-shadow: var(--rp-ring-inverse);
 }
 
 .rp-tenant input:is([type='checkbox'], [type='radio'], [type='range']) {
