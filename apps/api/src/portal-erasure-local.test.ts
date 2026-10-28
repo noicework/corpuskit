@@ -72,6 +72,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   breakGlass: { noPortalRecords: 'attempts and lockouts per client address' },
   requestContext: { noPortalRecords: 'per-request identity' },
   webDistPath: { noPortalRecords: 'the web bundle' },
+  embedShell: { noPortalRecords: 'serves the web bundle; keeps no portal records' },
   webAvailable: { noPortalRecords: 'the web bundle' },
   docsHealth: { noPortalRecords: 'in-memory readiness probe' },
   buildSha: { noPortalRecords: 'build stamp' },

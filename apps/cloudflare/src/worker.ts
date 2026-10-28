@@ -1,6 +1,7 @@
 /// <reference path="./runtime.d.ts" />
 /// <reference path="../../../worker-configuration.d.ts" />
 
+import { embedPath } from '../../api/src/embed.ts'
 import { runScheduledEvaluations } from '../../api/src/evaluation-schedule.ts'
 import { DurableObject } from 'cloudflare:workers'
 import {
@@ -210,6 +211,7 @@ export class PortalDurableObject extends DurableObject<Env> {
         (externalLoginConfigured(externalLoginConfig(bindings)) ? 'external' : undefined),
       externalLoginEnabled: externalLoginConfigured(externalLoginConfig(bindings)),
       audience: bindings.WORKER_NAME,
+      embedShell: (request) => env.ASSETS.fetch(new Request(new URL('/index.html', request.url))),
       provider: this.provider,
       management: this.provider,
       bindings: this.stores.bindings,
@@ -609,6 +611,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     return withSecurityHeaders(
       hostTransportSecurity(request, stringEnv(env).PLATFORM_DOMAIN, await route(request, env)),
+      new URL(request.url).pathname,
     )
   },
 
@@ -696,7 +699,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 308, headers: { location: aliasLocation } })
   }
 
-  if (url.pathname.startsWith('/api/')) {
+  if (url.pathname.startsWith('/api/') || embedPath(url.pathname)) {
     return forwardTrusted(request, env, auth, operator)
   }
 
@@ -730,6 +733,9 @@ async function routeAliasHost(
   const aliasLocation = tenantAliasLocation(request)
   if (aliasLocation) {
     return new Response(null, { status: 308, headers: { location: aliasLocation } })
+  }
+  if (embedPath(new URL(request.url).pathname)) {
+    return forwardTrusted(request, env, auth, { kind: 'absent' }, slug)
   }
   return pageRoute(request, env, platformDomain, slug)
 }

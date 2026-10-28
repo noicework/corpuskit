@@ -1,3 +1,4 @@
+import { embedPolicyForResponse, handleEmbedRequest } from './embed.ts'
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
@@ -99,6 +100,7 @@ import {
 import {
   AccessModeSchema,
   authorize,
+  EmbeddingSettingsSchema,
   normalisePrincipal,
   portalConfigurationExport,
   PortalConfigurationImportSchema,
@@ -897,6 +899,7 @@ const renameTenantSchema = z.object({
   regionalDiscovery: z.boolean().optional(),
   /** Whether the portal offers agent ask (opt-in; see TenantConfigSchema). */
   agentAsk: z.boolean().optional(),
+  embedding: EmbeddingSettingsSchema.optional(),
   /** Federation peers and participation, merged over the portal's current settings. */
   federation: FederationSettingsSchema.optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
@@ -913,6 +916,7 @@ const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
   'agentAsk',
+  'embedding',
   'siteFeedback',
   'federation',
 ])
@@ -1125,6 +1129,8 @@ export interface BuildAppOptions {
   requestContext?: (request: Request) => PortalRequestContext | undefined
   /** Where the built SPA lives; overridable in tests. Defaults to ./apps/web/dist. */
   webDistPath?: string
+  /** Worker asset adapter for the embeddable application shell. Local serving falls through. */
+  embedShell?: (request: Request) => Promise<Response>
   /** Runtime adapters that serve assets outside the local filesystem set this explicitly. */
   webAvailable?: boolean
   /** Internal documentation readiness probe; never exposed by public health. */
@@ -2082,7 +2088,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
     const policy = c.res.headers.get('Content-Security-Policy')
     if (policy !== STORED_FILE_POLICY && policy !== STORED_PDF_FRAMING) {
-      c.header('Content-Security-Policy', "frame-ancestors 'none'")
+      c.header('Content-Security-Policy', embedPolicyForResponse(c.req.raw, c.res, tenants))
     }
   })
 
@@ -2538,8 +2544,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.use(declaredRoute('ALL', '/t/*'), async (c, next) => {
     const location = tenantAliasLocation(c.req.raw)
     if (!location) {
-      await next()
-      return
+      return handleEmbedRequest(c, next, { tenants, shell: opts.embedShell })
     }
 
     return c.redirect(location, 308)
@@ -5568,6 +5573,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       searchPlaceholder,
       regionalDiscovery,
       agentAsk,
+      embedding,
       federation,
       siteFeedback: siteFeedbackSetting,
       layout: _layout,
@@ -5577,6 +5583,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
       ...(agentAsk !== undefined ? { agentAsk } : {}),
+      ...(embedding !== undefined ? { embedding } : {}),
       ...(federation !== undefined
         ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }
         : {}),

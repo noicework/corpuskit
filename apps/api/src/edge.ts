@@ -1,3 +1,4 @@
+import { embedPath } from './embed.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { portalHostnameForSlug } from './cloudflare-domains.ts'
 import { OFF_PLATFORM_TRANSPORT_SECURITY, transportSecurityFor } from './portal-aliases.ts'
@@ -56,8 +57,14 @@ export function secureAssetResponse(response: Response, status = response.status
  * carry the ones the Hono middleware sets; redirects, auth answers and the
  * ingress's own JSON gain them here without disturbing a streamed body.
  */
-export function withSecurityHeaders(response: Response): Response {
-  const missing = Object.entries(SECURITY_HEADERS).filter(([name]) => !response.headers.has(name))
+export function withSecurityHeaders(response: Response, pathname?: string): Response {
+  const path = pathname ? embedPath(pathname) : null
+  const framedEmbed = path && !path.script && response.status === 200 &&
+    response.headers.has('content-security-policy') &&
+    response.headers.get('content-security-policy') !== "frame-ancestors 'none'"
+  const missing = Object.entries(SECURITY_HEADERS).filter(([name]) =>
+    !response.headers.has(name) && !(framedEmbed && name === 'x-frame-options')
+  )
   if (missing.length === 0) return response
   const headers = new Headers(response.headers)
   for (const [name, value] of missing) headers.set(name, value)

@@ -1,3 +1,4 @@
+import { embedPath } from './embed.ts'
 import {
   apexOnlyDocument,
   hostTransportSecurity,
@@ -234,11 +235,14 @@ export class LocalIngress {
     info?: PeerInfo,
     session: TrustedSessionFacts | null = null,
   ): Promise<Response> {
-    return withSecurityHeaders(hostTransportSecurity(
-      request,
-      this.options.env.PLATFORM_DOMAIN,
-      await this.route(request, dispatch, info, session),
-    ))
+    return withSecurityHeaders(
+      hostTransportSecurity(
+        request,
+        this.options.env.PLATFORM_DOMAIN,
+        await this.route(request, dispatch, info, session),
+      ),
+      new URL(request.url).pathname,
+    )
   }
 
   private async route(
@@ -584,7 +588,7 @@ export class LocalIngress {
             }),
           )
         }
-        return !path.startsWith('/api/') && !path.startsWith('/auth/')
+        return !path.startsWith('/api/') && !path.startsWith('/auth/') && !embedPath(path)
           ? secureAssetResponse(response)
           : response
       } finally {

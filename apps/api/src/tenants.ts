@@ -255,6 +255,7 @@ export interface TenantPatch {
   regionalDiscovery?: boolean
   /** Whether the portal offers agent ask (opt-in). */
   agentAsk?: boolean
+  embedding?: TenantConfig['embedding']
   /** Federation peers and participation (docs/AGENT-ASK.md). */
   federation?: TenantConfig['federation']
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
@@ -285,6 +286,7 @@ export function tenantRecord(value: unknown): Record<string, unknown> {
 
 export function validateTenantPatch(value: unknown): TenantPatch {
   const patch = tenantRecord(value)
+  if (patch.embedding !== undefined) TenantConfigSchema.shape.embedding.parse(patch.embedding)
   if (patch.accessMode !== undefined) AccessModeSchema.parse(patch.accessMode)
   return patch as TenantPatch
 }

@@ -457,6 +457,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
           'searchPlaceholder',
           'regionalDiscovery',
           'agentAsk',
+          'embedding',
           'siteFeedback',
           'federation',
         ],
@@ -605,7 +606,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     aggregate: 'authorised-portals',
   }),
   entry('http', 'ALL', '/t/*', 'portal.read', 'public', {
-    reason: 'Application shell bookmark redirects only; no research data is returned.',
+    reason:
+      'Application shell, opt-in embed shell and loader, and bookmark redirects; no research data is returned.',
   }),
   entry('boundary', 'ALL', '/auth/*', 'portal.read', 'public', {
     reason: 'Authentication bootstrap and safe account session metadata.',

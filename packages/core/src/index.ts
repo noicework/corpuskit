@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { PortalLayoutSchema } from './layout.ts'
+import { EmbeddingSettingsSchema } from './embed.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
 import { FederationConfigSchema } from './agent-ask.ts'
@@ -477,6 +478,8 @@ export const TenantConfigSchema = z.object({
    * if it did not exist. Set through `PATCH /api/admin/tenants/:slug`.
    */
   agentAsk: z.boolean().optional(),
+  /** Embeddable assistant. Absent means disabled; exact HTTPS ancestors only. */
+  embedding: EmbeddingSettingsSchema.optional(),
   /**
    * Federation (docs/AGENT-ASK.md): the partner collections the portal's composed answers also
    * search, and whether the portal takes part in federated answers. Set through
@@ -1483,3 +1486,5 @@ export * from './duplicates.ts'
 
 export * from './answer-record.ts'
 export * from './evaluations.ts'
+
+export * from './embed.ts'

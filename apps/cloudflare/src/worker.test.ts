@@ -2688,3 +2688,48 @@ Deno.test('Worker sends reader feedback only through a configured send_email bin
     ['team@portal.example.org', 'feedback@portal.example.org'],
   ])
 })
+
+Deno.test('Worker serves only the opt-in embed shell with its tenant framing policy', async () => {
+  const h = await realHarness()
+  try {
+    const stores = (h.object as unknown as { stores: DurableStores }).stores
+    const get = (path: string) => worker.fetch(new Request(`https://corpuskit.org${path}`), h.env)
+    expect((await get('/t/marine/embed')).status).toBe(404)
+    stores.tenants.patch('marine', {
+      embedding: {
+        enabled: true,
+        allowedOrigins: ['https://research.example'],
+        defaultView: 'own',
+      },
+    })
+    for (const accessMode of ['public', 'restricted'] as const) {
+      stores.tenants.patch('marine', { accessMode })
+      const response = await get('/t/marine/embed')
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe('asset')
+      expect(response.headers.get('content-security-policy')).toBe(
+        'frame-ancestors https://research.example',
+      )
+      expect(response.headers.has('x-frame-options')).toBe(false)
+      expect(response.headers.get('cache-control')).toBe('private, no-store')
+    }
+    expect(h.assetRequests.every((request) => new URL(request.url).pathname === '/index.html'))
+      .toBe(true)
+    const script = await get('/t/marine/embed.js')
+    expect(script.headers.get('content-type')).toContain('text/javascript')
+    expect(script.headers.get('cache-control')).toBe('private, no-store')
+    expect(script.headers.get('x-frame-options')).toBe('DENY')
+    expect(await script.text()).toContain('showModal')
+    for (const path of ['/t/marine', '/t/marine/ask', '/t/marine/embed/', '/t/marine/embed/more']) {
+      const response = await get(path)
+      expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'")
+      expect(response.headers.get('x-frame-options')).toBe('DENY')
+    }
+    stores.tenants.patch('marine', {
+      embedding: { enabled: false, allowedOrigins: [], defaultView: 'own' },
+    })
+    expect((await get('/t/marine/embed.js')).status).toBe(404)
+  } finally {
+    h.database.close()
+  }
+})
