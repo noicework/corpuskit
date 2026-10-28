@@ -95,7 +95,7 @@ describe('the guided tour', () => {
             stageHidden:
               dialog.querySelector('.rp-tour-stage')?.getAttribute('aria-hidden') === 'true' &&
               dialog.querySelector('.rp-tour-stage')?.hasAttribute('inert') === true,
-            tryIt: dialog.querySelector<HTMLAnchorElement>('a.rp-btn-primary')?.getAttribute(
+            tryIt: dialog.querySelector<HTMLAnchorElement>('a[data-tour-action]')?.getAttribute(
               'href',
             ),
           }
@@ -142,7 +142,7 @@ describe('the guided tour', () => {
       await settle(
         page,
         () =>
-          document.querySelector('dialog[data-demo-tour] a.rp-btn-primary')?.getAttribute(
+          document.querySelector('dialog[data-demo-tour] a[data-tour-action]')?.getAttribute(
             'href',
           ) === '/t/grains/tools',
         'the MCP scene',
@@ -152,7 +152,7 @@ describe('the guided tour', () => {
       await settle(
         page,
         () =>
-          document.querySelector('dialog[data-demo-tour] a.rp-btn-primary')?.getAttribute(
+          document.querySelector('dialog[data-demo-tour] a[data-tour-action]')?.getAttribute(
             'href',
           ) === '/t/grains/graph',
         'the Graph scene',
@@ -181,11 +181,11 @@ describe('the guided tour', () => {
       await openFromBand(page)
       await settle(
         page,
-        () => document.querySelector('dialog[data-demo-tour] a.rp-btn-primary') !== null,
+        () => document.querySelector('dialog[data-demo-tour] a[data-tour-action]') !== null,
         'the first scene',
       )
       await page.evaluate(() =>
-        document.querySelector<HTMLAnchorElement>('dialog[data-demo-tour] a.rp-btn-primary')!
+        document.querySelector<HTMLAnchorElement>('dialog[data-demo-tour] a[data-tour-action]')!
           .click()
       )
       await settle(page, () => location.pathname.endsWith('/ask'), 'Ask')
@@ -215,7 +215,7 @@ describe('the guided tour', () => {
           await openFromBand(page)
           await settle(
             page,
-            () => document.querySelector('dialog[data-demo-tour] a.rp-btn-primary') !== null,
+            () => document.querySelector('dialog[data-demo-tour] a[data-tour-action]') !== null,
             'the first scene',
           )
           const layout = await page.evaluate(() => {

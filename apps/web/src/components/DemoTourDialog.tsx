@@ -246,7 +246,7 @@ function TryIt({ scene, slug, onGo }: { scene: ResolvedScene; slug: string; onGo
   const target = layoutHrefTarget(scene.href, slug)
   if (!target) return null
   return (
-    <div className='mt-5 space-y-3'>
+    <div className='mt-5 space-y-4'>
       {scene.question
         ? (
           <blockquote className='rp-tour-question text-base leading-relaxed text-ink'>
@@ -256,14 +256,20 @@ function TryIt({ scene, slug, onGo }: { scene: ResolvedScene; slug: string; onGo
         : null}
       {target.external
         ? (
-          <a href={target.url} rel='noopener' className='rp-btn rp-btn-primary' onClick={onGo}>
+          <a
+            href={target.url}
+            rel='noopener'
+            className='rp-btn rp-btn-outline'
+            data-tour-action
+            onClick={onGo}
+          >
             {scene.action}
             <ArrowRight />
             <ExternalMark />
           </a>
         )
         : (
-          <Link to={target.to} className='rp-btn rp-btn-primary' onClick={onGo}>
+          <Link to={target.to} className='rp-btn rp-btn-outline' data-tour-action onClick={onGo}>
             {scene.action}
             <ArrowRight />
           </Link>
