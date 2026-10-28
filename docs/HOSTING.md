@@ -1239,11 +1239,11 @@ hero's suggestions take.
 
 | Scene | What it shows | Built-in "Try it" |
 | --- | --- | --- |
-| `federated` | A cited answer, with its confidence label (the agent page's composed answer, once it exists) | Ask, with the portal's first suggested question; Ask itself when the portal has none |
+| `federated` | A cited answer, with its confidence label (the agent page's composed answer, once it exists) | Ask |
 | `cited-page` | A citation opening its PDF at the page, with the matched passage highlighted | The collection's first PDF in the Library; the Library itself until there is one |
 | `graph` | The Graph's links between the portal's entity types | `/graph` |
 | `mcp` | The MCP connector an external research tool uses | `/tools` |
-| `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask, with the portal's second suggested question |
+| `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask |
 | `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
 | `participation` | Which collections an answer used | `/agent` |
 

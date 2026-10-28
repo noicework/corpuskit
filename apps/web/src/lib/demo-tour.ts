@@ -26,7 +26,7 @@ export const DEFAULT_SCENE_IDS: readonly DemoTourSceneId[] = [
 export type TourUi = (english: string, values?: MessageValues) => string
 
 /** What the script needs to know about the portal it introduces. */
-export type TourConfig = Pick<TenantConfig, 'suggestedQuestions' | 'copy' | 'entityTypes'> & {
+export type TourConfig = Pick<TenantConfig, 'copy' | 'entityTypes'> & {
   branding: Pick<TenantConfig['branding'], 'productName' | 'organisation'>
 }
 
@@ -71,9 +71,9 @@ export function graphKinds(config: Pick<TenantConfig, 'entityTypes'>, ui: TourUi
 }
 
 /**
- * A scene's built-in words and target. The words promise only what the button then shows: a
- * portal without a suggested question opens Ask empty rather than sending a question the
- * reader never saw, and a collection without a PDF opens the Library.
+ * A scene's built-in words and target. The words promise only what the button then shows: the
+ * answer steps open Ask for the reader's own question, and a collection without a PDF opens
+ * the Library.
  */
 function builtIn(
   id: DemoTourSceneId,
@@ -82,9 +82,9 @@ function builtIn(
   ui: TourUi,
 ): { title: string; body: string; target: SceneTarget } {
   const portal = config.branding.productName
-  const suggested = config.suggestedQuestions.map((question) => question.text)
-  const ask = (text: string | undefined): SceneTarget =>
-    text ? { kind: 'ask', question: text } : { kind: 'link', href: '/ask' }
+  // The built-in steps send the reader to Ask to put their own question; a portal that sets a
+  // `question` for a step sends that question instead, and the dialog shows it beside the button.
+  const ask: SceneTarget = { kind: 'link', href: '/ask', label: ui('Ask a question') }
   switch (id) {
     case 'federated':
       return {
@@ -93,7 +93,7 @@ function builtIn(
           '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material. You can also use conventional search, or browse the collection through the Graph and the Library.',
           { portal },
         ),
-        target: ask(suggested[0]),
+        target: ask,
       }
     case 'provenance':
       return {
@@ -101,7 +101,7 @@ function builtIn(
         body: ui(
           'Under an answer, "Show retrieved sources" opens the sources that were found and the passages that matched. "Journey through the context" walks through those sources one at a time.',
         ),
-        target: ask(suggested[1] ?? suggested[0]),
+        target: ask,
       }
     case 'cited-page':
       return {

@@ -146,7 +146,7 @@ describe('the guided tour', () => {
       )
       now = await state()
       expect(now.status).toBe('Step 1 of 4: Find answers and sources')
-      expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
+      expect(now.tryIt).toBe('/t/grains/ask')
 
       // Tab stays inside the dialog, whichever way it goes.
       for (let index = 0; index < 8; index += 1) await page.keyboard.press('Tab')
@@ -213,7 +213,7 @@ describe('the guided tour', () => {
     }
   })
 
-  it("'Try it' closes the tour and sends the question to Ask", async () => {
+  it("'Ask a question' closes the tour and opens Ask", async () => {
     const page = await browser.newPage(`${server.url}/t/grains`)
     try {
       await openFromHelpMenu(page)
@@ -229,12 +229,6 @@ describe('the guided tour', () => {
       )
       await settle(page, () => location.pathname.endsWith('/ask'), 'Ask')
       expect(await page.evaluate(dialogGone)).toBe(true)
-      // The question went with it: the thread shows it as the first message.
-      await settle(
-        page,
-        () => document.querySelector('.rp-answer-question') !== null,
-        'the question',
-      )
     } finally {
       await page.evaluate(() => localStorage.removeItem('rp_demo_tour_done')).catch(() => {})
       await page.close()
