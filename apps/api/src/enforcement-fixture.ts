@@ -1,3 +1,4 @@
+import { summariseEvaluation } from './evaluation-scoring.ts'
 import { expect } from '@std/expect'
 import { type Permission, type Role, ROLES, type Scope } from '@research-portal/core'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
@@ -843,6 +844,25 @@ const html = `<html><title>Research</title><main><p>${
 }</p><a href="https://example.test/article">Article</a></main></html>`
 // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
 export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
+  ['GET', 'evaluations', 'behaviour.write'],
+  ['PUT', 'evaluations/:id', 'behaviour.write', {
+    name: 'Evidence checks',
+    questions: [
+      { query: 'Abalone evidence', expectedSources: ['res-1'] },
+    ],
+  }],
+  ['DELETE', 'evaluations/:id', 'behaviour.write'],
+  ['PUT', 'evaluations/:id/schedule', 'behaviour.write', {
+    everyDays: 1,
+    confirmedAsks: 1,
+    updatedAt: '2026-09-12T00:00:00.000Z',
+  }],
+  ['GET', 'evaluations/:id/runs', 'behaviour.write'],
+  ['POST', 'evaluations/:id/runs', 'behaviour.write', {
+    confirmedAsks: 1,
+    updatedAt: '2026-09-12T00:00:00.000Z',
+  }],
+  ['GET', 'evaluations/:id/runs/:runId/csv', 'behaviour.write'],
   ['GET', 'lifecycle', 'portal.create'],
   ['PUT', 'lifecycle', 'portal.create', { status: 'active', limits: null }],
   ['GET', 'usage', 'portal.create'],
@@ -1095,7 +1115,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       },
     }) as AragProvider
     const fixture = createEnforcementFixture({
-      management,
+      management: suffix.startsWith('evaluations') ? undefined : management,
       operatorDeleteAfterDays: 30,
       domainProvisioner: {
         attach: (hostname) => {
@@ -1111,6 +1131,43 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
     const originalFetch = globalThis.fetch
     const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
     try {
+      if (suffix.startsWith('evaluations/')) {
+        const definition = fixture.stores.evaluations.put('a', 'res-1', {
+          name: 'Evidence checks',
+          topK: 5,
+          questions: [{
+            query: 'Abalone evidence',
+            expectedSources: ['res-1'],
+            expectedFacts: [],
+            shouldDecline: false,
+          }],
+        }, fixture.now())
+        if (suffix.endsWith('/csv')) {
+          const run = {
+            id: 'run-1',
+            slug: 'a',
+            setId: 'res-1',
+            definition,
+            startedAt: definition.updatedAt,
+            completedAt: null,
+            status: 'running' as const,
+            results: [],
+            summary: summariseEvaluation([]),
+          }
+          fixture.stores.evaluations.start('a', run)
+          fixture.stores.evaluations.finish('a', { ...run, status: 'completed' })
+        }
+      }
+      if (
+        suffix === 'evaluations/:id/schedule' && (role === 'owner' || role === 'platform-admin')
+      ) {
+        fixture.rbac.assignmentService(fixture.tenantId, fixture.audience).create({
+          subjectKind: 'active-oid',
+          subjectId: fixture.sessionFor(role).oid,
+          scope: { kind: 'platform' },
+          role,
+        }, { requestId: 'evaluation-schedule-seed', actor: { kind: 'system' } })
+      }
       const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
       fixture.stores.enrichments.put('a', 'seeded-record', {
         schemaId: 'research',
@@ -1155,9 +1212,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       }
       if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
       const snapshot = () =>
-        ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
-          fixture.database.all(`SELECT * FROM ${table}`)
-        )
+        [
+          'state',
+          'branding_assets',
+          'enrichment_records',
+          'routing_records',
+          'evaluation_sets',
+          'evaluation_runs',
+          'evaluation_schedules',
+        ].map((table) => fixture.database.all(`SELECT * FROM ${table}`))
       const baseline = snapshot()
       globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
         calls.push('fetch')
@@ -1178,7 +1241,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       Deno.env.set('ARAG_NUA_KEY', 'fixture-key')
       Deno.env.set('ARAG_ACCOUNT', 'fixture-account')
       const path =
-        template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
+        template.replace(':slug', 'a').replace(':runId', 'run-1').replace(':taskId', 'task-a')
+          .replace(':kind', 'logo')
           .replace(':name', 'banner')
           .replace(':hostname', 'research.example.org')
           .replace(
@@ -1230,7 +1294,10 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             JSON.parse(result).some((row: { tenant: { slug: string } }) => row.tenant.slug === 'a'),
           ).toBe(true)
         } else if (method === 'GET') {
-          if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+          if (suffix === 'evaluations') expect(JSON.parse(result).sets).toEqual([])
+          else if (suffix === 'evaluations/:id/runs') expect(JSON.parse(result)).toEqual([])
+          else if (suffix === 'evaluations/:id/runs/:runId/csv') expect(result).toContain('run_id')
+          else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
           else if (suffix === 'suggestions') {
             expect(JSON.parse(result)[0].id).toBe('suggestion-a')
           } else if (suffix === 'enrichments/export') {

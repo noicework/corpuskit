@@ -87,6 +87,15 @@ const HIDDEN_RESOURCES_ENABLE = {
 } as const
 
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  ...[
+    ['GET', '/api/admin/t/:slug/evaluations'],
+    ['PUT', '/api/admin/t/:slug/evaluations/:id'],
+    ['PUT', '/api/admin/t/:slug/evaluations/:id/schedule'],
+    ['DELETE', '/api/admin/t/:slug/evaluations/:id'],
+    ['GET', '/api/admin/t/:slug/evaluations/:id/runs'],
+    ['POST', '/api/admin/t/:slug/evaluations/:id/runs'],
+    ['GET', '/api/admin/t/:slug/evaluations/:id/runs/:runId/csv'],
+  ].map(([method, path]) => entry('http', method!, path!, 'behaviour.write', 'portal')),
   entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
     operator: true,
   }),
@@ -147,6 +156,13 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ),
   ]),
   ...([
+    [
+      'evaluations',
+      ['put', 'remove', 'start', 'finish', 'schedule', 'claimSchedule'],
+      'behaviour.write',
+      'portal',
+    ],
+    ['evaluations', ['erase'], 'portal.create', 'platform'],
     ['lifecycle', ['set'], 'portal.create', 'platform'],
     ['lifecycle', ['remove'], 'portal.delete', 'platform'],
     ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],
@@ -213,6 +229,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       )
     )
   ),
+  entry('internal', 'SYSTEM', 'maintenance.evaluation.run', 'behaviour.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.source.sync', 'content.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.watch.run', 'portal.watch', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.enrichment.run', 'enrichments.write', 'portal'),

@@ -1,3 +1,5 @@
+import { EvaluationStore } from './evaluation-store.ts'
+import type { SqlExecutor } from './rbac-state.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   appendAudit,
@@ -40,7 +42,7 @@ interface RequestMutation {
 /** One runtime's shared stores, using its existing SQL connection and request audit context. */
 export function localOwnedStores(
   dataDir: string,
-  database: Pick<RbacDatabase, 'transactionSync'>,
+  database: Pick<RbacDatabase, 'transactionSync'> & SqlExecutor,
   audit: Pick<AuditStore, 'append'>,
   tenantEnv?: Record<string, string | undefined>,
 ) {
@@ -245,6 +247,15 @@ export function localOwnedStores(
   })
   return {
     localMutations,
+    evaluations: wrap(
+      'evaluations',
+      new EvaluationStore(database, (work) =>
+        database.transactionSync(() => {
+          const result = work()
+          boundary.complete()
+          return result
+        })),
+    ),
     attach,
     erasureTransaction: <T>(slug: string, work: () => T): T => erasure.erase(slug, work) as T,
     insights: wrap('insights', new InsightsStore(dataDir), files('insights', 'jsonl')),

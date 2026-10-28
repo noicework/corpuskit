@@ -1,3 +1,5 @@
+import { registerPortalEvaluations } from './evaluation-integration.ts'
+import type { EvaluationStore } from './evaluation-store.ts'
 import { PortalLifecycleStore } from './lifecycle-store.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
@@ -1013,6 +1015,7 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  evaluations?: EvaluationStore
   lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
@@ -2152,6 +2155,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
     // Hono records caught errors in c.error; c.res holds the onError response and real status.
     c.res = response
+  })
+
+  registerPortalEvaluations(app, opts, {
+    lifecycle,
+    tenants,
+    requestContext,
+    requestContexts,
+    notFound: adminNotFound,
   })
 
   registerLifecycleRoutes(app, {
@@ -4706,6 +4717,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   }
   const erasureStores = {
+    evaluations: opts.evaluations,
     tenants,
     bindings,
     lifecycle,

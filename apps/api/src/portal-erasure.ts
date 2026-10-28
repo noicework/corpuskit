@@ -1,3 +1,4 @@
+import type { EvaluationStore } from './evaluation-store.ts'
 import { appendAudit, type AuditActor, type AuditStore, createAuditEvent } from './audit.ts'
 import type { BindingStoreApi } from './bindings.ts'
 import type { EnrichmentStoreApi } from './enrichments.ts'
@@ -31,6 +32,7 @@ export { ERASED_RECORD_KINDS, type ErasedCounts, type ErasedRecordKind }
  * inventory tests fail when a store keyed by slug is left out.
  */
 export interface PortalErasureStores {
+  evaluations?: Pick<EvaluationStore, 'erase'>
   tenants: Pick<TenantStoreApi, 'erase'>
   bindings: Pick<BindingStoreApi, 'status' | 'remove'>
   lifecycle: Pick<PortalLifecycleStore, 'erase'>
@@ -77,6 +79,7 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   aliases: 'erasedAliases',
   bindings: 'erasedBindings',
   lifecycle: 'erasedLifecycle',
+  evaluations: 'erasedEvaluations',
   sessions: 'erasedSessions',
   investigations: 'erasedInvestigations',
   watches: 'erasedWatches',
@@ -127,6 +130,7 @@ export function erasePortal(
       stores.bindings.remove(slug)
       erased.bindings = 1
     }
+    erased.evaluations = stores.evaluations?.erase(slug) ?? 0
     erased.lifecycle = stores.lifecycle.erase(slug)
     erased.sessions = stores.sessions.erase(slug)
     erased.investigations = stores.investigations.erase(slug)

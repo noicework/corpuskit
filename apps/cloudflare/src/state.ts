@@ -1,3 +1,4 @@
+import { EvaluationStore } from '../../api/src/evaluation-store.ts'
 import {
   DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -2146,6 +2147,7 @@ export class DurableRoutingLog implements RoutingLogApi {
 }
 
 export interface DurableStores extends RbacStores {
+  evaluations: EvaluationStore
   lifecycle: PortalLifecycleStore
   localMutations: LocalMutationScope
   /** One SQLite transaction around a whole portal erasure, audited as `erasure.erase`. */
@@ -2172,6 +2174,7 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    evaluations: state.auditedStore('evaluations', new EvaluationStore(state.rbacDatabase)),
     lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
     localMutations: state.localMutations,
     erasureTransaction: (slug, work) => state.atomically('erasure.erase', [slug], work),

@@ -30,6 +30,7 @@ type Classification =
  * that holds portal records must name the erasure store that removes them.
  */
 const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
+  evaluations: { erasedBy: 'evaluations' },
   lifecycle: { erasedBy: 'lifecycle' },
   rbac: { erasedBy: 'rbac' },
   audit: { erasedBy: 'audit' },
@@ -85,6 +86,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
 }
 
 const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
+  evaluations: true,
   tenants: true,
   bindings: true,
   lifecycle: true,
