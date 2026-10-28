@@ -274,6 +274,7 @@ gives up, and `estate-done` never arrives.
 | `delta` | `text` | The next piece of the answer |
 | `citation` | `marker, sourceId, chunkId, title, url?` | What `[marker]` in the answer cites |
 | `done` | `elapsedMs, text?` | The answer is complete; `text`, when present, replaces provisional text with the checked answer |
+| `answer-record` | `answerId` | The host portal's evidence record has been saved, before the terminal event; see [Answer records](ANSWER-RECORDS.md) |
 | `error` | `code, message, retryable` | The stream ended without an answer |
 
 Guarantees a view can rely on:
@@ -333,6 +334,37 @@ data: {"type":"delta","text":"Mortality events in farmed oysters clustered ... t
 data: {"type":"citation","marker":"1","sourceId":"marine","chunkId":"marine/res-fish-0412","title":"Summer mortality in farmed oysters: a ten-year review"}
 data: {"type":"done","elapsedMs":18030}
 ```
+
+## The reader's page
+
+`/t/:slug/agent` (`apps/web/src/pages/AgentAskPage.tsx`) is where a reader asks and watches. It
+is in the portal's navigation as "Agent ask" wherever `agentAsk` is on. `?q=<question>` prefills
+the question and `&run=1` sends it at once (the demo tour links this way); `run` is consumed so a
+refresh does not ask again, and `q` stays so the address names the question. The page shares the
+Ask page's frame: the question becomes the heading once asked, the composer is pinned at the foot
+of the scrolling column, and the steps sit in a right rail from `xl` up.
+
+- On the platform host with a directory, the page offers the other portals to include and uses
+  `POST /api/ask-agent`; with nowhere else to search (an anonymous reader, or a portal's own
+  host) it asks the one-portal route, which composes over the portal and its peers.
+- The steps rail shows every step as it opens, grouped by phase, with its time; a failed step
+  carries its reason. Under the answer, every source from `agent-start` is a section with the
+  question put to it and the passages it returned as the Ask page's source cards; a peer is
+  marked "federated partner" or "partner over MCP", and its passages and citations carry no link.
+- The answer card says who wrote the answer ("Answered by the portal's research agent", or
+  "Composed by CorpusKit from N collections", counting the collections that returned passages),
+  shows the `sources-failed` notice above the answer, numbers the markers by first appearance and
+  places them after punctuation, keeps the working notes under the answer (closed by default),
+  and keeps whatever arrived when the stream ends early (stopped, failed, or past the page's own
+  five-minute limit).
+- Assistive technology hears one polite status line: the step the portal is on (at most one
+  every few seconds), the failed-source notice once, and the answer's completion; never the
+  answer text as it streams. Errors are an alert in the card.
+- A run outlives the page. The access layer withdraws authority on every return to the window
+  and re-reads the session, which remounts the page for a moment; the run is held outside the
+  page (`useAgentAsk`) and its stream is read outside the access generation (`durable` on
+  `streamAgentAsk`), so the page re-attaches to it. A different signed-in identity ends the run,
+  and a page nobody returns to within a few seconds stops it, keeping what arrived.
 
 ## Saving an answer as an evidence brief
 

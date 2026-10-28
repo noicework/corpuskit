@@ -1,0 +1,116 @@
+/* ---------------------------------------------------------------------------
+ * Agent ask (docs/AGENT-ASK.md): the page where a reader watches one question
+ * answered step by step across several collections. Every colour, radius and
+ * control height here is a token; the page scales up on wide displays (the
+ * answer column takes the width, the rail widens) and stacks on a phone.
+ * ------------------------------------------------------------------------- */
+
+/* Every control on the page is a comfortable target (44px), including the
+ * house chips and small buttons it reuses. */
+.rp-agent-page .rp-btn,
+.rp-agent-page .rp-chip,
+.rp-agent-target {
+  min-height: 2.75rem;
+}
+
+/* A step that failed: the bad status pair, never a bare red. */
+.rp-agent-mark-failed {
+  background-color: var(--rp-bad-bg);
+  color: var(--rp-bad-ink);
+}
+
+/* Notices inside the answer card: the failed-source notice, the end states. */
+.rp-agent-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-radius: var(--rp-radius);
+  border: 1px solid var(--rp-line);
+  background: var(--rp-surface-2);
+  color: var(--rp-ink);
+}
+
+.rp-agent-notice-warn {
+  background: var(--rp-warn-bg);
+  color: var(--rp-warn-ink);
+  border-color: var(--rp-warn-line);
+}
+
+.rp-agent-notice-bad {
+  background: var(--rp-bad-bg);
+  color: var(--rp-bad-ink);
+  border-color: var(--rp-bad-line);
+}
+
+/* Inline citation markers: accent as text, never the raw accent. */
+.rp-agent-marker {
+  padding-inline: 0.125rem;
+  border-radius: var(--rp-radius-chip);
+  font-weight: 600;
+  color: var(--rp-accent-fg);
+  text-decoration: none;
+}
+
+.rp-agent-marker-pending {
+  color: var(--rp-ink-3);
+}
+
+.rp-agent-marker-link:hover {
+  text-decoration: underline;
+}
+
+/* The page's quiet tag: the same pill the Ask page puts beside a disclosure
+ * ("7 sources · 3 cited"), used for the mode line and every count here, so one
+ * tag style runs through the page. Statuses that need a colour (a collection
+ * that failed) stay on the house status badge. */
+.rp-agent-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--rp-radius-chip);
+  border: 1px solid var(--rp-line);
+  background: var(--rp-surface-2);
+  color: var(--rp-ink-3);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-agent-reasoning {
+  border-left: 2px solid var(--rp-line);
+  padding-left: 0.875rem;
+}
+
+/* The passage's open line is the comfortable (44px) target for its document;
+ * the title above it is a text link to the same place, so it keeps text height. */
+.rp-agent-passage .rp-answer-source-link {
+  min-height: 2.75rem;
+  align-items: center;
+}
+
+/* The waiting line breathes while the agent works. Off under reduced motion;
+ * the ticking clock beside it still shows the page is alive. */
+@media (prefers-reduced-motion: no-preference) {
+  .rp-agent-answer[data-status='streaming'] [data-agent-waiting] {
+    animation: rp-agent-pulse 2.4s var(--rp-ease) infinite;
+  }
+}
+
+@keyframes rp-agent-pulse {
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Badges here carry sentences (who composed the answer, how a collection fared), so on a
+ * narrow phone or under a scaled-up system font they wrap rather than truncate. */
+.rp-agent-page .rp-badge {
+  white-space: normal;
+  height: auto;
+  line-height: 1.3;
+  padding-block: 0.2rem;
+}

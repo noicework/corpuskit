@@ -9,7 +9,13 @@
  * runs out of time ends its step `failed` and is named in one `sources-failed` event; the answer
  * comes from the rest.
  */
-import type { AgentAskEvent, AgentChunk, AgentSource, TenantConfig } from '@research-portal/core'
+import type {
+  AgentAskEvent,
+  AgentChunk,
+  AgentSource,
+  AnswerRecord,
+  TenantConfig,
+} from '@research-portal/core'
 import {
   AgentAskError,
   type AgentAskOptions,
@@ -21,6 +27,7 @@ import {
 } from '@research-portal/retrieval'
 import { composeDeadline, ComposeTimedOut } from './compose-deadline.ts'
 import { bindSentences, renderBound, sentenceFeatures } from './citation-binding.ts'
+import { agentRecordVerification } from './agent-record-verification.ts'
 
 /** How long one collection's search may take before it is reported as not answering. */
 export const SOURCE_TIMEOUT_MS = 20_000
@@ -66,6 +73,13 @@ export interface AgentAnswerOptions {
   sourceTimeoutMs?: number
   composeTimeoutMs?: number
   now?: () => number
+  /** Server-only evidence of the citation gate, never an extra public event. */
+  onVerification?: (check: {
+    decisions: NonNullable<AnswerRecord['agent']>['citationDecisions']
+    sentencesChecked: number
+    sentencesCited: number
+    sentencesDropped: number
+  }) => void
 }
 
 /** A portal as a source of a composed answer. */
@@ -373,6 +387,7 @@ export async function* composeAcross(
     ),
   )
   const answer = renderBound(bound.layout, bound.sentences, removed)
+  options.onVerification?.(agentRecordVerification({ text, bound, gathered, removed }))
   const notes = [
     bound.dropped > 0
       ? `${countOf(bound.dropped, 'citation')} removed: the passage does not support it`
