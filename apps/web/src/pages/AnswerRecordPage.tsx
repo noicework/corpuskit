@@ -194,9 +194,18 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
             <p className='max-w-prose whitespace-pre-wrap break-words'>{record.question}</p>
             <p className='break-all text-sm text-ink-2'>{record.answerId}</p>
             <p className='text-sm text-ink-2'>
-              {record.portal} · {new Date(record.at).toLocaleString('en-AU')} · {record.surface} ·
-              {' '}
-              {record.status}
+              {record.portal} · {new Date(record.at).toLocaleString('en-AU')} ·{' '}
+              {record.surface === 'composed'
+                ? ui('Composed by the portal')
+                : record.surface === 'agent'
+                ? ui('Answered by the agent')
+                : record.surface} · {record.status === 'answered'
+                ? ui('Answered')
+                : record.status === 'refused'
+                ? ui('Refused')
+                : record.status === 'cancelled'
+                ? ui('Cancelled')
+                : ui('Failed')}
             </p>
             {record.truncated && (
               <p role='status' className='break-words'>
@@ -237,38 +246,44 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
               title={ui('Passages retrieved')}
               passages={record.retrieved}
               sources={record.agent?.sources}
+              steps={record.agent?.steps}
             />
             <Passages
               title={ui('Passages cited')}
               passages={record.cited}
               sources={record.agent?.sources}
+              steps={record.agent?.steps}
             />
           </div>
           <section className='rp-card space-y-3 p-3 sm:p-5' aria-labelledby='verification'>
             <h2 id='verification' className='rp-display text-xl'>
               {ui('Verification and generation')}
             </h2>
-            <p>
-              {ui('Citations dropped')}: {record.verification.citationsDropped} ·{' '}
-              {ui('Sentences dropped')}: {record.verification.sentencesDropped}
-            </p>
-            <p>
-              {ui('Verification')}:{' '}
-              {record.verification.outcome === 'checked' ? ui('Checked') : ui('Not reported')}
-            </p>
-            <p className='break-words'>
-              {ui('Model')}: {record.generation.modelId ?? ui('Not reported by provider')}
-            </p>
-            <p className='break-words'>
-              {ui('Configurations')}:{' '}
-              {record.generation.configurationIds.join(', ') || ui('Not reported')}
-            </p>
+            {record.verification.outcome === 'checked'
+              ? (
+                <>
+                  <p>
+                    {ui('Citations dropped')}: {record.verification.citationsDropped} ·{' '}
+                    {ui('Sentences dropped')}: {record.verification.sentencesDropped}
+                  </p>
+                  <p>{ui('Verification')}: {ui('Checked')}</p>
+                </>
+              )
+              : !record.agent && <p>{ui('This source does not report rejected citations.')}</p>}
+            {record.generation.modelId && (
+              <p className='break-words'>{ui('Model')}: {record.generation.modelId}</p>
+            )}
+            {record.generation.configurationIds.length > 0 && (
+              <p className='break-words'>
+                {ui('Configurations')}: {record.generation.configurationIds.join(', ')}
+              </p>
+            )}
             <p>{ui('Duration')}: {record.timing.durationMs} ms</p>
             <details>
               <summary className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center w-fit'>
                 {ui('Quality, timing and verification details')}
               </summary>
-              <pre className='mt-3 whitespace-pre-wrap break-all text-sm'>{JSON.stringify({ verification: record.verification, generation: record.generation, quality: record.quality, timing: record.timing }, null, 2)}</pre>
+              <pre className='mt-3 whitespace-pre-wrap break-all text-sm'>{JSON.stringify(reportedDetails(record), null, 2)}</pre>
             </details>
           </section>
           <section className='rp-card space-y-3 p-3 sm:p-5' aria-labelledby='record-stores'>
@@ -343,14 +358,12 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
       </section>
       <section className='rp-card space-y-3 p-3 sm:p-5' aria-labelledby='record-retention'>
         <h2 id='record-retention' className='rp-display text-xl'>{ui('Retention')}</h2>
-        <p>
-          {retentionDays === null ? ui('Not reported') : (
-            <>
-              {ui('Records expire after')} {retentionDays}{' '}
-              {ui('days. The default is 90 days; portal administrators can choose 1 to 365 days.')}
-            </>
-          )}
-        </p>
+        {retentionDays !== null && (
+          <p>
+            {ui('Records expire after')} {retentionDays}{' '}
+            {ui('days. The default is 90 days; portal administrators can choose 1 to 365 days.')}
+          </p>
+        )}
         {retentionDays !== null && access.can('behaviour.write', { kind: 'portal', slug }) && (
           <form
             className='flex flex-wrap items-end gap-3'
@@ -385,18 +398,25 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
   )
 }
 
-function Passages(
-  { title, passages, sources }: {
+export function Passages(
+  { title, passages, sources, steps }: {
     title: string
     passages: AnswerRecordPassage[]
     sources?: NonNullable<AnswerRecord['agent']>['sources']
+    steps?: NonNullable<AnswerRecord['agent']>['steps']
   },
 ) {
   const { ui } = usePortalLocale()
+  const stepTitle = (id: string) => steps?.find((step) => step.id === id)?.title
   return (
     <section className='rp-card min-w-0 space-y-4 p-3 sm:p-5' aria-label={title}>
       <h2 className='rp-display text-xl'>{title} ({passages.length})</h2>
       {!passages.length && <p className='text-ink-2'>{ui('No passages were reported.')}</p>}
+      {passages.some((p) => !p.text) && (
+        <p className='text-sm text-ink-2'>
+          {ui('Some sources do not report passage text.')}
+        </p>
+      )}
       {passages.map((p, i) => (
         <article key={i} className='min-w-0 space-y-2 border-t border-[var(--rp-line)] pt-3'>
           <h3 className='break-words font-semibold'>
@@ -409,17 +429,47 @@ function Passages(
               {p.peerId ? ` (${p.peerId})` : ''}
             </p>
           )}
-          {p.stepId && <p className='break-all text-sm text-ink-2'>{ui('Step')}: {p.stepId}</p>}
+          {p.stepId && stepTitle(p.stepId) && (
+            <p className='break-words text-sm text-ink-2' title={p.stepId}>
+              {ui('Step')}: {stepTitle(p.stepId)}
+            </p>
+          )}
           {p.url && <p className='break-all text-sm'>{p.url}</p>}
           <p className='break-words text-sm text-ink-2'>
-            <span className='break-all'>{p.resourceId}</span> · {ui('Page')}:{' '}
-            {p.page ?? ui('Unknown')} · {ui('Score')}: {p.score ?? ui('Unknown')} ({p.scoreScope})
+            <span className='break-all'>{p.resourceId}</span>
+            {p.page !== null && <>{' '}· {ui('Page')}: {p.page}</>}
+            {p.score !== null && (
+              <>
+                {' '}· {ui('Score')}: {p.score}
+                {p.scoreScope === 'resource'
+                  ? ` (${ui('Resource relevance')})`
+                  : p.scoreScope === 'passage'
+                  ? ` (${ui('Passage relevance')})`
+                  : ''}
+              </>
+            )}
           </p>
-          <p className='max-w-prose whitespace-pre-wrap break-words text-sm'>
-            {p.text || ui('Passage text was not reported.')}
-          </p>
+          {p.text && <p className='max-w-prose whitespace-pre-wrap break-words text-sm'>{p.text}
+          </p>}
         </article>
       ))}
     </section>
+  )
+}
+
+function reportedDetails(record: AnswerRecord) {
+  const sections = {
+    verification: record.verification.outcome === 'checked' ? record.verification : undefined,
+    generation: record.generation,
+    quality: record.quality,
+    timing: record.timing,
+  }
+  return Object.fromEntries(
+    Object.entries(sections).flatMap(([section, fields]) => {
+      const known = Object.fromEntries(
+        Object.entries(fields ?? {}).filter(([, value]) => value !== null),
+      )
+      return Object.keys(known).length ? [[section, known]] : []
+    }),
   )
 }

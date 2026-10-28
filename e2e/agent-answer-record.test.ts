@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
-import { AgentAskEventSchema, AnswerRecordSchema } from '@research-portal/core'
+import { AgentAskEventSchema, type AnswerRecord, AnswerRecordSchema } from '@research-portal/core'
 import { startAgentStub } from './support/agent-stub-server.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 import { assertCurrentBuild } from './support/rbac-fixture.ts'
@@ -56,6 +56,8 @@ Deno.test('agent stub answers persist and a curator opens, reviews and exports t
   const page = await browser.newPage(`${server.url}/t/marine`)
   try {
     let composedId = ''
+    let agentId = ''
+    let composedRecord: AnswerRecord | undefined
     for (
       const query of [
         'How is warming changing pests? #fast',
@@ -82,8 +84,27 @@ Deno.test('agent stub answers persist and a curator opens, reviews and exports t
       const record = AnswerRecordSchema.parse(await detail.json())
       expect(record.agent?.mode).toBe(query.includes('#compose') ? 'orchestrated' : 'agent')
       expect(record.retrieved.length).toBeGreaterThan(0)
-      if (query.includes('#compose')) composedId = saved.answerId
+      if (query.includes('#compose')) {
+        composedId = saved.answerId
+        composedRecord = record
+      } else agentId = saved.answerId
     }
+    await page.goto(`${server.url}/t/marine/answer-records/${agentId}`)
+    await page.waitForSelector('#agent-evidence')
+    const agentText = await page.evaluate(() => document.querySelector('main')!.innerText)
+    expect(agentText).toContain('Mode: Answered by the agent')
+    expect(agentText).toContain('Answered by the agent · Answered')
+    expect(agentText).not.toContain('Unknown')
+    expect(agentText).not.toContain('Page:')
+    expect(agentText).not.toContain('Score:')
+    expect(agentText).not.toContain('Citations dropped:')
+    expect(agentText.match(/This source does not report rejected citations\./g)).toHaveLength(1)
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('#verification')!.parentElement!
+          .querySelector('pre')!.textContent
+      ),
+    ).not.toContain('null')
     const path = `/t/marine/answer-records/${composedId}`
     await page.goto(`${server.url}${path}`)
     await page.waitForSelector('#agent-evidence')
@@ -91,16 +112,35 @@ Deno.test('agent stub answers persist and a curator opens, reviews and exports t
     const text = await page.evaluate(() => document.body.innerText)
     for (
       const value of [
-        'orchestrated',
+        'Mode: Composed by the portal',
+        'Composed by the portal · Answered',
         'Soil partner collection',
         'Water partner collection',
-        'hosted',
-        'peer',
-        'mcp',
+        'Hosted collection',
+        'Partner collection',
+        'Knowledge box search',
+        'MCP server',
         'unauthorised',
         'Citation decisions',
       ]
     ) expect(text).toContain(value)
+    expect(text).not.toContain('Unknown')
+    const passageText = await page.evaluate(() =>
+      document.querySelector<HTMLElement>('[aria-label="Passages retrieved"]')!.innerText
+    )
+    const passageStep = composedRecord!.agent!.steps.find((step) =>
+      step.id === composedRecord!.retrieved[0]!.stepId
+    )!
+    expect(passageText).toContain(`Step: ${passageStep.title}`)
+    expect(passageText).not.toContain(`Step: ${passageStep.id}`)
+    await page.evaluate(() =>
+      document.querySelector<HTMLElement>('#agent-evidence')!.parentElement!
+        .querySelector('summary')!.focus()
+    )
+    await page.keyboard.press('Enter')
+    expect(await page.evaluate(() => document.querySelector('main')!.innerText)).toContain(
+      composedRecord!.agent!.steps[0]!.id,
+    )
     await page.evaluate(() => {
       const blobs: Blob[] = [], names: string[] = []
       Object.assign(globalThis, { agentRecordDownloads: { blobs, names } })
@@ -141,6 +181,12 @@ Deno.test('agent stub answers persist and a curator opens, reviews and exports t
       )
     )
     const exported = AnswerRecordSchema.parse(JSON.parse(downloads[0]!)[0])
+    expect(exported).toEqual(composedRecord)
+    const rawCsv = await fetch(
+      `${server.url}/api/admin/t/marine/answer-records/records/${composedId}/export?format=csv`,
+    )
+    expect(rawCsv.status).toBe(200)
+    expect(downloads[1]).toBe(await rawCsv.text())
     expect(exported.answerId).toBe(composedId)
     expect(exported.agent?.sources.map((s) => [s.kind, s.transport])).toEqual([['hosted', 'kb'], [
       'peer',
