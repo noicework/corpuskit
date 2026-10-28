@@ -164,8 +164,7 @@ export function AgentAskPage() {
       <div className='rp-agent-layout'>
         <div className='min-w-0'>
           <div className='max-w-3xl'>
-            <p className='rp-eyebrow text-ink-3'>{ui('Agent ask')}</p>
-            <h1 className='rp-display mt-1 text-2xl text-ink sm:text-3xl'>
+            <h1 className='rp-display text-2xl text-ink sm:text-3xl'>
               {ui('Ask across the collections')}
             </h1>
             <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
