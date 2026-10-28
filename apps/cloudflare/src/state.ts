@@ -33,6 +33,13 @@ import {
   LEARNING_ID_PATTERN,
   type MatchedAnswers,
 } from '../../api/src/stores.ts'
+import {
+  parseSiteFeedbackRecord,
+  SITE_FEEDBACK_KEEP,
+  siteFeedbackCutoff,
+  type SiteFeedbackRecord,
+  type SiteFeedbackStoreApi,
+} from '../../api/src/site-feedback.ts'
 import type {
   AskInsight,
   EnrichmentCollisionPolicy,
@@ -395,6 +402,17 @@ export class DurableState {
       );
       CREATE INDEX IF NOT EXISTS answer_feedback_by_tenant
         ON answer_feedback (tenant_slug, rated_at);
+      CREATE TABLE IF NOT EXISTS site_feedback (
+        tenant_slug TEXT NOT NULL,
+        id TEXT NOT NULL,
+        record TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant_slug, id)
+      );
+      CREATE INDEX IF NOT EXISTS site_feedback_by_created
+        ON site_feedback (created_at);
+      CREATE INDEX IF NOT EXISTS site_feedback_by_tenant
+        ON site_feedback (tenant_slug, created_at);
     `)
     // Legacy construction remains usable until the Worker injects storage in plan 02-04.
     if (this.transactions) this.rbac.migrate()
@@ -520,7 +538,7 @@ export class DurableState {
 
   /** Delete every row a table keeps for the portal in its `tenant_slug` column, counting them. */
   eraseTenantRows(
-    table: 'enrichment_records' | 'routing_records' | 'answer_feedback',
+    table: 'enrichment_records' | 'routing_records' | 'answer_feedback' | 'site_feedback',
     slug: string,
   ): number {
     this.guardLocalWrite()
@@ -634,6 +652,66 @@ export class DurableState {
       cutoff,
     ).one().n
     if (expired) this.sql.exec('DELETE FROM answer_feedback WHERE rated_at < ?', cutoff)
+    return expired
+  }
+
+  /**
+   * Keep a reader's message, replacing the row with its id, then drop the portal's messages
+   * older than `cutoff` and, past `keep`, the oldest.
+   */
+  putSiteFeedback(slug: string, record: SiteFeedbackRecord, keep: number, cutoff: number): void {
+    this.guardLocalWrite()
+    this.sql.exec(
+      `INSERT INTO site_feedback (tenant_slug, id, record, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(tenant_slug, id) DO UPDATE SET
+         record = excluded.record, created_at = excluded.created_at`,
+      slug,
+      record.id,
+      JSON.stringify(record),
+      Date.parse(record.createdAt),
+    )
+    this.sql.exec(
+      'DELETE FROM site_feedback WHERE tenant_slug = ? AND created_at < ?',
+      slug,
+      cutoff,
+    )
+    this.sql.exec(
+      `DELETE FROM site_feedback WHERE tenant_slug = ? AND id NOT IN (
+         SELECT id FROM site_feedback WHERE tenant_slug = ?
+         ORDER BY created_at DESC, id DESC LIMIT ?
+       )`,
+      slug,
+      slug,
+      keep,
+    )
+  }
+
+  /** The portal's messages from `cutoff` on, newest first, at most `limit`. */
+  siteFeedbackRecords(slug: string, cutoff: number, limit: number): SiteFeedbackRecord[] {
+    return this.sql.exec<{ record: string }>(
+      `SELECT record FROM site_feedback WHERE tenant_slug = ? AND created_at >= ?
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+      slug,
+      cutoff,
+      limit,
+    ).toArray().flatMap((row) => {
+      try {
+        const record = parseSiteFeedbackRecord(JSON.parse(row.record))
+        return record ? [record] : []
+      } catch {
+        return []
+      }
+    })
+  }
+
+  /** Remove every portal's messages older than `cutoff`, returning how many went. */
+  purgeSiteFeedback(cutoff: number): number {
+    this.guardLocalWrite()
+    const expired = this.sql.exec<{ n: number }>(
+      'SELECT count(*) AS n FROM site_feedback WHERE created_at < ?',
+      cutoff,
+    ).one().n
+    if (expired) this.sql.exec('DELETE FROM site_feedback WHERE created_at < ?', cutoff)
     return expired
   }
 
@@ -916,9 +994,9 @@ export class DurableState {
 
   /**
    * Delete the records a removed portal leaves stored under its slug: sources, enrichments and
-   * cached questions, insights, answer feedback, suggestions, knowledge graph proposals, research
-   * sessions, investigations, watches (current and pre-phase), branding assets and routing
-   * decisions.
+   * cached questions, insights, answer feedback, site feedback, suggestions, knowledge graph
+   * proposals, research sessions, investigations, watches (current and pre-phase), branding
+   * assets and routing decisions.
    * Removal itself already took the portal's binding and lifecycle records and revoked its access;
    * the revoked data keys and the audit events stay on record.
    */
@@ -934,6 +1012,7 @@ export class DurableState {
     this.sql.exec('DELETE FROM enrichment_records WHERE tenant_slug = ?', slug)
     this.sql.exec('DELETE FROM routing_records WHERE tenant_slug = ?', slug)
     this.sql.exec('DELETE FROM answer_feedback WHERE tenant_slug = ?', slug)
+    this.sql.exec('DELETE FROM site_feedback WHERE tenant_slug = ?', slug)
     const proposals = this.get<Record<string, unknown>>('kg-proposals', {})
     if (Object.hasOwn(proposals, slug)) {
       delete proposals[slug]
@@ -1411,6 +1490,35 @@ export class DurableFeedbackStore implements FeedbackStoreApi {
 
   erase(slug: string): number {
     return this.state.eraseTenantRows('answer_feedback', slug)
+  }
+}
+
+/** Readers' messages on the Durable Object: one `site_feedback` row per message. */
+export class DurableSiteFeedbackStore implements SiteFeedbackStoreApi {
+  constructor(
+    private readonly state: DurableState,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  save(slug: string, record: SiteFeedbackRecord): void {
+    this.state.putSiteFeedback(slug, record, SITE_FEEDBACK_KEEP, siteFeedbackCutoff(this.now()))
+  }
+
+  recent(slug: string, limit: number): SiteFeedbackRecord[] {
+    return this.state.siteFeedbackRecords(
+      slug,
+      siteFeedbackCutoff(this.now()),
+      Math.max(0, Math.min(limit, SITE_FEEDBACK_KEEP)),
+    )
+  }
+
+  /** Every portal's messages past the window, for the daily maintenance pass. */
+  purgeExpired(): number {
+    return this.state.purgeSiteFeedback(siteFeedbackCutoff(this.now()))
+  }
+
+  erase(slug: string): number {
+    return this.state.eraseTenantRows('site_feedback', slug)
   }
 }
 
@@ -2155,6 +2263,7 @@ export interface DurableStores extends RbacStores {
   tenants: DurableTenantStore
   insights: DurableInsightsStore
   feedback: DurableFeedbackStore
+  siteFeedback: DurableSiteFeedbackStore
   sessions: DurableSessionsStore
   watches: DurableWatchStore
   sources: DurableSourceStore
@@ -2191,6 +2300,7 @@ export function durableStores(
     ),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     feedback: state.auditedStore('feedback', new DurableFeedbackStore(state)),
+    siteFeedback: state.auditedStore('siteFeedback', new DurableSiteFeedbackStore(state)),
     sessions: state.auditedStore('sessions', new DurableSessionsStore(state)),
     watches: state.auditedStore('watches', new DurableWatchStore(state)),
     sources: state.auditedStore('sources', new DurableSourceStore(state)),

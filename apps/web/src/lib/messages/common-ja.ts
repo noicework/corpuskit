@@ -169,4 +169,35 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Survey': '調査',
   'Qualitative study': '質的研究',
   'Narrative review': 'ナラティブレビュー',
+  // Reader feedback to the portal team.
+  'Send feedback': 'フィードバックを送る',
+  'Share feedback': 'フィードバックを送信',
+  'Tell the portal team about an answer, a problem or an idea.':
+    '回答、不具合、改善のアイデアについてポータルの担当者にお知らせください。',
+  'Your message': 'メッセージ',
+  '(required)': '（必須）',
+  'Up to {count} characters. The address of this page is sent with it.':
+    '{count}文字まで入力できます。このページのアドレスも一緒に送信されます。',
+  'This is about': '内容の種類',
+  'General feedback': '一般的なご意見',
+  'Answer quality': '回答の品質',
+  'A problem with the portal': 'ポータルの不具合',
+  'An idea for improvement': '改善のアイデア',
+  'Only if you would like a reply.': '返信を希望する場合のみ入力してください。',
+  'Add a message before you send it.': '送信する前にメッセージを入力してください。',
+  'Enter an email address like name@example.com, or leave it empty.':
+    'name@example.com のような形式でメールアドレスを入力するか、空欄のままにしてください。',
+  'A lot of feedback has been sent from here just now. Your message is still here - try again in a few minutes.':
+    '短時間に多くのフィードバックが送信されました。メッセージは残っています。数分後に再試行してください。',
+  'Your feedback could not be sent. Your message is still here - try again.':
+    'フィードバックを送信できませんでした。メッセージは残っています。再試行してください。',
+  'Sending...': '送信中…',
+  'Sending your feedback.': 'フィードバックを送信しています。',
+  'Thank you - your feedback has been sent.':
+    'ありがとうございます。フィードバックを送信しました。',
+  'The portal team has been notified.': 'ポータルの担当者に通知しました。',
+  'Accessibility': 'アクセシビリティ',
+  'About this portal': 'このポータルについて',
+  'Phone': '電話',
+  'Website': 'ウェブサイト',
 }
