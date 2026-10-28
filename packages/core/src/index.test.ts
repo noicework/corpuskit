@@ -1,5 +1,10 @@
 import { expect } from '@std/expect'
-import { showsRegionalDiscovery, TenantConfigSchema } from './index.ts'
+import {
+  DemoTourCopySchema,
+  demoTourMode,
+  showsRegionalDiscovery,
+  TenantConfigSchema,
+} from './index.ts'
 
 const legacy = {
   slug: 'a',
@@ -35,5 +40,47 @@ Deno.test('the regional discovery band is opt-in: hidden when absent or false, s
     .toBe(true)
   for (const regionalDiscovery of ['true', 1, null]) {
     expect(TenantConfigSchema.safeParse({ ...legacy, regionalDiscovery }).success).toBe(false)
+  }
+})
+
+Deno.test('the guided tour is off unless a portal opts in to offering it or opening it', () => {
+  expect(demoTourMode(TenantConfigSchema.parse(legacy))).toBe('off')
+  for (const demoTour of ['off', 'request', 'auto'] as const) {
+    expect(demoTourMode(TenantConfigSchema.parse({ ...legacy, demoTour }))).toBe(demoTour)
+  }
+  for (const demoTour of [true, false, 'on', 1, null]) {
+    expect(TenantConfigSchema.safeParse({ ...legacy, demoTour }).success).toBe(false)
+  }
+})
+
+Deno.test('demo tour copy names each scene once and links only where a layout may', () => {
+  const copy = {
+    heading: 'Take the tour',
+    intro: 'Three scenes.',
+    scenes: [
+      { id: 'federated', question: 'What limits yield in a dry season?' },
+      { id: 'participation' },
+      { id: 'gaps', title: 'Ask the unanswerable', href: '/manage?tab=insights' },
+    ],
+  }
+  expect(DemoTourCopySchema.parse(copy)).toEqual(copy)
+  expect(TenantConfigSchema.parse({ ...legacy, copy: { demoTour: copy } }).copy?.demoTour)
+    .toEqual(copy)
+  for (
+    const invalid of [
+      { scenes: [] },
+      { scenes: [{ id: 'federated' }, { id: 'federated' }] },
+      { scenes: [{ id: 'fireworks' }] },
+      { scenes: [{ id: 'mcp', href: 'javascript:alert(1)' }] },
+      { scenes: [{ id: 'mcp', href: 'tools' }] },
+      { scenes: [{ id: 'mcp', title: '   ' }] },
+      { scenes: [{ id: 'mcp', hidden: true }] },
+      { heading: '' },
+      { order: ['mcp'] },
+    ]
+  ) {
+    expect(DemoTourCopySchema.safeParse(invalid).success, JSON.stringify(invalid)).toBe(false)
+    expect(TenantConfigSchema.safeParse({ ...legacy, copy: { demoTour: invalid } }).success)
+      .toBe(false)
   }
 })

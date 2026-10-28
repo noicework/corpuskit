@@ -161,3 +161,13 @@ Deno.test('configuration import rejects protected or unknown fields at every nes
     ]
   ) expect(PortalConfigurationImportSchema.safeParse(invalid).success).toBe(false)
 })
+
+Deno.test('the guided tour setting travels with the configuration, as one of its modes only', () => {
+  const exported = portalConfigurationExport({ ...config, demoTour: 'auto' })
+  expect(exported.demoTour).toBe('auto')
+  expect(PortalConfigurationImportSchema.parse(exported).demoTour).toBe('auto')
+  expect(portalConfigurationExport(config)).not.toHaveProperty('demoTour')
+  for (const demoTour of [true, 'yes']) {
+    expect(PortalConfigurationImportSchema.safeParse({ ...exported, demoTour }).success).toBe(false)
+  }
+})

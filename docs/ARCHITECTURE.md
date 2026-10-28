@@ -49,6 +49,10 @@ Australian state. The Manage screen has no control for it. A portal administrato
 operator credential, see `HOSTING.md`) turns it on or off with `PATCH /api/admin/tenants/:slug`
 and a body of `{"regionalDiscovery": true}` or `{"regionalDiscovery": false}`, which needs
 `behaviour.write` on the portal as well as the route's `appearance.write`.
+The guided tour on the home page ("See what this platform does", a dialog of illustrated scenes
+each with one click into the real feature) is the same shape: `demoTour` is `off` unless set to
+`request` or `auto` with the same route or Manage > Behaviour, and `copy.demoTour` chooses its
+scenes and their words (`HOSTING.md`, "Guided tour").
 
 A portal's own header links, footer and home page are an optional `layout` in its branding,
 validated by `PortalLayoutSchema` in `packages/core/src/layout.ts` and set with the same route
