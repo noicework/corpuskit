@@ -174,6 +174,7 @@ export class AgentAnswerRecorder extends AnswerRecorder {
           this.value.retrieved,
           {
             sourceId: this.text(event.source.id, 256),
+            stepId: this.text(event.stepId, 256),
             chunkId: this.text(chunk.id, 256),
             resourceId: this.text(chunk.resourceId ?? chunk.id, 256),
             ...(event.source.kind === 'peer'
@@ -207,6 +208,7 @@ export class AgentAnswerRecorder extends AnswerRecorder {
       const cited: AnswerRecordPassage = {
         resourceId: passage?.resourceId ?? this.text(event.chunkId, 256),
         sourceId: this.text(event.sourceId, 256),
+        ...(passage?.stepId ? { stepId: passage.stepId } : {}),
         chunkId: this.text(event.chunkId, 256),
         ...(passage?.peerId ? { peerId: passage.peerId } : {}),
         title: this.text(event.title, 300),

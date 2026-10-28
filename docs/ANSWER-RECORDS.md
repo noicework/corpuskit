@@ -18,7 +18,7 @@ sources announced by `agent-start`, their kind and transport, hosted portal or p
 non-secret store identifiers and configured peer endpoints. It includes every step's final
 status, duration and reported reason, the question put to each source, failures with their
 reason, and citation decisions before and after composition's citation check. Passages and
-citations carry source and chunk ids, a resource id when supplied, titles, excerpts and URLs
+citations carry source, lookup step and chunk ids, a resource id when supplied, titles, excerpts and URLs
 when supplied. Every URL has credentials, query strings and fragments removed.
 
 The composer reports kept and dropped original citation markers per sentence, including their

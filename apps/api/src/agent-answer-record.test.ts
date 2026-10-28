@@ -106,12 +106,14 @@ Deno.test('agent composition records hosted and two peer sources, questions, pas
   expect(record.retrieved).toHaveLength(2)
   expect(record.retrieved.find((p) => p.sourceId === 'peer:soil')).toMatchObject({
     sourceId: 'peer:soil',
+    stepId: 'source/peer:soil',
     peerId: 'soil',
     chunkId: 'soil-chunk',
     url: 'https://example.test/report.pdf',
   })
   expect(record.cited[0]).toMatchObject({
     sourceId: 'marine',
+    stepId: 'source/marine',
     resourceId: 'soil-report',
     text: passage,
     marker: '1',

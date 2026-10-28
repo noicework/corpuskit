@@ -15,6 +15,7 @@ export const AnswerRecordPassageSchema = z.object({
   scoreScope: z.enum(['resource', 'passage', 'unknown']),
   citationIndex: z.number().int().positive().optional(),
   sourceId: z.string().optional(),
+  stepId: z.string().optional(),
   chunkId: z.string().optional(),
   peerId: z.string().optional(),
   url: z.string().optional(),
