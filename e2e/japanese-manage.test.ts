@@ -3,6 +3,7 @@ import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { startTestServer } from './support/test-server.ts'
 import { assertCurrentBuild } from './support/rbac-fixture.ts'
+import { settle } from './support/settle.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
 
 const management = new Proxy({}, {
@@ -142,10 +143,10 @@ async function language(page: Page, value: 'ja' | 'en') {
   if (
     await page.evaluate(() => document.documentElement.lang) === (value === 'ja' ? 'ja' : 'en-AU')
   ) return
+  const button = `button[aria-label="${value === 'ja' ? '日本語' : 'English'}"]`
   await page.evaluate(() => scrollTo(0, 0))
-  await (await page.waitForSelector(
-    `button[aria-label="${value === 'ja' ? '日本語' : 'English'}"]`,
-  )).click()
+  await settle(page, button)
+  await (await page.waitForSelector(button)).click()
   await page.waitForFunction((value) => document.documentElement.lang === value, {
     args: [value === 'ja' ? 'ja' : 'en-AU'],
   })
