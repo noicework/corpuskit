@@ -44,6 +44,7 @@ import {
 } from '../api/client.ts'
 import { secondsUntilRetry } from '../lib/ask-budget.ts'
 import { answerHtml, escapeHtml, referenceListHtml } from '../lib/answer-export.ts'
+import { recordOpen } from '../api/usage-events.ts'
 import { citationLink, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
 import { CompareConfigurations } from '../components/CompareConfigurations.tsx'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
@@ -100,6 +101,7 @@ import {
 // ---------------------------------------------------------------------------
 
 type ChatMessage = {
+  answerId?: string
   id: string
   author: 'USER' | 'AGENT'
   text: string
@@ -370,6 +372,7 @@ function renderMarkdown(message: ChatMessage, slug: string): ReactNode {
     <AnswerText
       bodyClassName='rp-prose rp-measure text-base text-ink-2'
       text={message.text}
+      answerId={message.answerId}
       citations={message.citations}
       sources={message.sources}
       slug={slug}
@@ -1505,6 +1508,23 @@ function AnswerCard({
                             <Link
                               key={citation.index}
                               to={citationLink(slug, citation, source)}
+                              onClick={() =>
+                                recordOpen(
+                                  slug,
+                                  { answerId: message.answerId },
+                                  citation.resourceId,
+                                  citation.index,
+                                )}
+                              onAuxClick={(e) => {
+                                if (e.button === 1) {
+                                  recordOpen(
+                                    slug,
+                                    { answerId: message.answerId },
+                                    citation.resourceId,
+                                    citation.index,
+                                  )
+                                }
+                              }}
                               title={citation.headline
                                 ? `${citation.title} - ${citation.headline}`
                                 : citation.title}
@@ -1552,6 +1572,7 @@ function AnswerCard({
                       verdicts={message.verdicts}
                       judging={judging}
                       citations={message.citations}
+                      answerId={message.answerId}
                       unlinked={message.unlinked}
                       anchorPrefix={message.id}
                       collapsible={false}
@@ -3266,6 +3287,7 @@ export function AskPage() {
                   question={railQuestion}
                   sources={railSources}
                   citations={railAnswer.citations}
+                  answerId={railAnswer.answerId}
                   unlinked={railAnswer.unlinked}
                   verdicts={railAnswer.verdicts}
                   anchorPrefix={`rail-${railAnswer.id}`}

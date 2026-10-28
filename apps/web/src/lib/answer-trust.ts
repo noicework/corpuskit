@@ -40,6 +40,7 @@ export function auditFromEvent(event: AuditEvent): AnswerAudit {
 
 /** The part of an answer that one stream decides, whichever surface shows it. */
 export interface StreamedAnswer {
+  answerId?: string
   text: string
   citations: Citation[]
   sources: ScoredResource[]
@@ -94,6 +95,7 @@ export function applyAnswerEvent<T extends StreamedAnswer>(answer: T, event: Ask
     case 'done':
       return {
         ...answer,
+        answerId: event.answerId,
         // The citation-bound, gated text replaces the streamed accumulation;
         // a refusal may carry none, and the streamed text then stands.
         text: event.text ?? answer.text,

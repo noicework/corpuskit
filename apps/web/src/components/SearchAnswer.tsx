@@ -395,6 +395,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                     ? (
                       <div className='rp-measure rp-answer-in rp-prose text-base text-ink sm:text-sm'>
                         <AnswerText
+                          answerId={answer.answerId}
                           text={text}
                           citations={citations}
                           sources={sources}

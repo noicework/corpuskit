@@ -1,3 +1,4 @@
+import { UsageAnalyticsCards } from './UsageAnalyticsCards.tsx'
 import type { Locale } from '../../lib/portal-locale.tsx'
 import { englishUi } from './shared.ts'
 import { relativeTime } from './shared.ts'
@@ -148,12 +149,6 @@ export function MonthKnowledgeGaps(
             ))}
           </ol>
         )}
-      <h4 className='mt-5 text-sm font-semibold text-ink'>{ui('Evidence coverage by topic')}</h4>
-      <p className='mt-1 max-w-prose text-sm leading-relaxed text-ink-2'>
-        {ui(
-          "Not available: the ask log keeps each question's text but not its topic, and an unanswered question has no cited source to take a topic from.",
-        )}
-      </p>
     </div>
   )
 }
@@ -261,6 +256,13 @@ function InsightsPanelContent({ slug }: { slug: string }) {
       )}
 
       {isError && <p className='text-sm text-ink-3'>{ui('Could not load insights.')}</p>}
+
+      {data?.usage && (
+        <section aria-label={ui('This month’s usage')}>
+          <h3 className='mb-3 text-sm font-semibold text-ink'>{ui('This month’s usage')}</h3>
+          <UsageAnalyticsCards totals={data.usage.totals} headingLevel={4} />
+        </section>
+      )}
 
       {data && data.totalAsks === 0 && (
         <div className='rounded-[var(--rp-radius)] border border-dashed border-line bg-surface-2 p-6'>
