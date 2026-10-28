@@ -80,7 +80,8 @@ describe('agent ask page', () => {
           markers: text('[data-agent-text] sup'),
           markerLinks: document.querySelectorAll('[data-agent-text] sup a[href]').length,
           citations: document.querySelectorAll('[data-agent-citations] li li').length,
-          reasoning: document.querySelectorAll('[data-agent-reasoning] p').length,
+          reasoning: document.querySelector('[aria-controls="agent-reasoning"]')?.textContent
+            ?.replace(/\s+/g, ' ').trim(),
           reasoningToggle: document.querySelector('[aria-controls="agent-reasoning"]')
             ?.getAttribute('aria-expanded'),
           status: text('[data-agent-page] [role=status]'),
@@ -103,8 +104,9 @@ describe('agent ask page', () => {
       expect(seen.markers).toEqual(['1', '2', '3', '4', '5', '6'])
       expect(seen.markerLinks).toBe(6)
       expect(seen.citations).toBe(6)
-      expect(seen.reasoning).toBe(3)
-      expect(seen.reasoningToggle).toBe('true')
+      // The working notes are there but closed until the reader asks for them.
+      expect(seen.reasoning).toMatch(/^Show working\s*3 notes$/)
+      expect(seen.reasoningToggle).toBe('false')
       expect(seen.failed).toBe(false)
       expect(seen.clock).toBe('Answered in 1 min 30 s')
       // One announcement for the whole answer, not one a chunk.

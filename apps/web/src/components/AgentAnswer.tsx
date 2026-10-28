@@ -200,7 +200,7 @@ export function AgentAnswer(
     () => new Map(state.citations.map((citation) => [citation.marker, citation])),
     [state.citations],
   )
-  const [reasoningOpen, setReasoningOpen] = useState(true)
+  const [reasoningOpen, setReasoningOpen] = useState(false)
   const streaming = state.status === 'streaming'
   const hasText = state.text.trim().length > 0
   const current = activeStep(state.steps)
