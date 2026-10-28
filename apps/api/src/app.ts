@@ -98,6 +98,7 @@ import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
 import type { RbacState } from './rbac-state.ts'
 import {
+  AgentAskRequestSchema,
   canAssignPalette,
   ColourSchemeIdSchema,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -115,6 +116,7 @@ import {
   layoutImageNames,
   mapLayoutImages,
   MAX_LAYOUT_IMAGES,
+  offersAgentAsk,
   PaletteChoiceSchema,
   type PortalLayout,
   PortalLayoutSchema,
@@ -135,6 +137,7 @@ import type {
   TenantConfig,
 } from '@research-portal/core'
 import {
+  AgentAskError,
   AragApiError,
   type AragProvider,
   KbClient,
@@ -144,7 +147,7 @@ import {
   type RetrievalProvider,
   type SourceContext,
 } from '@research-portal/retrieval'
-import { publicErrorMessage, publicSseEvent } from './public-error.ts'
+import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -853,6 +856,8 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  /** Whether the portal offers agent ask (opt-in; see TenantConfigSchema). */
+  agentAsk: z.boolean().optional(),
   /**
    * The portal's header links, footer and home page, or null to clear them. Checked against
    * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
@@ -864,6 +869,7 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'agentAsk',
 ])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
@@ -5276,12 +5282,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      agentAsk,
       layout: _layout,
       ...branding
     } = parsed.data
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(agentAsk !== undefined ? { agentAsk } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
     const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))
@@ -8022,6 +8030,58 @@ export function buildApp(opts: BuildAppOptions): Hono {
         })
       } catch {
         // insights are best-effort - never fail the answer over them
+      }
+    }))
+  })
+
+  // Agent ask (docs/AGENT-ASK.md): a retrieval agent's answer, streamed step by step. Opt-in per
+  // portal; a portal that has not opted in, or a provider with no agent support, answers exactly
+  // as a route that does not exist.
+  app.post(declaredRoute('POST', '/api/t/:slug/ask-agent'), expensiveRateLimit, async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const agentAsk = provider.agentAsk?.bind(provider)
+    if (!agentAsk || !offersAgentAsk(config)) return c.json({ error: 'not_found' }, 404)
+    const parsed = AgentAskRequestSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    return withUtf8EventStream(streamSSE(c, async (stream) => {
+      // Ends the agent's upstream session the moment the reader goes away, not at its next event.
+      const upstream = new AbortController()
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      const stop = () => upstream.abort()
+      stream.onAbort(stop)
+      c.req.raw.signal.addEventListener('abort', stop, { once: true })
+      operationSignals.get(c.req.raw)?.addEventListener('abort', stop, { once: true })
+      const send = (event: unknown) =>
+        stream.writeSSE({ data: JSON.stringify(publicAgentSseEvent(event, 'agent-ask')) })
+      try {
+        if (cancelled()) return
+        const { query, context } = parsed.data
+        for await (
+          const event of agentAsk(config, query, {
+            ...(context ? { context } : {}),
+            signal: upstream.signal,
+          })
+        ) {
+          if (cancelled()) return
+          await send(event)
+        }
+      } catch (err) {
+        if (cancelled()) return
+        await send(
+          err instanceof AgentAskError
+            ? { type: 'error', code: err.code, message: err.message, retryable: err.retryable }
+            : {
+              type: 'error',
+              code: 'upstream',
+              message: publicErrorMessage(err),
+              retryable: true,
+            },
+        )
+      } finally {
+        stop()
       }
     }))
   })

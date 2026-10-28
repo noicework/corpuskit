@@ -1,4 +1,15 @@
-export type { ListResourcesOptions, RetrievalProvider, SourceContext } from './provider.ts'
+export type {
+  AgentAskOptions,
+  ListResourcesOptions,
+  RetrievalProvider,
+  SourceContext,
+} from './provider.ts'
+export { AgentAskError } from './provider.ts'
+export {
+  AgentStreamNormaliser,
+  type AgentStreamOptions,
+  normaliseAgentStream,
+} from './providers/arag/agent-stream.ts'
 export { AragProvider, KnowledgeBoxNotConnectedError } from './providers/arag/index.ts'
 export type { AgentConfig } from './providers/arag/index.ts'
 export {

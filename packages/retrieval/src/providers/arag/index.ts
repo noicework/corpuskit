@@ -1,4 +1,5 @@
 import type {
+  AgentAskEvent,
   AskEvent,
   CatalogItem,
   CatalogPage,
@@ -31,12 +32,14 @@ import {
   ResourceSummarySchema,
 } from '@research-portal/core'
 import type { DocPage } from '@research-portal/core'
-import type {
-  AskOptions,
-  CatalogOptions,
-  ListResourcesOptions,
-  RetrievalProvider,
-  SearchOptions,
+import {
+  AgentAskError,
+  type AgentAskOptions,
+  type AskOptions,
+  type CatalogOptions,
+  type ListResourcesOptions,
+  type RetrievalProvider,
+  type SearchOptions,
 } from '../../provider.ts'
 import {
   baselineMerchandising,
@@ -3980,6 +3983,24 @@ export class AragProvider implements RetrievalProvider {
       `/resource/${id}/file/${fieldId}/download/field`,
       range,
     )
+  }
+
+  /**
+   * TODO(agent-ask): stream a retrieval agent session. Needs a real agent and the per-portal agent
+   * configuration (agent id, zone, the agent's sealed service-account key, set through the
+   * operator API and never sent to the browser). The call is `POST
+   * https://{zone}.dp.progress.cloud/api/v1/agent/{id}/session/ephemeral?workflow_id=default`
+   * with `{question, operation: 0, chat_history, streaming: true}`; its NDJSON body goes through
+   * `normaliseAgentStream(ndjson(res), {sources})`, with a 300 s timeout that quits the session
+   * and reports `timeout`, and `opts.signal` aborting the fetch. Until then every portal answers
+   * `not_configured`.
+   */
+  agentAsk(
+    _tenant: TenantConfig,
+    _question: string,
+    _opts?: AgentAskOptions,
+  ): AsyncIterable<AgentAskEvent> {
+    throw new AgentAskError('not_configured', 'No retrieval agent is configured for this portal')
   }
 
   async *ask(

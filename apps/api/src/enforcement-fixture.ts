@@ -54,6 +54,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['GET', '/api/t/:slug/graph', 'portal.read', 'viewer'],
   ['POST', '/api/t/:slug/ask', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['POST', '/api/t/:slug/docs/ask', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
+  ['POST', '/api/t/:slug/ask-agent', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['POST', '/api/t/:slug/route', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['POST', '/api/t/:slug/feedback', 'portal.ask', 'viewer', {
     learningId: 'learning-123',
@@ -392,6 +393,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         graph: 'graphData',
         ask: 'ask',
         'docs/ask': 'ask',
+        'ask-agent': 'agentAsk',
         feedback: 'feedback',
         generate: 'askStructured',
         summarize: 'summarize',
@@ -589,7 +591,8 @@ export function createEnforcementFixture(
   for (const accessMode of ['public', 'authenticated', 'restricted'] as const) {
     for (const suffix of ['a', 'b']) {
       const slug = accessMode === 'restricted' ? suffix : `${accessMode}-${suffix}`
-      stores.tenants.seed({ ...tenantConfig('marine')!, slug, accessMode })
+      // Agent ask opted in, so its route reaches the provider like every other ask.
+      stores.tenants.seed({ ...tenantConfig('marine')!, slug, accessMode, agentAsk: true })
     }
   }
   stores.tenants.seed({ ...tenantConfig('marine')!, slug: 'disabled', accessMode: 'public' })

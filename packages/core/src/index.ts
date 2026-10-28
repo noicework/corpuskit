@@ -438,6 +438,12 @@ export const TenantConfigSchema = z.object({
    */
   regionalDiscovery: z.boolean().optional(),
   /**
+   * Whether the portal offers agent ask: a retrieval agent's answer streamed step by step
+   * (docs/AGENT-ASK.md). Opt-in: only true offers it; absent or false and its route answers as
+   * if it did not exist. Set through `PATCH /api/admin/tenants/:slug`.
+   */
+  agentAsk: z.boolean().optional(),
+  /**
    * Labels excluded from the research search and ask configurations (on top
    * of the always-excluded in-app documentation). A journal corpus keeps its
    * supplements and videos browsable in the library but grounds answers in
@@ -1394,3 +1400,4 @@ export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'
 export * from './layout.ts'
+export * from './agent-ask.ts'

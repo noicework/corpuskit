@@ -9,6 +9,7 @@
 // a resource so the AI Answer panel's citation marker click-through works.
 // ---------------------------------------------------------------------------
 import type {
+  AgentAskEvent,
   AskEvent,
   CatalogPage,
   FacetCounts,
@@ -18,7 +19,8 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import type { RetrievalProvider } from '@research-portal/retrieval'
+import type { AgentAskOptions, RetrievalProvider } from '@research-portal/retrieval'
+import { agentScenarioFor, replayAgentAsk } from './agent-replay.ts'
 
 export const RESOURCE_ONE: ResourceSummary = {
   id: 'res-1',
@@ -49,6 +51,10 @@ const MATCHED_PASSAGE =
 export class DoubleProvider implements RetrievalProvider {
   /** Protected so a journey that deletes a document can take it out of the collection. */
   protected resources: ResourceSummary[] = [RESOURCE_ONE, RESOURCE_TWO]
+  /** The pace agent asks replay their fixture at: 0 without waiting, 1 as recorded. */
+  agentReplaySpeed = 0
+  /** Agent asks still streaming: back to zero once a reader's abort has ended each one. */
+  agentAsksOpen = 0
 
   /**
    * A provider for portals whose collection is still empty. A factory, not a constructor
@@ -130,6 +136,24 @@ export class DoubleProvider implements RetrievalProvider {
 
   suggest(_tenant: TenantConfig): Promise<Question[]> {
     return Promise.resolve([{ id: 'sq-1', text: 'What is known about abalone stock health?' }])
+  }
+
+  /** A recorded agent session replayed (docs/AGENT-ASK.md): `#error`, `#slow`, `#fast` steer it. */
+  async *agentAsk(
+    _tenant: TenantConfig,
+    question: string,
+    opts: AgentAskOptions = {},
+  ): AsyncIterable<AgentAskEvent> {
+    const { scenario, fast } = agentScenarioFor(question)
+    this.agentAsksOpen++
+    try {
+      yield* replayAgentAsk(scenario, {
+        speed: fast ? 0 : this.agentReplaySpeed,
+        signal: opts.signal,
+      })
+    } finally {
+      this.agentAsksOpen--
+    }
   }
 
   async *ask(_tenant: TenantConfig, query: string): AsyncIterable<AskEvent> {

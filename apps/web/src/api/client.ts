@@ -11,6 +11,8 @@ import type { RequestContext } from './access-lifecycle.ts'
 import type { ProgressRequestInit, UploadProgress } from './upload-transport.ts'
 import type {
   AdminTenantOverview,
+  AgentAskEvent,
+  AgentAskRequest,
   AnalyseEvent,
   AskEvent,
   CatalogPage,
@@ -47,6 +49,7 @@ import type {
 } from '@research-portal/core'
 import {
   AdminTenantOverviewSchema,
+  AgentAskEventSchema,
   KnowledgeBoxStatusSchema,
   MigrationEventSchema,
 } from '@research-portal/core'
@@ -460,6 +463,65 @@ export async function streamAsk(
     } catch {
       // A truncated trailing frame (dropped connection) is not an event.
     }
+  }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
+  }
+}
+
+/**
+ * Stream a retrieval agent's answer (docs/AGENT-ASK.md): `agent-start` first, then steps, the
+ * passages each source returned, reasoning and answer text as they happen, citations, and one
+ * `done` or `error` last. A frame that is not a valid agent ask event is dropped. Returns when the
+ * stream closes; abort via the signal, which also ends the agent's session. A portal that does
+ * not offer agent ask rejects with a 404 `ApiError`.
+ */
+export async function streamAgentAsk(
+  slug: string,
+  body: AgentAskRequest,
+  onEvent: (event: AgentAskEvent) => void,
+  signal?: AbortSignal,
+  options: RequestContext = {},
+): Promise<void> {
+  const res = await transportFetch(`/api/t/${encodeURIComponent(slug)}/ask-agent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
+    body: JSON.stringify(body),
+    signal,
+  }, options)
+  assertResponseCurrent(res)
+  noteAskBudget(res)
+  if (!res.ok || !res.body) throw await askError(res, 'The agent is unavailable')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const emit = (frame: string) => {
+    assertResponseCurrent(res)
+    const line = frame.trim()
+    if (!line) return
+    const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      // A truncated trailing frame (dropped connection) is not an event.
+      return
+    }
+    const event = AgentAskEventSchema.safeParse(parsed)
+    if (event.success) onEvent(event.data)
   }
   try {
     for (;;) {

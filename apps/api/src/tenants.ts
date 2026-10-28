@@ -251,6 +251,8 @@ export interface TenantPatch {
   assessmentHeading?: string
   /** Whether Explore shows the regional discovery band (opt-in). */
   regionalDiscovery?: boolean
+  /** Whether the portal offers agent ask (opt-in). */
+  agentAsk?: boolean
   branding?: TenantConfig['branding']
   /**
    * Portal-managed behaviour settings (system prompt, image grounding). `uncitedAnswers`: what an

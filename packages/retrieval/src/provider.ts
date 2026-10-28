@@ -1,4 +1,6 @@
 import type {
+  AgentAskErrorCode,
+  AgentAskEvent,
   AskEvent,
   CatalogPage,
   FacetCounts,
@@ -143,6 +145,21 @@ export interface AskOptions {
   light?: boolean
 }
 
+export interface AgentAskOptions {
+  /** Prior turns, oldest first, for multi-turn conversations. */
+  context?: { author: 'USER' | 'AGENT'; text: string }[]
+  /** Aborted when the reader goes away: the provider ends its upstream session at once. */
+  signal?: AbortSignal
+}
+
+/** An agent ask refused before it streamed: the route reports it as an `error` event. */
+export class AgentAskError extends Error {
+  constructor(readonly code: AgentAskErrorCode, message: string, readonly retryable = false) {
+    super(message)
+    this.name = 'AgentAskError'
+  }
+}
+
 export interface CatalogOptions {
   page?: number
   pageSize?: number
@@ -193,6 +210,16 @@ export interface RetrievalProvider {
    */
   suggest(tenant: TenantConfig, query?: string): Promise<Question[]>
   ask(tenant: TenantConfig, query: string, opts?: AskOptions): AsyncIterable<AskEvent>
+  /**
+   * A retrieval agent's answer, streamed step by step (docs/AGENT-ASK.md). Optional: a provider
+   * with no agent support leaves it out. It may throw `AgentAskError` before streaming, and it
+   * ends its upstream session when `opts.signal` aborts or the caller stops iterating.
+   */
+  agentAsk?(
+    tenant: TenantConfig,
+    question: string,
+    opts?: AgentAskOptions,
+  ): AsyncIterable<AgentAskEvent>
   catalog(tenant: TenantConfig, opts?: CatalogOptions): Promise<CatalogPage>
   /** Top resources filed under one topic (Explore's topic rows) - via the classification index, not per-resource topicIds. */
   topicResources(tenant: TenantConfig, topicId: string, limit?: number): Promise<ResourceSummary[]>
