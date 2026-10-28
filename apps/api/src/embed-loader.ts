@@ -1,7 +1,6 @@
 /** Runs on the embedding site. It sends only focus and close messages, never research data. */
 export function embedLoader(options: {
   name: string
-  defaultView: 'own' | 'federated'
   tokens: Record<string, string>
 }) {
   const script = document.currentScript as HTMLScriptElement | null
@@ -19,7 +18,7 @@ export function embedLoader(options: {
     Object.entries(options.tokens).map(([key, value]) => `${key}:${value}`).join(';')
   } }
     * { box-sizing:border-box }
-    button, a { font:inherit; min-height:2.75rem; min-width:2.75rem; padding:.65rem 1rem;
+    button, a { font:inherit; min-height:max(44px,2.75rem); min-width:max(44px,2.75rem); padding:.65rem 1rem;
       border:2px solid var(--rp-primary); border-radius:var(--rp-radius-btn);
       background:var(--rp-primary); color:var(--rp-on-primary); cursor:pointer }
     button:focus-visible, a:focus-visible, iframe:focus-visible {
@@ -39,13 +38,12 @@ export function embedLoader(options: {
   const src = new URL(script.src)
   src.pathname = src.pathname.replace(/embed\.js$/, 'embed')
   src.search = ''
-  src.searchParams.set(
-    'view',
-    script.dataset.view === 'own' || script.dataset.view === 'federated'
-      ? script.dataset.view
-      : options.defaultView,
-  )
+  // Without an override, the authorised frame reads the portal's current default itself.
+  if (script.dataset.view === 'own' || script.dataset.view === 'federated') {
+    src.searchParams.set('view', script.dataset.view)
+  }
   if (japanese) src.searchParams.set('lang', 'ja')
+  else if (script.dataset.lang === 'en') src.searchParams.set('lang', 'en')
   const requestedHeight = Number.parseInt(script.dataset.height ?? '640', 10)
   const height = Number.isFinite(requestedHeight)
     ? Math.max(240, Math.min(2000, requestedHeight))

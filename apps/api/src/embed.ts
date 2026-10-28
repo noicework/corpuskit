@@ -52,7 +52,6 @@ export async function handleEmbedRequest(c: Context, next: Next, options: {
       paletteFromColours(branding.colours) || DEFAULT_PALETTES.corpuskit.palette
     const settings = {
       name: branding.productName,
-      defaultView: config.embedding.defaultView,
       tokens: {
         '--rp-primary': palette.brandSurface,
         '--rp-on-primary': palette.onBrandSurface,
@@ -79,6 +78,21 @@ export async function handleEmbedRequest(c: Context, next: Next, options: {
     const response = await options.shell(c.req.raw)
     c.res = response
   } else await next()
+  // The private sign-in view receives safe metadata without layout. Carry only its credit
+  // choice in the public shell, so that view honours the same footer policy as the portal.
+  if (c.res.status === 200 && c.res.headers.get('content-type')?.includes('text/html')) {
+    const response = c.res
+    const footer = config.branding.layout?.footer
+    const credit = !footer || footer.poweredBy ? 'on' : 'off'
+    const html = (await response.text()).replace(
+      /<head(?:\s[^>]*)?>/i,
+      (head) => `${head}<meta name="corpuskit-embed-credit" content="${credit}">`,
+    )
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    headers.delete('content-encoding')
+    c.res = new Response(html, { status: response.status, headers })
+  }
   c.header('Cache-Control', 'private, no-store')
   c.header('X-Robots-Tag', 'noindex, nofollow')
   return c.res

@@ -6,13 +6,21 @@ export function createBrowserClientId(
   storage: () => Pick<Storage, 'getItem' | 'setItem'> = () => localStorage,
 ): () => string {
   let current: string | undefined
+  let persisted = false
   return () => {
     try {
       const store = storage()
       const saved = store.getItem('rp-client-id')
-      if (saved) return current = saved
+      if (saved) {
+        persisted = true
+        return current = saved
+      }
+      // Clearing available site storage still starts a fresh anonymous identity.
+      if (persisted) current = undefined
+      persisted = false
       current ??= crypto.randomUUID().replace(/-/g, '')
       store.setItem('rp-client-id', current)
+      persisted = true
     } catch {
       current ??= crypto.randomUUID().replace(/-/g, '')
     }

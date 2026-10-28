@@ -96,7 +96,12 @@ Deno.test('only the successful exact embed shell gains its configured frame ance
 for (const adapter of ['local', 'durable'] as const) {
   Deno.test(`${adapter}: embed settings use behaviour permission, audit, lifecycle and erasure`, async () => {
     const f = createEnforcementFixture({}, adapter)
-    f.app.get('*', infrastructureHandler(async (c) => c.html('<div id="root"></div>')))
+    f.app.get(
+      '*',
+      infrastructureHandler(async (c) =>
+        c.html('<html><head></head><body><div id="root"></div></body></html>')
+      ),
+    )
     const patch = (value: unknown) => ({
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -133,11 +138,21 @@ for (const adapter of ['local', 'durable'] as const) {
         'frame-ancestors https://research.example',
       )
       expect(page.headers.get('cache-control')).toBe('private, no-store')
-      expect(await page.text()).toContain('root')
+      expect(await page.text()).toContain('corpuskit-embed-credit')
+      const before = f.stores.tenants.get('a')!.branding
+      f.stores.tenants.patch('a', {
+        branding: { ...before, layout: { footer: { poweredBy: false } } },
+      })
+      expect(await (await f.requestAs(null, '/t/a/embed')).text()).toContain(
+        'name="corpuskit-embed-credit" content="off"',
+      )
+      f.stores.tenants.patch('a', { branding: before })
       const script = await f.requestAs(null, '/t/a/embed.js')
       expect(script.headers.get('content-type')).toContain('text/javascript')
       expect(script.headers.get('content-security-policy')).toBe("frame-ancestors 'none'")
-      expect(await script.text()).toContain('showModal')
+      const loader = await script.text()
+      expect(loader).toContain('showModal')
+      expect(loader).not.toContain('defaultView')
       // The private shell is public branding only. Asking remains protected in either mode.
       for (const endpoint of ['ask', 'ask-agent']) {
         expect(

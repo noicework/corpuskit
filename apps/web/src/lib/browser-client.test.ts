@@ -31,3 +31,17 @@ Deno.test('a write-blocked frame and a later storage withdrawal retain the obser
   blocked = true
   expect(observed()).toBe('existing-browser-id')
 })
+
+Deno.test('clearing available site storage starts a fresh guest identity', () => {
+  const values = new Map<string, string>()
+  const id = createBrowserClientId(() => ({
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value)
+    },
+  }))
+  const first = id()
+  expect(id()).toBe(first)
+  values.clear()
+  expect(id()).not.toBe(first)
+})

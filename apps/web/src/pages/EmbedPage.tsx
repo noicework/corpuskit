@@ -311,12 +311,13 @@ export function EmbedPage() {
     enabled: access.state.status === 'ready' && !allowed,
     retry: false,
   }, access.safeClient)
-  const preferred = usePortalLocaleState(full.data)
-  const language = params.get('lang') === 'ja'
+  const explicitLanguage = params.get('lang') === 'ja'
     ? 'ja'
     : params.get('lang') === 'en'
     ? 'en'
-    : preferred.language
+    : undefined
+  const preferred = usePortalLocaleState(full.data, explicitLanguage)
+  const language = preferred.language
   const locale = useMemo(
     () => createPortalLocale(language, preferred.setLanguage, full.data?.copy),
     [language, preferred.setLanguage, full.data?.copy],
@@ -431,7 +432,10 @@ export function EmbedPage() {
             {ui('Open full portal')} <span className='sr-only'>{ui('Opens in a new tab')}</span>
             <span aria-hidden='true'>↗</span>
           </a>
-          {(!branding.layout?.footer || branding.layout.footer.poweredBy) && (
+          {(config
+            ? !branding.layout?.footer || branding.layout.footer.poweredBy
+            : document.querySelector<HTMLMetaElement>('meta[name=corpuskit-embed-credit]')
+              ?.content !== 'off') && (
             <p className='mt-5 border-t border-line pt-4 text-xs text-ink-2'>
               <a
                 className='rp-focus rp-embed-link inline-flex items-center underline'

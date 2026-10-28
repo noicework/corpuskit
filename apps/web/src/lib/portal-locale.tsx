@@ -139,16 +139,20 @@ export function AppLocaleProvider({ children }: { children: ReactNode }) {
 }
 
 /** Per-portal choices/defaults remain compatible; a deliberate app choice is also remembered. */
-export function usePortalLocaleState(config: TenantConfig | undefined): Locale {
+export function usePortalLocaleState(
+  config: TenantConfig | undefined,
+  override?: PortalLanguage,
+): Locale {
   const shared = useContext(SharedLocaleContext)
   const [choice, setChoice] = useState<{ slug: string; language: PortalLanguage } | null>(null)
   const available = config?.languagePolicy?.availableLanguages
   const preferred = shared?.preference
-  const language = choice?.slug === config?.slug && available?.includes(choice!.language)
-    ? choice!.language
-    : preferred && (!available || available.includes(preferred))
-    ? preferred
-    : config?.languagePolicy?.defaultLanguage ?? shared?.active ?? 'en'
+  const language = override ??
+    (choice?.slug === config?.slug && available?.includes(choice!.language)
+      ? choice!.language
+      : preferred && (!available || available.includes(preferred))
+      ? preferred
+      : config?.languagePolicy?.defaultLanguage ?? shared?.active ?? 'en')
   useEffect(() => {
     if (!config?.languagePolicy) return
     const saved = savedLanguage(`corpuskit-language-v1:${config.slug}`)
