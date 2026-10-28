@@ -2354,3 +2354,14 @@ including its automatic summary model, and for stopping legacy agents and extrac
 with unrelated model configurations. The request restriction complements those upstream controls.
 
 See [Answer records](ANSWER-RECORDS.md) for curator exports, retention and the server-only recorder API. The hosting control plane must add `answerRecords` to its strict erased-kind contract in the same release.
+
+
+### Portal backup recovery journal
+
+[Portal restore](RESTORE.md) reuses the retained stores above and adds no erased record kind.
+The local adapter temporarily holds pre-import file bytes in
+`DATA_DIR/portal-restore-journal.json`, alongside a transactionally committed audit receipt.
+Completion removes the journal. After interruption, startup either keeps committed files or
+restores their previous bytes and removes the journal before serving requests. Include a
+pending journal with consistent offline disk snapshots; do not delete it during recovery.
+Downloaded bundles are controlled by their recipients and remain outside portal erasure.
