@@ -130,10 +130,11 @@ Local fixture measurement on 29 October 2026, Deno 2.9.7, a shared development m
 
 | Runtime path | Fixture | ZIP bytes | Measured HTTP import |
 |---|---|---:|---:|
-| Deno DATA_DIR and SQLite | 100 sessions, 100 investigations, 100 answer records, 1,000 enrichments, 500 usage rows, 500 routing rows, 20 duplicate decisions, one evaluation set, configuration/lifecycle and seven audit events | 677,362 | 17.206 seconds |
-| Worker ingress and Durable Object SQLite adapter, locally doubled provider | 100 sessions, 100 investigations, 1,000 enrichments, 500 usage rows and configuration/lifecycle | 318,522 | 0.035 seconds |
+| Deno DATA_DIR and SQLite | 100 sessions, 100 investigations, 100 answer records, 1,000 enrichments, 500 usage rows, 500 routing rows, 20 duplicate decisions, one evaluation set, configuration/lifecycle and seven audit events | 677,362 | 5.844 seconds |
+| Worker ingress and Durable Object SQLite adapter, locally doubled provider | 100 sessions, 100 investigations, 1,000 enrichments, 500 usage rows and configuration/lifecycle | 318,522 | 0.022 seconds |
 
-The local sample ran alongside repository test suites, so filesystem contention is included.
+These samples were rechecked after integrating main `75af3d3e`. The local sample ran alongside
+repository test suites; earlier contended runs recorded 17.206 seconds.
 These are measured **portal-state restore operation times**, from the import request through
 its parsed response. They include validation and persistence. They are not a production
 Cloudflare latency measurement or an end-to-end outage RTO. The Worker drill uses a local
