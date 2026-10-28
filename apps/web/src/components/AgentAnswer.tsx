@@ -6,13 +6,13 @@ import {
   type AgentAskState,
   type AgentCitation,
   citationHref,
-  citationNumbers,
   citedSources,
   clockLabel,
   durationLabel,
   sourceKindLabel,
   splitAnswerMarkers,
 } from '../lib/agent-ask-state.ts'
+import { placeMarkersAfterPunctuation } from '../lib/answer-text.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { EvidenceDisclosure } from './AnswerStream.tsx'
 import { AlertTriangle, RotateCcw } from './icons.tsx'
@@ -23,12 +23,12 @@ import { Button } from './ui.tsx'
 export function AgentModeBadge({ state }: { state: Pick<AgentAskState, 'mode' | 'sources'> }) {
   const { ui } = usePortalLocale()
   if (state.mode === 'agent') {
-    return <span className='rp-badge rp-badge-quiet'>{ui('Retrieval agent')}</span>
+    return <span className='rp-agent-tag' data-agent-mode='agent'>{ui('Retrieval agent')}</span>
   }
   if (state.mode === 'orchestrated') {
     const count = state.sources.length
     return (
-      <span className='rp-badge rp-badge-quiet'>
+      <span className='rp-agent-tag' data-agent-mode='orchestrated'>
         {count === 1
           ? ui('Composed by CorpusKit from 1 collection')
           : ui('Composed by CorpusKit across {count} collections', { count })}
@@ -115,18 +115,28 @@ function CitationMark(
 }
 
 function CitationChip(
-  { number, citation, href }: { number: number; citation: AgentCitation; href: string | undefined },
+  { number, citation, href }: {
+    number: number
+    citation: AgentCitation
+    href: string | undefined
+  },
 ) {
   const { ui } = usePortalLocale()
   const title = citation.title.trim() || ui('Untitled passage')
   const inner = (
     <>
-      <span className='rp-agent-citation-number'>{number}</span>
-      <span className='min-w-0 max-w-[18rem] truncate text-left'>{title}</span>
+      <span
+        className='inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-2xs font-semibold'
+        style={{ backgroundColor: 'var(--rp-accent)', color: 'var(--rp-on-accent)' }}
+      >
+        {number}
+      </span>
+      <span className='flex min-w-0 flex-col leading-tight sm:max-w-[16rem]'>
+        <span className='truncate'>{title}</span>
+      </span>
     </>
   )
-  const className =
-    'rp-btn rp-btn-ghost rp-btn-sm rp-agent-target min-w-0 max-w-full gap-1.5 border border-line bg-surface-2'
+  const className = 'rp-chip rp-answer-chip h-auto py-1'
   if (!href) {
     return (
       <span
@@ -137,9 +147,11 @@ function CitationChip(
       </span>
     )
   }
-  if (href.startsWith('/')) return <Link to={href} className={className}>{inner}</Link>
+  if (href.startsWith('/')) {
+    return <Link to={href} title={title} className={className}>{inner}</Link>
+  }
   return (
-    <a href={href} target='_blank' rel='noopener noreferrer' className={className}>
+    <a href={href} target='_blank' rel='noopener noreferrer' title={title} className={className}>
       {inner}
       <span className='sr-only'>({ui('opens in a new tab')})</span>
     </a>
@@ -152,19 +164,19 @@ function CitationChip(
  * cited passages grouped by collection. The end states keep whatever arrived.
  */
 export function AgentAnswer(
-  { state, question, elapsedMs, onRetry }: {
+  { state, question, elapsedMs, numbers, onRetry }: {
     state: AgentAskState
     question: string
     elapsedMs: number
+    /** Each citation marker's display number (`citationNumbers`), shared with the rail. */
+    numbers: ReadonlyMap<string, number>
     onRetry: () => void
   },
 ) {
   const { ui, error: localError } = usePortalLocale()
   const units = { seconds: ui('s'), minutes: ui('min') }
-  const numbers = useMemo(
-    () => citationNumbers(state.text, state.citations),
-    [state.text, state.citations],
-  )
+  // Markers sit after the punctuation they follow, as every answer in the portal reads.
+  const text = useMemo(() => placeMarkersAfterPunctuation(state.text), [state.text])
   const byMarker = useMemo(
     () => new Map(state.citations.map((citation) => [citation.marker, citation])),
     [state.citations],
@@ -266,7 +278,7 @@ export function AgentAnswer(
         ? (
           <div className='rp-answer-in rp-prose mt-4 text-base text-ink sm:text-sm' data-agent-text>
             <AnswerMarkdown
-              text={state.text}
+              text={text}
               renderInline={(run, keyPrefix) => renderInline(run, renderMarker, keyPrefix)}
               bodyClassName='rp-measure leading-relaxed'
             />

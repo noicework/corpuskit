@@ -10,7 +10,7 @@ import { Button, LiveStatus } from '../components/ui.tsx'
 import { useAgentAnnouncements, useAgentAsk } from '../components/useAgentAsk.ts'
 import { getTenants } from '../api/client.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
-import { stepTotal } from '../lib/agent-ask-state.ts'
+import { citationNumbers, stepTotal } from '../lib/agent-ask-state.ts'
 import { runtimeHostPortal } from '../lib/portal-url.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
@@ -129,6 +129,10 @@ export function AgentAskPage() {
   }
 
   const started = state.status !== 'idle'
+  const numbers = useMemo(
+    () => citationNumbers(state.text, state.citations),
+    [state.text, state.citations],
+  )
   const askLabel = streaming ? ui('Stop') : ui('Ask the agent')
 
   return (
@@ -238,6 +242,7 @@ export function AgentAskPage() {
                   state={state}
                   question={agent.question}
                   elapsedMs={agent.elapsedMs}
+                  numbers={numbers}
                   onRetry={retry}
                 />
               </div>
@@ -284,7 +289,13 @@ export function AgentAskPage() {
             now={agent.elapsedMs + startedAtOf(agent)}
             total={stepTotal(state)}
           />
-          <AgentSources sources={state.sources} steps={state.steps} status={state.status} />
+          <AgentSources
+            sources={state.sources}
+            steps={state.steps}
+            status={state.status}
+            citations={state.citations}
+            numbers={numbers}
+          />
         </aside>
       </div>
     </main>

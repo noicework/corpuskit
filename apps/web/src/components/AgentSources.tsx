@@ -4,6 +4,7 @@ import type { AgentChunk, AgentSource } from '@research-portal/core'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import {
   type AgentAskStatus,
+  type AgentCitation,
   type AgentSourceGroup,
   type AgentStep,
   chunkHref,
@@ -12,7 +13,7 @@ import {
   sourceKindLabel,
   sourceState,
 } from '../lib/agent-ask-state.ts'
-import { ExternalLink } from './icons.tsx'
+import { ArrowRight, ExternalLink, FileText } from './icons.tsx'
 
 /** The reader's sentence for a source that could not be searched. */
 export function sourceFailureSentence(reason: SourceFailure, ui: (text: string) => string): string {
@@ -27,28 +28,101 @@ export function sourceFailureSentence(reason: SourceFailure, ui: (text: string) 
 }
 
 /**
- * A passage's title, linking to the document where there is somewhere to go: a portal
- * resource of this deployment, or the passage's own address (in a new tab). A federated
- * partner's passage links nowhere, by the partner's choice.
+ * One passage, in the shape the Ask page gives a retrieved source: the citation numbers it
+ * carries, the document cue, its title, the passage, and a plain "open" line. A portal resource
+ * of this deployment opens in the library; a passage with its own address opens in a new tab;
+ * a federated partner's passage opens nowhere, by the partner's choice.
  */
-export function PassageTitle(
-  { source, chunk }: {
+export function PassageCard(
+  { source, chunk, numbers }: {
     source: AgentSource
-    chunk: Pick<AgentChunk, 'title' | 'url' | 'resourceId'>
+    chunk: AgentChunk
+    /** The numbers the answer cites this passage as, in order; empty when it is not cited. */
+    numbers: readonly number[]
   },
 ) {
   const { ui } = usePortalLocale()
   const title = chunk.title.trim() || ui('Untitled passage')
   const href = chunkHref(source, chunk)
-  const className = 'rp-link-standalone rp-agent-passage-title text-sm font-medium'
-  if (!href) return <span className='text-sm font-medium text-ink'>{title}</span>
-  if (href.startsWith('/')) return <Link to={href} className={className}>{title}</Link>
+  const internal = href?.startsWith('/') === true
+  const titleClass =
+    'rp-answer-source-title rp-link-standalone min-w-0 flex-1 text-sm font-medium text-ink underline-offset-2 hover:underline'
+  const openClass =
+    'rp-answer-source-link rp-link-standalone rp-agent-target min-w-0 gap-1 text-xs font-medium hover:underline'
   return (
-    <a href={href} target='_blank' rel='noopener noreferrer' className={className}>
-      {title}
-      <ExternalLink size='sm' className='shrink-0' />
-      <span className='sr-only'>({ui('opens in a new tab')})</span>
-    </a>
+    <li
+      className='rp-agent-passage rounded-[var(--rp-radius)] border border-line bg-surface-2 p-3'
+      data-cited={numbers.length > 0 ? 'true' : undefined}
+    >
+      <div className='flex min-w-0 items-start gap-1.5'>
+        {numbers.length > 0
+          ? (
+            <span className='mt-0.5 flex shrink-0 items-center gap-1'>
+              {numbers.map((n) => (
+                <span
+                  key={n}
+                  className='inline-flex min-h-[1.25rem] min-w-[1.25rem] items-center justify-center rounded-full px-1 text-2xs font-semibold text-[var(--rp-on-accent)]'
+                  style={{ backgroundColor: 'var(--rp-accent)' }}
+                >
+                  {n}
+                </span>
+              ))}
+            </span>
+          )
+          : null}
+        <FileText size='sm' className='mt-0.5 shrink-0 text-ink-3' />
+        {href && internal
+          ? (
+            <Link to={href} className={titleClass}>
+              <span className='rp-clamp-2'>{title}</span>
+            </Link>
+          )
+          : href
+          ? (
+            <a href={href} target='_blank' rel='noopener noreferrer' className={titleClass}>
+              <span className='rp-clamp-2'>{title}</span>
+              <span className='sr-only'>({ui('opens in a new tab')})</span>
+            </a>
+          )
+          : (
+            <span className='min-w-0 flex-1 text-sm font-medium text-ink'>
+              <span className='rp-clamp-2'>{title}</span>
+            </span>
+          )}
+      </div>
+      {chunk.text.trim()
+        ? <p className='rp-clamp-3 mt-1.5 text-xs leading-relaxed text-ink-2'>{chunk.text}</p>
+        : null}
+      {href
+        ? (
+          <div className='mt-1.5'>
+            {internal
+              ? (
+                <Link
+                  to={href}
+                  className={openClass}
+                  aria-label={`${ui('Open in the library')}: ${title}`}
+                >
+                  {ui('Open in the library')}
+                  <ArrowRight size='sm' className='shrink-0' />
+                </Link>
+              )
+              : (
+                <a
+                  href={href}
+                  target='_blank'
+                  rel='noopener noreferrer'
+                  className={openClass}
+                  aria-label={`${ui('Open the document')}: ${title} (${ui('opens in a new tab')})`}
+                >
+                  {ui('Open the document')}
+                  <ExternalLink size='sm' className='shrink-0' />
+                </a>
+              )}
+          </div>
+        )
+        : null}
+    </li>
   )
 }
 
@@ -75,7 +149,7 @@ function SourceBadge(
   }
   if (state === 'searching') {
     return (
-      <span className='rp-badge rp-badge-quiet'>
+      <span className='rp-agent-tag'>
         <span
           aria-hidden='true'
           className='rp-stage-spin h-3 w-3 rounded-full border-2 border-current border-t-transparent'
@@ -86,23 +160,39 @@ function SourceBadge(
   }
   if (state === 'found' || count > 0) {
     return (
-      <span className='rp-badge rp-badge-ok'>
+      <span className='rp-agent-tag'>
         {count === 1 ? ui('1 passage') : ui('{count} passages', { count })}
       </span>
     )
   }
   return (
-    <span className='rp-badge rp-badge-quiet'>
+    <span className='rp-agent-tag'>
       {status === 'streaming' ? ui('Queued') : ui('No passages')}
     </span>
   )
 }
 
+/** The numbers the answer cites a passage as, from the citations and their display numbers. */
+function citedAs(
+  sourceId: string,
+  chunkId: string,
+  citations: readonly AgentCitation[],
+  numbers: ReadonlyMap<string, number>,
+): number[] {
+  return citations
+    .filter((citation) => citation.sourceId === sourceId && citation.chunkId === chunkId)
+    .map((citation) => numbers.get(citation.marker) ?? 0)
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b)
+}
+
 function SourceCard(
-  { group, steps, status }: {
+  { group, steps, status, citations, numbers }: {
     group: AgentSourceGroup
     steps: readonly AgentStep[]
     status: AgentAskStatus
+    citations: readonly AgentCitation[]
+    numbers: ReadonlyMap<string, number>
   },
 ) {
   const { ui } = usePortalLocale()
@@ -135,16 +225,12 @@ function SourceCard(
             ? (
               <ul className='mt-1.5 space-y-2'>
                 {lookup.chunks.map((chunk) => (
-                  <li key={chunk.id} className='rp-agent-passage'>
-                    <PassageTitle source={group.source} chunk={chunk} />
-                    {chunk.text.trim()
-                      ? (
-                        <p className='rp-clamp-2 mt-0.5 text-xs leading-relaxed text-ink-2'>
-                          {chunk.text}
-                        </p>
-                      )
-                      : null}
-                  </li>
+                  <PassageCard
+                    key={chunk.id}
+                    source={group.source}
+                    chunk={chunk}
+                    numbers={citedAs(group.source.id, chunk.id, citations, numbers)}
+                  />
                 ))}
               </ul>
             )
@@ -168,10 +254,13 @@ function SourceCard(
  * document), and a plain word when one could not be searched.
  */
 export function AgentSources(
-  { sources, steps, status, children }: {
+  { sources, steps, status, citations, numbers, children }: {
     sources: readonly AgentSourceGroup[]
     steps: readonly AgentStep[]
     status: AgentAskStatus
+    citations: readonly AgentCitation[]
+    /** Each citation marker's display number (`citationNumbers`). */
+    numbers: ReadonlyMap<string, number>
     /** Rendered under the heading, before the cards: the mode line. */
     children?: ReactNode
   },
@@ -205,7 +294,14 @@ export function AgentSources(
         : (
           <ul className='mt-3 space-y-3'>
             {sources.map((group) => (
-              <SourceCard key={group.source.id} group={group} steps={steps} status={status} />
+              <SourceCard
+                key={group.source.id}
+                group={group}
+                steps={steps}
+                status={status}
+                citations={citations}
+                numbers={numbers}
+              />
             ))}
           </ul>
         )}

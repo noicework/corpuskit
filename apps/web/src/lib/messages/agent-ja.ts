@@ -61,6 +61,8 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'partner over MCP': 'MCP経由のパートナー',
   'Asked': '質問',
   'Untitled passage': '無題の本文',
+  'Open in the library': 'ライブラリで開く',
+  'Open the document': '資料を開く',
   'Timed out': 'タイムアウト',
   'Not reached': '接続できません',
   '1 passage': '本文1件',

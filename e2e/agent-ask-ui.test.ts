@@ -61,7 +61,7 @@ describe('agent ask page', () => {
         return {
           title: document.title,
           heading: document.querySelector('h1')?.textContent,
-          mode: document.querySelector('[data-agent-answer] .rp-badge')?.textContent,
+          mode: document.querySelector('[data-agent-mode]')?.textContent,
           steps: document.querySelectorAll('[data-agent-steps] li[data-step-status]').length,
           stepStatuses: new Set(
             Array.from(document.querySelectorAll<HTMLElement>('[data-agent-steps] li'))
@@ -127,7 +127,7 @@ describe('agent ask page', () => {
         'the composed answer',
       )
       const seen = await page.evaluate(() => ({
-        mode: document.querySelector('[data-agent-answer] .rp-badge')?.textContent,
+        mode: document.querySelector('[data-agent-mode]')?.textContent,
         notice: document.querySelector<HTMLElement>('[data-agent-failed-sources]')?.innerText
           .replace(/\s+/g, ' ').trim(),
         sources: Array.from(
@@ -144,7 +144,7 @@ describe('agent ask page', () => {
           document.querySelectorAll<HTMLAnchorElement>('[data-source-id="marine"] a'),
         )
           .map((a) => a.getAttribute('href')),
-        unlinkedChips: document.querySelectorAll('[data-agent-citations] span.rp-btn').length,
+        unlinkedChips: document.querySelectorAll('[data-agent-citations] span.rp-chip').length,
         status: Array.from(document.querySelectorAll('[data-agent-page] [role=status]')).map((el) =>
           el.textContent?.trim()
         ),
