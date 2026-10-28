@@ -1,3 +1,10 @@
+import {
+  FederatedSearchStatus,
+  PartnerSearchSwitch,
+  PeerSearchResult,
+  SearchSourceBadge,
+  SearchSourceFacet,
+} from '../components/FederatedSearch.tsx'
 import { ResourceProvenanceLabel } from '../components/ResourceProvenanceLabel.tsx'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
@@ -7,7 +14,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
-import type { RetrievalMode, ScoredResource } from '@research-portal/core'
+import {
+  offersAgentAsk,
+  participatesInFederation,
+  type RetrievalMode,
+  type ScoredResource,
+} from '@research-portal/core'
 import {
   addWatch,
   deleteWatch,
@@ -188,7 +200,8 @@ function ResultCard(
 
         <div className='min-w-0 flex-1'>
           <div className='flex flex-wrap items-center justify-between gap-2'>
-            <div className='flex flex-wrap items-center gap-1.5'>
+            <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+              <SearchSourceBadge resource={resource} />
               <ResourceProvenanceLabel resourceId={resource.id} />
               <span className='rp-tag'>{typeLabel(resource.type, ui)}</span>
               {
@@ -587,6 +600,10 @@ export function SearchPage() {
   const canGenerate = permits('portal.generate')
   const [searchParams, setSearchParams] = useSearchParams()
   const q = searchParams.get('q') ?? ''
+  const offersPartners = offersAgentAsk(config) && participatesInFederation(config) &&
+    (config.federation?.peers?.length ?? 0) > 0
+  const federated = offersPartners && searchParams.get('federated') === '1'
+  const selectedSource = federated ? searchParams.get('source') ?? '' : ''
   const mode: RetrievalMode = (() => {
     const raw = searchParams.get('mode')
     return raw === 'semantic' || raw === 'keyword' ? raw : 'hybrid'
@@ -699,12 +716,14 @@ export function SearchPage() {
       mode,
       selectedTopics.join(','),
       selectedKinds.join(','),
+      federated,
     ],
     queryFn: () =>
       searchTenantFull(config.slug, q, {
         mode,
         topicIds: selectedTopics,
         kindIds: selectedKinds,
+        federated,
       }),
     enabled: q.trim().length > 0,
   })
@@ -728,9 +747,12 @@ export function SearchPage() {
   // this narrows the already-fetched, calibrated results client-side.
   const filteredResults = useMemo(() => {
     if (!results) return []
+    if (federated) {
+      return results.resources.filter((r) => !selectedSource || r.source?.id === selectedSource)
+    }
     if (strength !== 'strong') return results.resources
     return results.resources.filter((r) => r.relevance >= STRONG_MATCH_THRESHOLD)
-  }, [results, strength])
+  }, [results, strength, federated, selectedSource])
 
   // The AI Answer panel's citations/sources, reported up so the results list
   // can badge cited cards and power the Resources/Citations toggle. Reset to
@@ -779,6 +801,16 @@ export function SearchPage() {
   )
 
   const activeFilters = useMemo(() => {
+    if (federated) {
+      return selectedSource
+        ? [{
+          key: 'source',
+          label: results?.sources?.find((source) => source.id === selectedSource)?.label ??
+            selectedSource,
+          onRemove: () => updateParams({ source: null }),
+        }]
+        : []
+    }
     const chips: { key: string; label: string; onRemove: () => void }[] = selectedTopics.map(
       (id) => ({
         key: `topic-${id}`,
@@ -802,7 +834,16 @@ export function SearchPage() {
     }
     return chips
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTopics, selectedKinds, strength, config.topics, config.branding.organisation])
+  }, [
+    selectedTopics,
+    selectedKinds,
+    strength,
+    config.topics,
+    config.branding.organisation,
+    federated,
+    selectedSource,
+    results,
+  ])
 
   // Run a search. `withAnswer` picks the intent: true for the
   // default answered search (results + streamed cited answer), false for the
@@ -932,11 +973,11 @@ export function SearchPage() {
         />
 
         <div
-          className='rp-seg'
+          className={federated ? 'hidden' : 'rp-seg'}
           role='group'
           aria-label={ui('Retrieval mode')}
         >
-          {MODES.map((option) => {
+          {!federated && MODES.map((option) => {
             const active = mode === option.value
             return (
               <button
@@ -959,6 +1000,18 @@ export function SearchPage() {
           * too. (The class was on it and inert - .rp-chip sets its own display
           * and beat the utility - so dropping it changes nothing but the lie.) */
         }
+        {offersPartners
+          ? (
+            <PartnerSearchSwitch
+              checked={federated}
+              onChange={(checked) => {
+                updateParams({ federated: checked ? '1' : null, source: null })
+                setResultView('resources')
+              }}
+            />
+          )
+          : null}
+
         <Button
           variant='outline'
           size='sm'
@@ -1035,7 +1088,7 @@ export function SearchPage() {
                   {ui('In your Watches')}
                 </span>
               )
-              : canWatch
+              : canWatch && !federated
               ? (
                 <Button
                   variant='outline'
@@ -1053,6 +1106,16 @@ export function SearchPage() {
           )
           : null}
       </div>
+
+      {hasQuery && federated
+        ? (
+          <FederatedSearchStatus
+            results={results}
+            loading={isLoading}
+            count={filteredResults.length}
+          />
+        )
+        : null}
 
       {hasQuery && intents.length > 0 && route
         ? (
@@ -1090,6 +1153,16 @@ export function SearchPage() {
       {hasQuery && answerMode && (results !== undefined || isError)
         ? (
           <div className='mt-6'>
+            {federated
+              ? (
+                <p className='mb-2 text-sm text-ink-3'>
+                  {ui(
+                    'The answer below uses {source}. Partner passages are included in the search results.',
+                    { source: config.branding.productName },
+                  )}
+                </p>
+              )
+              : null}
             <SearchAnswer slug={config.slug} query={q} onResult={setAnswer} />
           </div>
         )
@@ -1102,7 +1175,16 @@ export function SearchPage() {
       >
         <aside className={filtersOpen ? 'block' : 'hidden'}>
           <div className='rp-card p-4 lg:sticky lg:top-[calc(var(--rp-header-h,_4rem)_+_var(--spacing)_*_4)]'>
-            {config.topics.length > 0
+            {federated
+              ? (
+                <SearchSourceFacet
+                  results={results}
+                  selected={selectedSource}
+                  onChange={(source) => updateParams({ source: source || null })}
+                />
+              )
+              : null}
+            {!federated && config.topics.length > 0
               ? (
                 <div>
                   <div className='flex items-center justify-between gap-2'>
@@ -1151,7 +1233,7 @@ export function SearchPage() {
               )
               : null}
 
-            {kindIds.length > 0
+            {!federated && kindIds.length > 0
               ? (
                 <div className={config.topics.length > 0 ? 'mt-5 border-t border-line pt-4' : ''}>
                   <div className='flex items-center justify-between gap-2'>
@@ -1200,49 +1282,57 @@ export function SearchPage() {
               )
               : null}
 
-            <div
-              className={(config.topics.length > 0 || kindIds.length > 0)
-                ? 'mt-5 border-t border-line pt-4'
-                : ''}
-            >
-              <p className='rp-eyebrow text-ink-3'>{ui('Match strength')}</p>
-              <div
-                className='rp-seg mt-2.5'
-                role='group'
-                aria-label={ui('Match strength')}
-              >
-                {STRENGTH_OPTIONS.map((option) => {
-                  const active = strength === option.value
-                  return (
-                    <button
-                      key={option.value}
-                      type='button'
-                      aria-pressed={active}
-                      onClick={() => setStrength(option.value)}
-                      className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
-                    >
-                      {ui(option.label)}
-                    </button>
-                  )
-                })}
-              </div>
-              <p className='mt-1.5 text-xs text-ink-3'>
-                {ui('Strong matches score 60% or higher on the calibrated relevance scale.')}
-              </p>
-            </div>
+            {!federated
+              ? (
+                <div
+                  className={(config.topics.length > 0 || kindIds.length > 0)
+                    ? 'mt-5 border-t border-line pt-4'
+                    : ''}
+                >
+                  <p className='rp-eyebrow text-ink-3'>{ui('Match strength')}</p>
+                  <div
+                    className='rp-seg mt-2.5'
+                    role='group'
+                    aria-label={ui('Match strength')}
+                  >
+                    {STRENGTH_OPTIONS.map((option) => {
+                      const active = strength === option.value
+                      return (
+                        <button
+                          key={option.value}
+                          type='button'
+                          aria-pressed={active}
+                          onClick={() => setStrength(option.value)}
+                          className='rp-seg-item rp-btn-sm min-w-[2.75rem]'
+                        >
+                          {ui(option.label)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className='mt-1.5 text-xs text-ink-3'>
+                    {ui('Strong matches score 60% or higher on the calibrated relevance scale.')}
+                  </p>
+                </div>
+              )
+              : null}
           </div>
         </aside>
 
         <div className='min-w-0'>
-          <WatchStrip
-            watches={watches ?? []}
-            canWatch={canWatch}
-            onRun={runWatch}
-            onDelete={(id) => {
-              if (permits('portal.watch')) deleteWatchMutation.mutate(id)
-            }}
-          />
-          {hasQuery
+          {!federated
+            ? (
+              <WatchStrip
+                watches={watches ?? []}
+                canWatch={canWatch}
+                onRun={runWatch}
+                onDelete={(id) => {
+                  if (permits('portal.watch')) deleteWatchMutation.mutate(id)
+                }}
+              />
+            )
+            : null}
+          {hasQuery && !federated
             ? (
               <p className='-mt-2 mb-4 text-xs text-ink-3'>
                 {ui('Watches are re-checked daily - a dot appears here when results change.')}
@@ -1412,10 +1502,14 @@ export function SearchPage() {
                           )
                           : (
                             <p className='text-xs font-medium text-ink-3'>
-                              {ui('Every match, most relevant first')}
+                              {ui(
+                                federated
+                                  ? 'Matches from each collection in turn'
+                                  : 'Every match, most relevant first',
+                              )}
                             </p>
                           )}
-                        {canGenerate
+                        {canGenerate && !federated
                           ? (
                             <Button
                               variant='ghost'
@@ -1452,15 +1546,19 @@ export function SearchPage() {
                             {(resultView === 'citations' ? citedResults : filteredResults).map((
                               resource,
                             ) => (
-                              <ResultCard
-                                key={resource.id}
-                                resource={resource}
-                                slug={config.slug}
-                                query={trimmedQuery}
-                                kindLabel={kindLabel}
-                                citedIndex={citationIndexByResource.get(resource.id)}
-                                lookup={lookupOnly}
-                              />
+                              resource.source?.kind === 'peer'
+                                ? <PeerSearchResult key={resource.id} resource={resource} />
+                                : (
+                                  <ResultCard
+                                    key={resource.id}
+                                    resource={resource}
+                                    slug={config.slug}
+                                    query={trimmedQuery}
+                                    kindLabel={kindLabel}
+                                    citedIndex={citationIndexByResource.get(resource.id)}
+                                    lookup={lookupOnly}
+                                  />
+                                )
                             ))}
                           </div>
                         )}
