@@ -3,7 +3,8 @@ export type AccountMenuTabDirection = 'forward' | 'backward'
 type MenuTriggerAttributes = {
   'aria-haspopup': 'menu'
   'aria-expanded': boolean
-  'aria-controls': string
+  /** Only while the menu is mounted: a reference to an absent id is broken (WCAG 4.1.2). */
+  'aria-controls'?: string
 }
 
 type StandardTriggerAttributes = {
@@ -24,7 +25,7 @@ export function accountTriggerAttributes(
     ? {
       'aria-haspopup': 'menu',
       'aria-expanded': open,
-      'aria-controls': menuId,
+      ...(open ? { 'aria-controls': menuId } : {}),
     }
     : { 'aria-haspopup': 'dialog' }
 }
