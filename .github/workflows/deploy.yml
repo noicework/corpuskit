@@ -39,6 +39,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+          # The lock-verified DENO_DIR cache described in ci.yml.
+          cache: true
 
       - name: Install build tooling
         env:
@@ -68,6 +70,54 @@ jobs:
       - name: Validate Wrangler package
         run: npx -y wrangler@4.127.1 deploy --config wrangler.jsonc --dry-run
 
+      - name: Preserve deployment package
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpuskit-cloudflare-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 2
+          path: |
+            apps/web/dist
+            dist/cloudflare/worker.js
+
+  e2e:
+    # The browser E2E suite in parallel shards, as in ci.yml. Nothing deploys
+    # until every shard passes: deploy-demo needs this job and production
+    # needs deploy-demo.
+    name: Browser E2E persona journeys (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The only matrix dimension, so strategy.job-total is the shard count.
+        shard: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Install build tooling
+        env:
+          ESBUILD_VERSION: 0.28.2
+          TAILWINDCSS_VERSION: 4.3.3
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWINDCSS_VERSION}/tailwindcss-linux-x64" \
+            -o /usr/local/bin/tailwindcss
+          chmod +x /usr/local/bin/tailwindcss
+          { curl -fsSL --retry 3 --retry-all-errors \
+              "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+              -o /tmp/esbuild.tgz \
+            && tar -xzf /tmp/esbuild.tgz -C /tmp \
+            && sudo mv /tmp/package/bin/esbuild /usr/local/bin/esbuild ; } \
+          || curl -fsSL --retry 3 --retry-all-errors \
+              "https://unpkg.com/@esbuild/linux-x64@${ESBUILD_VERSION}/bin/esbuild" \
+              -o /usr/local/bin/esbuild
+          sudo chmod +x /usr/local/bin/esbuild
+
       - name: Cache Chromium (astral/e2e)
         uses: actions/cache@v4
         with:
@@ -81,17 +131,12 @@ jobs:
           # GitHub-hosted runners do not expose Chromium's setuid sandbox.
           # Astral appends this to the browser process it launches in CI.
           ASTRAL_BIN_ARGS: --no-sandbox
-        run: deno task test:e2e
-
-      - name: Preserve deployment package
-        uses: actions/upload-artifact@v4
-        with:
-          name: corpuskit-cloudflare-${{ github.sha }}
-          if-no-files-found: error
-          retention-days: 2
-          path: |
-            apps/web/dist
-            dist/cloudflare/worker.js
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        # test:e2e ignoring the other shards' files; see ci.yml.
+        run: |
+          ignore=$(deno run --allow-read=e2e e2e/support/shard.ts ignore "$SHARD" "$SHARDS")
+          deno task test:e2e "--ignore=$ignore"
 
   deploy:
     name: Deploy to Cloudflare Workers
@@ -180,7 +225,7 @@ jobs:
 
   deploy-demo:
     name: Deploy documentation demo
-    needs: gate
+    needs: [gate, e2e]
     if: needs.gate.outputs.deployable == 'true'
     runs-on: ubuntu-latest
     environment: production
