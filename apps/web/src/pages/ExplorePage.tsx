@@ -15,6 +15,7 @@ import { ArrowRight, Library, MessageSquare, Network, Search } from '../componen
 import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { RegionMap, REGIONS } from '../components/RegionMap.tsx'
+import { SearchSuggestPanel, useSearchSuggest } from '../components/SearchSuggest.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 
@@ -86,6 +87,7 @@ export function Hero({
   const chips = hero?.questions ??
     config.suggestedQuestions.slice(0, 3).map((question) => question.text)
   const heroImage = hero?.image?.url ? hero.image : undefined
+  const suggest = useSearchSuggest({ config, query, setQuery, primary: 'ask', onAsk })
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -161,16 +163,15 @@ export function Hero({
                   id='explore-search'
                   ref={inputRef}
                   type='text'
-                  autoComplete='off'
+                  {...suggest.inputProps}
                   placeholder={isAcmd ? ui('Ask a question') : undefined}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
                   className='min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] min-w-0 flex-1 border-0 bg-transparent px-2 py-2 text-base text-ink focus:outline-none'
                 />
                 <Button type='submit' size='lg' className='shrink-0 self-stretch font-semibold'>
                   {ui('Ask')}
                 </Button>
               </div>
+              <SearchSuggestPanel state={suggest} config={config} />
             </div>
           </form>
 
@@ -182,9 +183,10 @@ export function Hero({
                     key={`${index}-${text}`}
                     type='button'
                     onClick={() => onAsk(text)}
-                    className='rp-pages-hero-chip rp-focus-inverse min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] rounded-[var(--rp-radius-chip)] border border-[var(--rp-on-hero)]/30 px-3 py-2 text-left text-sm text-[var(--rp-on-hero)] backdrop-blur-sm transition-colors duration-150'
+                    className='rp-pages-hero-chip rp-focus-inverse min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] rounded-[var(--rp-radius-input)] py-2 pl-3.5 pr-3 text-left text-sm'
                   >
-                    {text}
+                    <span className='min-w-0'>{text}</span>
+                    <ArrowRight size='sm' className='rp-pages-hero-chip-arrow shrink-0' />
                   </button>
                 ))}
               </div>
