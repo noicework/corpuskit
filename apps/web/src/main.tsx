@@ -27,6 +27,7 @@ import { TaxonomyPage } from './pages/TaxonomyPage.tsx'
 import { EntityPage } from './pages/EntityPage.tsx'
 import { NotFoundPage, RootNotFound } from './pages/NotFoundPage.tsx'
 import { AppLocaleProvider, PortalLocaleContext } from './lib/portal-locale.tsx'
+import { watchTextSpacing } from './lib/text-spacing.ts'
 
 /** Last line of defence: a render error shows a recoverable message, never a blank page. */
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -63,6 +64,9 @@ const container = document.getElementById('root')
 if (!container) {
   throw new Error('Root element #root not found')
 }
+
+// Clamped card text lets go while the reader's own text spacing applies (WCAG 1.4.12).
+watchTextSpacing()
 
 createRoot(container).render(
   <StrictMode>

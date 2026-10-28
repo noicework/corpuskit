@@ -70,9 +70,26 @@ export function AccessUnavailable({ failedRead = false, suspended = false }: {
   const anonymous = state.session?.authenticated === false
   const heading = useRef<HTMLHeadingElement>(null)
   const [profile, setProfile] = useState(false)
+  const outcome = loading
+    ? 'loading'
+    : failed
+    ? 'failed'
+    : paused
+    ? 'paused'
+    : anonymous && slug
+    ? 'sign-in'
+    : 'denied'
+  const shown = useRef<string | null>(null)
   useEffect(() => {
-    heading.current?.focus()
-  }, [loading, failed, safe.data])
+    // The heading takes focus when the gate settles on an outcome the person must act on, and
+    // again only when that outcome changes. Not while access is only being checked: the status
+    // line announces that, and a check on returning to the page would otherwise take focus every
+    // time. Nor when portal metadata later renames the same outcome, which would pull a keyboard
+    // user back from the sign-in button they had reached.
+    const previous = shown.current
+    shown.current = outcome
+    if (outcome !== 'loading' && outcome !== previous) heading.current?.focus()
+  }, [outcome])
   const title = loading
     ? ui('Checking access...')
     : failed
