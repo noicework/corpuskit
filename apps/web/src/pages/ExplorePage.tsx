@@ -182,7 +182,7 @@ export function Hero({
                     key={`${index}-${text}`}
                     type='button'
                     onClick={() => onAsk(text)}
-                    className='rp-pages-hero-chip rp-focus-inverse min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] rounded-[var(--rp-radius-chip)] py-2 pl-3.5 pr-3 text-left text-sm'
+                    className='rp-pages-hero-chip rp-focus-inverse min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] rounded-[var(--rp-radius-input)] py-2 pl-3.5 pr-3 text-left text-sm'
                   >
                     <span className='min-w-0'>{text}</span>
                     <ArrowRight size='sm' className='rp-pages-hero-chip-arrow shrink-0' />

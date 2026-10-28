@@ -1,14 +1,15 @@
 /* Pages component styles. */
 
 /* The hero's suggested questions: a light chip of the surface, nearly opaque so a hero gradient
- * or photograph cannot muddy the ink, with a 1px edge in the hero field's own edge token. That
- * token is the house field edge where the surface already stands out from the hero, and the
- * hero's text colour where it does not, so the chip keeps a 3:1 outline on every palette. */
+ * or photograph cannot muddy the ink, with a 1px edge that keeps a 3:1 outline on every palette.
+ * The edge is the hero field's own: the house field edge where the surface already stands out
+ * from the hero, else the hero's text colour - unless the hero is tinted by the accent, where a
+ * deepened accent reads at 3:1 and is lighter than near-black (lib/theme.ts accentMarkVars). */
 .rp-pages-hero-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  border: 1px solid var(--rp-hero-field-edge);
+  border: 1px solid var(--rp-hero-chip-edge, var(--rp-hero-field-edge));
   background: color-mix(in srgb, var(--rp-surface) 92%, transparent);
   color: var(--rp-ink);
   box-shadow: var(--rp-shadow-sm);
