@@ -290,6 +290,16 @@ export function AgentAskPage() {
                 </ul>
               </section>
             )}
+
+          <div className='mt-8'>
+            <AgentSources
+              sources={state.sources}
+              steps={state.steps}
+              status={state.status}
+              citations={state.citations}
+              numbers={numbers}
+            />
+          </div>
         </div>
 
         <aside
@@ -302,13 +312,6 @@ export function AgentAskPage() {
             status={state.status}
             now={agent.elapsedMs + startedAtOf(agent)}
             total={stepTotal(state)}
-          />
-          <AgentSources
-            sources={state.sources}
-            steps={state.steps}
-            status={state.status}
-            citations={state.citations}
-            numbers={numbers}
           />
         </aside>
       </div>

@@ -300,7 +300,7 @@ export function AgentSources(
           </p>
         )
         : (
-          <ul className='mt-3 space-y-3'>
+          <ul className='mt-3 grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-3'>
             {sources.map((group) => (
               <SourceCard
                 key={group.source.id}
