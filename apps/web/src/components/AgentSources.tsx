@@ -229,7 +229,7 @@ function SourceCard(
             : null}
           {lookup.chunks.length > 0
             ? (
-              <ul className='mt-1.5 space-y-2'>
+              <ul className='mt-1.5 grid items-start gap-3 md:grid-cols-2 2xl:grid-cols-3'>
                 {lookup.chunks.map((chunk) => (
                   <PassageCard
                     key={chunk.id}
@@ -300,7 +300,7 @@ export function AgentSources(
           </p>
         )
         : (
-          <ul className='mt-3 grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-3'>
+          <ul className='mt-3 space-y-4'>
             {sources.map((group) => (
               <SourceCard
                 key={group.source.id}
