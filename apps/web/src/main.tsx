@@ -1,3 +1,4 @@
+import { AnswerRecordPage } from './pages/AnswerRecordPage.tsx'
 import { Component, type ContextType, type ReactNode, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
@@ -115,6 +116,7 @@ createRoot(container).render(
                 <Route path='search' element={<SearchPage />} />
                 <Route path='library' element={<LibraryPage />} />
                 <Route path='library/:id' element={<ResourceDetailPage />} />
+                <Route path='answer-records/:id' element={<AnswerRecordPage />} />
                 <Route path='ask/*' element={<AskPage />} />
                 <Route path='investigations' element={<InvestigationsPage />} />
                 <Route path='investigations/:id' element={<InvestigationDetailPage />} />

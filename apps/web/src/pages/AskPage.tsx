@@ -1,3 +1,4 @@
+import { AnswerRecordLink } from '../components/AnswerRecordLink.tsx'
 import { portalError } from '../lib/locale-messages.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
@@ -122,6 +123,7 @@ type ChatMessage = {
   /** No citation could be tied to a passage; the sources are the ones consulted (D8-01). */
   unlinked?: boolean
   /** Platform learning id for this answer - target for feedback. */
+  answerRecordId?: string
   learningId?: string
   feedbackGood?: boolean
   feedbackSubmitted?: boolean
@@ -211,6 +213,9 @@ function migrateMessage(raw: unknown): ChatMessage {
     pending: false,
     interpretedQuery: typeof message?.interpretedQuery === 'string'
       ? message.interpretedQuery
+      : undefined,
+    answerRecordId: typeof message?.answerRecordId === 'string'
+      ? message.answerRecordId
       : undefined,
     learningId: typeof message?.learningId === 'string' ? message.learningId : undefined,
     feedbackGood: typeof message?.feedbackGood === 'boolean' ? message.feedbackGood : undefined,
@@ -1402,7 +1407,10 @@ function AnswerCard({
                   : null}
               </div>
             </div>
-            <div className='mt-2'>{secondaryTools}</div>
+            <div className='mt-2 flex flex-wrap items-center gap-2'>
+              {secondaryTools}
+              <AnswerRecordLink slug={slug} answerId={message.answerRecordId} />
+            </div>
             <FeedbackStatusMessage status={feedbackStatus} />
             {canAsk
               ? (
@@ -2405,6 +2413,9 @@ export function AskPage() {
             case 'quality':
             case 'audit':
               update((message) => applyAnswerEvent(message, event))
+              break
+            case 'answer-record':
+              update((message) => ({ ...message, answerRecordId: event.answerId }))
               break
             case 'learning':
               update((message) => ({ ...message, learningId: event.id }))
