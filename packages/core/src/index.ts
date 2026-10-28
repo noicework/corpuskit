@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
+import { FederationConfigSchema } from './agent-ask.ts'
 
 // ---------------------------------------------------------------------------
 // Tenant configuration - the single document that drives the whole portal UI.
@@ -471,6 +472,18 @@ export const TenantConfigSchema = z.object({
    */
   regionalDiscovery: z.boolean().optional(),
   /**
+   * Whether the portal offers agent ask: a retrieval agent's answer streamed step by step
+   * (docs/AGENT-ASK.md). Opt-in: only true offers it; absent or false and its route answers as
+   * if it did not exist. Set through `PATCH /api/admin/tenants/:slug`.
+   */
+  agentAsk: z.boolean().optional(),
+  /**
+   * Federation (docs/AGENT-ASK.md): the partner collections the portal's composed answers also
+   * search, and whether the portal takes part in federated answers. Set through
+   * `PATCH /api/admin/tenants/:slug`; peer keys go through their own operator route.
+   */
+  federation: FederationConfigSchema.optional(),
+  /**
    * Whether readers can send the portal team feedback from the header. Opt-in: only true turns
    * it on, through `PATCH /api/admin/tenants/:slug`. The control shows, and the route answers,
    * only where the deployment also has somewhere to deliver it (`siteFeedbackNotifier`); readers
@@ -752,6 +765,8 @@ export const ResourceSummarySchema = z.object({
    * a route that recreates the resource keeps it hidden.
    */
   hidden: z.literal(true).optional(),
+  /** Labelled `federation/exclude`: never leaves its portal in a federated answer. */
+  federationExcluded: z.literal(true).optional(),
 })
 
 // ---------------------------------------------------------------------------
@@ -1463,6 +1478,7 @@ export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'
 export * from './layout.ts'
+export * from './agent-ask.ts'
 export * from './duplicates.ts'
 
 export * from './answer-record.ts'

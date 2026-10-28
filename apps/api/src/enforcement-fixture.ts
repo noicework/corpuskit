@@ -31,6 +31,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['ALL', '/t/*', 'portal.read', 'viewer'],
   ['GET', '/api/tenants', 'portal.read', 'viewer'],
   ['POST', '/api/ask-estate', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
+  ['POST', '/api/ask-agent', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['GET', '/api/t/:slug/config', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/branding/:kind', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'viewer'],
@@ -57,6 +58,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['GET', '/api/t/:slug/graph', 'portal.read', 'viewer'],
   ['POST', '/api/t/:slug/ask', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['POST', '/api/t/:slug/docs/ask', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
+  ['POST', '/api/t/:slug/ask-agent', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['POST', '/api/t/:slug/route', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['POST', '/api/t/:slug/feedback', 'portal.ask', 'viewer', {
     learningId: 'learning-123',
@@ -165,6 +167,7 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
     'GET /api/admin/t/:slug/configuration',
     'POST /api/admin/t/:slug/knowledge-box',
     'DELETE /api/admin/t/:slug/knowledge-box',
+    'PUT /api/admin/t/:slug/federation/peers/:peerId/key',
     'PATCH /api/admin/t/:slug/access',
     'GET /api/admin/t/:slug/members',
     'POST /api/admin/t/:slug/members',
@@ -354,6 +357,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       '/t/*',
       '/api/tenants',
       '/api/ask-estate',
+      '/api/ask-agent',
       '/api/t/:slug/config',
       '/api/estate/mcp',
     ].includes(template)
@@ -419,6 +423,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         graph: 'graphData',
         ask: 'ask',
         'docs/ask': 'ask',
+        'ask-agent': 'agentAsk',
         feedback: 'feedback',
         generate: 'askStructured',
         summarize: 'summarize',
@@ -430,7 +435,11 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       if (suffix === 'resources/:id/questions') {
         expect(JSON.parse(result)).toEqual({ questions: ['Seeded question?'] })
       } else {
-        const expected = template === '/api/ask-estate' ? 'ask' : operations[suffix]
+        const expected = template === '/api/ask-estate'
+          ? 'ask'
+          : template === '/api/ask-agent'
+          ? 'agentAsk'
+          : operations[suffix]
         expect(expected, `missing dispatch assertion ${template}`).toBeDefined()
         expect([...calls, ...f.providerCalls.map((c) => c.method)], template).toContain(expected)
       }
@@ -479,7 +488,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       const safe = JSON.stringify(await (await f.requestAs(f.unassigned, path)).json())
       expect(safe).not.toContain('"slug":"a"')
     }
-    if (template === '/api/ask-estate') {
+    if (template === '/api/ask-estate' || template === '/api/ask-agent') {
       const before = f.providerCalls.length
       const denied = await f.requestAs(f.unassigned, path, {
         ...init,
@@ -640,7 +649,23 @@ export function createEnforcementFixture(
   for (const accessMode of ['public', 'authenticated', 'restricted'] as const) {
     for (const suffix of ['a', 'b']) {
       const slug = accessMode === 'restricted' ? suffix : `${accessMode}-${suffix}`
-      stores.tenants.seed({ ...tenantConfig('marine')!, slug, accessMode })
+      // Agent ask opted in, so its route reaches the provider like every other ask, with one
+      // synthetic federation peer so its key route has a peer to store a key for.
+      stores.tenants.seed({
+        ...tenantConfig('marine')!,
+        slug,
+        accessMode,
+        agentAsk: true,
+        federation: {
+          peers: [{
+            id: 'fixture-peer',
+            label: 'Fixture partner',
+            kind: 'arag-kb',
+            zone: 'fixture-zone',
+            kbId: 'fixture-box',
+          }],
+        },
+      })
     }
   }
   stores.tenants.seed({ ...tenantConfig('marine')!, slug: 'disabled', accessMode: 'public' })
@@ -1022,6 +1047,9 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
     url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
     token: 'fixture-service-account-token',
   }],
+  ['PUT', 'federation/peers/:peerId/key', 'bindings.write', {
+    token: 'fixture-peer-service-account-token',
+  }],
 ]
 const curatorPermissions = new Set<Permission>([
   'content.write',
@@ -1337,6 +1365,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           .replace(':kind', 'logo')
           .replace(':name', 'banner')
           .replace(':hostname', 'research.example.org')
+          .replace(':peerId', 'fixture-peer')
           .replace(
             ':id',
             suffix.startsWith('answer-records')

@@ -155,7 +155,9 @@ const READ_ONLY_EXEMPT = new Set([
   'POST /api/t/:slug/followups',
   'POST /api/t/:slug/ask',
   'POST /api/t/:slug/docs/ask',
+  'POST /api/t/:slug/ask-agent',
   'POST /api/ask-estate',
+  'POST /api/ask-agent',
   'ALL /api/t/:slug/mcp',
   'ALL /api/estate/mcp',
   // Revoking access; granting or changing it is refused.
@@ -919,7 +921,9 @@ Deno.test('enriching one resource refuses to store its result once the portal is
 const ASKS_COUNTED = new Set([
   'POST /api/t/:slug/ask',
   'POST /api/t/:slug/docs/ask',
+  'POST /api/t/:slug/ask-agent',
   'POST /api/ask-estate',
+  'POST /api/ask-agent',
   'MCP answer_question',
   'MCP answer_estate',
   'POST /api/t/:slug/generate',

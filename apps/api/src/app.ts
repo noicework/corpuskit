@@ -111,6 +111,7 @@ import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
 import type { RbacState } from './rbac-state.ts'
 import {
+  AgentAskRequestSchema,
   canAssignPalette,
   ColourSchemeIdSchema,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -122,13 +123,17 @@ import {
   enrichmentJsonSchema,
   EnrichmentSchema,
   ExtractionRulesSchema,
+  type FederationPeer,
+  FederationSettingsSchema,
   GenerateKindSchema,
   LAYOUT_IMAGE_NAME,
   type LayoutImage,
   layoutImageNames,
   mapLayoutImages,
   MAX_LAYOUT_IMAGES,
+  offersAgentAsk,
   PaletteChoiceSchema,
+  participatesInFederation,
   type PortalLayout,
   PortalLayoutSchema,
   ShapeIdSchema,
@@ -137,6 +142,7 @@ import {
   TypographyChoiceSchema,
 } from '@research-portal/core'
 import type {
+  AgentAskRequest,
   AskEvent,
   Citation,
   FacetCounts,
@@ -148,16 +154,20 @@ import type {
   TenantConfig,
 } from '@research-portal/core'
 import {
+  AgentAskError,
   AragApiError,
   type AragProvider,
   KbClient,
   KnowledgeBoxNotConnectedError,
   looksLikeReferenceChunk,
   parseKbUrl,
+  PeerError,
   type RetrievalProvider,
+  searchPeer,
   type SourceContext,
 } from '@research-portal/retrieval'
-import { publicErrorMessage, publicSseEvent } from './public-error.ts'
+import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
+import { agentAnswer, type ComposeSource } from './agent-compose.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -169,7 +179,7 @@ import {
 import { tenantToday } from './tenant-time.ts'
 import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
 import { knowledgeGaps } from './knowledge-gaps.ts'
-import { BindingStore, type BindingStoreApi } from './bindings.ts'
+import { BindingStore, type BindingStoreApi, peerKeyName } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
@@ -660,6 +670,12 @@ const summarizeBodySchema = z.object({
   kind: z.enum(['simple', 'extended']).optional(),
 }).strict()
 const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) }).strict()
+/** A federation peer's service-account key, as the operator sets it. */
+const peerKeyBodySchema = z.object({ token: z.string().min(20).max(4096) }).strict()
+/** Agent ask across portals: the question, and the portals to ask, the host first. */
+const agentAskAcrossSchema = AgentAskRequestSchema.extend({
+  slugs: z.array(KeyPortalSlugSchema).min(1).max(12).optional(),
+}).strict()
 const estateAskSchema = z.object({
   query: z.string().min(1).max(2000),
   slugs: z.array(KeyPortalSlugSchema).max(100).optional(),
@@ -879,6 +895,10 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  /** Whether the portal offers agent ask (opt-in; see TenantConfigSchema). */
+  agentAsk: z.boolean().optional(),
+  /** Federation peers and participation, merged over the portal's current settings. */
+  federation: FederationSettingsSchema.optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback: z.boolean().optional(),
   /**
@@ -892,7 +912,9 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'agentAsk',
   'siteFeedback',
+  'federation',
 ])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
@@ -1148,6 +1170,12 @@ export interface BuildAppOptions {
   estateSourceTimeoutMs?: number
   /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
   rateLimitMcpAuthPerMin?: number
+  /** How long one collection's search may take in a composed agent ask (20 s by default). */
+  agentSourceTimeoutMs?: number
+  /** How long composing an agent ask's answer may take (90 s by default). */
+  agentComposeTimeoutMs?: number
+  /** The fetch federation peers are called with; the platform's own by default (tests, stub). */
+  peerFetch?: typeof fetch
 }
 
 interface RequestAuthorisation {
@@ -1155,8 +1183,14 @@ interface RequestAuthorisation {
   subActions(names: readonly string[]): Promise<RequestAuthority>
   owner(): Promise<ResearchOwner>
   aggregateAuthority(): Promise<RequestAuthority>
-  /** The selected portals the caller may use, or without a selection their directory's. */
-  aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
+  /**
+   * The selected portals the caller may use, or without a selection their directory's. `include`
+   * leaves portals out before anything is admitted (a portal outside federation takes no ask).
+   */
+  aggregate(
+    slugs?: readonly string[],
+    include?: (config: TenantConfig) => boolean,
+  ): Promise<TenantConfig[]>
   /**
    * The portals one estate MCP tool call may reach on that tool's own permission, chosen as
    * `aggregate` chooses them. Admission against the daily ask limit is left to each portal.
@@ -1537,7 +1571,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
       return await authority(scope)
     }
     /** The portals `declaration` may reach for this caller, as the cross-portal ask chooses them. */
-    const authorisedPortals = async (declaration: Declaration, slugs?: readonly string[]) => {
+    const authorisedPortals = async (
+      declaration: Declaration,
+      slugs?: readonly string[],
+      include?: (config: TenantConfig) => boolean,
+    ) => {
       const selected = await aggregateAuthority()
       const requested = slugs ? new Set(slugs) : undefined
       // Without a selection the caller gets their directory. A selection, such as the alias
@@ -1548,6 +1586,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const slug = config.slug
         if (requested && !requested.has(slug)) return false
         if (listed && !listed(config)) return false
+        if (include && !include(config)) return false
         // The portal list still shows a suspended portal, with its status, so the picker
         // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
         // be read is left out on its own.
@@ -1613,9 +1652,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
     return {
       aggregateAuthority,
-      aggregate: async (slugs) => {
+      aggregate: async (slugs, include) => {
         const declaration = operation()
-        const targets = await authorisedPortals(declaration, slugs)
+        const targets = await authorisedPortals(declaration, slugs, include)
         admitRequestAsks(c.req.raw, declaration, targets)
         return targets
       },
@@ -1624,7 +1663,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
           tool.kind !== 'mcp' || tool.aggregate !== 'authorised-portals' ||
           operation().path !== ESTATE_MCP_ROUTE
         ) return deny({ kind: 'platform' })
-        return await authorisedPortals(tool, slugs)
+        // A portal that does not take part in federated answers is not in the estate either.
+        return await authorisedPortals(tool, slugs, participatesInFederation)
       },
       declared: async () => {
         if (operation().aggregate) return aggregateAuthority()
@@ -1887,7 +1927,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Portal modes and assignments are mutable, even for currently public bytes.
     if (
       c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
-      c.req.path === '/api/ask-estate' || c.req.path === ESTATE_MCP_ROUTE
+      c.req.path === '/api/ask-estate' || c.req.path === '/api/ask-agent' ||
+      c.req.path === ESTATE_MCP_ROUTE
     ) c.header('Cache-Control', 'private, no-store')
   })
   registerInfrastructure(app, '*', async (c, next) => {
@@ -2733,9 +2774,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (safeMetadataRequests.has(c.req.raw)) return c.json(safeProjection(config))
     // Readers learn the hosting status (the SPA's read-only banner). A suspended portal
     // never gets here: its 423 carries the safe projection and status instead.
-    const { siteFeedback: _optIn, ...served } = withBrandingUrls(config)
+    const { siteFeedback: _optIn, federation, ...served } = withBrandingUrls(config)
     return c.json({
       ...served,
+      // Readers learn each peer's name and kind only: never where its collection lives.
+      ...(federation
+        ? {
+          federation: {
+            ...(federation.participates !== undefined
+              ? { participates: federation.participates }
+              : {}),
+            ...(federation.peers
+              ? {
+                peers: federation.peers.map(({ id, label, kind }) => ({ id, label, kind })),
+              }
+              : {}),
+          },
+        }
+        : {}),
       // Readers see the opt-in only where this deployment can deliver what they send.
       ...(siteFeedbackAvailable(config, opts.siteFeedbackNotifier) ? { siteFeedback: true } : {}),
       status: lifecycle.get(config.slug).status,
@@ -4168,8 +4224,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
-    // Selecting the portals admits the ask on every one of them or on none.
-    const targets = await requestAuthorisation(c).aggregate(parsed.data.slugs)
+    // Selecting the portals admits the ask on every one of them or on none. A portal that does
+    // not take part in federated answers is left out, and checked again as each answer streams.
+    const targets = await requestAuthorisation(c).aggregate(
+      parsed.data.slugs,
+      participatesInFederation,
+    )
     const fanOut = admitEstateFanOut(c, targets)
     if (!fanOut.allowed) return rateLimited(c, fanOut.retryAfterSec)
     return streamSSE(c, async (stream) => {
@@ -4196,6 +4256,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
             }, provider)
           ) {
             if (stream.aborted || c.req.raw.signal.aborted) return
+            const current = tenant(config.slug)
+            if (!current || !participatesInFederation(current)) return
             if (event.type === 'citation') record.citations += 1
             if (event.type === 'quality') record.groundedness = event.groundedness
             if (event.type === 'error') record.failed = true
@@ -5505,6 +5567,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      agentAsk,
+      federation,
       siteFeedback: siteFeedbackSetting,
       layout: _layout,
       ...branding
@@ -5512,9 +5576,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(agentAsk !== undefined ? { agentAsk } : {}),
+      ...(federation !== undefined
+        ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }
+        : {}),
       ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
+    // A participation change is recorded with its before and after (who and when are the
+    // audit event's own).
+    const behaviourDetail = {
+      changedFields: behaviourFields.join(','),
+      ...(federation?.participates !== undefined
+        ? {
+          participates: federation.participates,
+          previousParticipates: participatesInFederation(config),
+        }
+        : {}),
+    }
     const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))
     if (behaviourFields.length && appearanceFields.length) {
       await subAction(c, '/api/admin/tenants/:slug', 'tenant.appearance.update', () =>
@@ -5525,7 +5604,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
               { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
               layout,
             ),
-          }), { changedFields: behaviourFields.join(',') }), {
+          }), behaviourDetail), {
         changedFields: appearanceFields.join(','),
       })
       return c.json({ ok: true })
@@ -5537,7 +5616,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         'tenant.behaviour.update',
         () =>
           tenants.patch(config.slug, behaviour),
-        { changedFields: behaviourFields.join(',') },
+        behaviourDetail,
       )
     }
     if (appearanceFields.length) {
@@ -8350,6 +8429,201 @@ export function buildApp(opts: BuildAppOptions): Hono {
         // insights are best-effort - never fail the answer over them
       }
     }))
+  })
+
+  // Agent ask (docs/AGENT-ASK.md): a retrieval agent's answer streamed step by step, or, when the
+  // portal has no agent, the portal's own answer composed across collections. Opt-in per portal;
+  // a portal that has not opted in, or a provider that can do neither, answers exactly as a route
+  // that does not exist.
+  /**
+   * The host portal's federation peers as sources of a composed answer: none when the host does
+   * not take part in federation. Each call uses the peer's sealed key from the binding store, and
+   * is audited on the host with the peer and the time it took, never the key.
+   */
+  const peerSources = (c: Context, host: TenantConfig): ComposeSource[] => {
+    if (!participatesInFederation(host)) return []
+    const peers = (host.federation?.peers ?? []).filter((peer): peer is FederationPeer =>
+      Boolean(peer.zone && peer.kbId)
+    )
+    return peers.map((peer) => ({
+      source: {
+        id: `peer:${peer.id}`,
+        label: peer.label,
+        kind: 'peer' as const,
+        transport: peer.kind === 'arag-mcp' ? 'mcp' as const : 'kb' as const,
+      },
+      search: async (question, signal) => {
+        const started = Date.now()
+        const record = (failure?: 'timeout' | 'unauthorised' | 'error') => {
+          const context = requestContext(c.req.raw)
+          appendAudit(
+            requiredAudit(),
+            createAuditEvent({
+              requestId: context.requestId,
+              actor: context.actor ?? { kind: 'anonymous' },
+              action: 'federation.peer.call',
+              scope: { kind: 'portal', slug: host.slug },
+              target: { kind: 'request' },
+              outcome: failure ? 'failure' : 'success',
+              detail: {
+                peerId: peer.id,
+                peerKind: peer.kind,
+                durationMs: Math.max(0, Date.now() - started),
+                ...(failure ? { peerFailure: failure } : {}),
+              },
+            }, opts.now),
+          )
+        }
+        try {
+          const key = bindings.get(peerKeyName(host.slug, peer.id))
+          if (!key) throw new PeerError('unauthorised', 'No key is stored for this peer')
+          const passages = await searchPeer(peer, key.token, question, {
+            signal,
+            ...(opts.peerFetch ? { fetchImpl: opts.peerFetch } : {}),
+          })
+          record()
+          return passages.map((passage, index) => ({
+            id: `peer:${peer.id}/${passage.resourceId}/${index}`,
+            title: passage.title,
+            text: passage.text.slice(0, 1200),
+            // Off by default: a link would name the partner on a public portal.
+            ...(peer.linkOrigins && passage.originUrl ? { url: passage.originUrl } : {}),
+          }))
+        } catch (error) {
+          record(
+            signal.aborted && !(error instanceof PeerError)
+              ? 'timeout'
+              : error instanceof PeerError
+              ? error.failure
+              : 'error',
+          )
+          throw error
+        }
+      },
+    }))
+  }
+
+  const agentAskStream = (
+    c: Context,
+    host: TenantConfig,
+    portals: readonly TenantConfig[],
+    request: AgentAskRequest,
+    peers: readonly ComposeSource[] = [],
+  ) =>
+    withUtf8EventStream(streamSSE(c, async (stream) => {
+      // Ends the upstream work the moment the reader goes away, not at its next event.
+      const upstream = new AbortController()
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      const stop = () => upstream.abort()
+      stream.onAbort(stop)
+      c.req.raw.signal.addEventListener('abort', stop, { once: true })
+      operationSignals.get(c.req.raw)?.addEventListener('abort', stop, { once: true })
+      const send = (event: unknown) =>
+        stream.writeSSE({ data: JSON.stringify(publicAgentSseEvent(event, 'agent-ask')) })
+      try {
+        if (cancelled()) return
+        for await (
+          const event of agentAnswer({
+            provider,
+            host,
+            portals,
+            peers,
+            stillParticipates: (slug) => {
+              const current = tenant(slug)
+              return current !== undefined && participatesInFederation(current)
+            },
+            question: request.query,
+            ...(request.context ? { context: request.context } : {}),
+            signal: upstream.signal,
+            ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
+            ...(opts.agentComposeTimeoutMs ? { composeTimeoutMs: opts.agentComposeTimeoutMs } : {}),
+          })
+        ) {
+          if (cancelled()) return
+          await send(event)
+        }
+      } catch (err) {
+        if (cancelled()) return
+        await send(
+          err instanceof AgentAskError
+            ? { type: 'error', code: err.code, message: err.message, retryable: err.retryable }
+            : {
+              type: 'error',
+              code: 'upstream',
+              message: publicErrorMessage(err),
+              retryable: true,
+            },
+        )
+      } finally {
+        stop()
+      }
+    }))
+  const answersAgentAsk = () => Boolean(provider.agentAsk || provider.compose)
+
+  // A federation peer's read-only service-account key: sealed beside the portal's own binding
+  // (BINDING_KEY), never returned, never in the portal's configuration. Replaces any key the peer
+  // had. Nothing is called with it here: a peer key may only search.
+  app.put(
+    declaredRoute('PUT', '/api/admin/t/:slug/federation/peers/:peerId/key'),
+    async (c) => {
+      const config = tenant(c.req.param('slug'))
+      if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      const peer = config.federation?.peers?.find((item) => item.id === c.req.param('peerId'))
+      if (!peer?.zone || !peer.kbId) return adminNotFound(c)
+      bindings.assertWritable()
+      const raw = await c.req.json().catch(() => null) as { token?: unknown } | null
+      const parsed = peerKeyBodySchema.safeParse(
+        raw && typeof raw.token === 'string' ? { ...raw, token: cleanToken(raw.token) } : raw,
+      )
+      if (!parsed.success) return c.json({ error: 'invalid_key' }, 400)
+      await bindings.set(peerKeyName(config.slug, peer.id), {
+        baseUrl: `https://${peer.zone}.dp.progress.cloud/api/v1/kb/${peer.kbId}`,
+        token: parsed.data.token,
+        kbId: peer.kbId,
+      })
+      return c.json({ ok: true })
+    },
+  )
+
+  app.post(declaredRoute('POST', '/api/t/:slug/ask-agent'), expensiveRateLimit, async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!answersAgentAsk() || !offersAgentAsk(config)) return c.json({ error: 'not_found' }, 404)
+    const parsed = AgentAskRequestSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    // Each peer is one more search on the reader's behalf: it counts against the host's limits.
+    const peers = peerSources(c, config)
+    if (peers.length > 0) {
+      const admitted = admitAll(askEntries(c, peers.length, peers.map(() => config.slug)))
+      if (!admitted.allowed) return rateLimited(c, admitted.retryAfterSec)
+    }
+    return agentAskStream(c, config, [config], parsed.data, peers)
+  })
+
+  // The same answer across several portals, authorised and admitted as the federated ask is: every
+  // selected portal (or, with none named, every portal in the caller's directory) that offers
+  // agent ask is a source. The first is the host, whose agent answers when it has one.
+  app.post(declaredRoute('POST', '/api/ask-agent'), estateRateLimit, async (c) => {
+    const parsed = agentAskAcrossSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    if (!answersAgentAsk()) return c.json({ error: 'not_found' }, 404)
+    const { slugs, ...request } = parsed.data
+    const order = new Map((slugs ?? []).map((slug, index) => [slug, index]))
+    // Only portals that offer agent ask and take part in federated answers are sources.
+    const targets = (await requestAuthorisation(c).aggregate(
+      slugs,
+      (config) => offersAgentAsk(config) && participatesInFederation(config),
+    )).sort((a, b) => (order.get(a.slug) ?? 0) - (order.get(b.slug) ?? 0))
+    const host = targets[0]!
+    const peers = peerSources(c, host)
+    const fanOut = admitAll([
+      ...askEntries(c, targets.length, targets.map((config) => config.slug)),
+      ...(peers.length > 0 ? askEntries(c, peers.length, peers.map(() => host.slug)) : []),
+    ])
+    if (!fanOut.allowed) return rateLimited(c, fanOut.retryAfterSec)
+    return agentAskStream(c, host, targets, request, peers)
   })
 
   // The Help assistant: a grounded, cited answer about USING the portal,
