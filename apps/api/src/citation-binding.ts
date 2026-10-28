@@ -22,10 +22,13 @@ import {
   claimFeatures,
   extractNumbers,
   figureSupportedBy,
+  isTimepointFigure,
   normaliseFigures,
   type PreparedSource,
   prepareSource,
+  quantityPhrase,
 } from './answer-audit.ts'
+import { markedClauses } from './citation-clauses.ts'
 
 const STOPWORDS = new Set([
   'about',
@@ -624,7 +627,7 @@ const LIST_PREFIX = /^(\s*(?:[-*•]|\d{1,3}[.)])\s+)/
 // ---------------------------------------------------------------------------
 
 export interface BoundSentence {
-  /** The sentence without markers. */
+  /** The sentence or explicitly marked clause, without markers. */
   text: string
   /** Citation indices (after renumbering) the sentence is bound to. */
   bound: number[]
@@ -634,6 +637,10 @@ export interface BoundSentence {
   original?: number[]
   /** The markers sprayed at the end of the sentence's block, candidates for every sentence in it. */
   block?: number[]
+  /** How an inline clause joins the previous claim on the same line. */
+  joinBefore?: string
+  /** An authored marker run whose contributing passages jointly support the claim. */
+  collective?: boolean
 }
 
 /** One line of the bound answer: a run of sentences with its list prefix, or a line kept as is. */
@@ -691,6 +698,76 @@ export interface BindResult {
   rebound: number
 }
 
+/**
+ * A shared marker run can cite complementary passages. Check figures in each actual passage,
+ * never in concatenated text, then require the contributing passages to cover every name and
+ * figure. Names in a numerical clause need that clause's result, not just its timepoint.
+ */
+function collectiveSupport(
+  features: SentenceFeatures,
+  candidates: readonly number[],
+  prepared: ReadonlyMap<number, PreparedText>,
+  rare: readonly string[],
+  rarePairs: readonly string[],
+  score: (index: number) => number,
+): { index: number; score: number }[] | undefined {
+  if (
+    candidates.length < 2 || candidates.some((index) => !prepared.has(index)) ||
+    (features.entities.length === 0 && features.numbers.length === 0)
+  ) return undefined
+  // Union coverage must not lend a figure the name from a different source. The audit's
+  // clause locator applies these mandatory names only to the clause containing that figure.
+  const figureClaim = {
+    ...features.claim,
+    mandatory: [
+      ...new Set([...features.claim.mandatory, ...features.claim.anchors, ...features.entities]),
+    ],
+  }
+  const results = features.numbers.filter((number) => !isTimepointFigure(number))
+  const numericalClauses = results.map((number) => quantityPhrase(figureClaim, number).rawClause)
+  const contributors = candidates.flatMap((index) => {
+    const text = prepared.get(index)!
+    const numbers = features.numbers.filter((number) =>
+      figureSupportedBy(number, figureClaim, text).supported
+    )
+    const carriesResult = numbers.some((number) => results.includes(number))
+    const entities = features.entities.filter((entity) =>
+      text.lower.includes(entity) &&
+      (carriesResult || !numericalClauses.some((clause) => clause.includes(entity)))
+    )
+    // A complementary passage need not repeat the other passage's species or study name.
+    // Distinctive claim terms outside those absent names still have to match.
+    const absentEntityWords = new Set(contentWords(
+      features.entities.filter((entity) => !entities.includes(entity)).join(' '),
+    ))
+    if (results.length > 0 && !carriesResult && entities.length === 0) return []
+    if (entities.length === 0 && numbers.length === 0) return []
+    const partial = supportScore(
+      {
+        ...features,
+        entities,
+        numbers,
+        claim: {
+          ...features.claim,
+          mandatory: features.claim.mandatory.filter((name) => text.lower.includes(name)),
+        },
+      },
+      text,
+      rare.filter((word) => !absentEntityWords.has(word)),
+      rarePairs.filter((pair) => pair.split(' ').every((word) => !absentEntityWords.has(word))),
+    )
+    const strength = Math.max(score(index), partial)
+    return strength > 0 ? [{ index, score: strength }] : []
+  })
+  const texts = contributors.map(({ index }) => prepared.get(index)!)
+  return features.entities.every((entity) => texts.some((text) => text.lower.includes(entity))) &&
+      features.numbers.every((number) =>
+        texts.some((text) => figureSupportedBy(number, figureClaim, text).supported)
+      )
+    ? contributors
+    : []
+}
+
 export function bindSentences(input: BindInput): BindResult {
   const lexicon = input.lexicon ?? []
   const prepared = new Map<number, PreparedText>()
@@ -717,13 +794,10 @@ export function bindSentences(input: BindInput): BindResult {
 
   let dropped = 0
   let rebound = 0
-  const sentencesOut: {
-    text: string
-    bound: number[]
-    line: number
+  const sentencesOut: (BoundSentence & {
     original: number[]
     block: number[]
-  }[] = []
+  })[] = []
   const lines = input.text.split('\n')
   const layout: BoundLine[] = []
   // The markers of the paragraph a list hangs from: a list item with no
@@ -765,60 +839,86 @@ export function bindSentences(input: BindInput): BindResult {
     for (let i = 0; i < sentences.length; i++) {
       const sentence = sentences[i]!
       const isLast = i === sentences.length - 1
-      const ownAll = markersIn(sentence)
-      const own = isLast && sentences.length > 1
-        ? ownAll.slice(0, ownAll.length - tailMarkers.length)
-        : ownAll
-      const plain = sentence.replace(/\s*\[\d{1,3}\]/g, '').trim()
-      const features = sentenceFeatures(
-        plain,
-        lexicon,
-        input.questionEntities ?? [],
-        input.allowedTerms ?? [],
-      )
-      const rare = rareWords(features.words, allPrepared)
-      const rarePairs = rareBigrams(features.bigrams, allPrepared)
-      const candidates = BOILERPLATE.test(plain)
-        ? []
-        : [...new Set([...own, ...(sentences.length > 1 ? tailMarkers : []), ...inherited])]
+      const clauses = markedClauses(sentence)
+      const inline = clauses.length > 1
+      for (const clause of clauses) {
+        const ownAll = markersIn(sentence)
+        const own = inline
+          ? clause.markers
+          : isLast && sentences.length > 1
+          ? ownAll.slice(0, ownAll.length - tailMarkers.length)
+          : ownAll
+        const plain = clause.text
+        const features = sentenceFeatures(
+          plain,
+          lexicon,
+          input.questionEntities ?? [],
+          input.allowedTerms ?? [],
+        )
+        const rare = rareWords(features.words, allPrepared)
+        const rarePairs = rareBigrams(features.bigrams, allPrepared)
+        const candidates = BOILERPLATE.test(plain) ? [] : [
+          ...new Set([
+            ...own,
+            ...(!inline && sentences.length > 1 ? tailMarkers : []),
+            ...inherited,
+          ]),
+        ]
           .filter(usable)
-      const score = (index: number): number => {
-        const text = prepared.get(index)
-        // A citation whose text could not be fetched is unverifiable: it
-        // keeps a marker the sentence already had, never gains one.
-        if (!text) return own.includes(index) ? 0.5 : 0
-        return supportScore(features, text, rare, rarePairs, own.includes(index))
+        const score = (index: number): number => {
+          const text = prepared.get(index)
+          // A citation whose text could not be fetched is unverifiable: it
+          // keeps a marker the sentence already had, never gains one.
+          if (!text) return own.includes(index) ? 0.5 : 0
+          return supportScore(features, text, rare, rarePairs, own.includes(index))
+        }
+        let supporters = candidates.map((index) => ({ index, score: score(index) }))
+          .filter((s) => s.score > 0)
+        // A marker run closing the final sentence is also a candidate for earlier sentences
+        // under the legacy paragraph-tail rule. It still closes this clause for union support.
+        const collective = clause.markers.length > 1
+          ? collectiveSupport(
+            features,
+            candidates.filter((index) => clause.markers.includes(index)),
+            prepared,
+            rare,
+            rarePairs,
+            score,
+          )
+          : undefined
+        if (collective !== undefined) supporters = collective
+        // Only a sentence with a figure or a named entity can gain a marker it
+        // did not have: boilerplate ("verify against prescribing information")
+        // matches every drug paper's vocabulary and must never be cited.
+        const verifiable = features.numbers.length > 0 || features.entities.length > 0
+        if (supporters.length === 0 && verifiable) {
+          // Nothing the block cited supports this sentence - look across every
+          // citation the answer made, and bind only to a clear match.
+          supporters = input.citations
+            .filter((c) => usable(c.index) && !candidates.includes(c.index))
+            .map((c) => ({ index: c.index, score: score(c.index) }))
+            .filter((s) => s.score >= 0.6)
+          if (supporters.length > 0) rebound += 1
+        }
+        supporters.sort((a, b) => b.score - a.score || a.index - b.index)
+        const bound = (collective !== undefined ? supporters : supporters.slice(0, 3))
+          .map((s) => s.index).sort((a, b) => a - b)
+        const lost = new Set(
+          [...own, ...(!inline && isLast ? tailMarkers : [])].filter((n) => !bound.includes(n)),
+        )
+        dropped += lost.size
+        outSentences.push(sentencesOut.length)
+        sentencesOut.push({
+          text: plain,
+          bound,
+          line: layout.length,
+          original: [...new Set(own)],
+          // The block's tail markers are candidates for every sentence in it.
+          block: inline ? [] : tailMarkers.filter((n) => !own.includes(n)),
+          ...(clause.joinBefore !== undefined ? { joinBefore: clause.joinBefore } : {}),
+          ...(collective && collective.length > 1 ? { collective: true } : {}),
+        })
       }
-      let supporters = candidates.map((index) => ({ index, score: score(index) }))
-        .filter((s) => s.score > 0)
-      // Only a sentence with a figure or a named entity can gain a marker it
-      // did not have: boilerplate ("verify against prescribing information")
-      // matches every drug paper's vocabulary and must never be cited.
-      const verifiable = features.numbers.length > 0 || features.entities.length > 0
-      if (supporters.length === 0 && verifiable) {
-        // Nothing the block cited supports this sentence - look across every
-        // citation the answer made, and bind only to a clear match.
-        supporters = input.citations
-          .filter((c) => usable(c.index) && !candidates.includes(c.index))
-          .map((c) => ({ index: c.index, score: score(c.index) }))
-          .filter((s) => s.score >= 0.6)
-        if (supporters.length > 0) rebound += 1
-      }
-      supporters.sort((a, b) => b.score - a.score || a.index - b.index)
-      const bound = supporters.slice(0, 3).map((s) => s.index).sort((a, b) => a - b)
-      const lost = new Set(
-        [...own, ...(isLast ? tailMarkers : [])].filter((n) => !bound.includes(n)),
-      )
-      dropped += lost.size
-      outSentences.push(sentencesOut.length)
-      sentencesOut.push({
-        text: plain,
-        bound,
-        line: layout.length,
-        original: [...new Set(own)],
-        // The block's tail markers are candidates for every sentence in it.
-        block: tailMarkers.filter((n) => !own.includes(n)),
-      })
     }
     layout.push({ kind: 'sentences', prefix, sentences: outSentences })
   }
@@ -841,6 +941,8 @@ export function bindSentences(input: BindInput): BindResult {
     line: s.line,
     original: s.original,
     block: s.block,
+    ...(s.joinBefore !== undefined ? { joinBefore: s.joinBefore } : {}),
+    ...(s.collective ? { collective: true } : {}),
   }))
   return {
     text: renderBound(layout, sentences),
@@ -915,10 +1017,15 @@ export function renderBound(
     const kept = line.sentences.filter((i) => !removed.has(i))
     if (kept.length === 0) continue
     const rendered = line.prefix +
-      kept.map((i) => {
+      kept.map((i, position) => {
         const s = sentences[i]!
-        return s.bound.length > 0 ? `${s.text}${s.bound.map((n) => `[${n}]`).join('')}` : s.text
-      }).join(' ')
+        const join = position === 0 ? '' : s.joinBefore ?? ' '
+        const text = position === 0 && s.joinBefore !== undefined
+          ? s.text.replace(/^[,;:]\s*(?:(?:and|but|while|whereas)\s+)?/i, '')
+          : s.text
+        return join +
+          (s.bound.length > 0 ? `${text}${s.bound.map((n) => `[${n}]`).join('')}` : text)
+      }).join('')
     lines.push(tableRowMarkers(rendered))
   }
   // A removed list item or paragraph never leaves a double blank line behind.

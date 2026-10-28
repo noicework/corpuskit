@@ -191,6 +191,153 @@ describe('literal Japanese citation support', () => {
 })
 
 describe('bindSentences', () => {
+  const beeLexicon = [
+    'Varroa destructor',
+    'Tropilaelaps clareae',
+    'Nosema apis',
+    'N. ceranae',
+    'chalkbrood',
+    'Varroa mites',
+    'colony collapse disorder',
+  ]
+  const beeSources = new Map([
+    [1, 'Varroa destructor and Tropilaelaps clareae are major exotic threats to honey bees.'],
+    [2, 'Nosema apis and N. ceranae are diseases affecting honey bee productivity.'],
+    [4, 'Chalkbrood, Varroa mites and colony collapse disorder are threats to honey bees.'],
+  ])
+  const beeCitations = [...beeSources.keys()].map((index) => ({
+    index,
+    resourceId: `bee-${index}`,
+    title: `Bee health report ${index}`,
+  }))
+
+  it('binds the three inline marker clauses of a multi-source list independently', () => {
+    const result = bindSentences({
+      text:
+        'The Knowledge Hub sources describe Varroa destructor and Tropilaelaps clareae as major exotic threats [1], ' +
+        'Nosema apis and N. ceranae as diseases affecting productivity [2], ' +
+        'and chalkbrood, Varroa mites and colony collapse disorder as threats [4].',
+      citations: beeCitations,
+      texts: beeSources,
+      lexicon: beeLexicon,
+      allowedTerms: ['Knowledge Hub research portal'],
+    })
+    expect(result.text).toBe(
+      'The Knowledge Hub sources describe Varroa destructor and Tropilaelaps clareae as major exotic threats[1], ' +
+        'Nosema apis and N. ceranae as diseases affecting productivity[2], ' +
+        'and chalkbrood, Varroa mites and colony collapse disorder as threats.[3]',
+    )
+    expect(result.sentences.map((sentence) => sentence.bound)).toEqual([[1], [2], [3]])
+    expect(result.citations.map((citation) => citation.resourceId)).toEqual([
+      'bee-1',
+      'bee-2',
+      'bee-4',
+    ])
+    expect(result.dropped).toBe(0)
+    expect(renderBound(result.layout, result.sentences)).toBe(result.text)
+    expect(renderBound(result.layout, result.sentences, new Set([0]))).toBe(
+      'Nosema apis and N. ceranae as diseases affecting productivity[2], ' +
+        'and chalkbrood, Varroa mites and colony collapse disorder as threats.[3]',
+    )
+  })
+
+  it('keeps complementary markers closing one clause when their passages cover all its entities', () => {
+    for (const prefix of ['', 'The reports describe bee health. ']) {
+      const result = bindSentences({
+        text:
+          `${prefix}Varroa destructor and Tropilaelaps clareae are major exotic threats.[1][2][3]`,
+        citations: [1, 2, 3].map((index) => ({
+          index,
+          resourceId: `bee-${index}`,
+          title: 'Bee health',
+        })),
+        texts: new Map([
+          [1, 'Varroa destructor is a major exotic threat to honey bees.'],
+          [2, 'Tropilaelaps clareae is a major exotic threat to honey bees.'],
+          [3, 'Warm water changes oyster mortality in estuaries.'],
+        ]),
+        lexicon: beeLexicon,
+      })
+      expect(result.text).toBe(
+        `${prefix}Varroa destructor and Tropilaelaps clareae are major exotic threats.[1][2]`,
+      )
+      expect(result.citations.map((citation) => citation.resourceId)).toEqual(['bee-1', 'bee-2'])
+      expect(result.dropped).toBe(1)
+    }
+  })
+
+  it('rejects a shared clause whose entities are not covered, including names on later clauses', () => {
+    for (
+      const text of [
+        'Varroa destructor and Tropilaelaps clareae are major exotic threats.[1][2]',
+        'Varroa destructor and Tropilaelaps clareae are major exotic threats [1][2], while Nosema apis affects productivity [3].',
+      ]
+    ) {
+      const result = bindSentences({
+        text,
+        lexicon: beeLexicon,
+        citations: [1, 2, 3].map((index) => ({
+          index,
+          resourceId: `bee-${index}`,
+          title: 'Bee health',
+        })),
+        texts: new Map([
+          [1, 'Varroa destructor is a major exotic threat to honey bees.'],
+          [2, 'Another report describes Varroa destructor as a major exotic threat.'],
+          [3, 'Nosema apis affects honey bee productivity.'],
+        ]),
+      })
+      expect(result.sentences[0]!.bound).toEqual([])
+      expect(
+        result.citations.some((citation) =>
+          citation.resourceId === 'bee-1' || citation.resourceId === 'bee-2'
+        ),
+      ).toBe(false)
+    }
+  })
+
+  it('keeps a named claim beside a numerical claim when different passages support them', () => {
+    const result = bindSentences({
+      text:
+        'Varroa destructor affected 65% of monitored colonies, while Nosema apis affected productivity.[1][2]',
+      citations: beeCitations.slice(0, 2),
+      texts: new Map([
+        [1, 'Varroa destructor affected 65 per cent of monitored colonies.'],
+        [2, 'Nosema apis affected honey bee productivity.'],
+      ]),
+      lexicon: beeLexicon,
+    })
+    expect(result.sentences[0]!.bound).toEqual([1, 2])
+    expect(result.dropped).toBe(0)
+  })
+
+  it("checks a shared clause's figures in their own passages, never across joined source text", () => {
+    const bind = (first: string, second = 'Nosema apis affected 67% of monitored colonies.') =>
+      bindSentences({
+        text:
+          'Varroa destructor affected 65% of monitored colonies, while Nosema apis affected 67% of colonies.[1][2]',
+        citations: [1, 2].map((index) => ({
+          index,
+          resourceId: `bee-${index}`,
+          title: 'Bee monitoring',
+        })),
+        texts: new Map([[1, first], [2, second]]),
+        lexicon: beeLexicon,
+      })
+    expect(
+      bind('Varroa destructor affected 65 per cent of monitored colonies.').sentences[0]!.bound,
+    )
+      .toEqual([1, 2])
+    expect(
+      bind(
+        'Tropilaelaps clareae affected 65% of monitored colonies.',
+        'Nosema apis affected 67% of monitored colonies.\n\nVarroa destructor was discussed separately.',
+      ).citations,
+    )
+      .toEqual([])
+    expect(bind('Varroa destructor affected 64% of monitored colonies.').citations).toEqual([])
+  })
+
   it('exempts collection labels and their words while still checking other names and figures', () => {
     const allowedTerms = [
       'Knowledge Hub research portal',
