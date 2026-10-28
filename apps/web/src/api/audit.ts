@@ -36,6 +36,8 @@ export const AUDIT_ACTIONS = [
   'migration.admin_emails',
   'request.denied',
   'request.privileged',
+  'estate.query',
+  'duplicate.review',
   'resource.delete',
   'resource.questions.generate',
   'resource.questions.cache',
@@ -57,6 +59,7 @@ export const AUDIT_ACTIONS = [
   'maintenance.source.sync',
   'maintenance.watch.run',
   'maintenance.enrichment.run',
+  'maintenance.evaluation.run',
   'maintenance.questions.run',
 ] as const
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/).refine((v) =>

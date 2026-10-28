@@ -31,6 +31,7 @@ const curatorTabs = [
   'overview',
   'insights',
   'content',
+  'duplicates',
   'enrichments',
   'taxonomy',
   'graph',
@@ -39,6 +40,7 @@ const curatorTabs = [
 const administratorTabs = [
   ...curatorTabs,
   'appearance',
+  'evaluations',
   'behaviour',
   'details',
   'connections',
