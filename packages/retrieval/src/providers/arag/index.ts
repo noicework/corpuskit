@@ -4233,15 +4233,16 @@ export class AragProvider implements RetrievalProvider {
         turn.text.slice(0, 600)
       }`
     )
+    const numbered = passages.map((passage, index) =>
+      `[${index + 1}] ${passage.source.slice(0, 120)} | ${passage.title.slice(0, 160)}\n${
+        passage.text.slice(0, COMPOSE_PASSAGE_CHARS)
+      }`
+    )
     const prompt = [
       `Question: ${question.slice(0, 2000)}`,
       ...(earlier.length > 0 ? ['', ...earlier] : []),
       '',
-      ...passages.map((passage, index) =>
-        `[${index + 1}] ${passage.source.slice(0, 120)} | ${passage.title.slice(0, 160)}\n${
-          passage.text.slice(0, COMPOSE_PASSAGE_CHARS)
-        }`
-      ),
+      ...numbered,
     ].join('\n')
     const instructions = COMPOSE_INSTRUCTIONS.replace('in `answer` ', '') +
       (tenant.languagePolicy ? '' : ' Use Australian English.')
@@ -4255,6 +4256,10 @@ export class AragProvider implements RetrievalProvider {
         query: prompt,
         features: ['keyword', 'semantic'],
         prompt: { system: instructions },
+        // The passages also ride extra_context: when the box's own one-paragraph retrieval finds
+        // nothing, the platform answers "Not enough data" without calling the model unless the
+        // context is supplied here.
+        extra_context: numbered,
         top_k: 1,
         max_tokens: 4096,
       },
