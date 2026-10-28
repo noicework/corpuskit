@@ -8,6 +8,7 @@ import {
 import { useAccess } from '../components/AccessProvider.tsx'
 import { assertResponseCurrent, authorityFetch } from '../api/break-glass.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { AnswerRecordAgentEvidence } from '../components/AnswerRecordAgentEvidence.tsx'
 
 export function AnswerRecordPage() {
   const { slug = '', id = '' } = useParams()
@@ -161,7 +162,12 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
   }
   return (
     <main className='min-w-0 space-y-6 p-4 text-ink sm:p-8'>
-      <Link className='rp-btn rp-btn-outline' to={`/t/${slug}/ask`}>{ui('Back to Ask')}</Link>
+      <Link
+        className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center'
+        to={`/t/${slug}/ask`}
+      >
+        {ui('Back to Ask')}
+      </Link>
       <header>
         <h1 className='rp-display text-3xl'>{ui('Answer record')}</h1>
         <p className='mt-2 text-ink-2'>
@@ -193,16 +199,17 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
               {record.status}
             </p>
             {record.truncated && (
-              <p role='status'>
+              <p role='status' className='break-words'>
                 {ui(
                   'This record reached its storage limit. Some evidence text or items were shortened.',
                 )}
+                {record.truncatedFields?.length ? ` (${record.truncatedFields.join(', ')})` : ''}
               </p>
             )}
             <div className='flex flex-wrap gap-2'>
               <button
                 type='button'
-                className='rp-btn rp-btn-outline'
+                className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center'
                 disabled={busy}
                 onClick={() => void download('json', false)}
               >
@@ -210,7 +217,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
               </button>
               <button
                 type='button'
-                className='rp-btn rp-btn-outline'
+                className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center'
                 disabled={busy}
                 onClick={() => void download('csv', false)}
               >
@@ -218,6 +225,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
               </button>
             </div>
           </section>
+          {record.agent && <AnswerRecordAgentEvidence record={record} />}
           <section className='rp-card p-3 sm:p-5' aria-labelledby='retrieval-queries'>
             <h2 id='retrieval-queries' className='rp-display text-xl'>{ui('Retrieval queries')}</h2>
             <ul className='mt-3 max-w-prose list-disc space-y-2 break-words pl-5'>
@@ -225,8 +233,16 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
             </ul>
           </section>
           <div className='grid min-w-0 gap-6 xl:grid-cols-2'>
-            <Passages title={ui('Passages retrieved')} passages={record.retrieved} />
-            <Passages title={ui('Passages cited')} passages={record.cited} />
+            <Passages
+              title={ui('Passages retrieved')}
+              passages={record.retrieved}
+              sources={record.agent?.sources}
+            />
+            <Passages
+              title={ui('Passages cited')}
+              passages={record.cited}
+              sources={record.agent?.sources}
+            />
           </div>
           <section className='rp-card space-y-3 p-3 sm:p-5' aria-labelledby='verification'>
             <h2 id='verification' className='rp-display text-xl'>
@@ -249,7 +265,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
             </p>
             <p>{ui('Duration')}: {record.timing.durationMs} ms</p>
             <details>
-              <summary className='rp-btn rp-btn-outline w-fit'>
+              <summary className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center w-fit'>
                 {ui('Quality, timing and verification details')}
               </summary>
               <pre className='mt-3 whitespace-pre-wrap break-all text-sm'>{JSON.stringify({ verification: record.verification, generation: record.generation, quality: record.quality, timing: record.timing }, null, 2)}</pre>
@@ -276,7 +292,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
           {ui('Dates include the whole day in UTC. Exports contain personal data.')}
         </p>
         <div className='flex flex-wrap items-end gap-3'>
-          <label className='min-w-0'>
+          <label className='min-w-0 max-w-full'>
             {ui('From')}
             <input
               type='date'
@@ -286,7 +302,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
               onChange={(e) => setFrom(e.target.value)}
             />
           </label>
-          <label className='min-w-0'>
+          <label className='min-w-0 max-w-full'>
             {ui('To')}
             <input
               type='date'
@@ -300,7 +316,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
           </label>
           <button
             type='button'
-            className='rp-btn rp-btn-outline'
+            className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center'
             disabled={busy || !from || !to || from > to}
             onClick={() => void download('json', true)}
           >
@@ -308,7 +324,7 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
           </button>
           <button
             type='button'
-            className='rp-btn rp-btn-outline'
+            className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center'
             disabled={busy || !from || !to || from > to}
             onClick={() => void download('csv', true)}
           >
@@ -355,7 +371,11 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
                 onChange={(e) => setDays(Number(e.target.value))}
               />
             </label>
-            <button className='rp-btn rp-btn-outline' disabled={busy} type='submit'>
+            <button
+              className='rp-btn rp-btn-outline max-w-full whitespace-normal text-center'
+              disabled={busy}
+              type='submit'
+            >
               {ui('Save retention')}
             </button>
           </form>
@@ -365,7 +385,13 @@ function RecordView({ slug, id }: { slug: string; id: string }) {
   )
 }
 
-function Passages({ title, passages }: { title: string; passages: AnswerRecordPassage[] }) {
+function Passages(
+  { title, passages, sources }: {
+    title: string
+    passages: AnswerRecordPassage[]
+    sources?: NonNullable<AnswerRecord['agent']>['sources']
+  },
+) {
   const { ui } = usePortalLocale()
   return (
     <section className='rp-card min-w-0 space-y-4 p-3 sm:p-5' aria-label={title}>
@@ -374,9 +400,17 @@ function Passages({ title, passages }: { title: string; passages: AnswerRecordPa
       {passages.map((p, i) => (
         <article key={i} className='min-w-0 space-y-2 border-t border-[var(--rp-line)] pt-3'>
           <h3 className='break-words font-semibold'>
-            {p.citationIndex ? `[${p.citationIndex}] ` : ''}
+            {p.marker || p.citationIndex ? `[${p.marker ?? p.citationIndex}] ` : ''}
             {p.title}
           </h3>
+          {p.sourceId && (
+            <p className='break-words text-sm text-ink-2'>
+              {ui('Source')}: {sources?.find((s) => s.id === p.sourceId)?.label ?? p.sourceId}
+              {p.peerId ? ` (${p.peerId})` : ''}
+            </p>
+          )}
+          {p.stepId && <p className='break-all text-sm text-ink-2'>{ui('Step')}: {p.stepId}</p>}
+          {p.url && <p className='break-all text-sm'>{p.url}</p>}
           <p className='break-words text-sm text-ink-2'>
             <span className='break-all'>{p.resourceId}</span> · {ui('Page')}:{' '}
             {p.page ?? ui('Unknown')} · {ui('Score')}: {p.score ?? ui('Unknown')} ({p.scoreScope})
