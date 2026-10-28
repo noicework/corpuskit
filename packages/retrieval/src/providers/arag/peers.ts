@@ -334,7 +334,7 @@ async function searchPeerMcp(
   if (!isRecord(result) || result.isError === true || !Array.isArray(result.content)) {
     throw new PeerError('error', 'The peer search failed')
   }
-  const passages: (PeerPassage & { score: number })[] = []
+  const passages: (PeerPassage & { score?: number })[] = []
   for (const item of result.content) {
     if (!isRecord(item)) continue
     const resource = isRecord(item.resource) ? item.resource : {}
@@ -351,8 +351,11 @@ async function searchPeerMcp(
     if (!reference) continue
     const labels = Array.isArray(meta.resource_labels) ? meta.resource_labels : []
     if (labels.some((entry) => isRecord(entry) && excludedBy(entry.classifications))) continue
-    const score = peerScore(meta.score ?? item.score)
-    if (score === undefined) continue
+    const reportedScore = meta.score !== undefined ? meta.score : item.score
+    const score = peerScore(reportedScore)
+    // MCP search results normally carry no scores. Their returned order is the ranking;
+    // apply the floor only to an explicitly reported score, never to missing metadata.
+    if (reportedScore !== undefined && score === undefined) continue
     const origin = peer.linkOrigins
       ? httpsUrl(meta.url) ?? (isRecord(meta.origin) ? httpsUrl(meta.origin.url) : undefined) ??
         httpsUrl(resource.uri)
@@ -371,6 +374,10 @@ async function searchPeerMcp(
       score,
     })
   }
-  return passages.sort((a, b) => b.score - a.score).slice(0, PEER_PASSAGES)
+  // Without a score for every passage, comparing scores would invent a rank for the others.
+  if (passages.every((passage) => passage.score !== undefined)) {
+    passages.sort((a, b) => b.score! - a.score!)
+  }
+  return passages.slice(0, PEER_PASSAGES)
     .map(({ score: _score, ...passage }) => passage)
 }

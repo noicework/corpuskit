@@ -93,12 +93,15 @@ PUT /api/admin/t/:slug/federation/peers/:peerId/key
   or an embedded text resource with a URI. Generated summaries without this provenance are
   discarded, including summaries carrying their own footnotes and document-id lists. Filename
   titles fall back to `_meta.resource_title`, then the first meaningful passage line.
-  Both transports require a finite numeric retrieval score of **at least 0.3**, the host
-  composition floor, without normalising against the best hit. KB uses the paragraph's `score`;
-  MCP uses `_meta.score` or the content item's `score`. Missing or invalid scores are omitted,
-  so an MCP server must provide scores to contribute passages. Results are ranked before the
-  four-passage source cap; one qualifying passage is enough to keep that source represented,
-  while no weak passage is promoted just to fill a source slot.
+  KB applies the host composition floor of **at least 0.3** to the paragraph's retrieval `score`,
+  without normalising against the best hit. MCP results normally carry no score: their returned
+  order is the server's ranking, so keep that order and take up to four eligible passages.
+  If MCP reports `_meta.score` or a content item's `score`, apply the same floor; invalid
+  reported scores are rejected. If every eligible MCP passage has a score, rank by score before
+  the four-passage cap; otherwise preserve server order, including when scored and unscored
+  passages are mixed. Missing MCP scores never disqualify a passage, but missing provenance
+  always does. One qualifying passage is enough to keep a source represented; no explicitly
+  weak passage is promoted just to fill a source slot.
 
 ## Participation
 

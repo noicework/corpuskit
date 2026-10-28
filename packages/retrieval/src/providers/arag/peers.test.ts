@@ -1,5 +1,5 @@
 import { expect } from '@std/expect'
-import { searchPeer } from './peers.ts'
+import { PEER_PASSAGES, searchPeer } from './peers.ts'
 import { peerScore, peerTitle } from './peer-passages.ts'
 
 Deno.test('peer title suffix removal is generic and only removes the last spaced segment', () => {
@@ -59,7 +59,7 @@ Deno.test('an MCP peer returns its result before a long-lived SSE connection clo
                         {
                           type: 'text',
                           text: 'Soil held moisture. '.repeat(200),
-                          _meta: { parent: 'soil', resource_title: 'Soil study', score: 0.8 },
+                          _meta: { parent: 'soil', resource_title: 'Soil study' },
                         },
                       ],
                     },
@@ -150,7 +150,7 @@ Deno.test('MCP peer filename titles fall back to metadata, then meaningful passa
 })
 
 Deno.test('MCP peers apply the returned score floor before ranking and capping passages', async () => {
-  const content = [-1, 0, 0.29, 0.3, 0.7, 0.8, 0.9, 0.95, undefined, '0.99'].map((score, index) =>
+  const content = [-1, 0, 0.29, 0.3, 0.7, 0.8, 0.9, 0.95, null, '0.99'].map((score, index) =>
     paragraph({ _meta: { parent: `soil-${index}`, resource_title: 'Soil study', score } })
   )
   const passages = await searchPeer(mcpPeer, 'test-key', 'soil', { fetchImpl: mcpFetch(content) })
@@ -163,6 +163,52 @@ Deno.test('MCP peers apply the returned score floor before ranking and capping p
     fetchImpl: mcpFetch(content.slice(0, 4)),
   })
   expect(boundary.map((p) => p.resourceId)).toEqual(['soil-3'])
+})
+
+Deno.test('unscored MCP passages keep server ranking and the source cap, excluding generated summaries', async () => {
+  const ids = ['soil-d', 'soil-a', 'soil-f', 'soil-b', 'soil-e', 'soil-c']
+  const content = ids.map((id, index) => ({
+    type: 'text',
+    text: `Soil moisture passage ${index}.`,
+    _meta: {
+      type: 'citations',
+      paragraph_id: `block-${index}`,
+      resource_labels: [],
+      resource_title: `Soil moisture study ${index}`,
+      parent: id,
+      field_type: 'f',
+      field: 'file',
+    },
+  }))
+  const passages = await searchPeer(mcpPeer, 'test-key', 'soil', {
+    fetchImpl: mcpFetch([
+      {
+        type: 'text',
+        text: 'A generated summary. [1]\n[1]: block-AB\nDocument IDs: block-AB: soil',
+      },
+      { type: 'text', text: 'An introduction.', _meta: { resource_title: 'Untitled document' } },
+      ...content,
+    ]),
+  })
+  expect(passages.map((passage) => passage.resourceId)).toEqual(ids.slice(0, PEER_PASSAGES))
+  expect(passages.map((passage) => passage.text)).toEqual(
+    content.slice(0, PEER_PASSAGES).map((item) => item.text),
+  )
+})
+
+Deno.test('mixed MCP scores retain server order while dropping explicitly weak or invalid scores', async () => {
+  const passages = await searchPeer(mcpPeer, 'test-key', 'soil', {
+    fetchImpl: mcpFetch([
+      paragraph({ _meta: { parent: 'first' } }),
+      paragraph({ _meta: { parent: 'strong', score: 0.8 } }),
+      paragraph({ _meta: { parent: 'weak', score: 0.29 } }),
+      paragraph({ _meta: { parent: 'last-unscored' } }),
+      paragraph({ _meta: { parent: 'strongest', score: 0.99 } }),
+      paragraph({ _meta: { parent: 'invalid', score: null } }),
+    ]),
+  })
+  expect(passages.map((passage) => passage.resourceId))
+    .toEqual(['first', 'strong', 'last-unscored', 'strongest'])
 })
 
 Deno.test('KB peers filter weak and unscored paragraphs before choosing descriptive titles', async () => {
