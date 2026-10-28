@@ -183,7 +183,7 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
     f.stores.tenants.patch(slug, { searchPlaceholder: 'Search the probe' })
     f.stores.tenants.setAlias(slug, 'research.first-customer.example', true, 5)
   },
-  insights: (f, slug) =>
+  insights: (f, slug) => {
     f.stores.insights.record(slug, {
       ts: new Date(f.now()).toISOString(),
       question: 'What did reader@first-customer.example ask?',
@@ -193,7 +193,23 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
       answerRelevance: 4,
       groundedness: 4,
       contextRelevance: 4,
-    }),
+    })
+    f.stores.insights.record(slug, {
+      kind: 'search',
+      ts: new Date(f.now()).toISOString(),
+      id: 'search-probe',
+      durationSec: 0.5,
+      resources: [{ resourceId: 'res-1', rank: 1 }],
+    })
+    f.stores.insights.record(slug, {
+      kind: 'open',
+      ts: new Date(f.now()).toISOString(),
+      source: 'search',
+      sourceId: 'search-probe',
+      resourceId: 'res-1',
+      rank: 1,
+    })
+  },
   feedback: (f, slug) =>
     // Ratings age out on real time, whatever the fixture's clock says.
     f.stores.feedback.record(slug, {

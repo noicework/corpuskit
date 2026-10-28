@@ -449,6 +449,8 @@ export const TenantConfigSchema = z.object({
   }).refine((policy) => policy.availableLanguages.includes(policy.defaultLanguage), {
     message: 'The default language must be available',
   }).optional(),
+  /** False disables research usage recording and reader open beacons. Absent enables it. */
+  analyticsEnabled: z.boolean().optional(),
   accessMode: AccessModeSchema.default('public'),
   /** Present only when this portal has a working dedicated hostname. */
   hostname: TenantHostnameSchema.optional(),
@@ -1067,6 +1069,8 @@ export const SearchLookupSchema = z.object({
 export type SearchLookup = z.infer<typeof SearchLookupSchema>
 
 export const SearchResultsSchema = z.object({
+  /** Opaque portal-scoped usage id; absent when analytics are disabled. */
+  searchId: z.string().optional(),
   query: z.string(),
   resources: ScoredResourceSchema.array(),
   relatedQuestions: QuestionSchema.array(),
@@ -1331,6 +1335,8 @@ export const AskEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('usage'),
+    /** False when the provider reported timings without token consumption. */
+    tokensReported: z.boolean().optional(),
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     firstChunkSec: z.number().nonnegative().optional(),
@@ -1338,6 +1344,8 @@ export const AskEventSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('done'),
+    /** Opaque portal-scoped id for citation open analytics. */
+    answerId: z.string().optional(),
     /** True when the corpus could not answer and guidance was shown instead. */
     refused: z.boolean().optional(),
     /**

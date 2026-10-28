@@ -259,6 +259,7 @@ export interface TenantPatch {
   federation?: TenantConfig['federation']
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback?: boolean
+  analyticsEnabled?: boolean
   branding?: TenantConfig['branding']
   /**
    * Portal-managed behaviour settings (system prompt, image grounding). `uncitedAnswers`: what an

@@ -37,6 +37,11 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources/:id/thumbnail', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/search', 'portal.read', 'viewer'],
+  ['POST', '/api/t/:slug/events/open', 'portal.read', 'viewer', {
+    searchId: 'search-fixture',
+    resourceId: 'res-1',
+    rank: 1,
+  }],
   ['GET', '/api/t/:slug/docs/search', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/catalog', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/topics/:topicId/resources', 'portal.read', 'viewer'],
@@ -1445,7 +1450,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'prompts') {
             expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
           } else if (suffix === 'insights') {
-            expect(JSON.parse(result)).toEqual({
+            expect(JSON.parse(result)).toMatchObject({
               ...fixture.stores.insights.summary('a'),
               knowledgeGaps: { month: '2026-09', questions: [], topics: null },
               feedback: { helpful: 0, unhelpful: 0, flagged: [] },

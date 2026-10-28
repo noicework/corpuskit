@@ -1,4 +1,7 @@
+import { discoveryCounts } from './usage-metrics.ts'
 import {
+  type ResourceSummary,
+  type TopicUsage,
   USAGE_COLUMNS,
   type UsageCounts,
   type UsageDay,
@@ -12,6 +15,7 @@ import {
   type AskInsight,
   type AskWindow,
   type FeedbackRating,
+  type UsageEventWindow,
   WEAK_GROUNDEDNESS,
 } from './stores.ts'
 
@@ -106,6 +110,9 @@ export function ratingsKeptSince(ratings: readonly FeedbackRating[], now: number
 /** What a usage report is counted from. */
 export interface UsageSources {
   asks: AskWindow
+  events?: UsageEventWindow
+  catalogue?: readonly ResourceSummary[] | null
+  topics?: readonly { id: string; label: string }[]
   /** Every rating the portal keeps, and the answers among them its ask log holds. */
   ratings: { records: readonly FeedbackRating[]; matched: ReadonlySet<string> }
   /**
@@ -115,13 +122,29 @@ export interface UsageSources {
   documents: { created: readonly string[]; readBackTo: string | null } | null
 }
 
-type AskCounts = Omit<UsageCounts, 'ratings' | 'unhelpfulRatings' | 'documentsAdded'>
+type AskCounts = Omit<
+  UsageCounts,
+  | 'ratings'
+  | 'unhelpfulRatings'
+  | 'documentsAdded'
+  | 'topics'
+  | 'searches'
+  | 'searchP50'
+  | 'searchP90'
+  | 'searchP95'
+  | 'opens'
+  | 'openRate'
+  | 'meanOpenRank'
+>
 type RatingCounts = Pick<UsageCounts, 'ratings' | 'unhelpfulRatings'>
 
 /** The question and answer counts of some asks; all null when they are not held. */
 function askCounts(asks: readonly AskInsight[] | null): AskCounts {
   if (!asks) {
     return {
+      consumptionAnswers: null,
+      inputTokens: null,
+      outputTokens: null,
       questions: null,
       answered: null,
       unanswered: null,
@@ -153,6 +176,10 @@ function askCounts(asks: readonly AskInsight[] | null): AskCounts {
   const answerTime = timesOf(answered.map((ask) => ask.answerSec))
   const generation = timesOf(answered.map((ask) => ask.durationSec))
   return {
+    consumptionAnswers:
+      asks.filter((ask) => ask.inputTokens !== undefined || ask.outputTokens !== undefined).length,
+    inputTokens: tokenSum(asks, 'inputTokens'),
+    outputTokens: tokenSum(asks, 'outputTokens'),
     questions: asks.length,
     answered: answered.length,
     unanswered: asks.length - answered.length,
@@ -174,6 +201,13 @@ function askCounts(asks: readonly AskInsight[] | null): AskCounts {
     generationTimeP90: percentile(generation, 90),
     generationTimeP95: percentile(generation, 95),
   }
+}
+
+function tokenSum(asks: readonly AskInsight[], key: 'inputTokens' | 'outputTokens'): number | null {
+  const values = asks.map((ask) => ask[key]).filter((v): v is number =>
+    typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+  )
+  return values.length ? values.reduce((sum, value) => sum + value, 0) : null
 }
 
 /** The measured times among some values, in ascending order. */
@@ -245,6 +279,10 @@ export function buildUsageReport(
     sources.asks.asks.filter((ask) => inPeriod(Date.parse(ask.ts))),
     (ask) => period.localDate(Date.parse(ask.ts)),
   )
+  const events = grouped(
+    sources.events?.events ?? [],
+    (event) => period.localDate(Date.parse(event.ts)),
+  )
   const ratings = grouped(
     sources.ratings.records.filter((rating) =>
       sources.ratings.matched.has(rating.learningId) && inPeriod(Date.parse(rating.ts))
@@ -259,6 +297,11 @@ export function buildUsageReport(
   const days: UsageDay[] = period.days.map((date) => ({
     date,
     ...askCounts(held(asksFrom, date) ? asks.get(date) ?? [] : null),
+    ...discoveryCounts(
+      held(asksFrom, date) ? asks.get(date) ?? [] : null,
+      held(asksFrom, date) ? events.get(date) ?? [] : null,
+      sources,
+    ),
     ...ratingCounts(held(ratingsFrom, date) ? ratings.get(date) ?? [] : null),
     documentsAdded: documents && held(documentsFrom, date) ? added.get(date)?.length ?? 0 : null,
   }))
@@ -278,6 +321,7 @@ export function buildUsageReport(
     days,
     totals: {
       ...askCounts(across(asksFrom, asks)),
+      ...discoveryCounts(across(asksFrom, asks), across(asksFrom, events), sources),
       ...ratingCounts(across(ratingsFrom, ratings)),
       documentsAdded: documentsHeld ? documentsHeld.length : null,
     },
@@ -320,8 +364,10 @@ export function usageCoverageNotes(report: UsageReport): string[] {
           : `read back to ${documents.from}; earlier days are blank`
       }`
       : 'Documents added: the knowledge box could not be read; the column is blank',
-    "Response times: time to first token and answer time are measured by the portal server for each answered question and recorded from this release on; generation time is the knowledge box's own report; search times are not measured; percentiles are nearest-rank",
+    "Response times: time to first token and answer time are measured by the portal server for each answered question and recorded from this release on; generation time is the knowledge box's own report; search times are measured from request receipt to response preparation on the server; percentiles are nearest-rank",
     'Topics of unanswered questions are not recorded; question text is left out because it can hold personal data',
+    'New metrics record activity from this release onwards only; older asks have no citation topics or open tracking',
+    'Consumption is portal research-answer tokens only; shared core platform overhead and other operations are excluded; no prices are applied',
   ]
 }
 
@@ -344,7 +390,8 @@ function rowNotes(report: UsageReport, date: string | null): string {
 /** A `#` comment line: no commas or quotes, so it stays one cell and CSV readers can skip it. */
 const comment = (text: string) => `# ${text.replace(/[,"\r\n]/g, ' ')}`.trimEnd()
 
-function cell(value: string | number | null, key: string): string {
+function cell(value: string | number | TopicUsage[] | null, key: string): string {
+  if (Array.isArray(value)) return auditCsvCell(JSON.stringify(value))
   if (value === null) return auditCsvCell('')
   // Scores and seconds keep their one decimal place: 4.0, not 4.
   return auditCsvCell(

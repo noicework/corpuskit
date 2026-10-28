@@ -4714,6 +4714,7 @@ export class AragProvider implements RetrievalProvider {
             if (tokens || timings) {
               yield {
                 type: 'usage',
+                tokensReported: tokens !== undefined,
                 inputTokens: tokens?.input ?? 0,
                 outputTokens: tokens?.output ?? 0,
                 firstChunkSec: timings?.generative_first_chunk,

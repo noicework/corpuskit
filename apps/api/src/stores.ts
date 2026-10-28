@@ -271,7 +271,43 @@ function ownedPortalDirectory(root: string, slug: string): string {
 
 // --- Ask insights -----------------------------------------------------------
 
+export interface CitedUsageResource {
+  resourceId: string
+  rank: number
+  topicIds: string[]
+}
+
+/** Anonymous usage records share the insights log and its erasure/retention boundary. */
+export interface SearchInsight {
+  kind: 'search'
+  ts: string
+  id: string
+  durationSec: number
+  resources: { resourceId: string; rank: number }[]
+}
+export interface OpenInsight {
+  kind: 'open'
+  ts: string
+  source: 'answer' | 'search'
+  sourceId: string
+  resourceId: string
+  rank: number
+}
+export type UsageEvent = SearchInsight | OpenInsight
+export type InsightRecord = AskInsight | UsageEvent
+export interface UsageEventWindow {
+  events: UsageEvent[]
+  keptSince: string | null
+}
+export function isAskInsight(record: InsightRecord): record is AskInsight {
+  return 'question' in record
+}
+
 export interface AskInsight {
+  answerId?: string
+  citedResources?: CitedUsageResource[]
+  inputTokens?: number
+  outputTokens?: number
   ts: string
   question: string
   answered: boolean
@@ -353,13 +389,13 @@ export class InsightsStore {
     return eraseFile(segment && this.pathFor(segment))
   }
 
-  record(slug: string, insight: AskInsight): void {
+  record(slug: string, insight: InsightRecord): void {
     const path = this.pathFor(slug)
     mkdirSync(dirname(path), { recursive: true })
     appendFileSync(path, JSON.stringify(insight) + '\n')
   }
 
-  private readAll(slug: string): AskInsight[] {
+  private readRecords(slug: string): InsightRecord[] {
     const path = this.pathFor(slug)
     let raw: string
     try {
@@ -371,16 +407,29 @@ export class InsightsStore {
     // Append-only log: a crash mid-append can leave one truncated trailing
     // line. Skip and log just that line rather than losing the whole file's
     // history, the way a whole-file JSON.parse fallback would.
-    const insights: AskInsight[] = []
+    const insights: InsightRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line) continue
       try {
-        insights.push(JSON.parse(line) as AskInsight)
+        insights.push(JSON.parse(line) as InsightRecord)
       } catch (err) {
         console.error(`[stores] skipping corrupt insight line in ${path}:`, err)
       }
     }
     return insights
+  }
+
+  private readAll(slug: string): AskInsight[] {
+    return this.readRecords(slug).filter(isAskInsight)
+  }
+
+  eventsBetween(slug: string, from: number, to: number): UsageEventWindow {
+    return {
+      events: this.readRecords(slug).filter((r): r is UsageEvent =>
+        !isAskInsight(r) && Date.parse(r.ts) >= from && Date.parse(r.ts) < to
+      ),
+      keptSince: null,
+    }
   }
 
   summary(slug: string, days = 90): InsightsSummary {
