@@ -48,6 +48,9 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
   overflow: hidden;
+  /* The display face's tight leading leaves no room below the last line, so
+   * the hidden overflow cut the descenders off the question. */
+  padding-bottom: 0.12em;
 }
 
 .rp-answer-chip.rp-chip {

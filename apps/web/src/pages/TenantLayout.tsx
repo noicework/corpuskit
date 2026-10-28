@@ -84,6 +84,8 @@ const NAV_ITEMS: {
 }[] = [
   { id: 'library', path: '/library', label: 'Library', end: false, permission: 'portal.read' },
   { id: 'ask', path: '/ask', label: 'Ask', end: false, permission: 'portal.ask' },
+  // Agent ask is opt-in per portal (`agentAsk`); the item shows only where it is offered.
+  { id: 'agent', path: '/agent', label: 'Agent ask', end: false, permission: 'portal.ask' },
   { id: 'graph', path: '/graph', label: 'Graph', end: false, permission: 'portal.read' },
   { id: 'tools', path: '/tools', label: 'Tools', end: false, permission: 'portal.read' },
   {
@@ -193,7 +195,7 @@ export function TenantLayout() {
   const routeAllowed = section === 'manage'
     ? MANAGEMENT_PERMISSIONS.some((permission) => access.can(permission, scope))
     : access.can(
-      section === 'ask'
+      section === 'ask' || section === 'agent'
         ? 'portal.ask'
         : ['generate', 'assessment'].includes(section)
         ? 'portal.generate'
@@ -338,7 +340,7 @@ export function TenantLayout() {
     [sourceConfig, locale.language],
   )
   // Routes whose page owns the full viewport height.
-  const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
+  const isViewportHeightRoute = /\/(ask|agent|graph)(\/|$)/.test(location.pathname)
 
   const { data: kbStatus } = useQuery({
     queryKey: ['kb-status', access.identityKey, slug, access.generation],
@@ -418,7 +420,7 @@ export function TenantLayout() {
 
   // The portal's own header links follow the built-in items it keeps.
   const { items: navigation, links: customLinks } = portalNavigation(
-    permitted,
+    permitted.filter((item) => item.id !== 'agent' || config.agentAsk === true),
     config.branding.layout,
   )
 
