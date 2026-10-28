@@ -1,3 +1,5 @@
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { afterEach, describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import {
@@ -353,6 +355,20 @@ describe('independent admin route permission matrix', () => {
   }</p><a href="https://example.test/article">Article</a></main></html>`
   // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
   const rows: [string, string, Permission, unknown?][] = [
+    ['GET', 'duplicates', 'content.write'],
+    ['POST', 'duplicates/refresh', 'content.write'],
+    ['POST', 'duplicates/review', 'content.write', {
+      pair: 'res-1/res-copy',
+      decision: 'keep-both',
+    }],
+    ['GET', '/api/admin/overlap', 'portal.create'],
+    ['POST', '/api/admin/overlap/refresh', 'portal.create'],
+    ['GET', '/api/admin/overlap/export', 'portal.create'],
+    ['GET', 'answer-records/records/:id', 'content.write'],
+    ['GET', 'answer-records/records/:id/export', 'content.write'],
+    ['GET', 'answer-records/export', 'content.write'],
+    ['GET', 'answer-records/retention', 'content.write'],
+    ['PUT', 'answer-records/retention', 'behaviour.write', { days: 90 }],
     ['GET', 'lifecycle', 'portal.create'],
     ['PUT', 'lifecycle', 'portal.create', { status: 'read_only', limits: { asksPerDay: 5 } }],
     ['GET', 'usage', 'portal.create'],
@@ -510,6 +526,14 @@ describe('independent admin route permission matrix', () => {
         ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
         'GET /api/admin/t/:slug/export',
         'PATCH /api/admin/t/:slug/access',
+        // This family's full role and mutation matrix lives in enforcement.test.ts.
+        'GET /api/admin/t/:slug/evaluations',
+        'PUT /api/admin/t/:slug/evaluations/:id',
+        'PUT /api/admin/t/:slug/evaluations/:id/schedule',
+        'DELETE /api/admin/t/:slug/evaluations/:id',
+        'GET /api/admin/t/:slug/evaluations/:id/runs',
+        'POST /api/admin/t/:slug/evaluations/:id/runs',
+        'GET /api/admin/t/:slug/evaluations/:id/runs/:runId/csv',
       ].sort()
       expect(actual).toEqual(expected)
     } finally {
@@ -662,6 +686,7 @@ describe('independent admin route permission matrix', () => {
           },
         }) as AragProvider
         const fixture = createEnforcementFixture({
+          provider: suffix.startsWith('duplicates') ? DoubleProvider.withDuplicates() : undefined,
           management,
           operatorDeleteAfterDays: 30,
           domainProvisioner: {
@@ -678,6 +703,10 @@ describe('independent admin route permission matrix', () => {
         const originalFetch = globalThis.fetch
         const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
         try {
+          const answerRecord = answerRecordFixture('a', fixture.now())
+          if (suffix.startsWith('answer-records')) {
+            fixture.stores.answerRecords.record('a', answerRecord)
+          }
           const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
           fixture.stores.enrichments.put('a', 'seeded-record', {
             schemaId: 'research',
@@ -721,9 +750,13 @@ describe('independent admin route permission matrix', () => {
           }
           if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
           const snapshot = () =>
-            ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
-              fixture.database.all(`SELECT * FROM ${table}`)
-            )
+            [
+              'state',
+              'branding_assets',
+              'enrichment_records',
+              'routing_records',
+              'duplicate_reviews',
+            ].map((table) => fixture.database.all(`SELECT * FROM ${table}`))
           const baseline = snapshot()
           globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
             calls.push('fetch')
@@ -750,7 +783,9 @@ describe('independent admin route permission matrix', () => {
               .replace(':peerId', 'fixture-peer')
               .replace(
                 ':id',
-                suffix.startsWith('sources')
+                suffix.startsWith('answer-records')
+                  ? answerRecord.answerId
+                  : suffix.startsWith('sources')
                   ? source.id
                   : suffix.includes('suggestions')
                   ? 'suggestion-a'
@@ -799,7 +834,15 @@ describe('independent admin route permission matrix', () => {
                 ),
               ).toBe(true)
             } else if (method === 'GET') {
-              if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+              if (suffix === 'answer-records/records/:id') {
+                expect(JSON.parse(result)).toEqual(answerRecord)
+              } else if (
+                suffix === 'answer-records/records/:id/export' || suffix === 'answer-records/export'
+              ) {
+                expect(JSON.parse(result).records).toEqual([answerRecord])
+              } else if (suffix === 'answer-records/retention') {
+                expect(JSON.parse(result)).toEqual({ days: 90 })
+              } else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
               else if (suffix === 'suggestions') {
                 expect(JSON.parse(result)[0].id).toBe('suggestion-a')
               } else if (suffix === 'enrichments/export') {
@@ -823,9 +866,20 @@ describe('independent admin route permission matrix', () => {
                 })
               } else if (suffix === 'aliases') {
                 expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
+              } else if (suffix === 'duplicates') {
+                expect(JSON.parse(result).candidates.length).toBeGreaterThan(0)
+              } else if (suffix === '/api/admin/overlap') {
+                expect(JSON.parse(result).rows.length).toBeGreaterThan(0)
+              } else if (suffix === '/api/admin/overlap/export') {
+                expect(result).toContain('Shared title pairs')
               } else if (suffix === 'usage') {
                 expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
               } else throw new Error(`Missing positive assertion for ${template}`)
+            } else if (suffix.endsWith('/refresh')) {
+              expect(result).toContain('generatedAt')
+              expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(
+                true,
+              )
             } else {
               expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
               if (suffix === 'disable' || suffix === 'enable') {
@@ -3530,6 +3584,8 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
     })
     // Every citation event precedes done; the quality judge's event follows it.
     const order = events.map((e) => e.type)
+    expect(order.indexOf('answer-record')).toBeGreaterThan(-1)
+    expect(order.indexOf('answer-record')).toBeLessThan(order.indexOf('done'))
     expect(order.indexOf('done')).toBeGreaterThan(order.lastIndexOf('citation'))
     expect(order.indexOf('quality')).toBeGreaterThan(order.indexOf('done'))
   })

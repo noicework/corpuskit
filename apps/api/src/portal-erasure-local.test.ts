@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { expect } from '@std/expect'
 import { join } from 'node:path'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
@@ -30,6 +31,8 @@ type Classification =
  * that holds portal records must name the erasure store that removes them.
  */
 const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
+  duplicates: { erasedBy: 'duplicates' },
+  evaluations: { erasedBy: 'evaluations' },
   lifecycle: { erasedBy: 'lifecycle' },
   rbac: { erasedBy: 'rbac' },
   audit: { erasedBy: 'audit' },
@@ -40,6 +43,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   feedback: { erasedBy: 'feedback' },
   siteFeedback: { erasedBy: 'siteFeedback' },
   siteFeedbackNotifier: { noPortalRecords: 'delivers messages; keeps nothing' },
+  answerRecords: { erasedBy: 'answerRecords' },
   sessions: { erasedBy: 'sessions' },
   sources: { erasedBy: 'sources' },
   watches: { erasedBy: 'watches' },
@@ -91,6 +95,8 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
 }
 
 const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
+  duplicates: true,
+  evaluations: true,
   tenants: true,
   bindings: true,
   lifecycle: true,
@@ -101,6 +107,7 @@ const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
   insights: true,
   feedback: true,
   siteFeedback: true,
+  answerRecords: true,
   suggestions: true,
   enrichments: true,
   kgProposals: true,
@@ -284,6 +291,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       note: '',
       tags: [],
     })
+    s.owned.duplicates.decide(SLUG, 'one/two', 'keep-both')
     s.owned.watches.add(SLUG, researcher, 'abalone decline')
     // A delete whose release was never recorded, kept in its own file beside the ledger.
     const added = s.owned.lifecycle.reserveAdd(SLUG, { observed: 0, bytes: 10 }) as {
@@ -315,6 +323,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       contextRelevance: 4,
     })
     // Ratings age out on real time, whatever the fixture's clock says.
+    s.owned.answerRecords.record(SLUG, answerRecordFixture(SLUG, s.now()))
     s.stores.feedback.record(SLUG, {
       ts: new Date().toISOString(),
       learningId: 'learning-probe',
@@ -379,6 +388,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
     expect(body.domain).toEqual({ status: 'not_configured' })
     for (
       const kind of [
+        'duplicates',
         'sessions',
         'investigations',
         'watches',
@@ -386,6 +396,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
         'insights',
         'feedback',
         'siteFeedback',
+        'answerRecords',
         'suggestions',
         'enrichments',
         'kgProposals',
@@ -395,6 +406,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
         'auditEvents',
       ]
     ) expect([kind, body.erasure.erased[kind] > 0]).toEqual([kind, true])
+    expect(s.database.all('SELECT * FROM duplicate_reviews WHERE slug = ?', SLUG)).toEqual([])
     expect(body.erasure.erased.sessions).toBe(2)
     expect(body.erasure.erased.investigations).toBe(2)
     expect(body.erasure.erased.watches).toBe(2)

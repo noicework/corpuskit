@@ -37,6 +37,7 @@ export const AUDIT_ACTIONS = [
   'request.denied',
   'request.privileged',
   'estate.query',
+  'duplicate.review',
   'resource.delete',
   'resource.questions.generate',
   'resource.questions.cache',
@@ -58,6 +59,7 @@ export const AUDIT_ACTIONS = [
   'maintenance.source.sync',
   'maintenance.watch.run',
   'maintenance.enrichment.run',
+  'maintenance.evaluation.run',
   'maintenance.questions.run',
   'federation.peer.call',
 ] as const

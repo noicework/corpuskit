@@ -54,6 +54,9 @@
       ".planning/"
     ]
   },
+  "test": {
+    "include": ["packages/", "apps/"]
+  },
   "lint": {
     "exclude": ["apps/web/dist/", "worker-configuration.d.ts", ".claude/", ".planning/"],
     "rules": {
@@ -74,8 +77,9 @@
     "build:worker": "mkdir -p dist/cloudflare && deno bundle --external cloudflare:workers --output dist/cloudflare/worker.js apps/cloudflare/src/worker.ts && deno run --allow-read=apps/web/dist/build.json,dist/cloudflare --allow-write=dist/cloudflare apps/cloudflare/scripts/stamp-worker.ts",
     "build:cloudflare": "deno task build:web && deno task build:worker",
     "secrets:cloudflare": "deno run --allow-read=.env --allow-write=.wrangler --allow-run=npx apps/cloudflare/scripts/upload-secrets.ts",
-    "check": "deno check apps/api/src/server.ts apps/api/scripts/provision.ts apps/api/scripts/persona-smoke.ts apps/api/scripts/accuracy-eval.ts apps/api/scripts/persona-eval.ts apps/web/src/main.tsx apps/cloudflare/src/worker.ts && deno lint && deno fmt --check && deno task test",
-    "test": "deno test --allow-env --allow-read --allow-write packages/ apps/",
+    "check": "deno task check:static && deno task test",
+    "check:static": "deno check apps/api/src/server.ts apps/api/scripts/provision.ts apps/api/scripts/persona-smoke.ts apps/api/scripts/accuracy-eval.ts apps/api/scripts/persona-eval.ts apps/web/src/main.tsx apps/cloudflare/src/worker.ts && deno lint && deno fmt --check",
+    "test": "deno test --allow-env --allow-read --allow-write",
     "dev:stub": "deno task build:web && deno run --allow-net --allow-env --allow-read --allow-write --allow-sys e2e/support/agent-stub-server.ts",
     "test:e2e": "deno task build:web && deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/",
     "test:e2e:visual": "deno task build:web && E2E_VISUAL_MATRIX=1 deno test --allow-net --allow-env --allow-read --allow-write --allow-run --allow-sys e2e/rbac-visual.test.ts",

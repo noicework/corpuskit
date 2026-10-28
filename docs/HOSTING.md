@@ -2099,6 +2099,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `aliases` | Host alias records | `tenants` row | `TENANTS_PATH` |
 | `bindings` | The knowledge box endpoint and sealed service account token | `bindings` row | `BINDINGS_PATH` |
 | `lifecycle` | Status, limits, ask counts, capacity ledger, pending delete records and suspension start | `portal-*:<slug>` rows | `DATA_DIR/lifecycle/` |
+| `evaluations` | Evaluation definitions, retained runs with question results, and scheduling delegations | `evaluation_sets`, `evaluation_runs`, `evaluation_schedules` | `DATA_DIR/rbac.sqlite` |
 | `sessions` | Every member's and visitor's saved research sessions, including pre-owner-scope records | `research-v2:…:sessions:` and `session:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/sessions/<slug>/` |
 | `investigations` | Investigations with their evidence, notes and artefacts | `research-v2:…:investigations:` and `investigation:<slug>:` rows | `DATA_DIR/research-v2/`, `DATA_DIR/investigations/<slug>/` |
 | `watches` | Saved searches | `research-v2:…:watches` and `watches:<slug>` rows | `DATA_DIR/research-v2/`, `DATA_DIR/watches/<slug>.json` |
@@ -2106,8 +2107,10 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
 | `siteFeedback` | [Reader feedback](#reader-feedback): readers' messages to the portal team and any reply address they gave (at most 500, kept 90 days) | `site_feedback` rows | `DATA_DIR/site-feedback/<slug>.json` |
+| `answerRecords` | Generated answer evidence, question text and per-portal retention setting; default 90 days, configurable 1 to 365 | `answer-records:<slug>:record:<id>` and `answer-records:<slug>:retention` rows | `DATA_DIR/answer-records/<slug>/` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
 | `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
+| `duplicates` | Remembered duplicate review decisions | `duplicate_reviews` rows | `DATA_DIR/rbac.sqlite`, `duplicate_reviews` rows |
 | `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |
 | `branding` | Uploaded logo, hero image and fonts | `branding_assets` rows | `BRANDING_PATH/<slug>-<kind>.<ext>` |
 | `routing` | Question routing decisions | `routing_records` rows | `DATA_DIR/routing/<slug>.jsonl` |
@@ -2120,13 +2123,18 @@ Durable Object's SQLite database, not in R2 or another blob store, and locally i
 `BRANDING_PATH`. Stores that cache records in memory (bindings, enrichments, knowledge graph
 proposals and the local portal registry) drop them too.
 
+Evaluation runs retain the latest 100 per set (at most 50 sets per portal); definitions and
+scheduling delegations remain until set deletion or portal erasure. See [portal evaluations](EVALUATIONS.md)
+for scoring, ask-cost consent and the optional daily or weekly schedule. The `evaluations` erased
+record kind is part of the hosting contract.
+
 Answer feedback and reader feedback also leave a live portal on their own: the daily maintenance
 pass (the one that applies `AUDIT_RETENTION_DAYS`) removes every rating, comment included, and
 every reader's message older than 90 days, on every portal.
 
 ```json
 200 { "ok": true, "slug": "acme",
-      "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0,
+      "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0, "evaluations": 0,
                   "sessions": 12, "investigations": 3, "watches": 1, "sources": 1,
                   "insights": 1, "feedback": 3, "siteFeedback": 2, "suggestions": 1,
                   "enrichments": 214, "kgProposals": 1, "branding": 2, "routing": 1,
@@ -2241,3 +2249,5 @@ Embeddings, indexing, ordinary document parsing and reranking remain platform se
 The operator is responsible for restricting upstream model access and credentials on the KB,
 including its automatic summary model, and for stopping legacy agents and extraction strategies
 with unrelated model configurations. The request restriction complements those upstream controls.
+
+See [Answer records](ANSWER-RECORDS.md) for curator exports, retention and the server-only recorder API. The hosting control plane must add `answerRecords` to its strict erased-kind contract in the same release.

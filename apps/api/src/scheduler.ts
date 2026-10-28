@@ -1,3 +1,8 @@
+import {
+  AnswerRecordStore,
+  type AnswerRecordStoreApi,
+  FileAnswerRecordState,
+} from './answer-record-store.ts'
 import type { EnrichmentRunEvent, TenantConfig } from '@research-portal/core'
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import {
@@ -64,6 +69,7 @@ export interface MaintenanceFailure {
     | 'job'
     | 'feedback'
     | 'site-feedback'
+    | 'answerRecords'
 }
 
 /**
@@ -313,6 +319,7 @@ interface MaintenanceStores {
   feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
   /** Readers' messages to the portal team, which the retention pass ages out too. */
   siteFeedback?: Pick<SiteFeedbackStoreApi, 'purgeExpired'>
+  answerRecords?: Pick<AnswerRecordStoreApi, 'purgeExpired'>
 }
 
 /**
@@ -356,6 +363,9 @@ export async function runSystemMaintenance(
   }
   if (retain && !purgeExpired(stores.siteFeedback, 'site feedback')) {
     failures.push({ job: 'retention', target: 'site-feedback' })
+  }
+  if (retain && !purgeExpired(stores.answerRecords, 'answer records')) {
+    failures.push({ job: 'retention', target: 'answerRecords' })
   }
   let halted = false
   for (const job of jobs) {
@@ -960,6 +970,7 @@ export function startScheduler(
   env: Record<string, string | undefined>,
   lifecycle?: PortalLifecycleStore,
   bindings?: Pick<BindingStoreApi, 'status'>,
+  runEvaluations?: () => Promise<void>,
 ): () => Promise<void> {
   // Local, explicitly operated demos may allow manual agents while scheduling no upkeep.
   // Unset or any value other than the exact string 'false' keeps the existing timers.
@@ -976,16 +987,28 @@ export function startScheduler(
     bindings,
     feedback: new FeedbackStore(dataDir),
     siteFeedback: new SiteFeedbackStore(dataDir),
+    answerRecords: new AnswerRecordStore(new FileAnswerRecordState(dataDir)),
   }
   return startMaintenanceTimers({
     dataDir,
     atUtc: env.MAINTENANCE_AT_UTC,
     cadenceMs: autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS),
     failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,
-    runDaily: (signal) =>
-      runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'], true, {
-        signal,
-      }),
+    runDaily: async (signal) => {
+      try {
+        await runSystemMaintenance(
+          management,
+          stores,
+          env.AUDIT_RETENTION_DAYS,
+          ['sync', 'watch'],
+          true,
+          { signal },
+        )
+      } finally {
+        signal.throwIfAborted()
+        await runEvaluations?.()
+      }
+    },
     runEnrichments: (signal) =>
       runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false, {
         signal,

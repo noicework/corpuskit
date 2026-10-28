@@ -248,6 +248,7 @@ const fields = {
   method: member(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']),
   // What kind of document a delete removed, and whether it was a draft; never its title.
   resourceKind: member(ResourceTypeSchema.options),
+  decision: member(['not-duplicate', 'keep-both']),
   draft: flag,
   // The knowledge box no longer held the document: only what the portal kept for it was cleared.
   cleanupOnly: flag,
@@ -259,7 +260,9 @@ const fields = {
   erasedConfiguration: count,
   erasedAliases: count,
   erasedBindings: count,
+  erasedDuplicates: count,
   erasedLifecycle: count,
+  erasedEvaluations: count,
   erasedSessions: count,
   erasedInvestigations: count,
   erasedWatches: count,
@@ -267,6 +270,7 @@ const fields = {
   erasedInsights: count,
   erasedFeedback: count,
   erasedSiteFeedback: count,
+  erasedAnswerRecords: count,
   erasedSuggestions: count,
   erasedEnrichments: count,
   erasedKgProposals: count,
@@ -307,7 +311,9 @@ const actionFields = {
     'erasedConfiguration',
     'erasedAliases',
     'erasedBindings',
+    'erasedDuplicates',
     'erasedLifecycle',
+    'erasedEvaluations',
     'erasedSessions',
     'erasedInvestigations',
     'erasedWatches',
@@ -315,6 +321,7 @@ const actionFields = {
     'erasedInsights',
     'erasedFeedback',
     'erasedSiteFeedback',
+    'erasedAnswerRecords',
     'erasedSuggestions',
     'erasedEnrichments',
     'erasedKgProposals',
@@ -368,6 +375,7 @@ const actionFields = {
   ],
   // One row for each portal an estate MCP tool call queried, in that portal's own log.
   'estate.query': ['permission', 'operation', 'count', 'keyRole', 'code'],
+  'duplicate.review': ['permission', 'decision', 'sessionOid', 'sessionTenantId'],
   'resource.delete': [
     'code',
     'permission',
@@ -438,6 +446,7 @@ const actionFields = {
   'maintenance.run': ['code', 'count'],
   'maintenance.source.sync': ['code', 'permission'],
   'maintenance.watch.run': ['code', 'permission'],
+  'maintenance.evaluation.run': ['code', 'permission'],
   'maintenance.enrichment.run': ['code', 'permission'],
   'maintenance.questions.run': ['code', 'permission'],
   // A composed answer's call to a federated peer: which peer, how long, and why it failed.
