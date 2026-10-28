@@ -295,6 +295,8 @@ Deno.test('GET resource overlays read legacy enrichment without migrating or wri
     } as unknown as AragProvider,
   })
   try {
+    // Isolate enrichment read purity from the portal's explicit usage logging.
+    f.stores.tenants.patch('a', { analyticsEnabled: false })
     f.state.put('enrichments:a', {
       'suggested-questions': { 'res-1': cached },
       [DEFAULT_RESEARCH_ENRICHMENT.id]: {

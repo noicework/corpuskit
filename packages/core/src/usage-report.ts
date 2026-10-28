@@ -15,7 +15,27 @@ const Count = z.number().int().nonnegative().nullable()
 /** A response time in seconds, to one decimal place; null when none was measured. */
 const Seconds = z.number().nonnegative().nullable()
 
+export const TopicUsageSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  questions: z.number().int().nonnegative(),
+  citedDocuments: z.number().int().nonnegative().nullable(),
+  totalDocuments: z.number().int().nonnegative().nullable(),
+}).strict()
+export type TopicUsage = z.infer<typeof TopicUsageSchema>
+
 const UsageCountsSchema = z.object({
+  topics: TopicUsageSchema.array().nullable(),
+  searches: Count,
+  searchP50: Seconds,
+  searchP90: Seconds,
+  searchP95: Seconds,
+  opens: Count,
+  openRate: z.number().min(0).max(1).nullable(),
+  meanOpenRank: z.number().nonnegative().nullable(),
+  consumptionAnswers: Count,
+  inputTokens: Count,
+  outputTokens: Count,
   questions: Count,
   answered: Count,
   unanswered: Count,
@@ -39,6 +59,26 @@ const UsageCountsSchema = z.object({
   generationTimeP95: Seconds,
 }).strict()
 export type UsageCounts = z.infer<typeof UsageCountsSchema>
+
+/** The operational metrics shown to curators in the current-month Insights cards. */
+export type UsageAnalyticsCounts = Pick<
+  UsageCounts,
+  | 'topics'
+  | 'searches'
+  | 'searchP50'
+  | 'searchP90'
+  | 'searchP95'
+  | 'opens'
+  | 'openRate'
+  | 'meanOpenRank'
+  | 'consumptionAnswers'
+  | 'inputTokens'
+  | 'outputTokens'
+>
+export interface UsageOverview {
+  month: string
+  totals: UsageAnalyticsCounts
+}
 
 export const UsageDaySchema = UsageCountsSchema.extend({ date: UsageDateSchema }).strict()
 export type UsageDay = z.infer<typeof UsageDaySchema>
@@ -272,6 +312,82 @@ export const USAGE_COLUMNS: readonly UsageColumn[] = Object.freeze(
       definition: 'The 95th percentile of the generation time in seconds',
       source: 'asks',
       timing: true,
+    },
+    {
+      key: 'searches',
+      heading: 'searches',
+      label: 'Searches',
+      definition: 'Successful search requests timed by the portal server',
+      timing: true,
+    },
+    {
+      key: 'searchP50',
+      heading: 'search_p50',
+      label: 'Search time p50',
+      definition:
+        'Median seconds from receiving a search to preparing its response; excludes the reader network',
+      timing: true,
+    },
+    {
+      key: 'searchP90',
+      heading: 'search_p90',
+      label: 'Search time p90',
+      definition: 'The 90th percentile of search response time in seconds',
+      timing: true,
+    },
+    {
+      key: 'searchP95',
+      heading: 'search_p95',
+      label: 'Search time p95',
+      definition: 'The 95th percentile of search response time in seconds',
+      timing: true,
+    },
+    {
+      key: 'opens',
+      heading: 'opens',
+      label: 'Opens',
+      definition: 'Accepted citation and search result open events in the period',
+    },
+    {
+      key: 'openRate',
+      heading: 'open_rate',
+      label: 'Open rate',
+      definition:
+        'Share of answers with citations and searches with results in the period that received at least one open in the period; not a unique reader count',
+    },
+    {
+      key: 'meanOpenRank',
+      heading: 'mean_open_rank',
+      label: 'Mean rank opened',
+      definition: 'Mean one-based citation or search result rank across accepted opens',
+    },
+    {
+      key: 'consumptionAnswers',
+      heading: 'consumption_answers',
+      label: 'Answers with token usage',
+      definition:
+        'Questions with provider-reported consumption; includes failed attempts and retries when reported',
+    },
+    {
+      key: 'inputTokens',
+      heading: 'input_tokens',
+      label: 'Input tokens',
+      definition:
+        'Provider-reported input tokens for research answers; blank when none were reported; excludes shared platform overhead and other operations',
+    },
+    {
+      key: 'outputTokens',
+      heading: 'output_tokens',
+      label: 'Output tokens',
+      definition:
+        'Provider-reported output tokens for research answers; blank when none were reported; tokens have no price in this report',
+    },
+    {
+      key: 'topics',
+      heading: 'topics',
+      label: 'Topics and evidence coverage',
+      definition:
+        'JSON by topic: questions count once per topic of cited documents; citedDocuments are distinct currently held documents cited in the period; totalDocuments is the current topic document count; null means unavailable',
     },
     {
       key: 'notes',

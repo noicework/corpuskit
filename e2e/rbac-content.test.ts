@@ -50,6 +50,7 @@ function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
     ...options,
     sources,
     insights: {
+      eventsBetween: () => ({ events: [], keptSince: null }),
       record: () => {
         throw new Error('Unsupported content fixture: record insight')
       },

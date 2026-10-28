@@ -114,3 +114,25 @@ for (const change of ['hidden', 'deleted'] as const) {
     expect(leaks).toEqual({ reader: false, library: false, full: false, cached: false })
   })
 }
+
+Deno.test('coverage inventory refuses a capped catalogue even when its reader listing is cached', async () => {
+  let pages = 0
+  const provider = new AragProvider({
+    resolveBinding: () => ({ baseUrl: 'https://example.test/api/v1/kb/walk', token: 'fixture' }),
+    fetchImpl: (input) => {
+      const page = Number(new URL(String(input)).searchParams.get('page_number'))
+      pages++
+      return Promise.resolve(Response.json({
+        resources: Object.fromEntries(
+          Array.from({ length: PAGE }, (_, i) => [`r-${page}-${i}`, row(`r-${page}-${i}`)]),
+        ),
+      }))
+    },
+  })
+  expect(await provider.listResources(TENANT)).toHaveLength(8000)
+  expect(pages).toBe(40)
+  await expect(provider.listResources(TENANT, { requireComplete: true })).rejects.toThrow(
+    'could not be read in full',
+  )
+  expect(pages).toBe(40)
+})
