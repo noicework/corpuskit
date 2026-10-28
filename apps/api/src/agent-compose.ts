@@ -34,12 +34,28 @@ export const NO_PASSAGES =
 export const NO_SUPPORTED_ANSWER =
   "The collections' passages did not support a cited answer to this question."
 
+/**
+ * One source of a composed answer that is not a portal of this deployment: a federated peer.
+ * `search` gets a signal that aborts at the source's time limit or when the reader leaves.
+ */
+export interface ComposeSource {
+  source: AgentSource
+  search(question: string, signal: AbortSignal): Promise<AgentChunk[]>
+}
+
 export interface AgentAnswerOptions {
   provider: RetrievalProvider
   /** The portal that answers: its agent, or its generation path when composing. */
   host: TenantConfig
   /** The portals searched when composing, each one source. The host is usually among them. */
   portals: readonly TenantConfig[]
+  /** Federated peers searched beside the portals. */
+  peers?: readonly ComposeSource[]
+  /**
+   * Asked again for every other portal as the answer is assembled: one that has stopped taking
+   * part in federated answers since its search began is left out of the answer.
+   */
+  stillParticipates?: (slug: string) => boolean
   question: string
   context?: AgentAskOptions['context']
   signal?: AbortSignal
@@ -50,7 +66,12 @@ export interface AgentAnswerOptions {
 
 /** A portal as a source of a composed answer. */
 export function portalSource(config: TenantConfig): AgentSource {
-  return { id: config.slug, label: config.branding.productName, portal: config.slug }
+  return {
+    id: config.slug,
+    label: config.branding.productName,
+    portal: config.slug,
+    kind: 'hosted',
+  }
 }
 
 class TimedOut extends Error {}
@@ -128,7 +149,22 @@ export async function* composeAcross(
   const now = options.now ?? Date.now
   const started = now()
   const sourceTimeout = options.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS
-  const sources = options.portals.map(portalSource)
+  // The host's own collection is its own: only another portal's resources can be withheld.
+  const searches: { source: AgentSource; slug?: string; search: ComposeSource['search'] }[] = [
+    ...options.portals.map((config) => ({
+      source: portalSource(config),
+      slug: config.slug,
+      search: async (query: string) =>
+        chunksFrom(
+          config.slug,
+          (await provider.search(config, query, { pageSize: 8 })).resources.filter((resource) =>
+            config.slug === host.slug || !resource.federationExcluded
+          ),
+        ),
+    })),
+    ...(options.peers ?? []).map((peer) => ({ source: peer.source, search: peer.search })),
+  ]
+  const sources = searches.map((entry) => entry.source)
   yield { type: 'agent-start', mode: 'orchestrated', sources }
 
   // Every collection is searched at once, and reported in the order they answer.
@@ -142,19 +178,36 @@ export async function* composeAcross(
       status: 'started',
     }
   }
-  type Lookup = { index: number; chunks?: AgentChunk[]; failure?: 'timeout' | 'error' }
+  type Failure = 'timeout' | 'unauthorised' | 'error'
+  type Lookup = { index: number; chunks?: AgentChunk[]; failure?: Failure }
   const pending = new Map<number, Promise<Lookup>>()
-  options.portals.forEach((config, index) => {
+  const limits: AbortController[] = []
+  searches.forEach((entry, index) => {
+    // Aborted at the time limit, so a peer's request is cut off rather than left running.
+    const limit = new AbortController()
+    limits.push(limit)
+    const abort = () => limit.abort(signal?.reason)
+    signal?.addEventListener('abort', abort, { once: true })
     pending.set(
       index,
-      within(provider.search(config, question, { pageSize: 8 }), sourceTimeout, signal).then(
-        (results): Lookup => ({ index, chunks: chunksFrom(config.slug, results.resources) }),
-        (error): Lookup => ({ index, failure: error instanceof TimedOut ? 'timeout' : 'error' }),
-      ),
+      within(entry.search(question, limit.signal), sourceTimeout, signal).then(
+        (chunks): Lookup => ({ index, chunks }),
+        (error): Lookup => {
+          if (error instanceof TimedOut) limit.abort(error)
+          return {
+            index,
+            failure: error instanceof TimedOut
+              ? 'timeout'
+              : (error as { failure?: unknown })?.failure === 'unauthorised'
+              ? 'unauthorised'
+              : 'error',
+          }
+        },
+      ).finally(() => signal?.removeEventListener('abort', abort)),
     )
   })
   const found: AgentChunk[][] = sources.map(() => [])
-  const failed: (AgentSource & { reason: 'timeout' | 'error' })[] = []
+  const failed: (AgentSource & { reason: Failure })[] = []
   while (pending.size > 0) {
     const lookup = await Promise.race(pending.values())
     pending.delete(lookup.index)
@@ -176,6 +229,8 @@ export async function* composeAcross(
               ? countOf(Math.round(sourceTimeout / 1000), 'second')
               : countOf(sourceTimeout, 'millisecond')
           }.`
+          : lookup.failure === 'unauthorised'
+          ? 'The collection refused its key.'
           : 'The collection could not be searched.',
       }
       continue
@@ -191,6 +246,15 @@ export async function* composeAcross(
     }
     yield { type: 'agent-sources', stepId: stepId(source), source, chunks: lookup.chunks! }
   }
+  // Checked again now the answer is assembled: a portal that has left federation since its
+  // search began contributes nothing to it.
+  searches.forEach((entry, index) => {
+    if (
+      entry.slug && entry.slug !== host.slug && options.stillParticipates?.(entry.slug) === false
+    ) {
+      found[index] = []
+    }
+  })
   if (failed.length > 0) {
     // In the portals' order, not the order they failed in.
     const order = new Map(sources.map((source, index) => [source.id, index]))
@@ -310,14 +374,16 @@ export async function* composeAcross(
     return
   }
   for (const paragraph of answer.split(/(?<=\n\n)/)) yield { type: 'delta', text: paragraph }
-  const byChunk = new Map(gathered.map(({ source, chunk }) => [chunk.id, source]))
+  const byChunk = new Map(gathered.map((entry) => [entry.chunk.id, entry]))
   for (const citation of bound.citations) {
+    const { source, chunk } = byChunk.get(citation.resourceId)!
     yield {
       type: 'citation',
       marker: String(citation.index),
-      sourceId: byChunk.get(citation.resourceId)!.id,
-      chunkId: citation.resourceId,
+      sourceId: source.id,
+      chunkId: chunk.id,
       title: citation.title,
+      ...(chunk.url ? { url: chunk.url } : {}),
     }
   }
   yield { type: 'done', elapsedMs: Math.max(0, Math.round(now() - started)) }

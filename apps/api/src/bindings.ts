@@ -47,6 +47,19 @@ export interface BindingPersistence {
   write(records: Record<string, unknown>, change: BindingChange): void
 }
 
+/**
+ * Where a federation peer's sealed key is kept: in this store, beside the portal's own binding,
+ * under a name no portal slug can take (slugs have no `#`).
+ */
+export function peerKeyName(slug: string, peerId: string): string {
+  return `${slug}#peer:${peerId}`
+}
+
+/** The portal a stored record belongs to: its own binding, or one of its peers' keys. */
+function portalOf(name: string): string {
+  return name.split('#peer:')[0]!
+}
+
 export function ownBinding(
   records: Record<string, KbBinding>,
   slug: string,
@@ -267,7 +280,7 @@ export class SealedBindingStore {
     // Merge after sealing so concurrent writes each keep the other's record.
     this.commit({ ...this.stored, [slug]: { ...entry, token } }, {
       operation: 'bindings.set',
-      slug,
+      slug: portalOf(slug),
     })
     this.connected.set(slug, entry)
     this.unavailable.delete(slug)
@@ -281,10 +294,28 @@ export class SealedBindingStore {
     if (this.storageInvalid) throw new BindingCryptoError('binding_storage_invalid')
     const next = { ...this.stored }
     delete next[slug]
-    this.commit(next, { operation: 'bindings.remove', slug })
+    this.commit(next, { operation: 'bindings.remove', slug: portalOf(slug) })
     this.connected.delete(slug)
     this.unavailable.delete(slug)
     this.plaintext.delete(slug)
+  }
+
+  /** Remove every federation peer key the portal holds; how many there were. */
+  removePeers(slug: string): number {
+    this.assertInitialized()
+    if (this.storageInvalid) throw new BindingCryptoError('binding_storage_invalid')
+    const prefix = peerKeyName(slug, '')
+    const names = Object.keys(this.stored).filter((name) => name.startsWith(prefix))
+    if (names.length === 0) return 0
+    const next = { ...this.stored }
+    for (const name of names) {
+      delete next[name]
+      this.connected.delete(name)
+      this.unavailable.delete(name)
+      this.plaintext.delete(name)
+    }
+    this.commit(next, { operation: 'bindings.remove', slug })
+    return names.length
   }
 
   status(slug: string): KnowledgeBoxStatus {

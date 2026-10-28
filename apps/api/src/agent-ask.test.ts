@@ -254,12 +254,12 @@ describe('POST /api/ask-agent', () => {
       body: JSON.stringify(body),
     })
 
-  it('answers as not found until a selected portal offers agent ask, and leaves out the rest', async () => {
+  it('is refused until a selected portal offers agent ask, and leaves out the rest', async () => {
     const app = buildApp({ provider: new DoubleProvider() })
     const slugs = ['marine', 'grains']
+    // With nowhere to ask, refused as the federated ask is, before anything is admitted.
     const off = await askAcross(app, { query: 'Why? #compose', slugs })
-    expect(off.status).toBe(404)
-    expect(await off.json()).toEqual({ error: 'not_found' })
+    expect(off.status).toBe(401)
     await setAgentAsk(app, 'grains', true)
     const events = await eventsOf(await askAcross(app, { query: 'Why? #compose', slugs }))
     expect(events[0]).toMatchObject({

@@ -57,6 +57,7 @@ export const AUDIT_ACTIONS = [
   'maintenance.watch.run',
   'maintenance.enrichment.run',
   'maintenance.questions.run',
+  'federation.peer.call',
 ] as const
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/).refine((v) =>
   !v.includes('://')

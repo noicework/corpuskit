@@ -807,6 +807,8 @@ export function resetCapacityOnRebind<T extends BindingWrites>(
           }
         }
         wrapped = (slug: string, ...rest: unknown[]) => {
+          // A federation peer's key names a partner's box, never the portal's own: no ledger.
+          if (slug.includes('#peer:')) return value.call(target, slug, ...rest)
           const before = boxOf(slug)
           const reset = () => {
             const after = boxOf(slug)

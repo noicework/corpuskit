@@ -26,6 +26,7 @@ import {
   DOCUMENTATION_LABEL,
   DOCUMENTATION_LABELSET,
   type ExtractionMethod,
+  FEDERATION_EXCLUDE_LABEL,
   type Intent,
   isDocOrigin,
   type LabelRef,
@@ -1362,6 +1363,11 @@ export class AragProvider implements RetrievalProvider {
       // route resolves PMC identifiers against it when the ingest stored no
       // pmcid field of its own.
       ...(raw.origin?.url ? { originUrl: raw.origin.url } : {}),
+      ...(classificationLabels(raw, FEDERATION_EXCLUDE_LABEL.labelset).includes(
+          FEDERATION_EXCLUDE_LABEL.label,
+        )
+        ? { federationExcluded: true as const }
+        : {}),
       enriched: false,
       ...((raw as { hidden?: boolean }).hidden === true ? { hidden: true } : {}),
     })
