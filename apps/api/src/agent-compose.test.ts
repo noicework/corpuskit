@@ -117,6 +117,72 @@ const answerOf = (events: AgentAskEvent[]) =>
   ofType(events, 'delta').map((event) => event.text).join('')
 
 describe('composeAcross', () => {
+  it("retains the host's three separately cited pest clauses beside a supported peer passage", async () => {
+    const host = portal('bee-host', 'Knowledge Hub research portal')
+    const hostPassages = [
+      'Varroa destructor and Tropilaelaps clareae are major exotic threats to honey bees.',
+      'Nosema apis and N. ceranae are diseases affecting honey bee productivity.',
+      'Chalkbrood, Varroa mites and colony collapse disorder are threats to honey bees.',
+    ]
+    const draft =
+      'Oyster mortality events clustered after ten warm days in shallow estuaries. [4] ' +
+      'The Knowledge Hub sources describe Varroa destructor and Tropilaelaps clareae as major exotic threats [1], ' +
+      'Nosema apis and N. ceranae as diseases affecting productivity [2], ' +
+      'and chalkbrood, Varroa mites and colony collapse disorder as threats [3].'
+    const provider = Object.assign(
+      new ComposeProvider({
+        'bee-host': async () => ({
+          query: 'q',
+          relatedQuestions: [],
+          resources: hostPassages.map((text, i) => ({
+            id: `bee-${i}`,
+            title: 'Bee health report',
+            summary: text,
+            matchedPassage: text,
+            type: 'pdf',
+            topicIds: [],
+            keyFacts: [],
+            citedCount: 0,
+            relevance: 0.9,
+          })),
+        }),
+      }),
+      {
+        composeStream: async function* () {
+          yield draft.slice(0, 130)
+          yield draft.slice(130)
+        },
+      },
+    )
+    const events = await collect(composeAcross({
+      provider,
+      host,
+      portals: [host],
+      question: 'Which pests and diseases are described?',
+      peers: [{
+        source: { id: 'peer:fish', label: 'Fisheries research (demonstration)', kind: 'peer' },
+        search: async () => [{
+          id: 'fish',
+          title: 'Oyster mortality',
+          text: PASSAGES.fisheries![0]!.text,
+        }],
+      }],
+    }))
+    expect(answerOf(events)).toBe(draft)
+    const done = ofType(events, 'done')[0]!
+    expect(done.text).toContain('exotic threats[2], Nosema')
+    expect(done.text).toContain('productivity[3], and chalkbrood')
+    expect(done.text).toContain('threats.[4]')
+    expect(ofType(events, 'citation').map((citation) => citation.chunkId))
+      .toEqual(['fish', 'bee-host/bee-0', 'bee-host/bee-1', 'bee-host/bee-2'])
+    expect(
+      ofType(events, 'agent-step').find((event) =>
+        event.id === 'verify' && event.status === 'completed'
+      )?.reason,
+    )
+      .toBeUndefined()
+  })
+
   it('keeps all 14 supported markers on an attributed host and two-peer answer', async () => {
     const host = portal('host', 'Knowledge Hub research portal')
     const collections = [

@@ -13,6 +13,58 @@ import { withheldDecline } from './answer-shape.ts'
 
 const config = { slug: `test-${crypto.randomUUID()}` } as unknown as TenantConfig
 
+Deno.test('the figure audit retains every contributing marker of a verified shared clause', async () => {
+  const combined =
+    'Varroa destructor affected 65% of monitored colonies, while Nosema apis affected 67% of colonies.'
+  const result = await bindAndAudit({
+    management: management({
+      combined: `Results\n\n${combined}`,
+      corroborating: 'Results\n\nNosema apis affected 67% of monitored colonies.',
+    }),
+    config,
+    query: 'What do the monitoring reports describe?',
+    text: `${combined}[1][2]`,
+    citations: [
+      { index: 1, resourceId: 'combined', title: 'Colony monitoring' },
+      { index: 2, resourceId: 'corroborating', title: 'Disease monitoring' },
+    ],
+    sources: [],
+    lexicon: ['Varroa destructor', 'Nosema apis'],
+    variant: undefined,
+    floor: 0.3,
+  })
+  expect(result.citations.map((citation) => citation.resourceId)).toEqual([
+    'combined',
+    'corroborating',
+  ])
+  expect(result.text).toContain('[1][2]')
+  expect(result.audit.figuresRemoved).toEqual([])
+})
+
+Deno.test('the figure audit keeps a collective contributor supporting a separate named claim', async () => {
+  const result = await bindAndAudit({
+    management: management({
+      measured: 'Results\n\nVarroa destructor affected 65% of monitored colonies.',
+      named: 'Results\n\nNosema apis affected honey bee productivity.',
+    }),
+    config,
+    query: 'What do the monitoring reports describe?',
+    text:
+      'Varroa destructor affected 65% of monitored colonies, while Nosema apis affected productivity.[1][2]',
+    citations: [
+      { index: 1, resourceId: 'measured', title: 'Colony monitoring' },
+      { index: 2, resourceId: 'named', title: 'Disease monitoring' },
+    ],
+    sources: [],
+    lexicon: ['Varroa destructor', 'Nosema apis'],
+    variant: undefined,
+    floor: 0.3,
+  })
+  expect(result.citations.map((citation) => citation.resourceId)).toEqual(['measured', 'named'])
+  expect(result.text).toContain('[1][2]')
+  expect(result.audit.figuresRemoved).toEqual([])
+})
+
 function management(texts: Record<string, string>): ExtractionSource {
   return {
     resourceExtraction: (_tenant, id) => Promise.resolve({ text: texts[id] ?? '' }),
