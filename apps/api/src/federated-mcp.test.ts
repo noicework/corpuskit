@@ -1,9 +1,10 @@
 import { expect } from '@std/expect'
-import type { AgentAskEvent } from '@research-portal/core'
+import type { AgentAskEvent, SearchResults } from '@research-portal/core'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { assertToolInventory, DECLARATIONS } from './permissions.ts'
 import { collectFederatedAnswer } from './federated-mcp.ts'
 import { peerKeyName } from './bindings.ts'
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { aragPeerFetch } from '../../../e2e/support/arag-peer-double.ts'
 
 const rpc = (method: string, params?: unknown, key?: string): RequestInit => ({
@@ -277,5 +278,60 @@ Deno.test('estate portal choices reveal only enabled portals the caller administ
     } finally {
       f.close()
     }
+  }
+})
+
+Deno.test('MCP returns the final citation-checked streamed text, including an empty final answer', async () => {
+  for (const text of ['The checked answer [1].', '']) {
+    const streamed = async function* (): AsyncIterable<AgentAskEvent> {
+      yield {
+        type: 'agent-start',
+        mode: 'orchestrated',
+        sources: [{ id: 'a', label: 'Research collection' }],
+      }
+      yield { type: 'delta', text: 'An unsupported provisional figure [99].' }
+      yield {
+        type: 'citation',
+        marker: '1',
+        sourceId: 'a',
+        chunkId: 'a/document',
+        title: 'Research evidence',
+      }
+      yield { type: 'done', elapsedMs: 10, text }
+    }
+    const result = await collectFederatedAnswer(streamed())
+    expect(result.answer).toBe(text)
+    expect(result.citations[0]?.source?.label).toBe('Research collection')
+    expect(JSON.stringify(result)).not.toContain('unsupported provisional')
+  }
+})
+
+Deno.test('federated MCP retrieval bounds host search and reports every failed source without a daily ask', async () => {
+  const provider = new DoubleProvider()
+  provider.search = () => new Promise<SearchResults>(() => {})
+  const f = createEnforcementFixture({ provider, agentSourceTimeoutMs: 10 })
+  try {
+    const response = await f.requestAs(
+      f.sessionFor('viewer'),
+      '/api/t/a/mcp',
+      tool('search_federated', { query: 'Water' }),
+    )
+    expect(response.status).toBe(200)
+    const result = (await response.json()).result
+    expect(result.isError).toBe(true)
+    expect(result.structuredContent.results).toEqual([])
+    expect(result.structuredContent.failed_sources).toMatchObject([
+      { id: 'a', reason: 'timeout' },
+      { id: 'peer:fixture-peer', reason: 'unauthorised' },
+    ])
+    const options = f.providerCalls.find((call) => call.method === 'search')!.args[2] as {
+      passagesOnly: boolean
+      signal: AbortSignal
+    }
+    expect(options.passagesOnly).toBe(true)
+    expect(options.signal.aborted).toBe(true)
+    expect(f.stores.lifecycle.usage('a', 'UTC', f.now()).asksToday).toBe(0)
+  } finally {
+    f.close()
   }
 })

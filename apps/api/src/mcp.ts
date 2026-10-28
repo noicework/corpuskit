@@ -568,7 +568,8 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
 
       // The pinned SDK indexes pending streams by JSON-RPC id. Isolate stateless
       // requests so different callers may safely reuse the same client-chosen id.
-      const enabled = offersAgentAsk(config) && (opts.provider.agentAsk || opts.provider.compose) &&
+      const enabled = offersAgentAsk(config) &&
+        (opts.provider.agentAsk || opts.provider.compose || opts.provider.composeStream) &&
         evaluateOperation(selected, 'portal.ask', { kind: 'portal', slug }, {
           slug,
           accessMode: config.accessMode,

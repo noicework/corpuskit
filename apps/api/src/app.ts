@@ -2502,6 +2502,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         composeTimeoutMs: opts.agentComposeTimeoutMs,
         audit: requiredAudit(),
         auditContext: requestContext(c.req.raw),
+        now: opts.now,
         admit: (asks) => {
           const admitted = admitAll(askEntries(c, asks, Array(asks).fill(host.slug)))
           if (!admitted.allowed) {

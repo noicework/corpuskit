@@ -10,6 +10,8 @@ import {
 import { appendAudit, type AuditStore, AuditWriteError, createAuditEvent } from './audit.ts'
 import type { PortalRequestContext } from './app.ts'
 import { declaredTool } from './permissions.ts'
+import { composeDeadline, ComposeTimedOut } from './compose-deadline.ts'
+import { COMPOSE_PASSAGE_CHARS } from '@research-portal/retrieval'
 
 export interface FederatedMcpTools {
   admit(): void
@@ -81,7 +83,10 @@ export async function collectFederatedAnswer(events: AsyncIterable<AgentAskEvent
     else if (event.type === 'citation') citations.push({ ...event })
     else if (event.type === 'sources-failed') failedSources.push(...event.sources)
     else if (event.type === 'error') failed = true
-    else if (event.type === 'done') complete = true
+    else if (event.type === 'done') {
+      if (event.text !== undefined) answer = event.text
+      complete = true
+    }
   }
   // A stream that fails or ends early must not release a partly written answer.
   failed ||= !complete || citations.some((citation) => !sources.has(citation.sourceId))
@@ -151,8 +156,9 @@ export function federatedMcpTools(
       run('search_federated', async () => {
         const sources = [{
           source: portalSource(host),
-          search: async (): Promise<AgentChunk[]> =>
-            (await provider.search(host, query, { pageSize: limit })).resources.slice(0, limit)
+          search: async (query: string, signal: AbortSignal): Promise<AgentChunk[]> =>
+            (await provider.search(host, query, { pageSize: limit, passagesOnly: true, signal }))
+              .resources.slice(0, limit)
               .flatMap((resource) => {
                 const text = (resource.matchedPassage ?? resource.summary ?? '').trim()
                 return text
@@ -160,43 +166,28 @@ export function federatedMcpTools(
                     id: `${host.slug}/${resource.id}`,
                     resourceId: resource.id,
                     title: resource.title,
-                    text: text.slice(0, 1200),
+                    text: text.slice(0, COMPOSE_PASSAGE_CHARS),
                   }]
                   : []
               }),
         }, ...peers]
         const outcomes = await Promise.all(sources.map(async ({ source, search }) => {
-          const deadline = new AbortController()
-          const stop = () => deadline.abort(signal?.reason)
-          signal?.addEventListener('abort', stop, { once: true })
-          if (signal?.aborted) stop()
-          const timer = setTimeout(
-            () => deadline.abort(),
-            options.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS,
-          )
+          const deadline = composeDeadline(options.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS, signal)
           try {
-            const chunks = await Promise.race([
-              search(query, deadline.signal),
-              new Promise<never>((_, reject) => {
-                const abort = () => reject(new Error('Source stopped'))
-                if (deadline.signal.aborted) abort()
-                else deadline.signal.addEventListener('abort', abort, { once: true })
-              }),
-            ])
+            const chunks = await deadline.run(() => search(query, deadline.signal))
             return { source, chunks: chunks.slice(0, limit) }
           } catch (error) {
             if (error instanceof AuditWriteError) throw error
             return {
               source,
-              reason: deadline.signal.aborted
+              reason: error instanceof ComposeTimedOut
                 ? 'timeout'
                 : (error as { failure?: string }).failure === 'unauthorised'
                 ? 'unauthorised'
                 : 'error',
             }
           } finally {
-            clearTimeout(timer)
-            signal?.removeEventListener('abort', stop)
+            deadline.close()
           }
         }))
         signal?.throwIfAborted()

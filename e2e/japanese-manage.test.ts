@@ -137,6 +137,7 @@ async function assertButtonDensity(page: Page) {
 }
 
 async function navigate(page: Page, tab: string) {
+  await page.bringToFront()
   await page.evaluate((tab) => {
     history.pushState(null, '', `/t/marine/manage?tab=${tab}`)
     dispatchEvent(new PopStateEvent('popstate'))

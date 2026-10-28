@@ -185,6 +185,7 @@ viewer includes `portal.ask`; a key still reaches only its bound portal at this 
   `POST /api/t/:slug/ask-agent`: the configured agent, or one answer composed from the host's
   passages and its federation peers. Returns `answer`, `mode`, `sources`, `citations` with
   their `source` attribution, and `failed_sources` with each unavailable source and reason.
+  The returned text uses the completed stream's citation-checked final answer.
   An interrupted or failed answer releases no partial answer text.
 - `search_federated`: `query` (1 to 2000 characters) and optional `limit` (passages per source,
   default 4, maximum 20). Returns `results` containing passage text and its `source`, plus
