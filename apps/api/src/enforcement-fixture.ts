@@ -59,6 +59,11 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
     learningId: 'learning-123',
     good: true,
   }],
+  ['POST', '/api/t/:slug/site-feedback', 'portal.ask', 'viewer', {
+    message: 'The library filters are hard to find.',
+    category: 'suggestion',
+    pagePath: '/t/a/library',
+  }],
   ['POST', '/api/t/:slug/generate', 'portal.generate', 'analyst', {
     kind: 'comparison',
     query: 'Abalone evidence',
@@ -225,7 +230,14 @@ export function matrixManagement(calls: string[]): AragProvider {
 export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
   const [method, template, permission, role, body] = row
   const calls: string[] = []
-  const f = createEnforcementFixture({ management: matrixManagement(calls) })
+  const notified: string[] = []
+  const f = createEnforcementFixture({
+    management: matrixManagement(calls),
+    siteFeedbackNotifier: (_portal, record) => {
+      notified.push(record.id)
+      return Promise.resolve('matrix-notification')
+    },
+  })
   try {
     assertExpectedPermission(
       method,
@@ -284,6 +296,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       f.authorityDependencies(),
     )
     key.commit()
+    f.stores.tenants.patch('a', { siteFeedback: true })
     const id = template.includes('/sessions')
       ? 'session'
       : template.includes('/watches')
@@ -310,6 +323,8 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
+        // Reader feedback is accepted only from the portal's own pages.
+        origin: 'http://localhost',
       },
       ...(body !== undefined || template.endsWith('/mcp')
         ? { body: JSON.stringify(body ?? rpc) }
@@ -322,6 +337,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         'enrichment_records',
         'routing_records',
         'answer_feedback',
+        'site_feedback',
         'audit_query_snapshots',
       ]
         .map((table) => f.database.all(`SELECT * FROM ${table}`))
@@ -359,7 +375,10 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
     const response = await f.requestAs(session, path, init)
     const result = await response.text()
     expect(response.status, `${template}: ${result}`).toBe(
-      template === '/t/*' ? 308 : template.endsWith('/mcp/keys') && method === 'POST' ? 201 : 200,
+      template === '/t/*' ? 308 : (template.endsWith('/mcp/keys') && method === 'POST') ||
+          template.endsWith('/site-feedback')
+        ? 201
+        : 200,
     )
     expect(result).not.toContain('"error":')
     expect(result).not.toContain('"type":"error"')
@@ -427,6 +446,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         '/api/t/:slug/investigations/:id': 'Seeded investigation',
         '/api/t/:slug/mcp/keys': 'Seeded client',
         '/api/t/:slug/mcp': 'search_corpus',
+        '/api/t/:slug/site-feedback': '"ok":true',
       }
       expect(expected[template], `missing positive assertion ${template}`).toBeDefined()
       expect(result).toContain(expected[template]!)
@@ -435,6 +455,12 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
           '/t/a/ask?q=abalone&name=Abalone&labelsets=topic,kind',
         )
       }
+    }
+    if (template === '/api/t/:slug/site-feedback') {
+      expect(notified).toHaveLength(1)
+      expect(f.stores.siteFeedback.recent('a', 10)).toMatchObject([
+        { id: notified[0], delivery: 'sent', notificationId: 'matrix-notification' },
+      ])
     }
     if (template === '/api/t/:slug/config') {
       const safe = await (await f.requestAs(f.unassigned, path)).json()
@@ -531,6 +557,7 @@ export function createEnforcementFixture(
       | 'rateLimitEstatePerMin'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
+      | 'siteFeedbackNotifier'
     >
     & {
       bindingKey?: string
@@ -923,6 +950,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['GET', 'corpus-health', 'content.write'],
   ['POST', 'purge-failed', 'content.write', { dryRun: false }],
   ['GET', 'insights', 'content.write'],
+  ['GET', 'site-feedback', 'content.write'],
   ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
   ['DELETE', 'resources/:id', 'content.write'],
   ['GET', 'sources', 'content.write'],
@@ -1133,6 +1161,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
         labelset: { id: 'species', title: 'Species', paragraphs: false, labels: ['Abalone'] },
       }])
       fixture.stores.kgProposals.set('a', proposal)
+      fixture.stores.siteFeedback.save('a', {
+        id: '00000000-0000-4000-8000-000000000001',
+        slug: 'a',
+        createdAt: new Date().toISOString(),
+        category: 'general',
+        message: 'Seeded reader feedback',
+        pageUrl: 'http://localhost/t/a',
+        delivery: 'failed',
+      })
       if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
       if (method === 'DELETE' && suffix === 'branding/image/:name') {
         fixture.stores.branding.put('a', 'image-banner', {
@@ -1242,6 +1279,10 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
               ...fixture.stores.insights.summary('a'),
               feedback: { helpful: 0, unhelpful: 0, flagged: [] },
             })
+          } else if (suffix === 'site-feedback') {
+            expect(JSON.parse(result).feedback).toMatchObject([
+              { message: 'Seeded reader feedback', delivery: 'failed' },
+            ])
           } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
           else if (suffix === 'lifecycle') {
             expect(JSON.parse(result)).toEqual({
