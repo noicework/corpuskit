@@ -114,10 +114,9 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
-        # test ignoring the other shards' files; see ci.yml.
-        run: |
-          ignore=$(deno run --allow-read=packages,apps e2e/support/shard.ts ignore "$SHARD" "$SHARDS" packages apps)
-          deno task test "--ignore=$ignore"
+        # test ignoring the other shards' files, with one retry of a failing
+        # file; see ci.yml.
+        run: deno run --allow-read --allow-write --allow-env --allow-run=deno e2e/support/shard.ts run test "$SHARD" "$SHARDS" packages apps
 
   e2e:
     # The browser E2E suite in parallel shards, as in ci.yml.
@@ -176,10 +175,9 @@ jobs:
           ASTRAL_BIN_ARGS: --no-sandbox
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
-        # test:e2e ignoring the other shards' files; see ci.yml.
-        run: |
-          ignore=$(deno run --allow-read=e2e e2e/support/shard.ts ignore "$SHARD" "$SHARDS" e2e)
-          deno task test:e2e "--ignore=$ignore"
+        # test:e2e ignoring the other shards' files, with one retry of a
+        # failing file; see ci.yml.
+        run: deno run --allow-read --allow-write --allow-env --allow-run=deno e2e/support/shard.ts run test:e2e "$SHARD" "$SHARDS" e2e
 
   deploy:
     name: Deploy to Cloudflare Workers

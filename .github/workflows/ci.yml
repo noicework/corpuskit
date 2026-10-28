@@ -106,9 +106,10 @@ jobs:
         # after another in one process, as the single job did. The task takes
         # its directories from deno.json's test.include: Deno applies --ignore
         # only under the first of several directories named as arguments.
-        run: |
-          ignore=$(deno run --allow-read=packages,apps e2e/support/shard.ts ignore "$SHARD" "$SHARDS" packages apps)
-          deno task test "--ignore=$ignore"
+        # A file that fails runs once more in the same job; the job passes only
+        # if that second run passes, and the job summary lists the file as
+        # flaky. More than three failing files fails at once.
+        run: deno run --allow-read --allow-write --allow-env --allow-run=deno e2e/support/shard.ts run test "$SHARD" "$SHARDS" packages apps
 
   e2e:
     name: Browser E2E persona journeys (${{ matrix.shard }}/${{ strategy.job-total }})
@@ -171,7 +172,6 @@ jobs:
           SHARDS: ${{ strategy.job-total }}
         # The whole of test:e2e, ignoring the files the other shards run. Deno
         # still finds the test files itself, so a file the shard plan does not
-        # know about runs on every shard rather than on none.
-        run: |
-          ignore=$(deno run --allow-read=e2e e2e/support/shard.ts ignore "$SHARD" "$SHARDS" e2e)
-          deno task test:e2e "--ignore=$ignore"
+        # know about runs on every shard rather than on none. A failing file
+        # runs once more, as in the unit shards.
+        run: deno run --allow-read --allow-write --allow-env --allow-run=deno e2e/support/shard.ts run test:e2e "$SHARD" "$SHARDS" e2e

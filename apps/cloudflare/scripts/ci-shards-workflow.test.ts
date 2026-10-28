@@ -13,7 +13,7 @@ function job(workflow: string, name: string): string {
 /** The lines of a sharded job that decide what it runs and over how many shards. */
 const shardRun = (workflow: string, name: string) =>
   job(workflow, name).split('\n').filter((line) =>
-    /^ +(shard: |SHARDS?: |ASTRAL_BIN_ARGS: |ignore=|deno task )/.test(line)
+    /^ +(shard: |SHARDS?: |ASTRAL_BIN_ARGS: |run: .*shard\.ts )/.test(line)
   )
 
 Deno.test('nothing deploys until every unit and browser E2E shard passes', () => {
@@ -26,8 +26,8 @@ Deno.test('pull requests run the same shards that gate a deploy', () => {
   for (const name of ['unit', 'e2e']) {
     expect(shardRun(read('ci.yml'), name)).toEqual(shardRun(read('deploy.yml'), name))
   }
-  expect(shardRun(read('ci.yml'), 'unit')).toHaveLength(5)
-  expect(shardRun(read('ci.yml'), 'e2e')).toHaveLength(6)
+  expect(shardRun(read('ci.yml'), 'unit')).toHaveLength(4)
+  expect(shardRun(read('ci.yml'), 'e2e')).toHaveLength(5)
 })
 
 Deno.test('the gate jobs together run the whole of deno task check', () => {
@@ -39,14 +39,13 @@ Deno.test('the gate jobs together run the whole of deno task check', () => {
   // given `packages/ apps/` ran nearly every file under apps/.
   expect(tasks.test).toBe('deno test --allow-env --allow-read --allow-write')
   expect(config.test.include).toEqual(['packages/', 'apps/'])
-  for (const workflow of [read('ci.yml'), read('deploy.yml')]) {
-    expect(shardRun(workflow, 'unit').join('\n')).toContain(
-      ' ignore "$SHARD" "$SHARDS" packages apps)',
-    )
-  }
+  // Each shard runs its task through shard.ts, which adds the ignore list and the one retry.
+  const run = (task: string, roots: string) =>
+    '        run: deno run --allow-read --allow-write --allow-env --allow-run=deno ' +
+    `e2e/support/shard.ts run ${task} "$SHARD" "$SHARDS" ${roots}`
   for (const workflow of [read('ci.yml'), read('deploy.yml')]) {
     expect(job(workflow, 'gate')).toContain('\n        run: deno task check:static\n')
-    expect(shardRun(workflow, 'unit')).toContain('          deno task test "--ignore=$ignore"')
-    expect(shardRun(workflow, 'e2e')).toContain('          deno task test:e2e "--ignore=$ignore"')
+    expect(shardRun(workflow, 'unit')).toContain(run('test', 'packages apps'))
+    expect(shardRun(workflow, 'e2e')).toContain(run('test:e2e', 'e2e'))
   }
 })

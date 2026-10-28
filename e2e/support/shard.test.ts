@@ -1,5 +1,14 @@
 import { expect } from '@std/expect'
-import { assign, measure, testFiles } from './shard.ts'
+import {
+  assign,
+  MAX_RETRIED_FILES,
+  measure,
+  outcome,
+  parseReport,
+  retryFiles,
+  retrySummary,
+  testFiles,
+} from './shard.ts'
 
 Deno.test('every file lands in exactly one shard, heaviest first onto the lightest', () => {
   const weights = {
@@ -92,4 +101,79 @@ Deno.test('weights are measured per file, to a tenth of a second, from a CI log'
     'e2e/b.test.ts': 138,
     'e2e/c.test.ts': 9,
   })
+})
+
+// Trimmed from a real `deno test --junit-path` report: a failing test, a failing step and its
+// parent, an ignored test, and a passing file.
+const REPORT = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="deno test" tests="6" failures="3" errors="0" time="0.091">
+    <testsuite name="./e2e/a.test.ts" tests="4" disabled="0" errors="0" failures="3">
+        <testcase name="passes" classname="./e2e/a.test.ts" time="0.000" line="1" col="6">
+        </testcase>
+        <testcase name="fails &amp; says so" classname="./e2e/a.test.ts" time="0.000" line="2" col="6">
+            <failure message="Uncaught Error: boom">Error: boom</failure>
+        </testcase>
+        <testcase name="steps" classname="./e2e/a.test.ts" time="0.000" line="3" col="6">
+            <failure message="1 test step failed">1 test step failed.</failure>
+        </testcase>
+        <testcase name="steps &gt; inner" classname="./e2e/a.test.ts" time="0.000" line="3" col="43">
+            <failure message="Uncaught Error: x">Error: x</failure>
+        </testcase>
+    </testsuite>
+    <testsuite name="./e2e/b.test.ts" tests="1" disabled="1" errors="0" failures="0">
+        <testcase name="skipped" classname="./e2e/b.test.ts" time="0.000" line="1" col="6">
+            <skipped/>
+        </testcase>
+    </testsuite>
+    <testsuite name="./e2e/c.test.ts" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="ok" classname="./e2e/c.test.ts" time="0.000" line="1" col="6">
+        </testcase>
+    </testsuite>
+</testsuites>`
+
+Deno.test("a JUnit report gives every file it covers and each file's failing tests", () => {
+  const report = parseReport(REPORT)
+  expect([...report.files]).toEqual(['e2e/a.test.ts', 'e2e/b.test.ts', 'e2e/c.test.ts'])
+  expect([...report.failures]).toEqual([
+    ['e2e/a.test.ts', ['fails & says so', 'steps', 'steps > inner']],
+  ])
+})
+
+Deno.test('a retry covers failing files and owned files the report never mentions', () => {
+  const report = parseReport(REPORT)
+  // d failed to load, so the report has no entry for it; c passed; e belongs to another shard.
+  expect(retryFiles(['e2e/c.test.ts', 'e2e/d.test.ts'], report)).toEqual([
+    'e2e/a.test.ts',
+    'e2e/d.test.ts',
+  ])
+  // No report at all (the run stopped early) means every owned file runs again.
+  expect(retryFiles(['e2e/c.test.ts', 'e2e/d.test.ts'], null)).toEqual([
+    'e2e/c.test.ts',
+    'e2e/d.test.ts',
+  ])
+})
+
+Deno.test('the job summary lists each retried file, its failing tests and how it did again', () => {
+  const first = parseReport(REPORT)
+  const again = parseReport(
+    REPORT.replace('<failure message="Uncaught Error: x">Error: x</failure>', '')
+      .replaceAll('./e2e/a.test.ts', './e2e/z.test.ts'),
+  )
+  const files = ['e2e/a.test.ts', 'e2e/c.test.ts', 'e2e/d.test.ts']
+  const summary = retrySummary('test:e2e, shard 2/7', first, files, again)
+  expect(summary).toContain('### test:e2e, shard 2/7: 3 test files failed')
+  expect(summary).toContain(
+    '- `e2e/a.test.ts`: fails & says so; steps; steps > inner. Did not report again',
+  )
+  expect(summary).toContain(
+    '- `e2e/c.test.ts`: did not report (failed to load, or the run stopped). Passed when run again',
+  )
+  expect(summary).toContain(
+    '- `e2e/d.test.ts`: did not report (failed to load, or the run stopped). Did not report again',
+  )
+  expect(outcome('e2e/z.test.ts', again)).toBe('Failed again')
+  expect(outcome('e2e/c.test.ts', null)).toBe('Did not report again')
+  expect(retrySummary('test, shard 1/3', first, files)).toContain(
+    `More than ${MAX_RETRIED_FILES} files failed, so none were run again.`,
+  )
 })
