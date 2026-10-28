@@ -1,4 +1,5 @@
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { afterEach, describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import {
@@ -363,6 +364,11 @@ describe('independent admin route permission matrix', () => {
     ['GET', '/api/admin/overlap', 'portal.create'],
     ['POST', '/api/admin/overlap/refresh', 'portal.create'],
     ['GET', '/api/admin/overlap/export', 'portal.create'],
+    ['GET', 'answer-records/records/:id', 'content.write'],
+    ['GET', 'answer-records/records/:id/export', 'content.write'],
+    ['GET', 'answer-records/export', 'content.write'],
+    ['GET', 'answer-records/retention', 'content.write'],
+    ['PUT', 'answer-records/retention', 'behaviour.write', { days: 90 }],
     ['GET', 'lifecycle', 'portal.create'],
     ['PUT', 'lifecycle', 'portal.create', { status: 'read_only', limits: { asksPerDay: 5 } }],
     ['GET', 'usage', 'portal.create'],
@@ -686,6 +692,10 @@ describe('independent admin route permission matrix', () => {
         const originalFetch = globalThis.fetch
         const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
         try {
+          const answerRecord = answerRecordFixture('a', fixture.now())
+          if (suffix.startsWith('answer-records')) {
+            fixture.stores.answerRecords.record('a', answerRecord)
+          }
           const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
           fixture.stores.enrichments.put('a', 'seeded-record', {
             schemaId: 'research',
@@ -761,7 +771,9 @@ describe('independent admin route permission matrix', () => {
               .replace(':hostname', 'research.example.org')
               .replace(
                 ':id',
-                suffix.startsWith('sources')
+                suffix.startsWith('answer-records')
+                  ? answerRecord.answerId
+                  : suffix.startsWith('sources')
                   ? source.id
                   : suffix.includes('suggestions')
                   ? 'suggestion-a'
@@ -810,7 +822,15 @@ describe('independent admin route permission matrix', () => {
                 ),
               ).toBe(true)
             } else if (method === 'GET') {
-              if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+              if (suffix === 'answer-records/records/:id') {
+                expect(JSON.parse(result)).toEqual(answerRecord)
+              } else if (
+                suffix === 'answer-records/records/:id/export' || suffix === 'answer-records/export'
+              ) {
+                expect(JSON.parse(result).records).toEqual([answerRecord])
+              } else if (suffix === 'answer-records/retention') {
+                expect(JSON.parse(result)).toEqual({ days: 90 })
+              } else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
               else if (suffix === 'suggestions') {
                 expect(JSON.parse(result)[0].id).toBe('suggestion-a')
               } else if (suffix === 'enrichments/export') {
@@ -3552,6 +3572,8 @@ describe('POST /api/t/:slug/ask sentence-level binding and audit', () => {
     })
     // Every citation event precedes done; the quality judge's event follows it.
     const order = events.map((e) => e.type)
+    expect(order.indexOf('answer-record')).toBeGreaterThan(-1)
+    expect(order.indexOf('answer-record')).toBeLessThan(order.indexOf('done'))
     expect(order.indexOf('done')).toBeGreaterThan(order.lastIndexOf('citation'))
     expect(order.indexOf('quality')).toBeGreaterThan(order.indexOf('done'))
   })

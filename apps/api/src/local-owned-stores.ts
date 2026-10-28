@@ -1,4 +1,5 @@
 import { DuplicateReviewStore } from './duplicate-store.ts'
+import { AnswerRecordStore, FileAnswerRecordState } from './answer-record-store.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   appendAudit,
@@ -239,6 +240,7 @@ export function localOwnedStores(
       (args) => EnrichmentStore.checkpoint(shared.enrichments, String(args[0])),
     )
   }
+  const answerRecordState = new FileAnswerRecordState(dataDir)
   const erasure = wrap('erasure', {
     erase: (_slug: string, work: () => unknown) => {
       const result = work()
@@ -259,6 +261,11 @@ export function localOwnedStores(
     ),
     attach,
     erasureTransaction: <T>(slug: string, work: () => T): T => erasure.erase(slug, work) as T,
+    answerRecords: wrap(
+      'answerRecords',
+      new AnswerRecordStore(answerRecordState),
+      (args) => answerRecordState.mutationPaths(args),
+    ),
     insights: wrap('insights', new InsightsStore(dataDir), files('insights', 'jsonl')),
     feedback: wrap('feedback', new FeedbackStore(dataDir), files('feedback')),
     siteFeedback: wrap('siteFeedback', new SiteFeedbackStore(dataDir), files('site-feedback')),

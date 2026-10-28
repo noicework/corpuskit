@@ -224,7 +224,20 @@ async function askPayload(mode: 'yield' | 'throw'): Promise<string> {
       }),
     })
     expect(response.status).toBe(200)
-    return await response.text()
+    const body = await response.text()
+    // Public answer ids are deliberately UUIDs; only that declared event is exempt from
+    // the upstream-identifier detector, which still inspects every error and other event.
+    return body.split('\n').map((line) => {
+      if (!line.startsWith('data: ')) return line
+      const event = JSON.parse(line.slice(6))
+      if (event.type !== 'answer-record') return line
+      expect(Object.keys(event).sort()).toEqual(['answerId', 'type'])
+      expect(event.answerId).toMatch(
+        /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+      )
+      expect(event.answerId).not.toBe('991906b6-1f55-4916-aa2e-33e566956ce3')
+      return 'data: {"type":"answer-record","answerId":"public-record"}'
+    }).join('\n')
   } finally {
     fixture.close()
   }
