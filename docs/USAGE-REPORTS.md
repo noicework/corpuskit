@@ -71,7 +71,7 @@ progress the report runs to today.
 
 The groundedness score is the knowledge box's own answer-quality measure, recorded with each
 answer. The definitions live in `USAGE_COLUMNS` (`packages/core/src/usage-report.ts`), which the
-CSV, the printable report and this table share. Questions put to the portal by AI assistants over
+CSV and the printable report share. The additional metrics are described below. Questions put to the portal by AI assistants over
 MCP are not in the ask log, so they are not counted.
 
 ## Response times
@@ -145,6 +145,8 @@ them (`pandas.read_csv(path, comment='#')`, or `read.csv(path, comment.char = '#
 come the heading row, a row per day and a `total` row. Every cell is quoted, and a value that a
 spreadsheet would read as a formula is prefixed with `'`, as in the audit export.
 
+This abbreviated example omits the additional topic, open, search and token columns described below.
+
 ```
 # CorpusKit usage report
 # Portal: marine
@@ -180,7 +182,7 @@ period**, against **all documents the topic currently holds**. The denominator i
 catalogue snapshot, not the historical size at month end. Documents removed since the answer do
 not inflate the numerator; multiple questions citing the same document still count one document.
 This measures use of the collection, not answer quality, completeness of the research or coverage
-of unanswered questions. A catalogue that cannot be read in full gives null document counts.
+of unanswered questions. A catalogue that cannot be read in full gives null document counts, including one that reaches the provider’s 8,000-document reader cap without proving the inventory ended. A capped listing is never treated as the whole topic.
 
 Earlier asks have no citation metadata. Topic, coverage, click-through and search measurements
 start with this release and are not backfilled. A historical zero for these measures means no
@@ -216,9 +218,11 @@ Absent or true enables recording. Disabling recording does not erase already ret
 
 Search/open rows live beside asks under `insights:<slug>` on the Durable Object and in
 `DATA_DIR/insights/<slug>.jsonl` locally. The existing `insights` erasure kind removes all three
-record types together; no new erased record kind is introduced. Local mutations are audited on
-both runtimes. Normal audit records retain their existing actor policy separately from the
-anonymous usage payload.
+record types together; no new erased record kind is introduced. Usage mutations are audited with an anonymous actor on
+both runtimes, including when a signed-in reader opens a source. Privileged operations and access
+denials retain their normal audit policy. The existing answer-evidence boundary persists the
+completed answer before releasing its terminal event, so beacon validation can use the kept log
+as soon as the reader receives that event.
 
 ## Consumption and cost attribution
 
@@ -242,3 +246,17 @@ the open source application. A hosting operator can price these portal token tot
 from shared core platform costs and other portal-specific services using its own metering and
 commercial terms. This report is not a complete hosting invoice or a measurement of those
 excluded operations.
+
+
+## Upgrade and rollback
+
+No dependency or lockfile change is needed. Analytics are enabled by default; set
+`analyticsEnabled: false` to stop new usage recording. Existing ask records remain readable and
+are never backfilled with inferred topics or estimated tokens. The answer evidence and routing
+records retain their separate purposes and retention settings.
+
+The insights log now contains tagged search/open rows alongside asks. A rollback to a build
+without this mixed-record reader requires restoring the pre-upgrade insights log, or removing
+only the tagged search/open rows in a backed-up copy before restoring that older build. Older
+builds cannot safely interpret those rows as asks. Portal erasure removes every record type in
+the insights log through the existing inventory.

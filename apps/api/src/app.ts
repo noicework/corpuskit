@@ -178,7 +178,7 @@ import {
   withLayout,
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
-import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
+import { buildUsageReport, usageOverview, usagePeriod, usageReportCsv } from './usage-report.ts'
 import { knowledgeGaps } from './knowledge-gaps.ts'
 import { BindingStore, type BindingStoreApi, peerKeyName } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
@@ -6396,14 +6396,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )!
     return c.json({
       ...insights.summary(config.slug),
-      usage: buildUsageReport(config.slug, month, {
+      usage: usageOverview(buildUsageReport(config.slug, month, {
         asks: insights.asksBetween(config.slug, month.from, month.to),
         events: insights.eventsBetween(config.slug, month.from, month.to),
-        catalogue: await provider.listResources(config).catch(() => null),
+        catalogue: await provider.listResources(config, { requireComplete: true }).catch(() =>
+          null
+        ),
         topics: config.topics,
         ratings: { records: [], matched: new Set() },
         documents: null,
-      }, now),
+      }, now)),
       // This month's questions the collection could not answer well: curators' eyes only.
       knowledgeGaps: knowledgeGaps(
         insights.asksBetween(config.slug, month.from, month.to).asks,
@@ -6459,7 +6461,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const report = buildUsageReport(config.slug, period, {
       asks: insights.asksBetween(config.slug, period.from, period.to),
       events: insights.eventsBetween(config.slug, period.from, period.to),
-      catalogue: await provider.listResources(config).catch(() => null),
+      catalogue: await provider.listResources(config, { requireComplete: true }).catch(() => null),
       topics: config.topics,
       ratings: { records: ratings, matched: new Set(Object.keys(asked)) },
       documents,

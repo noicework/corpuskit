@@ -710,3 +710,47 @@ Deno.test('consumption sums provider-reported tokens including failed answers an
   })
   expect(report.totals).toMatchObject({ consumptionAnswers: 3, inputTokens: 170, outputTokens: 35 })
 })
+
+Deno.test('curators receive current-month card totals without daily report rows or export metadata', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const curator = f.sessionFor('curator')
+    const response = await f.requestAs(curator, '/api/admin/t/a/insights')
+    expect(response.status).toBe(200)
+    const snapshot = (await response.json()).usage
+    expect(Object.keys(snapshot).sort()).toEqual(['month', 'totals'])
+    expect(snapshot.month).toBe('2026-09')
+    expect(snapshot.totals).toMatchObject({ searches: 0, opens: 0 })
+    expect(snapshot.totals.questions).toBeUndefined()
+    expect(snapshot.totals.ratings).toBeUndefined()
+    expect(snapshot.totals.documentsAdded).toBeUndefined()
+    expect(snapshot.days).toBeUndefined()
+    expect(snapshot.generatedAt).toBeUndefined()
+    expect((await f.requestAs(curator, '/api/admin/t/a/insights/usage?month=2026-09')).status).toBe(
+      403,
+    )
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('coverage includes unasked catalogue topics even before the portal taxonomy lists them', () => {
+  const report = buildUsageReport('example', usagePeriod('2026-10', 'UTC', NOW)!, {
+    ...none,
+    catalogue: [{
+      id: 'doc-new',
+      title: 'Research note',
+      summary: 'A research note',
+      type: 'pdf',
+      topicIds: ['new-topic'],
+      keyFacts: [],
+    }],
+  }, NOW)
+  expect(report.totals.topics).toEqual([{
+    id: 'new-topic',
+    label: 'new-topic',
+    questions: 0,
+    citedDocuments: 0,
+    totalDocuments: 1,
+  }])
+})

@@ -1426,7 +1426,7 @@ export class DurableTenantStore implements TenantStoreApi {
   }
 }
 
-/** Asks the Durable Object keeps per portal; past it, the oldest go first. */
+/** Usage records the Durable Object keeps per portal; past it, the oldest go first. */
 export const DURABLE_ASKS_KEPT = 50_000
 
 export class DurableInsightsStore implements InsightsStoreApi {

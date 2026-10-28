@@ -32,7 +32,7 @@ function fixture(opts: {
   /** The zero-based page the platform reports for the retrieved paragraph. */
   page?: number
   metadata?: {
-    tokens?: { input?: number; output?: number }
+    tokens?: { input?: number; output?: number } | null
     timings?: { generative_total: number }
   }
 } = {}) {
@@ -667,13 +667,13 @@ Deno.test('a later capability fallback keeps resource scope, answer settings and
 })
 
 Deno.test('ask requests consumption and distinguishes reported tokens from timing-only metadata', async () => {
-  for (const tokens of [{ input: 120, output: 30 }, { input: 0, output: 0 }, undefined]) {
+  for (const tokens of [{ input: 120, output: 30 }, { input: 0, output: 0 }, null, undefined]) {
     const f = fixture({ metadata: { tokens, timings: { generative_total: 2 } } })
     const events = await collect(f.provider)
     expect(f.headers[0]!.get('x-show-consumption')).toBe('true')
     expect(events.find((e) => e.type === 'usage')).toEqual({
       type: 'usage',
-      tokensReported: tokens !== undefined,
+      tokensReported: tokens != null,
       inputTokens: tokens?.input ?? 0,
       outputTokens: tokens?.output ?? 0,
       firstChunkSec: undefined,

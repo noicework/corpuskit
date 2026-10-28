@@ -6,6 +6,7 @@ import {
   type UsageCounts,
   type UsageDay,
   UsageMonthSchema,
+  type UsageOverview,
   type UsageReport,
 } from '@research-portal/core'
 import { auditCsvCell } from './audit-routes.ts'
@@ -333,6 +334,26 @@ export function buildUsageReport(
         kept: ANSWER_FEEDBACK_KEEP,
       },
       documents: { from: documents ? documentsFrom : null, available: documents !== null },
+    },
+  }
+}
+
+/** Curators receive the current month's card totals, never the daily export document. */
+export function usageOverview({ month, totals }: UsageReport): UsageOverview {
+  return {
+    month,
+    totals: {
+      topics: totals.topics,
+      searches: totals.searches,
+      searchP50: totals.searchP50,
+      searchP90: totals.searchP90,
+      searchP95: totals.searchP95,
+      opens: totals.opens,
+      openRate: totals.openRate,
+      meanOpenRank: totals.meanOpenRank,
+      consumptionAnswers: totals.consumptionAnswers,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
     },
   }
 }

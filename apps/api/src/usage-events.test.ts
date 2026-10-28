@@ -51,7 +51,15 @@ for (const adapter of ['local', 'durable'] as const) {
       expect(measured.kind === 'search' && measured.durationSec).toBeGreaterThanOrEqual(0)
       const body = { searchId: result.searchId, resourceId: result.resources[0].id, rank: 1 }
       const open = () => f.requestAs(null, '/api/t/public-a/events/open', json(body))
-      expect((await open()).status).toBe(204)
+      expect(
+        (await f.requestAs(f.sessionFor('viewer'), '/api/t/public-a/events/open', json(body)))
+          .status,
+      ).toBe(204)
+      expect(
+        f.rbac.audit.read({ scope: { kind: 'portal', slug: 'public-a' } }).filter((e) =>
+          e.action === 'local.mutation'
+        ).every((e) => e.actor_kind === 'anonymous' && e.actor_id === null),
+      ).toBe(true)
       expect(records()[1]).toEqual({
         kind: 'open',
         ts: new Date(f.now()).toISOString(),

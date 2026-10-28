@@ -359,7 +359,7 @@ export interface AskWindow {
   /** The asks recorded in the period, oldest first. */
   asks: AskInsight[]
   /**
-   * When the log began dropping its oldest asks, as the time of the oldest it still holds; null
+   * When the shared usage log began dropping records, as the time of its oldest record; null
    * while it holds every ask it was given.
    */
   keptSince: string | null

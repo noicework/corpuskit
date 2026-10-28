@@ -48,6 +48,11 @@ export function discoveryCounts(
   for (const topic of sources.topics ?? []) {
     topicCounts.set(topic.id, { questions: 0 })
   }
+  for (const resource of sources.catalogue ?? []) {
+    for (const id of resource.topicIds) {
+      if (!topicCounts.has(id)) topicCounts.set(id, { questions: 0 })
+    }
+  }
   for (const ask of asks.filter((a) => a.answered)) {
     const seen = new Set<string>()
     for (const resource of ask.citedResources ?? []) {

@@ -217,6 +217,7 @@ function migrateMessage(raw: unknown): ChatMessage {
     interpretedQuery: typeof message?.interpretedQuery === 'string'
       ? message.interpretedQuery
       : undefined,
+    answerId: typeof message?.answerId === 'string' ? message.answerId : undefined,
     answerRecordId: typeof message?.answerRecordId === 'string'
       ? message.answerRecordId
       : undefined,

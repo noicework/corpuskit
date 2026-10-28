@@ -60,6 +60,26 @@ const UsageCountsSchema = z.object({
 }).strict()
 export type UsageCounts = z.infer<typeof UsageCountsSchema>
 
+/** The operational metrics shown to curators in the current-month Insights cards. */
+export type UsageAnalyticsCounts = Pick<
+  UsageCounts,
+  | 'topics'
+  | 'searches'
+  | 'searchP50'
+  | 'searchP90'
+  | 'searchP95'
+  | 'opens'
+  | 'openRate'
+  | 'meanOpenRank'
+  | 'consumptionAnswers'
+  | 'inputTokens'
+  | 'outputTokens'
+>
+export interface UsageOverview {
+  month: string
+  totals: UsageAnalyticsCounts
+}
+
 export const UsageDaySchema = UsageCountsSchema.extend({ date: UsageDateSchema }).strict()
 export type UsageDay = z.infer<typeof UsageDaySchema>
 

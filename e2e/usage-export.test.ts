@@ -281,6 +281,12 @@ Deno.test('a curator reads Insights but is never offered or sent the usage repor
       document.querySelector('[data-month-gaps]')?.textContent ?? ''
     )
     expect(gaps).toContain('Which seagrass beds recovered after the 2022 floods?')
+    const snapshot = await page.evaluate(async () =>
+      (await fetch('/api/admin/t/marine/insights')).json()
+    )
+    expect(Object.keys(snapshot.usage).sort()).toEqual(['month', 'totals'])
+    expect(snapshot.usage.days).toBeUndefined()
+    expect(snapshot.usage.generatedAt).toBeUndefined()
     expect(
       await page.evaluate(() => document.querySelector('[data-evidence-coverage]')?.textContent),
     ).toContain('Evidence coverage by topic')
@@ -352,9 +358,39 @@ Deno.test('Insights and the monthly report show topics, coverage, opens, tokens 
         expect(cards.token.length).toBeGreaterThan(0)
         if (review) {
           await Deno.writeFile(
-            `.review/usage-analytics/insights-${width}-${scheme}.png`,
+            `.review/usage-analytics/insights-full-${width}-${scheme}.png`,
             await page.screenshot({ captureBeyondViewport: true }),
           )
+          await page.evaluate(() => {
+            const card = document.querySelector('[data-usage-analytics]')!
+            scrollTo(
+              0,
+              card.getBoundingClientRect().top + scrollY -
+                (document.querySelector('header')!.getBoundingClientRect().height + 32),
+            )
+          })
+          await Deno.writeFile(
+            `.review/usage-analytics/insights-${width}-${scheme}.png`,
+            await page.screenshot({ captureBeyondViewport: false }),
+          )
+          if (width === 390 && scheme === 'light') {
+            await page.evaluate(() => {
+              document.documentElement.style.fontSize = '200%'
+              const card = document.querySelector('[data-usage-analytics]')!
+              scrollTo(
+                0,
+                card.getBoundingClientRect().top + scrollY -
+                  (document.querySelector('header')!.getBoundingClientRect().height + 32),
+              )
+            })
+            expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth))
+              .toBeLessThanOrEqual(1)
+            await Deno.writeFile(
+              '.review/usage-analytics/insights-text200-390-light.png',
+              await page.screenshot({ captureBeyondViewport: false }),
+            )
+            await page.evaluate(() => document.documentElement.style.removeProperty('font-size'))
+          }
         }
         await click(page, '[data-usage-view]')
         await page.waitForSelector('[data-usage-report] [data-usage-analytics]')
@@ -365,14 +401,32 @@ Deno.test('Insights and the monthly report show topics, coverage, opens, tokens 
         ).toContain('Stock assessment')
         if (review) {
           await Deno.writeFile(
-            `.review/usage-analytics/usage-report-${width}-${scheme}.png`,
+            `.review/usage-analytics/usage-report-full-${width}-${scheme}.png`,
             await page.screenshot({ captureBeyondViewport: true }),
+          )
+          await page.evaluate(() => {
+            const card = document.querySelector('[data-usage-report] [data-usage-analytics]')!
+            scrollTo(
+              0,
+              card.getBoundingClientRect().top + scrollY -
+                (document.querySelector('header')!.getBoundingClientRect().height + 32),
+            )
+          })
+          await Deno.writeFile(
+            `.review/usage-analytics/usage-report-${width}-${scheme}.png`,
+            await page.screenshot({ captureBeyondViewport: false }),
           )
         }
         if (width === 390 && scheme === 'light') {
           await page.evaluate(async () => {
             document.documentElement.style.fontSize = '200%'
             await document.fonts.ready
+            const card = document.querySelector('[data-usage-report] [data-usage-analytics]')!
+            scrollTo(
+              0,
+              card.getBoundingClientRect().top + scrollY -
+                (document.querySelector('header')!.getBoundingClientRect().height + 32),
+            )
           })
           const overflow = await page.evaluate(() =>
             document.documentElement.scrollWidth - innerWidth
@@ -381,7 +435,7 @@ Deno.test('Insights and the monthly report show topics, coverage, opens, tokens 
           if (review) {
             await Deno.writeFile(
               '.review/usage-analytics/usage-report-text200-390-light.png',
-              await page.screenshot({ captureBeyondViewport: true }),
+              await page.screenshot({ captureBeyondViewport: false }),
             )
           }
         }

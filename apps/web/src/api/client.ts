@@ -1565,7 +1565,7 @@ export interface KnowledgeGapQuestion {
 }
 
 export interface InsightsSummary {
-  usage?: import('@research-portal/core').UsageReport
+  usage?: import('@research-portal/core').UsageOverview
   /** Absent from a server that does not keep answer feedback. */
   feedback?: AnswerFeedbackSummary
   /**

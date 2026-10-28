@@ -1,12 +1,17 @@
-import type { UsageCounts } from '@research-portal/core'
+import { useOutletContext } from 'react-router-dom'
+import type { TenantOutletContext } from '../TenantLayout.tsx'
+import type { UsageAnalyticsCounts } from '@research-portal/core'
 import { SectionHeader } from '../../components/ui.tsx'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 
 /** Shared by the current Insights snapshot and the selected month's printable report. */
 export function UsageAnalyticsCards(
-  { totals, headingLevel = 3 }: { totals: UsageCounts; headingLevel?: 3 | 4 },
+  { totals, headingLevel = 3 }: { totals: UsageAnalyticsCounts; headingLevel?: 3 | 4 },
 ) {
   const { ui, number } = usePortalLocale()
+  const portalTopics = useOutletContext<TenantOutletContext | null>()?.config.topics
+  const topicLabel = (topic: { id: string; label: string }) =>
+    portalTopics?.find((t) => t.id === topic.id)?.label ?? topic.label
   const topics = totals.topics ?? []
   const count = (value: number | null) => value === null ? ui('Not reported') : number(value)
   return (
@@ -25,7 +30,7 @@ export function UsageAnalyticsCards(
             <ol className='mt-3 divide-y divide-line'>
               {topics.filter((t) => t.questions > 0).map((topic) => (
                 <li key={topic.id} className='flex items-start justify-between gap-3 py-2 text-sm'>
-                  <span className='min-w-0 break-words text-ink-2'>{topic.label}</span>
+                  <span className='min-w-0 break-words text-ink-2'>{topicLabel(topic)}</span>
                   <span className='shrink-0 tabular-nums text-ink'>{number(topic.questions)}</span>
                 </li>
               ))}
@@ -52,7 +57,7 @@ export function UsageAnalyticsCards(
               key={topic.id}
               className='flex flex-wrap items-start justify-between gap-2 py-2 text-sm'
             >
-              <dt className='min-w-0 break-words text-ink-2'>{topic.label}</dt>
+              <dt className='min-w-0 break-words text-ink-2'>{topicLabel(topic)}</dt>
               <dd className='tabular-nums text-ink'>
                 {topic.totalDocuments === null
                   ? ui('Catalogue unavailable')

@@ -1,7 +1,6 @@
 import { z } from 'zod'
 import type { Context, MiddlewareHandler } from 'hono'
 import type { TenantConfig } from '@research-portal/core'
-import type { AuditActor } from './audit.ts'
 import type { LocalMutationScope } from './audit-execution.ts'
 import type { InsightRecord, InsightsStoreApi } from './stores.ts'
 import { admitAll, rateLimited, SlidingWindowLimiter } from './rate-limit.ts'
@@ -18,7 +17,7 @@ export const OpenEventSchema = z.object({
 export interface UsageAnalyticsOptions {
   insights: InsightsStoreApi
   tenant: (slug: string) => TenantConfig | undefined
-  context: (c: Context) => { requestId: string; actor?: AuditActor }
+  context: (c: Context) => { requestId: string }
   address: (c: Context) => string
   localMutations?: LocalMutationScope
   now?: () => number
@@ -68,7 +67,7 @@ export function usageAnalytics(options: UsageAnalyticsOptions) {
     await options.localMutations.run(
       {
         requestId: context.requestId,
-        actor: context.actor ?? { kind: 'anonymous' },
+        actor: { kind: 'anonymous' },
         action: 'local.mutation',
         scope: { kind: 'portal', slug },
         target: { kind: 'request' },
