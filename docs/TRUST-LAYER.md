@@ -952,3 +952,7 @@ apps/web/src/components/AnswerStream.tsx, QualityGauge.tsx, StageTimeline.tsx, E
 `stage auditing completed`, `sources` (re-chosen passages), `citation`s (renumbered), `audit`,
 `done { text, refused, truncated? }`, `stage validating`, `quality?`. A decline is `sources`,
 `delta`, `done { refused: true, text }`, with `audit` before it when the gate emptied an answer.
+
+A `citation` carries the `passage` and one-based `page` of the first paragraph the answer cited in
+that resource, when retrieval returned it (`cited-pages.ts`); its links open the PDF there. Without
+them a link falls back to the source's `matchedPassage` and `matchedPage`.
