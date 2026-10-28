@@ -568,8 +568,8 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
     'アップロードごとに適用されます。本番ボックスは変更しません。',
   'ask': '件の質問',
   'asks': '件の質問',
-  'e.g. AgriFutures Research Hub': '例: 研究資料ポータル',
   'e.g. Region': '例: 地域',
+  'e.g. Soil Research Hub': '例: 研究資料ポータル',
   'e.g. funds, develops, studies': '例: 資金提供、開発、研究',
   'https://<region>.rag.progress.cloud/api/v1/kb/<box-id>':
     'https://<region>.rag.progress.cloud/api/v1/kb/<box-id>',
