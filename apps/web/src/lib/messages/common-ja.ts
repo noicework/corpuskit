@@ -196,4 +196,8 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Thank you - your feedback has been sent.':
     'ありがとうございます。フィードバックを送信しました。',
   'The portal team has been notified.': 'ポータルの担当者に通知しました。',
+  'Accessibility': 'アクセシビリティ',
+  'About this portal': 'このポータルについて',
+  'Phone': '電話',
+  'Website': 'ウェブサイト',
 }

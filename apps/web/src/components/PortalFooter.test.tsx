@@ -43,7 +43,8 @@ describe('PortalFooter', () => {
   it('invents nothing about the organisation it belongs to', () => {
     // Link columns, legal pages, social accounts and an Acknowledgement of
     // Country belong to a real organisation. A footer that generates them is
-    // asserting something the portal does not know.
+    // asserting something the portal does not know. The one link the slim
+    // footer carries is the portal's own accessibility statement.
     expect(markup).not.toContain('href')
     expect(markup).not.toContain('<svg')
     expect(markup).not.toMatch(/acknowledge/i)
@@ -51,7 +52,33 @@ describe('PortalFooter', () => {
     // The fuller footer links only what the layout supplies, and CorpusKit only when asked.
     expect(layoutMarkup).not.toMatch(/acknowledge/i)
     expect(layoutMarkup).not.toMatch(/subscribe/i)
-    expect(render(branding)).not.toContain('<a')
+    const links = [...render(branding).matchAll(/<a\b[^>]*href="([^"]*)"/g)].map((m) => m[1])
+    expect(links).toEqual(['/t/example/accessibility'])
+  })
+
+  it('links the accessibility statement from both footer variants', () => {
+    const full: Branding = {
+      ...branding,
+      layout: {
+        footer: {
+          columns: [{ heading: 'Explore', links: [{ label: 'Library', href: '/library' }] }],
+          note: 'A bounded note.',
+          credits: [{ label: 'Research partner', href: 'https://example.org' }],
+          poweredBy: true,
+        },
+      },
+    }
+    for (const html of [render(branding), render(full)]) {
+      expect(html).toMatch(
+        /<a class="[^"]*rp-focus-inverse[^"]*text-\[var\(--rp-on-primary-2\)\][^"]*" href="\/t\/example\/accessibility"[^>]*>Accessibility<\/a>/,
+      )
+    }
+    // In the fuller footer it sits in the closing row, outside the layout's own credits.
+    const html = render(full)
+    const credits = html.match(/<ul role="list"[^>]*>([\s\S]*?)<\/ul>/)?.[1] ?? ''
+    expect(credits).not.toContain('/accessibility')
+    expect(html.indexOf('A bounded note.')).toBeLessThan(html.indexOf('/t/example/accessibility'))
+    expect(html.indexOf('/t/example/accessibility')).toBeLessThan(html.indexOf('Research partner'))
   })
 
   it('paints on the brand surface through the appearance tokens', () => {
@@ -107,7 +134,8 @@ describe('PortalFooter', () => {
       },
     })
     const links = [...html.matchAll(/<a\b[^>]*class="([^"]*)"/g)]
-    expect(links).toHaveLength(3)
+    // The layout's link, its credit, "Powered by CorpusKit" and the accessibility statement.
+    expect(links).toHaveLength(4)
     for (const [, classes] of links) {
       expect(classes).toContain('min-h-[2.75rem]')
       expect(classes).toContain('min-w-[2.75rem]')
@@ -121,7 +149,7 @@ describe('PortalFooter', () => {
   it('stacks on narrow viewports and guards its flex items against overflow', () => {
     expect(markup).toContain('flex-col')
     expect(markup).toContain('sm:flex-row')
-    expect(markup.match(/min-w-0/g)?.length).toBe(2)
+    expect(markup.match(/min-w-0/g)?.length).toBe(3)
     expect(layoutMarkup).toContain('grid-cols-1')
     expect(layoutMarkup).toContain('md:flex-row')
   })

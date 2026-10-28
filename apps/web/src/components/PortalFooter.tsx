@@ -1,5 +1,6 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import type { Branding, PortalLayout } from '@research-portal/core'
+import { Link } from 'react-router-dom'
 import { LayoutAnchor } from './LayoutLink.tsx'
 
 type LayoutFooterContent = NonNullable<PortalLayout['footer']>
@@ -12,13 +13,31 @@ const creditLinkClassName =
 /**
  * The portal footer, on the brand surface. A portal whose layout sets a footer gets the fuller
  * one, with its own link columns, note and an optional "Powered by CorpusKit"; every other portal
- * gets the slim band.
+ * gets the slim band. Both carry the one link every portal owns: its accessibility statement.
  */
 export function PortalFooter({ branding, slug }: { branding: Branding; slug: string }) {
   const footer = branding.layout?.footer
   return footer
     ? <LayoutFooter branding={branding} slug={slug} footer={footer} />
-    : <SlimFooter branding={branding} />
+    : <SlimFooter branding={branding} slug={slug} />
+}
+
+/**
+ * The link to the portal's own accessibility statement (`/t/:slug/accessibility`). The page is
+ * served by the portal itself, so unlike legal pages or social accounts it is not a fact about
+ * the organisation the footer would be inventing.
+ */
+function AccessibilityLink({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
+  // Underlined at rest: beside the copyright line it is otherwise told apart only by position.
+  return (
+    <Link
+      to={`/t/${slug}/accessibility`}
+      className={creditLinkClassName.replace('hover:underline', 'underline')}
+    >
+      {ui('Accessibility')}
+    </Link>
+  )
 }
 
 /**
@@ -32,14 +51,15 @@ export function PortalFooter({ branding, slug }: { branding: Branding; slug: str
  * this component guess. That also means every portal gets a footer, instead of only the ones
  * with hand-written content.
  */
-function SlimFooter({ branding }: { branding: Branding }) {
+function SlimFooter({ branding, slug }: { branding: Branding; slug: string }) {
   const year = new Date().getFullYear()
   return (
     <footer className='bg-[var(--rp-primary)] text-[var(--rp-on-primary)]'>
       <div className='rp-shell flex flex-col gap-3 py-8 sm:flex-row sm:items-baseline sm:justify-between sm:gap-8'>
-        <p className='min-w-0 text-xs text-[var(--rp-on-primary-2)]'>
-          &copy; {year} {branding.organisation}
-        </p>
+        <div className='flex min-w-0 flex-col items-start gap-1 text-xs text-[var(--rp-on-primary-2)] sm:flex-row sm:items-baseline sm:gap-4'>
+          <p className='min-w-0'>&copy; {year} {branding.organisation}</p>
+          <AccessibilityLink slug={slug} />
+        </div>
         <div className='min-w-0 sm:text-right'>
           <p className='rp-display break-words text-2xl'>{branding.productName}</p>
           <p className='mt-1 text-sm leading-relaxed text-[var(--rp-on-primary-2)]'>
@@ -114,6 +134,7 @@ function LayoutFooter(
         <div className='mt-12 flex flex-col gap-3 border-t border-[var(--rp-on-primary)]/15 pt-6 text-xs leading-relaxed text-[var(--rp-on-primary-2)] md:flex-row md:flex-wrap md:items-baseline md:gap-8'>
           <p className='min-w-0'>&copy; {year} {branding.organisation}</p>
           {footer.note ? <p className='min-w-0 max-w-prose md:flex-1'>{footer.note}</p> : null}
+          <AccessibilityLink slug={slug} />
           {credits.length
             ? (
               <ul

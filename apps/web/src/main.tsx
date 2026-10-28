@@ -22,6 +22,7 @@ import { AssessmentPage } from './pages/AssessmentPage.tsx'
 import { GraphPage } from './pages/GraphPage.tsx'
 import { DocsPage } from './pages/DocsPage.tsx'
 import { HowItWorksPage } from './pages/HowItWorksPage.tsx'
+import { AccessibilityPage } from './pages/AccessibilityPage.tsx'
 import { ToolsPage } from './pages/ToolsPage.tsx'
 import { TaxonomyPage } from './pages/TaxonomyPage.tsx'
 import { EntityPage } from './pages/EntityPage.tsx'
@@ -130,6 +131,7 @@ createRoot(container).render(
                 <Route path='help' element={<DocsPage />} />
                 <Route path='help/:pageId' element={<DocsPage />} />
                 <Route path='how-it-works' element={<HowItWorksPage />} />
+                <Route path='accessibility' element={<AccessibilityPage />} />
                 <Route path='entity/:name' element={<EntityPage />} />
                 <Route path='taxonomy' element={<TaxonomyPage />} />
                 <Route path='manage' element={<ManagePage />} />

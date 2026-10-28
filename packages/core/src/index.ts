@@ -400,6 +400,39 @@ export const TenantSummarySchema = z.object({
   hostname: TenantHostnameSchema.optional(),
 })
 
+/** An `https://` address a portal may point readers at; nothing else is a link. */
+const httpsUrl = z.string().url().refine((url) => url.startsWith('https://'), {
+  message: 'Must be an https:// address',
+})
+
+/**
+ * How readers reach the people who run a portal about an access problem. Every field is
+ * optional, and a portal that sets none has no contact section on its statement; the page never
+ * invents an address. The text renders as plain text, never markup.
+ */
+export const AccessibilityContactSchema = z.object({
+  /** Who answers: "the Example Research Portal team", "Example Alliance's digital team". */
+  name: z.string().min(1).max(120).optional(),
+  email: z.string().email().max(254).optional(),
+  /** As it should be dialled, "1800 000 000" or "+61 3 0000 0000". */
+  phone: z.string().min(3).max(40).optional(),
+  /** A contact form or accessibility page on the organisation's own site. */
+  url: httpsUrl.optional(),
+  /** A sentence after the contact details: when to expect a reply, or what to include. */
+  note: z.string().min(1).max(600).optional(),
+}).strict()
+export type AccessibilityContact = z.infer<typeof AccessibilityContactSchema>
+
+export const AccessibilityStatementSchema = z.object({
+  /** The portal's own statement, replacing the default sections: a heading and paragraphs each. */
+  sections: z.object({
+    heading: z.string().min(1).max(120),
+    paragraphs: z.string().min(1).max(2000).array().min(1).max(20),
+  }).strict().array().min(1).max(20).optional(),
+  contact: AccessibilityContactSchema.optional(),
+}).strict()
+export type AccessibilityStatement = z.infer<typeof AccessibilityStatementSchema>
+
 export const TenantConfigSchema = z.object({
   slug: z.string().min(1),
   /** Optional bilingual portal policy. Answers follow the question language; catalogue
@@ -476,6 +509,13 @@ export const TenantConfigSchema = z.object({
     /** Placeholder per Generate kind (comparison, briefing, timeline, proscons, faq, assessment). */
     generateExamples: z.record(z.string(), z.string()).optional(),
   }).optional(),
+  /**
+   * The portal's accessibility statement, at `/t/:slug/accessibility` and linked from the footer.
+   * Absent, the page carries the default statement (apps/web/src/pages/AccessibilityPage.tsx):
+   * what is tested and how, with no conformance claim, test date or tool name, and no way to
+   * report a problem. A portal supplies the contact, and may replace the sections with its own.
+   */
+  accessibility: AccessibilityStatementSchema.optional(),
   /** Extraction routing rules (docs/EXTRACTION-LAB.md). Absent = platform default for everything. */
   extraction: ExtractionRulesSchema.optional(),
 })
@@ -498,6 +538,7 @@ const portalConfigurationShape = TenantConfigSchema.pick({
   regionalDiscovery: true,
   timezone: true,
   copy: true,
+  accessibility: true,
 }).extend({
   timezone: z.string().refine((timezone) => {
     try {
