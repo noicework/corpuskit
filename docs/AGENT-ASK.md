@@ -96,7 +96,8 @@ PATCH /api/admin/tenants/:slug   {"federation": {"participates": false}}
 ```
 
 A portal that does not take part is left out of other portals' composed answers
-(`POST /api/ask-agent`) and of federated asks (`POST /api/ask-estate`) before anything is asked
+(`POST /api/ask-agent`), of federated asks (`POST /api/ask-estate`) and of the estate MCP
+endpoint's tools (`/api/estate/mcp`) before anything is asked
 or counted, is checked again as each answer is assembled (a portal that leaves mid-answer
 contributes nothing), and does not federate to its own peers. Its own one-portal agent ask is
 unaffected. The change is audited as `tenant.behaviour.update` with `participates` and
