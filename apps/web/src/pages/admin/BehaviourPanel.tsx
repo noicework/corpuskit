@@ -1,4 +1,6 @@
 import { EmbeddingPanel } from './EmbeddingPanel.tsx'
+import { AnswerGuardrailsSchema, PortalPromptsSchema } from '@research-portal/core'
+import { AnswerPolicyFields } from './AnswerPolicyFields.tsx'
 import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -34,7 +36,11 @@ function validPrompts(value: Prompts): Prompts {
     (value.images !== undefined && typeof value.images !== 'boolean') ||
     (value.uncitedAnswers !== undefined && !['show', 'refuse'].includes(value.uncitedAnswers))
   ) throw new AdminAccessError()
-  return value
+  const parsed = PortalPromptsSchema.extend({
+    ask: PortalPromptsSchema.shape.ask.unwrap().max(4000).optional(),
+  }).safeParse(value)
+  if (!parsed.success) throw new AdminAccessError()
+  return parsed.data
 }
 
 function validConfigs(value: Record<string, unknown>): Record<string, unknown> {
@@ -55,11 +61,16 @@ function validRouting(value: Routing): Routing {
 }
 
 /**
- * Ask system prompt editor. Loads the current prompt (if any), lets the
- * librarian override it, and saves straight back through the admin API.
+ * Additional answer instructions and private guardrails. Built-in grounding remains
+ * server-owned; drafts apply only when the administrator saves through the admin API.
  */
 function AskPromptEditor({ slug }: { slug: string }) {
   const { ui } = usePortalLocale()
+  const defaultGuardrails = () =>
+    AnswerGuardrailsSchema.parse({
+      refusalMessage: ui('This portal cannot answer questions about that topic.'),
+      withheldMessage: ui('This answer has been withheld under the portal answer policy.'),
+    })
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
@@ -70,6 +81,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const [value, setValue] = useState('')
   const [images, setImages] = useState(false)
+  const [guardrails, setGuardrails] = useState(defaultGuardrails)
   // D8-01: an answer no citation could be tied to is shown with its sources consulted unless
   // the portal refuses such answers.
   const [showUnlinked, setShowUnlinked] = useState(true)
@@ -88,6 +100,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
     if (data && !loaded) {
       setValue(data.ask ?? '')
       setImages(data.images ?? false)
+      setGuardrails(data.guardrails ?? defaultGuardrails())
       setShowUnlinked(data.uncitedAnswers !== 'refuse')
       setLoaded(true)
     }
@@ -105,6 +118,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
       if (result === undefined) return
       setValue(result.ask ?? '')
       setImages(result.images ?? false)
+      setGuardrails(result.guardrails ?? defaultGuardrails())
       setShowUnlinked(result.uncitedAnswers !== 'refuse')
       setLoaded(true)
     } catch (err) {
@@ -121,6 +135,45 @@ function AskPromptEditor({ slug }: { slug: string }) {
   }
 
   const onSave = async () => {
+    const checked = PortalPromptsSchema.safeParse({
+      ask: value,
+      guardrails: {
+        ...guardrails,
+        outOfScope: guardrails.outOfScope.map((s) => s.trim()).filter(Boolean),
+        blockedTerms: guardrails.blockedTerms.map((s) => s.trim()).filter(Boolean),
+      },
+    })
+    if (!checked.success) {
+      const field = checked.error.issues[0]?.path.filter((part) => typeof part === 'string').at(-1)
+      const explanation = field === 'ask'
+        ? 'Additional answer instructions must be 2000 characters or fewer.'
+        : field === 'outOfScope' || field === 'blockedTerms'
+        ? 'Use no more than 50 phrases of 120 characters each.'
+        : field === 'contactLine'
+        ? 'The contact line must be 240 characters or fewer.'
+        : field === 'maxAnswerLength'
+        ? 'Answer length must be a whole number from 100 to 20,000, or empty.'
+        : 'Refusal and withheld messages must contain 1 to 500 characters.'
+      setMessage(
+        messageFor(
+          'error',
+          ({ ui }) => ui(explanation),
+        ),
+      )
+      const selector = field === 'ask'
+        ? '[data-behaviour-prompt]'
+        : field === 'refusalMessage'
+        ? '#policy-refusal'
+        : field === 'withheldMessage'
+        ? '#policy-withheld'
+        : field === 'contactLine'
+        ? '#policy-contact'
+        : field === 'maxAnswerLength'
+        ? '#policy-length'
+        : `#policy-${field}`
+      document.querySelector<HTMLElement>(selector)?.focus()
+      return
+    }
     setBusy(true)
     setMessage(null)
     try {
@@ -128,6 +181,11 @@ function AskPromptEditor({ slug }: { slug: string }) {
         const saved = await savePrompts(slug, access, {
           ask: value.trim() || undefined,
           images,
+          guardrails: AnswerGuardrailsSchema.parse({
+            ...guardrails,
+            outOfScope: guardrails.outOfScope.map((s) => s.trim()).filter(Boolean),
+            blockedTerms: guardrails.blockedTerms.map((s) => s.trim()).filter(Boolean),
+          }),
           uncitedAnswers: showUnlinked ? 'show' : 'refuse',
         })
         if (saved?.ok !== true) throw new AdminAccessError()
@@ -136,7 +194,10 @@ function AskPromptEditor({ slug }: { slug: string }) {
       assertCurrent()
       if (result === undefined) return
       setMessage(
-        messageFor('ok', ({ ui }) => ui('Saved - the new prompt applies to the next answer.')),
+        messageFor(
+          'ok',
+          ({ ui }) => ui('Saved - the new prompt applies to the next answer.'),
+        ),
       )
     } catch (err) {
       if (context !== authority.controller.context) return
@@ -155,9 +216,9 @@ function AskPromptEditor({ slug }: { slug: string }) {
     <section className='rp-card min-w-0 p-5 lg:p-6'>
       <SectionHeader
         className='rp-admin-section-head'
-        title={ui('Ask system prompt')}
+        title={ui('Additional answer instructions')}
         description={ui(
-          'Used for every grounded answer on this portal. Leave empty for the default analyst prompt.',
+          'Appended after built-in grounding instructions for Ask, search answers and composed agent answers on this portal. They cannot remove grounding or citation checks. Leave empty for the built-in instructions only.',
         )}
         actions={
           <Button
@@ -181,14 +242,38 @@ function AskPromptEditor({ slug }: { slug: string }) {
       )}
       <textarea
         data-behaviour-prompt
-        aria-label={ui('Ask system prompt')}
+        aria-label={ui('Additional answer instructions')}
         disabled={busy || !loaded}
         className='rp-input mt-4 w-full'
-        rows={8}
+        rows={5}
+        maxLength={2000}
+        aria-describedby='answer-instructions-help'
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder={ui('Leave empty to use the default analyst prompt.')}
+        placeholder={ui(
+          'For example: explain specialist terms and end with a short practical summary.',
+        )}
       />
+      <p id='answer-instructions-help' className='mt-2 text-sm text-ink-2'>
+        {ui(
+          '{count} / 2000 characters. Plain text only. Built-in evidence and citation rules always apply.',
+          { count: value.length },
+        )}
+      </p>
+      <div className='mt-3'>
+        <Button
+          variant='outline'
+          disabled={busy || !loaded}
+          onClick={() => {
+            setValue('')
+            setMessage(
+              messageFor('ok', ({ ui }) => ui('Default settings restored. Save to apply.')),
+            )
+          }}
+        >
+          {ui('Reset answer instructions')}
+        </Button>
+      </div>
       <label className='rp-check mt-3 text-sm text-ink-2'>
         <input
           type='checkbox'
@@ -218,13 +303,22 @@ function AskPromptEditor({ slug }: { slug: string }) {
           'Such an answer carries a note and lists the sources consulted. Turn this off to decline instead. An answer is always declined when nothing relevant was found.',
         )}
       </p>
+      <AnswerPolicyFields
+        value={guardrails}
+        onChange={setGuardrails}
+        disabled={busy || !loaded}
+        onReset={() => {
+          setGuardrails(defaultGuardrails())
+          setMessage(messageFor('ok', ({ ui }) => ui('Default settings restored. Save to apply.')))
+        }}
+      />
       <div className='mt-3 flex items-center gap-3'>
         <Button
           data-behaviour-save
           disabled={busy || !loaded}
           onClick={() => void onSave()}
         >
-          {busy ? ui('Saving…') : ui('Save prompt')}
+          {busy ? ui('Saving…') : ui('Save answer settings')}
         </Button>
       </div>
       {message && <MessagePanel message={message} className='mt-3' />}
@@ -403,7 +497,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
 }
 
 /**
- * Behaviour: the portal's grounded-answer system prompt and its search
+ * Behaviour: the portal's answer preferences, guardrails and its search
  * configurations. Both are platform-facing settings, not content.
  */
 /**

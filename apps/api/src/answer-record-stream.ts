@@ -4,6 +4,7 @@ import { type SSEStreamingApi, streamSSE } from 'hono/streaming'
 import type { Context } from 'hono'
 import { AnswerRecorder } from './answer-recorder.ts'
 import type { AnswerRecordStoreApi } from './answer-record-store.ts'
+import { type AnswerGuardrail, guardedAskWriter } from './answer-guardrails.ts'
 
 /** Hold the terminal event until persistence commits, including early refusal paths. */
 export function recordAnswerStream(
@@ -15,6 +16,7 @@ export function recordAnswerStream(
     modelId?: string
     buildId?: string
     now?: () => number
+    policy?: AnswerGuardrail
     cancelled: (stream: SSEStreamingApi) => boolean
   },
   provider: RetrievalProvider,
@@ -61,7 +63,15 @@ export function recordAnswerStream(
       await stream.writeSSE({ data: JSON.stringify(event) })
     }
     try {
-      await run(stream, recorder.provider(provider), send)
+      const refused = options.policy?.question(options.question)
+      if (refused) {
+        await send({ type: 'delta', text: refused })
+        await send({ type: 'done', refused: true, text: refused })
+      } else {
+        const guarded = guardedAskWriter(options.policy, send)
+        await run(stream, recorder.provider(provider), guarded.send)
+        if (!options.cancelled(stream)) await guarded.finish()
+      }
       if (options.cancelled(stream)) {
         recorder.finish('cancelled')
         return

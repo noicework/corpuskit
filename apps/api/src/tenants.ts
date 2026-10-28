@@ -6,6 +6,7 @@ import {
   DEFAULT_PORTAL_COLOURS,
   NEW_PORTAL_PALETTE,
   type PortalLayout,
+  PortalPromptsSchema,
   type TenantConfig,
   TenantConfigSchema,
   type TenantSummary,
@@ -268,7 +269,7 @@ export interface TenantPatch {
    * answer whose citations could not be tied to any passage does - `show` (the default) keeps
    * the prose, marked unlinked, with the sources consulted; `refuse` declines instead.
    */
-  prompts?: { ask?: string; images?: boolean; uncitedAnswers?: UncitedAnswers }
+  prompts?: import('@research-portal/core').PortalPrompts
   /** Extraction routing rules (docs/EXTRACTION-LAB.md). */
   extraction?: TenantConfig['extraction']
   /** Intent-routed configurations (docs/INTENT-ROUTING.md), when a portal tunes its own. */
@@ -290,6 +291,12 @@ export function validateTenantPatch(value: unknown): TenantPatch {
   const patch = tenantRecord(value)
   if (patch.embedding !== undefined) TenantConfigSchema.shape.embedding.parse(patch.embedding)
   if (patch.accessMode !== undefined) AccessModeSchema.parse(patch.accessMode)
+  if (patch.prompts !== undefined) {
+    const prompts = PortalPromptsSchema.extend({
+      ask: PortalPromptsSchema.shape.ask.unwrap().max(4000).optional(),
+    }).parse(patch.prompts)
+    return { ...patch, prompts } as TenantPatch
+  }
   return patch as TenantPatch
 }
 
@@ -525,7 +532,7 @@ export class TenantStore {
   }
 
   /** App-side settings that never reach the public config payload. */
-  promptsFor(slug: string): { ask?: string; images?: boolean; uncitedAnswers?: UncitedAnswers } {
+  promptsFor(slug: string): import('@research-portal/core').PortalPrompts {
     this.get(slug)
     return Object.hasOwn(this.overrides, slug)
       ? validateTenantPatch(this.overrides[slug]).prompts ?? {}

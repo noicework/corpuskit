@@ -71,7 +71,12 @@ export function AgentAskPage() {
       "Agent ask is not set up on this portal. Use Ask to put your question to this portal's collection.",
     ),
   }), [ui])
-  const agent = useAgentAsk({ slug: config.slug, canAsk: canAskNow, messages })
+  const agent = useAgentAsk({
+    slug: config.slug,
+    canAsk: canAskNow,
+    identityKey: access.identityKey,
+    messages,
+  })
   const { state, streaming } = agent
   const announcement = useAgentAnnouncements(state, {
     step: (title) => title,

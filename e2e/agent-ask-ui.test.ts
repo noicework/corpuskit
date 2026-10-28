@@ -252,6 +252,63 @@ describe('agent ask page', () => {
     }
   })
 
+  it('keeps a running answer through the remount a return to the window causes', async () => {
+    const page = await browser.newPage(agentUrl(paced, 'Why?', true))
+    try {
+      await page.waitForSelector('[data-agent-answer]')
+      await settle(
+        page,
+        () => document.querySelectorAll('[data-agent-steps] li[data-step-status]').length >= 1,
+        'the first step',
+      )
+      const before = await page.evaluate(() => ({
+        status: document.querySelector<HTMLElement>('[data-agent-answer]')?.dataset.status,
+        steps: document.querySelectorAll('[data-agent-steps] li[data-step-status]').length,
+      }))
+      expect(before.status).toBe('streaming')
+      // A return to the window: the access layer withdraws authority, re-reads the session and
+      // remounts the page. The run must still be there when the page comes back.
+      await page.evaluate(() => {
+        globalThis.dispatchEvent(new Event('blur'))
+        globalThis.dispatchEvent(new Event('focus'))
+      })
+      await settle(
+        page,
+        () =>
+          document.querySelector('[data-access-state]') === null &&
+          document.querySelector('[data-agent-answer]') !== null,
+        'the page to come back',
+      )
+      const after = await page.evaluate(() => ({
+        status: document.querySelector<HTMLElement>('[data-agent-answer]')?.dataset.status,
+        steps: document.querySelectorAll('[data-agent-steps] li[data-step-status]').length,
+        question: document.querySelector('h1')?.textContent,
+      }))
+      expect(after.status).toBe('streaming')
+      expect(after.steps).toBeGreaterThanOrEqual(before.steps)
+      expect(after.question).toBe('Why?')
+      // And the stream is still being read: more steps arrive after the remount.
+      await settle(
+        page,
+        () => document.querySelectorAll('[data-agent-steps] li[data-step-status]').length >= 4,
+        'steps after the remount',
+        20_000,
+      )
+      await page.evaluate(() =>
+        document.querySelector<HTMLButtonElement>('[data-agent-submit]')!.click()
+      )
+      await settle(
+        page,
+        () =>
+          document.querySelector<HTMLElement>('[data-agent-answer]')?.dataset.status ===
+            'cancelled',
+        'the stop',
+      )
+    } finally {
+      await page.close()
+    }
+  })
+
   it('is keyboard reachable with comfortable targets and no sideways scroll on a narrow phone', async () => {
     const page = await browser.newPage(agentUrl(instant, 'How is warming changing pests? #fast'))
     try {
