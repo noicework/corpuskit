@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { expect } from '@std/expect'
 import { type Permission, type Role, ROLES, type Scope } from '@research-portal/core'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
@@ -843,6 +844,11 @@ const html = `<html><title>Research</title><main><p>${
 }</p><a href="https://example.test/article">Article</a></main></html>`
 // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
 export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
+  ['GET', 'answer-records/records/:id', 'content.write'],
+  ['GET', 'answer-records/records/:id/export', 'content.write'],
+  ['GET', 'answer-records/export', 'content.write'],
+  ['GET', 'answer-records/retention', 'content.write'],
+  ['PUT', 'answer-records/retention', 'behaviour.write', { days: 90 }],
   ['GET', 'lifecycle', 'portal.create'],
   ['PUT', 'lifecycle', 'portal.create', { status: 'active', limits: null }],
   ['GET', 'usage', 'portal.create'],
@@ -1111,6 +1117,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
     const originalFetch = globalThis.fetch
     const env = ['ARAG_NUA_KEY', 'ARAG_ACCOUNT'].map((key) => [key, Deno.env.get(key)] as const)
     try {
+      const answerRecord = answerRecordFixture('a', fixture.now())
+      fixture.stores.answerRecords.record('a', answerRecord)
       const source = fixture.stores.sources.add('a', 'https://example.test/news', true, 1)
       fixture.stores.enrichments.put('a', 'seeded-record', {
         schemaId: 'research',
@@ -1183,7 +1191,9 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           .replace(':hostname', 'research.example.org')
           .replace(
             ':id',
-            suffix.startsWith('sources')
+            suffix.startsWith('answer-records')
+              ? answerRecord.answerId
+              : suffix.startsWith('sources')
               ? source.id
               : suffix.includes('suggestions')
               ? 'suggestion-a'

@@ -1202,6 +1202,7 @@ export const AskStageSchema = z.enum([
 ])
 
 export const AskEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('answer-record'), answerId: z.string().uuid() }),
   z.object({
     type: z.literal('stage'),
     stage: AskStageSchema,
@@ -1394,3 +1395,5 @@ export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'
 export * from './layout.ts'
+
+export * from './answer-record.ts'

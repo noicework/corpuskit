@@ -1,3 +1,4 @@
+import type { AnswerRecordStoreApi } from './answer-record-store.ts'
 import { appendAudit, type AuditActor, type AuditStore, createAuditEvent } from './audit.ts'
 import type { BindingStoreApi } from './bindings.ts'
 import type { EnrichmentStoreApi } from './enrichments.ts'
@@ -39,6 +40,7 @@ export interface PortalErasureStores {
   watches: Pick<WatchStoreApi, 'erase'>
   sources: Pick<SourceStoreApi, 'erase'>
   insights: Pick<InsightsStoreApi, 'erase'>
+  answerRecords: Pick<AnswerRecordStoreApi, 'erase'>
   feedback: Pick<FeedbackStoreApi, 'erase'>
   suggestions: Pick<SuggestionStoreApi, 'erase'>
   enrichments: Pick<EnrichmentStoreApi, 'erase'>
@@ -83,6 +85,7 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   sources: 'erasedSources',
   insights: 'erasedInsights',
   feedback: 'erasedFeedback',
+  answerRecords: 'erasedAnswerRecords',
   suggestions: 'erasedSuggestions',
   enrichments: 'erasedEnrichments',
   kgProposals: 'erasedKgProposals',
@@ -134,6 +137,7 @@ export function erasePortal(
     erased.sources = stores.sources.erase(slug)
     erased.insights = stores.insights.erase(slug)
     erased.feedback = stores.feedback.erase(slug)
+    erased.answerRecords = stores.answerRecords.erase(slug)
     erased.suggestions = stores.suggestions.erase(slug)
     erased.enrichments = stores.enrichments.erase(slug)
     erased.kgProposals = stores.kgProposals.erase(slug)

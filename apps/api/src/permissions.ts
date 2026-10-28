@@ -122,6 +122,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
       scope: 'portal',
     }],
   }),
+  ...['/records/:id', '/records/:id/export', '/export', '/retention'].map((suffix) =>
+    entry('http', 'GET', '/api/admin/t/:slug/answer-records' + suffix, 'content.write', 'portal')
+  ),
+  entry('http', 'PUT', '/api/admin/t/:slug/answer-records/retention', 'behaviour.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
@@ -177,6 +181,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['tenants', ['patchBranding'], 'appearance.write', 'portal'],
     ['sessions', ['put', 'remove'], 'portal.ask', 'portal'],
     ['insights', ['record'], 'portal.ask', 'portal'],
+    ['answerRecords', ['record'], 'portal.ask', 'portal'],
+    ['answerRecords', ['setRetention'], 'behaviour.write', 'portal'],
     ['feedback', ['record'], 'portal.ask', 'portal'],
     ['routing', ['record'], 'portal.ask', 'portal'],
     ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],

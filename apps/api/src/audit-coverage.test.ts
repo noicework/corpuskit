@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { localOwnedStores } from './local-owned-stores.ts'
 import { BindingStore } from './bindings.ts'
 import { FeedbackStore, InsightsStore, RoutingLog, SourceStore } from './stores.ts'
@@ -843,6 +844,8 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
         }
         if (stores.branding) call('branding.put', slug, 'image-hero', asset)
         const args: Record<string, unknown[]> = {
+          'answerRecords.record': [slug, answerRecordFixture(slug)],
+          'answerRecords.setRetention': [slug, 30],
           'lifecycle.set': [slug, { status: 'read_only', limits: null }],
           'lifecycle.remove': [slug],
           'lifecycle.erase': [slug],

@@ -2002,6 +2002,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `sources` | The source registry | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
 | `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
+| `answerRecords` | Generated answer evidence, question text and per-portal retention setting; default 90 days, configurable 1 to 365 | `answer-records:<slug>:record:<id>` and `answer-records:<slug>:retention` rows | `DATA_DIR/answer-records/<slug>/` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
 | `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
 | `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |
@@ -2133,3 +2134,5 @@ Embeddings, indexing, ordinary document parsing and reranking remain platform se
 The operator is responsible for restricting upstream model access and credentials on the KB,
 including its automatic summary model, and for stopping legacy agents and extraction strategies
 with unrelated model configurations. The request restriction complements those upstream controls.
+
+See [Answer records](ANSWER-RECORDS.md) for curator exports, retention and the server-only recorder API. The hosting control plane must add `answerRecords` to its strict erased-kind contract in the same release.

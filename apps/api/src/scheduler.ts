@@ -1,3 +1,8 @@
+import {
+  AnswerRecordStore,
+  type AnswerRecordStoreApi,
+  FileAnswerRecordState,
+} from './answer-record-store.ts'
 import type { EnrichmentRunEvent, TenantConfig } from '@research-portal/core'
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import {
@@ -54,7 +59,15 @@ export interface MaintenanceFailure {
   /** The job, or `retention` for the pass's own clean-up before the jobs. */
   job: MaintenanceJob | 'retention'
   slug?: string
-  target: 'source' | 'watch' | 'enrichment' | 'questions' | 'portal' | 'job' | 'feedback'
+  target:
+    | 'source'
+    | 'watch'
+    | 'enrichment'
+    | 'questions'
+    | 'portal'
+    | 'job'
+    | 'feedback'
+    | 'answerRecords'
 }
 
 /**
@@ -302,6 +315,7 @@ interface MaintenanceStores {
   bindings?: Pick<BindingStoreApi, 'status'>
   /** Answer feedback, whose expired ratings the retention pass removes. */
   feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
+  answerRecords?: Pick<AnswerRecordStoreApi, 'purgeExpired'>
 }
 
 /**
@@ -342,6 +356,14 @@ export async function runSystemMaintenance(
   // A failed purge never stops the jobs, but the pass still reports it at the end.
   if (retain && !purgeExpiredFeedback(stores.feedback)) {
     failures.push({ job: 'retention', target: 'feedback' })
+  }
+  if (retain) {
+    try {
+      stores.answerRecords?.purgeExpired()
+    } catch {
+      console.error('[scheduler] expired answer records could not be removed')
+      failures.push({ job: 'retention', target: 'answerRecords' })
+    }
   }
   let halted = false
   for (const job of jobs) {
@@ -960,6 +982,7 @@ export function startScheduler(
     lifecycle,
     bindings,
     feedback: new FeedbackStore(env.DATA_DIR ?? './data'),
+    answerRecords: new AnswerRecordStore(new FileAnswerRecordState(env.DATA_DIR ?? './data')),
   }
   return startMaintenanceTimers({
     dataDir: env.DATA_DIR ?? './data',

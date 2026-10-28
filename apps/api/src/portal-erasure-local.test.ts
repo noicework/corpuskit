@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { expect } from '@std/expect'
 import { join } from 'node:path'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
@@ -38,6 +39,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   bindings: { erasedBy: 'bindings' },
   insights: { erasedBy: 'insights' },
   feedback: { erasedBy: 'feedback' },
+  answerRecords: { erasedBy: 'answerRecords' },
   sessions: { erasedBy: 'sessions' },
   sources: { erasedBy: 'sources' },
   watches: { erasedBy: 'watches' },
@@ -94,6 +96,7 @@ const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
   sources: true,
   insights: true,
   feedback: true,
+  answerRecords: true,
   suggestions: true,
   enrichments: true,
   kgProposals: true,
@@ -308,6 +311,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       contextRelevance: 4,
     })
     // Ratings age out on real time, whatever the fixture's clock says.
+    s.owned.answerRecords.record(SLUG, answerRecordFixture(SLUG, s.now()))
     s.stores.feedback.record(SLUG, {
       ts: new Date().toISOString(),
       learningId: 'learning-probe',
@@ -368,6 +372,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
         'sources',
         'insights',
         'feedback',
+        'answerRecords',
         'suggestions',
         'enrichments',
         'kgProposals',

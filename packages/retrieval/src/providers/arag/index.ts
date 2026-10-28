@@ -2791,6 +2791,10 @@ export class AragProvider implements RetrievalProvider {
   // Data-augmentation agents (DA tasks on the data-plane host).
   // -------------------------------------------------------------------------
 
+  storeIdentifier(tenant: TenantConfig): string | undefined {
+    return this.opts.resolveBinding(tenant.slug)?.kbId
+  }
+
   /** The box's configured user-facing answer model. DA tasks must not inherit it. */
   async generativeModel(tenant: TenantConfig): Promise<string> {
     const policy = this.opts.resolveBinding(tenant.slug)?.inferenceModel

@@ -176,6 +176,11 @@ export interface ListResourcesOptions {
 }
 
 export interface RetrievalProvider {
+  /** The configured answer model, when the provider can report it. No credentials. */
+  generativeModel?(tenant: TenantConfig): Promise<string>
+  /** Non-secret identifier of the store supplying this portal. */
+  storeIdentifier?(tenant: TenantConfig): string | undefined
+
   listResources(tenant: TenantConfig, options?: ListResourcesOptions): Promise<ResourceSummary[]>
   /**
    * One resource by id. A hidden resource (a draft) is null unless `hidden` is set, which only a

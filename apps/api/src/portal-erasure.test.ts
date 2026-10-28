@@ -1,3 +1,4 @@
+import { answerRecordFixture } from './answer-record-fixture.ts'
 import { expect } from '@std/expect'
 import type { KgProposal } from '@research-portal/core'
 import type { DurableStores } from '../../cloudflare/src/state.ts'
@@ -72,6 +73,8 @@ const anonymous: ResearchOwner = { kind: 'anonymous', clientId: 'visitor-1' }
  * and the erasure tests below then prove that erasure removes whatever it wrote.
  */
 const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string) => unknown> = {
+  answerRecords: (f, slug) =>
+    f.stores.answerRecords.record(slug, answerRecordFixture(slug, f.now())),
   lifecycle: (f, slug) => {
     f.stores.lifecycle.set(slug, { status: 'suspended', limits: { asksPerDay: 5 } }, f.now())
     f.stores.lifecycle.consumeAsk(slug, 'UTC', f.now())

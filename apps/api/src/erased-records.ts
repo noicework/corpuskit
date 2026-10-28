@@ -18,6 +18,8 @@ export const ERASED_RECORD_KINDS = [
   'insights',
   /** Readers' ratings of answers and their comments. */
   'feedback',
+  /** Generated answer evidence and per-portal retention settings. */
+  'answerRecords',
   'suggestions',
   /** Generated enrichments and cached suggested questions. */
   'enrichments',
