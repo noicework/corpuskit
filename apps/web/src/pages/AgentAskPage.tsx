@@ -151,7 +151,7 @@ export function AgentAskPage() {
             </h1>
             <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
               {ui(
-                "Ask a question across all of this portal's collections. Each step, and what each collection returned, is shown while the answer is written. Answers take one to two minutes.",
+                "Ask a question across all of this portal's collections. Answers take one to two minutes.",
               )}
             </p>
           </div>
