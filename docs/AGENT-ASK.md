@@ -57,8 +57,9 @@ Guarantees a view can rely on:
   something to show.
 - Every step id is `started` once, then closed at most once. A step still open at the end is
   closed by the `done` (as `completed`) or the `error` (as `failed`). Steps can run in parallel.
-- `agent-sources.stepId` names a step already started. A step can have several `agent-sources`
-  events, one per source it searched.
+- `agent-sources.stepId` names the lookup step that found the passages, already started. A step
+  can have several `agent-sources` events, one per source it searched. If the agent ever sends
+  passages with no step at all, `stepId` is `context/<id>` and no `agent-step` has that id.
 - Citation markers appear in the `delta` text as `[block-AA]`; the `citation` event's `marker` is
   the bare `block-AA`. Citations arrive after the answer text. `sourceId` and `chunkId` match an
   earlier `agent-sources` event.
