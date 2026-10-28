@@ -1,5 +1,6 @@
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { AnswerRecordStore, FileAnswerRecordState } from './answer-record-store.ts'
+import { EvaluationStore } from './evaluation-store.ts'
 import { LinkHealthStore } from './link-health-store.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
@@ -254,6 +255,15 @@ export function localOwnedStores(
     duplicates: wrap(
       'duplicates',
       new DuplicateReviewStore(database, (work) =>
+        database.transactionSync(() => {
+          const result = work()
+          boundary.complete()
+          return result
+        })),
+    ),
+    evaluations: wrap(
+      'evaluations',
+      new EvaluationStore(database, (work) =>
         database.transactionSync(() => {
           const result = work()
           boundary.complete()

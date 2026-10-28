@@ -262,6 +262,7 @@ const fields = {
   erasedBindings: count,
   erasedDuplicates: count,
   erasedLifecycle: count,
+  erasedEvaluations: count,
   erasedSessions: count,
   erasedInvestigations: count,
   erasedWatches: count,
@@ -305,6 +306,7 @@ const actionFields = {
     'erasedBindings',
     'erasedDuplicates',
     'erasedLifecycle',
+    'erasedEvaluations',
     'erasedSessions',
     'erasedInvestigations',
     'erasedWatches',
@@ -437,6 +439,7 @@ const actionFields = {
   'maintenance.link.check': ['code', 'permission'],
   'maintenance.source.sync': ['code', 'permission'],
   'maintenance.watch.run': ['code', 'permission'],
+  'maintenance.evaluation.run': ['code', 'permission'],
   'maintenance.enrichment.run': ['code', 'permission'],
   'maintenance.questions.run': ['code', 'permission'],
 } as const satisfies Record<string, readonly Field[]>

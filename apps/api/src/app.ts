@@ -3,6 +3,8 @@ import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
 import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
 import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
+import { registerPortalEvaluations } from './evaluation-integration.ts'
+import type { EvaluationStore } from './evaluation-store.ts'
 import type { PublicHttpClient } from './public-http.ts'
 import { LinkHealthStore } from './link-health-store.ts'
 import type { LinkHealthStoreApi } from './link-health.ts'
@@ -1040,6 +1042,7 @@ export interface PortalRequestContext {
 export interface BuildAppOptions {
   duplicates?: DuplicateReviewStore
   answerRecords?: AnswerRecordStoreApi
+  evaluations?: EvaluationStore
   lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
@@ -2250,6 +2253,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
         { kind: 'portal', slug },
         { kind: 'duplicate-pair', id: pair },
       ),
+  })
+
+  registerPortalEvaluations(app, opts, {
+    lifecycle,
+    tenants,
+    requestContext,
+    requestContexts,
+    notFound: adminNotFound,
   })
 
   registerLinkHealthRoutes(app, {
@@ -4918,6 +4929,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   }
   const erasureStores = {
     duplicates,
+    evaluations: opts.evaluations,
     linkHealth,
     tenants,
     bindings,

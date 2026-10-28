@@ -76,6 +76,47 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
   duplicates: (f, slug) => f.stores.duplicates.decide(slug, 'res-1~res-2', 'keep-both'),
   answerRecords: (f, slug) =>
     f.stores.answerRecords.record(slug, answerRecordFixture(slug, f.now())),
+  evaluations: (f, slug) => {
+    const definition = f.stores.evaluations.put(slug, 'checks', {
+      name: 'Evidence checks',
+      topK: 5,
+      questions: [{
+        query: 'Research evidence?',
+        expectedSources: ['doc-1'],
+        expectedFacts: [],
+        shouldDecline: false,
+      }],
+    }, f.now())
+    f.stores.evaluations.start(slug, {
+      id: 'evaluation-run',
+      slug,
+      setId: definition.id,
+      definition,
+      startedAt: definition.updatedAt,
+      completedAt: null,
+      status: 'running',
+      results: [],
+      summary: {
+        errors: 0,
+        retrievalHitRate: null,
+        citationPrecision: null,
+        factCoverage: null,
+        declineCorrectness: null,
+        answerRelevance: null,
+        groundedness: null,
+        contextRelevance: null,
+      },
+    })
+    f.stores.evaluations.schedule(slug, 'checks', {
+      slug,
+      setId: 'checks',
+      everyDays: 1,
+      nextAt: f.now(),
+      confirmedAsks: 1,
+      updatedAt: definition.updatedAt,
+      owner: { tenantId: 'tenant-1', oid: 'researcher-1' },
+    })
+  },
   lifecycle: (f, slug) => {
     f.stores.lifecycle.set(slug, { status: 'suspended', limits: { asksPerDay: 5 } }, f.now())
     f.stores.lifecycle.consumeAsk(slug, 'UTC', f.now())
@@ -825,6 +866,9 @@ Deno.test('OPERATOR_DELETE_AFTER_DAYS accepts whole days from 1 to 36500 and not
  */
 const DURABLE_TABLES: Record<string, string> = {
   duplicate_reviews: 'erased: DuplicateReviewStore.erase',
+  evaluation_sets: 'erased: EvaluationStore.erase',
+  evaluation_schedules: 'erased: EvaluationStore.erase',
+  evaluation_runs: 'erased: EvaluationStore.erase',
   state: 'erased: each store removes its own keys (see POPULATE and the erasure diff)',
   branding_assets: 'erased: DurableBrandingStore.erase',
   enrichment_records: 'erased: DurableEnrichmentStore.erase',

@@ -32,6 +32,7 @@ type Classification =
  */
 const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   duplicates: { erasedBy: 'duplicates' },
+  evaluations: { erasedBy: 'evaluations' },
   lifecycle: { erasedBy: 'lifecycle' },
   rbac: { erasedBy: 'rbac' },
   audit: { erasedBy: 'audit' },
@@ -94,6 +95,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
 
 const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
   duplicates: true,
+  evaluations: true,
   tenants: true,
   bindings: true,
   lifecycle: true,
