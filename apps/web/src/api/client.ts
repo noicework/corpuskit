@@ -239,13 +239,20 @@ export function getKnowledgeBoxStatus(
 export function searchTenantFull(
   slug: string,
   query: string,
-  opts: { mode?: RetrievalMode; topicIds?: string[]; kindIds?: string[]; intent?: string } = {},
+  opts: {
+    mode?: RetrievalMode
+    topicIds?: string[]
+    kindIds?: string[]
+    intent?: string
+    federated?: boolean
+  } = {},
 ): Promise<SearchResults> {
   const params = new URLSearchParams({ q: query })
   if (opts.mode) params.set('mode', opts.mode)
   if (opts.topicIds && opts.topicIds.length > 0) params.set('topics', opts.topicIds.join(','))
   if (opts.kindIds && opts.kindIds.length > 0) params.set('kinds', opts.kindIds.join(','))
   if (opts.intent) params.set('intent', opts.intent)
+  if (opts.federated) params.set('federated', '1')
   return request<SearchResults>(`/api/t/${encodeURIComponent(slug)}/search?${params.toString()}`)
 }
 

@@ -180,6 +180,11 @@ import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './publi
 import { type ComposeSource } from './agent-compose.ts'
 import { measureAgentAnswer } from './agent-timing.ts'
 import {
+  federatedCollections,
+  offersFederatedSearch,
+  searchCollections,
+} from './federated-search.ts'
+import {
   type NewTenantInput,
   type TenantPatch,
   TenantStore,
@@ -2888,6 +2893,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = searchQuerySchema.safeParse({ q: c.req.query('q') })
     if (!parsed.success) return c.json({ error: 'missing_query' }, 400)
+    if (c.req.query('federated') === '1') {
+      if (!offersFederatedSearch(config)) return c.json({ error: 'not_found' }, 404)
+      const collections = federatedCollections({
+        config,
+        query: parsed.data.q,
+        provider,
+        bindings,
+        peerFetch: opts.peerFetch,
+        merchandise: (results) => merchandiseSearchResults(enrichments, config.slug, results),
+      })
+      // Retrieval consumes the caller's buckets once per source, without spending daily asks.
+      const admitted = admitAll(askEntries(c, collections.length, []))
+      if (!admitted.allowed) return rateLimited(c, admitted.retryAfterSec)
+      return c.json(
+        await searchCollections(parsed.data.q, collections, {
+          timeoutMs: opts.agentSourceTimeoutMs,
+          signal: c.req.raw.signal,
+        }),
+      )
+    }
     const modeRaw = c.req.query('mode')
     const mode = modeRaw === 'semantic' || modeRaw === 'keyword' ? modeRaw : 'hybrid'
     const topicIds = (c.req.query('topics') ?? '').split(',').filter(Boolean)
