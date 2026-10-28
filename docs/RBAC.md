@@ -175,8 +175,8 @@ whose response is built in memory, the completion record is written before the r
 released; streaming responses are buffered up to a fixed cap for the same reason.
 
 Every declared local store mutation on either runtime also records `local.mutation`, including
-sources, generated enrichments, suggestions, answer feedback, insights, routing, knowledge graph
-proposals and branding. On Deno, the synchronous file write and its required audit completion
+sources, generated enrichments, suggestions, answer feedback, reader feedback, insights, routing,
+knowledge graph proposals and branding. On Deno, the synchronous file write and its required audit completion
 form one rollback boundary. See [single-process hosting](HOSTING.md#single-process-mutation-audit).
 
 Read at `GET /api/admin/t/:slug/audit` (portal `audit.read`) or `GET /api/admin/audit` (platform

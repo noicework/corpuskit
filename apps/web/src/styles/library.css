@@ -10,6 +10,22 @@
   container-name: rp-library-pdf;
 }
 
+/* The page stage fills its scroll pane, which clips the outward .rp-focus ring,
+ * so keyboard focus on the page is drawn inward instead, as the map's is. A
+ * citation moves focus here, so it has to show. */
+.rp-library-pdf-reader .rp-library-pdf-stage:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: -4px;
+  box-shadow: inset 0 0 0 2px var(--rp-surface), inset 0 0 0 4px var(--rp-focus);
+}
+
+@media (forced-colors: active) {
+  .rp-library-pdf-reader .rp-library-pdf-stage:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -4px;
+  }
+}
+
 .rp-library-pdf-toolbar {
   position: relative;
   display: flex;

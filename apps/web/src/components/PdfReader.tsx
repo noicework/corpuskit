@@ -226,6 +226,13 @@ export function PdfReader(
    * to the cited page later must not yank the window again.
    */
   const scrolledPageToReaderRef = useRef<string | null>(null)
+  /**
+   * The deep link (a cited page or passage) the reader has already brought
+   * focus to. A citation is where the reader asked to go, as a URL fragment
+   * is, so once the cited page is on screen the page itself takes focus: the
+   * arrow keys page on from there and a screen reader reads where it landed.
+   */
+  const focusedArrivalRef = useRef<string | null>(null)
 
   const closeMenu = useCallback((restoreFocus = true) => {
     setMenuOpen(false)
@@ -381,6 +388,7 @@ export function PdfReader(
       try {
         await task.promise
         if (cancelled) return
+        let located = false
         if (highlight && passageNeedles(highlight).length > 0) {
           const content = await page.getTextContent()
           if (cancelled) return
@@ -408,6 +416,7 @@ export function PdfReader(
             setHighlightPage(pageNumber)
             setHighlightMissing(false)
             const firstRect = rects[0]
+            located = firstRect !== undefined
             if (firstRect) {
               setAnnouncement(ui('Cited passage highlighted on page {page}', { page: pageNumber }))
               scrollHighlightIntoView(canvas, firstRect, `${fileUrl}::${pageNumber}::${highlight}`)
@@ -422,6 +431,11 @@ export function PdfReader(
               setAnnouncement(ui('Highlight not found on page {page}', { page: pageNumber }))
             }
           }
+        }
+        if (
+          located || (initialPage && pageNumber === Math.min(initialPage, numPages || initialPage))
+        ) {
+          focusArrival(located)
         }
       } catch (err) {
         // A cancelled render (superseded by a newer page/zoom) is expected
@@ -531,6 +545,24 @@ export function PdfReader(
         })
       })
     }
+  }
+
+  /**
+   * Moves focus to the page the deep link opened, once per arrival and never
+   * out of a field the reader is typing in. A located passage has already been
+   * scrolled to; otherwise the reader itself is brought into view first.
+   */
+  function focusArrival(scrolled: boolean) {
+    const key = `${fileUrl}::${initialPage}::${highlight}`
+    if (focusedArrivalRef.current === key) return
+    focusedArrivalRef.current = key
+    const active = document.activeElement
+    if (
+      active instanceof HTMLElement &&
+      (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName))
+    ) return
+    if (!scrolled) rootRef.current?.scrollIntoView({ block: 'start' })
+    pageStageRef.current?.focus({ preventScroll: true })
   }
 
   function goToPage(n: number) {
@@ -685,7 +717,7 @@ export function PdfReader(
             icon={Menu}
             aria-haspopup='menu'
             aria-expanded={menuOpen}
-            aria-controls={menuId}
+            aria-controls={menuOpen ? menuId : undefined}
             onClick={() => {
               menuInitialFocusRef.current = 'first'
               setMenuOpen((open) => !open)
@@ -882,7 +914,9 @@ export function PdfReader(
           })}
           tabIndex={0}
           onKeyDown={handleKeyDown}
-          className={`rp-focus flex justify-center p-4 ${status === 'ready' ? '' : 'hidden'}`}
+          className={`rp-focus rp-library-pdf-stage flex justify-center p-4 ${
+            status === 'ready' ? '' : 'hidden'
+          }`}
         >
           <div className='relative'>
             <canvas ref={canvasRef} className='rp-shadow-sm bg-white' />

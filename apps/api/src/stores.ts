@@ -24,6 +24,12 @@ import {
   watchOwner,
 } from './research-owner.ts'
 import {
+  parseSiteFeedbackRecord,
+  retainedSiteFeedback,
+  type SiteFeedbackRecord,
+  type SiteFeedbackStoreApi,
+} from './site-feedback.ts'
+import {
   decodeScopedKeyRecords,
   KeyPortalSlugSchema,
   KeyTimeSchema,
@@ -662,6 +668,71 @@ export class FeedbackStore {
   }
 }
 
+// --- Reader feedback about the portal (see site-feedback.ts) ------------------
+
+/**
+ * Reader feedback on the local server: one JSON file per portal, newest first, bounded by
+ * `retainedSiteFeedback` on every write.
+ */
+export class SiteFeedbackStore implements SiteFeedbackStoreApi {
+  constructor(
+    private readonly dataDir = DATA_DIR,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private pathFor(slug: string): string {
+    return join(this.dataDir, 'site-feedback', `${safeSegment(slug)}.json`)
+  }
+
+  private readAll(slug: string): SiteFeedbackRecord[] {
+    const raw = readJson<unknown>(this.pathFor(slug), [])
+    return Array.isArray(raw)
+      ? raw.map(parseSiteFeedbackRecord).filter((r): r is SiteFeedbackRecord => r !== null)
+      : []
+  }
+
+  save(slug: string, record: SiteFeedbackRecord): void {
+    const others = this.readAll(slug).filter((r) => r.id !== record.id)
+    writeJson(this.pathFor(slug), retainedSiteFeedback([record, ...others], this.now()))
+  }
+
+  recent(slug: string, limit: number): SiteFeedbackRecord[] {
+    return retainedSiteFeedback(this.readAll(slug), this.now()).slice(0, Math.max(0, limit))
+  }
+
+  /**
+   * Remove every portal's messages older than the window, for the daily maintenance pass: a
+   * reader's message leaves after `SITE_FEEDBACK_DAYS` even on a portal no one writes to again.
+   */
+  purgeExpired(): number {
+    const dir = join(this.dataDir, 'site-feedback')
+    let names: string[]
+    try {
+      names = readdirSync(dir).filter((name) => name.endsWith('.json'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+    let removed = 0
+    for (const name of names) {
+      const slug = name.slice(0, -'.json'.length)
+      const all = this.readAll(slug)
+      const kept = retainedSiteFeedback(all, this.now())
+      if (kept.length === all.length) continue
+      removed += all.length - kept.length
+      if (kept.length === 0) eraseFile(this.pathFor(slug))
+      else writeJson(this.pathFor(slug), kept)
+    }
+    return removed
+  }
+
+  /** Remove the portal's messages (see `PortalErasure`). */
+  erase(slug: string): number {
+    const segment = portalSegment(slug)
+    return eraseFile(segment && this.pathFor(segment))
+  }
+}
+
 // --- Research-trail sessions (namespaced per anonymous client id) -----------
 
 export interface StoredSession {
@@ -995,6 +1066,8 @@ export class SourceStore {
 export interface EvidenceItem {
   id: string
   passage: string
+  /** The page (counted from one) the passage sits on in the stored file, when known. */
+  page?: number
   resourceId: string
   resourceTitle: string
   /** Calibrated retrieval score at capture time, when known. */

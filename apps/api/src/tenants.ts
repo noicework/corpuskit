@@ -243,6 +243,8 @@ export interface TenantPatch {
   relationTypes?: TenantConfig['relationTypes']
   timezone?: TenantConfig['timezone']
   copy?: TenantConfig['copy']
+  /** The accessibility statement's own sections and contact (see TenantConfigSchema). */
+  accessibility?: TenantConfig['accessibility']
   accessMode?: AccessMode
   hostname?: TenantConfig['hostname']
   topics?: TenantConfig['topics']
@@ -251,6 +253,8 @@ export interface TenantPatch {
   assessmentHeading?: string
   /** Whether Explore shows the regional discovery band (opt-in). */
   regionalDiscovery?: boolean
+  /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
+  siteFeedback?: boolean
   branding?: TenantConfig['branding']
   /**
    * Portal-managed behaviour settings (system prompt, image grounding). `uncitedAnswers`: what an
