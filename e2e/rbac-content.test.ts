@@ -64,6 +64,7 @@ function startTestServer(options: Parameters<typeof startServer>[0] = {}) {
         recent: [],
       }),
       questions: () => ({}),
+      asksBetween: () => ({ asks: [], keptSince: null }),
       erase: () => 0,
     },
   })
