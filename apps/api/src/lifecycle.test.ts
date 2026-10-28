@@ -173,6 +173,8 @@ const READ_ONLY_EXEMPT = new Set([
   'MCP get_document',
   'MCP browse_catalogue',
   'MCP answer_question',
+  'MCP ask_federated',
+  'MCP search_federated',
   'MCP search_estate',
   'MCP answer_estate',
 ])
@@ -926,6 +928,7 @@ const ASKS_COUNTED = new Set([
   'POST /api/ask-estate',
   'POST /api/ask-agent',
   'MCP answer_question',
+  'MCP ask_federated',
   'MCP answer_estate',
   'POST /api/t/:slug/generate',
   'POST /api/t/:slug/summarize',

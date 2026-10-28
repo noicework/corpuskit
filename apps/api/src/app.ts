@@ -178,6 +178,7 @@ import {
 import { answerUsageTracker, usageAnalytics } from './usage-events.ts'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { type ComposeSource } from './agent-compose.ts'
+import { federatedMcpTools } from './federated-mcp.ts'
 import { measureAgentAnswer } from './agent-timing.ts'
 import {
   federatedCollections,
@@ -2520,12 +2521,47 @@ export function buildApp(opts: BuildAppOptions): Hono {
     requestContext,
     authorityDependencies,
     authorise: authoriseDeclared,
+    portals: () => tenants.list(false).flatMap(({ slug }) => tenant(slug) ?? []),
+    federated: (c, host) =>
+      federatedMcpTools({
+        provider,
+        host,
+        peers: peerSources(c, host),
+        // The same answer policy and answer record as the HTTP agent ask.
+        answer: (options) =>
+          guardAgentAnswer(
+            answerPolicy(host, options.question, undefined, true),
+            options.question,
+            () =>
+              recordAgentAnswer({
+                ...options,
+                store: answerRecords,
+                buildId: opts.buildSha,
+                now: opts.now,
+              }),
+          ),
+        sourceTimeoutMs: opts.agentSourceTimeoutMs,
+        composeTimeoutMs: opts.agentComposeTimeoutMs,
+        audit: requiredAudit(),
+        auditContext: requestContext(c.req.raw),
+        now: opts.now,
+        admit: (asks) => {
+          const admitted = admitAll(askEntries(c, asks, Array(asks).fill(host.slug)))
+          if (!admitted.allowed) {
+            throw new PortalLifecycleError(429, {
+              error: 'rate_limited',
+              retryAfter: admitted.retryAfterSec,
+            })
+          }
+        },
+      }),
     // The MCP transport route is already guarded; each tool call is checked again on its own,
     // and an anonymous answer takes its portal's turn and its address's share as a web ask does.
     beforeTool: (declaration, config, authority, caller) => {
-      const portal = authority.kind === 'anonymous' && askUse(declaration) === 'count'
-        ? anonymousEntries(config.slug, caller.clientIp)
-        : []
+      const portal =
+        !declaration.feature && authority.kind === 'anonymous' && askUse(declaration) === 'count'
+          ? anonymousEntries(config.slug, caller.clientIp)
+          : []
       const refused = portal.map((entry) => entry.limiter.peek(entry.key))
         .filter((verdict) => !verdict.allowed)
       if (refused.length > 0) {

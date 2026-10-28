@@ -53,6 +53,8 @@ Deno.test('real MCP list and every call equal independent inventory and reject u
     ['get_document', { id: 'res-1' }, 'portal.read', 'resource'],
     ['browse_catalogue', {}, 'portal.read', 'catalog'],
     ['answer_question', { question: 'Abalone evidence?' }, 'portal.ask', 'ask'],
+    ['ask_federated', { question: 'Abalone evidence? #compose' }, 'portal.ask', 'compose'],
+    ['search_federated', { query: 'Abalone' }, 'portal.ask', 'search'],
   ] as const
   const f = createEnforcementFixture()
   const rpc = (method: string, params?: unknown): RequestInit => ({
@@ -65,9 +67,9 @@ Deno.test('real MCP list and every call equal independent inventory and reject u
     expect(list.status).toBe(200)
     const names = (await list.json()).result.tools.map((tool: { name: string }) => tool.name)
     expect(names.sort()).toEqual(cases.map(([name]) => name).sort())
-    assertToolInventory(names)
+    assertToolInventory(names, 'portal', true)
     for (const invalid of [names.slice(1), [...names, 'undeclared_tool'], [...names, names[0]]]) {
-      expect(() => assertToolInventory(invalid)).toThrow()
+      expect(() => assertToolInventory(invalid, 'portal', true)).toThrow()
     }
     for (const [name, args, permission, dispatch] of cases) {
       expect(DECLARATIONS.find((d) => d.kind === 'mcp' && d.path === name)?.permission).toBe(

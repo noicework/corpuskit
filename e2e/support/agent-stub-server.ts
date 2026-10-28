@@ -184,13 +184,14 @@ export interface AgentStubServer extends TestServer {
 
 /** Start the stub: `speed` paces the replay (1 as recorded, 0 without waiting). */
 export async function startAgentStub(
-  options: { speed?: number; apiOnly?: boolean } = {},
+  options: { speed?: number; apiOnly?: boolean; identity?: { role: 'portal-admin' } } = {},
 ): Promise<AgentStubServer> {
   const speed = options.speed ?? 1
   const provider = new AgentStubProvider()
   provider.agentReplaySpeed = speed
   const server = startTestServer({
     provider,
+    identity: options.identity,
     apiOnly: options.apiOnly,
     peerFetch: stubPeerFetch(),
     // Long enough for every stub search at the chosen pace, short enough to watch one time out.

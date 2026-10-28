@@ -129,6 +129,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
     data: { resourceId: 'res-1' },
   }],
   ['POST', '/api/t/:slug/investigations/:id/synthesise', 'portal.investigate', 'analyst'],
+  ['GET', '/api/t/:slug/mcp/portals', 'keys.manage', 'portal-admin'],
   ['GET', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal-admin'],
   ['POST', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal-admin', {
     label: 'New client',
@@ -480,6 +481,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         '/api/t/:slug/investigations': 'Seeded investigation',
         '/api/t/:slug/investigations/:id': 'Seeded investigation',
         '/api/t/:slug/mcp/keys': 'Seeded client',
+        '/api/t/:slug/mcp/portals': 'a',
         '/api/t/:slug/mcp': 'search_corpus',
         '/api/estate/mcp': 'search_estate',
         '/api/t/:slug/site-feedback': '"ok":true',
@@ -606,6 +608,8 @@ export function createEnforcementFixture(
       | 'rateLimitEstatePerMin'
       | 'rateLimitMcpAuthPerMin'
       | 'estateSourceTimeoutMs'
+      | 'agentSourceTimeoutMs'
+      | 'peerFetch'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
       | 'siteFeedbackNotifier'

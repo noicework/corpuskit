@@ -12,6 +12,7 @@ import {
   AuthorisationError,
   authoriseOperation,
   type AuthorityDependencies,
+  evaluateOperation,
   type RequestAuthority,
 } from './authorisation.ts'
 import {
@@ -42,10 +43,11 @@ import {
   WebStandardStreamableHTTPServerTransport,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod/v4'
-import { PORTAL_ROLES, type TenantConfig } from '@research-portal/core'
+import { offersAgentAsk, PORTAL_ROLES, type TenantConfig } from '@research-portal/core'
 import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
 import { type McpKeyStoreApi } from './stores.ts'
-import { MAX_ESTATE_PORTALS } from './scoped-key-record.ts'
+import { KeyEstateSchema } from './scoped-key-record.ts'
+import { type FederatedMcpTools, registerFederatedMcpTools } from './federated-mcp.ts'
 import { addressKey, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
 
 const MCP_ROUTE = '/api/t/:slug/mcp'
@@ -58,7 +60,7 @@ const keyLabelSchema = z.object({
   role: z.enum(PORTAL_ROLES),
   expiresAt: z.string().optional(),
   // Other portals the key also reaches at the estate MCP endpoint.
-  estate: z.array(z.string()).max(MAX_ESTATE_PORTALS).optional(),
+  estate: z.custom<string[]>((value) => KeyEstateSchema.safeParse(value).success).optional(),
 }).strict()
 
 const READ_ONLY_TOOL = {
@@ -75,9 +77,11 @@ export interface McpRoutesOptions {
     authority: RequestAuthority,
     caller: { clientIp?: string },
   ) => void
+  federated?: (context: Context, config: TenantConfig) => FederatedMcpTools
   localMutations?: LocalMutationScope
   provider: RetrievalProvider
   tenant: (slug: string) => TenantConfig | undefined
+  portals?: () => readonly TenantConfig[]
   keys: McpKeyStoreApi
   authorityDependencies?: AuthorityDependencies
   authorise?: (context: Context) => Promise<RequestAuthority | null>
@@ -265,7 +269,7 @@ export async function collectVerifiedAnswer(
   return { answer, refused, citations, sources, ...(quality ? { quality } : {}) }
 }
 
-export function createMcpServer(opts: McpRoutesOptions): {
+export function createMcpServer(opts: McpRoutesOptions, federated?: FederatedMcpTools): {
   transport: WebStandardStreamableHTTPServerTransport
   connected: Promise<void>
 } {
@@ -294,6 +298,10 @@ export function createMcpServer(opts: McpRoutesOptions): {
           accessMode: config?.accessMode,
           configuredTenantId: opts.authorityDependencies.configuredTenantId,
         })
+        if (declaration.feature) {
+          if (!config || !offersAgentAsk(config) || !federated) throw new AuthorisationError(403)
+          federated.admit()
+        }
         const clientIp = context.http?.authInfo?.extra?.clientIp
         if (config) {
           opts.beforeTool?.(declaration, config, authority, {
@@ -408,6 +416,8 @@ export function createMcpServer(opts: McpRoutesOptions): {
       })),
   )
 
+  if (federated) registerFederatedMcpTools(server, federated, auditedTool)
+
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -467,6 +477,19 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
     return selected
   }
 
+  app.get(declaredRoute('GET', '/api/t/:slug/mcp/portals'), async (context) => {
+    const selected = await authority(context)
+    return context.json(
+      (opts.portals?.() ?? []).filter((config) =>
+        evaluateOperation(selected, 'keys.manage', { kind: 'portal', slug: config.slug }, {
+          slug: config.slug,
+          accessMode: config.accessMode,
+          configuredTenantId: opts.authorityDependencies!.configuredTenantId,
+        })
+      ).map((config) => ({ slug: config.slug, title: config.branding.productName })),
+    )
+  })
+
   app.get(declaredRoute('GET', '/api/t/:slug/mcp/keys'), async (context) => {
     await authority(context)
     const config = opts.tenant(context.req.param('slug'))
@@ -492,6 +515,13 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
       // Checked after the creator's roles, so a portal admin cannot probe which portals exist.
       if (parsed.data.estate?.some((slug) => !opts.tenant(slug))) {
         return context.json({ error: 'invalid_request' }, 400)
+      }
+      for (const slug of parsed.data.estate ?? []) {
+        authoriseOperation(selected, 'keys.manage', { kind: 'portal', slug }, {
+          slug,
+          accessMode: opts.tenant(slug)!.accessMode,
+          configuredTenantId: opts.authorityDependencies!.configuredTenantId,
+        })
       }
       issued.commit()
       return context.json({ key: issued.key, credential: keySummary(issued.credential) }, 201)
@@ -533,11 +563,22 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
         context.header('allow', 'POST')
         return context.json({ error: 'method_not_allowed' }, 405)
       }
-      if (!opts.tenant(slug)) return context.json({ error: 'unknown_tenant' }, 404)
+      const config = opts.tenant(slug)
+      if (!config) return context.json({ error: 'unknown_tenant' }, 404)
 
       // The pinned SDK indexes pending streams by JSON-RPC id. Isolate stateless
       // requests so different callers may safely reuse the same client-chosen id.
-      const { transport, connected } = createMcpServer(opts)
+      const enabled = offersAgentAsk(config) &&
+        (opts.provider.agentAsk || opts.provider.compose || opts.provider.composeStream) &&
+        evaluateOperation(selected, 'portal.ask', { kind: 'portal', slug }, {
+          slug,
+          accessMode: config.accessMode,
+          configuredTenantId: opts.authorityDependencies!.configuredTenantId,
+        })
+      const { transport, connected } = createMcpServer(
+        opts,
+        enabled ? opts.federated?.(context, config) : undefined,
+      )
       await connected
       const auditContext: McpAuditContext = {
         requestId: request?.requestId ?? crypto.randomUUID(),
