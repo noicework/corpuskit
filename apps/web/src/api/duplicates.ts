@@ -1,4 +1,9 @@
-import type { DuplicateDecision, DuplicateReport, OverlapReport } from '@research-portal/core'
+import {
+  type DuplicateDecision,
+  DuplicateReportSchema,
+  DuplicateReviewResultSchema,
+  OverlapReportSchema,
+} from '@research-portal/core'
 import { adminRequest } from './client.ts'
 import { adminFetch, type AdminRequestAccess, assertResponseCurrent } from './break-glass.ts'
 import type { Locale } from '../lib/portal-locale.tsx'
@@ -19,11 +24,11 @@ export function getDuplicates(
   page = 1,
   reviewed = true,
 ) {
-  return adminRequest<DuplicateReport>(
+  return adminRequest<unknown>(
     `${portalPath(slug)}?page=${page}&reviewed=${reviewed}`,
     access,
     { signal },
-  )
+  ).then((value) => DuplicateReportSchema.parse(value))
 }
 export function refreshDuplicates(
   slug: string,
@@ -31,11 +36,11 @@ export function refreshDuplicates(
   page = 1,
   reviewed = true,
 ) {
-  return adminRequest<DuplicateReport>(
+  return adminRequest<unknown>(
     `${portalPath(slug)}/refresh?page=${page}&reviewed=${reviewed}`,
     access,
     { method: 'POST' },
-  )
+  ).then((value) => DuplicateReportSchema.parse(value))
 }
 export function reviewDuplicate(
   slug: string,
@@ -43,19 +48,21 @@ export function reviewDuplicate(
   pair: string,
   decision: DuplicateDecision,
 ) {
-  return adminRequest<{ ok: true }>(`${portalPath(slug)}/review`, access, {
+  return adminRequest<unknown>(`${portalPath(slug)}/review`, access, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pair, decision }),
-  })
+  }).then((value) => DuplicateReviewResultSchema.parse(value))
 }
 export function getOverlap(access: AdminRequestAccess, signal?: AbortSignal, page = 1) {
-  return adminRequest<OverlapReport>(`/api/admin/overlap?page=${page}`, access, { signal })
+  return adminRequest<unknown>(`/api/admin/overlap?page=${page}`, access, { signal }).then((
+    value,
+  ) => OverlapReportSchema.parse(value))
 }
 export function refreshOverlap(access: AdminRequestAccess, page = 1) {
-  return adminRequest<OverlapReport>(`/api/admin/overlap/refresh?page=${page}`, access, {
+  return adminRequest<unknown>(`/api/admin/overlap/refresh?page=${page}`, access, {
     method: 'POST',
-  })
+  }).then((value) => OverlapReportSchema.parse(value))
 }
 export async function downloadOverlap(access: AdminRequestAccess, page = 1): Promise<Blob> {
   const response = await adminFetch(access, `/api/admin/overlap/export?page=${page}`)

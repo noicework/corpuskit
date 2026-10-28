@@ -11,6 +11,9 @@ import { findCandidates } from './duplicate-matching.ts'
 import type { DuplicateReviewStore } from './duplicate-store.ts'
 import { declaredRoute } from './permissions.ts'
 import type { TenantStoreApi } from './tenants.ts'
+import type { PortalLifecycleStore } from './lifecycle-store.ts'
+import { assertManagementWritable } from './lifecycle-management.ts'
+import { PortalLifecycleError } from './lifecycle-error.ts'
 
 const REVIEW_PATH = '/api/admin/t/:slug/duplicates/review'
 const ReviewInput = z.object({
@@ -19,6 +22,24 @@ const ReviewInput = z.object({
 }).strict()
 const PAGE_SIZE = 50
 const DAY = 86_400_000
+
+/** Recheck at the synchronous write, after any cold metadata read has finished. */
+export function rememberDuplicateDecision(
+  services: {
+    tenants: TenantStoreApi
+    duplicates: DuplicateReviewStore
+    lifecycle: PortalLifecycleStore
+  },
+  slug: string,
+  pair: string,
+  decision: z.infer<typeof DuplicateDecisionSchema>,
+) {
+  if (!services.tenants.get(slug)) {
+    throw new PortalLifecycleError(503, { error: 'portal_unavailable' })
+  }
+  assertManagementWritable(services.lifecycle, slug, { platformRequests: true })
+  return services.duplicates.decide(slug, pair, decision)
+}
 
 export interface DuplicateRouteServices {
   provider: RetrievalProvider

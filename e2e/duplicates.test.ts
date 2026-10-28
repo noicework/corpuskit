@@ -147,9 +147,17 @@ Deno.test('platform administrator sees cross-collection examples and downloads t
     provider: DoubleProvider.withDuplicates(),
     identity: { role: 'platform-admin' },
   })
+  server.setResponseStatus('/api/admin/overlap', 200)
   const browser = await launch()
   const page = await browser.newPage(`${server.url}/admin`)
   try {
+    await page.waitForSelector('[data-overlap-panel] [role=alert]')
+    expect(await page.evaluate(() => document.querySelector('h1')?.textContent)).toBe(
+      'Knowledge boxes',
+    )
+    await captureBoundary(page, '.planning/logs/duplicates', 'overlap-malformed-390', 390)
+    server.setResponseStatus('/api/admin/overlap', null)
+    await click(page, 'Refresh overlap')
     await page.waitForSelector('[data-overlap-panel] details')
     await assertCurrentBuild(page)
     expect(await page.evaluate(() => document.querySelector('[data-overlap-panel]')?.textContent))

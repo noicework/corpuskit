@@ -140,6 +140,43 @@ Deno.test('review lifecycle guards prevent writes before provider dispatch', asy
   }
 })
 
+for (const transition of ['read_only', 'suspended', 'erased'] as const) {
+  Deno.test(`a cold review cannot write after its portal becomes ${transition}`, async () => {
+    const provider = DoubleProvider.withDuplicates()
+    const listed = provider.listResources.bind(provider)
+    let release!: () => void
+    let entered!: () => void
+    const ready = new Promise<void>((resolve) => entered = resolve)
+    const pending = new Promise<void>((resolve) => release = resolve)
+    provider.listResources = async (config) => {
+      entered()
+      await pending
+      return listed(config)
+    }
+    const f = createEnforcementFixture({ provider })
+    try {
+      const response = f.requestAs(
+        f.sessionFor('curator'),
+        '/api/admin/t/a/duplicates/review',
+        json('keep-both'),
+      )
+      await ready
+      if (transition === 'erased') {
+        f.stores.tenants.remove('a')
+        f.stores.duplicates.erase('a')
+        f.stores.lifecycle.erase('a')
+      } else f.stores.lifecycle.set('a', { status: transition, limits: null })
+      release()
+      expect((await response).status).toBeGreaterThanOrEqual(400)
+      expect(f.stores.duplicates.reviews('a')).toEqual({})
+      if (transition === 'erased') expect(f.stores.duplicates.cache.has('a')).toBe(false)
+    } finally {
+      release()
+      f.close()
+    }
+  })
+}
+
 Deno.test('durable review and local SQL decisions survive store reconstruction and erase only their portal', () => {
   const db = new LocalRbacDatabase(':memory:')
   try {

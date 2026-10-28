@@ -1,5 +1,5 @@
 import { DuplicateReviewStore } from './duplicate-store.ts'
-import { registerDuplicateRoutes } from './duplicate-routes.ts'
+import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { PortalLifecycleStore } from './lifecycle-store.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
@@ -2168,7 +2168,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         c,
         '/api/admin/t/:slug/duplicates/review',
         'duplicate.review',
-        () => duplicates.decide(slug, pair, decision),
+        () => rememberDuplicateDecision({ tenants, duplicates, lifecycle }, slug, pair, decision),
         { decision },
         { kind: 'portal', slug },
         { kind: 'duplicate-pair', id: pair },
