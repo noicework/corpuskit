@@ -180,8 +180,13 @@ describe('AragProvider.compose', () => {
       /STRICTLY from the numbered passages/,
     )
     expect((body.prompt as { system: string }).system).toMatch(/Australian English/)
-    // The passages are the grounding: the box's own retrieval is held to one paragraph.
+    // The passages are the grounding: the box's own retrieval is held to one paragraph, and the
+    // passages also ride extra_context so an empty retrieval cannot short-circuit generation.
     expect(body.top_k).toBe(1)
+    expect(body.extra_context).toEqual([
+      '[1] Fisheries collection | Oyster mortality\nOysters died after heat.',
+      '[2] Grains collection | Rust timing\nRust arrived earlier.',
+    ])
     expect(body.generative_model).toBe('host-model')
   })
 
