@@ -88,6 +88,8 @@ export function startTestServer(options: {
   emptyCollection?: boolean
   /** The collection readers see, when a journey changes it; the DoubleProvider otherwise. */
   provider?: DoubleProvider
+  /** Where readers' feedback goes; without it no portal takes feedback. */
+  siteFeedbackNotifier?: BuildAppOptions['siteFeedbackNotifier']
 } = {}): TestServer {
   const directory = Deno.makeTempDirSync({ prefix: 'rbac-e2e-' })
   // Legacy JSON stores capture DATA_DIR at module load. Override only their
@@ -255,6 +257,7 @@ export function startTestServer(options: {
       management: options.management,
       bindings,
       domainProvisioner: options.domainProvisioner ?? null,
+      siteFeedbackNotifier: options.siteFeedbackNotifier,
       sources: options.sources ?? isolatedStore(new SourceStore(), 'sources', 'json'),
       insights: options.insights ?? isolatedStore(new InsightsStore(), 'insights', 'jsonl'),
       feedback: new FeedbackStore(directory),
