@@ -1,3 +1,6 @@
+import { parseAnswerFeedback } from './stores.ts'
+import { parseSiteFeedbackRecord } from './site-feedback.ts'
+import { tenantRecord } from './tenants.ts'
 import { redactExport } from './portal-export-redaction.ts'
 import { z } from 'zod'
 import {
@@ -6,6 +9,7 @@ import {
   DuplicateDecisionSchema,
   EnrichmentSchema,
   EvaluationInputSchema,
+  KgProposalSchema,
   PortalLifecycleSchema,
   PortalPromptsSchema,
   TenantConfigSchema,
@@ -75,6 +79,38 @@ export function configurationRecord(
   const { hostname: _hostname, ...config } = TenantConfigSchema.parse(tenant)
   return { kind: 'configuration', key: '', value: { tenant: config, prompts, disabled } }
 }
+/** Preserve destination routing metadata while replacing only source portal configuration. */
+export function restoredTenantRegistry(
+  raw: unknown,
+  slug: string,
+  value: unknown,
+): Record<string, unknown> {
+  const registry = tenantRecord(raw)
+  const config = value as { tenant: Record<string, unknown>; prompts: unknown; disabled: boolean }
+  const v2 = Object.hasOwn(registry, 'custom')
+  const overrides = v2 && registry.overrides ? tenantRecord(registry.overrides) : {}
+  const previous = Object.hasOwn(overrides, slug) ? tenantRecord(overrides[slug]) : {}
+  return {
+    ...(v2 ? registry : {}),
+    custom: v2 ? tenantRecord(registry.custom) : registry,
+    overrides: {
+      ...overrides,
+      [slug]: {
+        ...config.tenant,
+        slug: undefined,
+        hostname: previous.hostname,
+        prompts: config.prompts,
+      },
+    },
+    disabled: [
+      ...(Array.isArray(registry.disabled)
+        ? registry.disabled.filter((s) => typeof s === 'string' && s !== slug)
+        : []),
+      ...(config.disabled ? [slug] : []),
+    ],
+  }
+}
+
 export function parseBackup(value: unknown): PortalBackup {
   const parsed = BackupSchema.parse(value)
   const seen = new Set<string>()
@@ -106,6 +142,24 @@ export function parseBackup(value: unknown): PortalBackup {
         payload: { id: string }
       }
       readOwnedRecord(owned, parsed.portal, owned.owner, owned.payload.id)
+      if (row.kind === 'sessions') {
+        z.object({
+          id: z.string(),
+          title: z.string(),
+          updatedAt: z.string(),
+          messages: z.array(z.unknown()),
+        }).parse(owned.payload)
+      } else {z.object({
+          id: z.string(),
+          name: z.string(),
+          question: z.string(),
+          notes: z.string(),
+          status: z.enum(['active', 'closed']),
+          createdAt: z.string(),
+          updatedAt: z.string(),
+          evidence: z.array(z.unknown()),
+          artefacts: z.array(z.unknown()),
+        }).parse(owned.payload)}
       if (
         row.key !==
           `${encodeResearchOwner(owned.owner)}:${encodeStorageIdentifier(owned.payload.id)}`
@@ -166,10 +220,37 @@ export function parseBackup(value: unknown): PortalBackup {
             }
           }
         }
-      } else if (row.kind === 'kgProposals') z.record(z.unknown()).parse(row.value)
-      else {z.array(z.record(z.unknown())).max(row.kind === 'routing' ? 5000 : 50_000).parse(
-          row.value,
-        )}
+      } else if (row.kind === 'kgProposals') KgProposalSchema.parse(row.value)
+      else {
+        const values = z.array(z.record(z.unknown())).max(
+          row.kind === 'routing'
+            ? 5000
+            : ['feedback', 'siteFeedback'].includes(row.kind)
+            ? 500
+            : row.kind === 'linkHealth'
+            ? 10_000
+            : 50_000,
+        ).parse(row.value)
+        const identities = new Set<string>()
+        for (const value of values) {
+          if (row.kind === 'feedback' && !parseAnswerFeedback(value)) {
+            throw new ImportError('invalid_restore_record')
+          }
+          if (
+            row.kind === 'siteFeedback' &&
+            (!parseSiteFeedbackRecord(value) || value.slug !== parsed.portal)
+          ) throw new ImportError('invalid_restore_record')
+          if (
+            ['sources', 'linkHealth', 'suggestions', 'feedback', 'siteFeedback'].includes(row.kind)
+          ) {
+            const id = row.kind === 'feedback' ? value.learningId : value.id
+            if (typeof id !== 'string' || !id.length || identities.has(id)) {
+              throw new ImportError('duplicate_restore_record')
+            }
+            identities.add(id)
+          }
+        }
+      }
     }
   }
   if (!seen.has('configuration:')) throw new ImportError('missing_restore_configuration')

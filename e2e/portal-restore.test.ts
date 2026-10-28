@@ -168,6 +168,21 @@ Deno.test('local operator exports, resets and restores realistic portal records 
       expect(managed.stores.answerRecords.list('b').every((r) => r.portal === 'b')).toBe(true)
       expect(managed.stores.enrichments.count('b', 'suggested-questions')).toBe(1000)
       expect(managed.stores.evaluations.list('b')[0]!.slug).toBe('b')
+      const managedExport = await managed.requestAs(
+        managed.sessionFor('platform-admin'),
+        '/api/admin/t/b/export',
+      )
+      expect(managedExport.status).toBe(200)
+      const managedBytes = new Uint8Array(await managedExport.arrayBuffer())
+      const localImport = await fetch(`${server.url}/api/admin/t/grains/import?targetSlug=grains`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/zip' },
+        body: managedBytes,
+      })
+      expect(localImport.status, await localImport.clone().text()).toBe(200)
+      expect((await localImport.json()).counts.sessions).toBe(100)
+      expect(sessions.list('grains', owner)).toEqual(beforeSessions)
+      expect(answers.list('grains').every((r) => r.portal === 'grains')).toBe(true)
     } finally {
       managed.close()
     }

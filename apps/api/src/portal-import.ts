@@ -225,8 +225,8 @@ export function registerPortalImport(app: Hono, services: Services): void {
       // Refuse merging research state into an occupied target. Audit and provisioning configuration are allowed.
       if (
         services.store.capture(slug, true).some((r) =>
-          !['configuration', 'lifecycle'].includes(r.kind) &&
-          !(r.kind === 'answerRecords' && r.key === 'retention') && backupRecordCount(r) > 0
+          r.kind === 'evaluationSchedules' || !['configuration', 'lifecycle'].includes(r.kind) &&
+            !(r.kind === 'answerRecords' && r.key === 'retention') && backupRecordCount(r) > 0
         )
       ) throw new ImportError('portal_not_empty', 409)
       const context = services.context(c)

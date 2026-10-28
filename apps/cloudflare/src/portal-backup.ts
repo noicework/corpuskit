@@ -4,6 +4,7 @@ import {
   type BackupRecord,
   captureBackupTables,
   type PortalBackupStore,
+  restoredTenantRegistry,
   writeBackupTable,
 } from '../../api/src/portal-backup.ts'
 import {
@@ -100,27 +101,7 @@ export function durablePortalBackup(state: DurableState): PortalBackupStore {
         for (const row of records) {
           if (writeBackupTable(state.rbacDatabase, slug, row)) continue
           if (row.kind === 'configuration') {
-            const value = row.value as {
-              tenant: Record<string, unknown>
-              prompts: unknown
-              disabled: boolean
-            }
-            const registry = state.get<{ overrides: Record<string, unknown>; disabled: string[] }>(
-              'tenants',
-              { overrides: {}, disabled: [] },
-            )
-            registry.overrides ??= {}
-            registry.overrides[slug] = {
-              ...value.tenant,
-              slug: undefined,
-              hostname: undefined,
-              prompts: value.prompts,
-            }
-            registry.disabled = [
-              ...registry.disabled.filter((s) => s !== slug),
-              ...(value.disabled ? [slug] : []),
-            ]
-            state.put('tenants', registry)
+            state.put('tenants', restoredTenantRegistry(state.get('tenants', {}), slug, row.value))
           } else if (row.kind === 'lifecycle') {
             state.put(`portal-lifecycle:${slug}`, row.value)
           } else if (

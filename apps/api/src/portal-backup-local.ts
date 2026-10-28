@@ -5,6 +5,7 @@ import {
   type BackupRecord,
   captureBackupTables,
   type PortalBackupStore,
+  restoredTenantRegistry,
   writeBackupTable,
 } from './portal-backup.ts'
 import type { RbacDatabase } from './rbac-state.ts'
@@ -199,27 +200,11 @@ export function localPortalBackup(
         ) continue
         let value = row.value
         if (row.kind === 'configuration') {
-          const config = row.value as {
-            tenant: Record<string, unknown>
-            prompts: unknown
-            disabled: boolean
-          }
-          const registry = read(tenantPath, { custom: {}, overrides: {}, disabled: [] }) as {
-            overrides: Record<string, unknown>
-            disabled: string[]
-          }
-          registry.overrides ??= {}
-          registry.overrides[slug] = {
-            ...config.tenant,
-            slug: undefined,
-            hostname: undefined,
-            prompts: config.prompts,
-          }
-          registry.disabled = [
-            ...(registry.disabled ?? []).filter((s) => s !== slug),
-            ...(config.disabled ? [slug] : []),
-          ]
-          value = registry
+          value = restoredTenantRegistry(
+            read(tenantPath, { custom: {}, overrides: {}, disabled: [] }),
+            slug,
+            row.value,
+          )
         } else if (row.kind === 'kgProposals') {
           value = { ...read(kgPath, {}) as object, [slug]: value }
         }

@@ -200,3 +200,156 @@ Deno.test('import refuses portal roles and MCP keys and accepts platform authori
     f.close()
   }
 })
+
+Deno.test('registry restore preserves destination host routing and handles legacy registry records', async () => {
+  const { restoredTenantRegistry } = await import('./portal-backup.ts')
+  const value = {
+    tenant: { slug: 'source', branding: { productName: 'Evidence' } },
+    prompts: { ask: 'Use research.' },
+    disabled: false,
+  }
+  const restored = restoredTenantRegistry(
+    {
+      custom: { target: { slug: 'target' } },
+      overrides: { target: { hostname: 'soil.example.test' }, other: { siteFeedback: true } },
+      disabled: ['target'],
+      aliases: [{ slug: 'target', hostname: 'soil.example.test' }],
+    },
+    'target',
+    value,
+  )
+  expect(restored).toMatchObject({
+    overrides: { target: { hostname: 'soil.example.test' }, other: { siteFeedback: true } },
+    disabled: [],
+    aliases: [{ slug: 'target', hostname: 'soil.example.test' }],
+  })
+  expect(restoredTenantRegistry({ target: { slug: 'target' } }, 'target', value)).toMatchObject({
+    custom: { target: { slug: 'target' } },
+    disabled: [],
+  })
+})
+
+Deno.test('restore counts and reads every additional portal record collection without replaying scheduling authority', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const slug = 'a', target = 'b', at = new Date().toISOString()
+    const watch = f.stores.watches.add(slug, owner, 'Stock health')
+    f.stores.sources.add(slug, 'https://research.example.test/news', false)
+    f.stores.linkHealth.put(slug, {
+      id: 'link',
+      url: 'https://research.example.test/page',
+      title: 'Evidence',
+      status: 'broken',
+      firstFailed: at,
+      lastChecked: at,
+      attempts: 1,
+      ignored: true,
+    })
+    f.stores.suggestions.replacePending(slug, [{
+      id: 'taxonomy',
+      kind: 'labelset',
+      title: 'Topics',
+      detail: 'Research labels',
+      status: 'pending',
+      createdAt: at,
+      labelset: { id: 'topic', title: 'Topics', paragraphs: false, labels: ['Stock health'] },
+    }])
+    f.stores.kgProposals.set(slug, {
+      rationale: 'Research graph',
+      entityTypes: [],
+      resourceLabels: [],
+      chunkLabels: [],
+      examples: [],
+    })
+    f.stores.feedback.record(slug, {
+      learningId: 'a'.repeat(32),
+      good: false,
+      ts: at,
+      text: 'Research message',
+    })
+    f.stores.siteFeedback.save(slug, {
+      id: '00000000-0000-4000-8000-000000000001',
+      slug,
+      createdAt: at,
+      category: 'general',
+      message: 'Research portal message',
+      pageUrl: 'https://research.example.test/t/a/library',
+      delivery: 'sent',
+    })
+    const definition = f.stores.evaluations.put(slug, 'checks', {
+      name: 'Evidence checks',
+      topK: 5,
+      questions: [{
+        query: 'Stock health?',
+        expectedSources: ['res-1'],
+        expectedFacts: [],
+        shouldDecline: false,
+      }],
+    })
+    f.stores.evaluations.schedule(slug, 'checks', {
+      slug,
+      setId: 'checks',
+      everyDays: 1,
+      nextAt: Date.now() + 86_400_000,
+      confirmedAsks: 1,
+      updatedAt: definition.updatedAt,
+      owner: { tenantId: 'tenant-1', oid: 'fixture-reviewer' },
+    })
+    f.stores.evaluations.start(slug, {
+      id: 'retained-run',
+      slug,
+      setId: 'checks',
+      definition,
+      startedAt: at,
+      completedAt: null,
+      status: 'running',
+      results: [],
+      summary: {
+        errors: 0,
+        retrievalHitRate: null,
+        citationPrecision: null,
+        factCoverage: null,
+        declineCorrectness: null,
+        answerRelevance: null,
+        groundedness: null,
+        contextRelevance: null,
+      },
+    })
+    const admin = f.sessionFor('platform-admin')
+    const exported = await f.requestAs(admin, '/api/admin/t/a/export?includeFeedback=true')
+    expect(exported.status).toBe(200)
+    const bytes = new Uint8Array(await exported.arrayBuffer())
+    const response = await f.requestAs(admin, '/api/admin/t/b/import?targetSlug=b', {
+      method: 'POST',
+      headers: { 'content-type': 'application/zip' },
+      body: bytes,
+    })
+    expect(response.status, await response.clone().text()).toBe(200)
+    expect((await response.json()).counts).toMatchObject({
+      watches: 1,
+      sources: 1,
+      linkHealth: 1,
+      suggestions: 1,
+      kgProposals: 1,
+      feedback: 1,
+      siteFeedback: 1,
+      evaluationSets: 1,
+      evaluationRuns: 1,
+      evaluationSchedules: 0,
+    })
+    expect(f.stores.watches.list(target, owner)[0]!.id).toBe(watch.id)
+    expect(f.stores.sources.list(target)[0]!.url).toBe('https://research.example.test/news')
+    expect(f.stores.linkHealth.list(target)[0]!.ignored).toBe(true)
+    expect(f.stores.suggestions.list(target)[0]!.labelset!.labels).toEqual(['Stock health'])
+    expect(f.stores.kgProposals.get(target)!.rationale).toBe('Research graph')
+    expect(f.stores.feedback.comments(target, ['a'.repeat(32)])['a'.repeat(32)]).toBe(
+      'Research message',
+    )
+    expect(f.stores.siteFeedback.recent(target, 10)[0]!.slug).toBe(target)
+    expect(f.stores.evaluations.schedules(target)).toEqual([])
+    expect(f.stores.evaluations.runs(target, 'checks')[0]!.status).toBe('failed')
+    expect(f.stores.evaluations.runs(target, 'checks')[0]!.definition.slug).toBe(target)
+  } finally {
+    f.close()
+  }
+})
