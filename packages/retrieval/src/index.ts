@@ -1,4 +1,9 @@
-export type { ListResourcesOptions, RetrievalProvider, SourceContext } from './provider.ts'
+export type {
+  ExportResource,
+  ListResourcesOptions,
+  RetrievalProvider,
+  SourceContext,
+} from './provider.ts'
 export { AragProvider, KnowledgeBoxNotConnectedError } from './providers/arag/index.ts'
 export type { AgentConfig } from './providers/arag/index.ts'
 export {

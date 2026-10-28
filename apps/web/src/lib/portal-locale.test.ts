@@ -48,6 +48,15 @@ Deno.test('portal translations change visible copy without translating identity,
     },
     entityTypes: [{ id: 'original', label: 'original', colour: '#123456' }],
     relationTypes: ['original'],
+    accessibility: {
+      sections: [{ heading: '研究', paragraphs: ['研究'] }],
+      contact: {
+        name: '研究',
+        email: 'original@example.org',
+        url: 'https://original.example.org',
+        note: '研究',
+      },
+    },
     languagePolicy: {
       defaultLanguage: 'ja',
       availableLanguages: ['ja', 'en'],
@@ -60,6 +69,8 @@ Deno.test('portal translations change visible copy without translating identity,
           '/original': '/other',
           '/original/logo.svg': '/other/logo.svg',
           '#123456': '#abcdef',
+          'original@example.org': 'other@example.org',
+          'https://original.example.org': 'https://other.example.org',
         },
       },
     },
@@ -89,6 +100,16 @@ Deno.test('portal translations change visible copy without translating identity,
     resourceIds: ['original'],
   })
   expect(translated.languagePolicy).toEqual(config.languagePolicy)
+  // The statement's words translate; where it points readers does not.
+  expect(translated.accessibility).toEqual({
+    sections: [{ heading: 'Research', paragraphs: ['Research'] }],
+    contact: {
+      name: 'Research',
+      email: 'original@example.org',
+      url: 'https://original.example.org',
+      note: 'Research',
+    },
+  })
   expect(translated.copy?.defaultResourceLabel).toBe('Research')
   expect(translated.copy?.interfaceMessages).toEqual(config.copy?.interfaceMessages)
   expect(localisePortalConfig(config, 'ja')).toBe(config)

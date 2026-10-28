@@ -1652,6 +1652,8 @@ export type EvidenceVerdict = 'supports' | 'partial' | 'not-relevant' | 'contrad
 export interface EvidenceItem {
   id: string
   passage: string
+  /** The page (counted from one) the passage sits on in the stored file, when known. */
+  page?: number
   resourceId: string
   resourceTitle: string
   score: number | null
@@ -1737,6 +1739,8 @@ export function deleteInvestigation(slug: string, id: string): Promise<{ ok: boo
 
 export interface NewEvidence {
   passage: string
+  /** The page the passage sits on, so the saved item reopens the PDF there. */
+  page?: number
   resourceId: string
   resourceTitle: string
   score?: number | null

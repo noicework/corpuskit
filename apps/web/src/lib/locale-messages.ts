@@ -2,6 +2,7 @@ import { COMMON_JA } from './messages/common-ja.ts'
 import { MANAGE_JA } from './messages/manage-ja.ts'
 import { RESEARCH_JA } from './messages/research-ja.ts'
 import { PLATFORM_JA } from './messages/platform-ja.ts'
+import { GRAPH_JA } from './messages/graph-ja.ts'
 import { USAGE_JA } from './messages/usage-ja.ts'
 
 export type MessageValues = Readonly<Record<string, string | number>>
@@ -34,6 +35,7 @@ export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
   MANAGE_JA,
   RESEARCH_JA,
   PLATFORM_JA,
+  GRAPH_JA,
   USAGE_JA,
 )
 

@@ -1102,6 +1102,8 @@ export class SourceStore {
 export interface EvidenceItem {
   id: string
   passage: string
+  /** The page (counted from one) the passage sits on in the stored file, when known. */
+  page?: number
   resourceId: string
   resourceTitle: string
   /** Calibrated retrieval score at capture time, when known. */
