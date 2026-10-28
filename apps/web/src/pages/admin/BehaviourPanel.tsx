@@ -2,7 +2,9 @@ import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
 import { useEffect, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type DemoTourMode, demoTourMode, DemoTourModeSchema } from '@research-portal/core'
 import {
   ensureSearchConfigs,
   getPrompts,
@@ -10,7 +12,9 @@ import {
   getSearchConfigs,
   getTenantConfig,
   savePrompts,
+  updatePortalBehaviour,
 } from '../../api/client.ts'
+import type { TenantOutletContext } from '../TenantLayout.tsx'
 import { intentSummary } from '../../components/RouteChip.tsx'
 import { MessagePanel } from './MessagePanel.tsx'
 import { errorMessage, type Message } from './shared.ts'
@@ -401,10 +405,93 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
  * Behaviour: the portal's grounded-answer system prompt and its search
  * configurations. Both are platform-facing settings, not content.
  */
+/**
+ * How the home page offers the guided tour. The same PATCH as the appearance settings, so it
+ * needs `appearance.write` on the route as well as `behaviour.write`, like the regional band.
+ */
+function DemoTourSetting({ slug }: { slug: string }) {
+  const { ui } = usePortalLocale()
+  const { config } = useOutletContext<TenantOutletContext>()
+  const queryClient = useQueryClient()
+  const { runExplicit } = usePermissionAdminAccess('behaviour.write', { kind: 'portal', slug })
+  const authority = useAccess()
+  const context = authority.controller.context
+  const [mode, setMode] = useState<DemoTourMode>(demoTourMode(config))
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<Message | null>(null)
+  const choices: { value: DemoTourMode; label: string }[] = [
+    { value: 'off', label: ui('Off') },
+    { value: 'request', label: ui('Offered on the home page') },
+    { value: 'auto', label: ui('Offered, and opens once by itself') },
+  ]
+
+  const onSave = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const result = await runExplicit(ui('Save the guided tour setting'), async (access) => {
+        const saved = await updatePortalBehaviour(slug, access, { demoTour: mode })
+        if (saved?.ok !== true) throw new AdminAccessError()
+        return true
+      })
+      authority.controller.assertCurrent(context)
+      if (result === undefined) return
+      await queryClient.invalidateQueries({ queryKey: ['tenant-config', slug] })
+      setMessage(messageFor('ok', ({ ui: localUi }) => localUi('Guided tour setting saved.')))
+    } catch (err) {
+      if (context !== authority.controller.context) return
+      setMessage(
+        messageFor(
+          'error',
+          ({ error: localError }) =>
+            errorMessage(err, 'Could not save the guided tour setting.', localError),
+        ),
+      )
+    } finally {
+      if (context === authority.controller.context) setBusy(false)
+    }
+  }
+
+  return (
+    <section className='rp-card min-w-0 p-5 lg:p-6' data-behaviour-demo-tour>
+      <SectionHeader
+        className='rp-admin-section-head'
+        title={ui('Guided tour')}
+        description={ui(
+          'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, MCP and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.',
+        )}
+      />
+      <label className='mt-4 block text-sm text-ink-2'>
+        <span className='block font-medium text-ink'>{ui('Offer the tour')}</span>
+        <select
+          className='rp-input rp-select mt-1.5 w-full max-w-md'
+          value={mode}
+          disabled={busy}
+          onChange={(event) => setMode(DemoTourModeSchema.parse(event.target.value))}
+        >
+          {choices.map((choice) => (
+            <option key={choice.value} value={choice.value}>{choice.label}</option>
+          ))}
+        </select>
+      </label>
+      <p className='mt-1 text-xs text-ink-3'>
+        {ui('The scenes and their words can be set per portal through the configuration import.')}
+      </p>
+      <div className='mt-3 flex items-center gap-3'>
+        <Button data-behaviour-demo-tour-save disabled={busy} onClick={() => void onSave()}>
+          {busy ? ui('Saving…') : ui('Save guided tour setting')}
+        </Button>
+      </div>
+      {message && <MessagePanel message={message} className='mt-3' />}
+    </section>
+  )
+}
+
 function BehaviourPanelContent({ slug }: { slug: string }) {
   return (
     <div className='space-y-6 lg:space-y-8'>
       <AskPromptEditor slug={slug} />
+      <DemoTourSetting slug={slug} />
       <SearchConfigsBlock slug={slug} />
     </div>
   )

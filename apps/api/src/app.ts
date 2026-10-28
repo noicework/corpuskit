@@ -86,6 +86,7 @@ import {
 import {
   AccessModeSchema,
   authorize,
+  DemoTourModeSchema,
   normalisePrincipal,
   portalConfigurationExport,
   PortalConfigurationImportSchema,
@@ -863,6 +864,8 @@ const renameTenantSchema = z.object({
   regionalDiscovery: z.boolean().optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback: z.boolean().optional(),
+  /** The guided tour on the home page: off, request or auto (see TenantConfigSchema). */
+  demoTour: DemoTourModeSchema.optional(),
   /**
    * The portal's header links, footer and home page, or null to clear them. Checked against
    * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
@@ -875,6 +878,7 @@ const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
   'siteFeedback',
+  'demoTour',
 ])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
@@ -5315,6 +5319,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       searchPlaceholder,
       regionalDiscovery,
       siteFeedback: siteFeedbackSetting,
+      demoTour,
       layout: _layout,
       ...branding
     } = parsed.data
@@ -5322,6 +5327,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
       ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
+      ...(demoTour !== undefined ? { demoTour } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
     const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))

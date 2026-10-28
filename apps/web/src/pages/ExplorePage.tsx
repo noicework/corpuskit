@@ -2,6 +2,7 @@ import { type FormEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import {
+  demoTourMode,
   type PortalLayout,
   type ResourceSummary,
   showsRegionalDiscovery,
@@ -14,6 +15,7 @@ import { ArrowRight, Library, MessageSquare, Network, Search } from '../componen
 import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
 import { RegionMap, REGIONS } from '../components/RegionMap.tsx'
+import { DemoTour } from '../components/DemoTour.tsx'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 
@@ -646,6 +648,8 @@ export function ExplorePage() {
   return (
     <main>
       <Hero config={config} onAsk={ask} />
+
+      {demoTourMode(config) !== 'off' && <DemoTour config={config} />}
 
       <QuickEntry slug={config.slug} />
 

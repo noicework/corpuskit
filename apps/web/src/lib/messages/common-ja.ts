@@ -1,5 +1,69 @@
 /** Application-owned interface copy only; source content never enters this catalog. */
 export const COMMON_JA: Readonly<Record<string, string>> = {
+  // The guided tour on the home page.
+  'See what this platform does': 'このプラットフォームでできること',
+  'A short guided tour: cited answers, how they are made, the page a citation came from, an agent connected over MCP, and what happens when the collection cannot answer.':
+    '短いガイドツアーです。出典付きの回答、その作られ方、引用元のページ、MCPで接続したエージェント、そしてコレクションが答えられないときの動きを紹介します。',
+  'Take the tour': 'ツアーを見る',
+  '{count} short scenes, each with one click into {product}.':
+    '{count}つの短いシーンがあり、それぞれワンクリックで{product}の機能に進めます。',
+  'Show me around': '案内を見る',
+  'Explore on my own': '自分で見て回る',
+  'Start exploring': '探索を始める',
+  'Those were the scenes. Pick a place to begin, or close the tour.':
+    'シーンは以上です。始める場所を選ぶか、ツアーを閉じてください。',
+  'Step {n} of {total}': 'ステップ {n} / {total}',
+  'Close the tour': 'ツアーを閉じる',
+  'Next': '次へ',
+  'Try it': '試してみる',
+  'Ask it': '質問してみる',
+  'What are the main findings in this collection?': 'このコレクションの主な知見は何ですか？',
+  'Ask across every collection': 'すべてのコレクションに横断して質問する',
+  'One question, answered from several knowledge boxes at once. Every sentence carries a citation, and the answer says which collections it drew on.':
+    '一つの質問に複数のナレッジボックスから同時に回答します。すべての文に出典が付き、どのコレクションを参照したかも示されます。',
+  'See how an answer was made': '回答がどのように作られたかを見る',
+  'Each answer shows its stages as it works, then keeps its evidence under it. Open Sources and evidence, then Journey through the context, to walk the passages it was built from.':
+    '回答は処理の段階を表示しながら作られ、根拠は回答の下に残ります。「出典と根拠」を開き、「根拠資料をたどる」で回答の元になった箇所を順に確認できます。',
+  'Open the PDF at the cited page': '引用されたページでPDFを開く',
+  'A citation takes you to the page it came from, with the matched passage marked, not to the top of a file.':
+    '引用をクリックすると、ファイルの先頭ではなく、該当箇所が示された元のページに移動します。',
+  'Connect an external agent over MCP': 'MCPで外部エージェントを接続する',
+  'Any MCP client can search, browse and ask this portal and get the same cited answers, read-only and within its access rules. The connection details are on Tools.':
+    'どのMCPクライアントからでも、このポータルを検索・閲覧・質問でき、同じ出典付きの回答を得られます。読み取り専用で、アクセス権限の範囲内に限られます。接続情報は「ツール」にあります。',
+  'See who took part': '参加したコレクションを見る',
+  "Each collection's owner decides whether it takes part in a federated answer. The answer shows who did.":
+    '横断回答に参加するかどうかは各コレクションの所有者が決めます。回答には参加したコレクションが示されます。',
+  'Find the gaps': '知識の空白を見つける',
+  'Ask something the collection does not cover and it says so instead of guessing, and shows what came closest. Curators see every gap in Manage under Insights.':
+    'コレクションが扱っていないことを質問すると、推測せずにその旨を答え、最も近い資料を示します。管理者は「管理」の「利用状況」で空白を確認できます。',
+  'What was published on this topic in the last week?':
+    'このテーマについて先週発表されたものは何ですか？',
+  '{count} sources · {cited} cited': '出典 {count} 件 · 引用 {cited} 件',
+  'p. {page}': 'p. {page}',
+  'Page {page}': '{page} ページ',
+  'Read-only': '読み取り専用',
+  'Streamable HTTP': 'Streamable HTTP',
+  'Collections in this answer': 'この回答に参加したコレクション',
+  'Took part': '参加',
+  'Not taking part': '不参加',
+  'Nothing in the collection was published in the last week. The closest matches are listed below and were not used.':
+    'コレクションには先週発表されたものはありません。最も近い資料を以下に示しますが、回答には使用していません。',
+  'Playground studies': '遊び場の研究',
+  'Design guidance': '設計ガイド',
+  'Archive, 1998 to 2004': 'アーカイブ（1998年から2004年）',
+  // Manage > Behaviour: how the tour is offered.
+  'Guided tour': 'ガイドツアー',
+  'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, MCP and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.':
+    'ポータルでできることをホームページから案内する短いツアーです。出典付きの回答、その作られ方、引用元のページ、MCP、コレクションが答えられないときの動きを紹介します。「初回に自動で開く」は、各ブラウザがホームページを初めて開いたときにだけ表示し、他のページの上には開きません。',
+  'Offer the tour': 'ツアーの提供',
+  'Offered on the home page': 'ホームページで提供する',
+  'Offered, and opens once by itself': 'ホームページで提供し、初回に自動で開く',
+  'The scenes and their words can be set per portal through the configuration import.':
+    'シーンとその文言は、設定のインポートでポータルごとに指定できます。',
+  'Save guided tour setting': 'ガイドツアーの設定を保存',
+  'Save the guided tour setting': 'ガイドツアーの設定を保存する',
+  'Guided tour setting saved.': 'ガイドツアーの設定を保存しました。',
+  'Could not save the guided tour setting.': 'ガイドツアーの設定を保存できませんでした。',
   'Agentic': 'エージェント調査',
   'Research Portal': '研究ポータル',
   'Open {name}': '{name}を開く',

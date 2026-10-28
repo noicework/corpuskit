@@ -3,6 +3,7 @@ import { createContext, useContext, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link, useOutletContext } from 'react-router-dom'
 import {
+  demoTourMode,
   type HomeSection,
   layoutHrefTarget,
   type LayoutImage,
@@ -18,6 +19,7 @@ import {
   typeLabel,
 } from '../components/ui.tsx'
 import { ResourceThumb } from '../components/ResourceThumb.tsx'
+import { DemoTour } from '../components/DemoTour.tsx'
 import { ArrowRight, File, FileText, Globe, MessageSquare } from '../components/icons.tsx'
 import { EXTERNAL_LINK_NOTE, ExternalMark, LayoutAnchor } from '../components/LayoutLink.tsx'
 import { ExplorePage, Hero, TopicRows, useAskNavigation } from './ExplorePage.tsx'
@@ -51,6 +53,7 @@ export function PortalHome({ config, home }: { config: TenantConfig; home: Layou
     <CardArrows.Provider value={home.cardArrows !== false}>
       <main>
         <Hero config={config} onAsk={ask} hero={home.hero ?? {}} showRecent={!hasRecent} />
+        {demoTourMode(config) !== 'off' && <DemoTour config={config} />}
         {home.sections.map((section, index) => (
           <HomeSectionView
             key={`${index}-${section.kind}`}
