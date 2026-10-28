@@ -87,6 +87,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   agentSourceTimeoutMs: { noPortalRecords: 'a time limit' },
   agentComposeTimeoutMs: { noPortalRecords: 'a time limit' },
   peerFetch: { noPortalRecords: 'a transport' },
+  estateSourceTimeoutMs: { noPortalRecords: 'deployment configuration' },
 }
 
 const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {

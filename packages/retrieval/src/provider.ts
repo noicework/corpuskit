@@ -200,7 +200,20 @@ export interface ListResourcesOptions {
   bounded?: boolean
 }
 
+/** Administrative inventory, including drafts and failed ingests, without credentialed URLs. */
+export interface ExportResource {
+  resource: ResourceSummary
+  metadata: Record<string, unknown>
+  labels: { labelset: string; label: string }[]
+  created?: string
+  modified?: string
+  status?: string
+  files: { fieldId: string; contentType?: string }[]
+}
+
 export interface RetrievalProvider {
+  /** Complete paged inventory or failure. Optional providers must refuse export, never truncate. */
+  exportResources?(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource>
   listResources(tenant: TenantConfig, options?: ListResourcesOptions): Promise<ResourceSummary[]>
   /**
    * One resource by id. A hidden resource (a draft) is null unless `hidden` is set, which only a

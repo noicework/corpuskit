@@ -508,6 +508,7 @@ describe('independent admin route permission matrix', () => {
         ),
         ...ACCESS_ROUTE_CASES.map(({ method, path }) => `${method} ${path}`),
         ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
+        'GET /api/admin/t/:slug/export',
         'PATCH /api/admin/t/:slug/access',
       ].sort()
       expect(actual).toEqual(expected)

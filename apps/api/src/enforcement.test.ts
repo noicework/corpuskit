@@ -233,6 +233,7 @@ Deno.test('declarations explicitly distinguish aggregate, safe metadata and rese
       ['GET', '/api/tenants', 'portal.read'],
       ['POST', '/api/ask-estate', 'portal.ask'],
       ['POST', '/api/ask-agent', 'portal.ask'],
+      ['ALL', '/api/estate/mcp', 'portal.read'],
     ] as const
   ) {
     expect(declarationFor(method, path)).toMatchObject({

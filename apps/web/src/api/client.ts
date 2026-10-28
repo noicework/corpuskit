@@ -204,6 +204,20 @@ export function getResources(slug: string): Promise<ResourceSummary[]> {
   return request<ResourceSummary[]>(`/api/t/${encodeURIComponent(slug)}/resources`)
 }
 
+/** One document in the title index the header search suggests from. */
+export interface TitleIndexItem {
+  id: string
+  title: string
+  type?: ResourceSummary['type']
+  topicIds?: string[]
+  kind?: string
+}
+
+/** Every document's display title, fetched once a session for the header search's suggestions. */
+export function getTitleIndex(slug: string): Promise<{ items: TitleIndexItem[] }> {
+  return request<{ items: TitleIndexItem[] }>(`/api/t/${encodeURIComponent(slug)}/titles`)
+}
+
 export function getResource(slug: string, id: string): Promise<ResourceSummary> {
   return request<ResourceSummary>(
     `/api/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}`,

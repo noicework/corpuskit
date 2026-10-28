@@ -23,6 +23,7 @@ import {
   AgentAskError,
   type AgentAskOptions,
   type ComposePassage,
+  type ExportResource,
   type RetrievalProvider,
 } from '@research-portal/retrieval'
 import { agentScenarioFor, replayAgentAsk } from './agent-replay.ts'
@@ -78,6 +79,22 @@ export class DoubleProvider implements RetrievalProvider {
 
   listResources(_tenant: TenantConfig): Promise<ResourceSummary[]> {
     return Promise.resolve(this.resources)
+  }
+
+  async *exportResources(
+    _tenant: TenantConfig,
+    signal: AbortSignal,
+  ): AsyncIterable<ExportResource> {
+    for (const resource of this.resources) {
+      signal.throwIfAborted()
+      yield {
+        resource: { ...resource, originUrl: `https://research.example.test/${resource.id}` },
+        metadata: { collection: 'Fisheries research' },
+        labels: resource.topicIds.map((label) => ({ labelset: 'topic', label })),
+        status: 'PROCESSED',
+        files: resource.type === 'pdf' ? [{ fieldId: 'file', contentType: 'application/pdf' }] : [],
+      }
+    }
   }
 
   resource(_tenant: TenantConfig, id: string): Promise<ResourceSummary | null> {
