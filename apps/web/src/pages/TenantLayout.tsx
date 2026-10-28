@@ -1,7 +1,7 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
 import { acceptsSiteFeedback, type Permission, type TenantConfig } from '@research-portal/core'
 import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import { retryTenantConfig } from '../api/portal-metadata.ts'
@@ -18,11 +18,11 @@ import {
   type IconProps,
   MessageSquare,
   Moon,
-  Search,
   Sun,
 } from '../components/icons.tsx'
 import { Button, IconButton } from '../components/ui.tsx'
 import { CommandPalette } from '../components/CommandPalette.tsx'
+import { HeaderSearch } from '../components/HeaderSearch.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
 import {
   accountEntries,
@@ -165,7 +165,6 @@ function prefersReducedMotion(): boolean {
 export function TenantLayout() {
   const { slug } = useParams<{ slug: string }>()
   const location = useLocation()
-  const navigate = useNavigate()
   const [navOpen, setNavOpen] = useState(false)
   // The sheet outlives `navOpen` by the length of its exit, so the panel, the
   // scrim and the rows can animate away and the trigger can morph back from the
@@ -174,7 +173,6 @@ export function TenantLayout() {
   const [navTop, setNavTop] = useState<number | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [logoFailed, setLogoFailed] = useState(false)
-  const [headerQuery, setHeaderQuery] = useState('')
   const [signInOpen, setSignInOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const access = useAccess()
@@ -616,41 +614,7 @@ export function TenantLayout() {
                         <KbSwitcher config={config} />
                       )}
                     </div>
-                    {
-                      /* Header search, centred and full-measure: it is the only search
-              * box in the product now, so it carries the weight. */
-                    }
-                    <div className='hidden w-[min(40rem,42vw)] min-w-0 items-center lg:flex'>
-                      <form
-                        role='search'
-                        onSubmit={(event) => {
-                          event.preventDefault()
-                          const trimmed = headerQuery.trim()
-                          if (!trimmed) return
-                          navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
-                          setHeaderQuery('')
-                        }}
-                        className='rp-field flex w-full items-center gap-1 rounded-[var(--rp-radius-input)] border bg-surface p-1'
-                      >
-                        <label htmlFor='header-search' className='sr-only'>
-                          {locale.ui('Search')} {config.branding.productName}
-                        </label>
-                        <input
-                          id='header-search'
-                          type='search'
-                          value={headerQuery}
-                          onChange={(event) => setHeaderQuery(event.target.value)}
-                          placeholder={config.searchPlaceholder}
-                          className='min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] min-w-0 flex-1 bg-transparent px-3 text-base text-ink outline-none'
-                        />
-                        <IconButton
-                          type='submit'
-                          label={locale.ui('Search')}
-                          icon={Search}
-                          size='lg'
-                        />
-                      </form>
-                    </div>
+                    <HeaderSearch config={config} />
 
                     {
                       /* Below `sm` this cluster takes exactly the width its buttons

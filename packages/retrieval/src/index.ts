@@ -1,6 +1,7 @@
 export type {
   AgentAskOptions,
   ComposePassage,
+  ExportResource,
   ListResourcesOptions,
   RetrievalProvider,
   SourceContext,

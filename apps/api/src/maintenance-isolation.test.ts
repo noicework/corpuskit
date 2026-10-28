@@ -383,7 +383,7 @@ Deno.test('a source sync stops taking pages when told to, and leaves the rest fo
     const management = {
       createText: () => {
         created++
-        return Promise.resolve('created')
+        return Promise.resolve({ id: `created-${created}` })
       },
     } as unknown as AragProvider
     const result = await syncSource(
@@ -395,7 +395,13 @@ Deno.test('a source sync stops taking pages when told to, and leaves the rest fo
       undefined,
       () => created >= 2,
     )
-    expect(result).toEqual({ added: 2, deferred: 4, backpressure: false, boxBusy: false })
+    expect(result).toEqual({
+      added: 2,
+      deferred: 4,
+      backpressure: false,
+      boxBusy: false,
+      summary: { new: 2, changed: 0, unchanged: 0, failed: 0 },
+    })
     const after = sources.find('marine', source.id)!
     expect(after.synced).toHaveLength(2)
     expect(after.lastStatus).toBe('ok')
@@ -698,7 +704,7 @@ Deno.test('a page the box fails with a 5xx stays for the next sync, and the pass
             new AragApiError(502, 'https://box.example/resources', 'bad gateway'),
           )
         }
-        return Promise.resolve('created')
+        return Promise.resolve({ id: 'created' })
       },
     } as unknown as AragProvider
     await runSystemMaintenance(

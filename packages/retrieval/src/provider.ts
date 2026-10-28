@@ -192,6 +192,9 @@ export interface CatalogOptions {
  */
 /** How a caller reads the catalogue listing. */
 export interface ListResourcesOptions {
+  /** Administrative enumeration only: include drafts and failed resources without caching them. */
+  includeHidden?: boolean
+  signal?: AbortSignal
   /**
    * A reader's request that must not wait on a slow box: answer within a bound with the cached
    * listing, or as much of it as has been read, possibly none, rather than the whole catalogue.
@@ -200,7 +203,25 @@ export interface ListResourcesOptions {
   bounded?: boolean
 }
 
+/** Administrative inventory, including drafts and failed ingests, without credentialed URLs. */
+export interface ExportResource {
+  resource: ResourceSummary
+  metadata: Record<string, unknown>
+  labels: { labelset: string; label: string }[]
+  created?: string
+  modified?: string
+  status?: string
+  files: { fieldId: string; contentType?: string }[]
+}
+
 export interface RetrievalProvider {
+  /** Complete paged inventory or failure. Optional providers must refuse export, never truncate. */
+  exportResources?(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource>
+  /** The configured answer model, when the provider can report it. No credentials. */
+  generativeModel?(tenant: TenantConfig): Promise<string>
+  /** Non-secret identifier of the store supplying this portal. */
+  storeIdentifier?(tenant: TenantConfig): string | undefined
+
   listResources(tenant: TenantConfig, options?: ListResourcesOptions): Promise<ResourceSummary[]>
   /**
    * One resource by id. A hidden resource (a draft) is null unless `hidden` is set, which only a
